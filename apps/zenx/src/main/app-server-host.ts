@@ -15,7 +15,7 @@ import {
   createZenXHostToolEnvironment,
   ZenXHostToolBundle,
 } from "./capability-tool-executor.js";
-import type { ZenXCapabilityHostSnapshot } from "./capabilities/types.js";
+import type { ZenXCapabilityGenerationSnapshot } from "./capabilities/types.js";
 import { projectThreadAttachments } from "./image-attachments.js";
 import { projectModelUsage } from "../../../../src/model-usage.js";
 import { ToolOutputSpool } from "../../../../src/tool-output-spool.js";
@@ -24,7 +24,9 @@ let server: CodexWebSocketServer | undefined;
 let appServer: HostedZenAppServer | undefined;
 let tools: ZenXHostToolBundle | undefined;
 let replaceCapabilities:
-  ((capabilities: ZenXCapabilityHostSnapshot) => void) | undefined;
+  ((capabilities: ZenXCapabilityGenerationSnapshot) => void) | undefined;
+let currentCapabilityGeneration: (() => string) | undefined;
+let closeToolComposition: ((reason?: string) => Promise<void>) | undefined;
 let shuttingDown = false;
 let toolOutputSpool: ToolOutputSpool | undefined;
 
@@ -59,14 +61,36 @@ async function handleCommand(command: HostCommand): Promise<void> {
         throw new Error("Zen App Server is not ready");
       }
       replaceCapabilities(command.capabilities);
-      send({ type: "capabilities/replaced", requestId: command.requestId });
+      send({
+        type: "capabilities/replaced",
+        requestId: command.requestId,
+        generationToken: command.capabilities.generationToken,
+      });
     } catch (error) {
       send({
         type: "capabilities/replaced",
         requestId: command.requestId,
+        generationToken: command.capabilities.generationToken,
         error: error instanceof Error ? error.message : String(error),
       });
     }
+    return;
+  }
+  if (command.type === "capabilities/current") {
+    const generationToken = currentCapabilityGeneration?.();
+    send(
+      generationToken === undefined
+        ? {
+            type: "capabilities/current",
+            requestId: command.requestId,
+            error: "Zen App Server is not ready",
+          }
+        : {
+            type: "capabilities/current",
+            requestId: command.requestId,
+            generationToken,
+          },
+    );
     return;
   }
   if (command.type === "thread-summary/list") {
@@ -145,6 +169,36 @@ async function handleCommand(command: HostCommand): Promise<void> {
     }
     return;
   }
+  if (command.type === "plugin-turn/start") {
+    if (appServer === undefined) {
+      send({
+        type: "plugin-turn/result",
+        requestId: command.requestId,
+        error: "Zen App Server is not ready",
+      });
+      return;
+    }
+    try {
+      const turn = await appServer.startTurn(command.threadId, command.input);
+      await turn.done;
+      send({
+        type: "plugin-turn/result",
+        requestId: command.requestId,
+        threadId: command.threadId,
+        turnId: turn.id,
+        items: structuredClone([
+          ...(await appServer.readThread(command.threadId)).items,
+        ]),
+      });
+    } catch (error) {
+      send({
+        type: "plugin-turn/result",
+        requestId: command.requestId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
   if (server !== undefined) {
     throw new Error("ZenX App Server host already started");
   }
@@ -157,6 +211,8 @@ async function handleCommand(command: HostCommand): Promise<void> {
   });
   tools = toolComposition.capabilityBundle;
   replaceCapabilities = toolComposition.replaceCapabilities;
+  currentCapabilityGeneration = toolComposition.currentGenerationToken;
+  closeToolComposition = toolComposition.close;
   appServer = createHostedAppServer({
     ...command.config,
     toolEnvironment: toolComposition.toolEnvironment,
@@ -196,9 +252,11 @@ async function shutdown(): Promise<void> {
   }
   appServer = undefined;
   toolOutputSpool = undefined;
-  tools?.close();
+  await closeToolComposition?.();
   tools = undefined;
   replaceCapabilities = undefined;
+  currentCapabilityGeneration = undefined;
+  closeToolComposition = undefined;
   if (process.connected) process.disconnect();
   process.exit(process.exitCode ?? 0);
 }

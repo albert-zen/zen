@@ -3,7 +3,6 @@ import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { CanonicalItem, UserInput } from "../../../../src/item.js";
-import type { TurnHandle } from "../../../../src/app-server.js";
 import type { ZenXProjectProjectionEntry } from "./project-projection.js";
 
 export const ZENX_PLUGIN_HOST_SDK_VERSION = 1 as const;
@@ -21,8 +20,14 @@ export interface PluginStorageMigration {
 }
 
 export interface PluginHostAppServerPort {
-  startTurn(threadId: string, input: string | UserInput): Promise<TurnHandle>;
-  readThread(threadId: string): Promise<{ items: readonly CanonicalItem[] }>;
+  completeTurn(
+    threadId: string,
+    input: string | UserInput,
+  ): Promise<{
+    threadId: string;
+    turnId: string;
+    items: readonly CanonicalItem[];
+  }>;
 }
 
 export interface ZenXPluginHostSdkV1 {
@@ -185,14 +190,8 @@ export async function createZenXPluginHostSdk(
           threadId: string;
           input: string | UserInput;
         }) => {
-          const turn = await options.appServer.startTurn(threadId, input);
-          await turn.done;
-          const snapshot = await options.appServer.readThread(threadId);
-          return Object.freeze({
-            threadId,
-            turnId: turn.id,
-            items: structuredClone(snapshot.items),
-          });
+          const result = await options.appServer.completeTurn(threadId, input);
+          return Object.freeze(structuredClone(result));
         },
       }),
     }),

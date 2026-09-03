@@ -738,6 +738,28 @@ const remainingPluginIds = remainingDefinitions.map(
   (definition) => definition.pluginId,
 );
 
+test("CapabilityService close attempts browser and computer owners after one rejects", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-close-all-"));
+  const closed: string[] = [];
+  const service = new ZenXCapabilityService({
+    userDataDirectory: root,
+    bundledProvidersOnly: true,
+    browserBackend: browserBackend(undefined, () => {
+      closed.push("browser");
+      throw new Error("browser close failed");
+    }),
+    computerBackend: computerBackend(() => closed.push("computer")),
+    providerCatalogOptions: { platform: "darwin" },
+  });
+  try {
+    await service.initialize();
+    await assert.rejects(service.close(), /ZenX Capability shutdown failed/u);
+    assert.deepEqual(closed.sort(), ["browser", "computer"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 function firstPartyService(
   userDataDirectory: string,
   resourcesDirectory: string,
@@ -988,7 +1010,9 @@ function browserBackend(
   };
 }
 
-function computerBackend(): ZenXComputerBackend {
+function computerBackend(
+  onClose: () => void = () => undefined,
+): ZenXComputerBackend {
   const target = { pid: 1, applicationName: "Fixture", windowTitle: "Fixture" };
   return {
     inspect: async () => ({
@@ -1015,7 +1039,7 @@ function computerBackend(): ZenXComputerBackend {
     foregroundClick: async () => undefined,
     foregroundKeyPress: async () => undefined,
     foregroundScroll: async () => undefined,
-    close: () => undefined,
+    close: onClose,
   };
 }
 

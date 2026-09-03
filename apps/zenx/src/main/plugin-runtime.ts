@@ -79,6 +79,13 @@ export class PluginRuntimeSupervisor {
   readonly #hostSdkFor: (pluginId: string) => Promise<ZenXPluginHostSdkV1>;
   readonly #active = new Map<string, ActiveRuntime>();
   readonly #staged = new Map<string, StagedRuntime>();
+  readonly #hostGenerations = new Map<
+    string,
+    {
+      tools: ReadonlyMap<string, SupervisedPluginBundle>;
+      release(): void;
+    }
+  >();
   #mutationTail: Promise<void> = Promise.resolve();
 
   constructor(
@@ -205,6 +212,14 @@ export class PluginRuntimeSupervisor {
   async close(): Promise<void> {
     await this.#serializeMutation(async () => {
       const failures: Error[] = [];
+      for (const generation of this.#hostGenerations.values()) {
+        try {
+          generation.release();
+        } catch (error) {
+          failures.push(asError(error));
+        }
+      }
+      this.#hostGenerations.clear();
       for (const pluginId of [...this.#active.keys()]) {
         try {
           await this.#stop(pluginId);
@@ -224,6 +239,71 @@ export class PluginRuntimeSupervisor {
       if (failures.length > 0) {
         throw new AggregateError(failures, "Plugin runtime shutdown failed");
       }
+    });
+  }
+
+  captureHostGeneration(toolNames: readonly string[]): string {
+    const tools = new Map<string, SupervisedPluginBundle>();
+    for (const toolName of toolNames) {
+      const bundle = [...this.#active.values()].find((active) =>
+        active.bundle.ownsTool(toolName),
+      )?.bundle;
+      if (bundle === undefined) {
+        throw new Error(
+          `Cannot capture unavailable capability tool: ${toolName}`,
+        );
+      }
+      tools.set(toolName, bundle);
+    }
+    const releases = [...new Set(tools.values())].map((bundle) =>
+      bundle.retainPreparedInvocation(),
+    );
+    const generationToken = randomUUID();
+    let retained = true;
+    this.#hostGenerations.set(generationToken, {
+      tools,
+      release: () => {
+        if (!retained) return;
+        retained = false;
+        for (const release of releases) release();
+      },
+    });
+    return generationToken;
+  }
+
+  releaseHostGeneration(generationToken: string): void {
+    const generation = this.#hostGenerations.get(generationToken);
+    if (generation === undefined) {
+      throw new Error(
+        `Unknown or released capability generation: ${generationToken}`,
+      );
+    }
+    this.#hostGenerations.delete(generationToken);
+    generation.release();
+  }
+
+  async invokeHostGeneration(
+    generationToken: string,
+    invocation: ToolInvocation,
+  ): Promise<ToolExecutionResult> {
+    const generation = this.#hostGenerations.get(generationToken);
+    if (generation === undefined) {
+      throw new Error(
+        `Unknown or released capability generation: ${generationToken}`,
+      );
+    }
+    const bundle = generation.tools.get(invocation.name);
+    if (bundle === undefined) {
+      throw new Error(
+        `Capability generation ${generationToken} does not own tool ${invocation.name}`,
+      );
+    }
+    return await bundle.invoke({
+      invocationId: invocation.callId,
+      tool: invocation.name,
+      arguments: invocation.arguments,
+      context: { callId: invocation.callId, cwd: invocation.cwd },
+      signal: invocation.signal,
     });
   }
 
@@ -307,6 +387,10 @@ class SupervisedPluginBundle implements ToolBundle {
       this.#prepared -= 1;
       this.#notifyDrain();
     };
+  }
+
+  ownsTool(toolName: string): boolean {
+    return this.#toolNames.has(toolName);
   }
 
   async invoke(

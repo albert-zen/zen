@@ -58,12 +58,31 @@ export class AppServerConnectionPublisher {
   }
 
   async release(): Promise<void> {
-    await this.revoke();
     const lease = this.#lease;
     this.#lease = undefined;
-    await lease?.close();
-    await removeFile(this.#leaseFile);
+    const failures: Error[] = [];
+    for (const cleanup of [
+      async () => await this.revoke(),
+      async () => await lease?.close(),
+      async () => await removeFile(this.#leaseFile),
+    ]) {
+      try {
+        await cleanup();
+      } catch (error) {
+        failures.push(asError(error));
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        "ZenX App Server connection publisher release failed",
+      );
+    }
   }
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 async function removeFile(filePath: string): Promise<void> {

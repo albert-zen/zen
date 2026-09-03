@@ -19,6 +19,7 @@ interface PendingInvocation {
   reject(error: Error): void;
   signal: AbortSignal;
   abort(): void;
+  generationToken: string;
 }
 
 interface CapabilityInvocationState {
@@ -33,9 +34,13 @@ export class ZenXHostToolBundle implements ToolBundle {
   readonly tools: readonly ToolRuntime[];
   readonly #send: (event: HostEvent) => void;
   readonly #state: CapabilityInvocationState;
+  readonly #generationToken: string;
+  readonly #drainWaiters = new Set<() => void>();
+  #prepared = 0;
+  #retiring = false;
 
   constructor(options: {
-    capabilities: ZenXCapabilityHostSnapshot;
+    capabilities: ZenXCapabilityHostSnapshot & { generationToken?: string };
     send: (event: HostEvent) => void;
     state?: CapabilityInvocationState;
   }) {
@@ -47,6 +52,23 @@ export class ZenXHostToolBundle implements ToolBundle {
     }));
     this.#send = options.send;
     this.#state = options.state ?? { pending: new Map() };
+    this.#generationToken = options.capabilities.generationToken ?? "legacy";
+  }
+
+  retainPreparedInvocation(): () => void {
+    if (this.#retiring) {
+      throw new Error(
+        `Capability generation is retiring: ${this.#generationToken}`,
+      );
+    }
+    this.#prepared += 1;
+    let retained = true;
+    return () => {
+      if (!retained) return;
+      retained = false;
+      this.#prepared -= 1;
+      this.#notifyDrain();
+    };
   }
 
   async #execute(
@@ -63,7 +85,11 @@ export class ZenXHostToolBundle implements ToolBundle {
     return await new Promise<ToolExecutionResult>((resolve, reject) => {
       const abort = (): void => {
         this.#state.pending.delete(invocationId);
-        this.#send({ type: "capability/cancel", invocationId });
+        this.#send({
+          type: "capability/cancel",
+          invocationId,
+          generationToken: this.#generationToken,
+        });
         reject(
           invocation.signal.reason ??
             new DOMException("The operation was aborted", "AbortError"),
@@ -74,11 +100,13 @@ export class ZenXHostToolBundle implements ToolBundle {
         reject,
         signal: invocation.signal,
         abort,
+        generationToken: this.#generationToken,
       });
       invocation.signal.addEventListener("abort", abort, { once: true });
       this.#send({
         type: "capability/invoke",
         invocationId,
+        generationToken: this.#generationToken,
         invocation: {
           callId: invocation.callId,
           name: invocation.name,
@@ -92,6 +120,7 @@ export class ZenXHostToolBundle implements ToolBundle {
   handleResult(command: CapabilityResultCommand): void {
     const pending = this.#state.pending.get(command.invocationId);
     if (pending === undefined) return;
+    if (pending.generationToken !== command.generationToken) return;
     this.#state.pending.delete(command.invocationId);
     pending.signal.removeEventListener("abort", pending.abort);
     if (command.error === undefined) {
@@ -120,10 +149,26 @@ export class ZenXHostToolBundle implements ToolBundle {
     }
     this.#state.pending.clear();
   }
+
+  async retire(): Promise<void> {
+    this.#retiring = true;
+    while (this.#prepared > 0) {
+      await new Promise<void>((resolve) => this.#drainWaiters.add(resolve));
+    }
+  }
+
+  get generationToken(): string {
+    return this.#generationToken;
+  }
+
+  #notifyDrain(): void {
+    for (const resolve of this.#drainWaiters) resolve();
+    this.#drainWaiters.clear();
+  }
 }
 
 export function createZenXHostToolEnvironment(options: {
-  capabilities: ZenXCapabilityHostSnapshot;
+  capabilities: ZenXCapabilityHostSnapshot & { generationToken?: string };
   blockedEnvironmentVariables?: readonly string[];
   redactedValues?: readonly string[];
   send: (event: HostEvent) => void;
@@ -132,7 +177,11 @@ export function createZenXHostToolEnvironment(options: {
   capabilityBundle: ZenXHostToolBundle;
   toolEnvironment: ToolEnvironment;
   toolDefinitionProjection: ToolDefinitionProjection;
-  replaceCapabilities(capabilities: ZenXCapabilityHostSnapshot): void;
+  replaceCapabilities(
+    capabilities: ZenXCapabilityHostSnapshot & { generationToken?: string },
+  ): void;
+  currentGenerationToken(): string;
+  close(reason?: string): Promise<void>;
 } {
   const invocationState: CapabilityInvocationState = { pending: new Map() };
   const capabilityBundle = new ZenXHostToolBundle({
@@ -162,6 +211,23 @@ export function createZenXHostToolEnvironment(options: {
     },
   );
   const projection = new PluginDiscoveryProjection(toolEnvironment, catalog);
+  const bundles = new Set([capabilityBundle]);
+  const releasedBundles = new Set<ZenXHostToolBundle>();
+  let currentBundle = capabilityBundle;
+  const releaseGeneration = (bundle: ZenXHostToolBundle): void => {
+    if (releasedBundles.has(bundle)) return;
+    releasedBundles.add(bundle);
+    options.send({
+      type: "capabilities/released",
+      generationToken: bundle.generationToken,
+    });
+  };
+  const retire = (bundle: ZenXHostToolBundle): void => {
+    void bundle.retire().then(() => {
+      bundles.delete(bundle);
+      releaseGeneration(bundle);
+    });
+  };
   return {
     capabilityBundle,
     toolEnvironment,
@@ -176,7 +242,21 @@ export function createZenXHostToolEnvironment(options: {
         replaceCurrent: true,
       });
       staged.publish();
+      const previous = currentBundle;
+      currentBundle = nextBundle;
+      bundles.add(nextBundle);
+      retire(previous);
       capabilities = structuredClone(replacement);
+    },
+    currentGenerationToken: () => currentBundle.generationToken,
+    close: async (reason = "ZenX capability bridge closed") => {
+      capabilityBundle.close(reason);
+      const retiring = [...bundles].map(async (bundle) => {
+        await bundle.retire();
+        releaseGeneration(bundle);
+      });
+      bundles.clear();
+      await Promise.all(retiring);
     },
   };
 }

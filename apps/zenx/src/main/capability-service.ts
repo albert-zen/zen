@@ -37,14 +37,20 @@ import type {
   ZenXPluginCatalogStore,
   ZenXCapabilityHost,
   ZenXCapabilityHostSnapshot,
+  ZenXCapabilityGenerationSnapshot,
   ZenXCapabilityPackage,
   ZenXPluginManifestV2,
   ZenXPluginDiagnostics,
   ZenXPluginSnapshot,
   ZenXPluginPackageSource,
 } from "./capabilities/types.js";
-import type { PluginHostUiPort } from "./plugin-host-sdk.js";
+import type {
+  PluginHostAppServerPort,
+  PluginHostUiPort,
+} from "./plugin-host-sdk.js";
 import { createZenXPluginHostSdk } from "./plugin-host-sdk.js";
+import type { AppServerRequestPort } from "./capabilities/self-control-package.js";
+import type { ZenXProjectProjection } from "./project-projection.js";
 import {
   cleanupUnreferencedProfileGenerations,
   discardStagedProfileGeneration,
@@ -93,6 +99,8 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     | "userBrowserConnector"
     | "electronBrowserFactory"
   >;
+  readonly #projectProjection?: ZenXProjectProjection;
+  readonly #appServerPort?: AppServerRequestPort & PluginHostAppServerPort;
   #browserProfilePackage: ZenXCapabilityPackage | undefined;
   #computerProfilePackage: ZenXCapabilityPackage | undefined;
   #stagedBrowserProfilePackage: ZenXCapabilityPackage | undefined;
@@ -130,6 +138,8 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       | "userBrowserConnector"
       | "electronBrowserFactory"
     >;
+    projectProjection?: ZenXProjectProjection;
+    appServerPort?: AppServerRequestPort & PluginHostAppServerPort;
   }) {
     this.#foregroundRequiredAllowed = options.allowForegroundRequired ?? false;
     this.#pluginToolEnvironment = new ToolEnvironment();
@@ -173,15 +183,9 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
               storageVersion: storage?.version ?? manifest.storageVersion ?? 1,
               migrations: storage?.migrations,
               initialStorage: storage?.initialValue,
-              queryProjects: async () => [],
-              appServer: {
-                startTurn: async () => {
-                  throw new Error("Plugin AppServer actions are not attached");
-                },
-                readThread: async () => {
-                  throw new Error("Plugin AppServer actions are not attached");
-                },
-              },
+              queryProjects: async () => await this.#queryProjects(),
+              appServer: this.#appServerPort ?? unavailablePluginAppServerPort,
+              ui: this.#pluginUiPort(manifest.id),
             });
             return {
               sdk,
@@ -219,6 +223,8 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     this.#providerCatalogOptions = Object.freeze({
       ...(options.providerCatalogOptions ?? {}),
     });
+    this.#projectProjection = options.projectProjection;
+    this.#appServerPort = options.appServerPort;
   }
 
   async initialize(): Promise<void> {
@@ -1186,6 +1192,18 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     return this.#registry.hostSnapshot();
   }
 
+  captureHostSnapshot(): ZenXCapabilityGenerationSnapshot {
+    const snapshot = this.#registry.hostSnapshot();
+    const generationToken = this.#pluginRuntimeSupervisor.captureHostGeneration(
+      snapshot.definitions.map((definition) => definition.name),
+    );
+    return { ...snapshot, generationToken };
+  }
+
+  releaseHostGeneration(generationToken: string): void {
+    this.#pluginRuntimeSupervisor.releaseHostGeneration(generationToken);
+  }
+
   setForegroundRequiredAllowed(allowed: boolean): boolean {
     if (this.#foregroundRequiredAllowed === allowed) return false;
     this.#foregroundRequiredAllowed = allowed;
@@ -1201,7 +1219,13 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     return true;
   }
 
-  async execute(invocation: ToolInvocation) {
+  async execute(invocation: ToolInvocation, generationToken?: string) {
+    if (generationToken !== undefined) {
+      return await this.#pluginRuntimeSupervisor.invokeHostGeneration(
+        generationToken,
+        invocation,
+      );
+    }
     this.#registry.assertToolExposed(invocation.name);
     const prepared = this.#pluginToolEnvironment.prepare(invocation);
     return await this.#pluginToolEnvironment.execute(prepared);
@@ -1213,6 +1237,31 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     input?: unknown,
   ): Promise<unknown> {
     return await this.#pluginUiPort(pluginId).executeCommand(commandId, input);
+  }
+
+  async #queryProjects() {
+    if (
+      this.#projectProjection === undefined ||
+      this.#appServerPort === undefined
+    ) {
+      throw new Error("Plugin Project query is not attached");
+    }
+    const threads = [];
+    let cursor: string | null | undefined;
+    do {
+      const page = await this.#appServerPort.request("thread/list", {
+        limit: 100,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      threads.push(
+        ...page.data.map((thread) => ({
+          id: thread.id,
+          cwd: thread.status.type === "systemError" ? null : thread.cwd,
+        })),
+      );
+      cursor = page.nextCursor;
+    } while (cursor !== null);
+    return (await this.#projectProjection.project(threads)).projects;
   }
 
   async readPluginUiHandle(
@@ -1266,11 +1315,53 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   }
 
   async close(): Promise<void> {
-    await this.#discardPendingBrowserProfileSelection();
-    await this.#registry.close();
-    await this.#pluginRuntimeSupervisor.close();
-    await this.#browserProfilePackage?.close?.();
-    await this.#computerProfilePackage?.close?.();
+    const packages = new Set(
+      [
+        this.#pendingBrowserProfileSelection?.capabilityPackage,
+        this.#stagedBrowserProfilePackage,
+        this.#stagedComputerProfilePackage,
+        this.#browserProfilePackage,
+        this.#computerProfilePackage,
+      ].filter(
+        (candidate): candidate is ZenXCapabilityPackage =>
+          candidate !== undefined,
+      ),
+    );
+    this.#pendingBrowserProfileSelection = undefined;
+    this.#stagedBrowserProfilePackage = undefined;
+    this.#stagedComputerProfilePackage = undefined;
+    this.#browserProfilePackage = undefined;
+    this.#computerProfilePackage = undefined;
+    const failures: Error[] = [];
+    for (const operation of [
+      async () => await this.#registry.close(),
+      async () => await this.#pluginRuntimeSupervisor.close(),
+      async () => {
+        const results = await Promise.allSettled(
+          [...packages].map(async (capabilityPackage) => {
+            await capabilityPackage.close?.();
+          }),
+        );
+        const packageFailures = results.flatMap((result) =>
+          result.status === "rejected" ? [asError(result.reason)] : [],
+        );
+        if (packageFailures.length > 0) {
+          throw new AggregateError(
+            packageFailures,
+            "Plugin profile package shutdown failed",
+          );
+        }
+      },
+    ]) {
+      try {
+        await operation();
+      } catch (error) {
+        failures.push(asError(error));
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "ZenX Capability shutdown failed");
+    }
   }
 
   async #resolvePnpm(): Promise<string> {
@@ -1293,3 +1384,13 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+const unavailablePluginAppServerPort: PluginHostAppServerPort = {
+  completeTurn: async () => {
+    throw new Error("Plugin AppServer actions are not attached");
+  },
+};

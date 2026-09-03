@@ -235,6 +235,8 @@ app.whenReady().then(async () => {
       bundledManifestSha256: app.isPackaged
         ? PACKAGED_PROVIDER_MANIFEST_SHA256
         : undefined,
+      projectProjection,
+      appServerPort: selfControlPort,
     });
     await syncProjectProjection(settingsService);
     let startupError: unknown;

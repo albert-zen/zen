@@ -18,7 +18,7 @@ import { validatePluginPackage } from "@zenx/plugin-sdk";
 
 import type { ToolInvocation } from "../../../../src/tool.js";
 import type { ZenXPluginHostSdkV1 } from "./plugin-host-sdk.js";
-import { ProcessPluginRuntime } from "./plugin-runtime.js";
+import { HttpPluginRuntime, ProcessPluginRuntime } from "./plugin-runtime.js";
 import type {
   ZenXCapabilityPackage,
   ZenXPluginPackageSource,
@@ -329,19 +329,6 @@ export async function loadProfilePluginPackage(
   const manifest = structuredClone(
     validated.manifest,
   ) as unknown as ZenXPluginManifestV2;
-  if (
-    manifest.runtime?.type !== "process" &&
-    manifest.runtime?.type !== "bundled"
-  ) {
-    throw new Error(
-      `Profile plugin ${packageName} runtime must be process-backed or an admitted bundled runtime`,
-    );
-  }
-  const runtimeEntry = await containedRealpath(
-    packageRoot,
-    path.resolve(packageRoot, manifest.runtime.entry),
-    `Plugin runtime for ${packageName}`,
-  );
   const bundles = (manifest.ui?.bundles ?? []).map((bundle) => {
     if (
       bundle.kind !== "isolated" &&
@@ -362,6 +349,14 @@ export async function loadProfilePluginPackage(
     return bundle;
   });
   if (manifest.ui !== undefined) manifest.ui = { ...manifest.ui, bundles };
+  if (manifest.runtime.type === "http") {
+    return new ProfileHttpPluginPackage(manifest);
+  }
+  const runtimeEntry = await containedRealpath(
+    packageRoot,
+    path.resolve(packageRoot, manifest.runtime.entry),
+    `Plugin runtime for ${packageName}`,
+  );
   if (manifest.runtime.type === "process") {
     return new ProfileProcessPluginPackage(manifest, packageRoot, runtimeEntry);
   }
@@ -510,6 +505,49 @@ class ProfileProcessPluginPackage implements ZenXCapabilityPackage {
         requestTimeoutMs: runtime.timeoutMs,
         hostSdk,
       },
+    );
+  }
+
+  async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
+    const runtime = this.#runtime;
+    if (runtime === undefined) {
+      throw new Error(`Plugin runtime is not started: ${this.manifest.id}`);
+    }
+    return await runtime.invoke({
+      invocationId: invocation.callId,
+      tool: toolName,
+      arguments: invocation.arguments,
+      context: { callId: invocation.callId, cwd: invocation.cwd },
+      signal: invocation.signal,
+    });
+  }
+
+  async close(): Promise<void> {
+    const runtime = this.#runtime;
+    this.#runtime = undefined;
+    await runtime?.close();
+  }
+}
+
+class ProfileHttpPluginPackage implements ZenXCapabilityPackage {
+  readonly manifest: ZenXPluginManifestV2;
+  #runtime: HttpPluginRuntime | undefined;
+
+  constructor(manifest: ZenXPluginManifestV2) {
+    this.manifest = manifest;
+  }
+
+  async start(hostSdk: ZenXPluginHostSdkV1): Promise<void> {
+    if (this.#runtime !== undefined) {
+      throw new Error(`Plugin runtime is already started: ${this.manifest.id}`);
+    }
+    const runtime = this.manifest.runtime;
+    if (runtime.type !== "http") {
+      throw new Error(`Plugin runtime is not HTTP-backed: ${this.manifest.id}`);
+    }
+    this.#runtime = new HttpPluginRuntime(
+      { pluginId: this.manifest.id, packageVersion: this.manifest.version },
+      { url: runtime.url, requestTimeoutMs: runtime.timeoutMs, hostSdk },
     );
   }
 

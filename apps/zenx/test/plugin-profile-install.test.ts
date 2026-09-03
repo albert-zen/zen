@@ -24,8 +24,15 @@ import { requestPluginDevLink } from "@zenx/plugin-sdk";
 import { npmInvocation } from "../../../packages/zenx-plugin-sdk/dist/npm-invocation.mjs";
 import { AppServerManager } from "../src/main/app-server-manager.js";
 import { ZenXCapabilityService } from "../src/main/capability-service.js";
+import { MutableAppServerRequestPort } from "../src/main/capabilities/self-control-package.js";
+import { ZenXProjectProjection } from "../src/main/project-projection.js";
 import { JsonZenXPluginCatalogStore } from "../src/main/capabilities/plugin-catalog-store.js";
-import { BUNDLED_PNPM_VERSION } from "../src/main/plugin-profile.js";
+import type { ZenXPluginManifestV2 } from "../src/main/capabilities/types.js";
+import {
+  BUNDLED_PNPM_VERSION,
+  loadProfilePluginPackage,
+} from "../src/main/plugin-profile.js";
+import { createZenXPluginHostSdk } from "../src/main/plugin-host-sdk.js";
 import {
   MarketplaceCatalogService,
   marketplacePackageSource,
@@ -750,6 +757,99 @@ test("profile process runtime admission uses its manifest start timeout", async 
     assert.deepEqual(service.pluginSnapshot().plugins, []);
   } finally {
     await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("the common profile loader admits an HTTP runtime before filesystem entry resolution", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-profile-http-"));
+  const generation = path.join(directory, "generation");
+  const packageRoot = path.join(
+    generation,
+    "node_modules",
+    "@zenx-test",
+    "http-profile",
+  );
+  let requests = 0;
+  const server = createServer(async (request, response) => {
+    requests += 1;
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+      id: string;
+      arguments: { value: string };
+    };
+    response.setHeader("content-type", "application/json");
+    response.end(
+      JSON.stringify({
+        version: 1,
+        id: body.id,
+        result: { output: `http:${body.arguments.value}`, exitCode: 0 },
+      }),
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  await mkdir(packageRoot, { recursive: true });
+  const manifest = {
+    ...fixtureManifest("http-profile"),
+    runtime: {
+      type: "http" as const,
+      url: `http://127.0.0.1:${String(address.port)}/invoke`,
+      timeoutMs: 1_000,
+    },
+  };
+  await Promise.all([
+    writeFile(
+      path.join(packageRoot, "package.json"),
+      `${JSON.stringify({
+        name: "@zenx-test/http-profile",
+        version: "1.0.0",
+        zenx: { plugin: "zenx.plugin.json" },
+      })}\n`,
+    ),
+    writeFile(
+      path.join(packageRoot, "zenx.plugin.json"),
+      `${JSON.stringify(manifest)}\n`,
+    ),
+  ]);
+  const capabilityPackage = await loadProfilePluginPackage(
+    generation,
+    "@zenx-test/http-profile",
+  );
+  const sdk = await createZenXPluginHostSdk({
+    pluginId: "http-profile",
+    storageRoot: path.join(directory, "storage"),
+    storageVersion: 1,
+    queryProjects: async () => [],
+    appServer: {
+      completeTurn: async () => {
+        throw new Error("unused");
+      },
+    },
+  });
+  try {
+    await capabilityPackage.start?.(sdk);
+    assert.deepEqual(
+      await capabilityPackage.invoke(
+        "http_profile_echo",
+        {
+          callId: "http-profile-call",
+          name: "http_profile_echo",
+          arguments: { value: "loaded" },
+          cwd: directory,
+          signal: new AbortController().signal,
+        },
+        sdk,
+      ),
+      { output: "http:loaded", exitCode: 0 },
+    );
+    assert.equal(requests, 1);
+  } finally {
+    await capabilityPackage.close?.();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -1549,6 +1649,138 @@ test("only App Resource packages enter the canonical trusted bundled source", as
   }
 });
 
+test("desktop composition injects one live Project, AppServer, UI, and storage Host SDK", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-sdk-composition-"),
+  );
+  const resourcesDirectory = path.join(directory, "resources");
+  const pluginResources = path.join(resourcesDirectory, "plugins");
+  await mkdir(pluginResources, { recursive: true });
+  const tarball = await createTarballFixture(pluginResources, {
+    id: "sdk-composition",
+    packageName: "@zenx-test/sdk-composition",
+    runtimeType: "bundled",
+    runtimeModule: 'export const fixture = "sdk-composition";\n',
+    mutateManifest: (manifest) => ({
+      ...manifest,
+      tools: [
+        ...manifest.tools,
+        { ...manifest.tools[0]!, name: "sdk_composition_ui" },
+      ],
+      contributions: {
+        ...manifest.contributions,
+        commands: [
+          {
+            id: "round-trip",
+            title: "Round trip",
+            tool: "sdk_composition_ui",
+          },
+        ],
+      },
+    }),
+  });
+  const projects = new ZenXProjectProjection("linux", async (value) => value);
+  await projects.updateConfiguration(["/workspace"], "/workspace");
+  const appServerPort = new MutableAppServerRequestPort(projects);
+  let service!: ZenXCapabilityService;
+  let injectedSdk:
+    Awaited<ReturnType<typeof createZenXPluginHostSdk>> | undefined;
+  service = new ZenXCapabilityService({
+    userDataDirectory: path.join(directory, "user-data"),
+    resourcesDirectory,
+    pnpmCliPath: pnpmCli,
+    bundledProvidersOnly: true,
+    projectProjection: projects,
+    appServerPort,
+    trustedProfileLoaders: {
+      "sdk-composition": () => ({
+        start: (sdk) => {
+          injectedSdk = sdk;
+        },
+        invoke: async (toolName) => {
+          if (toolName === "sdk_composition_ui") {
+            return {
+              output: JSON.stringify({ ui: "round-trip" }),
+              exitCode: 0,
+            };
+          }
+          await injectedSdk!.storage.set({ persisted: "value" });
+          return {
+            output: JSON.stringify({
+              projects: await injectedSdk!.query.projects.list(),
+              turn: await injectedSdk!.actions.threads.startTurn({
+                threadId: "thread-1",
+                input: "from plugin",
+              }),
+              handle: await injectedSdk!.ui.handles.read(
+                "sdk-composition:context",
+              ),
+              command: await injectedSdk!.ui.commands.execute("round-trip"),
+              storage: await injectedSdk!.storage.get(),
+            }),
+            exitCode: 0,
+          };
+        },
+      }),
+    },
+  });
+  await appServerPort.attach({
+    request: async () =>
+      ({
+        data: [
+          {
+            id: "thread-1",
+            cwd: "/workspace",
+            status: { type: "idle" },
+          },
+        ],
+        nextCursor: null,
+        backwardsCursor: null,
+      }) as never,
+    completePluginTurn: async (threadId) => ({
+      threadId,
+      turnId: "turn-1",
+      items: [],
+    }),
+  });
+  try {
+    await service.initialize();
+    await service.installBundledPluginPackage(tarball, {
+      pluginId: "sdk-composition",
+      packageName: "@zenx-test/sdk-composition",
+    });
+    const result = JSON.parse(
+      (
+        await service.execute({
+          callId: "sdk-composition-call",
+          name: "sdk_composition_echo",
+          arguments: {},
+          cwd: directory,
+          signal: new AbortController().signal,
+        })
+      ).output,
+    ) as Record<string, unknown>;
+    assert.deepEqual(result, {
+      projects: [
+        {
+          key: "/workspace",
+          workspace: "/workspace",
+          configured: true,
+          isDefault: true,
+          threadIds: ["thread-1"],
+        },
+      ],
+      turn: { threadId: "thread-1", turnId: "turn-1", items: [] },
+      handle: { pluginId: "sdk-composition", lifecycle: "enabled" },
+      command: { ui: "round-trip" },
+      storage: { persisted: "value" },
+    });
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a local Marketplace fixture drives exact versions through the canonical package installer", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-profile-npm-"));
   const userData = path.join(directory, "user-data");
@@ -2095,6 +2327,9 @@ interface TarballFixtureOptions {
   runtimeType?: "process" | "bundled";
   runtimeModule?: string;
   runtimeTimeoutMs?: number;
+  mutateManifest?: (
+    manifest: ReturnType<typeof fixtureManifest>,
+  ) => ReturnType<typeof fixtureManifest>;
 }
 
 async function createTarballFixture(
@@ -2132,13 +2367,15 @@ async function createTarballFixture(
     writeFile(
       path.join(packageDirectory, "zenx.plugin.json"),
       `${JSON.stringify(
-        fixtureManifest(
-          id,
-          options.description,
-          options.omitUiEntry,
-          version,
-          options.runtimeType,
-          options.runtimeTimeoutMs,
+        (options.mutateManifest ?? ((manifest) => manifest))(
+          fixtureManifest(
+            id,
+            options.description,
+            options.omitUiEntry,
+            version,
+            options.runtimeType,
+            options.runtimeTimeoutMs,
+          ),
         ),
         null,
         2,
@@ -2178,7 +2415,7 @@ function fixtureManifest(
   version = "1.0.0",
   runtimeType: "process" | "bundled" = "process",
   runtimeTimeoutMs?: number,
-) {
+): ZenXPluginManifestV2 {
   const toolPrefix = id.replaceAll("-", "_");
   return {
     schemaVersion: 2,

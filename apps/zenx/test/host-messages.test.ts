@@ -292,6 +292,37 @@ test("validates exclusive canonical Thread usage projections", () => {
   );
 });
 
+test("validates every canonical item in plugin Turn results", () => {
+  assert.equal(
+    isHostEvent({
+      type: "plugin-turn/result",
+      requestId: "valid-plugin-turn",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      items: [
+        {
+          id: "item-1",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          createdAt: "2026-08-19T00:00:00.000Z",
+          type: "turn_started",
+        },
+      ],
+    }),
+    true,
+  );
+  assert.equal(
+    isHostEvent({
+      type: "plugin-turn/result",
+      requestId: "malformed-plugin-turn",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      items: [{ type: "not-a-canonical-item" }],
+    }),
+    false,
+  );
+});
+
 test("host event validation is total for hostile object access", () => {
   const hostile = new Proxy(
     {},
@@ -410,14 +441,32 @@ test("manager ignores unmatched and late malformed summary responses", async () 
   }
 });
 
-test("manager bounds a stalled plugin replacement and ignores its late reply", async () => {
-  const capabilityHost: ZenXCapabilityHost = {
-    hostSnapshot: () => ({ definitions: [] }),
-    execute: async () => ({ output: "ok", exitCode: 0 }),
-  };
+test("replacement ACK timeout confirms the new generation without disrupting the Host", async () => {
+  const leased = leasedCapabilityHost();
+  const fixture = await createFixtureManager("query-new", leased.host, {
+    capabilityReplacementTimeoutMs: 20,
+  });
+  try {
+    await fixture.manager.start();
+    assert.deepEqual(await fixture.manager.refreshPluginAfterCommit("target"), {
+      status: "reloaded",
+    });
+    assert.deepEqual(fixture.manager.status, {
+      type: "ready",
+      reconnected: false,
+    });
+    assert.equal(leased.released.includes("fixture-generation-2"), false);
+  } finally {
+    await fixture.manager.stop();
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("late replacement ACK resolves pending confirmation without releasing its generation", async () => {
+  const leased = leasedCapabilityHost();
   const fixture = await createFixtureManager(
-    "late-replacement",
-    capabilityHost,
+    "late-ack-query-timeout",
+    leased.host,
     { capabilityReplacementTimeoutMs: 20 },
   );
   try {
@@ -426,13 +475,65 @@ test("manager bounds a stalled plugin replacement and ignores its late reply", a
       await fixture.manager.refreshPluginAfterCommit("target");
     assert.equal(replacement.status, "failed");
     if (replacement.status === "failed") {
-      assert.match(replacement.message, /replacement timed out after 20ms/u);
+      assert.match(replacement.message, /confirmation remains pending/u);
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.deepEqual(await fixture.manager.refreshPluginAfterCommit("target"), {
+      status: "reloaded",
+    });
+    assert.equal(leased.released.includes("fixture-generation-2"), false);
+  } finally {
+    await fixture.manager.stop();
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("current-generation confirmation keeps the old child generation and releases the rejected replacement", async () => {
+  const leased = leasedCapabilityHost();
+  const fixture = await createFixtureManager("query-old", leased.host, {
+    capabilityReplacementTimeoutMs: 20,
+  });
+  try {
+    await fixture.manager.start();
+    const replacement =
+      await fixture.manager.refreshPluginAfterCommit("target");
+    assert.equal(replacement.status, "failed");
+    assert.equal(leased.released.includes("fixture-generation-2"), true);
     assert.deepEqual(fixture.manager.status, {
       type: "ready",
       reconnected: false,
     });
+  } finally {
+    await fixture.manager.stop();
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("double timeout retains both generations while ordinary work continues and reconciles before the next replacement", async () => {
+  const leased = leasedCapabilityHost();
+  const fixture = await createFixtureManager("double-timeout", leased.host, {
+    capabilityReplacementTimeoutMs: 20,
+  });
+  try {
+    await fixture.manager.start();
+    const replacement =
+      await fixture.manager.refreshPluginAfterCommit("target");
+    assert.equal(replacement.status, "failed");
+    if (replacement.status === "failed") {
+      assert.match(replacement.message, /confirmation remains pending/u);
+    }
+    assert.equal(leased.released.includes("fixture-generation-1"), false);
+    assert.equal(leased.released.includes("fixture-generation-2"), false);
+    assert.equal(
+      (await fixture.manager.listThreadSummaries())[0]?.threadId,
+      "fixture-thread",
+    );
+    await waitFor(() => leased.invocations.length === 1);
+    assert.deepEqual(leased.invocations, ["fixture-generation-2:summary"]);
+    assert.deepEqual(await fixture.manager.refreshPluginAfterCommit("target"), {
+      status: "reloaded",
+    });
+    assert.equal(leased.captured(), 3);
   } finally {
     await fixture.manager.stop();
     await rm(fixture.directory, { recursive: true, force: true });
@@ -469,6 +570,43 @@ test("manager removes a pending plugin replacement when the child exits", async 
     await rm(fixture.directory, { recursive: true, force: true });
   }
 });
+
+function leasedCapabilityHost(): {
+  host: ZenXCapabilityHost;
+  released: string[];
+  invocations: string[];
+  captured(): number;
+} {
+  let generation = 1;
+  const released: string[] = [];
+  const invocations: string[] = [];
+  return {
+    released,
+    invocations,
+    captured: () => generation - 1,
+    host: {
+      captureHostSnapshot: () => ({
+        definitions: [
+          {
+            name: "fixture_inspect",
+            description: "Inspect the fixture",
+            inputSchema: { type: "object" },
+          },
+        ],
+        generationToken: `fixture-generation-${String(generation++)}`,
+      }),
+      releaseHostGeneration: (generationToken) => {
+        released.push(generationToken);
+      },
+      execute: async (invocation, generationToken) => {
+        invocations.push(
+          `${String(generationToken)}:${String(invocation.arguments.target)}`,
+        );
+        return { output: "ok", exitCode: 0 };
+      },
+    },
+  };
+}
 
 async function createFixtureManager(
   mode: string,

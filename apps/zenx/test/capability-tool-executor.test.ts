@@ -66,6 +66,7 @@ test("real ZenX host composition preserves builtin and capability bundle identit
   capabilityBundle.handleResult({
     type: "capability/result",
     invocationId: request.invocationId,
+    generationToken: request.generationToken,
     output: "bounded",
     exitCode: 0,
     sourceTruncated: true,
@@ -183,6 +184,7 @@ test("exposes capability definitions and resolves main-process execution", async
   bundle.handleResult({
     type: "capability/result",
     invocationId: request.invocationId,
+    generationToken: request.generationToken,
     output: "bounded",
     exitCode: 0,
   });
@@ -269,10 +271,108 @@ test("replaces one target projection while an invocation from another plugin rem
   composition.capabilityBundle.handleResult({
     type: "capability/result",
     invocationId: neighborRequest.invocationId,
+    generationToken: neighborRequest.generationToken,
     output: "neighbor-completed",
     exitCode: 0,
   });
   assert.equal((await activeNeighbor).output, "neighbor-completed");
+});
+
+test("prepared child calls keep their exact capability generation through consecutive replacements", async (t) => {
+  const toolOutputSpool = new ToolOutputSpool();
+  t.after(async () => await toolOutputSpool.close());
+  const events: HostEvent[] = [];
+  const versioned = (generationToken: string, description: string) => ({
+    generationToken,
+    definitions: [tool("fixture_echo", description)],
+  });
+  const composition = createZenXHostToolEnvironment({
+    capabilities: versioned("generation-v1", "Version one"),
+    send: (event) => events.push(event),
+    toolOutputSpool,
+  });
+  const prepare = (callId: string) =>
+    composition.toolEnvironment.prepare({
+      callId,
+      name: "fixture_echo",
+      arguments: {},
+      cwd: "/workspace",
+      signal: new AbortController().signal,
+    });
+  const v1 = prepare("v1-call");
+  composition.replaceCapabilities(versioned("generation-v2", "Version two"));
+  const v2 = prepare("v2-call");
+  composition.replaceCapabilities(versioned("generation-v3", "Version three"));
+  await Promise.resolve();
+  assert.deepEqual(
+    events.filter((event) => event.type === "capabilities/released"),
+    [],
+  );
+
+  const v1Execution = composition.toolEnvironment.execute(v1);
+  const v1Invocation = events.find(
+    (event) =>
+      event.type === "capability/invoke" &&
+      event.invocation.callId === "v1-call",
+  );
+  assert.equal(v1Invocation?.type, "capability/invoke");
+  if (v1Invocation?.type !== "capability/invoke")
+    throw new Error("missing v1 invocation");
+  assert.equal(v1Invocation.generationToken, "generation-v1");
+  composition.capabilityBundle.handleResult({
+    type: "capability/result",
+    invocationId: v1Invocation.invocationId,
+    generationToken: "generation-v1",
+    output: "v1",
+    exitCode: 0,
+  });
+  assert.equal((await v1Execution).output, "v1");
+  await Promise.resolve();
+  assert.equal(
+    events.some(
+      (event) =>
+        event.type === "capabilities/released" &&
+        event.generationToken === "generation-v1",
+    ),
+    true,
+  );
+  assert.equal(
+    events.some(
+      (event) =>
+        event.type === "capabilities/released" &&
+        event.generationToken === "generation-v2",
+    ),
+    false,
+  );
+
+  const v2Execution = composition.toolEnvironment.execute(v2);
+  const v2Invocation = events.find(
+    (event) =>
+      event.type === "capability/invoke" &&
+      event.invocation.callId === "v2-call",
+  );
+  assert.equal(v2Invocation?.type, "capability/invoke");
+  if (v2Invocation?.type !== "capability/invoke")
+    throw new Error("missing v2 invocation");
+  assert.equal(v2Invocation.generationToken, "generation-v2");
+  composition.capabilityBundle.handleResult({
+    type: "capability/result",
+    invocationId: v2Invocation.invocationId,
+    generationToken: "generation-v2",
+    output: "v2",
+    exitCode: 0,
+  });
+  assert.equal((await v2Execution).output, "v2");
+  await Promise.resolve();
+  assert.equal(
+    events.some(
+      (event) =>
+        event.type === "capabilities/released" &&
+        event.generationToken === "generation-v2",
+    ),
+    true,
+  );
+  await composition.close();
 });
 
 function tool(name: string, description: string) {

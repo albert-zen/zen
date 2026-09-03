@@ -36,6 +36,17 @@ test("fixture SDK queries Projects, isolates namespaces, migrates sequentially o
   const root = await mkdtemp(path.join(os.tmpdir(), "zenx-sdk-"));
   const journal = new InMemoryThreadJournal();
   const appServer = fixtureAppServer(journal);
+  const pluginAppServer = {
+    completeTurn: async (threadId: string, input: string) => {
+      const turn = await appServer.startTurn(threadId, input);
+      await turn.done;
+      return {
+        threadId,
+        turnId: turn.id,
+        items: (await appServer.readThread(threadId)).items,
+      };
+    },
+  };
   const thread = await appServer.startThread({ cwd: "/workspace" });
   const projects = async () => [
     {
@@ -66,7 +77,7 @@ test("fixture SDK queries Projects, isolates namespaces, migrates sequentially o
       ],
       initialStorage: { first: 1 },
       queryProjects: projects,
-      appServer,
+      appServer: pluginAppServer,
     });
     const other = await createZenXPluginHostSdk({
       pluginId: "other",
@@ -74,7 +85,7 @@ test("fixture SDK queries Projects, isolates namespaces, migrates sequentially o
       storageVersion: 1,
       initialStorage: {},
       queryProjects: projects,
-      appServer,
+      appServer: pluginAppServer,
     });
 
     assert.equal(fixture.version, 1);
@@ -128,7 +139,7 @@ test("fixture SDK queries Projects, isolates namespaces, migrates sequentially o
         },
       ],
       queryProjects: projects,
-      appServer,
+      appServer: pluginAppServer,
     });
     assert.equal(reran, 0);
     assert.deepEqual(await restarted.storage.get(), {
@@ -252,10 +263,9 @@ test("bundled, process, and HTTP adapters expose the same logical SDK operation 
     initialStorage: { shared: "value" },
     queryProjects: async () => [],
     appServer: {
-      startTurn: async () => {
+      completeTurn: async () => {
         throw new Error("unused");
       },
-      readThread: async () => ({ items: [] }),
     },
   });
   const invocation = {

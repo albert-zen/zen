@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import type { ToolInvocation } from "../../../../../src/tool.js";
+import type { CanonicalItem, UserInput } from "../../../../../src/item.js";
 import type {
   ClientRequestMethod,
   ClientRequestParams,
@@ -43,6 +44,14 @@ interface AppServerRequestTarget {
     method: M,
     params: ClientRequestParams[M],
   ): Promise<ClientRequestResults[M]>;
+  completePluginTurn?(
+    threadId: string,
+    input: string | UserInput,
+  ): Promise<{
+    threadId: string;
+    turnId: string;
+    items: readonly CanonicalItem[];
+  }>;
 }
 
 export class MutableAppServerRequestPort implements AppServerRequestPort {
@@ -80,6 +89,20 @@ export class MutableAppServerRequestPort implements AppServerRequestPort {
       throw new Error("ZenX self-control App Server port is not attached");
     }
     return await this.#target.request(method, params);
+  }
+
+  async completeTurn(
+    threadId: string,
+    input: string | UserInput,
+  ): Promise<{
+    threadId: string;
+    turnId: string;
+    items: readonly CanonicalItem[];
+  }> {
+    if (this.#target?.completePluginTurn === undefined) {
+      throw new Error("ZenX plugin App Server port is not attached");
+    }
+    return await this.#target.completePluginTurn(threadId, input);
   }
 }
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -33,6 +33,91 @@ function managerFor(directory: string): AppServerManager {
     startupTimeoutMs: 10_000,
   });
 }
+
+test("startup timeout terminates an exact child that ignores graceful shutdown and TERM", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-start-timeout-"),
+  );
+  const entryPath = path.join(directory, "ignores-shutdown.cjs");
+  const marker = path.join(directory, "signals.log");
+  await writeFile(
+    entryPath,
+    `const fs = require("node:fs");
+const marker = process.env.ZENX_STARTUP_MARKER;
+const mark = (value) => fs.appendFileSync(marker, value + "\\n");
+process.on("message", (message) => {
+  if (message?.type === "shutdown") mark("shutdown");
+});
+process.on("SIGTERM", () => mark("SIGTERM"));
+mark("started");
+setInterval(() => {}, 1_000);
+`,
+    "utf8",
+  );
+  const manager = new AppServerManager({
+    entryPath,
+    tokenFile: path.join(directory, "runtime", "app-server.token"),
+    hostConfig: {
+      cwd: process.cwd(),
+      dataDirectory: path.join(directory, "data"),
+      model: "fake",
+      models: ["fake"],
+      approvalPolicy: "never",
+      provider: { type: "fake" },
+    },
+    environment: { ...process.env, ZENX_STARTUP_MARKER: marker },
+    startupTimeoutMs: 2_000,
+    shutdownGraceMs: 20,
+    terminationGraceMs: 20,
+  });
+  try {
+    const startup = manager.start();
+    void startup.catch(() => undefined);
+    await waitFor(() => manager.processId !== undefined);
+    const processId = manager.processId!;
+    await assert.rejects(startup, /Timed out starting Zen App Server/u);
+    assert.equal(manager.processId, undefined);
+    assert.deepEqual((await readFile(marker, "utf8")).trim().split("\n"), [
+      "started",
+      "shutdown",
+      "SIGTERM",
+    ]);
+    assert.throws(
+      () => process.kill(processId, 0),
+      (error: unknown) =>
+        error instanceof Error && "code" in error && error.code === "ESRCH",
+    );
+
+    await manager.stop();
+    await writeFile(marker, "", "utf8");
+    const cancelledStartup = manager.start();
+    void cancelledStartup.catch(() => undefined);
+    await waitFor(() => manager.processId !== undefined);
+    await waitFor(() =>
+      readFile(marker, "utf8").then((value) => value.includes("started")),
+    );
+    const cancelledProcessId = manager.processId!;
+    const stopping = manager.stop();
+    await assert.rejects(
+      cancelledStartup,
+      /exited during startup|startup was cancelled/u,
+    );
+    await stopping;
+    assert.deepEqual((await readFile(marker, "utf8")).trim().split("\n"), [
+      "started",
+      "shutdown",
+      "SIGTERM",
+    ]);
+    assert.throws(
+      () => process.kill(cancelledProcessId, 0),
+      (error: unknown) =>
+        error instanceof Error && "code" in error && error.code === "ESRCH",
+    );
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("hosts a real App Server and removes its private token on shutdown", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-host-"));
@@ -280,8 +365,17 @@ test("refreshes one plugin projection in the existing target App Server process"
     path.join(os.tmpdir(), "zenx-plugin-refresh-"),
   );
   let snapshot = pluginHostSnapshot("Target one");
+  let generation = 1;
+  const released: string[] = [];
   const capabilityHost: ZenXCapabilityHost = {
     hostSnapshot: () => structuredClone(snapshot),
+    captureHostSnapshot: () => ({
+      ...structuredClone(snapshot),
+      generationToken: `generation-${String(generation++)}`,
+    }),
+    releaseHostGeneration: (generationToken) => {
+      released.push(generationToken);
+    },
     execute: async () => ({ output: "ok", exitCode: 0 }),
   };
   const manager = new AppServerManager({
@@ -306,6 +400,7 @@ test("refreshes one plugin projection in the existing target App Server process"
     assert.deepEqual(await manager.refreshPluginAfterCommit("target"), {
       status: "reloaded",
     });
+    await waitFor(() => released.includes("generation-1"));
     assert.equal(manager.processId, processId);
     assert.deepEqual(manager.status, { type: "ready", reconnected: false });
     snapshot = {
@@ -324,6 +419,9 @@ test("refreshes one plugin projection in the existing target App Server process"
     if (rejected.status === "failed") {
       assert.match(rejected.message, /non-target capability projection/u);
     }
+    assert.equal(released.includes("generation-3"), true);
+    await manager.stop();
+    assert.equal(released.includes("generation-2"), true);
   } finally {
     await manager.stop();
     await rm(directory, { recursive: true, force: true });
@@ -354,23 +452,34 @@ function pluginHostSnapshot(description: string) {
 test("recovers a killed hosted App Server and admits one subsequent Turn", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-crash-"));
   const invocations: string[] = [];
-  const capabilityHost: ZenXCapabilityHost = {
-    hostSnapshot: () => ({
-      definitions: [
-        {
-          name: "demo_recovered",
-          description: "Prove the recovered capability bridge",
-          inputSchema: {
-            type: "object",
-            properties: { value: { type: "string" } },
-            required: ["value"],
-            additionalProperties: false,
-          },
+  const released: string[] = [];
+  let generation = 1;
+  const snapshot = {
+    definitions: [
+      {
+        name: "demo_recovered",
+        description: "Prove the recovered capability bridge",
+        inputSchema: {
+          type: "object",
+          properties: { value: { type: "string" } },
+          required: ["value"],
+          additionalProperties: false,
         },
-      ],
+      },
+    ],
+  };
+  const capabilityHost: ZenXCapabilityHost = {
+    captureHostSnapshot: () => ({
+      ...structuredClone(snapshot),
+      generationToken: `crash-generation-${String(generation++)}`,
     }),
-    execute: async (invocation) => {
-      invocations.push(String(invocation.arguments.value));
+    releaseHostGeneration: (generationToken) => {
+      released.push(generationToken);
+    },
+    execute: async (invocation, generationToken) => {
+      invocations.push(
+        `${String(generationToken)}:${String(invocation.arguments.value)}`,
+      );
       return { output: '{"recovered":true}', exitCode: 0 };
     },
   };
@@ -408,6 +517,7 @@ test("recovers a killed hosted App Server and admits one subsequent Turn", async
     process.kill(originalProcessId!, "SIGKILL");
 
     await within(recovered.promise);
+    assert.equal(released.includes("crash-generation-1"), true);
     assert.notEqual(manager.processId, originalProcessId);
     assert.equal(
       statuses.some((status) => status.type === "reconnecting"),
@@ -435,7 +545,7 @@ test("recovers a killed hosted App Server and admits one subsequent Turn", async
       clientUserMessageId: "after-recovery-once",
     });
     await within(completed.promise);
-    assert.deepEqual(invocations, ["once"]);
+    assert.deepEqual(invocations, ["crash-generation-2:once"]);
     const resumed = await manager.request("thread/read", {
       threadId: thread.id,
       includeTurns: true,
@@ -452,6 +562,7 @@ test("recovers a killed hosted App Server and admits one subsequent Turn", async
     );
   } finally {
     await manager.stop();
+    assert.equal(released.includes("crash-generation-2"), true);
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -1023,11 +1134,11 @@ async function within<T>(
 }
 
 async function waitFor(
-  predicate: () => boolean,
+  predicate: () => boolean | Promise<boolean>,
   milliseconds = 10_000,
 ): Promise<void> {
   const deadline = Date.now() + milliseconds;
-  while (!predicate()) {
+  while (!(await predicate())) {
     if (Date.now() >= deadline)
       throw new Error("Timed out waiting for Room tool turn");
     await new Promise((resolve) => setTimeout(resolve, 10));

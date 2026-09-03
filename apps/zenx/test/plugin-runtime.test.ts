@@ -212,6 +212,82 @@ test("runtime ownership is unique and disable drains an admitted call before rev
   assert.equal(closed, true);
 });
 
+test("host generation leases route v1 and v2 after v3 publishes and reject released tokens", async () => {
+  const environment = new ToolEnvironment();
+  const supervisor = new PluginRuntimeSupervisor(environment);
+  const closed: string[] = [];
+  const registration = (version: string): PluginRuntimeRegistration => ({
+    identity: { pluginId: "fixture", packageVersion: version },
+    definitions: [
+      {
+        name: "fixture_echo",
+        description: "Echo a generation",
+        inputSchema: { type: "object" },
+      },
+    ],
+    start: async () => ({
+      identity: { pluginId: "fixture", packageVersion: version },
+      invoke: async () => ({ output: version, exitCode: 0 }),
+      close: async () => {
+        closed.push(version);
+      },
+    }),
+  });
+  await supervisor.start(registration("v1"));
+  const v1 = supervisor.captureHostGeneration(["fixture_echo"]);
+  const stagedV2 = await supervisor.stage(registration("v2"), undefined, {
+    replaceCurrent: true,
+  });
+  stagedV2.publish();
+  const v2 = supervisor.captureHostGeneration(["fixture_echo"]);
+  const stagedV3 = await supervisor.stage(registration("v3"), undefined, {
+    replaceCurrent: true,
+  });
+  stagedV3.publish();
+  await Promise.resolve();
+  assert.equal(closed.length, 0);
+
+  assert.equal(
+    (
+      await supervisor.invokeHostGeneration(
+        v1,
+        invocation("fixture_echo", "v1-call"),
+      )
+    ).output,
+    "v1",
+  );
+  assert.equal(
+    (
+      await supervisor.invokeHostGeneration(
+        v2,
+        invocation("fixture_echo", "v2-call"),
+      )
+    ).output,
+    "v2",
+  );
+  supervisor.releaseHostGeneration(v1);
+  await waitUntil(() => closed.includes("v1"));
+  assert.equal(closed.includes("v2"), false);
+  await assert.rejects(
+    supervisor.invokeHostGeneration(
+      v1,
+      invocation("fixture_echo", "released-v1"),
+    ),
+    /Unknown or released capability generation/u,
+  );
+  supervisor.releaseHostGeneration(v2);
+  await waitUntil(() => closed.includes("v2"));
+  await assert.rejects(
+    supervisor.invokeHostGeneration(
+      "unknown-generation",
+      invocation("fixture_echo", "unknown"),
+    ),
+    /Unknown or released capability generation/u,
+  );
+  await supervisor.close();
+  assert.equal(closed.includes("v3"), true);
+});
+
 test("local process runtime executes, cancels, closes, and never retries failures", async () => {
   const temporaryDirectory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-plugin-runtime-"),
@@ -916,6 +992,47 @@ test("throwing Catalog listeners cannot fail lifecycle commits or block later li
     observed.at(-1)?.plugins.find((plugin) => plugin.id === "fixture")?.enabled,
     true,
   );
+});
+
+test("Catalog close revokes every runtime when the first close rejects", async () => {
+  const stopped: string[] = [];
+  const registry = new ZenXPluginCatalog(
+    {
+      load: async () => emptyCapabilityConfiguration(),
+      save: async () => {},
+    },
+    {
+      pluginRuntimeLifecycle: {
+        stage: async () => ({ publish: () => {}, rollback: async () => {} }),
+        stop: async (pluginId) => {
+          stopped.push(pluginId);
+          if (pluginId === "first") throw new Error("first close failed");
+        },
+      },
+    },
+  );
+  const packageFor = (id: string): ZenXCapabilityPackage => ({
+    manifest: {
+      ...pluginManifest(),
+      id,
+      name: id,
+      mainDocument: `Use ${id}_echo.`,
+      provider: { ...pluginManifest().provider, id: `${id}-provider` },
+      tools: [
+        {
+          ...pluginManifest().tools[0]!,
+          name: `${id}_echo`,
+        },
+      ],
+    },
+    invoke: async () => ({ output: id, exitCode: 0 }),
+  });
+  await registry.initialize();
+  await registry.install(packageFor("first"));
+  await registry.install(packageFor("second"));
+  await assert.rejects(registry.close(), /Plugin Catalog shutdown failed/u);
+  assert.deepEqual(stopped.sort(), ["first", "second"]);
+  assert.deepEqual(registry.hostSnapshot().definitions, []);
 });
 
 function bundledRegistration(

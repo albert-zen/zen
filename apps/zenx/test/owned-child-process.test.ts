@@ -4,6 +4,7 @@ import test from "node:test";
 import type { ChildProcess } from "node:child_process";
 
 import { observeOwnedChild } from "../src/main/owned-child-process.js";
+import { stopOwnedAppServerChild } from "../src/main/app-server-manager.js";
 
 function childWithPid(pid: number | undefined): ChildProcess {
   const child = new EventEmitter() as ChildProcess;
@@ -66,4 +67,60 @@ test("owned cleanup cannot advance before a post-error close", async () => {
   child.emit("close", null, "SIGKILL");
   await cleanup;
   assert.deepEqual(cleanupOrder, ["remove-owned-resource"]);
+});
+
+test("AppServer owned-child stop escalates exact shutdown through TERM and KILL then awaits close", async () => {
+  const child = childWithPid(6789);
+  const calls: string[] = [];
+  Object.defineProperties(child, {
+    connected: { configurable: true, value: true },
+    exitCode: { configurable: true, value: null },
+    signalCode: { configurable: true, value: null },
+  });
+  child.send = (() => {
+    calls.push("shutdown");
+    return true;
+  }) as ChildProcess["send"];
+  child.kill = ((signal?: NodeJS.Signals | number) => {
+    calls.push(String(signal));
+    if (signal === "SIGKILL") {
+      queueMicrotask(() => {
+        calls.push("close");
+        child.emit("close", null, "SIGKILL");
+      });
+    }
+    return true;
+  }) as ChildProcess["kill"];
+  const observation = observeOwnedChild(child);
+
+  await stopOwnedAppServerChild(child, observation, {
+    shutdownGraceMs: 1,
+    terminationGraceMs: 1,
+  });
+  assert.deepEqual(calls, ["shutdown", "SIGTERM", "SIGKILL", "close"]);
+});
+
+test("AppServer owned-child stop treats an already closed exact child as settled", async () => {
+  const child = childWithPid(6790);
+  const calls: string[] = [];
+  Object.defineProperty(child, "connected", {
+    configurable: true,
+    value: true,
+  });
+  child.send = (() => {
+    calls.push("shutdown");
+    return true;
+  }) as ChildProcess["send"];
+  child.kill = (() => {
+    calls.push("kill");
+    return true;
+  }) as ChildProcess["kill"];
+  const observation = observeOwnedChild(child);
+  child.emit("close", 0, null);
+
+  await stopOwnedAppServerChild(child, observation, {
+    shutdownGraceMs: 1,
+    terminationGraceMs: 1,
+  });
+  assert.deepEqual(calls, []);
 });

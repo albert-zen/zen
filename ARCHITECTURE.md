@@ -29,6 +29,7 @@
 - **Plugin Runtime** — 实际执行插件领域行为的运行边界，可以是 bundled module、child process、本地服务或远程服务，失败由调用明确返回且不建立自动修复状态机。
 - **Plugin Runtime ABI** — bundled module、child process 与 HTTP service 共享的 provider-neutral invocation/result、取消与 close 合同；它只传递稳定 package identity、namespaced tool、参数和一次调用上下文，不拥有 Agent 或会话语义。
 - **Plugin Runtime Supervisor** — ZenX Host 持有的瞬时 plugin runtime/bundle registry，启动或附着 enabled runtime、向 Tool Environment 原子发布其 tool ownership，并在 disable/uninstall/quit 时先撤销新 admission、再等待已准备/执行调用并关闭 runtime。
+- **ZenX Capability Generation Lease** — ZenX Host 为一次 child capability snapshot 持有的瞬时 opaque token，把跨进程 prepared invocation 绑定到当时的 exact Plugin Runtime generation，并在 child 释放该 snapshot 或退出后撤销 lease；它不进入模型输入、Catalog 或 durable state。
 - **Plugin Runtime Adapter** — 把 trusted module 调用、bounded JSONL child process 或有界 HTTP request/continuation 映射到同一 Plugin Runtime ABI；transport 失败显式返回且不重试或重启。
 - **ZenX Plugin Host SDK v1** — Plugin Host 按 package identity 注入的 provider-neutral 公共合同，以 `query / actions / ui / storage` 四组能力让 bundled 与隔离 runtime 使用相同产品语义，而不取得 ZenX 内部 store authority。
 - **ZenX Plugin Developer Kit** — 仓库内公开的 `@zenx/plugin-sdk` package 提供与 Host SDK v1、Plugin Runtime/UI 和 manifest v2 一致的类型、runtime schema、无会话 authority 的内存 fixture Host，以及只负责 `create` / `validate` / 标准 npm `pack` 的薄开发者 CLI。

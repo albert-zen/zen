@@ -14,6 +14,9 @@ import {
 let appServer: HostedZenAppServer | undefined;
 let server: CodexWebSocketServer | undefined;
 let summaryRequestCount = 0;
+let generationToken = "legacy";
+let replacementCount = 0;
+let currentQueryCount = 0;
 
 process.on("message", (message: unknown) => {
   if (!isHostCommand(message)) return;
@@ -33,6 +36,7 @@ async function handle(command: HostCommand): Promise<void> {
     return;
   }
   if (command.type === "start") {
+    generationToken = command.capabilities.generationToken;
     appServer = createHostedAppServer(command.config);
     server = await serveCodexWebSocket({
       appServer,
@@ -44,19 +48,55 @@ async function handle(command: HostCommand): Promise<void> {
     return;
   }
   if (command.type === "capabilities/replace") {
-    if (process.env["ZENX_SUMMARY_FIXTURE_MODE"] === "exit-replacement") {
+    const mode = process.env["ZENX_SUMMARY_FIXTURE_MODE"];
+    replacementCount += 1;
+    if (mode !== "query-old") {
+      generationToken = command.capabilities.generationToken;
+    }
+    if (mode === "exit-replacement") {
       process.exit(42);
     }
-    const reply = () =>
-      process.send?.({
-        type: "capabilities/replaced",
-        requestId: command.requestId,
-      });
-    if (process.env["ZENX_SUMMARY_FIXTURE_MODE"] === "late-replacement") {
+    const reply = () => {
+      if (!process.connected) return;
+      process.send?.(
+        {
+          type: "capabilities/replaced",
+          requestId: command.requestId,
+          generationToken,
+        },
+        () => undefined,
+      );
+    };
+    if (
+      mode === "query-old" ||
+      (mode === "double-timeout" && replacementCount === 1)
+    ) {
+      return;
+    }
+    if (
+      (mode === "query-new" || mode === "late-ack-query-timeout") &&
+      replacementCount === 1
+    ) {
       setTimeout(reply, 80);
     } else {
       reply();
     }
+    return;
+  }
+  if (command.type === "capabilities/current") {
+    const mode = process.env["ZENX_SUMMARY_FIXTURE_MODE"];
+    currentQueryCount += 1;
+    if (
+      mode === "late-ack-query-timeout" ||
+      (mode === "double-timeout" && currentQueryCount === 1)
+    ) {
+      return;
+    }
+    process.send?.({
+      type: "capabilities/current",
+      requestId: command.requestId,
+      generationToken,
+    });
     return;
   }
   if (command.type !== "thread-summary/list") return;
@@ -70,15 +110,17 @@ async function handle(command: HostCommand): Promise<void> {
     });
     return;
   }
-  if (mode === "colliding-known-events") {
+  if (mode === "colliding-known-events" || mode === "double-timeout") {
     process.send?.({
       type: "capability/cancel",
       invocationId: "unrelated-capability",
+      generationToken,
       requestId: command.requestId,
     });
     process.send?.({
       type: "capability/invoke",
       invocationId: "fixture-capability",
+      generationToken,
       requestId: command.requestId,
       invocation: {
         callId: "call-1",

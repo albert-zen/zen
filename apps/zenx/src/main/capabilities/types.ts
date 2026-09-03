@@ -296,6 +296,11 @@ export interface ZenXCapabilityHostSnapshot {
   plugins?: ZenXAvailablePlugin[];
 }
 
+/** Host-only snapshot identity; never projected into model-visible tool specs. */
+export interface ZenXCapabilityGenerationSnapshot extends ZenXCapabilityHostSnapshot {
+  generationToken: string;
+}
+
 export interface ZenXAvailablePlugin {
   id: string;
   name: string;
@@ -306,8 +311,14 @@ export interface ZenXAvailablePlugin {
 }
 
 export interface ZenXCapabilityHost {
-  hostSnapshot(): ZenXCapabilityHostSnapshot;
-  execute(invocation: ToolInvocation): Promise<ToolExecutionResult>;
+  /** Legacy/product projection seam; Manager prefers captureHostSnapshot. */
+  hostSnapshot?(): ZenXCapabilityHostSnapshot;
+  captureHostSnapshot?(): ZenXCapabilityGenerationSnapshot;
+  releaseHostGeneration?(generationToken: string): void;
+  execute(
+    invocation: ToolInvocation,
+    generationToken?: string,
+  ): Promise<ToolExecutionResult>;
 }
 
 export interface ZenXPluginCatalogStore {

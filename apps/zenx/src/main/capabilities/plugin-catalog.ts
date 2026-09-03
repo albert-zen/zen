@@ -1028,10 +1028,18 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
   }
 
   async close(): Promise<void> {
+    const failures: Error[] = [];
     for (const capabilityId of [...this.#registered.keys()]) {
-      await this.unregister(capabilityId);
+      try {
+        await this.unregister(capabilityId);
+      } catch (error) {
+        failures.push(asError(error));
+      }
     }
     this.#catalogPackages.clear();
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "Plugin Catalog shutdown failed");
+    }
   }
 
   async resetTransient(): Promise<void> {
@@ -1163,6 +1171,10 @@ function enterCatalogCommit(options: {
     return;
   }
   options.signal?.throwIfAborted();
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 function isProfileSource(value: unknown): value is ZenXPluginProfileSource {

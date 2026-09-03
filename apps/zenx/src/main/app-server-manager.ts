@@ -1,5 +1,5 @@
 import { fork, type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { chmod, mkdir, open, unlink } from "node:fs/promises";
 import path from "node:path";
 
@@ -21,6 +21,7 @@ import {
 import type {
   ZenXCapabilityHost,
   ZenXCapabilityHostSnapshot,
+  ZenXCapabilityGenerationSnapshot,
   ZenXPostCommitCapabilityRefresh,
 } from "./capabilities/types.js";
 import type {
@@ -29,7 +30,12 @@ import type {
 } from "../../../../src/thread-summary.js";
 import type { ZenXThreadAttachmentProjection } from "./image-attachments.js";
 import type { ModelUsageProjection } from "../../../../src/model-usage.js";
+import type { CanonicalItem, UserInput } from "../../../../src/item.js";
 import { AppServerConnectionPublisher } from "./app-server-connection.js";
+import {
+  observeOwnedChild,
+  type OwnedChildObservation,
+} from "./owned-child-process.js";
 
 export type AppServerHostStatus =
   | { type: "starting" }
@@ -51,6 +57,8 @@ export interface AppServerManagerOptions {
   recoveryDelaysMs?: readonly number[];
   capabilityHost?: ZenXCapabilityHost;
   capabilityReplacementTimeoutMs?: number;
+  shutdownGraceMs?: number;
+  terminationGraceMs?: number;
 }
 
 type NotificationListener = (
@@ -78,6 +86,12 @@ interface PendingApproval {
   resolve(result: { decision: ApprovalDecision }): void;
 }
 
+interface UncertainCapabilityReplacement {
+  requestId: string;
+  previousGenerationToken: string | undefined;
+  snapshot: ZenXCapabilityGenerationSnapshot;
+}
+
 export class AppServerManager {
   readonly #options: AppServerManagerOptions;
   readonly #statusListeners = new Set<(status: AppServerHostStatus) => void>();
@@ -91,8 +105,13 @@ export class AppServerManager {
   readonly #pendingApprovals = new Map<string, PendingApproval>();
   readonly #activeCapabilityInvocations = new Map<
     string,
-    { controller: AbortController; execution: Promise<void> }
+    {
+      controller: AbortController;
+      execution: Promise<void>;
+      generationToken: string;
+    }
   >();
+  readonly #heldCapabilityGenerations = new Set<string>();
   readonly #pendingThreadSummaryRequests = new Map<
     string,
     {
@@ -116,10 +135,30 @@ export class AppServerManager {
   >();
   readonly #pendingCapabilityReplacements = new Map<
     string,
-    { resolve(): void; reject(error: Error): void }
+    {
+      generationToken: string;
+      resolve(): void;
+      reject(error: Error): void;
+    }
+  >();
+  readonly #pendingCapabilityCurrentRequests = new Map<
+    string,
+    { resolve(generationToken: string): void; reject(error: Error): void }
+  >();
+  readonly #pendingPluginTurns = new Map<
+    string,
+    {
+      resolve(result: {
+        threadId: string;
+        turnId: string;
+        items: readonly CanonicalItem[];
+      }): void;
+      reject(error: Error): void;
+    }
   >();
   #status: AppServerHostStatus = { type: "stopped" };
   #child: ChildProcess | undefined;
+  #childObservation: OwnedChildObservation | undefined;
   #client: ZenXProtocolClient | undefined;
   #acceptingCapabilityInvocations = false;
   #stopping = false;
@@ -131,11 +170,15 @@ export class AppServerManager {
   #nextThreadAttachmentRequest = 1;
   #nextThreadUsageRequest = 1;
   #nextCapabilityReplacementRequest = 1;
+  #nextCapabilityCurrentRequest = 1;
+  #nextPluginTurnRequest = 1;
   #capabilityRestartTail: Promise<void> = Promise.resolve();
+  #pluginRefreshTail: Promise<void> = Promise.resolve();
+  #uncertainCapabilityReplacement: UncertainCapabilityReplacement | undefined;
   #connectionPublisher: AppServerConnectionPublisher | undefined;
   #bearerToken: string | undefined;
   #authorityUrl: string | undefined;
-  #publishedCapabilitySnapshot: ZenXCapabilityHostSnapshot | undefined;
+  #publishedCapabilitySnapshot: ZenXCapabilityGenerationSnapshot | undefined;
 
   constructor(options: AppServerManagerOptions) {
     this.#options = options;
@@ -180,20 +223,30 @@ export class AppServerManager {
       await this.#startHost(lifecycle);
       this.#setStatus({ type: "ready", reconnected: false });
     } catch (error) {
-      const message = asError(error).message;
+      const failure = asError(error);
+      const failures = [failure];
       if (
         this.#options.descriptorFile === undefined ||
         this.#connectionPublisher !== undefined
       ) {
-        await removeTokenFile(this.#options.tokenFile);
         this.#bearerToken = undefined;
         this.#authorityUrl = undefined;
       }
-      await this.#releaseConnectionPublisher();
-      if (lifecycle === this.#lifecycle && !this.#stopping) {
-        this.#setStatus({ type: "error", message });
+      const cleanup = await Promise.allSettled([
+        this.#options.descriptorFile === undefined ||
+        this.#connectionPublisher !== undefined
+          ? removeTokenFile(this.#options.tokenFile)
+          : Promise.resolve(),
+        this.#releaseConnectionPublisher(),
+      ]);
+      for (const result of cleanup) {
+        if (result.status === "rejected") failures.push(asError(result.reason));
       }
-      throw new Error(message);
+      if (lifecycle === this.#lifecycle && !this.#stopping) {
+        this.#setStatus({ type: "error", message: failure.message });
+      }
+      if (failures.length === 1) throw failure;
+      throw new AggregateError(failures, "Zen App Server startup failed");
     }
   }
 
@@ -220,6 +273,8 @@ export class AppServerManager {
       silent: true,
     });
     this.#child = child;
+    const childObservation = observeOwnedChild(child);
+    this.#childObservation = childObservation;
     child.stderr?.on("data", (chunk: Buffer | string) => {
       console.error(`[ZenX App Server] ${chunk.toString().trimEnd()}`);
     });
@@ -227,10 +282,9 @@ export class AppServerManager {
       this.#handleChildExit(child, code, signal);
     });
 
+    let capabilities: ZenXCapabilityGenerationSnapshot | undefined;
     try {
-      const capabilities = this.#options.capabilityHost?.hostSnapshot() ?? {
-        definitions: [],
-      };
+      capabilities = this.#captureCapabilitySnapshot();
       const url = await waitForReady(
         child,
         this.#options.startupTimeoutMs ?? 10_000,
@@ -272,13 +326,33 @@ export class AppServerManager {
       this.#recoverUnexpectedExits = true;
     } catch (error) {
       this.#acceptingCapabilityInvocations = false;
-      this.#client?.close();
+      const failures = [asError(error)];
+      const client = this.#client;
       this.#client = undefined;
-      if (this.#child === child) this.#child = undefined;
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGTERM");
+      this.#publishedCapabilitySnapshot = undefined;
+      const cleanup = await Promise.allSettled([
+        Promise.resolve().then(() => client?.close()),
+        stopOwnedAppServerChild(child, childObservation, {
+          shutdownGraceMs: this.#options.shutdownGraceMs ?? 3_000,
+          terminationGraceMs: this.#options.terminationGraceMs ?? 3_000,
+        }),
+      ]);
+      for (const result of cleanup) {
+        if (result.status === "rejected") failures.push(asError(result.reason));
       }
-      throw error;
+      if (this.#child === child) this.#child = undefined;
+      if (this.#childObservation === childObservation) {
+        this.#childObservation = undefined;
+      }
+      if (capabilities !== undefined) {
+        try {
+          this.#releaseCapabilityGeneration(capabilities.generationToken);
+        } catch (releaseError) {
+          failures.push(asError(releaseError));
+        }
+      }
+      if (failures.length === 1) throw failures[0]!;
+      throw new AggregateError(failures, "Zen App Server startup failed");
     }
   }
 
@@ -313,6 +387,21 @@ export class AppServerManager {
   async refreshPluginAfterCommit(
     targetPluginId: string,
   ): Promise<{ status: "reloaded" } | { status: "failed"; message: string }> {
+    const refresh = this.#pluginRefreshTail.then(
+      async () => await this.#refreshPluginAfterCommit(targetPluginId),
+    );
+    this.#pluginRefreshTail = refresh.then(
+      () => undefined,
+      () => undefined,
+    );
+    return await refresh;
+  }
+
+  async #refreshPluginAfterCommit(
+    targetPluginId: string,
+  ): Promise<{ status: "reloaded" } | { status: "failed"; message: string }> {
+    let capturedGenerationToken: string | undefined;
+    let replacementSent = false;
     try {
       if (!/^[a-z][a-z0-9-]{1,62}$/u.test(targetPluginId)) {
         throw new Error(`Invalid target plugin id: ${targetPluginId}`);
@@ -327,8 +416,15 @@ export class AppServerManager {
       ) {
         throw new Error("Zen App Server is not ready for plugin reload");
       }
+      if (this.#uncertainCapabilityReplacement !== undefined) {
+        const reconciliation = await this.#reconcileCapabilityReplacement();
+        if (reconciliation.status === "pending") {
+          return { status: "failed", message: reconciliation.message };
+        }
+      }
       const requestId = `capability-replace-${String(this.#nextCapabilityReplacementRequest++)}`;
-      const capabilities = capabilityHost.hostSnapshot();
+      const capabilities = this.#captureCapabilitySnapshot();
+      capturedGenerationToken = capabilities.generationToken;
       if (this.#publishedCapabilitySnapshot !== undefined) {
         assertTargetOnlyCapabilityChange(
           this.#publishedCapabilitySnapshot,
@@ -336,16 +432,8 @@ export class AppServerManager {
           targetPluginId,
         );
       }
+      const timeoutMs = this.#capabilityReplacementTimeout();
       await new Promise<void>((resolve, reject) => {
-        const timeoutMs = this.#options.capabilityReplacementTimeoutMs ?? 5_000;
-        if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
-          reject(
-            new Error(
-              "Capability replacement timeout must be a positive integer",
-            ),
-          );
-          return;
-        }
         const timer = setTimeout(() => {
           if (!this.#pendingCapabilityReplacements.delete(requestId)) return;
           reject(
@@ -364,7 +452,17 @@ export class AppServerManager {
             reject(error);
           },
         };
-        this.#pendingCapabilityReplacements.set(requestId, pending);
+        this.#uncertainCapabilityReplacement = {
+          requestId,
+          previousGenerationToken:
+            this.#publishedCapabilitySnapshot?.generationToken,
+          snapshot: structuredClone(capabilities),
+        };
+        this.#pendingCapabilityReplacements.set(requestId, {
+          ...pending,
+          generationToken: capabilities.generationToken,
+        });
+        replacementSent = true;
         child.send(
           {
             type: "capabilities/replace",
@@ -379,10 +477,35 @@ export class AppServerManager {
           },
         );
       });
-      this.#publishedCapabilitySnapshot = structuredClone(capabilities);
       return { status: "reloaded" };
     } catch (error) {
-      return { status: "failed", message: asError(error).message };
+      const failure = asError(error);
+      if (
+        replacementSent &&
+        this.#uncertainCapabilityReplacement?.snapshot.generationToken ===
+          capturedGenerationToken
+      ) {
+        const reconciliation = await this.#reconcileCapabilityReplacement();
+        if (reconciliation.status === "confirmed-new") {
+          return { status: "reloaded" };
+        }
+        if (reconciliation.status === "pending") {
+          return {
+            status: "failed",
+            message: `${failure.message}; ${reconciliation.message}`,
+          };
+        }
+      } else if (capturedGenerationToken !== undefined) {
+        try {
+          this.#releaseCapabilityGeneration(capturedGenerationToken);
+        } catch (releaseError) {
+          return {
+            status: "failed",
+            message: `${failure.message}; capability generation cleanup failed: ${asError(releaseError).message}`,
+          };
+        }
+      }
+      return { status: "failed", message: failure.message };
     }
   }
 
@@ -491,6 +614,42 @@ export class AppServerManager {
     });
   }
 
+  async completePluginTurn(
+    threadId: string,
+    input: string | UserInput,
+  ): Promise<{
+    threadId: string;
+    turnId: string;
+    items: readonly CanonicalItem[];
+  }> {
+    if (
+      this.#status.type !== "ready" ||
+      this.#child === undefined ||
+      !this.#child.connected
+    ) {
+      const detail =
+        this.#status.type === "error" ? `: ${this.#status.message}` : "";
+      throw new Error(`Zen App Server is not ready${detail}`);
+    }
+    const requestId = `plugin-turn-${String(this.#nextPluginTurnRequest++)}`;
+    return await new Promise((resolve, reject) => {
+      this.#pendingPluginTurns.set(requestId, { resolve, reject });
+      this.#child!.send(
+        {
+          type: "plugin-turn/start",
+          requestId,
+          threadId,
+          input,
+        } satisfies HostCommand,
+        (error) => {
+          if (error === null) return;
+          this.#pendingPluginTurns.delete(requestId);
+          reject(error);
+        },
+      );
+    });
+  }
+
   onStatus(listener: (status: AppServerHostStatus) => void): () => void {
     this.#statusListeners.add(listener);
     return () => this.#statusListeners.delete(listener);
@@ -560,8 +719,13 @@ export class AppServerManager {
   }
 
   async #performStop(preserveConnectionAuthority: boolean): Promise<void> {
+    const failures: Error[] = [];
     if (!preserveConnectionAuthority) {
-      await this.#connectionPublisher?.revoke();
+      try {
+        await this.#connectionPublisher?.revoke();
+      } catch (error) {
+        failures.push(asError(error));
+      }
     }
     this.#cancelPendingApprovals();
     this.#rejectPendingThreadSummaryRequests(
@@ -576,35 +740,54 @@ export class AppServerManager {
     this.#rejectPendingCapabilityReplacements(
       new Error("Zen App Server host stopped"),
     );
+    this.#rejectPendingCapabilityCurrentRequests(
+      new Error("Zen App Server host stopped"),
+    );
+    this.#uncertainCapabilityReplacement = undefined;
+    this.#rejectPendingPluginTurns(new Error("Zen App Server host stopped"));
     await this.#cancelAndSettleCapabilityInvocations();
-    this.#client?.close();
+    try {
+      this.#client?.close();
+    } catch (error) {
+      failures.push(asError(error));
+    }
     this.#client = undefined;
     this.#publishedCapabilitySnapshot = undefined;
     const child = this.#child;
-    if (child !== undefined && child.exitCode === null) {
-      child.send({ type: "shutdown" } satisfies HostCommand);
-      const exitedGracefully = await waitForExit(child, 3_000);
-      if (!exitedGracefully) {
-        child.kill("SIGTERM");
-        const terminated = await waitForExit(child, 3_000);
-        if (!terminated) {
-          throw new Error(
-            `Timed out after 3000ms waiting for Zen App Server child ${String(
-              child.pid ?? "unknown",
-            )} to settle after SIGTERM`,
-          );
-        }
+    const observation = this.#childObservation;
+    if (child !== undefined && observation !== undefined) {
+      try {
+        await stopOwnedAppServerChild(child, observation, {
+          shutdownGraceMs: this.#options.shutdownGraceMs ?? 3_000,
+          terminationGraceMs: this.#options.terminationGraceMs ?? 3_000,
+        });
+      } catch (error) {
+        failures.push(asError(error));
       }
     }
     this.#child = undefined;
-    await this.#recoveryPromise;
+    this.#childObservation = undefined;
+    failures.push(...this.#releaseAllCapabilityGenerations());
+    try {
+      await this.#recoveryPromise;
+    } catch (error) {
+      failures.push(asError(error));
+    }
     if (!preserveConnectionAuthority) {
-      await removeTokenFile(this.#options.tokenFile);
       this.#bearerToken = undefined;
       this.#authorityUrl = undefined;
-      await this.#releaseConnectionPublisher();
+      const cleanup = await Promise.allSettled([
+        removeTokenFile(this.#options.tokenFile),
+        this.#releaseConnectionPublisher(),
+      ]);
+      for (const result of cleanup) {
+        if (result.status === "rejected") failures.push(asError(result.reason));
+      }
     }
     this.#setStatus({ type: "stopped" });
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "Zen App Server shutdown failed");
+    }
   }
 
   async #releaseConnectionPublisher(): Promise<void> {
@@ -702,6 +885,7 @@ export class AppServerManager {
   ): void {
     if (this.#child !== child) return;
     this.#child = undefined;
+    this.#childObservation = undefined;
     this.#acceptingCapabilityInvocations = false;
     this.#cancelPendingApprovals();
     this.#abortCapabilityInvocations();
@@ -717,8 +901,20 @@ export class AppServerManager {
     this.#rejectPendingCapabilityReplacements(
       new Error("Zen App Server stopped before replacing capabilities"),
     );
+    this.#rejectPendingCapabilityCurrentRequests(
+      new Error("Zen App Server stopped before confirming capabilities"),
+    );
+    this.#uncertainCapabilityReplacement = undefined;
+    this.#rejectPendingPluginTurns(
+      new Error("Zen App Server stopped before completing plugin Turn"),
+    );
     this.#client?.close();
     this.#client = undefined;
+    for (const failure of this.#releaseAllCapabilityGenerations()) {
+      console.error(
+        `[ZenX App Server] Failed to release a capability generation: ${failure.message}`,
+      );
+    }
     if (!this.#stopping && this.#recoverUnexpectedExits) {
       const reason =
         signal === null ? `exit code ${String(code)}` : `signal ${signal}`;
@@ -826,9 +1022,64 @@ export class AppServerManager {
         );
         if (pending !== undefined) {
           this.#pendingCapabilityReplacements.delete(hostEvent.requestId);
-          if (hostEvent.error === undefined) pending.resolve();
-          else pending.reject(new Error(hostEvent.error));
+          if (pending.generationToken !== hostEvent.generationToken) {
+            pending.reject(
+              new Error("Capability replacement ACK token mismatch"),
+            );
+            return;
+          }
         }
+        if (hostEvent.error === undefined) {
+          this.#confirmCapabilityReplacement(
+            hostEvent.requestId,
+            hostEvent.generationToken,
+          );
+          pending?.resolve();
+        } else {
+          const uncertain = this.#uncertainCapabilityReplacement;
+          if (
+            uncertain?.requestId === hostEvent.requestId &&
+            uncertain.snapshot.generationToken === hostEvent.generationToken
+          ) {
+            this.#uncertainCapabilityReplacement = undefined;
+            this.#releaseCapabilityGeneration(hostEvent.generationToken);
+          }
+          pending?.reject(new Error(hostEvent.error));
+        }
+        return;
+      }
+      if (hostEvent?.type === "capabilities/current") {
+        const pending = this.#pendingCapabilityCurrentRequests.get(
+          hostEvent.requestId,
+        );
+        if (pending !== undefined) {
+          this.#pendingCapabilityCurrentRequests.delete(hostEvent.requestId);
+          if (hostEvent.error !== undefined) {
+            pending.reject(new Error(hostEvent.error));
+          } else {
+            pending.resolve(hostEvent.generationToken);
+          }
+        }
+        return;
+      }
+      if (hostEvent?.type === "plugin-turn/result") {
+        const pending = this.#pendingPluginTurns.get(hostEvent.requestId);
+        if (pending !== undefined) {
+          this.#pendingPluginTurns.delete(hostEvent.requestId);
+          if (hostEvent.error !== undefined) {
+            pending.reject(new Error(hostEvent.error));
+          } else {
+            pending.resolve({
+              threadId: hostEvent.threadId,
+              turnId: hostEvent.turnId,
+              items: structuredClone(hostEvent.items),
+            });
+          }
+        }
+        return;
+      }
+      if (hostEvent?.type === "capabilities/released") {
+        this.#releaseCapabilityGeneration(hostEvent.generationToken);
         return;
       }
       if (hostEvent === undefined) {
@@ -876,11 +1127,14 @@ export class AppServerManager {
         return;
       }
       if (hostEvent.type === "capability/cancel") {
-        this.#activeCapabilityInvocations
-          .get(hostEvent.invocationId)
-          ?.controller.abort(
+        const active = this.#activeCapabilityInvocations.get(
+          hostEvent.invocationId,
+        );
+        if (active?.generationToken === hostEvent.generationToken) {
+          active.controller.abort(
             new DOMException("Capability invocation cancelled", "AbortError"),
           );
+        }
         return;
       }
       if (hostEvent.type !== "capability/invoke") return;
@@ -888,6 +1142,7 @@ export class AppServerManager {
         child.send({
           type: "capability/result",
           invocationId: hostEvent.invocationId,
+          generationToken: hostEvent.generationToken,
           error: "ZenX capability host is stopping",
         } satisfies HostCommand);
         return;
@@ -897,6 +1152,7 @@ export class AppServerManager {
         child.send({
           type: "capability/result",
           invocationId: hostEvent.invocationId,
+          generationToken: hostEvent.generationToken,
           error: "ZenX capability host is unavailable",
         } satisfies HostCommand);
         return;
@@ -905,6 +1161,7 @@ export class AppServerManager {
         child.send({
           type: "capability/result",
           invocationId: hostEvent.invocationId,
+          generationToken: hostEvent.generationToken,
           error: `Duplicate capability invocation ${hostEvent.invocationId}`,
         } satisfies HostCommand);
         return;
@@ -913,16 +1170,20 @@ export class AppServerManager {
       const execution = Promise.resolve()
         .then(
           async () =>
-            await host.execute({
-              ...hostEvent.invocation,
-              signal: controller.signal,
-            }),
+            await host.execute(
+              {
+                ...hostEvent.invocation,
+                signal: controller.signal,
+              },
+              hostEvent.generationToken,
+            ),
         )
         .then((result) => {
           if (this.#child === child && child.connected) {
             child.send({
               type: "capability/result",
               invocationId: hostEvent.invocationId,
+              generationToken: hostEvent.generationToken,
               output: result.output,
               exitCode: result.exitCode,
               ...(result.contentType === undefined
@@ -942,6 +1203,7 @@ export class AppServerManager {
             child.send({
               type: "capability/result",
               invocationId: hostEvent.invocationId,
+              generationToken: hostEvent.generationToken,
               error: asError(error).message,
             } satisfies HostCommand);
           }
@@ -957,6 +1219,7 @@ export class AppServerManager {
       this.#activeCapabilityInvocations.set(hostEvent.invocationId, {
         controller,
         execution,
+        generationToken: hostEvent.generationToken,
       });
     });
   }
@@ -1002,6 +1265,149 @@ export class AppServerManager {
       pending.reject(error);
     }
     this.#pendingCapabilityReplacements.clear();
+  }
+
+  #rejectPendingPluginTurns(error: Error): void {
+    for (const pending of this.#pendingPluginTurns.values()) {
+      pending.reject(error);
+    }
+    this.#pendingPluginTurns.clear();
+  }
+
+  #capabilityReplacementTimeout(): number {
+    const timeoutMs = this.#options.capabilityReplacementTimeoutMs ?? 5_000;
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+      throw new Error(
+        "Capability replacement timeout must be a positive integer",
+      );
+    }
+    return timeoutMs;
+  }
+
+  async #reconcileCapabilityReplacement(): Promise<
+    | { status: "confirmed-new" | "confirmed-previous" }
+    | { status: "pending"; message: string }
+  > {
+    const uncertain = this.#uncertainCapabilityReplacement;
+    if (uncertain === undefined) return { status: "confirmed-new" };
+    let currentGenerationToken: string;
+    try {
+      currentGenerationToken = await this.#readCurrentCapabilityGeneration();
+    } catch (error) {
+      return {
+        status: "pending",
+        message: `capability generation confirmation remains pending: ${asError(error).message}`,
+      };
+    }
+    if (currentGenerationToken === uncertain.snapshot.generationToken) {
+      this.#confirmCapabilityReplacement(
+        uncertain.requestId,
+        currentGenerationToken,
+      );
+      return { status: "confirmed-new" };
+    }
+    if (currentGenerationToken === uncertain.previousGenerationToken) {
+      this.#uncertainCapabilityReplacement = undefined;
+      this.#releaseCapabilityGeneration(uncertain.snapshot.generationToken);
+      return { status: "confirmed-previous" };
+    }
+    return {
+      status: "pending",
+      message: `capability generation confirmation returned unexpected token ${currentGenerationToken}`,
+    };
+  }
+
+  async #readCurrentCapabilityGeneration(): Promise<string> {
+    const child = this.#child;
+    if (child === undefined || !child.connected) {
+      throw new Error(
+        "Zen App Server is not ready for capability confirmation",
+      );
+    }
+    const requestId = `capability-current-${String(this.#nextCapabilityCurrentRequest++)}`;
+    const timeoutMs = this.#capabilityReplacementTimeout();
+    return await new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (!this.#pendingCapabilityCurrentRequests.delete(requestId)) return;
+        reject(
+          new Error(
+            `Capability generation confirmation timed out after ${String(timeoutMs)}ms`,
+          ),
+        );
+      }, timeoutMs);
+      const pending = {
+        resolve: (generationToken: string) => {
+          clearTimeout(timer);
+          resolve(generationToken);
+        },
+        reject: (error: Error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      };
+      this.#pendingCapabilityCurrentRequests.set(requestId, pending);
+      child.send(
+        { type: "capabilities/current", requestId } satisfies HostCommand,
+        (error) => {
+          if (error === null) return;
+          if (!this.#pendingCapabilityCurrentRequests.delete(requestId)) return;
+          pending.reject(error);
+        },
+      );
+    });
+  }
+
+  #confirmCapabilityReplacement(
+    requestId: string,
+    generationToken: string,
+  ): void {
+    const uncertain = this.#uncertainCapabilityReplacement;
+    if (
+      uncertain?.requestId !== requestId ||
+      uncertain.snapshot.generationToken !== generationToken
+    ) {
+      return;
+    }
+    this.#publishedCapabilitySnapshot = structuredClone(uncertain.snapshot);
+    this.#uncertainCapabilityReplacement = undefined;
+  }
+
+  #rejectPendingCapabilityCurrentRequests(error: Error): void {
+    for (const pending of this.#pendingCapabilityCurrentRequests.values()) {
+      pending.reject(error);
+    }
+    this.#pendingCapabilityCurrentRequests.clear();
+  }
+
+  #captureCapabilitySnapshot(): ZenXCapabilityGenerationSnapshot {
+    const host = this.#options.capabilityHost;
+    if (host === undefined) {
+      return { definitions: [], generationToken: `empty-${randomUUID()}` };
+    }
+    if (host.captureHostSnapshot !== undefined) {
+      const snapshot = host.captureHostSnapshot();
+      this.#heldCapabilityGenerations.add(snapshot.generationToken);
+      return snapshot;
+    }
+    const snapshot = host.hostSnapshot?.() ?? { definitions: [] };
+    return { ...snapshot, generationToken: `legacy-${randomUUID()}` };
+  }
+
+  #releaseCapabilityGeneration(generationToken: string): void {
+    if (!this.#heldCapabilityGenerations.delete(generationToken)) return;
+    this.#options.capabilityHost?.releaseHostGeneration?.(generationToken);
+  }
+
+  #releaseAllCapabilityGenerations(): Error[] {
+    const failures: Error[] = [];
+    for (const generationToken of [...this.#heldCapabilityGenerations]) {
+      try {
+        this.#releaseCapabilityGeneration(generationToken);
+      } catch (error) {
+        failures.push(asError(error));
+      }
+    }
+    return failures;
   }
 }
 
@@ -1104,28 +1510,49 @@ async function waitForReady(
   });
 }
 
-async function waitForExit(
+export async function stopOwnedAppServerChild(
   child: ChildProcess,
+  observation: OwnedChildObservation,
+  options: { shutdownGraceMs: number; terminationGraceMs: number },
+): Promise<void> {
+  if (observation.outcome() === undefined) {
+    try {
+      if (child.connected)
+        child.send({ type: "shutdown" } satisfies HostCommand);
+    } catch {
+      // The exact child terminal observation decides whether escalation remains necessary.
+    }
+  }
+  if (
+    observation.outcome() === undefined &&
+    !(await terminalWithin(observation, options.shutdownGraceMs))
+  ) {
+    child.kill("SIGTERM");
+  }
+  if (
+    observation.outcome() === undefined &&
+    !(await terminalWithin(observation, options.terminationGraceMs))
+  ) {
+    child.kill("SIGKILL");
+  }
+  const outcome = observation.outcome() ?? (await observation.terminal);
+  if (outcome.type === "spawn_error") throw outcome.error;
+}
+
+async function terminalWithin(
+  observation: OwnedChildObservation,
   timeoutMs: number,
 ): Promise<boolean> {
-  if (child.exitCode !== null || child.signalCode !== null) return true;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+    throw new Error("Owned child shutdown deadline must be a positive integer");
+  }
+  if (observation.outcome() !== undefined) return true;
   return await new Promise<boolean>((resolve) => {
-    let settled = false;
-    let timer: NodeJS.Timeout | undefined;
-    const finish = (exited: boolean): void => {
-      if (settled) return;
-      settled = true;
-      if (timer !== undefined) clearTimeout(timer);
-      child.off("exit", didExit);
-      resolve(exited);
-    };
-    const didExit = (): void => finish(true);
-    child.once("exit", didExit);
-    if (child.exitCode !== null || child.signalCode !== null) {
-      finish(true);
-      return;
-    }
-    timer = setTimeout(() => finish(false), timeoutMs);
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    void observation.terminal.then(() => {
+      clearTimeout(timer);
+      resolve(true);
+    });
   });
 }
 
