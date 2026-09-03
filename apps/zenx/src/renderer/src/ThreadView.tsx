@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import type { AttachmentRef } from "../../../../../src/attachment.js";
 import type {
@@ -127,6 +134,8 @@ export function ThreadView({
   const [atLive, setAtLive] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   const shouldFollowRef = useRef(true);
+  const viewRef = useRef<HTMLDivElement>(null);
+  const bottomZoneRef = useRef<HTMLDivElement>(null);
   const runningTurn = thread === null ? null : activeTurn(thread);
   const turns = thread?.turns ?? [];
   const pendingApprovals = approvals.filter(
@@ -144,6 +153,32 @@ export function ThreadView({
       setAtLive(true);
     }
   }, [thread?.turns, approvals]);
+
+  // The Composer overlays the bottom of the full-height transcript scroll
+  // area. Publish its live height so the list reserves matching virtual
+  // space and Back to live can float just above it; growth keeps a live
+  // view pinned to the bottom.
+  useLayoutEffect(() => {
+    const view = viewRef.current;
+    const zone = bottomZoneRef.current;
+    if (view === null || zone === null) return;
+    const publish = () => {
+      const height = `${Math.round(zone.getBoundingClientRect().height)}px`;
+      if (view.style.getPropertyValue("--bottom-zone-height") === height)
+        return;
+      view.style.setProperty("--bottom-zone-height", height);
+      const scroll = scrollRef.current;
+      if (shouldFollowRef.current && scroll !== null)
+        scroll.scrollTop = scroll.scrollHeight;
+    };
+    publish();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(publish);
+    observer.observe(zone);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   const submit = (intent: ComposerIntent) => {
     if (composerDisabled || !hasDraft || submitting || blockedByImageCapability)
@@ -183,6 +218,7 @@ export function ThreadView({
   return (
     <div
       className={`thread-view${draggingImages ? " image-dragging" : ""}`}
+      ref={viewRef}
       onDragEnter={(event) => {
         if (composerDisabled || submitting) return;
         if (hasImageFiles(event.dataTransfer.files)) setDraggingImages(true);
@@ -268,7 +304,7 @@ export function ThreadView({
         </button>
       )}
 
-      <div className="bottom-zone">
+      <div className="bottom-zone" ref={bottomZoneRef}>
         {composerContext}
         {pendingApprovals.map((approval) => (
           <ApprovalBar
