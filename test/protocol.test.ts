@@ -821,6 +821,78 @@ test("thread/resume does not wait for later projection work from another thread"
   }
 });
 
+test("failed thread/resume sends its error before releasing archived catch-up", async (t) => {
+  for (const timing of ["before snapshot", "after snapshot"] as const) {
+    await t.test(timing, async () => {
+      const appServer = testHost();
+      const thread = await appServer.startThread();
+      const messages: JsonRpcMessage[] = [];
+      const connection = new CodexConnection({
+        appServer,
+        zenHome: path.join(os.tmpdir(), "zen-home"),
+        send: (message) => messages.push(message),
+      });
+      const readEntered = deferred<void>();
+      const releaseRead = deferred<void>();
+      const readThread = appServer.readThread.bind(appServer);
+      let intercept = true;
+      appServer.readThread = async (threadId) => {
+        if (!intercept || threadId !== thread.id) {
+          return await readThread(threadId);
+        }
+        intercept = false;
+        if (timing === "before snapshot") {
+          readEntered.resolve();
+          await releaseRead.promise;
+          return await readThread(threadId);
+        }
+        const snapshot = await readThread(threadId);
+        readEntered.resolve();
+        await releaseRead.promise;
+        return snapshot;
+      };
+
+      try {
+        await connection.receive({ id: 1, method: "initialize", params: {} });
+        await connection.receive({ method: "initialized" });
+        messages.length = 0;
+        const resume = connection.receive({
+          id: 2,
+          method: "thread/resume",
+          params: {
+            threadId: thread.id,
+            cwd: path.join(process.cwd(), "mismatched-resume-cwd"),
+          },
+        });
+        await within(readEntered.promise);
+        await appServer.setThreadArchived(thread.id, true);
+        releaseRead.resolve();
+        await within(resume);
+        await flushTasks();
+
+        const errorIndexes = messages.flatMap((message, index) =>
+          "error" in message && message.id === 2 ? [index] : [],
+        );
+        const archivedIndexes = messages.flatMap((message, index) =>
+          "method" in message && message.method === "thread/archived"
+            ? [index]
+            : [],
+        );
+        assert.deepEqual(errorIndexes.length, 1);
+        const errorMessage = messages[errorIndexes[0]!]!;
+        assert("error" in errorMessage);
+        assert.equal(errorMessage.error.code, -32602);
+        assert.deepEqual(archivedIndexes.length, 1);
+        assert(errorIndexes[0]! < archivedIndexes[0]!);
+      } finally {
+        releaseRead.resolve();
+        connection.close();
+        await appServer.closeProviderTransport();
+      }
+    });
+  }
+});
+
 test("thread/resume never replays superseded state after its final snapshot", async () => {
   const backingMetadata = new InMemoryThreadMetadataStore();
   const readEntered = deferred<void>();

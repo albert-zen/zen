@@ -137,17 +137,7 @@ export class CodexConnection {
     try {
       await this.#dispatch(message);
     } catch (error) {
-      if (error instanceof MethodNotFoundError) {
-        this.#sendFailure(message.id, -32601, error.message);
-      } else if (error instanceof InvalidParamsError) {
-        this.#sendFailure(message.id, -32602, error.message);
-      } else if (error instanceof AppServerError) {
-        this.#sendFailure(message.id, -32000, error.message, {
-          zenCode: error.code,
-        });
-      } else {
-        this.#sendFailure(message.id, -32603, describeError(error));
-      }
+      this.#sendRequestError(message.id, error);
     }
   }
 
@@ -284,6 +274,7 @@ export class CodexConnection {
         const barrier = { events: [] as AppServerEvent[] };
         this.#resumeBarriers.set(threadId, barrier);
         let snapshot: ThreadSnapshot | undefined;
+        let snapshotDelivered = false;
         try {
           await priorEventTail;
           snapshot = await this.#appServer.readThread(threadId);
@@ -327,9 +318,15 @@ export class CodexConnection {
               ...threadSettings(snapshot),
             },
           });
+          snapshotDelivered = true;
+        } catch (error) {
+          this.#sendRequestError(request.id, error);
         } finally {
           this.#resumeBarriers.delete(threadId);
-          for (const event of resumeCatchUpEvents(barrier.events, snapshot)) {
+          for (const event of resumeCatchUpEvents(
+            barrier.events,
+            snapshotDelivered ? snapshot : undefined,
+          )) {
             this.#enqueueEvent(event);
           }
         }
@@ -1074,6 +1071,20 @@ export class CodexConnection {
     const error: JsonRpcFailure["error"] =
       data === undefined ? { code, message } : { code, message, data };
     this.#send({ id, error });
+  }
+
+  #sendRequestError(id: RequestId, error: unknown): void {
+    if (error instanceof MethodNotFoundError) {
+      this.#sendFailure(id, -32601, error.message);
+    } else if (error instanceof InvalidParamsError) {
+      this.#sendFailure(id, -32602, error.message);
+    } else if (error instanceof AppServerError) {
+      this.#sendFailure(id, -32000, error.message, {
+        zenCode: error.code,
+      });
+    } else {
+      this.#sendFailure(id, -32603, describeError(error));
+    }
   }
 
   #sendErrorNotification(error: unknown, event: AppServerEvent): void {
