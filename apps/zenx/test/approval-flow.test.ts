@@ -118,6 +118,71 @@ test("broadcasts approval state and reuses the persisted tool decision", async (
   }
 });
 
+test("scopes approval identity to one Host connection and resolves pending UI on stop", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-approval-generation-"),
+  );
+  const manager = new AppServerManager({
+    entryPath: path.resolve("src/main/app-server-host.ts"),
+    tokenFile: path.join(directory, "runtime", "app-server.token"),
+    hostConfig: {
+      cwd: process.cwd(),
+      dataDirectory: path.join(directory, "data"),
+      model: "fake",
+      models: ["fake"],
+      approvalPolicy: "always",
+      provider: { type: "fake" },
+    },
+    execArgv: ["--import", "tsx"],
+    startupTimeoutMs: 10_000,
+  });
+  const requests: ApprovalRequestEvent[] = [];
+  const resolved: ApprovalResolvedEvent[] = [];
+  const seen = [deferred<void>(), deferred<void>()];
+  manager.onApprovalRequest((event) => {
+    requests.push(event);
+    seen[requests.length - 1]?.resolve();
+  });
+  manager.onApprovalResolved((event) => resolved.push(event));
+  try {
+    await manager.start();
+    const firstThread = (await manager.request("thread/start", {})).thread;
+    await manager.request("turn/start", {
+      threadId: firstThread.id,
+      input: [{ type: "text", text: `!shell ${shellPrintCommand("first")}` }],
+    });
+    await within(seen[0]!.promise);
+    const firstId = requests[0]!.requestId;
+
+    await manager.stop();
+    assert.deepEqual(resolved, [
+      {
+        requestId: firstId,
+        threadId: firstThread.id,
+        decision: "cancel",
+      },
+    ]);
+
+    await manager.start();
+    const secondThread = (await manager.request("thread/start", {})).thread;
+    await manager.request("turn/start", {
+      threadId: secondThread.id,
+      input: [{ type: "text", text: `!shell ${shellPrintCommand("second")}` }],
+    });
+    await within(seen[1]!.promise);
+    const secondId = requests[1]!.requestId;
+    assert.notEqual(secondId, firstId);
+    assert.throws(
+      () => manager.respondToApproval(firstId, "accept"),
+      /no longer pending/u,
+    );
+    manager.respondToApproval(secondId, "decline");
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   const promise = new Promise<T>((resolvePromise) => {

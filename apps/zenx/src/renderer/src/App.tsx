@@ -29,6 +29,7 @@ import type {
 } from "../../main/thread-title-types.js";
 import type {
   ModelSummary,
+  ServerNotificationMethod,
   ServerNotificationParams,
   Thread,
 } from "../../protocol-client/index.js";
@@ -37,9 +38,11 @@ import {
   addApprovalRequest,
   markApprovalResponding,
   pendingApprovalThreadIds,
+  replacePendingApprovals,
   resolveApproval,
   restoreApprovalPending,
   type ApprovalCardState,
+  type ApprovalStateEvent,
 } from "./approval-state.js";
 import {
   acceptComposerSubmission,
@@ -101,8 +104,24 @@ interface NewThreadDraft {
   composer: ComposerState;
 }
 
+type BufferedProtocolNotification = {
+  [M in ServerNotificationMethod]: {
+    method: M;
+    params: ServerNotificationParams[M];
+  };
+}[ServerNotificationMethod];
+
 export function App() {
   const selectionEpoch = useRef(0);
+  const pendingResumeProjectionRef = useRef<{
+    epoch: number;
+    notifications: BufferedProtocolNotification[];
+  } | null>(null);
+  const approvalSnapshotEpoch = useRef(0);
+  const pendingApprovalSnapshotRef = useRef<{
+    epoch: number;
+    events: ApprovalStateEvent[];
+  } | null>(null);
   const newThreadPendingRef = useRef(false);
   const newThreadDraftRef = useRef<NewThreadDraft | null>(null);
   const newThreadPendingDraftRef = useRef<NewThreadDraft | null>(null);
@@ -415,6 +434,7 @@ export function App() {
   const resumeThread = async (threadId: string, preserveNavigation = false) => {
     discardRecoverableDraft();
     const epoch = ++selectionEpoch.current;
+    pendingResumeProjectionRef.current = { epoch, notifications: [] };
     confirmNewThreadDraft(null);
     const usageEpoch = ++threadUsageLoadEpoch.current;
     selectedThreadIdRef.current = threadId;
@@ -433,23 +453,75 @@ export function App() {
     setThreadError(null);
     void loadComposerCatalog();
     try {
-      const [result, attachments, usage] = await Promise.all([
-        window.zenx.protocol.request("thread/resume", { threadId }),
-        window.zenx.imageAttachments.forThread(threadId),
-        window.zenx.modelUsage.forThread(threadId),
-      ]);
+      const result = await window.zenx.protocol.request("thread/resume", {
+        threadId,
+      });
       if (selectionEpoch.current !== epoch) return;
-      setThreadDetail(result.thread);
-      setThreadAttachments(attachments);
-      if (threadUsageLoadEpoch.current === usageEpoch) setThreadUsage(usage);
-      setSelectedSettings(settingsFromSnapshot(result.thread.id, result));
+      const pending = pendingResumeProjectionRef.current;
+      const notifications =
+        pending?.epoch === epoch ? pending.notifications : [];
+      if (pending?.epoch === epoch) pendingResumeProjectionRef.current = null;
+      let projectedThread = result.thread;
+      let projectedSettings = settingsFromSnapshot(result.thread.id, result);
+      for (const notification of notifications) {
+        projectedThread = applyThreadViewNotification(
+          projectedThread,
+          notification.method,
+          notification.params,
+        );
+        if (notification.method === "thread/settings/updated") {
+          const event =
+            notification.params as ServerNotificationParams["thread/settings/updated"];
+          projectedSettings =
+            applySettingsMirror(
+              projectedSettings,
+              event.threadId,
+              event.threadSettings,
+            ) ?? projectedSettings;
+        }
+      }
+      setThreadDetail(projectedThread);
+      setSelectedSettings(projectedSettings);
+      void window.zenx.imageAttachments
+        .forThread(threadId)
+        .then((attachments) => {
+          if (selectionEpoch.current === epoch)
+            setThreadAttachments(attachments);
+        })
+        .catch((error: unknown) => {
+          if (selectionEpoch.current === epoch)
+            setRequestError(
+              `Thread images could not be loaded: ${describeError(error)}`,
+            );
+        });
+      void window.zenx.modelUsage
+        .forThread(threadId)
+        .then((usage) => {
+          if (
+            selectionEpoch.current === epoch &&
+            threadUsageLoadEpoch.current === usageEpoch
+          )
+            setThreadUsage(usage);
+        })
+        .catch((error: unknown) => {
+          if (
+            selectionEpoch.current === epoch &&
+            threadUsageLoadEpoch.current === usageEpoch
+          )
+            setRequestError(
+              `Thread usage could not be loaded: ${describeError(error)}`,
+            );
+        });
       void window.zenx.settings
         .markWorkspaceUsed(result.thread.cwd)
         .then(() => loadProjects())
         .catch(() => undefined);
     } catch (error) {
-      if (selectionEpoch.current === epoch)
+      if (selectionEpoch.current === epoch) {
+        if (pendingResumeProjectionRef.current?.epoch === epoch)
+          pendingResumeProjectionRef.current = null;
         setThreadError(describeError(error));
+      }
     } finally {
       if (selectionEpoch.current === epoch) setThreadLoading(false);
     }
@@ -500,10 +572,31 @@ export function App() {
         if (active) setModelCatalogError(describeError(error));
       }
     };
+    const replaceApprovalSnapshot = async () => {
+      const epoch = ++approvalSnapshotEpoch.current;
+      const pending = { epoch, events: [] as ApprovalStateEvent[] };
+      pendingApprovalSnapshotRef.current = pending;
+      try {
+        const snapshot = await window.zenx.protocol.getPendingApprovals();
+        if (!active || approvalSnapshotEpoch.current !== epoch) return;
+        if (pendingApprovalSnapshotRef.current?.epoch === epoch)
+          pendingApprovalSnapshotRef.current = null;
+        setApprovals(replacePendingApprovals(snapshot, pending.events));
+      } catch (error) {
+        if (!active || approvalSnapshotEpoch.current !== epoch) return;
+        if (pendingApprovalSnapshotRef.current?.epoch === epoch)
+          pendingApprovalSnapshotRef.current = null;
+        setApprovals(replacePendingApprovals([], pending.events));
+        setRequestError(
+          `Pending approvals could not be loaded: ${describeError(error)}`,
+        );
+      }
+    };
     const disposeStatus = window.zenx.protocol.onStatus((status) => {
       if (!active) return;
       setServerStatus(status);
       if (status.type === "ready") {
+        void replaceApprovalSnapshot();
         void loadThreadSummaries();
         void loadProjects();
         void loadModels();
@@ -523,11 +616,22 @@ export function App() {
           void loadThreadSummaries();
           void loadProjects();
         }
-        setThreadDetail((current) =>
-          current === null
-            ? null
-            : applyThreadViewNotification(current, method, params),
-        );
+        const pendingResume = pendingResumeProjectionRef.current;
+        const bufferingResume =
+          pendingResume !== null &&
+          pendingResume.epoch === selectionEpoch.current;
+        if (bufferingResume) {
+          pendingResume.notifications.push({
+            method,
+            params,
+          } as BufferedProtocolNotification);
+        } else {
+          setThreadDetail((current) =>
+            current === null
+              ? null
+              : applyThreadViewNotification(current, method, params),
+          );
+        }
         if (method === "item/completed" || method === "turn/completed") {
           const event = params as { threadId: string };
           if (selectedThreadIdRef.current === event.threadId)
@@ -555,34 +659,44 @@ export function App() {
         if (method === "thread/settings/updated") {
           const event =
             params as ServerNotificationParams["thread/settings/updated"];
-          setSelectedSettings((current) =>
-            applySettingsMirror(current, event.threadId, event.threadSettings),
-          );
+          if (!bufferingResume) {
+            setSelectedSettings((current) =>
+              applySettingsMirror(
+                current,
+                event.threadId,
+                event.threadSettings,
+              ),
+            );
+          }
           setModelUpdateError(null);
         }
       },
     );
     const disposeApprovals = window.zenx.protocol.onApprovalRequest((event) => {
-      if (active) setApprovals((current) => addApprovalRequest(current, event));
+      if (!active) return;
+      const pending = pendingApprovalSnapshotRef.current;
+      if (pending === null) {
+        setApprovals((current) => addApprovalRequest(current, event));
+      } else {
+        pending.events.push({ type: "requested", event });
+      }
     });
     const disposeResolved = window.zenx.protocol.onApprovalResolved((event) => {
-      if (active) setApprovals((current) => resolveApproval(current, event));
+      if (!active) return;
+      const pending = pendingApprovalSnapshotRef.current;
+      if (pending === null) {
+        setApprovals((current) => resolveApproval(current, event));
+      } else {
+        pending.events.push({ type: "resolved", event });
+      }
     });
-    void window.zenx.protocol
-      .getPendingApprovals()
-      .then((pending) => {
-        if (active)
-          setApprovals((current) =>
-            pending.reduce(addApprovalRequest, current),
-          );
-      })
-      .catch(() => undefined);
     void window.zenx.protocol
       .getStatus()
       .then((status) => {
         if (!active) return;
         setServerStatus(status);
         if (status.type === "ready") {
+          void replaceApprovalSnapshot();
           void loadThreadSummaries();
           void loadProjects();
           void loadModels();

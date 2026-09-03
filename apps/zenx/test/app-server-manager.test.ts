@@ -322,7 +322,7 @@ test("serializes concurrent capability restarts", async () => {
       manager.restartCapabilities(),
       manager.restartCapabilities(),
     ]);
-    assert.deepEqual(manager.status, { type: "ready", reconnected: false });
+    assert.deepEqual(manager.status, { type: "ready", reconnected: true });
     assert.deepEqual(await manager.request("thread/list", {}), {
       data: [],
       nextCursor: null,

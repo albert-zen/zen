@@ -9,6 +9,28 @@ export interface ApprovalCardState extends ApprovalRequestEvent {
   decision: ApprovalDecision | null;
 }
 
+export type ApprovalStateEvent =
+  | { type: "requested"; event: ApprovalRequestEvent }
+  | { type: "resolved"; event: ApprovalResolvedEvent };
+
+export function replacePendingApprovals(
+  pending: readonly ApprovalRequestEvent[],
+  events: readonly ApprovalStateEvent[] = [],
+): ApprovalCardState[] {
+  const projected = events.reduce<ApprovalCardState[]>(
+    (current, update) =>
+      update.type === "requested"
+        ? addApprovalRequest(current, update.event)
+        : resolveApproval(current, update.event),
+    pending.map((event) => ({
+      ...event,
+      status: "pending",
+      decision: null,
+    })),
+  );
+  return projected.filter((approval) => approval.status !== "resolved");
+}
+
 export function addApprovalRequest(
   approvals: readonly ApprovalCardState[],
   event: ApprovalRequestEvent,

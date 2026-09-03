@@ -3,6 +3,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { WebSocketServer, type WebSocket } from "ws";
 
 import { createHostedAppServer } from "../../../apps/cli/src/host.js";
 import { InMemoryThreadJournal } from "../../../src/journal.js";
@@ -360,6 +361,80 @@ test("reconnects and restores subscriptions with thread/resume", async () => {
   } finally {
     client.close();
     if (secondServer !== undefined) await secondServer.close();
+  }
+});
+
+test("a delayed server-request handler never replies on a successor socket", async () => {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve, reject) => {
+    server.once("listening", resolve);
+    server.once("error", reject);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("Expected a TCP WebSocket listener");
+  }
+  const sockets: WebSocket[] = [];
+  const messages: unknown[][] = [];
+  const approvalSeen = deferred<void>();
+  server.on("connection", (socket) => {
+    const index = sockets.length;
+    sockets.push(socket);
+    messages.push([]);
+    socket.on("message", (data) => {
+      const message = JSON.parse(data.toString()) as {
+        id?: string | number;
+        method?: string;
+      };
+      messages[index]!.push(message);
+      if (message.method === "initialize") {
+        socket.send(JSON.stringify({ id: message.id, result: {} }));
+      }
+    });
+  });
+  const handlerResult = deferred<{ decision: "cancel" }>();
+  const client = await ZenXProtocolClient.connect(
+    clientOptions(`ws://127.0.0.1:${String(address.port)}`, "socket-fence", {
+      reconnect: { maxAttempts: 10, minDelayMs: 5, maxDelayMs: 10 },
+    }),
+  );
+  client.onServerRequest("item/commandExecution/requestApproval", async () => {
+    approvalSeen.resolve();
+    return await handlerResult.promise;
+  });
+  const reconnected = deferred<void>();
+  client.onStatus((status) => {
+    if (status.type === "ready" && status.reconnected) reconnected.resolve();
+  });
+  try {
+    sockets[0]!.send(
+      JSON.stringify({
+        id: "approval_1",
+        method: "item/commandExecution/requestApproval",
+        params: {},
+      }),
+    );
+    await within(approvalSeen.promise);
+    sockets[0]!.terminate();
+    await within(reconnected.promise);
+    handlerResult.resolve({ decision: "cancel" });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(
+      messages[1]!.some(
+        (message) =>
+          (message as { id?: unknown }).id === "approval_1" &&
+          !("method" in (message as object)),
+      ),
+      false,
+    );
+  } finally {
+    client.close();
+    for (const socket of sockets) socket.terminate();
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) =>
+        error === undefined ? resolve() : reject(error),
+      ),
+    );
   }
 });
 

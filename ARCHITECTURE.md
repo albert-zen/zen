@@ -49,6 +49,8 @@
 - **Plugin UI SDK** — 第一方 bundled 插件和隔离运行的第三方插件共享的逻辑 UI contribution API；信任和进程隔离不同，不产生两套产品语义。
 - **Tool Result Renderer** — 按 namespaced content type 渲染既有 `ToolResultItem` 可选 structured content 的插件 UI contribution；renderer 缺失时必须回退 text/JSON，且不得改写历史 Item。
 - **ZenX ZAS Endpoint** — ZenX Host 拥有的稳定、带认证、可供其他应用连接的固定 Codex App Server endpoint；它不创建第二个 AppServer authority，也不要求 OS daemon。
+- **ZenX Resume Projection Buffer** — renderer 在一次 Thread selection epoch 内只短时缓存 resume 响应到 React commit 之间到达的协议事件，并在 canonical snapshot 提交时按序重放；它不持久化，也不成为第二份 Thread 状态。
+- **ZenX Approval UI Identity** — ZenX main 为每个 connection generation 的瞬时 approval 分配 opaque UI id，并把应答绑定到发起请求的 exact client/socket 与 wire id；stop 或 reconnect 会取消并清空旧 generation，renderer ready snapshot 只镜像当前 pending 集合。
 - **AttachmentStore** — ZAS 管理的不可变、SHA-256 内容寻址 payload store；
   canonical Item 只保存 provider-neutral `AttachmentRef`，Store 与 ItemList 合起来才足以重放输入，
   它不保存消息、Turn、引用关系或任何第二份会话状态。

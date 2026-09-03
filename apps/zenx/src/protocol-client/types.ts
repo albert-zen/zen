@@ -275,6 +275,7 @@ export type ServerRequestMethod = keyof ServerRequestParams;
 
 export interface ServerRequestContext {
   requestId: string | number;
+  connectionGeneration: number;
 }
 
 export type ConnectionStatus =

@@ -83,6 +83,9 @@ export interface ApprovalResolvedEvent {
 interface PendingApproval {
   event: ApprovalRequestEvent;
   decision: ApprovalDecision | null;
+  client: ZenXProtocolClient;
+  connectionGeneration: number;
+  wireRequestId: string;
   resolve(result: { decision: ApprovalDecision }): void;
 }
 
@@ -163,6 +166,7 @@ export class AppServerManager {
   #acceptingCapabilityInvocations = false;
   #stopping = false;
   #recoverUnexpectedExits = false;
+  #hasReachedReady = false;
   #stopPromise: Promise<void> | undefined;
   #recoveryPromise: Promise<void> | undefined;
   #lifecycle = 0;
@@ -221,7 +225,9 @@ export class AppServerManager {
         this.#connectionPublisher = publisher;
       }
       await this.#startHost(lifecycle);
-      this.#setStatus({ type: "ready", reconnected: false });
+      const reconnected = this.#hasReachedReady;
+      this.#hasReachedReady = true;
+      this.#setStatus({ type: "ready", reconnected });
     } catch (error) {
       const failure = asError(error);
       const failures = [failure];
@@ -808,6 +814,7 @@ export class AppServerManager {
     client.onStatus((status) => {
       if (client !== this.#client || this.#stopping) return;
       if (status.type === "reconnecting") {
+        this.#cancelPendingApprovals((pending) => pending.client === client);
         this.#setStatus({
           type: "reconnecting",
           attempt: status.attempt,
@@ -822,15 +829,26 @@ export class AppServerManager {
     client.onServerRequest(
       "item/commandExecution/requestApproval",
       async (params, context) => {
-        const requestId = String(context.requestId);
-        if (this.#pendingApprovals.has(requestId)) {
-          throw new Error(`Duplicate approval request ${requestId}`);
+        const wireRequestId = String(context.requestId);
+        if (
+          [...this.#pendingApprovals.values()].some(
+            (pending) =>
+              pending.client === client &&
+              pending.connectionGeneration === context.connectionGeneration &&
+              pending.wireRequestId === wireRequestId,
+          )
+        ) {
+          throw new Error(`Duplicate approval request ${wireRequestId}`);
         }
         return await new Promise<{ decision: ApprovalDecision }>((resolve) => {
+          const requestId = randomUUID();
           const event = { requestId, params };
           this.#pendingApprovals.set(requestId, {
             event,
             decision: null,
+            client,
+            connectionGeneration: context.connectionGeneration,
+            wireRequestId,
             resolve,
           });
           for (const listener of this.#approvalListeners) listener(event);
@@ -858,6 +876,8 @@ export class AppServerManager {
       client.onNotification(method, (params) => {
         if (method === "serverRequest/resolved") {
           this.#resolveApproval(
+            client,
+            client.connectionGeneration,
             params as ServerNotificationParams["serverRequest/resolved"],
           );
         }
@@ -869,20 +889,27 @@ export class AppServerManager {
   }
 
   #resolveApproval(
+    client: ZenXProtocolClient,
+    connectionGeneration: number,
     params: ServerNotificationParams["serverRequest/resolved"],
   ): void {
-    const pending = this.#pendingApprovals.get(params.requestId);
+    const pending = [...this.#pendingApprovals.values()].find(
+      (candidate) =>
+        candidate.client === client &&
+        candidate.connectionGeneration === connectionGeneration &&
+        candidate.wireRequestId === params.requestId,
+    );
     if (pending === undefined) return;
     if (pending.decision === null) {
       pending.decision = "cancel";
       pending.resolve({ decision: "cancel" });
     }
     const event = {
-      requestId: params.requestId,
+      requestId: pending.event.requestId,
       threadId: params.threadId,
       decision: pending.decision,
     } satisfies ApprovalResolvedEvent;
-    this.#pendingApprovals.delete(params.requestId);
+    this.#pendingApprovals.delete(pending.event.requestId);
     for (const listener of this.#approvalResolvedListeners) listener(event);
   }
 
@@ -977,11 +1004,21 @@ export class AppServerManager {
     for (const listener of this.#statusListeners) listener(status);
   }
 
-  #cancelPendingApprovals(): void {
-    for (const pending of this.#pendingApprovals.values()) {
-      pending.resolve({ decision: "cancel" });
+  #cancelPendingApprovals(
+    matches: (pending: PendingApproval) => boolean = () => true,
+  ): void {
+    for (const [requestId, pending] of this.#pendingApprovals) {
+      if (!matches(pending)) continue;
+      const decision = pending.decision ?? "cancel";
+      if (pending.decision === null) pending.resolve({ decision: "cancel" });
+      this.#pendingApprovals.delete(requestId);
+      const event = {
+        requestId,
+        threadId: pending.event.params.threadId,
+        decision,
+      } satisfies ApprovalResolvedEvent;
+      for (const listener of this.#approvalResolvedListeners) listener(event);
     }
-    this.#pendingApprovals.clear();
   }
 
   #installCapabilityBridge(child: ChildProcess): void {

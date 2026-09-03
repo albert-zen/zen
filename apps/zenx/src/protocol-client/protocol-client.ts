@@ -75,6 +75,7 @@ export class ZenXProtocolClient {
   readonly #subscribedThreads = new Set<string>();
   #socket: WebSocket | undefined;
   #nextRequestId = 1;
+  #connectionGeneration = 0;
   #ready = false;
   #establishedOnce = false;
   #manualClose = false;
@@ -122,6 +123,10 @@ export class ZenXProtocolClient {
 
   get subscriptions(): readonly string[] {
     return [...this.#subscribedThreads];
+  }
+
+  get connectionGeneration(): number {
+    return this.#connectionGeneration;
   }
 
   async request<M extends ClientRequestMethod>(
@@ -221,11 +226,14 @@ export class ZenXProtocolClient {
         ? {}
         : { headers: { Authorization: `Bearer ${this.#bearerToken}` } }),
     });
+    const connectionGeneration = ++this.#connectionGeneration;
     this.#socket = socket;
     socket.on("message", (data, isBinary) => {
-      void this.#receive(data, isBinary).catch((error: unknown) => {
-        this.#emitStatus({ type: "protocolError", error: asError(error) });
-      });
+      void this.#receive(socket, connectionGeneration, data, isBinary).catch(
+        (error: unknown) => {
+          this.#emitStatus({ type: "protocolError", error: asError(error) });
+        },
+      );
     });
     socket.on("error", (error) => {
       if (socket.readyState === WebSocket.OPEN) {
@@ -261,16 +269,22 @@ export class ZenXProtocolClient {
     return (await response) as ClientRequestResults[M];
   }
 
-  async #receive(data: RawData, isBinary: boolean): Promise<void> {
+  async #receive(
+    socket: WebSocket,
+    connectionGeneration: number,
+    data: RawData,
+    isBinary: boolean,
+  ): Promise<void> {
+    if (this.#socket !== socket) return;
     if (isBinary) {
-      this.#socket?.close(1003, "JSON text frames required");
+      socket.close(1003, "JSON text frames required");
       throw new Error("App Server sent a binary WebSocket frame");
     }
     let message: JsonRpcMessage;
     try {
       message = JSON.parse(data.toString()) as JsonRpcMessage;
     } catch {
-      this.#socket?.close(1003, "Invalid JSON");
+      socket.close(1003, "Invalid JSON");
       throw new Error("App Server sent invalid JSON");
     }
 
@@ -295,7 +309,7 @@ export class ZenXProtocolClient {
     if (isRequest(message)) {
       const handler = this.#serverRequestHandlers.get(message.method);
       if (handler === undefined) {
-        this.#send({
+        this.#sendToOrigin(socket, {
           id: message.id,
           error: {
             code: -32601,
@@ -307,10 +321,11 @@ export class ZenXProtocolClient {
       try {
         const result = await handler(message.params, {
           requestId: message.id,
+          connectionGeneration,
         });
-        this.#send({ id: message.id, result });
+        this.#sendToOrigin(socket, { id: message.id, result });
       } catch (error) {
-        this.#send({
+        this.#sendToOrigin(socket, {
           id: message.id,
           error: { code: -32603, message: asError(error).message },
         });
@@ -330,6 +345,11 @@ export class ZenXProtocolClient {
       throw new Error("App Server connection is not open");
     }
     this.#socket.send(JSON.stringify(message));
+  }
+
+  #sendToOrigin(socket: WebSocket, message: JsonRpcMessage): void {
+    if (this.#socket !== socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify(message));
   }
 
   #handleSocketClose(socket: WebSocket, code: number, reason: string): void {
