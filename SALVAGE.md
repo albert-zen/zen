@@ -29,9 +29,10 @@
 
 - **pi**（badlogic，TypeScript，极简）— agent loop 与 provider 处理的结构参考
 - **OpenClaw** — 多 IM 通道接入与订阅认证的实现参考
-- **Codex CLI**（Apache-2.0）— 订阅认证的官方实现；app-server 协议的权威来源
+- **Codex CLI**（Apache-2.0）— 订阅认证的官方实现；固定 0.146.0 Codex App Server（CAS）
+  shape/schema 的事实来源，不是 ZAS、Core 或产品语义的权威
 - **T3 Code** `apps/server/src/provider/Layers/CodexSessionRuntime.ts` —
-  `src/protocol/codex/` 需要支持的方法/事件子集的事实定义
+  特定版本客户端实际调用面与互操作验收的事实来源
 
 ## 明确不移植
 

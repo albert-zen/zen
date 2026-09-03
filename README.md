@@ -13,7 +13,8 @@ Provider 账户和 workspace 配置由宿主持有，不进入 Thread。
 - FakeModel、OpenAI-compatible 与 ChatGPT subscription model adapters
 - exact-name Tool Runtime registry、shell、`apply_patch` 文件编辑、shell-equivalent `run_code`
   programmatic tool calling、command item 审批与 Turn interrupt
-- codex-cli 0.146.0 App Server 协议子集（JSONL stdio / loopback WebSocket）
+- ZAS 自有的 App Server 协议，以及固定 codex-cli 0.146.0 Codex App Server（CAS）adapter
+  （当前共享 JSONL stdio / loopback WebSocket endpoint 与 shape）
 - `run`、`chat`、`threads`、`app-server` 薄 CLI
 - 独立 IMZen（QQ / Telegram / Feishu / Weixin channel adapters）
 - ZenX Plugin Package lifecycle、Host SDK 与 Generic UI Host（sidebar、page/subroute、settings、panel、command/menu；第三方 iframe 隔离）
@@ -109,6 +110,6 @@ ZenX 插件开发合同与命令见 [packages/zenx-plugin-sdk/README.md](package
 - [LESSONS.md](LESSONS.md) — 非目标与 zen-legacy 的教训
 - [PRODUCTS.md](PRODUCTS.md) — 各接入端的定位与里程碑
 - [SALVAGE.md](SALVAGE.md) — 从 zen-legacy 移植的清单
-- [src/protocol/codex/README.md](src/protocol/codex/README.md) — 固定协议版本与精确子集
+- [src/protocol/codex/README.md](src/protocol/codex/README.md) — 固定 CAS adapter 与精确兼容范围
 
 前身仓库见 [zen-legacy](https://github.com/albert-zen/zen-legacy)（tag `legacy-2026-07`）。

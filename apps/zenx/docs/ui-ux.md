@@ -27,7 +27,7 @@ New thread 打开临时本地编辑页；选择或添加 Project 不创建 Threa
 - ZenX 是围绕同一个 ZAS 构建的 Electron 产品。Electron main 托管并组合本机 ZAS host 与 Plugin Host；desktop-only host profile 仍由宿主持有，Trigger / Room 状态则由各自 Plugin Package 的 namespaced storage/service 持有，renderer 只经 Generic UI Host SDK 消费其 contribution，不存在产品专用 Trigger / Room IPC。
 - 目标 ZenX Host 同时拥有并列的 ZAS/AppServer 与 Plugin Host 服务。Plugin Host 负责插件生命周期、UI/tool 注册与 Runtime 路由，但不拥有 Agent、Thread、Turn 或 transcript；人类直接操作插件 UI 不创建 Turn，只有显式 **Run Agent** 才调用 AppServer。
 - ZenX Host 通过稳定的私有 descriptor 暴露唯一 ZAS 的带认证 loopback endpoint。关闭最后一个窗口只关闭 UI，不停止 ZenX Host、active Turn 或外部连接；activation 重建窗口，显式 Quit 在 macOS、Windows、Linux 都撤销发现入口并停止 Host / ZAS。本阶段仍不做 OS daemon。
-- Renderer、native IPC 与外层产品功能不复制 ZAS 的 Agent、Thread、Turn、transcript 或 scheduler authority。Codex protocol 是同一 ZAS 面向兼容客户端的 wire adapter；Codex DTO 不反向定义 ZenX 产品模型，也不是 renderer 的产品读取路径。
+- Renderer、native IPC 与外层产品功能不复制 ZAS 的 Agent、Thread、Turn、transcript 或 scheduler authority。Codex App Server（CAS）compatibility mapping / claim 只覆盖 ZAS 中固定 0.146.0 可表达且已验收的子集；当前共用 endpoint/shape 不使 CAS 成为 ZenX 产品读取路径或产品模型权威。
 - Thread 会话内容与执行结果来自 append-only canonical ItemList。流式 delta 只用于实时显示，不能被 UI 当作第二份 durable history。
 - Thread 列表产品数据来自 ZAS native `ThreadSummary` / `CurrentMetadata` read model，经 Electron main/preload typed IPC 投影。
 - Thread 的名称与归档由 ZAS 产品元数据负责；当前选择、disclosure、草稿、打开的菜单和面板属于 renderer-local UI 状态。
@@ -152,8 +152,8 @@ New thread 可保留独立 row；它相对 Plugin spaces / Projects 的精确视
 - 如果完成后没有 Final Message，显示明确 fallback，不留下空 Turn。
 - Final Message 是完成结果，不能与中间 Agent Message 重复渲染。
 - Thread 顶部与每个 Turn metadata 使用一行弱化、紧凑的 usage 摘要展示 input/output tokens
-  与 cache hit rate。它只消费 Host 从 canonical ItemList 派生的 typed projection，不向固定
-  Codex wire 增加私有通知。cache rate 是仅对报告 cache 明细的 response 做 token-weighted
+  与 cache hit rate。它只消费 Host 从 canonical ItemList 派生的 typed projection；当前产品
+  不需要为此新增 ZAS method 或 notification。cache rate 是仅对报告 cache 明细的 response 做 token-weighted
   聚合；有 usage 但 Provider 未报告 cache 时显示 **Cache unknown**，不得显示 `0%`。
 - usage 展示不包含费率、货币、成本、预算、图表或 pricing 配置；reasoning output tokens 即使
   Provider 报告也只属于 canonical usage 明细，不要求在当前紧凑摘要中展开。
@@ -172,7 +172,7 @@ Trace Group 默认收起，只显示轻量摘要、Item 数量和 disclosure ico
 Tool 状态统一投影为 `queued / running / success / failed / cancelled / approval_required`。状态更新同一个稳定 Item，不创建重复 row；长 payload 在摘要截断，在详情内换行或局部滚动。
 
 `run_code` outer command 与 nested `tools.*` command 仍属于同一 trace sequence。展开后，UI
-只根据 fixed protocol projection 携带的 canonical `callId / parentCallId` 缩进实际 child；不得从
+只根据 ZAS protocol projection 携带的 canonical `callId / parentCallId` 缩进实际 child；不得从
 显示文本、时间或本地缓存猜测层级。outer 详情展示完整 code，切回 direct 后旧 hierarchy 仍从
 ItemList replay，Renderer 不保存另一份 transcript authority。
 

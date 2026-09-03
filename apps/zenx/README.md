@@ -252,10 +252,12 @@ While ZenX is running, its app-owned Host publishes
 `<Electron userData>/runtime/app-server.json`. The private version-1 descriptor
 contains the loopback WebSocket URL and the absolute path of a separate private
 bearer-token file; it never embeds the token. A client reads the descriptor,
-loads that bearer file, and performs the fixed Codex App Server 0.146.0
-`initialize` / `initialized` handshake over the existing WebSocket transport.
+loads that bearer file, and performs the current ZAS `initialize` / `initialized`
+handshake over the existing WebSocket transport. A compatible Codex App Server
+0.146.0 client can use the mapped subset on that currently shared endpoint.
 ZenX's renderer uses the same ZAS instance, so either side can create, resume,
-read, or continue the same Thread.
+read, or continue the same Thread; CAS compatibility does not define this product
+contract.
 
 The runtime directory, descriptor, and token are owner-private on POSIX;
 Windows uses the current user's Electron profile boundary. A second ZenX
@@ -309,8 +311,10 @@ known reasoning capability is non-runnable even when a Thread supplies an
 explicit effort; it requires a manual catalog capability override before it can
 become the canonical selection. The fixed Codex 0.146.0 `model/list` omits such
 non-default entries while continuing to expose valid configured models, and a
-completed manual override makes the entry visible. Default and title models
-must have runnable, wire-representable reasoning and text-input metadata.
+completed manual override makes the entry visible. ZenX currently consumes that
+shared `model/list` codec, so its default and title models must have runnable,
+wire-representable reasoning and text-input metadata; this is a current shared-codec
+constraint, not a ZAS protocol semantic.
 
 The OpenAI subscription preset exposes the five models confirmed by the current
 host: `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, and `gpt-5.4`.

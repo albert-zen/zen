@@ -13,7 +13,9 @@ CLI、桌面、Web、IM 都是平级的接入端，全部只通过 App Server �
 
 - 核心概念（Item / Thread / Turn / AgentRuntime / AppServer）在代码中清晰可见：
   一个开发者能顺着单条代码路径读懂一个 Turn 的完整生命周期。
-- 对外直接使用生态通用协议（固定版本的 Codex App Server 兼容子集），
-  现有客户端和编排工具可以直接驱动 Zen。
+- ZAS 原生协议由 Zen 自己定义；Codex App Server（CAS）adapter 只把其中可表达的
+  部分映射到固定 codex-cli 0.146.0 形状。当前两者可以共享 endpoint/shape，出现
+  真实演进需求时允许分叉；生态兼容按具体客户端、版本和调用面验收，不反向约束
+  Core 或产品语义。
 - 简单、可读、可解释，优先于完整恢复、向后兼容和防御性工程。
 - 如果实现让核心概念难以看见，错的是实现：重写实现，而不是给概念打补丁。

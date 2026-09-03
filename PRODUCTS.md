@@ -1,7 +1,8 @@
 # PRODUCTS
 
-所有接入端平级，都只通过 App Server 协议工作。任何接入端都不得拥有
-自己的 Agent、Thread、Turn 或调度语义。
+所有接入端平级，都只通过 ZAS 自有的 App Server 协议工作。任何接入端都不得
+拥有自己的 Agent、Thread、Turn 或调度语义。Codex App Server（CAS）adapter
+只是其中可表达部分的兼容映射。
 
 ZenX 的全局 New thread 采用最近使用的 Project，Project 内入口采用该精确 Project；两者只打开本地 draft，选择目录不会创建 Thread，第一条有效 Send 才配置 Project、创建真实 Thread，并且不等待辅助投影就立即启动 Turn。失败必须明确、可恢复且不遮盖可用会话。
 
@@ -13,9 +14,9 @@ App Server 的 Thread 设置操作；可用模型来自 ZAS 投影的宿主 Mode
 目录按 Provider profile 隔离，并保留 reasoning/input/context capability 的
 Unknown；接入端不得从模型名补写能力。
 
-原版 `codex --remote` 与固定版本 T3 Code 是机会型兼容目标：Phase 2 用最小
-stub App Server 记录真实调用，在不污染 Zen Core 的前提下扩展协议子集。能接入
-是生态收益，不能接入也不阻塞 Zen 自身产品。
+原版 `codex --remote` 与固定版本 T3 Code 是机会型互操作目标：Phase 2 用最小
+stub App Server 记录具体版本的真实调用面，再决定是否扩展 CAS adapter 的映射。
+能接入是生态收益，不能接入也不阻塞 ZAS 产品或反向改变 Core。
 
 ## 桌面
 
@@ -27,10 +28,10 @@ Interrupt & send；Provider/onboarding、安全 Markdown、Trigger / Watching / 
 已经形成可运行的 Plugin Platform 纵向切片；渐进发现与 structured result renderer 已完成，
 安装、启停、卸载、重装与独立删除数据的产品入口已经完成。
 ZenX 的产品读取模型来自 ZAS 原生 `ThreadSummary` 查询，并经 Electron main/preload
-typed IPC 暴露；Codex Thread DTO 只属于兼容协议 adapter，不定义 ZenX 产品模型。
+typed IPC 暴露；当前 Codex-base Thread DTO 只属于 CAS adapter，不定义 ZenX 产品模型。
 ZenX 同样经 host-local typed projection 从 canonical `model_usage` Items 展示 Thread/Turn
 的 input/output token 与 token-weighted cache hit rate；cache 明细缺失时明确显示 Unknown，
-不扩展固定 Codex wire protocol，也不估算费率、货币或成本。
+不为此增加 ZAS protocol method 或 notification，也不估算费率、货币或成本。
 高保真 renderer 的当前 UI/UX 合同单独维护在 `apps/zenx/docs/ui-ux.md`，本文件不重复
 具体布局。Thread 的重命名、归档与取消归档全部通过既有 App Server 操作；Archive
 作为可逆的安全删除替代，不提供永久删除，也不在活动 Turn 期间暗改 Thread 设置。
@@ -152,7 +153,7 @@ AX/窗口定向截图和明确提示、可取消的前台输入形成基线；
 `computer_foreground_*` 在 fresh/legacy profile 中默认不向 Agent 投影且不能执行，只有用户在 ZenX
 General Settings 中阅读前台接管风险并明确开启后才可用，关闭后立即撤销且选择随正常重启保持；
 后续 Windows provider 可用 UIA/Windows Graphics Capture/SendInput 接入同一 seam；plugin manifest、
-provider 选择与诊断均由 ZenX 持有，不进入 Zen Core 或 Codex 协议；独立 Skills 平台暂缓，
+provider 选择与诊断均由 ZenX 持有，不进入 Zen Core 或 ZAS protocol；独立 Skills 平台暂缓，
 插件以 main document 承担首要说明。上述外层配置
 和调度状态不进入 Zen Core，命中 Trigger 仍只通过 App Server 发起普通 Turn；在真实
 桌面验收完成前不夸大为稳定发布。
@@ -172,8 +173,8 @@ Add Project 使用只读的内部目录 picker。Windows/Linux 不安装 Electro
 选择 Project，不把 Documents、进程 cwd 或默认 Project 当作隐式替代。
 Project row 的 New thread 始终选择被点击 Project 的 canonical workspace；全局入口使用仍有效的最近 workspace，否则要求用户明确选择。点击入口、切换 Project 或确认目录都只维护 Renderer 本地 draft，不创建 Thread；第一条有效 Send 才配置 Project、创建真实 Thread，并立即启动 Turn，不等待 summaries 或 Project projection。失败以不遮盖当前页面的明确通知呈现，并可恢复原 draft 重试。
 
-固定版本 T3 Code 仍是机会型兼容目标：它可以通过协议直接把 Zen 当 provider
-驱动，但不会替代 ZenX 的外层产品能力，也不会反向扩大 Zen Core。
+固定版本 T3 Code 仍是机会型互操作目标：它可以通过已验收的 CAS mapped surface
+把 Zen 当 provider 驱动，但不会替代 ZenX 的外层产品能力，也不会反向扩大 Zen Core。
 
 ## IMZen
 
@@ -211,7 +212,7 @@ presenter；其他扩展位置缺席，因此保持 SDK 默认行为。
 | 阶段 | 当前结果                                                                          | 状态                                                                                                                                                                                                                                                                         |
 | ---- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1    | VISION / ARCHITECTURE / LESSONS / PRODUCTS 定义当前产品边界                       | 完成                                                                                                                                                                                                                                                                         |
-| 2    | 协议钉在 codex-cli 0.146.0；精确子集记录在 `src/protocol/codex/README.md`         | 完成                                                                                                                                                                                                                                                                         |
+| 2    | ZAS 自有协议；CAS adapter 固定 codex-cli 0.146.0 并记录精确映射与验收面           | 完成                                                                                                                                                                                                                                                                         |
 | 3    | 内存 ItemList → Runtime → App Server → FakeModel 事件链                           | 完成                                                                                                                                                                                                                                                                         |
 | 4    | 每 Thread 一个 append-only JSONL；stale open Turn 派生为 interrupted              | 完成                                                                                                                                                                                                                                                                         |
 | 5    | shell + command item 瞬态审批；accept / decline / cancel / interrupt              | 完成                                                                                                                                                                                                                                                                         |

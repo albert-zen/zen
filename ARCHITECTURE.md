@@ -13,6 +13,8 @@
 - **Turn** — 一次交换：从一条用户输入开始、到 agent 完成响应为止追加的那段连续 Item。
 - **AgentRuntime** — Zen 拥有的 provider-neutral agent loop：从 ItemList 编译上下文 → 调用模型 → 通过 Tool Environment 执行工具，并把 canonical `tool_call` / `tool_result` 在内的一切事实追加为 Item。
 - **AppServer** — 按 threadId 把请求路由到 Thread、驱动 AgentRuntime、向订阅者广播 item 事件的唯一服务入口。
+- **ZAS Native Protocol** — Zen 自己定义的 App Server 调用与事件语义，由 canonical 生命周期、Host policy 和产品需求向外投影，不受兼容 adapter 可表达能力裁剪。
+- **Codex App Server Adapter** — `src/protocol/codex/` 把 ZAS 原生 surface 中可表达的部分映射为固定 codex-cli 0.146.0 shape；兼容只属于已验收的具体客户端调用面，不反向定义 ZAS。
 - **Tool Environment** — AgentRuntime 面向的混合工具执行环境，统一解析、投影、Host policy、取消、路由与结果回写，但不要求 Zen 自己实现每个工具的领域行为。
 - **Tool Presentation** — AgentRuntime 把同一个 Tool Environment 以 `direct`、`code` 或 `both` 形态投影给模型；它只改变模型调用入口，不拥有第二套工具、权限或会话语义。
 - **Code Runtime** — 每次调用在 fresh、空环境、有限 heap/time/output 且可硬终止的 Node Worker 中运行 erasable TypeScript，权限明确等同 builtin shell，并用同一个 Tool Environment 的 `tools.*` bindings 调用结构化工具。
@@ -48,7 +50,7 @@
 - **Generic UI Host** — ZenX 为插件提供 sidebar、pages/subroutes、settings、panel、commands/menu 与 result renderer 的受控宿主 surface，不允许插件直接接管核心 DOM、router 或 Agent 页面语义。
 - **Plugin UI SDK** — 第一方 bundled 插件和隔离运行的第三方插件共享的逻辑 UI contribution API；信任和进程隔离不同，不产生两套产品语义。
 - **Tool Result Renderer** — 按 namespaced content type 渲染既有 `ToolResultItem` 可选 structured content 的插件 UI contribution；renderer 缺失时必须回退 text/JSON，且不得改写历史 Item。
-- **ZenX ZAS Endpoint** — ZenX Host 拥有的稳定、带认证、可供其他应用连接的固定 Codex App Server endpoint；它不创建第二个 AppServer authority，也不要求 OS daemon。
+- **ZenX ZAS Endpoint** — ZenX Host 拥有的稳定、带认证、可供其他应用连接的 Zen App Server endpoint；当前原生 surface 与 CAS mapped surface 共用它，但不创建第二个 AppServer authority，也不要求 OS daemon。
 - **ZenX Resume Projection Buffer** — renderer 在一次 Thread selection epoch 内只短时缓存 resume 响应到 React commit 之间到达的协议事件，并在 canonical snapshot 提交时按序重放；它不持久化，也不成为第二份 Thread 状态。
 - **ZenX Approval UI Identity** — ZenX main 为每个 connection generation 的瞬时 approval 分配 opaque UI id，并把应答绑定到发起请求的 exact client/socket 与 wire id；stop 或 reconnect 会取消并清空旧 generation，renderer ready snapshot 只镜像当前 pending 集合。
 - **AttachmentStore** — ZAS 管理的不可变、SHA-256 内容寻址 payload store；
@@ -206,7 +208,7 @@
   artifact，并把 observation identity 与 artifact metadata 一起投影；文件是外部瞬时观测，不进入 Zen Core 或 durable journal。
 - **ZenXBrowserLiveObservation** — ZenX user-browser provider 把 Agent 当前实际操作的同一 CDP target 作为
   observer-scoped、只读、host-local 的有界 latest-frame/status 投影交给当前 renderer；它逐帧 ack、在无观察者、页面隐藏、
-  target/document/provider 生命周期变化时停止，且不进入 plugin storage、Core、ItemList、Codex wire、磁盘或历史。
+  target/document/provider 生命周期变化时停止，且不进入 plugin storage、Core、ItemList、ZAS protocol、磁盘或历史。
 - **ZenXCapabilityTransientReset** — ZenX 主进程在 App Server/settings restart、provider replacement 或 close 时
   单调使 provider-owned artifacts 失效并重建可重建 backend；它不改写 canonical ItemList、Catalog lifecycle
   或 durable plugin data，也不成为第二个 runtime/coordinator。
@@ -596,8 +598,10 @@ Reasoning control 只有一个权威：UI/Core 在 Turn admission 时冻结 cano
    opaque reasoning 只能走 summary 通道。
 3. **协议事件** — ItemList 状态变化向 wire protocol 的投影，不是独立状态。
 
-Turn 边界对齐 Codex rollout 语义：canonical `turn_started` 开始 Turn，
+Turn 边界由 Zen canonical lifecycle 定义：`turn_started` 开始 Turn，
 `turn_completed` / `turn_aborted` 结束 Turn；完成的语义 Item 在二者之间追加。
+ZAS 当前把它们投影为 `turn/started` / `turn/completed`；CAS adapter 可将这部分
+无损映射到固定 Codex shape，但外部 rollout 命名不反向定义 canonical Turn。
 任一 canonical append Promise 拒绝后，持久化结果都视为未知：当前 Turn 停止后续
 canonical 写入，App Server 丢弃对应 Thread 与 summary 缓存并在下次读取时从 journal
 重建，不补写替代 failure 或第二个 terminal。
@@ -621,38 +625,48 @@ ItemList 推导为 resolved。进程不会自动继续未完成 intent，只有�
 审批请求与应答是正在运行的 Turn 和接入端之间的瞬态交互，不写 journal。
 最终执行或拒绝的结果由完整的 tool-result Item 表达。
 
-## 在线协议
+## ZAS 原生协议与 CAS 映射
 
-Zen 对外只有一个 wire protocol：**固定版本的 Codex App Server message
-protocol 兼容子集**（Thread / Turn / Item 三原语）。transport 只是同一协议的
-承载方式，不是第二套协议。当前兼容基线钉在 **codex-cli 0.146.0**，实现
-JSONL stdio 与 loopback WebSocket 两种承载；Unix socket 尚未实现。兼容原版
-Codex CLI、T3 Code 是收益，不是核心设计前提。
+ZAS 拥有原生 App Server 协议（Thread / Turn / Item 三原语）及其全部语义。
+当前实现让原生 surface 与 Codex App Server（CAS）mapped surface 共用一个 endpoint
+和 JSON-RPC shape，因为尚未出现需要两份实现的真实差异；这只是当前实现局部性，
+不把 CAS 变成语义权威，也不阻止 ZAS 在产品需要时分叉。native-only 的新增方法或
+字段可以由共享 connection 明确排除在 CAS claim 外；只有 shared codec / validation
+无法同时诚实承载两侧重叠语义时，才拆出独立 native schema。
 
-Zen 只在 Codex 0.146.0 没有等价原子语义时增加明确命名的协议扩展：
-`turn/replace` 与 `thread/compact`。它们不是 Codex compatibility claim，也不得
-复用或改变标准方法；客户端必须显式调用并处理 unsupported。
+CAS adapter 固定在 **codex-cli 0.146.0**，只映射 ZAS 中该 shape 可表达的部分。
+CAS-specific types、映射和兼容文档归入 `src/protocol/codex/`，Codex 生成 schema
+只是这层 mapping 的 shape oracle。当前 shared codec / connection 也承载下列 ZAS
+native surface；物理位置不赋予 CAS 语义权威。当前 endpoint 提供 JSONL stdio 与
+loopback WebSocket 两种 transport，Unix socket 尚未实现。原版 Codex CLI、T3 Code
+的互操作是收益，不是 ZAS、Core 或产品的设计前提。
+
+`turn/replace`、`thread/compact` 与 typed input 的 `attachment` variant 是 ZAS
+native surface；command item 上 structured result 和调用 lineage 的可选字段同样
+来自 ZAS 产品语义。它们即使当前存在于共享 endpoint/DTO，也不属于 CAS compatibility
+claim，不得被称为 Codex extension 或因固定 CAS schema 缺失而删除。
 
 规则：
 
-- **固定版本**：协议 schema 以 codex-cli 0.146.0 的生成结果为准，不承诺
-  "兼容最新"。升级版本是一次显式决策。
+- **固定 CAS 版本**：CAS 字段 shape 以 codex-cli 0.146.0 的生成结果为准，不承诺
+  "兼容最新"，也不自动继承后续 Codex 语义；升级 adapter 基线是一次显式决策。
 - **强制握手**：每个连接先 `initialize` → `initialized`，之后才接受其他方法。
 - **WebSocket 访问控制在宿主侧**：loopback listener 拒绝浏览器 `Origin`，可选
   bearer credential 仅用于 transport 握手，不进入 Zen Core、Thread 或 journal。
-- **stdio ↔ WebSocket bridge 只是 transport adapter**：它原样转发固定协议消息，
+- **stdio ↔ WebSocket bridge 只是 transport adapter**：它原样转发共享 endpoint 消息，
   不创建 runtime、Thread 或任何可持久化状态。
-- **子集先由 Zen 生命周期定义**：实现 Zen 自建 CLI 所需的最小生命周期，再用
-  stub 记录原版 `codex --remote` 与固定版本 T3 Code 的实际调用，机会性扩展
-  兼容面。当前请求子集包括 `account/read`、`skills/list`、`model/list`、
+- **ZAS 调用面先由产品生命周期定义**：先实现 Zen 自建客户端需要的原生语义，
+  再用 stub 记录原版 `codex --remote` 与固定版本 T3 Code 的实际调用，按具体客户端、
+  版本和方法机会性扩展 CAS 映射。当前 CAS request 子集包括 `account/read`、`skills/list`、`model/list`、
   `thread/start`、`thread/resume`、`thread/read`、`thread/list`、
   `thread/unsubscribe`、`turn/start`、`turn/steer`、`turn/interrupt`，以及 Thread / Turn /
   Item 事件流和 command item 审批请求。精确清单见
   `src/protocol/codex/README.md`。
 - `account/read`、`skills/list` 与 `model/list` 只投影宿主公开能力，不向 Zen Core 或 Thread 写入账户、skill、provider 状态；
   `model/list` 用稳定 opaque model key 区分不同 profile 的同名 model，reasoning effort
-  仍使用固定 Codex 字段；固定 schema 无法表达的非默认 Unknown/不可运行条目只从
-  wire 投影省略，不从 Host/Core catalog 删除，默认模型则必须可表示且可运行。
+  仍使用固定 Codex 字段；固定 CAS schema 无法表达的非默认 Unknown/不可运行条目
+  只从 CAS 投影省略，不从 ZAS/Host/Core catalog 删除。CAS `model/list` 的 default entry
+  必须可表示且可运行，否则该兼容请求明确失败；这不重写 ZAS 原生 catalog 或 selection。
   opaque key 的编码与解析只存在于协议目录。
 - `thread/settings/update` 修改后续 Turn 使用的配置；`turn/start` 携带的模型
   与 effort override 复用同一内部更新路径。provider/model/effort 必须原子解析并追加；成功变更必须先追加
@@ -664,30 +678,34 @@ Zen 只在 Codex 0.146.0 没有等价原子语义时增加明确命名的协议�
   `thread/settings/updated` 与 `thread/resume` 返回值镜像同一份配置；恢复
   Thread 时不得用客户端缓存覆盖 ZAS，只有用户明确选择新模型时才提交配置
   变更。同值更新是空操作，即使 Turn 正在运行也不得阻断跨端恢复。
-- Codex 协议投影不把 `thread_configuration_changed` 伪装成 Codex Thread Item；
+- CAS 投影不把 `thread_configuration_changed` 伪装成 Codex Thread Item；
   它只通过当前 `threadSettings` 与 settings 通知暴露结果，不承诺展示历史切换点。
   canonical ItemList 仍保留完整切换点和各 Turn 的生效模型，供 Zen 原生客户端
   重放。
 - `thread/name/set` 修改 ZAS 的 ThreadMetadataStore 并广播
   `thread/name/updated`；名称不是 Agent Item。`thread/list`、`thread/read` 与
   `thread/resume` 返回当前名称。
-- Codex 标准 `thread/archive` / `thread/unarchive` 修改同一 ThreadMetadataStore
-  并广播对应生命周期通知；`thread/list` 默认只返回未归档 Thread，只有
-  `archived: true` 才返回已归档 Thread，而 `thread/read` / `thread/resume` 始终可读。
-- `thread/list` 必须隔离单个损坏 journal，并使用 Codex 标准
-  `status: systemError` 显式返回该 threadId；`thread/read` / `thread/resume`
+- ZAS `thread/archive` / `thread/unarchive` 修改同一 ThreadMetadataStore 并广播
+  对应生命周期通知；`thread/list` 默认只返回未归档 Thread，只有 `archived: true`
+  才返回已归档 Thread，而 `thread/read` / `thread/resume` 始终可读。CAS adapter
+  以 Codex 的同名 methods 映射这组语义。
+- ZAS `thread/list` 必须隔离单个损坏 journal 并显式返回该 threadId；CAS adapter
+  把它映射为 Codex `status: systemError` shape。`thread/read` / `thread/resume`
   仍明确失败，且不得用默认配置伪造可恢复的 Thread snapshot。
 - 未实现的方法一律返回 JSON-RPC `-32601`；不返回伪造的成功结果。
-- **sandbox 与 approval 分离**：sandbox 限制工具实际上能做什么，approval
-  决定何时询问用户。首版只接受明确支持的 sandbox mode，其他 mode 返回
-  unsupported；审批不能冒充隔离。MCP 相关方法在未实现时同样明确返回 unsupported。
+- **Host policy 由 ZAS/Host 定义**：CAS 中的 sandbox 与 approval 只是 adapter 输入；
+  sandbox 限制工具实际上能做什么，approval 决定何时询问用户。当前只接受明确
+  支持的 sandbox mode，其他 mode 返回 unsupported；审批不能冒充隔离，外部字段
+  也不能反向要求 Zen 建立新的权限产品。MCP 相关方法在未实现时同样明确返回 unsupported。
   当前唯一模式 `danger-full-access` **不是安全隔离**；最小环境与已知 secret
   脱敏只防止意外泄漏，不能阻止已批准的命令主动读取本机可访问的文件。
-- **协议边界是目录不是包**：内部保持极小的 `Item` / `Thread` 类型，
-  `src/protocol/codex/` 存放固定版本的 wire types 和普通函数映射。协议 churn
-  只允许波及这个目录。只有出现"同时支持多个 Codex 版本"或"多个独立消费者"
-  时才拆包。
-- 在真实客户端跑通验收（一轮会话 + 一次工具审批）之前，不宣称兼容任何客户端。
+- **CAS 边界是目录不是包**：内部保持极小的 `Item` / `Thread` 类型，
+  CAS-specific types、普通函数映射和兼容文档只放在 `src/protocol/codex/`；当前
+  shared connection 也在这里分发 ZAS native calls，但目录位置不赋予 CAS 语义权威。
+  原生/CAS 尚能共享 codec 与 validation 时不复制第二份 schema；同一重叠语义开始
+  需要不同字段、requiredness、校验、生命周期或错误语义，或 CAS 升级而 ZAS 不跟随时，
+  再建立独立 native wire types 并迁移 Zen client。
+- 在真实客户端跑通验收（一轮会话 + 一次工具审批）之前，不对该客户端调用面宣称兼容。
 
 ## Adapter 边界
 
@@ -709,9 +727,9 @@ Zen 只在 Codex 0.146.0 没有等价原子语义时增加明确命名的协议�
 - **工具** — AgentRuntime 只依赖 Tool Environment；builtin `shell` / `apply_patch` 由 Zen 执行，
   plugin / external proxy runtimes 分别路由到拥有领域行为的 Plugin Runtime 或外部服务。
 - **审批** — 审批请求的呈现与应答（各接入端自行实现 UI）。
-- **接入端权限预设** — 当前固定 Codex wire 仍分别携带 sandbox 与 approval 字段；
-  Plugin Platform 的目标产品策略只把它们归约为默认 `full_access` 与可选
-  `ask_unknown`，不由接入端扩展新的 risk/scope 权限模型。
+- **接入端权限预设** — ZAS/Host 拥有默认 `full_access` 与可选 `ask_unknown`；
+  CAS adapter 只把固定 shape 的 sandbox 与 approval 字段映射到该策略，接入端与
+  CAS schema 都不能反向扩展新的 risk/scope 权限模型。
 
 ## 并发
 
@@ -743,7 +761,7 @@ src/
     openai-subscription.ts
   tool.ts
   protocol/
-    codex/         # 0.146.0 wire types + 映射（唯一允许协议 churn 的地方）
+    codex/         # 固定 0.146.0 CAS types + 映射（CAS 专属 churn 边界）
 apps/
   cli/             # 薄协议客户端；host 在这里组合外部配置、OAuth profile 与 adapters
   imzen/           # 与 CLI/Web/桌面平级的独立接入端
@@ -755,5 +773,5 @@ Python IM Agent SDK 的 Channel、Gateway、Application adapter 与 bridge state
 ports 而作为独立 Python 应用存在。IMZen 只保留产品配置、命令/呈现与 composition
 root；这些 package 关系不会长出 Project、第二套 Agent 或调度语义。
 
-自建薄 CLI 是首个稳定接入端；原版 `codex --remote` / T3 Code 作为机会型兼容
-验收，不反向塑造 Zen Core。
+自建薄 CLI 是首个稳定接入端；原版 `codex --remote` / T3 Code 只作为固定版本
+CAS mapped surface 的机会型验收，不反向塑造 ZAS 或 Zen Core。
