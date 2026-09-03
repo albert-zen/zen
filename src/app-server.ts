@@ -76,7 +76,7 @@ export interface AppServerDefaults {
   cwd: string;
   providerProfileId: string;
   modelId: string;
-  reasoningEffort: string;
+  reasoningEffort: string | null;
   sandbox: SandboxMode;
   approvalPolicy: ApprovalPolicy;
 }
@@ -98,7 +98,7 @@ export interface ThreadSnapshot {
   cwd: string;
   providerProfileId: string;
   modelId: string;
-  reasoningEffort: string;
+  reasoningEffort: string | null;
   /** Compatibility projections for existing product callers. */
   model: string;
   provider: string;
@@ -1454,7 +1454,7 @@ export class ZenAppServer {
 
   #requireSelection(
     selection: ProviderSelectionInput,
-    fallbackReasoningEffort?: string,
+    fallbackReasoningEffort?: string | null,
   ) {
     try {
       return this.#providerRegistry.resolve(selection, fallbackReasoningEffort);
@@ -1660,7 +1660,7 @@ function automaticCompactionThreshold(contextWindow: number): number {
 async function generateContextCompactionSummary(options: {
   adapter: ModelAdapter;
   model: string;
-  reasoningEffort: string;
+  reasoningEffort: string | null;
   messages: ModelMessage[];
   signal: AbortSignal;
 }): Promise<{

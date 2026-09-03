@@ -277,6 +277,33 @@ test("upgrades an existing subscription catalog with current presets while prese
   assert.equal(upgraded.providerProfiles[0]?.models[2]?.source, "manual");
 });
 
+test("migrates unconfigured compatible models to text-only without inferring provider controls", () => {
+  const unconfigured = {
+    ...profile.providerProfiles[0]!.models[1]!,
+    source: "manual" as const,
+    supportedReasoningEfforts: null,
+    defaultReasoningEffort: null,
+    inputModalities: null,
+    contextWindow: null,
+  };
+  const upgraded = applyBuiltInModelCatalogPresets({
+    ...profile,
+    providerProfiles: [
+      {
+        ...profile.providerProfiles[0]!,
+        models: [profile.providerProfiles[0]!.models[0]!, unconfigured],
+      },
+    ],
+    titleModel: profile.defaultModel,
+  });
+
+  const migrated = upgraded.providerProfiles[0]!.models[1]!;
+  assert.deepEqual(migrated.supportedReasoningEfforts, []);
+  assert.equal(migrated.defaultReasoningEffort, null);
+  assert.deepEqual(migrated.inputModalities, ["text"]);
+  assert.equal(migrated.contextWindow, null);
+});
+
 test("migrates v2 string catalogs deterministically without changing active model references", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-profile-v2-"));
   const file = path.join(directory, "host-profile.json");

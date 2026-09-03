@@ -62,7 +62,7 @@ export function ComposerModelMenu({
     selected === undefined
       ? "Unknown"
       : efforts.length === 0
-        ? "Unavailable"
+        ? "Text only"
         : (selectedReasoningLabel ?? "Choose");
   const close = (restoreFocus = true) => {
     restoreFocusRef.current = restoreFocus;
@@ -155,7 +155,9 @@ export function ComposerModelMenu({
               />
               {available ? (
                 <p className="composer-menu-note">
-                  Changes apply to the next turn.
+                  {efforts.length === 0
+                    ? "This model sends text without a Provider-specific reasoning control. Configure or detect capabilities to enable one."
+                    : "Changes apply to the next turn."}
                 </p>
               ) : (
                 <p className="composer-menu-warning" role="alert">

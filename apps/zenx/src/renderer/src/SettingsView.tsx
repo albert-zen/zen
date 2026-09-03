@@ -1231,8 +1231,9 @@ function ProviderEditor({
           <legend>Model catalog</legend>
           <div className="model-catalog-head">
             <p>
-              Model IDs are Provider-scoped. Unknown capabilities stay unknown
-              until discovery or a manual override supplies them.
+              Model IDs are Provider-scoped. New and discovered models start in
+              text-only mode; configure or detect optional capabilities before
+              enabling them.
             </p>
             {provider.type === "openai-compatible" && mode === "edit" ? (
               <button
@@ -1317,7 +1318,10 @@ function ProviderEditor({
                   initialProvider.models.some(
                     (entry) => entry.id === model.id,
                   ) &&
-                  model.inputModalities === null
+                  (model.inputModalities === null ||
+                    (model.source === "discovered" &&
+                      model.inputModalities.length === 1 &&
+                      model.inputModalities[0] === "text"))
                     ? async () => {
                         setProbingModel(model.id);
                         setValidationError(null);
@@ -1416,11 +1420,18 @@ function ModelCapabilityEditor({
   onProbe?(): Promise<void>;
   probing?: boolean;
 }) {
+  const [configuringReasoning, setConfiguringReasoning] = useState(false);
   const manual = (
     update: Partial<ZenXModelCatalogEntry>,
   ): ZenXModelCatalogEntry => ({ ...model, ...update, source: "manual" });
   const reasoningMode =
-    model.supportedReasoningEfforts === null ? "unknown" : "configured";
+    model.supportedReasoningEfforts === null
+      ? "unknown"
+      : model.supportedReasoningEfforts.length === 0
+        ? configuringReasoning
+          ? "configured"
+          : "text-only"
+        : "configured";
   return (
     <details className="provider-model-capabilities">
       <summary>{modelCapabilitySummary(model)}</summary>
@@ -1439,23 +1450,31 @@ function ModelCapabilityEditor({
           <span>{`Model ${index + 1} reasoning metadata`}</span>
           <select
             value={reasoningMode}
-            onChange={(event) =>
+            onChange={(event) => {
+              const mode = event.target.value;
+              setConfiguringReasoning(mode === "configured");
               onChange(
                 manual(
-                  event.target.value === "unknown"
+                  mode === "unknown"
                     ? {
                         supportedReasoningEfforts: null,
                         defaultReasoningEffort: null,
                       }
-                    : {
-                        supportedReasoningEfforts:
-                          model.supportedReasoningEfforts ?? [],
-                      },
+                    : mode === "text-only"
+                      ? {
+                          supportedReasoningEfforts: [],
+                          defaultReasoningEffort: null,
+                        }
+                      : {
+                          supportedReasoningEfforts:
+                            model.supportedReasoningEfforts ?? [],
+                        },
                 ),
-              )
-            }
+              );
+            }}
           >
             <option value="unknown">Unknown</option>
+            <option value="text-only">Text only (no reasoning control)</option>
             <option value="configured">Configured</option>
           </select>
         </label>
@@ -1882,8 +1901,10 @@ function modelReferenceExists(
 function isRunnableModel(model: ZenXModelCatalogEntry): boolean {
   return (
     model.supportedReasoningEfforts !== null &&
-    model.defaultReasoningEffort !== null &&
-    model.supportedReasoningEfforts.includes(model.defaultReasoningEffort) &&
+    ((model.defaultReasoningEffort !== null &&
+      model.supportedReasoningEfforts.includes(model.defaultReasoningEffort)) ||
+      (model.defaultReasoningEffort === null &&
+        model.supportedReasoningEfforts.length === 0)) &&
     model.inputModalities !== null &&
     model.inputModalities.includes("text")
   );
@@ -2305,9 +2326,9 @@ function manualModelCatalogEntry(id: string): ZenXModelCatalogEntry {
     displayName: id,
     description: "",
     hidden: false,
-    supportedReasoningEfforts: null,
+    supportedReasoningEfforts: [],
     defaultReasoningEffort: null,
-    inputModalities: null,
+    inputModalities: ["text"],
     contextWindow: null,
     source: "manual",
   };
@@ -2358,7 +2379,7 @@ function modelCapabilitySummary(model: ZenXModelCatalogEntry): string {
     model.supportedReasoningEfforts === null
       ? "reasoning unknown"
       : model.supportedReasoningEfforts.length === 0
-        ? "no selectable reasoning"
+        ? "text only · reasoning not configured"
         : model.supportedReasoningEfforts.join(" / ");
   const modalities =
     model.inputModalities === null

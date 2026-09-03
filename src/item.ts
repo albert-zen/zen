@@ -61,7 +61,8 @@ export interface LegacyThreadMetadataItem extends ThreadMetadataItemBase {
 export interface ProviderThreadMetadataItem extends ThreadMetadataItemBase {
   providerProfileId: string;
   modelId: string;
-  reasoningEffort: string;
+  /** null preserves an intentional request for the Provider's text default. */
+  reasoningEffort: string | null;
 }
 
 export type ThreadMetadataItem =
@@ -70,7 +71,8 @@ export type ThreadMetadataItem =
 export interface CanonicalProviderSelection {
   providerProfileId: string;
   modelId: string;
-  reasoningEffort: string;
+  /** null means Zen did not request a Provider-specific reasoning control. */
+  reasoningEffort: string | null;
 }
 
 export interface LegacyThreadConfigurationChangedItem extends ItemBase {
@@ -251,7 +253,7 @@ export interface ContextCompactionItem extends ItemBase {
   retainedItemIds: string[];
   providerProfileId: string;
   modelId: string;
-  reasoningEffort: string;
+  reasoningEffort: string | null;
   algorithmVersion: string;
   tokenUsage: {
     inputTokens: number;
@@ -436,7 +438,11 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         "reasoningEffort",
         "algorithmVersion",
       ]) {
-        requireNonEmptyString(item[key], `context_compaction.${key}`);
+        if (key === "reasoningEffort") {
+          requireReasoningEffort(item[key], `context_compaction.${key}`);
+        } else {
+          requireNonEmptyString(item[key], `context_compaction.${key}`);
+        }
       }
       requireStringArray(
         item.retainedItemIds,
@@ -657,7 +663,12 @@ function requireStringArray(value: unknown, name: string): void {
 function validateSelection(value: Record<string, unknown>, name: string): void {
   requireNonEmptyString(value.providerProfileId, `${name}.providerProfileId`);
   requireNonEmptyString(value.modelId, `${name}.modelId`);
-  requireNonEmptyString(value.reasoningEffort, `${name}.reasoningEffort`);
+  requireReasoningEffort(value.reasoningEffort, `${name}.reasoningEffort`);
+}
+
+function requireReasoningEffort(value: unknown, name: string): void {
+  if (value === null) return;
+  requireNonEmptyString(value, name);
 }
 
 function validateUserInput(value: unknown, name: string): void {

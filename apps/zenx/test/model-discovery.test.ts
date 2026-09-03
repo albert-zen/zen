@@ -14,7 +14,7 @@ import { discoverOpenAiCompatibleModels } from "../src/main/model-discovery.js";
 import { KNOWN_PROVIDER_PRESETS } from "../src/main/provider-presets.js";
 import { ZenXSettingsService } from "../src/main/settings-service.js";
 
-test("GET /models discovers ids with unknown capabilities and routes the selected credential", async () => {
+test("GET /models discovers ids as text-only and routes the selected credential", async () => {
   let requestUrl = "";
   let authorization: string | null = null;
   const models = await discoverOpenAiCompatibleModels({
@@ -38,9 +38,9 @@ test("GET /models discovers ids with unknown capabilities and routes the selecte
       description: "",
       hidden: false,
       source: "discovered",
-      supportedReasoningEfforts: null,
+      supportedReasoningEfforts: [],
       defaultReasoningEffort: null,
-      inputModalities: null,
+      inputModalities: ["text"],
       contextWindow: null,
     },
     {
@@ -49,9 +49,9 @@ test("GET /models discovers ids with unknown capabilities and routes the selecte
       description: "",
       hidden: false,
       source: "discovered",
-      supportedReasoningEfforts: null,
+      supportedReasoningEfforts: [],
       defaultReasoningEffort: null,
-      inputModalities: null,
+      inputModalities: ["text"],
       contextWindow: null,
     },
   ]);
@@ -77,10 +77,10 @@ test("GET /models uses explicit rich modalities and exact catalog enrichment wit
   assert.deepEqual(models[1]?.inputModalities, []);
   assert.equal(Object.isFrozen(models[1]?.inputModalities), true);
   assert.equal(models[1]?.source, "preset");
-  assert.equal(models[2]?.inputModalities, null);
+  assert.deepEqual(models[2]?.inputModalities, ["text"]);
   assert.deepEqual(models[3]?.inputModalities, ["text", "image"]);
   assert.equal(models[3]?.source, "preset");
-  assert.equal(models[4]?.inputModalities, null);
+  assert.deepEqual(models[4]?.inputModalities, ["text"]);
 });
 
 test("discovery derives transport from one exact profile and credential snapshot", async () => {
@@ -340,7 +340,8 @@ test("Host discovery keeps manual overrides and routes the selected profile tran
     assert.equal(closed, true);
     assert.deepEqual(snapshot.models[0], manual);
     assert.equal(snapshot.models[1]?.id, "discovered-only");
-    assert.equal(snapshot.models[1]?.supportedReasoningEfforts, null);
+    assert.deepEqual(snapshot.models[1]?.supportedReasoningEfforts, []);
+    assert.deepEqual(snapshot.models[1]?.inputModalities, ["text"]);
     assert.deepEqual((await service.publicSettings()).profile, before);
     assert.doesNotMatch(JSON.stringify(snapshot), /selected-key/u);
   } finally {
@@ -518,9 +519,9 @@ test("all known Provider presets create with profile-scoped keys and discover Un
         snapshot.models.map((model) => model.id),
         ["manual-seed", "discovered-model"],
       );
-      assert.equal(snapshot.models[1]?.supportedReasoningEfforts, null);
+      assert.deepEqual(snapshot.models[1]?.supportedReasoningEfforts, []);
       assert.equal(snapshot.models[1]?.defaultReasoningEffort, null);
-      assert.equal(snapshot.models[1]?.inputModalities, null);
+      assert.deepEqual(snapshot.models[1]?.inputModalities, ["text"]);
       assert.equal(snapshot.models[1]?.contextWindow, null);
     }
     assert.deepEqual(

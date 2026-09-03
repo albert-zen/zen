@@ -88,7 +88,9 @@ export function validateContextCompactionItem(
   requireNonEmpty(item.summary, "summary", true);
   requireNonEmpty(item.providerProfileId, "providerProfileId");
   requireNonEmpty(item.modelId, "modelId");
-  requireNonEmpty(item.reasoningEffort, "reasoningEffort");
+  if (item.reasoningEffort !== null) {
+    requireNonEmpty(item.reasoningEffort, "reasoningEffort");
+  }
   requireNonEmpty(item.algorithmVersion, "algorithmVersion");
   requireTokenCount(item.tokenUsage.inputTokens, "inputTokens");
   requireTokenCount(item.tokenUsage.outputTokens, "outputTokens");

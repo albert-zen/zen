@@ -32,6 +32,7 @@ export interface InitializeResult {
 export interface ThreadConfigurationParams {
   cwd?: string;
   model?: string;
+  effort?: string;
   approvalPolicy?: "on-request" | "never";
   approvalsReviewer?: "user";
   sandbox?: "danger-full-access";
@@ -40,7 +41,7 @@ export interface ThreadConfigurationParams {
     mode: "default";
     settings: {
       model: string;
-      reasoning_effort: string;
+      reasoning_effort: string | null;
       developer_instructions: string;
     };
   };
@@ -63,7 +64,7 @@ export interface UpdatedThreadSettings {
   approvalsReviewer: "user";
   collaborationMode: {
     mode: "default";
-    settings: { model: string; reasoning_effort: string };
+    settings: { model: string; reasoning_effort: string | null };
   };
   cwd: string;
   effort: string | null;
@@ -88,7 +89,7 @@ export interface ModelSummary {
     reasoningEffort: string;
     description: string;
   }>;
-  defaultReasoningEffort: string;
+  defaultReasoningEffort: string | null;
   inputModalities: Array<"text" | "image">;
   supportsPersonality: false;
   additionalSpeedTiers: unknown[];

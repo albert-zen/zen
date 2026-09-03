@@ -138,6 +138,9 @@ export class OpenAiCompatibleModel implements ModelAdapter {
         policy: reasoningPolicy,
         requestEffort: request.reasoningEffort,
       }),
+      ...(reasoningPolicy.enableThinking && request.reasoningEffort !== null
+        ? { enable_thinking: true }
+        : {}),
       ...(reasoningPolicy.enableToolStream
         ? { tool_stream: tools.length > 0 ? true : undefined }
         : {}),
@@ -203,6 +206,8 @@ type ReasoningReplay = "none" | "tool-calls" | "all-assistant";
 interface CompatibleReasoningPolicy {
   replay: ReasoningReplay;
   forwardReasoningEffort: boolean;
+  /** A documented provider wire requirement, not inferred model capability. */
+  enableThinking: boolean;
   enableToolStream: boolean;
   supportsUsageInStreaming: boolean;
 }
@@ -233,6 +238,7 @@ function compatibleReasoningPolicy(options: {
           ? "none"
           : "all-assistant",
       forwardReasoningEffort: true,
+      enableThinking: true,
       enableToolStream: false,
       supportsUsageInStreaming,
     };
@@ -248,6 +254,7 @@ function compatibleReasoningPolicy(options: {
           ? "all-assistant"
           : "tool-calls",
       forwardReasoningEffort: isDashScope || isZhipu,
+      enableThinking: false,
       enableToolStream: true,
       supportsUsageInStreaming,
     };
@@ -257,6 +264,7 @@ function compatibleReasoningPolicy(options: {
     return {
       replay: "tool-calls",
       forwardReasoningEffort: false,
+      enableThinking: false,
       enableToolStream: false,
       supportsUsageInStreaming,
     };
@@ -265,6 +273,7 @@ function compatibleReasoningPolicy(options: {
   return {
     replay: "all-assistant",
     forwardReasoningEffort: true,
+    enableThinking: false,
     enableToolStream: false,
     supportsUsageInStreaming,
   };
@@ -322,9 +331,10 @@ function zhipuPreservedThinking(
 
 function compatibleReasoningEffort(options: {
   policy: CompatibleReasoningPolicy;
-  requestEffort: string;
+  requestEffort: string | null;
 }): unknown {
-  if (!options.policy.forwardReasoningEffort) return undefined;
+  if (!options.policy.forwardReasoningEffort || options.requestEffort === null)
+    return undefined;
   return requiredLabel(options.requestEffort, "reasoning effort");
 }
 

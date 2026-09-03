@@ -42,7 +42,7 @@ export interface RuntimeConfiguration {
   cwd: string;
   providerProfileId: string;
   model: string;
-  reasoningEffort: string;
+  reasoningEffort: string | null;
   sandbox: SandboxMode;
   approvalPolicy: ApprovalPolicy;
 }

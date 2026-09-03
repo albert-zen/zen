@@ -63,6 +63,8 @@ export type CodexThreadItem =
       id: string;
       clientId: string | null;
       content: Array<{ type: "text"; text: string; text_elements: [] }>;
+      /** Durable placement anchor for a mid-turn steer. */
+      deliveryAfter?: string;
     }
   | {
       type: "agentMessage";
@@ -96,6 +98,8 @@ export interface CodexCommandItem {
   /** Zen fixed-subset extensions projected from the canonical tool call. */
   toolName?: string;
   toolArguments?: Readonly<Record<string, unknown>>;
+  /** Model response whose tool batch this call belongs to. */
+  modelResponseId?: string;
   callId?: string;
   parentCallId?: string;
   /** Zen fixed-subset extension; omitted for ordinary and legacy results. */
@@ -273,6 +277,9 @@ export function projectCompletedItem(
         content: [
           { type: "text", text: textFromUserMessage(item), text_elements: [] },
         ],
+        ...(item.deliveryAfter === undefined
+          ? {}
+          : { deliveryAfter: item.deliveryAfter }),
       };
     case "agent_message":
       return {
@@ -332,6 +339,9 @@ export function projectCommandStarted(
     toolName: call.name,
     toolArguments: structuredClone(call.arguments),
     callId: call.callId,
+    ...(call.modelResponseId === undefined
+      ? {}
+      : { modelResponseId: call.modelResponseId }),
     ...(call.parentCallId === undefined
       ? {}
       : { parentCallId: call.parentCallId }),

@@ -381,6 +381,70 @@ test("manual capability override makes an otherwise unknown model visible in fix
   }
 });
 
+test("text-only models are selectable, run without an effort, and remain in model/list", async () => {
+  const requests: ModelRequest[] = [];
+  const registry = new ProviderRegistry([
+    {
+      providerProfileId: "profile-a",
+      adapter: recordingAdapter("adapter-a", requests),
+      modelCatalog: new StaticModelCatalog([
+        { id: "shared-model", isDefault: true },
+        {
+          id: "text-only-model",
+          source: "discovered",
+          supportedReasoningEfforts: [],
+          defaultReasoningEffort: null,
+          inputModalities: ["text"],
+          contextWindow: null,
+        },
+      ]),
+    },
+  ]);
+  const appServer = createRegistryServer({
+    registry,
+    defaultSelection: selection("profile-a", "medium"),
+  });
+  const wire = await serveCodexWebSocket({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-text-only-model-projection"),
+    listen: "ws://127.0.0.1:0",
+  });
+  const client = await CodexClient.connect(wire.url);
+  try {
+    await client.initialize({ name: "test", title: "Test", version: "1" });
+    const listed = (await client.request("model/list", {})) as {
+      data: Array<{
+        model: string;
+        defaultReasoningEffort: string | null;
+        supportedReasoningEfforts: Array<{ reasoningEffort: string }>;
+        inputModalities: string[];
+      }>;
+    };
+    const textOnly = listed.data.find(
+      (entry) => decodeModelKey(entry.model).modelId === "text-only-model",
+    );
+    assert(textOnly !== undefined);
+    assert.equal(textOnly.defaultReasoningEffort, null);
+    assert.deepEqual(textOnly.supportedReasoningEfforts, []);
+    assert.deepEqual(textOnly.inputModalities, ["text"]);
+
+    const started = (await client.request("thread/start", {
+      model: textOnly.model,
+    })) as { thread: { id: string } };
+    await completeTurn(client, started.thread.id, "plain text request");
+    assert.deepEqual(
+      requests.map(({ model, reasoningEffort }) => ({
+        model,
+        reasoningEffort,
+      })),
+      [{ model: "text-only-model", reasoningEffort: null }],
+    );
+  } finally {
+    client.close();
+    await wire.close();
+  }
+});
+
 test("rejects an explicit effort for unknown reasoning without mutating the Thread or invoking the adapter", async () => {
   const requests: ModelRequest[] = [];
   const server = createRegistryServer({
@@ -745,11 +809,11 @@ function duplicateModelRegistry(
 
 function selection(
   providerProfileId: string,
-  reasoningEffort: string,
+  reasoningEffort: string | null,
 ): {
   providerProfileId: string;
   modelId: string;
-  reasoningEffort: string;
+  reasoningEffort: string | null;
 } {
   return { providerProfileId, modelId: "shared-model", reasoningEffort };
 }

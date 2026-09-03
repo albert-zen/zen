@@ -330,6 +330,93 @@ test("New thread stays local, switches Project, and creates on first Send", asyn
   }
 });
 
+test("New thread sends its selected model and reasoning effort to Project start", async () => {
+  const starts: Array<{
+    workspace: string;
+    selection: { model?: string; effort?: string } | undefined;
+  }> = [];
+  const advanced = {
+    ...wireModel(
+      encodeModelKey({
+        providerProfileId: "fake",
+        modelId: "gpt-5.6-luna",
+      }),
+      false,
+      "Compose model",
+    ),
+    model: "gpt-5.6-luna",
+    supportedReasoningEfforts: [
+      { reasoningEffort: "low", description: "low" },
+      { reasoningEffort: "high", description: "high" },
+    ],
+    defaultReasoningEffort: "high",
+  };
+  const harness = await mountApp(oneProject(), {
+    models: [wireModel("fake", true, "Local demo"), advanced],
+    request: async (method) => {
+      if (method === "turn/start") return {};
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+    startProjectThread: async (workspace, selection) => {
+      starts.push({ workspace, selection });
+      return started(liveThread(), workspace);
+    },
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    const modelTrigger = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".composer-model-trigger"),
+    );
+    await invokeButtonClick(modelTrigger);
+    const modelEntry = await waitFor(() =>
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      ).find((button) => button.textContent?.startsWith("Model")),
+    );
+    await invokeButtonClick(modelEntry);
+    const advancedEntry = await waitFor(() =>
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+      ).find((button) => button.textContent?.includes("Compose model")),
+    );
+    await invokeButtonClick(advancedEntry);
+    await invokeButtonClick(modelTrigger);
+    const reasoningEntry = await waitFor(() =>
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      ).find((button) => button.textContent?.startsWith("Reasoning")),
+    );
+    await invokeButtonClick(reasoningEntry);
+    const low = await waitFor(() =>
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+      ).find((button) => button.textContent?.includes("Low")),
+    );
+    await invokeButtonClick(low);
+
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(composer, "Use the selected model");
+    await invokeButtonClick(
+      await waitFor(() =>
+        document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+      ),
+    );
+    await waitFor(() => starts.length === 1);
+    assert.deepEqual(starts, [
+      {
+        workspace: "/work/zen",
+        selection: { model: advanced.id, effort: "low" },
+      },
+    ]);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("abandoning an untouched new-thread draft performs no Project mutation", async () => {
   let projectReads = 0;
   let addWorkspaceCalls = 0;
@@ -2421,7 +2508,10 @@ async function mountApp(
       workspace: string,
     ): Promise<ReturnType<typeof publicSettings>>;
     projectsGet?(): Promise<ZenXProjectProjectionSnapshot>;
-    startProjectThread?(workspace: string): Promise<unknown>;
+    startProjectThread?(
+      workspace: string,
+      selection?: { model?: string; effort?: string },
+    ): Promise<unknown>;
     setPinnedThreadIds?(
       threadIds: readonly string[],
     ): Promise<ReturnType<typeof publicSettings>>;
@@ -2499,11 +2589,14 @@ async function mountApp(
         options.projectsGet === undefined
           ? projects
           : await options.projectsGet(),
-      startThread: async (workspace: string) => {
+      startThread: async (
+        workspace: string,
+        selection?: { model?: string; effort?: string },
+      ) => {
         if (options.startProjectThread === undefined) {
           throw new Error(`Unexpected Project Thread start: ${workspace}`);
         }
-        return await options.startProjectThread(workspace);
+        return await options.startProjectThread(workspace, selection);
       },
     },
     settings: {

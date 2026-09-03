@@ -176,6 +176,44 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
     assert.equal(document.querySelector('[role="menu"]'), null);
     assert.equal(document.activeElement, trigger);
 
+    const textOnly = key("alpha", "alpha-text-only");
+    await act(async () =>
+      root.render(
+        createElement(
+          "div",
+          { className: "composer-tools" },
+          createElement(ComposerModelMenu, {
+            disabled: false,
+            modelError: null,
+            models: [model(textOnly, "Alpha Text Only", [], true)],
+            onModelChange: () => undefined,
+            onReasoningChange: () => undefined,
+            providerProfiles: [
+              provider("alpha", "Alpha Cloud", ["alpha-text-only"]),
+            ],
+            selectedModel: textOnly,
+            selectedReasoningEffort: null,
+            switching: false,
+          }),
+        ),
+      ),
+    );
+    const textOnlyTrigger = requiredButton(".composer-model-trigger");
+    assert.equal(
+      textOnlyTrigger.getAttribute("aria-label"),
+      "Model and reasoning: Alpha Text Only",
+    );
+    await act(async () => textOnlyTrigger.click());
+    const textOnlyReasoning = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((button) => button.textContent?.includes("Text only"));
+    assert.ok(textOnlyReasoning);
+    assert.equal(textOnlyReasoning.disabled, true);
+    assert.match(
+      document.body.textContent ?? "",
+      /sends text without a Provider-specific reasoning control/u,
+    );
+
     await act(async () =>
       root.render(
         createElement(
@@ -312,7 +350,7 @@ function model(
       reasoningEffort,
       description: reasoningEffort,
     })),
-    defaultReasoningEffort: efforts[0]!,
+    defaultReasoningEffort: efforts[0] ?? null,
     inputModalities: displayName.includes("Vision")
       ? ["text", "image"]
       : ["text"],

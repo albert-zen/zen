@@ -102,6 +102,7 @@ declare global {
         ): Promise<ZenXProjectProjectionSnapshot>;
         startThread(
           workspace: string,
+          selection?: { model?: string; effort?: string },
         ): Promise<ClientRequestResults["thread/start"]>;
       };
       settings: {

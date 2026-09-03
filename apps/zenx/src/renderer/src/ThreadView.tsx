@@ -482,25 +482,28 @@ function TurnBlock({
   const projection = useMemo(() => projectTurn(turn), [turn]);
   const [expanded, setExpanded] = useState(false);
   const complete = turn.status !== "inProgress";
+  const renderUserItem = (
+    item: Extract<ThreadItem, { type: "userMessage" }>,
+  ) => {
+    const wakeup = wakeups.find(
+      (entry) => entry.clientUserMessageId === item.clientId,
+    );
+    return wakeup === undefined ? (
+      <UserMessage
+        attachments={attachments[item.id] ?? []}
+        item={item}
+        key={item.id}
+        onOpenImage={onOpenImage}
+        onReadAttachment={onReadAttachment}
+        turn={turn}
+      />
+    ) : (
+      <WakeupCard entry={wakeup} key={item.id} />
+    );
+  };
   return (
     <section className={`turn ${turn.status}`} aria-label={`Turn ${index + 1}`}>
-      {projection.userItems.map((item) => {
-        const wakeup = wakeups.find(
-          (entry) => entry.clientUserMessageId === item.clientId,
-        );
-        return wakeup === undefined ? (
-          <UserMessage
-            attachments={attachments[item.id] ?? []}
-            item={item}
-            key={item.id}
-            onOpenImage={onOpenImage}
-            onReadAttachment={onReadAttachment}
-            turn={turn}
-          />
-        ) : (
-          <WakeupCard entry={wakeup} key={item.id} />
-        );
-      })}
+      {projection.userItems.map(renderUserItem)}
       {complete ? (
         <button
           className="turn-toggle"
@@ -519,16 +522,20 @@ function TurnBlock({
       )}
       {!complete || expanded ? (
         <div className="turn-history">
-          {projection.history.map((node) => (
-            <DisplayNode
-              key={node.kind === "agent" ? node.item.id : node.id}
-              node={node}
-              turn={turn}
-              usage={usage}
-              pluginSnapshot={pluginSnapshot}
-              pluginUiRegistry={pluginUiRegistry}
-            />
-          ))}
+          {projection.history.map((node) =>
+            node.kind === "user" ? (
+              renderUserItem(node.item)
+            ) : (
+              <DisplayNode
+                key={node.kind === "agent" ? node.item.id : node.id}
+                node={node}
+                turn={turn}
+                usage={usage}
+                pluginSnapshot={pluginSnapshot}
+                pluginUiRegistry={pluginUiRegistry}
+              />
+            ),
+          )}
           {!complete && projection.finalItem !== null ? (
             <AgentMessage
               item={projection.finalItem}
@@ -539,6 +546,14 @@ function TurnBlock({
           ) : null}
         </div>
       ) : null}
+      {complete && !expanded
+        ? projection.history
+            .filter(
+              (node): node is Extract<TurnDisplayNode, { kind: "user" }> =>
+                node.kind === "user",
+            )
+            .map((node) => renderUserItem(node.item))
+        : null}
       {complete && projection.finalItem !== null ? (
         <div className="turn-final">
           <AgentMessage
@@ -580,7 +595,7 @@ function DisplayNode({
   pluginSnapshot,
   pluginUiRegistry,
 }: {
-  node: TurnDisplayNode;
+  node: Exclude<TurnDisplayNode, { kind: "user" }>;
   turn: Turn;
   usage?: ModelUsageAggregate;
   pluginSnapshot: ZenXPluginSnapshot | null;

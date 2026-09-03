@@ -56,7 +56,8 @@ export type ReasoningEffort = string;
 
 export interface ModelRequest {
   model: string;
-  reasoningEffort: ReasoningEffort;
+  /** null leaves Provider-specific reasoning controls out of the request. */
+  reasoningEffort: ReasoningEffort | null;
   messages: ModelMessage[];
   tools: ModelTool[];
   signal: AbortSignal;

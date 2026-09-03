@@ -307,7 +307,7 @@ test("automatic compaction freezes admitted selection across a concurrent settin
   const releaseSummary = deferred<void>();
   const summarySelections: Array<{
     model: string;
-    reasoningEffort: string;
+    reasoningEffort: string | null;
   }> = [];
   const model: ModelAdapter = {
     provider: "recording",
@@ -979,7 +979,7 @@ test("freezes the admitted Provider selection while a settings update waits", as
   const releaseSummary = deferred<void>();
   const summarySelections: Array<{
     model: string;
-    reasoningEffort: string;
+    reasoningEffort: string | null;
   }> = [];
   const model: ModelAdapter = {
     provider: "recording",

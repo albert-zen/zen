@@ -275,7 +275,7 @@ export function createHostedAppServer(
       cwd: path.resolve(options.cwd),
       providerProfileId: defaultSelection.providerProfileId,
       modelId: defaultSelection.modelId,
-      reasoningEffort: requiredDefaultReasoningEffort(
+      reasoningEffort: defaultReasoningEffort(
         configuredDefault,
         defaultSelection,
       ),
@@ -375,10 +375,10 @@ function normalizeProviderProfiles(
   ];
 }
 
-function requiredDefaultReasoningEffort(
+function defaultReasoningEffort(
   model: ReturnType<StaticModelCatalog["defaultModel"]>,
   selection: HostModelSelection,
-): string {
+): string | null {
   if (model.supportedReasoningEfforts === null) {
     throw new Error(
       `Supported reasoning efforts are unknown for default model ${selection.modelId} from provider profile ${selection.providerProfileId}; configure a manual capability override`,
@@ -394,6 +394,9 @@ function requiredDefaultReasoningEffort(
   }
   if (model.defaultReasoningEffort !== null) {
     return model.defaultReasoningEffort;
+  }
+  if (model.supportedReasoningEfforts.length === 0) {
+    return null;
   }
   throw new Error(
     `Default reasoning effort is unknown for model ${selection.modelId} from provider profile ${selection.providerProfileId}; configure a manual capability override`,

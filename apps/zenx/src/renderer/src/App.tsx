@@ -102,6 +102,7 @@ interface NewThreadDraft {
   id: string;
   workspace: string | null;
   composer: ComposerState;
+  settings: SelectedThreadSettings | null;
 }
 
 type BufferedProtocolNotification = {
@@ -111,12 +112,109 @@ type BufferedProtocolNotification = {
   };
 }[ServerNotificationMethod];
 
+interface ThreadProjectionCacheEntry {
+  thread: Thread;
+  settings: SelectedThreadSettings;
+  activeTurnNotifications: BufferedProtocolNotification[];
+}
+
+function replayThreadProjection(
+  thread: Thread,
+  settings: SelectedThreadSettings,
+  notifications: readonly BufferedProtocolNotification[],
+): ThreadProjectionCacheEntry {
+  let projectedThread = thread;
+  let projectedSettings = settings;
+  for (const notification of notifications) {
+    projectedThread = applyThreadViewNotification(
+      projectedThread,
+      notification.method,
+      notification.params,
+    );
+    if (notification.method === "thread/settings/updated") {
+      const event =
+        notification.params as ServerNotificationParams["thread/settings/updated"];
+      projectedSettings =
+        applySettingsMirror(
+          projectedSettings,
+          event.threadId,
+          event.threadSettings,
+        ) ?? projectedSettings;
+    }
+  }
+  return {
+    thread: projectedThread,
+    settings: projectedSettings,
+    activeTurnNotifications: activeTurnNotificationTail(notifications),
+  };
+}
+
+function notificationThreadId(
+  notification: BufferedProtocolNotification,
+): string | null {
+  const threadId = (notification.params as { threadId?: unknown }).threadId;
+  return typeof threadId === "string" ? threadId : null;
+}
+
+function retainsActiveTurnNotification(
+  method: ServerNotificationMethod,
+): boolean {
+  return (
+    method === "turn/started" ||
+    method === "item/started" ||
+    method === "item/agentMessage/delta" ||
+    method === "item/reasoning/summaryPartAdded" ||
+    method === "item/reasoning/summaryTextDelta" ||
+    method === "item/reasoning/textDelta" ||
+    method === "item/commandExecution/outputDelta" ||
+    method === "item/completed"
+  );
+}
+
+function activeTurnNotificationTail(
+  notifications: readonly BufferedProtocolNotification[],
+): BufferedProtocolNotification[] {
+  const tail: BufferedProtocolNotification[] = [];
+  for (const notification of notifications) {
+    if (notification.method === "turn/completed") {
+      tail.length = 0;
+    } else if (retainsActiveTurnNotification(notification.method)) {
+      tail.push(notification);
+    }
+  }
+  return tail;
+}
+
+function updateThreadProjectionCache(
+  cache: Map<string, ThreadProjectionCacheEntry>,
+  notification: BufferedProtocolNotification,
+): ThreadProjectionCacheEntry | undefined {
+  const threadId = notificationThreadId(notification);
+  if (threadId === null) return undefined;
+  const current = cache.get(threadId);
+  if (current === undefined) return undefined;
+  const updated = replayThreadProjection(current.thread, current.settings, [
+    notification,
+  ]);
+  const activeTurnNotifications = activeTurnNotificationTail([
+    ...current.activeTurnNotifications,
+    notification,
+  ]);
+  const next = { ...updated, activeTurnNotifications };
+  cache.set(threadId, next);
+  return next;
+}
+
 export function App() {
   const selectionEpoch = useRef(0);
   const pendingResumeProjectionRef = useRef<{
     epoch: number;
+    threadId: string;
     notifications: BufferedProtocolNotification[];
   } | null>(null);
+  const threadProjectionCacheRef = useRef(
+    new Map<string, ThreadProjectionCacheEntry>(),
+  );
   const invalidateThreadSelection = () => {
     selectionEpoch.current += 1;
     pendingResumeProjectionRef.current = null;
@@ -438,7 +536,9 @@ export function App() {
   const resumeThread = async (threadId: string, preserveNavigation = false) => {
     discardRecoverableDraft();
     const epoch = ++selectionEpoch.current;
-    pendingResumeProjectionRef.current = { epoch, notifications: [] };
+    const cached = threadProjectionCacheRef.current.get(threadId);
+    pendingResumeProjectionRef.current =
+      cached === undefined ? { epoch, threadId, notifications: [] } : null;
     confirmNewThreadDraft(null);
     const usageEpoch = ++threadUsageLoadEpoch.current;
     selectedThreadIdRef.current = threadId;
@@ -448,12 +548,12 @@ export function App() {
       setWorkspaceOpen(false);
     }
     setSelectedThreadId(threadId);
-    setThreadDetail(null);
+    setThreadDetail(cached?.thread ?? null);
     setThreadAttachments({});
     setThreadUsage(undefined);
-    setSelectedSettings(null);
+    setSelectedSettings(cached?.settings ?? null);
     setModelUpdateError(null);
-    setThreadLoading(true);
+    setThreadLoading(cached === undefined);
     setThreadError(null);
     void loadComposerCatalog();
     try {
@@ -463,29 +563,20 @@ export function App() {
       if (selectionEpoch.current !== epoch) return;
       const pending = pendingResumeProjectionRef.current;
       const notifications =
-        pending?.epoch === epoch ? pending.notifications : [];
-      if (pending?.epoch === epoch) pendingResumeProjectionRef.current = null;
-      let projectedThread = result.thread;
-      let projectedSettings = settingsFromSnapshot(result.thread.id, result);
-      for (const notification of notifications) {
-        projectedThread = applyThreadViewNotification(
-          projectedThread,
-          notification.method,
-          notification.params,
-        );
-        if (notification.method === "thread/settings/updated") {
-          const event =
-            notification.params as ServerNotificationParams["thread/settings/updated"];
-          projectedSettings =
-            applySettingsMirror(
-              projectedSettings,
-              event.threadId,
-              event.threadSettings,
-            ) ?? projectedSettings;
-        }
-      }
-      setThreadDetail(projectedThread);
-      setSelectedSettings(projectedSettings);
+        pending?.epoch === epoch && pending.threadId === threadId
+          ? pending.notifications
+          : (threadProjectionCacheRef.current.get(threadId)
+              ?.activeTurnNotifications ?? []);
+      if (pending?.epoch === epoch && pending.threadId === threadId)
+        pendingResumeProjectionRef.current = null;
+      const projected = replayThreadProjection(
+        result.thread,
+        settingsFromSnapshot(result.thread.id, result),
+        notifications,
+      );
+      threadProjectionCacheRef.current.set(threadId, projected);
+      setThreadDetail(projected.thread);
+      setSelectedSettings(projected.settings);
       void window.zenx.imageAttachments
         .forThread(threadId)
         .then((attachments) => {
@@ -626,20 +717,27 @@ export function App() {
           void loadProjects();
         }
         const pendingResume = pendingResumeProjectionRef.current;
+        const notification = {
+          method,
+          params,
+        } as BufferedProtocolNotification;
+        const eventThreadId = notificationThreadId(notification);
+        const cached = updateThreadProjectionCache(
+          threadProjectionCacheRef.current,
+          notification,
+        );
         const bufferingResume =
           pendingResume !== null &&
-          pendingResume.epoch === selectionEpoch.current;
+          pendingResume.epoch === selectionEpoch.current &&
+          pendingResume.threadId === eventThreadId;
         if (bufferingResume) {
-          pendingResume.notifications.push({
-            method,
-            params,
-          } as BufferedProtocolNotification);
-        } else {
-          setThreadDetail((current) =>
-            current === null
-              ? null
-              : applyThreadViewNotification(current, method, params),
-          );
+          pendingResume.notifications.push(notification);
+        } else if (
+          cached !== undefined &&
+          selectedThreadIdRef.current === eventThreadId
+        ) {
+          setThreadDetail(cached.thread);
+          setSelectedSettings(cached.settings);
         }
         if (method === "item/completed" || method === "turn/completed") {
           const event = params as { threadId: string };
@@ -666,17 +764,6 @@ export function App() {
           }
         }
         if (method === "thread/settings/updated") {
-          const event =
-            params as ServerNotificationParams["thread/settings/updated"];
-          if (!bufferingResume) {
-            setSelectedSettings((current) =>
-              applySettingsMirror(
-                current,
-                event.threadId,
-                event.threadSettings,
-              ),
-            );
-          }
           setModelUpdateError(null);
         }
       },
@@ -825,6 +912,7 @@ export function App() {
       id: crypto.randomUUID(),
       workspace,
       composer: emptyComposerState(),
+      settings: defaultDraftSettings(models),
     });
     void loadComposerCatalog();
   };
@@ -999,7 +1087,7 @@ export function App() {
       return;
     }
     const workspace = project.workspace;
-    const draftSettings = defaultDraftSettings(models);
+    const draftSettings = current.settings ?? defaultDraftSettings(models);
     if (current.composer.draft.images.length > 0) {
       const capabilityError = imageCapabilityMessage(
         providerProfiles,
@@ -1038,8 +1126,19 @@ export function App() {
     let createdThreadId: string | null = null;
     try {
       await window.zenx.settings.addWorkspace(workspace);
-      const result = await window.zenx.projects.startThread(workspace);
+      const result = await window.zenx.projects.startThread(workspace, {
+        model: draftSettings.model,
+        ...(draftSettings.reasoningEffort === null
+          ? {}
+          : { effort: draftSettings.reasoningEffort }),
+      });
       createdThreadId = result.thread.id;
+      const createdProjection: ThreadProjectionCacheEntry = {
+        thread: result.thread,
+        settings: settingsFromSnapshot(createdThreadId, result),
+        activeTurnNotifications: [],
+      };
+      threadProjectionCacheRef.current.set(createdThreadId, createdProjection);
       setOptimisticSummary(optimisticThreadSummary(result, submission.text));
       newThreadPromotionsRef.current.set(draftId, createdThreadId);
       if (!newThreadImageLeasesRef.current.has(draftId))
@@ -1066,10 +1165,10 @@ export function App() {
         selectedThreadIdRef.current = createdThreadId;
         threadUsageLoadEpoch.current += 1;
         setSelectedThreadId(createdThreadId);
-        setThreadDetail(result.thread);
+        setThreadDetail(createdProjection.thread);
         setThreadAttachments({});
         setThreadUsage(undefined);
-        setSelectedSettings(settingsFromSnapshot(createdThreadId, result));
+        setSelectedSettings(createdProjection.settings);
         confirmNewThreadDraft(null);
       }
       void window.zenx.settings
@@ -1284,6 +1383,47 @@ export function App() {
     } finally {
       setSwitchingModel(false);
     }
+  };
+
+  const changeNewThreadModel = (model: string) => {
+    const settings = draftSettingsForModel(
+      models,
+      model,
+      newThreadDraftRef.current?.settings ?? null,
+    );
+    if (settings === null) {
+      setModelUpdateError("Choose an available model before sending.");
+      return;
+    }
+    setModelUpdateError(null);
+    updateNewThreadDraft((draft) => ({ ...draft, settings }));
+  };
+
+  const changeNewThreadReasoning = (effort: string) => {
+    const draft = newThreadDraftRef.current;
+    if (draft === null) return;
+    const settings = draft.settings ?? defaultDraftSettings(models);
+    const model =
+      settings === null
+        ? undefined
+        : models.find((candidate) => candidate.id === settings.model);
+    if (
+      settings === null ||
+      model === undefined ||
+      !model.supportedReasoningEfforts.some(
+        (candidate) => candidate.reasoningEffort === effort,
+      )
+    ) {
+      setModelUpdateError(
+        "Choose an available reasoning effort before sending.",
+      );
+      return;
+    }
+    setModelUpdateError(null);
+    updateNewThreadDraft((current) => ({
+      ...current,
+      settings: { ...settings, reasoningEffort: effort },
+    }));
   };
 
   const openPage = (next: ProductPage) => {
@@ -1644,6 +1784,8 @@ export function App() {
                 composer: editComposer(current.composer, draft),
               }))
             }
+            onNewThreadModelChange={changeNewThreadModel}
+            onNewThreadReasoningChange={changeNewThreadReasoning}
             onNewThreadProjectChange={(workspace) => {
               setModelUpdateError(null);
               updateNewThreadDraft((current) => ({
@@ -1944,6 +2086,8 @@ function AgentSurface({
   onRemoveImage,
   onRemoveNewThreadImage,
   onNewThreadDraftChange,
+  onNewThreadModelChange,
+  onNewThreadReasoningChange,
   onNewThreadProjectChange,
   onAddNewThreadProject,
   onInterrupt,
@@ -1984,6 +2128,8 @@ function AgentSurface({
   onRemoveImage(threadId: string, imageId: string): void;
   onRemoveNewThreadImage(imageId: string): void;
   onNewThreadDraftChange(draft: string): void;
+  onNewThreadModelChange(model: string): void;
+  onNewThreadReasoningChange(effort: string): void;
   onNewThreadProjectChange(workspace: string): void;
   onAddNewThreadProject(): void;
   onInterrupt(turnId: string): Promise<void>;
@@ -2011,7 +2157,8 @@ function AgentSurface({
   threadError: string | null;
   threadLoading: boolean;
 }) {
-  const draftSettings = defaultDraftSettings(models);
+  const draftSettings =
+    newThreadDraft?.settings ?? defaultDraftSettings(models);
   const draftProject =
     newThreadDraft === null
       ? undefined
@@ -2111,7 +2258,9 @@ function AgentSurface({
             providerProfiles,
             draftSettings,
           )}
-          modelDisabled
+          modelDisabled={
+            newThreadDraft.composer.submission?.status === "pending"
+          }
           modelError={
             draftProjectError ?? modelUpdateError ?? modelCatalogError
           }
@@ -2127,6 +2276,8 @@ function AgentSurface({
           onReadAttachment={onReadAttachment}
           onRemoveImage={onRemoveNewThreadImage}
           onInterrupt={async () => undefined}
+          onModelChange={onNewThreadModelChange}
+          onReasoningChange={onNewThreadReasoningChange}
           onRespondToApproval={onRespondToApproval}
           onSubmit={onSubmitNewThread}
         />
@@ -2811,6 +2962,34 @@ function defaultDraftSettings(
     model: model.id,
     modelProvider,
     reasoningEffort: model.defaultReasoningEffort,
+  };
+}
+
+function draftSettingsForModel(
+  models: readonly ModelSummary[],
+  modelId: string,
+  current: SelectedThreadSettings | null,
+): SelectedThreadSettings | null {
+  const model = models.find(
+    (candidate) => candidate.id === modelId && !candidate.hidden,
+  );
+  if (model === undefined) return null;
+  let modelProvider = model.model;
+  try {
+    modelProvider = decodeModelKey(model.id).providerProfileId;
+  } catch {
+    // Preserve compatibility with legacy model catalogs that used unencoded ids.
+  }
+  const reasoningEffort = model.supportedReasoningEfforts.some(
+    (candidate) => candidate.reasoningEffort === current?.reasoningEffort,
+  )
+    ? current!.reasoningEffort
+    : model.defaultReasoningEffort;
+  return {
+    threadId: "",
+    model: model.id,
+    modelProvider,
+    reasoningEffort,
   };
 }
 

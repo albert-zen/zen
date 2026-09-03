@@ -672,11 +672,12 @@ function installProtocolIpc(
   });
   ipcMain.handle(
     ipcChannels.projectThreadStart,
-    async (_event, workspace: unknown) =>
+    async (_event, workspace: unknown, selection: unknown) =>
       await startConfiguredProjectThread(
         projects,
         workspace,
         async (params) => await manager.request("thread/start", params),
+        readProjectThreadStartOptions(selection),
       ),
   );
   ipcMain.handle(
@@ -818,6 +819,35 @@ function readThreadSummaryListOptions(value: unknown): { archived?: boolean } {
   return "archived" in value
     ? { archived: (value as { archived: boolean }).archived }
     : {};
+}
+
+function readProjectThreadStartOptions(value: unknown): {
+  model?: string;
+  effort?: string;
+} {
+  if (value === undefined) return {};
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Invalid Project Thread start options");
+  }
+  const entries = Object.entries(value);
+  if (
+    entries.some(
+      ([key, entry]) =>
+        (key !== "model" && key !== "effort") ||
+        typeof entry !== "string" ||
+        entry.trim().length === 0,
+    )
+  ) {
+    throw new Error("Invalid Project Thread start options");
+  }
+  const options = value as { model?: string; effort?: string };
+  if (options.effort !== undefined && options.model === undefined) {
+    throw new Error("Project Thread reasoning effort requires a model");
+  }
+  return {
+    ...(options.model === undefined ? {} : { model: options.model }),
+    ...(options.effort === undefined ? {} : { effort: options.effort }),
+  };
 }
 
 function installSettingsIpc(

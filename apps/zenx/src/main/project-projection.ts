@@ -22,10 +22,16 @@ export interface ZenXProjectProjectionSnapshot {
 
 export type ProjectRealpath = (candidate: string) => Promise<string>;
 
+export interface ProjectThreadStartOptions {
+  model?: string;
+  effort?: string;
+}
+
 export async function startConfiguredProjectThread<T>(
   projection: ZenXProjectProjection,
   workspace: unknown,
-  start: (params: { cwd: string }) => Promise<T>,
+  start: (params: { cwd: string } & ProjectThreadStartOptions) => Promise<T>,
+  options: ProjectThreadStartOptions = {},
 ): Promise<T> {
   if (typeof workspace !== "string" || workspace.trim().length === 0) {
     throw new Error("Invalid Project workspace");
@@ -34,7 +40,7 @@ export async function startConfiguredProjectThread<T>(
   if (configuredWorkspace === null) {
     throw new Error("Project workspace is not configured");
   }
-  return await start({ cwd: configuredWorkspace });
+  return await start({ cwd: configuredWorkspace, ...options });
 }
 
 export interface ProjectPathIdentity {

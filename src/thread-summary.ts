@@ -7,7 +7,7 @@ import type { ApprovalPolicy, SandboxMode } from "./item.js";
 export interface CurrentMetadata {
   providerProfileId?: string;
   modelId?: string;
-  reasoningEffort?: string;
+  reasoningEffort?: string | null;
   /** Compatibility projections for existing product callers. */
   model: string;
   provider: string;
@@ -159,6 +159,7 @@ function isCurrentMetadata(value: unknown): value is CurrentMetadata {
       typeof value.providerProfileId === "string") &&
     (value.modelId === undefined || typeof value.modelId === "string") &&
     (value.reasoningEffort === undefined ||
+      value.reasoningEffort === null ||
       typeof value.reasoningEffort === "string") &&
     typeof value.model === "string" &&
     typeof value.provider === "string" &&

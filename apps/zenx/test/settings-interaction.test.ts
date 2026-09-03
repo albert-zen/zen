@@ -72,7 +72,7 @@ function model(id: string): ZenXModelCatalogEntry {
     hidden: false,
     supportedReasoningEfforts: ["medium"],
     defaultReasoningEffort: "medium",
-    inputModalities: ["text"],
+    inputModalities: ["text" as const],
     contextWindow: null,
     source: "legacy",
   };
@@ -201,12 +201,12 @@ test("Models lists every profile and keeps duplicate model IDs distinguishable a
   }
 });
 
-test("Provider discovery keeps unknown capabilities explicit and manual overrides persist", async () => {
+test("Provider discovery starts text-only and manual overrides persist", async () => {
   const discovered = {
     ...model("alpha-vision"),
-    supportedReasoningEfforts: null,
+    supportedReasoningEfforts: [],
     defaultReasoningEffort: null,
-    inputModalities: null,
+    inputModalities: ["text" as const],
     contextWindow: null,
     source: "discovered" as const,
   };
@@ -244,7 +244,7 @@ test("Provider discovery keeps unknown capabilities explicit and manual override
     assert.equal(requiredInput("Model 3").value, "alpha-vision");
     assert.match(
       document.body.textContent ?? "",
-      /reasoning unknown · input unknown · context unknown/u,
+      /text only · reasoning not configured · text · context unknown/u,
     );
 
     const reasoningMode = labeledSelect("Model 3 reasoning metadata");
@@ -372,8 +372,9 @@ test("Add custom provider submits an opaque identity, credential, and repeatable
       added?.provider.models.every(
         (entry) =>
           entry.source === "manual" &&
-          entry.supportedReasoningEfforts === null &&
-          entry.inputModalities === null &&
+          entry.supportedReasoningEfforts?.length === 0 &&
+          entry.inputModalities?.length === 1 &&
+          entry.inputModalities[0] === "text" &&
           entry.contextWindow === null,
       ),
     );

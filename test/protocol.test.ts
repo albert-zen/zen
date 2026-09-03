@@ -1206,6 +1206,7 @@ test("switches models canonically and synchronizes thread settings", async () =>
     });
     const started = await initiating.request("thread/start", {
       model: "fake",
+      effort: "medium",
       cwd: process.cwd(),
       sandbox: "danger-full-access",
       approvalPolicy: "never",
@@ -1517,6 +1518,8 @@ test("dispatches Codex turn/steer to the same active Turn for every subscriber",
     for (const observation of observations) {
       assert.equal(observation.threadId, thread.id);
       assert.equal(observation.turnId, turn.id);
+      assert(isRecord(observation.item));
+      assert.equal(typeof observation.item.deliveryAfter, "string");
     }
 
     await assert.rejects(

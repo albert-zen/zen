@@ -204,7 +204,7 @@ function model(
     description: id,
     hidden: false,
     supportedReasoningEfforts: [],
-    defaultReasoningEffort: "medium",
+    defaultReasoningEffort: null,
     inputModalities: ["text"],
     supportsPersonality: false,
     additionalSpeedTiers: [],

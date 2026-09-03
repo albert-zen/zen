@@ -96,6 +96,96 @@ test("resume commits canonical state before auxiliary reads and replays catch-up
   }
 });
 
+test("keeps an inactive Thread's streaming projection when returning to it", async () => {
+  let notify: NotificationListener | undefined;
+  const resumeCalls: string[] = [];
+  const harness = await mountApp({
+    request: async (method, params) => {
+      if (method !== "thread/resume")
+        throw new Error(`Unexpected protocol request: ${method}`);
+      const threadId = (params as { threadId: string }).threadId;
+      resumeCalls.push(threadId);
+      return resumed(thread(threadId));
+    },
+    onNotification: (listener) => {
+      notify = listener;
+      return () => {
+        notify = undefined;
+      };
+    },
+    threads: async (archived) =>
+      archived
+        ? []
+        : [
+            summary("thread-1", "Thread one"),
+            summary("thread-2", "Thread two"),
+          ],
+  });
+  try {
+    const threadOne = await waitFor(() =>
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+      ).find((row) => row.textContent?.includes("Thread one")),
+    );
+    await act(async () => threadOne.click());
+    await waitFor(() => resumeCalls.includes("thread-1"));
+    assert.ok(notify);
+    await act(async () => {
+      notify?.("turn/started", {
+        threadId: "thread-1",
+        turn: runningTurn(),
+      });
+      notify?.("item/started", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "streamed-item",
+          type: "agentMessage",
+          text: "",
+          phase: "final_answer",
+          memoryCitation: null,
+        },
+        startedAtMs: 10_000,
+      });
+      notify?.("item/agentMessage/delta", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "streamed-item",
+        delta: "Initial stream",
+      });
+    });
+    assert.match(document.body.textContent ?? "", /Initial stream/u);
+
+    const threadTwo = await waitFor(() =>
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+      ).find((row) => row.textContent?.includes("Thread two")),
+    );
+    await act(async () => threadTwo.click());
+    await waitFor(() => resumeCalls.includes("thread-2"));
+    await act(async () => {
+      notify?.("item/agentMessage/delta", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "streamed-item",
+        delta: " continues while away",
+      });
+    });
+
+    await act(async () => threadOne.click());
+    await waitFor(
+      () =>
+        resumeCalls.filter((threadId) => threadId === "thread-1").length === 2,
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /Initial stream continues while away/u,
+    );
+  } finally {
+    await harness.unmount();
+  }
+});
+
 test("failed ready approval snapshot drops stale cards and replays live requests", async () => {
   const nextSnapshot = deferred<ApprovalRequestEvent[]>();
   let snapshotCalls = 0;
@@ -304,6 +394,7 @@ interface MountOptions {
   request(method: string, params?: unknown): Promise<unknown>;
   attachments?(threadId: string): Promise<ZenXThreadAttachmentProjection>;
   usage?(threadId: string): Promise<ModelUsageProjection>;
+  threads?(archived: boolean): Promise<NativeThreadSummary[]>;
   getPendingApprovals?(): Promise<ApprovalRequestEvent[]>;
   onStatus?(listener: (value: AppServerHostStatus) => void): () => void;
   onNotification?(listener: NotificationListener): () => void;
@@ -367,7 +458,11 @@ async function mountApp(options: MountOptions) {
     },
     threads: {
       list: async ({ archived }: { archived: boolean }) =>
-        archived ? [] : [summary()],
+        options.threads === undefined
+          ? archived
+            ? []
+            : [summary()]
+          : await options.threads(archived),
     },
     imageAttachments: {
       pick: async () => [],
@@ -475,9 +570,12 @@ function approval(requestId: string, command: string): ApprovalRequestEvent {
   };
 }
 
-function summary(): NativeThreadSummary {
+function summary(
+  threadId = "thread-1",
+  name = "Thread one",
+): NativeThreadSummary {
   return {
-    threadId: "thread-1",
+    threadId,
     currentMetadata: {
       model: "fake",
       provider: "fake",
@@ -488,16 +586,16 @@ function summary(): NativeThreadSummary {
     archived: false,
     createdAt: new Date(1_000).toISOString(),
     updatedAt: new Date(2_000).toISOString(),
-    name: "Thread one",
+    name,
     preview: "",
     status: "idle",
   };
 }
 
-function thread(): Thread {
+function thread(threadId = "thread-1"): Thread {
   return {
-    id: "thread-1",
-    sessionId: "thread-1",
+    id: threadId,
+    sessionId: threadId,
     forkedFromId: null,
     parentThreadId: null,
     preview: "",
@@ -516,7 +614,7 @@ function thread(): Thread {
     agentNickname: null,
     agentRole: null,
     gitInfo: null,
-    name: "Thread one",
+    name: threadId === "thread-1" ? "Thread one" : "Thread two",
     turns: [],
   };
 }

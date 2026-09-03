@@ -1,8 +1,12 @@
-import type { ModelCatalogEntryInput } from "../../../../src/model-catalog.js";
+import type {
+  ModelCatalogEntryInput,
+  ModelInputModality,
+} from "../../../../src/model-catalog.js";
 import { builtInModelCatalogPreset } from "../../../../apps/cli/src/model-presets.js";
 
 const MAX_DISCOVERED_MODELS = 1_024;
 const MAX_MODEL_ID_LENGTH = 512;
+const TEXT_ONLY_INPUT: readonly ModelInputModality[] = Object.freeze(["text"]);
 
 export type DiscoveredModelCatalogEntry = Required<
   Pick<
@@ -85,9 +89,14 @@ export async function discoverOpenAiCompatibleModels(options: {
       description: catalog?.description ?? "",
       hidden: catalog?.hidden ?? false,
       source: catalog === undefined ? "discovered" : "preset",
-      supportedReasoningEfforts: catalog?.supportedReasoningEfforts ?? null,
+      // Listing a model confirms a text endpoint exists; it does not confirm
+      // any Provider-specific reasoning control. Keep that control absent
+      // until a preset, explicit Provider metadata, or manual configuration
+      // supplies it.
+      supportedReasoningEfforts: catalog?.supportedReasoningEfforts ?? [],
       defaultReasoningEffort: catalog?.defaultReasoningEffort ?? null,
-      inputModalities: providerModalities ?? catalog?.inputModalities ?? null,
+      inputModalities:
+        providerModalities ?? catalog?.inputModalities ?? TEXT_ONLY_INPUT,
       contextWindow: catalog?.contextWindow ?? null,
     });
   });

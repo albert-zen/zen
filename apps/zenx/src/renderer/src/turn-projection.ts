@@ -1,6 +1,11 @@
 import type { ThreadItem, Turn } from "../../protocol-client/index.js";
 
 export type TurnDisplayNode =
+  | {
+      kind: "user";
+      id: string;
+      item: Extract<ThreadItem, { type: "userMessage" }>;
+    }
   | { kind: "agent"; item: Extract<ThreadItem, { type: "agentMessage" }> }
   | {
       kind: "traceItem";
@@ -59,7 +64,11 @@ export function traceDisplayRows(
 export function projectTurn(turn: Turn): TurnDisplayProjection {
   const userItems = turn.items.filter(
     (item): item is Extract<ThreadItem, { type: "userMessage" }> =>
-      item.type === "userMessage",
+      item.type === "userMessage" && item.deliveryAfter === undefined,
+  );
+  const steers = turn.items.filter(
+    (item): item is Extract<ThreadItem, { type: "userMessage" }> =>
+      item.type === "userMessage" && item.deliveryAfter !== undefined,
   );
   const responseItems = turn.items.filter(
     (item) => item.type !== "userMessage",
@@ -74,6 +83,46 @@ export function projectTurn(turn: Turn): TurnDisplayProjection {
     finalItem === null
       ? responseItems
       : responseItems.filter((item) => item.id !== finalItem.id);
+  const steersByAnchor = new Map<
+    string,
+    Array<Extract<ThreadItem, { type: "userMessage" }>>
+  >();
+  for (const steer of steers) {
+    const anchor = steer.deliveryAfter;
+    if (anchor === undefined) continue;
+    const entries = steersByAnchor.get(anchor) ?? [];
+    entries.push(steer);
+    steersByAnchor.set(anchor, entries);
+  }
+  const lastAnchorIndex = new Map<string, number>();
+  for (let index = 0; index < historySource.length; index += 1) {
+    const item = historySource[index];
+    if (item === undefined) continue;
+    for (const anchor of steersByAnchor.keys()) {
+      if (
+        item.id === anchor ||
+        (item.type === "commandExecution" && item.modelResponseId === anchor)
+      ) {
+        lastAnchorIndex.set(anchor, index);
+      }
+    }
+  }
+  const steersAfterIndex = new Map<
+    number,
+    Array<Extract<ThreadItem, { type: "userMessage" }>>
+  >();
+  const unanchoredSteers: Array<Extract<ThreadItem, { type: "userMessage" }>> =
+    [];
+  for (const [anchor, entries] of steersByAnchor) {
+    const index = lastAnchorIndex.get(anchor);
+    if (index === undefined) {
+      unanchoredSteers.push(...entries);
+      continue;
+    }
+    const target = steersAfterIndex.get(index) ?? [];
+    target.push(...entries);
+    steersAfterIndex.set(index, target);
+  }
   const history: TurnDisplayNode[] = [];
   let traceItems: Array<
     Extract<ThreadItem, { type: "reasoning" | "commandExecution" }>
@@ -93,15 +142,36 @@ export function projectTurn(turn: Turn): TurnDisplayProjection {
     );
     traceItems = [];
   };
-  for (const item of historySource) {
+  const appendSteersAfter = (index: number) => {
+    const entries = steersAfterIndex.get(index);
+    if (entries === undefined) return;
+    history.push(
+      ...entries.map((item) => ({ kind: "user" as const, id: item.id, item })),
+    );
+  };
+  for (let index = 0; index < historySource.length; index += 1) {
+    const item = historySource[index];
+    if (item === undefined) continue;
     if (item.type === "reasoning" || item.type === "commandExecution") {
       traceItems.push(item);
+      if (steersAfterIndex.has(index)) {
+        flushTrace();
+        appendSteersAfter(index);
+      }
       continue;
     }
     flushTrace();
     if (item.type === "agentMessage") history.push({ kind: "agent", item });
+    appendSteersAfter(index);
   }
   flushTrace();
+  history.push(
+    ...unanchoredSteers.map((item) => ({
+      kind: "user" as const,
+      id: item.id,
+      item,
+    })),
+  );
   return {
     userItems,
     history,

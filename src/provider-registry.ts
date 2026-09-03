@@ -7,7 +7,7 @@ export type ProviderSelection = CanonicalProviderSelection;
 export interface ProviderSelectionInput {
   providerProfileId: string;
   modelId: string;
-  reasoningEffort?: string;
+  reasoningEffort?: string | null;
 }
 
 export interface ProviderProfile {
@@ -66,7 +66,7 @@ export class ProviderRegistry {
 
   resolve(
     selection: ProviderSelectionInput,
-    fallbackReasoningEffort?: string,
+    fallbackReasoningEffort?: string | null,
   ): ResolvedProviderSelection {
     const profile = this.#profiles.get(selection.providerProfileId);
     if (profile === undefined) {
@@ -83,7 +83,7 @@ export class ProviderRegistry {
       );
     }
     const supportedReasoningEfforts = model.supportedReasoningEfforts;
-    const explicitReasoningEffort = selection.reasoningEffort;
+    const explicitReasoningEffort = selection.reasoningEffort ?? undefined;
     if (supportedReasoningEfforts === null) {
       throw new ProviderRegistryError(
         "reasoning_effort_unknown",
@@ -101,12 +101,24 @@ export class ProviderRegistry {
     }
     const canPreserveFallback =
       fallbackReasoningEffort !== undefined &&
+      fallbackReasoningEffort !== null &&
       supportedReasoningEfforts.includes(fallbackReasoningEffort);
     const reasoningEffort =
       explicitReasoningEffort ??
       (canPreserveFallback
         ? fallbackReasoningEffort
         : model.defaultReasoningEffort);
+    if (reasoningEffort === null && supportedReasoningEfforts.length === 0) {
+      return {
+        selection: {
+          providerProfileId: selection.providerProfileId,
+          modelId: selection.modelId,
+          reasoningEffort: null,
+        },
+        adapter: profile.adapter,
+        model,
+      };
+    }
     if (reasoningEffort === null || reasoningEffort === undefined) {
       throw new ProviderRegistryError(
         "reasoning_effort_unavailable",

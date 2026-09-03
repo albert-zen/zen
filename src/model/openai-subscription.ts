@@ -78,7 +78,10 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       include: ["reasoning.encrypted_content"],
       text: { verbosity: "low" },
       reasoning: {
-        effort: requiredLabel(request.reasoningEffort, "reasoning effort"),
+        effort: requiredLabel(
+          request.reasoningEffort ?? "",
+          "reasoning effort",
+        ),
       },
       tool_choice: tools.length === 0 ? "none" : "auto",
       parallel_tool_calls: true,

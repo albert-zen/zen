@@ -28,6 +28,36 @@ test("groups only consecutive reasoning and tool Items", () => {
   assert.equal(projection.finalItem, null);
 });
 
+test("places a steered user message after its delivery anchor", () => {
+  const projection = projectTurn(
+    turn("completed", [
+      user("request", "initial request"),
+      user("steer", "apply this correction", "tool-a"),
+      agent("progress", "Checking the code."),
+      command("tool-a", "rg deliveryAfter"),
+      agent("after-steer", "Applied the correction."),
+      agent("final", "Done."),
+    ]),
+  );
+
+  assert.deepEqual(
+    projection.userItems.map((item) => item.id),
+    ["request"],
+  );
+  assert.deepEqual(
+    projection.history.map((node) =>
+      node.kind === "agent" ? [node.kind, node.item.id] : [node.kind, node.id],
+    ),
+    [
+      ["agent", "progress"],
+      ["traceItem", "tool-a"],
+      ["user", "steer"],
+      ["agent", "after-steer"],
+    ],
+  );
+  assert.equal(projection.finalItem?.id, "final");
+});
+
 test("projects a singleton trace Item directly and promotes it with stable identity", () => {
   const singleton = projectTurn(
     turn("inProgress", [reasoning("reason-a", "Mapped Items")]),
@@ -117,13 +147,14 @@ function turn(status: Turn["status"], items: ThreadItem[]): Turn {
   };
 }
 
-function user(id: string, text: string): ThreadItem {
+function user(id: string, text: string, deliveryAfter?: string): ThreadItem {
   return {
     type: "userMessage",
     id,
     clientId: null,
     content: [{ type: "text", text, text_elements: [] }],
-  };
+    ...(deliveryAfter === undefined ? {} : { deliveryAfter }),
+  } as ThreadItem;
 }
 
 function agent(id: string, text: string): ThreadItem {

@@ -305,16 +305,16 @@ credential-scoped `GET <baseUrl>/models` discovery through that profile's system
 proxy transport. Discovery reads IDs plus only explicitly parseable modality
 fields returned by that Provider, then performs exact-ID enrichment from the
 built-in verified catalog. It never infers capabilities from model names;
-unmatched or bare-ID results remain Unknown. Discovery does not persist
-credentials or modify the configured/manual catalog on success or failure. A discovered model with no
-known reasoning capability is non-runnable even when a Thread supplies an
-explicit effort; it requires a manual catalog capability override before it can
-become the canonical selection. The fixed Codex 0.146.0 `model/list` omits such
-non-default entries while continuing to expose valid configured models, and a
-completed manual override makes the entry visible. ZenX currently consumes that
-shared `model/list` codec, so its default and title models must have runnable,
-wire-representable reasoning and text-input metadata; this is a current shared-codec
-constraint, not a ZAS protocol semantic.
+unmatched or bare-ID results start in the safe text-only baseline. Discovery
+does not persist credentials or modify the configured/manual catalog on success
+or failure. A model with no configured reasoning capability sends no
+`reasoning_effort` and does not claim image input, but remains selectable through
+the fixed Codex 0.146.0 `model/list`. An explicit manual capability override or a
+Provider result with parseable metadata can enable the relevant control. ZenX
+currently consumes that shared `model/list` codec, so default and title models
+must have known text input plus either a supported default effort or this
+text-only baseline; this is a current shared-codec constraint, not a ZAS
+protocol semantic.
 
 The OpenAI subscription preset exposes the five models confirmed by the current
 host: `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, and `gpt-5.4`.
@@ -344,11 +344,12 @@ Settings → Models & providers exposes every profile as an independently editab
 row. Global Default and Title selectors show both Provider display name and model
 ID. Custom catalogs use repeatable model rows; an existing compatible profile can
 fetch `/models` IDs and explicit modality metadata with exact-ID verified-catalog
-enrichment. Unknown capabilities remain visibly Unknown, and each row can store an
-explicit manual reasoning/input/context override. A saved Unknown model offers one
-user-triggered tiny image probe with a cost warning; only success or an explicit
-image-type rejection is persisted, while auth, quota, rate-limit, network,
-missing-model, and ambiguous failures remain inconclusive. Saved keys are represented
+enrichment. New and ID-only discovered compatible models visibly start as Text
+only, and each row can store an explicit manual reasoning/input/context override.
+A saved text-only discovered model offers one user-triggered tiny image probe
+with a cost warning; only success or an explicit image-type rejection is
+persisted, while auth, quota, rate-limit, network, missing-model, and ambiguous
+failures remain inconclusive. Saved keys are represented
 only by presence—blank credential input keeps the existing key. Deleting a
 profile that owns either global model requires the corresponding replacement(s)
 and sends them with the deletion in one host mutation; Settings never changes

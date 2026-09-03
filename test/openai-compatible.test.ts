@@ -278,6 +278,7 @@ test("encodes provider-specific reasoning replay contracts", async (t) => {
     });
 
     assert.equal(body.reasoning_effort, "high");
+    assert.equal(body.enable_thinking, true);
     assert.equal("thinking_budget" in body, false);
     assert.deepEqual(
       (body.messages as Readonly<Record<string, unknown>>[])
@@ -286,6 +287,22 @@ test("encodes provider-specific reasoning replay contracts", async (t) => {
       ["tool reasoning", "final reasoning"],
     );
   });
+
+  await t.test(
+    "omits the reasoning control when the selected model has none configured",
+    async () => {
+      const body = await captureRequestBody({
+        provider: "dashscope",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        model: "qwen3.8-max",
+        reasoningEffort: null,
+        messages: [],
+      });
+
+      assert.equal("reasoning_effort" in body, false);
+      assert.equal("enable_thinking" in body, false);
+    },
+  );
 
   await t.test("Qwen honors explicit preservation settings", async (t) => {
     await t.test("enabled", async () => {
@@ -1190,7 +1207,7 @@ async function captureRequestBody(options: {
   provider: string;
   baseUrl: string;
   model: string;
-  reasoningEffort?: string;
+  reasoningEffort?: string | null;
   defaultParams?: Readonly<Record<string, unknown>>;
   messages: ModelRequest["messages"];
   tools?: ModelRequest["tools"];
@@ -1214,7 +1231,10 @@ async function captureRequestBody(options: {
     adapter.stream(
       request({
         model: options.model,
-        reasoningEffort: options.reasoningEffort ?? "medium",
+        reasoningEffort:
+          options.reasoningEffort === undefined
+            ? "medium"
+            : options.reasoningEffort,
         messages: options.messages,
         tools: options.tools ?? [],
       }),

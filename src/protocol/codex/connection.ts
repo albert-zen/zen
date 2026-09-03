@@ -217,7 +217,7 @@ export class CodexConnection {
                     description: reasoningEffort,
                   }),
                 ),
-              defaultReasoningEffort: entry.model.defaultReasoningEffort!,
+              defaultReasoningEffort: entry.model.defaultReasoningEffort,
               inputModalities: entry.model.inputModalities!,
               supportsPersonality: false,
               additionalSpeedTiers: [],
@@ -234,6 +234,7 @@ export class CodexConnection {
         rejectUnsupportedValues(params, [
           "cwd",
           "model",
+          "effort",
           "approvalPolicy",
           "sandbox",
           "approvalsReviewer",
@@ -241,6 +242,10 @@ export class CodexConnection {
         const sandbox = optionalString(params.sandbox);
         const cwd = optionalString(params.cwd);
         const model = optionalNonEmptyString(params.model, "model");
+        const effort = optionalNonEmptyString(params.effort, "effort");
+        if (effort !== undefined && model === undefined) {
+          throw new InvalidParamsError("effort requires a model");
+        }
         const approvalPolicy = readApprovalPolicy(params.approvalPolicy);
         readApprovalsReviewer(params.approvalsReviewer);
         if (sandbox !== undefined && sandbox !== "danger-full-access") {
@@ -250,7 +255,7 @@ export class CodexConnection {
           ...(cwd === undefined ? {} : { cwd }),
           ...(model === undefined
             ? {}
-            : { selection: this.#selectionForWireModel(model, undefined) }),
+            : { selection: this.#selectionForWireModel(model, effort) }),
           ...(sandbox === undefined
             ? {}
             : { sandbox: "danger-full-access" as const }),
@@ -1232,9 +1237,10 @@ function reasoningItemKey(
 function isCodexModelListRunnable(entry: ListedProviderModel): boolean {
   return (
     entry.model.supportedReasoningEfforts !== null &&
-    entry.model.defaultReasoningEffort !== null &&
     entry.model.inputModalities !== null &&
-    entry.model.inputModalities.includes("text")
+    entry.model.inputModalities.includes("text") &&
+    (entry.model.defaultReasoningEffort !== null ||
+      entry.model.supportedReasoningEfforts.length === 0)
   );
 }
 

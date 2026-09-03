@@ -140,6 +140,64 @@ test("assistant messages omit the identity row while preserving metadata and con
   assert.match(html, /class="agent-copy"[\s\S]*Final answer/u);
 });
 
+test("completed Turn keeps a steer after its disclosure when collapsed", () => {
+  const html = renderTurns([
+    turnWithItems(
+      "completed",
+      [
+        user("Initial request", "initial"),
+        user("Mid-turn correction", "steer", "tool-1"),
+        agent("Checked the first result."),
+        commandItem("tool-1", "rg deliveryAfter"),
+        agent("Final corrected answer."),
+      ],
+      1_000,
+    ),
+  ]);
+
+  assert.ok(html.indexOf("Initial request") < html.indexOf("turn-toggle"));
+  assert.ok(html.indexOf("turn-toggle") < html.indexOf("Mid-turn correction"));
+  assert.ok(
+    html.indexOf("Mid-turn correction") <
+      html.indexOf("Final corrected answer."),
+  );
+});
+
+test("expanded Turn renders a steer at its delivery point", async () => {
+  await withDom(async (root) => {
+    await renderInteractive(
+      root,
+      turnWithItems("completed", [
+        user("Initial request", "initial"),
+        user("Mid-turn correction", "steer", "tool-1"),
+        agent("Checked the first result."),
+        commandItem("tool-1", "rg deliveryAfter"),
+        agent("Applied the correction."),
+        agent("Final corrected answer."),
+      ]),
+    );
+    await act(async () => requiredButton(".turn-toggle").click());
+
+    const text = document.querySelector(".turn")?.textContent ?? "";
+    assert.ok(
+      text.indexOf("Initial request") <
+        text.indexOf("Checked the first result."),
+    );
+    assert.ok(
+      text.indexOf("Checked the first result.") <
+        text.indexOf("Mid-turn correction"),
+    );
+    assert.ok(
+      text.indexOf("Mid-turn correction") <
+        text.indexOf("Applied the correction."),
+    );
+    assert.ok(
+      text.indexOf("Applied the correction.") <
+        text.indexOf("Final corrected answer."),
+    );
+  });
+});
+
 test("message controls are Turn-backed, accessible, and stable while hovering", () => {
   const completedAt = new Date();
   completedAt.setHours(12, 34, 0, 0);
@@ -1005,13 +1063,14 @@ function turnWithItems(
   };
 }
 
-function user(text: string): ThreadItem {
+function user(text: string, id = "user-1", deliveryAfter?: string): ThreadItem {
   return {
     type: "userMessage",
-    id: "user-1",
+    id,
     clientId: null,
     content: [{ type: "text", text, text_elements: [] }],
-  };
+    ...(deliveryAfter === undefined ? {} : { deliveryAfter }),
+  } as ThreadItem;
 }
 
 function agent(text: string): ThreadItem {

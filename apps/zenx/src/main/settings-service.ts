@@ -398,7 +398,7 @@ export class ZenXSettingsService {
   async titleModel(): Promise<{
     adapter: ModelAdapter | null;
     model: string;
-    reasoningEffort: string;
+    reasoningEffort: string | null;
   }> {
     await this.#profileOperations;
     const profile = this.#requireProfile();
@@ -411,11 +411,6 @@ export class ZenXSettingsService {
       (model) => model.id === titleReference.modelId,
     )!;
     const reasoningEffort = modelMetadata.defaultReasoningEffort;
-    if (reasoningEffort === null) {
-      throw new Error(
-        `Title model ${titleReference.modelId} from Provider profile ${provider.providerProfileId} requires a manual default reasoning effort override`,
-      );
-    }
     if (provider.type === "fake") {
       return { adapter: null, model: titleReference.modelId, reasoningEffort };
     }

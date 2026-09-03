@@ -151,8 +151,13 @@ contextBridge.exposeInMainWorld("zenx", {
       await ipcRenderer.invoke(ipcChannels.projectsGet, options),
     startThread: async (
       workspace: string,
+      selection?: { model?: string; effort?: string },
     ): Promise<ClientRequestResults["thread/start"]> =>
-      await ipcRenderer.invoke(ipcChannels.projectThreadStart, workspace),
+      await ipcRenderer.invoke(
+        ipcChannels.projectThreadStart,
+        workspace,
+        selection,
+      ),
   },
   settings: {
     get: async (): Promise<PublicHostSettings> =>

@@ -305,6 +305,14 @@ function validateRunnableModel(
   model: ZenXModelCatalogEntry,
   label: "default" | "title",
 ): void {
+  if (
+    model.supportedReasoningEfforts !== null &&
+    model.supportedReasoningEfforts.length === 0 &&
+    model.defaultReasoningEffort === null &&
+    model.inputModalities?.includes("text") === true
+  ) {
+    return;
+  }
   if (model.defaultReasoningEffort === null) {
     throw new Error(
       `ZenX ${label} model requires a known default reasoning effort or manual override`,
@@ -661,6 +669,16 @@ export function applyBuiltInModelCatalogPresets(
 ): ZenXHostProfile {
   const validated = validateHostProfile(profile, projectPlatform);
   const providerProfiles = validated.providerProfiles.map((provider) => {
+    if (provider.type === "openai-compatible") {
+      return {
+        ...provider,
+        models: provider.models.map((model) => ({
+          ...model,
+          supportedReasoningEfforts: model.supportedReasoningEfforts ?? [],
+          inputModalities: model.inputModalities ?? ["text"],
+        })),
+      };
+    }
     if (provider.type !== "openai-subscription") return provider;
     const existingById = new Map(
       provider.models.map((model) => [model.id, model]),
