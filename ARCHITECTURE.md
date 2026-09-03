@@ -589,6 +589,9 @@ Reasoning control 只有一个权威：UI/Core 在 Turn admission 时冻结 cano
 
 Turn 边界对齐 Codex rollout 语义：canonical `turn_started` 开始 Turn，
 `turn_completed` / `turn_aborted` 结束 Turn；完成的语义 Item 在二者之间追加。
+任一 canonical append Promise 拒绝后，持久化结果都视为未知：当前 Turn 停止后续
+canonical 写入，App Server 丢弃对应 Thread 与 summary 缓存并在下次读取时从 journal
+重建，不补写替代 failure 或第二个 terminal。
 canonical `user_message` 可携带接入端提供的可选 `clientId`，仅用于跨接入端关联
 同一条用户消息，并投影为 wire `userMessage.clientId`。active Turn 接受的 soft
 steer 仍是普通 canonical `user_message`；若它在一次模型响应或其工具执行期间

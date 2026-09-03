@@ -11,6 +11,13 @@ export interface ThreadJournal {
   read(threadId: string): Promise<CanonicalItem[]>;
 }
 
+export class ThreadJournalAppendOutcomeUnknownError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "ThreadJournalAppendOutcomeUnknownError";
+  }
+}
+
 export class InMemoryThreadJournal implements ThreadJournal {
   readonly #threads = new Map<string, CanonicalItem[]>();
 

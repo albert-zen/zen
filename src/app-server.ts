@@ -33,7 +33,10 @@ import {
   previewFromUserMessage,
   sameUserInput,
 } from "./item.js";
-import type { ThreadJournal } from "./journal.js";
+import {
+  ThreadJournalAppendOutcomeUnknownError,
+  type ThreadJournal,
+} from "./journal.js";
 import {
   compileModelMessages,
   type ModelAdapter,
@@ -273,8 +276,15 @@ export class ZenAppServer {
       sandbox: input.sandbox ?? this.#defaults.sandbox,
       approvalPolicy: input.approvalPolicy ?? this.#defaults.approvalPolicy,
     };
-    await this.#commit(thread, metadata);
     this.#threads.set(threadId, thread);
+    try {
+      await this.#commit(thread, metadata);
+    } catch (error) {
+      if (this.#threads.get(threadId) === thread) {
+        this.#threads.delete(threadId);
+      }
+      throw error;
+    }
     return await this.#snapshot(thread);
   }
 
@@ -1195,9 +1205,24 @@ export class ZenAppServer {
   }
 
   async #commit(thread: Thread, item: CanonicalItem): Promise<void> {
+    if (this.#threads.get(thread.id) !== thread) {
+      throw new ThreadJournalAppendOutcomeUnknownError(
+        new Error(
+          `Thread ${thread.id} was invalidated after a journal append rejection`,
+        ),
+      );
+    }
     await this.#ensureThreadSummaries();
     thread.validateAppend(item);
-    await this.#journal.append(item);
+    try {
+      await this.#journal.append(item);
+    } catch (error) {
+      if (this.#threads.get(thread.id) === thread) {
+        this.#threads.delete(thread.id);
+      }
+      this.#threadSummaries = undefined;
+      throw new ThreadJournalAppendOutcomeUnknownError(error);
+    }
     thread.append(item);
     await this.#refreshThreadSummary(thread);
   }
@@ -1311,27 +1336,38 @@ export class ZenAppServer {
   }
 
   async #refreshThreadSummary(thread: Thread): Promise<void> {
-    await this.#ensureThreadSummaries();
+    const summaries = await this.#captureThreadSummaries();
     const update = this.#threadSummaryWrites.then(async () => {
-      this.#threadSummaries!.set(thread.id, await this.#summary(thread));
-      await this.#saveThreadSummaries();
+      summaries.set(thread.id, await this.#summary(thread));
+      await this.#saveThreadSummaries(summaries);
     });
     this.#threadSummaryWrites = update.catch(() => undefined);
     await update;
+  }
+
+  async #captureThreadSummaries(): Promise<Map<string, NativeThreadSummary>> {
+    for (;;) {
+      const summaries = this.#threadSummaries;
+      if (summaries !== undefined) return summaries;
+      await this.#ensureThreadSummaries();
+    }
   }
 
   async #persistThreadSummaries(): Promise<void> {
+    const summaries = this.#threadSummaries!;
     const update = this.#threadSummaryWrites.then(async () => {
-      await this.#saveThreadSummaries();
+      await this.#saveThreadSummaries(summaries);
     });
     this.#threadSummaryWrites = update.catch(() => undefined);
     await update;
   }
 
-  async #saveThreadSummaries(): Promise<void> {
+  async #saveThreadSummaries(
+    summaries: ReadonlyMap<string, NativeThreadSummary>,
+  ): Promise<void> {
     try {
       await this.#threadSummaryProjection.replace(
-        [...this.#threadSummaries!.values()].sort((left, right) =>
+        [...summaries.values()].sort((left, right) =>
           left.threadId.localeCompare(right.threadId),
         ),
       );

@@ -17,6 +17,7 @@ import type {
   UserInput,
   UserMessageItem,
 } from "./item.js";
+import { ThreadJournalAppendOutcomeUnknownError } from "./journal.js";
 import type { ModelAdapter, ModelMessage, ModelTool } from "./model.js";
 import {
   buildToolPresentation,
@@ -271,6 +272,7 @@ export class AgentRuntime {
       }
     } catch (error) {
       if (!initialInputCommitted) throw error;
+      if (error instanceof ThreadJournalAppendOutcomeUnknownError) throw error;
       if (
         options.thread.items.some(
           (item) =>
@@ -743,6 +745,9 @@ export class AgentRuntime {
               : await operation;
           outcome = { result };
         } catch (error) {
+          if (error instanceof ThreadJournalAppendOutcomeUnknownError) {
+            throw error;
+          }
           const interrupted = execution.signal.aborted;
           const unawaited =
             execution.signal.reason instanceof UnawaitedNestedToolCallError;

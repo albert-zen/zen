@@ -40,11 +40,16 @@ import {
   JsonlThreadMetadataStore,
   type ThreadMetadataStore,
 } from "../src/thread-metadata.js";
+import type {
+  NativeThreadSummary,
+  ThreadSummaryProjection,
+} from "../src/thread-summary.js";
 import {
   ShellToolRuntime,
   ToolEnvironment,
   type ToolRuntime,
 } from "../src/tool.js";
+import { Thread } from "../src/thread.js";
 import { testToolBundle, testToolRuntime } from "./tool-fixtures.js";
 
 function createServer(
@@ -54,6 +59,7 @@ function createServer(
     model?: ModelAdapter;
     modelCatalog?: ModelCatalog;
     threadMetadata?: ThreadMetadataStore;
+    threadSummaryProjection?: ThreadSummaryProjection;
     tools?: ToolRuntime;
     idFactory?: () => string;
     runtimeIdFactory?: () => string;
@@ -88,6 +94,9 @@ function createServer(
       { providerProfileId: model.provider, adapter: model, modelCatalog },
     ]),
     threadMetadata: options.threadMetadata ?? new InMemoryThreadMetadataStore(),
+    ...(options.threadSummaryProjection === undefined
+      ? {}
+      : { threadSummaryProjection: options.threadSummaryProjection }),
     defaults: {
       cwd: process.cwd(),
       providerProfileId: model.provider,
@@ -796,6 +805,174 @@ test("validates canonical items before appending them to the journal", async () 
     (await journal.read(thread.id)).map((item) => item.type),
     ["thread_metadata"],
   );
+});
+
+test("stops a Turn when a completed terminal append has an unknown persistence outcome", async () => {
+  const backing = new InMemoryThreadJournal();
+  let journalReads = 0;
+  const journal: ThreadJournal = {
+    append: async (item) => {
+      await backing.append(item);
+      if (item.type === "turn_completed" && item.status === "completed") {
+        throw new Error("completed terminal durability unknown");
+      }
+    },
+    listThreadIds: async () => await backing.listThreadIds(),
+    read: async (threadId) => {
+      journalReads += 1;
+      return await backing.read(threadId);
+    },
+  };
+  const server = createServer({ journal });
+  const started = await server.startThread();
+  const turn = await server.startTurn(started.id, "complete once");
+
+  await assert.rejects(turn.done, /completed terminal durability unknown/u);
+
+  const persisted = await backing.read(started.id);
+  assert.equal(
+    persisted.filter(
+      (item) =>
+        item.turnId === turn.id &&
+        (item.type === "turn_completed" || item.type === "turn_aborted"),
+    ).length,
+    1,
+  );
+  assert.equal(
+    persisted.some(
+      (item) =>
+        item.turnId === turn.id &&
+        (item.type === "failure" ||
+          (item.type === "turn_completed" && item.status === "failed")),
+    ),
+    false,
+  );
+
+  const reloaded = await server.readThread(started.id);
+  assert.equal(journalReads, 1);
+  assert.equal(reloaded.turns.at(-1)?.status, "completed");
+  assert.equal(
+    (await server.listThreadSummaries()).find(
+      (summary) => summary.threadId === started.id,
+    )?.status,
+    "idle",
+  );
+});
+
+test("rejects a second terminal Item for the same Turn", () => {
+  const threadId = "single_terminal_thread";
+  const turnId = "single_terminal_turn";
+  const thread = new Thread(threadId, [
+    {
+      id: "single_terminal_metadata",
+      threadId,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      type: "thread_metadata",
+      cwd: process.cwd(),
+      model: "fake",
+      provider: "fake",
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    },
+    {
+      id: "single_terminal_started",
+      threadId,
+      turnId,
+      createdAt: "2026-01-01T00:00:01.000Z",
+      type: "turn_started",
+    },
+    {
+      id: "single_terminal_completed",
+      threadId,
+      turnId,
+      createdAt: "2026-01-01T00:00:02.000Z",
+      type: "turn_completed",
+      status: "completed",
+    },
+  ]);
+
+  assert.throws(
+    () =>
+      thread.append({
+        id: "single_terminal_aborted",
+        threadId,
+        turnId,
+        createdAt: "2026-01-01T00:00:03.000Z",
+        type: "turn_aborted",
+        reason: "too late",
+      }),
+    /already has a terminal Item/u,
+  );
+});
+
+test("an in-flight summary refresh survives journal cache invalidation", async () => {
+  const backingJournal = new InMemoryThreadJournal();
+  let rejectedThreadId: string | undefined;
+  const journal: ThreadJournal = {
+    append: async (item) => {
+      if (item.threadId === rejectedThreadId && item.type === "turn_started") {
+        throw new Error("concurrent journal rejection");
+      }
+      await backingJournal.append(item);
+    },
+    listThreadIds: async () => await backingJournal.listThreadIds(),
+    read: async (threadId) => await backingJournal.read(threadId),
+  };
+
+  const backingMetadata = new InMemoryThreadMetadataStore();
+  const summaryReadEntered = testDeferred<void>();
+  const releaseSummaryRead = testDeferred<void>();
+  let blockedThreadId: string | undefined;
+  let shouldBlock = true;
+  const threadMetadata: ThreadMetadataStore = {
+    read: async (threadId) => {
+      if (threadId === blockedThreadId && shouldBlock) {
+        shouldBlock = false;
+        summaryReadEntered.resolve();
+        await releaseSummaryRead.promise;
+      }
+      return await backingMetadata.read(threadId);
+    },
+    setName: async (threadId, name) =>
+      await backingMetadata.setName(threadId, name),
+    setArchived: async (threadId, archived) =>
+      await backingMetadata.setArchived(threadId, archived),
+  };
+  let projected: readonly NativeThreadSummary[] = [];
+  const threadSummaryProjection: ThreadSummaryProjection = {
+    load: async () => undefined,
+    replace: async (summaries) => {
+      projected = structuredClone(summaries);
+    },
+  };
+  const server = createServer({
+    journal,
+    threadMetadata,
+    threadSummaryProjection,
+  });
+  const refreshing = await server.startThread();
+  const rejecting = await server.startThread();
+  await server.listThreadSummaries();
+
+  blockedThreadId = refreshing.id;
+  const refresh = server.setThreadName(refreshing.id, "Concurrent refresh");
+  await summaryReadEntered.promise;
+
+  rejectedThreadId = rejecting.id;
+  await assert.rejects(
+    server.startTurn(rejecting.id, "must not start"),
+    /concurrent journal rejection/u,
+  );
+  releaseSummaryRead.resolve();
+  await refresh;
+
+  const rebuilt = await server.listThreadSummaries();
+  assert.equal(rebuilt.length, 2);
+  assert.equal(
+    rebuilt.find((summary) => summary.threadId === refreshing.id)?.name,
+    "Concurrent refresh",
+  );
+  assert.equal(projected.length, 2);
 });
 
 function createTwoCallModel(): ModelAdapter {
@@ -2456,7 +2633,7 @@ test("soft steer waits behind a tool result and does not cancel approval", async
   ]);
 });
 
-test("soft steer never acknowledges a failed journal append or crosses a terminal fence", async () => {
+test("soft steer append rejection stops the active Turn without a replacement terminal", async () => {
   const backing = new InMemoryThreadJournal();
   const journal: ThreadJournal = {
     append: async (item) => {
@@ -2501,7 +2678,10 @@ test("soft steer never acknowledges a failed journal append or crosses a termina
   );
 
   releaseModel.resolve();
-  await active.done;
+  await assert.rejects(
+    active.done,
+    /invalidated after a journal append rejection/u,
+  );
   await assert.rejects(
     server.steerTurn(thread.id, active.id, "too late"),
     (error: unknown) =>
@@ -2509,10 +2689,9 @@ test("soft steer never acknowledges a failed journal append or crosses a termina
       "code" in error &&
       error.code === "turn_not_running",
   );
-  assert.equal(
-    (await server.readThread(thread.id)).items.at(-1)?.type,
-    "turn_completed",
-  );
+  const afterFailure = await server.readThread(thread.id);
+  assert.equal(afterFailure.items.at(-1)?.type, "user_message");
+  assert.equal(afterFailure.turns.at(-1)?.status, "interrupted");
 });
 
 test("an interrupt that wins the mutation fence rejects a racing soft steer", async () => {

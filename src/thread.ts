@@ -53,6 +53,17 @@ export class Thread {
     if (this.#items.some((existing) => existing.id === item.id)) {
       throw new Error(`Duplicate item id ${item.id}`);
     }
+    if (
+      (item.type === "turn_completed" || item.type === "turn_aborted") &&
+      this.#items.some(
+        (existing) =>
+          existing.turnId === item.turnId &&
+          (existing.type === "turn_completed" ||
+            existing.type === "turn_aborted"),
+      )
+    ) {
+      throw new Error(`Turn ${item.turnId} already has a terminal Item`);
+    }
     if (item.type === "model_usage") {
       validateModelUsage(item);
     }
