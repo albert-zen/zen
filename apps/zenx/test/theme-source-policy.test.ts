@@ -11,7 +11,13 @@ const themePath = path.join(rendererRoot, "theme.css");
 const rawColor = /#[0-9a-f]{3,8}\b|\b(?:rgb|rgba|hsl|hsla)\(/giu;
 const definition = /(--[a-z0-9_-]+)\s*:/giu;
 const consumption = /var\((--[a-z0-9_-]+)/giu;
-const dynamicProductTokens = new Set(["--zenx-brand-asset"]);
+// Component-owned runtime seams published by their owning component: the
+// brand asset is set by ZenXBrand, and --bottom-zone-height is published by
+// ThreadView for the Composer overlay layout.
+const dynamicProductTokens = new Set([
+  "--zenx-brand-asset",
+  "--bottom-zone-height",
+]);
 
 test("renderer product styles keep raw colors in the single theme source", async () => {
   const files = await rendererProductFiles(rendererRoot);
