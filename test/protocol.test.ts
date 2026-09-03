@@ -751,6 +751,103 @@ test("thread/resume sends its snapshot before lossless non-duplicate catch-up", 
   }
 });
 
+test("thread/resume never replays superseded state after its final snapshot", async () => {
+  const backingMetadata = new InMemoryThreadMetadataStore();
+  const readEntered = deferred<void>();
+  const releaseRead = deferred<void>();
+  let blockNextRead = false;
+  const threadMetadata: ThreadMetadataStore = {
+    read: async (threadId) => {
+      if (blockNextRead) {
+        blockNextRead = false;
+        readEntered.resolve();
+        await releaseRead.promise;
+      }
+      return await backingMetadata.read(threadId);
+    },
+    setName: async (threadId, name) =>
+      await backingMetadata.setName(threadId, name),
+    setArchived: async (threadId, archived) =>
+      await backingMetadata.setArchived(threadId, archived),
+  };
+  const appServer = createHostedAppServer({
+    cwd: process.cwd(),
+    dataDirectory: path.join(os.tmpdir(), "unused-zen-test-data"),
+    model: "fake",
+    models: ["fake", "other", "final"],
+    approvalPolicy: "never",
+    provider: { type: "fake" },
+    journal: new InMemoryThreadJournal(),
+    threadMetadata,
+  });
+  const thread = await appServer.startThread();
+  const messages: JsonRpcMessage[] = [];
+  const connection = new CodexConnection({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    send: (message) => messages.push(message),
+  });
+
+  try {
+    await connection.receive({ id: 1, method: "initialize", params: {} });
+    await connection.receive({ method: "initialized" });
+    messages.length = 0;
+    blockNextRead = true;
+    const resume = connection.receive({
+      id: 2,
+      method: "thread/resume",
+      params: { threadId: thread.id },
+    });
+    await within(readEntered.promise);
+    await appServer.updateThreadSettings(thread.id, { model: "other" });
+    await appServer.updateThreadSettings(thread.id, { model: "final" });
+    await appServer.setThreadName(thread.id, "First name");
+    await appServer.setThreadName(thread.id, "Final name");
+    await appServer.setThreadArchived(thread.id, true);
+    await appServer.setThreadArchived(thread.id, false);
+    releaseRead.resolve();
+    await within(resume);
+    await flushTasks();
+
+    const responseIndex = messages.findIndex(
+      (message) => "result" in message && message.id === 2,
+    );
+    assert(responseIndex >= 0);
+    const response = messages[responseIndex]!;
+    assert("result" in response && isRecord(response.result));
+    assert.equal(
+      responseResult<Record<string, unknown>>(response.result, "thread").name,
+      "Final name",
+    );
+    assert.equal(
+      response.result.model,
+      encodeModelKey({ providerProfileId: "fake", modelId: "final" }),
+    );
+    assert.deepEqual(
+      messages
+        .slice(responseIndex + 1)
+        .filter((message) => "method" in message)
+        .map((message) => ("method" in message ? message.method : ""))
+        .filter((method) =>
+          [
+            "thread/settings/updated",
+            "thread/name/updated",
+            "thread/archived",
+            "thread/unarchived",
+          ].includes(method),
+        ),
+      [],
+    );
+    const snapshot = await appServer.readThread(thread.id);
+    assert.equal(snapshot.modelId, "final");
+    assert.equal(snapshot.name, "Final name");
+    assert.equal(snapshot.archived, false);
+  } finally {
+    connection.close();
+    await appServer.closeProviderTransport();
+  }
+});
+
 test("closing a connection discards its transient resume catch-up buffer", async () => {
   const appServer = testHost();
   const thread = await appServer.startThread();
@@ -794,6 +891,64 @@ test("closing a connection discards its transient resume catch-up buffer", async
 
     assert.equal(
       messages.some((message) => "method" in message),
+      false,
+    );
+  } finally {
+    connection.close();
+    await appServer.closeProviderTransport();
+  }
+});
+
+test("closing a connection discards App Server events already queued behind projection", async () => {
+  const appServer = testHost();
+  const messages: JsonRpcMessage[] = [];
+  const connection = new CodexConnection({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    send: (message) => messages.push(message),
+  });
+  const readEntered = deferred<void>();
+  const releaseRead = deferred<void>();
+
+  try {
+    await connection.receive({ id: 1, method: "initialize", params: {} });
+    await connection.receive({ method: "initialized" });
+    await connection.receive({ id: 2, method: "thread/start", params: {} });
+    const started = messages.find(
+      (message) => "result" in message && message.id === 2,
+    );
+    assert(started !== undefined && "result" in started);
+    const thread = responseResult<Record<string, unknown>>(
+      started.result,
+      "thread",
+    );
+    const readThread = appServer.readThread.bind(appServer);
+    let blockNextRead = true;
+    appServer.readThread = async (threadId) => {
+      if (blockNextRead) {
+        blockNextRead = false;
+        readEntered.resolve();
+        await releaseRead.promise;
+      }
+      return await readThread(threadId);
+    };
+
+    const turn = await appServer.startTurn(
+      String(thread.id),
+      `!shell ${shellPrintCommand("queued-close")}`,
+    );
+    await within(readEntered.promise);
+    await appServer.setThreadName(String(thread.id), "Must not project");
+    connection.close();
+    releaseRead.resolve();
+    await turn.done;
+    await flushTasks();
+
+    assert.equal(
+      messages.some(
+        (message) =>
+          "method" in message && message.method === "thread/name/updated",
+      ),
       false,
     );
   } finally {

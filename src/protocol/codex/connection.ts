@@ -328,13 +328,8 @@ export class CodexConnection {
           });
         } finally {
           this.#resumeBarriers.delete(threadId);
-          for (const event of barrier.events) {
-            if (
-              snapshot === undefined ||
-              !eventRepresentedInSnapshot(event, snapshot)
-            ) {
-              this.#enqueueEvent(event);
-            }
+          for (const event of resumeCatchUpEvents(barrier.events, snapshot)) {
+            this.#enqueueEvent(event);
           }
         }
         return;
@@ -617,6 +612,7 @@ export class CodexConnection {
     if (this.#closed) return;
     this.#eventChain = this.#eventChain
       .then(async () => {
+        if (this.#closed) return;
         await this.#projectEvent(event);
       })
       .catch((error: unknown) => {
@@ -1182,6 +1178,43 @@ function eventRepresentedInSnapshot(
     case "token_usage":
       return true;
   }
+}
+
+type ResumeStateEventType =
+  "thread_archived_updated" | "thread_name_updated" | "thread_settings_updated";
+
+function resumeCatchUpEvents(
+  events: readonly AppServerEvent[],
+  snapshot: ThreadSnapshot | undefined,
+): AppServerEvent[] {
+  const lastStateEventIndexes = new Map<ResumeStateEventType, number>();
+  for (const [index, event] of events.entries()) {
+    if (isResumeStateEvent(event)) {
+      lastStateEventIndexes.set(event.type, index);
+    }
+  }
+
+  return events.filter((event, index) => {
+    if (
+      isResumeStateEvent(event) &&
+      lastStateEventIndexes.get(event.type) !== index
+    ) {
+      return false;
+    }
+    return (
+      snapshot === undefined || !eventRepresentedInSnapshot(event, snapshot)
+    );
+  });
+}
+
+function isResumeStateEvent(
+  event: AppServerEvent,
+): event is Extract<AppServerEvent, { type: ResumeStateEventType }> {
+  return (
+    event.type === "thread_archived_updated" ||
+    event.type === "thread_name_updated" ||
+    event.type === "thread_settings_updated"
+  );
 }
 
 function reasoningItemKey(
