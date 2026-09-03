@@ -12,6 +12,13 @@
   font-synthesis: none;
 }
 
+/* One thin, track-less scrollbar vocabulary for every scrollable surface so
+   no platform default sits thick or opaque on top of the app surfaces. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-control) transparent;
+}
+
 .plugin-page-scroll {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
@@ -1322,18 +1329,20 @@ a:focus-visible {
   position: relative;
   min-width: 0;
   min-height: 0;
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  display: block;
   overflow: hidden;
 }
 .messages {
+  position: absolute;
+  inset: 0;
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
-  scrollbar-color: var(--color-border-control) transparent;
-  padding: 28px max(24px, calc((100% - 820px) / 2)) 38px;
+  scrollbar-color: var(--border-control) transparent;
+  padding: 28px max(24px, calc((100% - 820px) / 2))
+    calc(38px + var(--bottom-zone-height, 0px));
 }
 .messages-inner {
   width: 100%;
@@ -1778,7 +1787,7 @@ a:focus-visible {
 .back-live {
   position: absolute;
   left: 50%;
-  bottom: 150px;
+  bottom: calc(var(--bottom-zone-height, 0px) + 12px);
   z-index: 5;
   min-height: 36px;
   display: inline-flex;
@@ -1795,7 +1804,10 @@ a:focus-visible {
 }
 
 .bottom-zone {
-  position: relative;
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
   z-index: 4;
   min-width: 0;
   padding: 0 max(18px, calc((100% - 840px) / 2)) 18px;
@@ -2063,6 +2075,8 @@ a:focus-visible {
   display: block;
   resize: none;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-control) transparent;
   padding: 15px 16px 6px;
   border: 0;
   outline: 0;
@@ -4783,7 +4797,7 @@ a:focus-visible {
     flex-basis: 100%;
   }
   .messages {
-    padding: 20px 14px 28px;
+    padding: 20px 14px calc(28px + var(--bottom-zone-height, 0px));
   }
   .messages-inner {
     gap: 20px;
@@ -4846,9 +4860,6 @@ a:focus-visible {
   }
   .permission-control span {
     display: none;
-  }
-  .back-live {
-    bottom: 132px;
   }
   .page-scroll {
     padding: 20px 14px 34px;

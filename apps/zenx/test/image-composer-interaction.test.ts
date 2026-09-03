@@ -213,6 +213,47 @@ test("Unknown image capability warns but keeps the try-send action available", a
   });
 });
 
+test("the Composer overlay publishes its live bottom-zone height", async () => {
+  await withDom(async (_dom, root) => {
+    let notify: (() => void) | null = null;
+    class FakeResizeObserver {
+      constructor(callback: () => void) {
+        notify = callback;
+      }
+      observe(): void {}
+      disconnect(): void {}
+    }
+    Object.assign(globalThis, { ResizeObserver: FakeResizeObserver });
+    try {
+      await act(async () =>
+        root.render(
+          createElement(ThreadView, {
+            approvals: [],
+            composer: emptyComposerState(),
+            thread: emptyThread(),
+            onDraftChange: () => undefined,
+            onInterrupt: async () => undefined,
+            onRespondToApproval: async () => undefined,
+            onSubmit: async () => undefined,
+          }),
+        ),
+      );
+      const view = required<HTMLElement>(".thread-view");
+      assert.equal(view.style.getPropertyValue("--bottom-zone-height"), "0px");
+      required<HTMLElement>(".bottom-zone").getBoundingClientRect = () =>
+        ({ height: 216 }) as DOMRect;
+      assert.ok(notify !== null);
+      await act(async () => notify?.());
+      assert.equal(
+        view.style.getPropertyValue("--bottom-zone-height"),
+        "216px",
+      );
+    } finally {
+      Reflect.deleteProperty(globalThis, "ResizeObserver");
+    }
+  });
+});
+
 async function withDom(
   run: (dom: JSDOM, root: ReturnType<typeof createRoot>) => Promise<void>,
 ) {
