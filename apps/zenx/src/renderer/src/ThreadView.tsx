@@ -188,12 +188,22 @@ export function ThreadView({
     // Reset before measuring so deleting text shrinks the editor as well as
     // adding text grows it. Keep the budget bounded so the transcript remains
     // usable in short windows; the textarea itself scrolls beyond the cap.
-    const maxHeight = 150;
-    textarea.style.height = "auto";
-    const contentHeight = textarea.scrollHeight;
-    const height = Math.min(Math.max(contentHeight, 68), maxHeight);
-    textarea.style.height = `${height}px`;
-    textarea.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden";
+    const resize = () => {
+      textarea.style.height = "auto";
+      const contentHeight = textarea.scrollHeight;
+      const declaredMaxHeight = Number.parseFloat(
+        window.getComputedStyle(textarea).maxHeight,
+      );
+      const maxHeight = Number.isFinite(declaredMaxHeight)
+        ? declaredMaxHeight
+        : 150;
+      const height = Math.min(Math.max(contentHeight, 68), maxHeight);
+      textarea.style.height = `${height}px`;
+      textarea.style.overflowY = contentHeight > height ? "auto" : "hidden";
+    };
+    resize();
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
   }, [composer.draft.text]);
 
   const submit = (intent: ComposerIntent) => {

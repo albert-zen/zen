@@ -64,6 +64,47 @@ test("composer textarea grows to its cap, scrolls, and shrinks after deletion", 
   });
 });
 
+test("composer respects the viewport cap and remeasures on resize", async () => {
+  await withDom(async (root) => {
+    let contentHeight = 240;
+    Object.defineProperty(domTextAreaPrototype(), "scrollHeight", {
+      configurable: true,
+      get: () => contentHeight,
+    });
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      value: 200,
+    });
+    const computedStyle = window.getComputedStyle;
+    window.getComputedStyle = (() =>
+      ({
+        maxHeight: `${Math.min(150, window.innerHeight * 0.35)}px`,
+      }) as unknown as CSSStyleDeclaration) as typeof window.getComputedStyle;
+    try {
+      const props = createElement(ThreadView, {
+        approvals: [],
+        composer: editComposer(emptyComposerState(), "long draft"),
+        thread: thread([]),
+        onDraftChange: () => undefined,
+        onInterrupt: noop,
+        onRespondToApproval: noop,
+        onSubmit: noop,
+      });
+      await act(async () => root.render(props));
+      const textarea = requiredElement<HTMLTextAreaElement>("#thread-composer");
+      assert.equal(textarea.style.height, "70px");
+      assert.equal(textarea.style.overflowY, "auto");
+
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 600 });
+      await act(async () => window.dispatchEvent(new window.Event("resize")));
+      assert.equal(textarea.style.height, "150px");
+      assert.equal(textarea.style.overflowY, "auto");
+    } finally {
+      window.getComputedStyle = computedStyle;
+    }
+  });
+});
+
 test("running empty composer exposes Stop without locking the editor", () => {
   const html = render(true, []);
   assert.match(html, /aria-label="Message"/u);
