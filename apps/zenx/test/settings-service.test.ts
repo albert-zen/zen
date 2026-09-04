@@ -482,6 +482,46 @@ test("persists the Host-owned tool presentation across restart", async () => {
   }
 });
 
+test("persists and clears the optional context compaction prompt", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-context-compaction-settings-"),
+  );
+  try {
+    const service = settingsFor(directory, inactiveSubscription());
+    await service.initialize({});
+    const initial = (await service.publicSettings()).profile;
+    assert.equal(initial.contextCompaction, undefined);
+
+    await service.save({
+      ...initial,
+      contextCompaction: {
+        summaryInstruction: "Custom summary prompt.",
+      },
+    });
+    assert.deepEqual((await service.hostConfig()).contextCompaction, {
+      summaryInstruction: "Custom summary prompt.",
+    });
+
+    const restarted = settingsFor(directory, inactiveSubscription());
+    await restarted.initialize({});
+    const persisted = (await restarted.publicSettings()).profile;
+    assert.deepEqual(persisted.contextCompaction, {
+      summaryInstruction: "Custom summary prompt.",
+    });
+
+    const defaults = { ...persisted };
+    delete defaults.contextCompaction;
+    await restarted.save(defaults);
+    assert.equal(
+      (await restarted.publicSettings()).profile.contextCompaction,
+      undefined,
+    );
+    assert.equal((await restarted.hostConfig()).contextCompaction, undefined);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("persists explicit foreground computer consent across restart and allows revocation", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-foreground-setting-"),

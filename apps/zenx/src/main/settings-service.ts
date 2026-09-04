@@ -477,6 +477,7 @@ export class ZenXSettingsService {
             approvalPolicy: settings.approvalPolicy,
             toolPresentation: settings.toolPresentation ?? "both",
             maxToolRounds: settings.maxToolRounds,
+            contextCompaction: settings.contextCompaction,
           }),
           [],
         )
