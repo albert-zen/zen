@@ -96,8 +96,14 @@ test("resume commits canonical state before auxiliary reads and replays catch-up
       await Promise.resolve();
       await Promise.resolve();
     });
-    assert.match(document.body.textContent ?? "", /7 in/u);
-    assert.match(document.body.textContent ?? "", /Context 10% · 7 \/ 70/u);
+    const contextUsage = document.querySelector<HTMLElement>(
+      ".context-usage-indicator",
+    );
+    assert.ok(contextUsage);
+    assert.equal(
+      contextUsage.getAttribute("aria-valuetext"),
+      "Context 10% · 7 / 70",
+    );
   } finally {
     await harness.unmount();
   }

@@ -167,7 +167,7 @@ function fixtureAppServer(journal: InMemoryThreadJournal): ZenAppServer {
         providerProfileId: model.provider,
         adapter: model,
         modelCatalog: new StaticModelCatalog([
-          { id: "fixture", isDefault: true },
+          { id: "fixture", contextWindow: 32_768, isDefault: true },
         ]),
       },
     ]),

@@ -180,6 +180,7 @@ test("imports image-only input and resumes canonical AttachmentRefs without jour
       modelCatalog: [
         {
           id: "fake-image",
+          contextWindow: 32_768,
           isDefault: true,
           source: "manual",
           supportedReasoningEfforts: ["medium"],

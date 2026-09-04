@@ -274,7 +274,7 @@ test("an Agent drives the complete bounded tracer bullet through App Server wire
   const tools = capabilityTools(capabilities);
   const model = new TracerBulletModel(workspace);
   const modelCatalog = new StaticModelCatalog([
-    { id: "tracer", isDefault: true },
+    { id: "tracer", contextWindow: 32_768, isDefault: true },
   ]);
   const appServer = new ZenAppServer({
     journal: new InMemoryThreadJournal(),

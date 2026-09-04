@@ -445,7 +445,7 @@ function appServer(
         providerProfileId: model.provider,
         adapter: model,
         modelCatalog: new StaticModelCatalog([
-          { id: "fixture-model", isDefault: true },
+          { id: "fixture-model", contextWindow: 32_768, isDefault: true },
         ]),
       },
     ]),

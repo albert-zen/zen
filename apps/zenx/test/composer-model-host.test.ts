@@ -44,12 +44,14 @@ test("host seam preserves compatible effort, falls back atomically, and freezes 
         modelCatalog: [
           {
             id: "alpha-medium",
+            contextWindow: 32_768,
             supportedReasoningEfforts: ["medium"],
             defaultReasoningEffort: "medium",
             inputModalities: ["text"],
           },
           {
             id: "alpha-compatible",
+            contextWindow: 32_768,
             supportedReasoningEfforts: ["low", "medium"],
             defaultReasoningEffort: "low",
             inputModalities: ["text"],
@@ -63,6 +65,7 @@ test("host seam preserves compatible effort, falls back atomically, and freezes 
         modelCatalog: [
           {
             id: "beta-low",
+            contextWindow: 32_768,
             supportedReasoningEfforts: ["low"],
             defaultReasoningEffort: "low",
             inputModalities: ["text"],

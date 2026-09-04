@@ -306,13 +306,16 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
       usageRequests[2]?.response.resolve(projectedUsage(9));
       await Promise.resolve();
     });
-    assert.match(document.body.textContent ?? "", /9 in/u);
+    const contextUsageText = (): string | null =>
+      document
+        .querySelector(".context-usage-indicator")
+        ?.getAttribute("aria-valuetext") ?? null;
+    assert.equal(contextUsageText(), "Context 9% · 9 / 100");
     await act(async () => {
       usageRequests[1]?.response.resolve(projectedUsage(4));
       await Promise.resolve();
     });
-    assert.match(document.body.textContent ?? "", /9 in/u);
-    assert.doesNotMatch(document.body.textContent ?? "", /4 in/u);
+    assert.equal(contextUsageText(), "Context 9% · 9 / 100");
 
     await act(async () => {
       notify?.("turn/completed", {
@@ -335,13 +338,12 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
       usageRequests.at(-1)?.response.resolve(projectedUsage(2));
       await Promise.resolve();
     });
-    assert.match(document.body.textContent ?? "", /2 in/u);
+    assert.equal(contextUsageText(), "Context 2% · 2 / 100");
     await act(async () => {
       usageRequests[3]?.response.resolve(projectedUsage(12));
       await Promise.resolve();
     });
-    assert.match(document.body.textContent ?? "", /2 in/u);
-    assert.doesNotMatch(document.body.textContent ?? "", /12 in/u);
+    assert.equal(contextUsageText(), "Context 2% · 2 / 100");
   } finally {
     await act(async () => root.unmount());
     Object.assign(globalThis, previousGlobals, {
