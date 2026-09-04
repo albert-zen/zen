@@ -78,7 +78,7 @@ test("composer respects the viewport cap and remeasures on resize", async () => 
     const computedStyle = window.getComputedStyle;
     window.getComputedStyle = (() =>
       ({
-        maxHeight: `${Math.min(150, window.innerHeight * 0.35)}px`,
+        maxHeight: `${Math.max(68, Math.min(150, window.innerHeight * 0.35))}px`,
       }) as unknown as CSSStyleDeclaration) as typeof window.getComputedStyle;
     try {
       const props = createElement(ThreadView, {
@@ -93,6 +93,11 @@ test("composer respects the viewport cap and remeasures on resize", async () => 
       await act(async () => root.render(props));
       const textarea = requiredElement<HTMLTextAreaElement>("#thread-composer");
       assert.equal(textarea.style.height, "70px");
+      assert.equal(textarea.style.overflowY, "auto");
+
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 168 });
+      await act(async () => window.dispatchEvent(new window.Event("resize")));
+      assert.equal(textarea.style.height, "68px");
       assert.equal(textarea.style.overflowY, "auto");
 
       Object.defineProperty(window, "innerHeight", { configurable: true, value: 600 });

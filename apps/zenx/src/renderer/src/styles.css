@@ -2071,7 +2071,7 @@ a:focus-visible {
 .composer > textarea {
   width: 100%;
   min-height: 68px;
-  max-height: min(150px, 35vh);
+  max-height: max(68px, min(150px, 35vh));
   display: block;
   resize: none;
   overflow-y: hidden;
