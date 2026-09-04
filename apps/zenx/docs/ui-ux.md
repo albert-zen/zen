@@ -234,6 +234,8 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 
 - Settings 是由左下导航进入的 routed page。Settings 顶部动作的最终合同仍为 **TBD**；“不提供 Done”以及“只在 dirty 时显示或强调 Apply & restart”是当前设计实验，不是 durable semantics。
 - Settings 明确管理 Archived Threads、Provider/Account 和 Plugins；General 可以承载其他 host-local preferences，但不能改变这些核心分区的所有权。
+- Context compaction prompt 是可选的 host-local preference；省略时使用 Core 默认。它只影响未来
+  compaction summary 生成，不重写历史 Thread，也不进入 canonical ItemList。
 - Settings → Models & providers 展示所有稳定 Provider profiles，并让用户以明确的
   `Provider display name · model ID` 选择全局 Default model 与 Title model；相同 model ID
   可以属于不同 profile，选择器不能把它们合并。Profile 内的结构化 ModelCatalog 使用可聚焦的

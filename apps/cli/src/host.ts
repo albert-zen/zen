@@ -12,6 +12,7 @@ import {
   RunCodeToolRuntime,
   type CodeRuntimeLimits,
 } from "../../../src/code-runtime.js";
+import type { ContextCompactionConfig } from "../../../src/context-compaction.js";
 import {
   JsonlThreadJournal,
   type ThreadJournal,
@@ -103,6 +104,8 @@ export interface ZenHostOptions {
   maxConcurrentToolBodies?: number;
   /** Product warning sink used when both degrades to direct. */
   onToolPresentationWarning?: (warning: string) => void;
+  /** Host-owned context compaction behavior; omitted fields use Core defaults. */
+  contextCompaction?: ContextCompactionConfig;
   attachments?: AttachmentStore;
   /** Host-local owner injection, primarily for composition and lifecycle tests. */
   toolOutputSpool?: ToolOutputSpool;
@@ -282,6 +285,9 @@ export function createHostedAppServer(
       sandbox: "danger-full-access",
       approvalPolicy: options.approvalPolicy,
     },
+    ...(options.contextCompaction === undefined
+      ? {}
+      : { contextCompaction: options.contextCompaction }),
   });
   let closeTransportPromise: Promise<void> | undefined;
   const closeProviderTransport = async () => {

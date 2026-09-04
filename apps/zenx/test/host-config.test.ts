@@ -45,6 +45,17 @@ test("validates the Host-owned tool presentation environment setting", () => {
   );
 });
 
+test("resolves the optional context compaction prompt from environment", () => {
+  const config = resolveZenXHostConfig({
+    ZENX_CONTEXT_COMPACTION_PROMPT: "Custom compact prompt.",
+  });
+
+  assert.equal(
+    config.contextCompaction?.summaryInstruction,
+    "Custom compact prompt.",
+  );
+});
+
 test("moves an OpenAI-compatible key into host config and blocks shell inheritance", () => {
   const environment: NodeJS.ProcessEnv = {
     ZENX_PROVIDER: "openai-compatible",

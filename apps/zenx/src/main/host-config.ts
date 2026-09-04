@@ -73,6 +73,13 @@ export function resolveZenXHostConfig(
     models,
     approvalPolicy,
     toolPresentation,
+    ...(environment["ZENX_CONTEXT_COMPACTION_PROMPT"] === undefined
+      ? {}
+      : {
+          contextCompaction: {
+            summaryInstruction: environment["ZENX_CONTEXT_COMPACTION_PROMPT"],
+          },
+        }),
     provider,
     secretEnvironmentVariables,
   };

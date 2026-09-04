@@ -156,6 +156,39 @@ test("validates and projects an opt-in maximum tool round setting", () => {
   }
 });
 
+test("validates and projects the optional context compaction prompt", () => {
+  const configured = validateHostProfile({
+    ...profile,
+    contextCompaction: {
+      summaryInstruction: "Custom summary prompt.",
+    },
+  });
+  const config = hostConfigFromProfile(configured, {
+    dataDirectory: path.join(os.tmpdir(), "data"),
+    subscriptionProfilePath: path.join(os.tmpdir(), "auth"),
+    fallbackWorkspace: path.join(os.tmpdir(), "fallback"),
+    apiKeys: { local: "secret" },
+  });
+
+  assert.deepEqual(configured.contextCompaction, {
+    summaryInstruction: "Custom summary prompt.",
+  });
+  assert.deepEqual(config.contextCompaction, configured.contextCompaction);
+  assert.equal(
+    validateHostProfile({ ...profile, contextCompaction: {} })
+      .contextCompaction,
+    undefined,
+  );
+  assert.throws(
+    () =>
+      validateHostProfile({
+        ...profile,
+        contextCompaction: { summaryInstruction: "" },
+      }),
+    /context compaction prompt/u,
+  );
+});
+
 test("migrates v1 deterministically, persists v3, and preserves adapter identity and preferences", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-profile-v1-"));
   const file = path.join(directory, "host-profile.json");

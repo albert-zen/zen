@@ -59,6 +59,8 @@
 - **ContextCompactionItem** — Zen 在完整 Turn 边界生成并追加的 provider-neutral
   context summary；它记录覆盖边界、稳定有序的保留 Item、冻结的 Provider selection、
   版本化算法与 token usage，使后续模型上下文和重启投影都只由 append-only ItemList 推导。
+- **ContextCompactionConfig** — Host-owned 压缩策略配置；当前只允许替换模型摘要指令，
+  省略时使用 Core 默认，配置本身不写入 Thread canonical ItemList。
 - **ModelUsageItem** — Provider 对一次稳定 model response 报告的 canonical 执行事实，
   保存包含 cached 部分的 total input、可选 cached input、output 与可选 reasoning output tokens。
 - **NativeThreadSummaryProjection** — ZAS 把 canonical journal 与
@@ -546,9 +548,11 @@ Provider `inputTokens`，若 compaction 已经使该样本代表旧上下文，�
 手动 context compaction 只在没有 active / incomplete Turn 时取最新
 `turn_completed` 作为覆盖边界；调用者不能指定任意 Item。Zen 以 admission 时
 Thread 当前生效的 `providerProfileId / modelId / reasoningEffort` 调用所选 Provider，
-使用版本化、provider-neutral 的 summary 指令且不使用 Provider opaque compaction
-或 cache。v1 确定性保留该最新完整 Turn 的全部 canonical Item；生成、abort、验证或
-journal append 失败都明确返回且不追加 compaction Item，不隐藏重试。
+默认使用版本化、provider-neutral 的 summary 指令且不使用 Provider opaque compaction
+或 cache。Host 可以配置替代的 summary 指令；该配置只影响未来 summary 生成，不写入
+Thread Item，也不改变已生成 compaction 的重放语义。v1 确定性保留该最新完整 Turn 的全部
+canonical Item；生成、abort、验证或 journal append 失败都明确返回且不追加 compaction
+Item，不隐藏重试。
 
 成功 Turn 使用 admission 时冻结的 Provider adapter、selection、catalog entry 与
 `contextWindow` 判断自动 compaction；只有 Provider 实际报告的有效 `inputTokens`

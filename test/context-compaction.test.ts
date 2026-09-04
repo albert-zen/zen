@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { AppServerError, ZenAppServer } from "../src/app-server.js";
-import { validateContextCompactionItem } from "../src/context-compaction.js";
+import {
+  normalizeContextCompactionConfig,
+  validateContextCompactionItem,
+  type ContextCompactionConfig,
+} from "../src/context-compaction.js";
 import type {
   CanonicalItem,
   ContextCompactionItem,
@@ -130,6 +134,60 @@ test("manually compacts long history without changing the complete transcript", 
       "userMessage",
       "agentMessage",
     ],
+  );
+});
+
+test("uses the configured context compaction prompt exactly", async () => {
+  const prompt = "CUSTOM_COMPACTION_PROMPT\nKeep the active blockers first.";
+  const requests: ModelRequest[] = [];
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      const latest = request.messages.at(-1);
+      if (
+        latest?.role === "user" &&
+        "text" in latest &&
+        latest.text === prompt
+      ) {
+        yield { type: "text_delta", delta: "custom summary" };
+        return;
+      }
+      yield { type: "text_delta", delta: "answer" };
+    },
+  };
+  const server = createServer({
+    journal: new InMemoryThreadJournal(),
+    model,
+    contextCompaction: { summaryInstruction: prompt },
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "one")
+  ).done;
+
+  await server.compactThread(thread.id);
+
+  const summaryRequest = requests.at(-1);
+  assert(summaryRequest !== undefined);
+  assert.deepEqual(summaryRequest.tools, []);
+  assert.deepEqual(summaryRequest.messages.at(-1), {
+    role: "user",
+    text: prompt,
+  });
+  assert.equal(
+    (await server.readThread(thread.id)).items.at(-1)?.type,
+    "context_compaction",
+  );
+});
+
+test("rejects an empty configured context compaction prompt", () => {
+  assert.throws(
+    () =>
+      normalizeContextCompactionConfig({
+        summaryInstruction: " \n\t ",
+      }),
+    /summaryInstruction/u,
   );
 });
 
@@ -1042,6 +1100,7 @@ function createServer(options: {
   model: ModelAdapter;
   modelCatalog?: ModelCatalog;
   runtime?: AgentRuntime;
+  contextCompaction?: ContextCompactionConfig;
 }): ZenAppServer {
   const modelCatalog =
     options.modelCatalog ??
@@ -1072,6 +1131,9 @@ function createServer(options: {
       sandbox: "danger-full-access",
       approvalPolicy: "never",
     },
+    ...(options.contextCompaction === undefined
+      ? {}
+      : { contextCompaction: options.contextCompaction }),
   });
 }
 

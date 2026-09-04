@@ -11,6 +11,7 @@ import {
   type ModelCatalogEntry,
   type ModelCatalogEntryInput,
 } from "../../../../src/model-catalog.js";
+import type { ContextCompactionConfig } from "../../../../src/context-compaction.js";
 import type { ZenXHostConfig } from "./host-messages.js";
 import { resolveProjectPath } from "./project-projection.js";
 import type { ToolPresentation } from "../../../../src/tool-presentation.js";
@@ -58,6 +59,8 @@ export interface ZenXHostProfile {
   toolPresentation?: ToolPresentation;
   /** Omitted means tool rounds are unlimited. */
   maxToolRounds?: number;
+  /** Omitted means Core uses its default compaction prompt. */
+  contextCompaction?: ContextCompactionConfig;
   pinnedThreadIds: string[];
   sidebarOrder: ZenXSidebarOrder;
 }
@@ -72,6 +75,7 @@ export type ZenXSettingsUpdate = Pick<
   | "approvalPolicy"
   | "toolPresentation"
   | "maxToolRounds"
+  | "contextCompaction"
 >;
 
 export interface ZenXProviderEditOptions {
@@ -133,6 +137,7 @@ const MAX_PROVIDER_PROFILE_ID_LENGTH = 512;
 const MAX_MODEL_ID_LENGTH = 512;
 const MAX_PROVIDER_PROFILES = 128;
 const MAX_MODELS_PER_PROFILE = 1_024;
+const MAX_CONTEXT_COMPACTION_PROMPT_LENGTH = 32_768;
 
 export class ZenXHostProfileStore {
   readonly #filePath: string;
@@ -265,6 +270,9 @@ export function validateHostProfile(
   }
   const maxToolRounds = optionalMaximumToolRounds(value.maxToolRounds);
   const toolPresentation = validateToolPresentation(value.toolPresentation);
+  const contextCompaction = optionalContextCompactionConfig(
+    value.contextCompaction,
+  );
   const workspace =
     value.workspace === null
       ? null
@@ -296,6 +304,7 @@ export function validateHostProfile(
     approvalPolicy: value.approvalPolicy,
     toolPresentation,
     ...(maxToolRounds === undefined ? {} : { maxToolRounds }),
+    ...(contextCompaction === undefined ? {} : { contextCompaction }),
     pinnedThreadIds: normalizePinnedThreadIds(value.pinnedThreadIds),
     sidebarOrder: normalizeSidebarOrder(value.sidebarOrder),
   };
@@ -434,6 +443,9 @@ export function hostConfigFromProfile(
     ...(validated.maxToolRounds === undefined
       ? {}
       : { maxToolRounds: validated.maxToolRounds }),
+    ...(validated.contextCompaction === undefined
+      ? {}
+      : { contextCompaction: validated.contextCompaction }),
     providers: validated.providerProfiles.map((providerProfile) => ({
       ...providerRuntimeCatalog(providerProfile, validated.defaultModel),
       providerProfileId: providerProfile.providerProfileId,
@@ -896,6 +908,25 @@ function optionalMaximumToolRounds(value: unknown): number | undefined {
     throw new Error("ZenX maximum tool rounds must be a positive safe integer");
   }
   return value as number;
+}
+
+function optionalContextCompactionConfig(
+  value: unknown,
+): ContextCompactionConfig | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error("ZenX context compaction config is invalid");
+  }
+  const instruction = value.summaryInstruction;
+  if (instruction === undefined) return undefined;
+  if (
+    typeof instruction !== "string" ||
+    instruction.trim().length === 0 ||
+    instruction.length > MAX_CONTEXT_COMPACTION_PROMPT_LENGTH
+  ) {
+    throw new Error("ZenX context compaction prompt is invalid");
+  }
+  return { summaryInstruction: instruction };
 }
 
 function nonEmpty(value: unknown, label: string): string {

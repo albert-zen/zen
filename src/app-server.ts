@@ -9,9 +9,11 @@ import {
 } from "./attachment.js";
 import {
   CONTEXT_COMPACTION_ALGORITHM_VERSION,
-  CONTEXT_COMPACTION_SUMMARY_INSTRUCTION,
   latestCompaction,
   latestEligibleCompactionBoundary,
+  normalizeContextCompactionConfig,
+  type ContextCompactionConfig,
+  type ResolvedContextCompactionConfig,
 } from "./context-compaction.js";
 import type {
   AgentMessageItem,
@@ -188,6 +190,7 @@ export class ZenAppServer {
   readonly #threadMetadata: ThreadMetadataStore;
   readonly #threadSummaryProjection: ThreadSummaryProjection;
   readonly #defaults: AppServerDefaults;
+  readonly #contextCompaction: ResolvedContextCompactionConfig;
   readonly #id: () => string;
   readonly #now: () => string;
   readonly #threads = new Map<string, Thread>();
@@ -219,6 +222,7 @@ export class ZenAppServer {
     threadMetadata: ThreadMetadataStore;
     threadSummaryProjection?: ThreadSummaryProjection;
     defaults: AppServerDefaults;
+    contextCompaction?: ContextCompactionConfig;
     idFactory?: () => string;
     now?: () => string;
   }) {
@@ -233,6 +237,9 @@ export class ZenAppServer {
       ...options.defaults,
       cwd: path.resolve(options.defaults.cwd),
     };
+    this.#contextCompaction = normalizeContextCompactionConfig(
+      options.contextCompaction,
+    );
     this.#id = options.idFactory ?? randomUUID;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#requireSelection(this.#defaults);
@@ -1087,6 +1094,7 @@ export class ZenAppServer {
       model: options.selection.selection.modelId,
       reasoningEffort: options.selection.selection.reasoningEffort,
       messages: sourceMessages,
+      summaryInstruction: this.#contextCompaction.summaryInstruction,
       signal: options.signal,
     });
     const item: ContextCompactionItem = {
@@ -1662,6 +1670,7 @@ async function generateContextCompactionSummary(options: {
   model: string;
   reasoningEffort: string | null;
   messages: ModelMessage[];
+  summaryInstruction: string;
   signal: AbortSignal;
 }): Promise<{
   text: string;
@@ -1672,7 +1681,7 @@ async function generateContextCompactionSummary(options: {
   let outputTokens = 0;
   const messages: ModelMessage[] = [
     ...options.messages,
-    { role: "user", text: CONTEXT_COMPACTION_SUMMARY_INSTRUCTION },
+    { role: "user", text: options.summaryInstruction },
   ];
   try {
     for await (const event of options.adapter.stream({
