@@ -1980,7 +1980,7 @@ test("host recovery refreshes the selected Thread without clearing draft or loca
   }
 });
 
-test("conversation header owns thread cache telemetry and only retains workspace action", async () => {
+test("conversation header omits usage while Composer owns context indicator and workspace action remains", async () => {
   const longTitle =
     "Verify the complete ZenX integrated title bar with an intentionally long real Thread title";
   const harness = await mountApp(
@@ -2046,21 +2046,23 @@ test("conversation header owns thread cache telemetry and only retains workspace
       document.querySelector(".agent-surface > .workspace-header"),
       null,
     );
-    assert.match(
-      document.querySelector(".workspace-header .thread-usage")?.textContent ??
-        "",
-      /Context 50% · 200 \/ 400 · Thread cache unknown · 200 in · 25 out/u,
+    assert.doesNotMatch(
+      document.querySelector(".workspace-header")?.textContent ?? "",
+      /Context|Thread cache|50%/u,
     );
+    const contextIndicator = document.querySelector(
+      ".composer .context-usage-indicator",
+    );
+    assert.ok(contextIndicator);
+    assert.equal(contextIndicator?.getAttribute("role"), "progressbar");
+    assert.equal(contextIndicator?.getAttribute("aria-valuenow"), "50");
+    assert.match(contextIndicator?.getAttribute("aria-valuetext") ?? "", /Context 50%/u);
     assert.equal(
       document.querySelector(".messages-inner > .thread-usage"),
       null,
     );
     const workspaceAction = document.querySelector(
       '.workspace-header [aria-label="Open workspace panel"]',
-    );
-    assert.equal(
-      workspaceAction?.previousElementSibling?.className,
-      "thread-usage",
     );
     assert.equal(
       document

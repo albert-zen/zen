@@ -674,15 +674,20 @@ export function ContextUsageIndicator({
   if (context?.ratio === null || context?.ratio === undefined) return null;
   const percent = Math.round(context.ratio * 100);
   const visualRatio = Math.max(0, Math.min(1, context.ratio));
+  const visualPercent = Math.round(visualRatio * 100);
   const label = contextUsageLabel(context);
   const tooltip = label ?? `Context ${String(percent)}%`;
   const radius = 7;
   return (
     <span
       className="context-usage-indicator"
-      role="img"
+      role="progressbar"
       tabIndex={0}
       aria-label={tooltip}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={visualPercent}
+      aria-valuetext={tooltip}
       data-tooltip={tooltip}
     >
       <svg aria-hidden="true" viewBox="0 0 20 20">
