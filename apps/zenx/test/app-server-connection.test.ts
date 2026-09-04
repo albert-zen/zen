@@ -399,7 +399,11 @@ test("Host configuration restart keeps external clients on the same published au
     });
 
     await manager.restartCapabilities();
-    await within(reconnected.promise);
+    await within(
+      reconnected.promise,
+      12_000,
+      "external App Server reconnect after Host configuration restart",
+    );
     assert.equal(await readFile(descriptorFile, "utf8"), descriptorSource);
     assert.equal(
       (await external.request("thread/resume", { threadId: thread.id })).thread

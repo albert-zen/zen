@@ -405,6 +405,9 @@ test("external public fixture completes create, dev target reload, validate, pac
     await runNpm(
       [
         "install",
+        "--offline",
+        "--no-audit",
+        "--no-fund",
         "--ignore-scripts",
         "--no-save",
         path.join(sdkTarballs, sdkFilename),
