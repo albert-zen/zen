@@ -76,7 +76,12 @@ test("context tooltip exposes exact zero and unknown Thread cache rates", () => 
     emptyComposerState(),
     {},
     {
-      thread: { responseCount: 1, inputTokens: 10, outputTokens: 2, cacheHitRate: 0 },
+      thread: {
+        responseCount: 1,
+        inputTokens: 10,
+        outputTokens: 2,
+        cacheHitRate: 0,
+      },
       turns: {},
       context: {
         inputTokens: 78_200,

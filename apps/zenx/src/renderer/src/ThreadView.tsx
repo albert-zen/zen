@@ -669,7 +669,9 @@ export function contextUsageLabel(
   return `Context ${String(Math.round(context.ratio * 100))}%${source} · ${input} / ${formatTokenCount(context.contextWindow)}`;
 }
 
-export function threadCacheUsageLabel(cacheHitRate: number | undefined): string {
+export function threadCacheUsageLabel(
+  cacheHitRate: number | undefined,
+): string {
   return cacheHitRate === undefined
     ? "Thread cache unknown"
     : `Thread cache ${String(Math.round(cacheHitRate * 100))}%`;
