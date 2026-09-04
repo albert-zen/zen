@@ -118,6 +118,9 @@ child process、本地服务或远程服务。模型初始只看到 builtin tool
 取消会中断这条工具路径；模型、journal 与 Runtime 失败仍保留既有 Turn failure 语义。
 tool loop 默认不限轮数；ZenX General Settings 可选择一个正整数最大轮数，只有显式配置后
 Runtime 才以该上限终止持续请求工具的 Turn。
+ZenX host profile 也可以保存可选的 context compaction summary instruction；省略时使用
+Core 默认 prompt，配置只影响未来 compaction，不进入 Thread canonical state 或 CAS/ZAS
+wire。
 
 CLI 与 ZenX 现在通过同一个 Host composition 默认发布 `both` Tool Presentation；Host-owned
 配置可显式切换 `direct | code | both`，不进入 Item。`run_code` 使用 fresh、可取消的 Node

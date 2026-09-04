@@ -14,10 +14,27 @@ Summarize the conversation context above for a provider-neutral agent continuati
 Preserve concrete user goals, decisions, constraints, unfinished work, exact identifiers,
 and tool outcomes that affect future work. Do not call tools. Return only the summary.`;
 
+export interface ContextCompactionConfig {
+  summaryInstruction?: string;
+}
+
+export interface ResolvedContextCompactionConfig {
+  summaryInstruction: string;
+}
+
 export interface CompactionBoundary {
   item: Extract<CanonicalItem, { type: "turn_completed" }>;
   index: number;
   retainedItemIds: string[];
+}
+
+export function normalizeContextCompactionConfig(
+  config: ContextCompactionConfig = {},
+): ResolvedContextCompactionConfig {
+  const summaryInstruction =
+    config.summaryInstruction ?? CONTEXT_COMPACTION_SUMMARY_INSTRUCTION;
+  requireNonEmpty(summaryInstruction, "summaryInstruction", true);
+  return { summaryInstruction };
 }
 
 export function latestCompaction(
