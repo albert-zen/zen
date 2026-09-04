@@ -1212,6 +1212,9 @@ function profileFromLegacy(
     lastUsedWorkspace: null,
     approvalPolicy: config.approvalPolicy,
     toolPresentation: config.toolPresentation ?? "both",
+    ...(config.contextCompaction === undefined
+      ? {}
+      : { contextCompaction: config.contextCompaction }),
     pinnedThreadIds: [],
     sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
   });

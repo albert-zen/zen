@@ -50,6 +50,7 @@ test("migrates legacy environment config once without persisting or inheriting i
     ZENX_MODEL: "model-a",
     ZENX_MODELS: "model-a,model-b",
     ZENX_CWD: directory,
+    ZENX_CONTEXT_COMPACTION_PROMPT: "Keep the migration facts concise.",
   };
   try {
     await first.initialize(environment);
@@ -59,6 +60,12 @@ test("migrates legacy environment config once without persisting or inheriting i
       await readFile(path.join(directory, "host-profile.json"), "utf8"),
       /migration-secret/u,
     );
+    assert.deepEqual((await first.publicSettings()).profile.contextCompaction, {
+      summaryInstruction: "Keep the migration facts concise.",
+    });
+    assert.deepEqual((await first.hostConfig()).contextCompaction, {
+      summaryInstruction: "Keep the migration facts concise.",
+    });
 
     const second = new ZenXSettingsService({
       userDataDirectory: directory,
@@ -69,6 +76,10 @@ test("migrates legacy environment config once without persisting or inheriting i
     assert.equal(
       (await second.publicSettings()).profile.defaultModel.modelId,
       "model-a",
+    );
+    assert.deepEqual(
+      (await second.publicSettings()).profile.contextCompaction,
+      { summaryInstruction: "Keep the migration facts concise." },
     );
   } finally {
     await rm(directory, { recursive: true, force: true });

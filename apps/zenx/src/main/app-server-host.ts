@@ -171,6 +171,12 @@ async function handleCommand(command: HostCommand): Promise<void> {
               entry.providerProfileId === selection.providerProfileId &&
               entry.model.id === selection.modelId,
           )?.model.contextWindow ?? null;
+      const latestUsage = snapshot.items.findLast(
+        (item) => item.type === "model_usage",
+      );
+      const usageSelection = snapshot.turns.find(
+        (turn) => turn.id === latestUsage?.turnId,
+      )?.selection;
       send({
         type: "thread-usage/result",
         requestId: command.requestId,
@@ -179,6 +185,11 @@ async function handleCommand(command: HostCommand): Promise<void> {
           estimatedInputTokens: estimateModelMessageInputTokens(
             compileModelMessages(snapshot.items, selection),
           ),
+          providerContextUsageCompatible:
+            usageSelection !== undefined &&
+            usageSelection.providerProfileId === selection.providerProfileId &&
+            usageSelection.modelId === selection.modelId &&
+            usageSelection.reasoningEffort === selection.reasoningEffort,
         }),
       });
     } catch (error) {

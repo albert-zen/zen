@@ -21,6 +21,10 @@ test("projects a streamed tool turn from the hosted App Server", async () => {
       dataDirectory: path.join(directory, "data"),
       model: "fake",
       models: ["fake"],
+      modelCatalog: [
+        { id: "fake", isDefault: true, contextWindow: 100 },
+        { id: "other", contextWindow: 1_000 },
+      ],
       approvalPolicy: "never",
       provider: { type: "fake" },
     },
@@ -74,6 +78,16 @@ test("projects a streamed tool turn from the hosted App Server", async () => {
     assert.equal(usage.thread.cacheHitRate, undefined);
     assert.ok(usage.thread.inputTokens > 0);
     assert.deepEqual(usage.turns[usageTurn.turn.id], usage.thread);
+    assert.equal(usage.context.inputTokenSource, "provider");
+    assert.equal(usage.context.contextWindow, 100);
+
+    await manager.request("thread/settings/update", {
+      threadId: projected.id,
+      model: "other",
+    });
+    const switchedUsage = await manager.readThreadUsage(projected.id);
+    assert.equal(switchedUsage.context.inputTokenSource, "estimated");
+    assert.equal(switchedUsage.context.contextWindow, 1_000);
   } finally {
     await manager.stop();
     await rm(directory, { recursive: true, force: true });

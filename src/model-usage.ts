@@ -29,6 +29,7 @@ export function projectModelUsage(
   options: {
     contextWindow?: number | null;
     estimatedInputTokens?: number;
+    providerContextUsageCompatible?: boolean;
   } = {},
 ): ModelUsageProjection {
   const latestByResponse = new Map<string, ModelUsageItem>();
@@ -59,6 +60,8 @@ export function projectModelUsage(
       ...(options.estimatedInputTokens === undefined
         ? {}
         : { estimatedInputTokens: options.estimatedInputTokens }),
+      providerContextUsageCompatible:
+        options.providerContextUsageCompatible ?? true,
       latestCompactionIndex,
       ...(latestUsage === undefined ? {} : { latestUsage }),
     }),
@@ -160,10 +163,12 @@ function aggregate(usages: readonly ModelUsageItem[]): ModelUsageAggregate {
 function contextProjection(options: {
   contextWindow: number | null;
   estimatedInputTokens?: number;
+  providerContextUsageCompatible: boolean;
   latestCompactionIndex: number;
   latestUsage?: { item: ModelUsageItem; index: number };
 }): ModelContextUsageProjection {
   const canUseProviderUsage =
+    options.providerContextUsageCompatible &&
     options.latestUsage !== undefined &&
     options.latestUsage.index > options.latestCompactionIndex;
   const estimatedInputTokens = options.estimatedInputTokens;
