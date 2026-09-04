@@ -2056,7 +2056,10 @@ test("conversation header omits usage while Composer owns context indicator and 
     assert.ok(contextIndicator);
     assert.equal(contextIndicator?.getAttribute("role"), "progressbar");
     assert.equal(contextIndicator?.getAttribute("aria-valuenow"), "50");
-    assert.match(contextIndicator?.getAttribute("aria-valuetext") ?? "", /Context 50%/u);
+    assert.match(
+      contextIndicator?.getAttribute("aria-valuetext") ?? "",
+      /Context 50%/u,
+    );
     assert.equal(
       document.querySelector(".messages-inner > .thread-usage"),
       null,

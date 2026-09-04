@@ -2201,14 +2201,32 @@ a:focus-visible {
   color: var(--color-text-muted);
   outline: 0;
 }
-.context-usage-indicator svg { width: 18px; height: 18px; transform: rotate(-90deg); }
+.context-usage-indicator svg {
+  width: 18px;
+  height: 18px;
+  transform: rotate(-90deg);
+}
 .context-usage-track,
-.context-usage-progress { fill: none; stroke-width: 2.5; }
-.context-usage-track { stroke: var(--color-border-control); }
-.context-usage-progress { stroke: var(--accent); stroke-linecap: round; }
+.context-usage-progress {
+  fill: none;
+  stroke-width: 2.5;
+}
+.context-usage-track {
+  stroke: var(--color-border-control);
+}
+.context-usage-progress {
+  stroke: var(--accent);
+  stroke-linecap: round;
+}
 .context-usage-indicator:hover,
-.context-usage-indicator:focus-visible { color: var(--color-text-primary); background: var(--color-surface-elevated); }
-.context-usage-indicator:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 1px; }
+.context-usage-indicator:focus-visible {
+  color: var(--color-text-primary);
+  background: var(--color-surface-elevated);
+}
+.context-usage-indicator:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
 .context-usage-indicator::after {
   content: attr(data-tooltip);
   position: absolute;
@@ -2229,10 +2247,15 @@ a:focus-visible {
   opacity: 0;
   pointer-events: none;
   transform: translateY(3px);
-  transition: opacity 120ms ease, transform 120ms ease;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
 }
 .context-usage-indicator:hover::after,
-.context-usage-indicator:focus-visible::after { opacity: 1; transform: translateY(0); }
+.context-usage-indicator:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
+}
 .composer-selection-menu {
   position: absolute;
   z-index: 40;
