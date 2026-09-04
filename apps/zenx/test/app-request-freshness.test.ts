@@ -310,12 +310,18 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
       document
         .querySelector(".context-usage-indicator")
         ?.getAttribute("aria-valuetext") ?? null;
-    assert.equal(contextUsageText(), "Context 9% · 9 / 100");
+    assert.equal(
+      contextUsageText(),
+      "Context 9% · 9 / 100\nThread cache unknown",
+    );
     await act(async () => {
       usageRequests[1]?.response.resolve(projectedUsage(4));
       await Promise.resolve();
     });
-    assert.equal(contextUsageText(), "Context 9% · 9 / 100");
+    assert.equal(
+      contextUsageText(),
+      "Context 9% · 9 / 100\nThread cache unknown",
+    );
 
     await act(async () => {
       notify?.("turn/completed", {
@@ -338,12 +344,18 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
       usageRequests.at(-1)?.response.resolve(projectedUsage(2));
       await Promise.resolve();
     });
-    assert.equal(contextUsageText(), "Context 2% · 2 / 100");
+    assert.equal(
+      contextUsageText(),
+      "Context 2% · 2 / 100\nThread cache unknown",
+    );
     await act(async () => {
       usageRequests[3]?.response.resolve(projectedUsage(12));
       await Promise.resolve();
     });
-    assert.equal(contextUsageText(), "Context 2% · 2 / 100");
+    assert.equal(
+      contextUsageText(),
+      "Context 2% · 2 / 100\nThread cache unknown",
+    );
   } finally {
     await act(async () => root.unmount());
     Object.assign(globalThis, previousGlobals, {
