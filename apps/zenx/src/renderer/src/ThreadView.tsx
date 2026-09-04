@@ -432,6 +432,7 @@ export function ThreadView({
                   switching={switchingModel}
                 />
               )}
+              <ContextUsageIndicator context={threadUsage?.context} />
               {permissionLabel === null ? null : (
                 <button
                   className="composer-tool permission-control"
@@ -663,6 +664,41 @@ export function contextUsageLabel(
     return `Context unknown · ${input} in${source}`;
   }
   return `Context ${String(Math.round(context.ratio * 100))}%${source} · ${input} / ${formatTokenCount(context.contextWindow)}`;
+}
+
+export function ContextUsageIndicator({
+  context,
+}: {
+  context?: ModelContextUsageProjection;
+}) {
+  if (context?.ratio === null || context?.ratio === undefined) return null;
+  const percent = Math.round(context.ratio * 100);
+  const visualRatio = Math.max(0, Math.min(1, context.ratio));
+  const label = contextUsageLabel(context);
+  const tooltip = label ?? `Context ${String(percent)}%`;
+  const radius = 7;
+  return (
+    <span
+      className="context-usage-indicator"
+      role="img"
+      tabIndex={0}
+      aria-label={tooltip}
+      data-tooltip={tooltip}
+    >
+      <svg aria-hidden="true" viewBox="0 0 20 20">
+        <circle className="context-usage-track" cx="10" cy="10" r={radius} />
+        <circle
+          className="context-usage-progress"
+          cx="10"
+          cy="10"
+          r={radius}
+          pathLength="1"
+          strokeDasharray={`${visualRatio} 1`}
+        />
+      </svg>
+      <span className="sr-only">{tooltip}</span>
+    </span>
+  );
 }
 
 function formatTokenCount(value: number): string {

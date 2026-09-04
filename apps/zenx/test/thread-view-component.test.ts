@@ -34,6 +34,39 @@ test("composer textarea opts into bounded content-driven growth", () => {
   assert.match(html, /<textarea[^>]*data-autogrow="true"/u);
 });
 
+test("context usage renders beside the composer with honest tooltip details", () => {
+  const html = renderTurns([], [], emptyComposerState(), {}, {
+    thread: { responseCount: 1, inputTokens: 10, outputTokens: 2 },
+    turns: {},
+    context: {
+      inputTokens: 78_200,
+      inputTokenSource: "estimated",
+      contextWindow: 262_000,
+      ratio: 0.3,
+    },
+  });
+  assert.match(html, /class="composer-model-menu"|class="context-usage-indicator"/u);
+  assert.match(html, /class="context-usage-indicator"[^>]*aria-label="Context 30% est/u);
+  assert.match(html, /data-tooltip="Context 30% est/u);
+  assert.match(html, /stroke-dasharray="0\.3 1"/u);
+});
+
+test("context indicator hides unknown ratio instead of presenting zero", () => {
+  const unknown = renderTurns([], [], emptyComposerState(), {}, {
+    thread: { responseCount: 1, inputTokens: 10, outputTokens: 2 },
+    turns: {},
+    context: { inputTokens: null, inputTokenSource: null, contextWindow: null, ratio: null },
+  });
+  assert.doesNotMatch(unknown, /context-usage-indicator/u);
+  const over = renderTurns([], [], emptyComposerState(), {}, {
+    thread: { responseCount: 1, inputTokens: 10, outputTokens: 2 },
+    turns: {},
+    context: { inputTokens: 120, inputTokenSource: "provider", contextWindow: 100, ratio: 1.2 },
+  });
+  assert.match(over, /aria-label="Context 120%/u);
+  assert.match(over, /stroke-dasharray="1 1"/u);
+});
+
 test("composer textarea grows to its cap, scrolls, and shrinks after deletion", async () => {
   await withDom(async (root) => {
     let contentHeight = 240;

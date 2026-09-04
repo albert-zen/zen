@@ -93,7 +93,7 @@ import {
   type SidebarMode,
 } from "./thread-list.js";
 import { applyThreadViewNotification } from "./thread-view-state.js";
-import { ThreadView, contextUsageLabel, usageLabel } from "./ThreadView.js";
+import { ThreadView } from "./ThreadView.js";
 import { ZenXBrand } from "./ZenXBrand.js";
 
 type ProductPage = string;
@@ -1608,7 +1608,6 @@ export function App() {
             onRetryTitle={retrySelectedTitle}
             selectedSummary={selectedSummary}
             threadDetail={threadDetail}
-            threadUsage={threadUsage}
             titleProjection={titleProjection}
           />
         ) : page === "settings" ? (
@@ -1983,7 +1982,6 @@ function ConversationTitleBar({
   onRetryTitle,
   selectedSummary,
   threadDetail,
-  threadUsage,
   titleProjection,
 }: {
   onOpenSidebar(): void;
@@ -1992,7 +1990,6 @@ function ConversationTitleBar({
   onRetryTitle(): Promise<void>;
   selectedSummary: NativeThreadSummary;
   threadDetail: Thread | null;
-  threadUsage: ModelUsageProjection | undefined;
   titleProjection: ThreadTitleProjection | undefined;
 }) {
   return (
@@ -2022,12 +2019,6 @@ function ConversationTitleBar({
         </div>
       </div>
       <div className="top-actions">
-        {threadUsage === undefined ||
-        threadUsage.thread.responseCount === 0 ? null : (
-          <small className="thread-usage">
-            {threadHeaderUsageLabel(threadUsage)}
-          </small>
-        )}
         <button
           className="icon-button"
           type="button"
@@ -2041,12 +2032,6 @@ function ConversationTitleBar({
       </div>
     </div>
   );
-}
-
-function threadHeaderUsageLabel(threadUsage: ModelUsageProjection): string {
-  const context = contextUsageLabel(threadUsage.context);
-  const usage = usageLabel(threadUsage.thread, "Thread cache");
-  return context === null ? usage : `${context} · ${usage}`;
 }
 
 function PageTitleBar({
