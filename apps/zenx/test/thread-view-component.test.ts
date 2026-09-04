@@ -29,6 +29,41 @@ test("idle composer exposes one disabled Send action when empty", () => {
   assert.doesNotMatch(html, /Steer now/u);
 });
 
+test("composer textarea opts into bounded content-driven growth", () => {
+  const html = render(false, [], editComposer(emptyComposerState(), "draft"));
+  assert.match(html, /<textarea[^>]*data-autogrow="true"/u);
+});
+
+test("composer textarea grows to its cap, scrolls, and shrinks after deletion", async () => {
+  await withDom(async (root) => {
+    let contentHeight = 240;
+    Object.defineProperty(domTextAreaPrototype(), "scrollHeight", {
+      configurable: true,
+      get: () => contentHeight,
+    });
+    const props = (text: string) =>
+      createElement(ThreadView, {
+        approvals: [],
+        composer: editComposer(emptyComposerState(), text),
+        thread: thread([]),
+        onDraftChange: () => undefined,
+        onInterrupt: noop,
+        onRespondToApproval: noop,
+        onSubmit: noop,
+      });
+
+    await act(async () => root.render(props("long draft")));
+    const textarea = requiredElement<HTMLTextAreaElement>("#thread-composer");
+    assert.equal(textarea.style.height, "150px");
+    assert.equal(textarea.style.overflowY, "auto");
+
+    contentHeight = 42;
+    await act(async () => root.render(props("")));
+    assert.equal(textarea.style.height, "68px");
+    assert.equal(textarea.style.overflowY, "hidden");
+  });
+});
+
 test("running empty composer exposes Stop without locking the editor", () => {
   const html = render(true, []);
   assert.match(html, /aria-label="Message"/u);
@@ -950,6 +985,10 @@ function renderTurns(
       onSubmit: noop,
     }),
   );
+}
+
+function domTextAreaPrototype(): typeof HTMLTextAreaElement.prototype {
+  return window.HTMLTextAreaElement.prototype;
 }
 
 async function openReasoningRow(

@@ -136,6 +136,7 @@ export function ThreadView({
   const shouldFollowRef = useRef(true);
   const viewRef = useRef<HTMLDivElement>(null);
   const bottomZoneRef = useRef<HTMLDivElement>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const runningTurn = thread === null ? null : activeTurn(thread);
   const turns = thread?.turns ?? [];
   const pendingApprovals = approvals.filter(
@@ -179,6 +180,21 @@ export function ThreadView({
       observer.disconnect();
     };
   }, []);
+
+  useLayoutEffect(() => {
+    const textarea = composerTextareaRef.current;
+    if (textarea === null) return;
+
+    // Reset before measuring so deleting text shrinks the editor as well as
+    // adding text grows it. Keep the budget bounded so the transcript remains
+    // usable in short windows; the textarea itself scrolls beyond the cap.
+    const maxHeight = 150;
+    textarea.style.height = "auto";
+    const contentHeight = textarea.scrollHeight;
+    const height = Math.min(Math.max(contentHeight, 68), maxHeight);
+    textarea.style.height = `${height}px`;
+    textarea.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden";
+  }, [composer.draft.text]);
 
   const submit = (intent: ComposerIntent) => {
     if (composerDisabled || !hasDraft || submitting || blockedByImageCapability)
@@ -345,6 +361,7 @@ export function ThreadView({
           <textarea
             id="thread-composer"
             aria-label="Message"
+            data-autogrow="true"
             disabled={composerDisabled}
             onChange={(event) => onDraftChange(event.target.value)}
             onPaste={(event) => {
@@ -371,6 +388,7 @@ export function ThreadView({
                   : "Ask ZenX anything…"
                 : "Steer the current run…"
             }
+            ref={composerTextareaRef}
             rows={1}
             value={composer.draft.text}
           />

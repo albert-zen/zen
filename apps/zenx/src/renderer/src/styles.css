@@ -2070,11 +2070,11 @@ a:focus-visible {
 }
 .composer > textarea {
   width: 100%;
-  height: 68px;
-  max-height: 150px;
+  min-height: 68px;
+  max-height: min(150px, 35vh);
   display: block;
   resize: none;
-  overflow-y: auto;
+  overflow-y: hidden;
   scrollbar-width: thin;
   scrollbar-color: var(--border-control) transparent;
   padding: 15px 16px 6px;
