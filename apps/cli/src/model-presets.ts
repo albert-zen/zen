@@ -1,6 +1,6 @@
 import type { ModelCatalogEntryInput } from "../../../src/model-catalog.js";
 
-export const BUILTIN_MODEL_CATALOG_PRESET_VERSION = 3;
+export const BUILTIN_MODEL_CATALOG_PRESET_VERSION = 4;
 
 export type BuiltinModelCatalogPresetKind =
   "fake" | "openai-subscription" | "openai-compatible";
@@ -18,7 +18,8 @@ const PRESETS: Readonly<
       supportedReasoningEfforts: Object.freeze(["medium"]),
       defaultReasoningEffort: "medium",
       inputModalities: Object.freeze(["text" as const]),
-      contextWindow: null,
+      // Synthetic local ceiling used only by the deterministic fake adapter.
+      contextWindow: 16_384,
     }),
   ]),
   "openai-subscription": Object.freeze([
@@ -67,7 +68,14 @@ export function legacyModelCatalogEntries(
   return Object.freeze(
     modelIds.map((id) => {
       const preset = presetById.get(id);
-      return preset ?? Object.freeze({ id, source: "legacy" as const });
+      return (
+        preset ??
+        Object.freeze({
+          id,
+          source: "legacy" as const,
+          ...(kind === "fake" ? { contextWindow: 16_384 } : {}),
+        })
+      );
     }),
   );
 }
@@ -83,13 +91,14 @@ function subscriptionPreset(
     hidden: false,
     source: "preset",
     // These capabilities are the fixed host contract, not guesses from the
-    // model id. The Provider context window remains unconfirmed.
+    // model id. The context window is Zen's user-selected local cap, not a
+    // claim about the Provider's advertised maximum.
     supportedReasoningEfforts: Object.freeze([...supportedReasoningEfforts]),
     defaultReasoningEffort: "medium",
     // models.dev's versioned OpenAI catalog lists all five fixed subscription
     // models with text/image/pdf input. Zen currently projects only the two
     // modalities it implements.
     inputModalities: Object.freeze(["text" as const, "image" as const]),
-    contextWindow: null,
+    contextWindow: 256_000,
   });
 }

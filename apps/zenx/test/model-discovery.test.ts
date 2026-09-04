@@ -224,7 +224,10 @@ test("a conclusive image probe cannot overwrite changed model metadata", async (
       resolveTransport: async () => undefined,
     });
     await requestStarted.promise;
-    const changedModel = { ...model, description: "new metadata" };
+    const changedModel = {
+      ...selectedProvider.models[0]!,
+      description: "new metadata",
+    };
     await service.editProviderProfile(
       "selected",
       { ...selectedProvider, models: [changedModel] },
@@ -508,7 +511,7 @@ test("all known Provider presets create with profile-scoped keys and discover Un
           type: "openai-compatible",
           models: structuredLegacyModelCatalog("openai-compatible", [
             "manual-seed",
-          ]),
+          ]).map((model) => ({ ...model, contextWindow: 32_768 })),
         },
         `${preset.providerProfileId}-key`,
       );
@@ -561,7 +564,12 @@ function compatibleProfile(
         name: "selected-runtime",
         displayName: "Selected",
         baseUrl: "https://selected.example.test/v1",
-        models: [model],
+        models: [
+          {
+            ...model,
+            contextWindow: model.contextWindow ?? 32_768,
+          },
+        ],
       },
     ],
     defaultModel: { providerProfileId: "selected", modelId: model.id },

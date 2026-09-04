@@ -52,7 +52,7 @@ test("structured tool results survive canonical persistence without entering mod
           providerProfileId: "structured",
           adapter: modelCalling("fixture_cards"),
           modelCatalog: new StaticModelCatalog([
-            { id: "fixture-model", isDefault: true },
+            { id: "fixture-model", isDefault: true, contextWindow: 32_768 },
           ]),
         },
       ]),
@@ -526,7 +526,7 @@ function createServer(
         providerProfileId: model.provider,
         adapter: model,
         modelCatalog: new StaticModelCatalog([
-          { id: "fixture-model", isDefault: true },
+          { id: "fixture-model", isDefault: true, contextWindow: 32_768 },
         ]),
       },
     ]),

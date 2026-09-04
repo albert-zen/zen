@@ -186,8 +186,12 @@ export class CodexConnection {
           (entry) => entry.isDefault && !isCodexModelListRunnable(entry),
         );
         if (unavailableDefault !== undefined) {
+          const missingContext =
+            unavailableDefault.model.contextWindow === null
+              ? "; configure a positive context window"
+              : "; configure a manual capability override";
           throw new Error(
-            `Default model ${unavailableDefault.model.id} from provider profile ${unavailableDefault.providerProfileId} cannot be represented as a runnable codex-cli 0.146.0 model/list entry; configure a manual capability override`,
+            `Default model ${unavailableDefault.model.id} from provider profile ${unavailableDefault.providerProfileId} cannot be represented as a runnable codex-cli 0.146.0 model/list entry${missingContext}`,
           );
         }
         const models = catalog.filter(isCodexModelListRunnable);
@@ -1236,6 +1240,7 @@ function reasoningItemKey(
 
 function isCodexModelListRunnable(entry: ListedProviderModel): boolean {
   return (
+    entry.model.contextWindow !== null &&
     entry.model.supportedReasoningEfforts !== null &&
     entry.model.inputModalities !== null &&
     entry.model.inputModalities.includes("text") &&

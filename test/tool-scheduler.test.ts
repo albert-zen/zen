@@ -106,7 +106,9 @@ function runtimeServer(options: {
   maxConcurrentToolBodies?: number;
   approvalPolicy?: "always" | "never";
 }): ZenAppServer {
-  const catalog = new StaticModelCatalog([{ id: "model", isDefault: true }]);
+  const catalog = new StaticModelCatalog([
+    { id: "model", isDefault: true, contextWindow: 32_768 },
+  ]);
   return new ZenAppServer({
     journal: new InMemoryThreadJournal(),
     runtime: new AgentRuntime({
@@ -548,7 +550,9 @@ test("both presentation freezes direct and nested capabilities through scheduler
       }
     },
   };
-  const catalog = new StaticModelCatalog([{ id: "model", isDefault: true }]);
+  const catalog = new StaticModelCatalog([
+    { id: "model", isDefault: true, contextWindow: 32_768 },
+  ]);
   const server = new ZenAppServer({
     journal: new InMemoryThreadJournal(),
     runtime: new AgentRuntime({
@@ -843,7 +847,9 @@ test("parallel-safe preparation leases survive bundle removal while queued", asy
     },
   );
   const environment = new ToolEnvironment({ bundles: [bundle] });
-  const catalog = new StaticModelCatalog([{ id: "model", isDefault: true }]);
+  const catalog = new StaticModelCatalog([
+    { id: "model", isDefault: true, contextWindow: 32_768 },
+  ]);
   const model = batchModel([
     { callId: "first", name: "parallel" },
     { callId: "second", name: "parallel" },

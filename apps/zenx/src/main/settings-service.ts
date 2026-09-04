@@ -27,6 +27,7 @@ import {
   type ZenXSidebarOrder,
   type ZenXSettingsUpdate,
   structuredLegacyModelCatalog,
+  validateConfiguredModelContexts,
   validateHostProfile,
 } from "./host-profile.js";
 import { ZenXCredentialVault } from "./credential-vault.js";
@@ -410,6 +411,11 @@ export class ZenXSettingsService {
     const modelMetadata = provider.models.find(
       (model) => model.id === titleReference.modelId,
     )!;
+    if (modelMetadata.contextWindow === null) {
+      throw new Error(
+        `ZenX title model ${modelMetadata.id} requires a positive context window`,
+      );
+    }
     const reasoningEffort = modelMetadata.defaultReasoningEffort;
     if (provider.type === "fake") {
       return { adapter: null, model: titleReference.modelId, reasoningEffort };
@@ -482,6 +488,7 @@ export class ZenXSettingsService {
           [],
         )
       ).profile;
+      validateConfiguredModelContexts(validated);
       const credentialProfileId = validated.defaultModel.providerProfileId;
       for (const provider of validated.providerProfiles) {
         if (provider.type !== "openai-compatible") continue;
@@ -527,6 +534,12 @@ export class ZenXSettingsService {
         ...current,
         providerProfiles: [...current.providerProfiles, provider],
       });
+      validateConfiguredModelContexts(next, [
+        next.providerProfiles.find(
+          (candidate) =>
+            candidate.providerProfileId === provider.providerProfileId,
+        )!,
+      ]);
       if (
         provider.type === "openai-compatible" &&
         (apiKey === undefined || apiKey.length === 0)
@@ -570,6 +583,7 @@ export class ZenXSettingsService {
         defaultModel: options.defaultModel ?? current.defaultModel,
         titleModel: options.titleModel ?? current.titleModel,
       });
+      validateConfiguredModelContexts(next, [next.providerProfiles[index]!]);
       if (
         provider.type === "openai-compatible" &&
         (options.apiKey === undefined || options.apiKey.length === 0) &&

@@ -18,8 +18,8 @@ import { ShellToolRuntime, ToolEnvironment } from "../src/tool.js";
 function createServer(directory: string): ZenAppServer {
   const model = new FakeModel();
   const modelCatalog = new StaticModelCatalog([
-    { id: "fake", isDefault: true },
-    { id: "other" },
+    { id: "fake", isDefault: true, contextWindow: 32_768 },
+    { id: "other", contextWindow: 32_768 },
   ]);
   return new ZenAppServer({
     journal: new JsonlThreadJournal(path.join(directory, "threads")),

@@ -36,7 +36,7 @@ export interface ModelCatalogEntry {
   defaultReasoningEffort: ReasoningEffort | null;
   /** null means Unknown; [] means known to accept no supported input modality. */
   inputModalities: readonly ModelInputModality[] | null;
-  /** null means Unknown. */
+  /** null means incomplete discovery/legacy metadata and is not runnable. */
   contextWindow: number | null;
   source: ModelCatalogSource;
 }

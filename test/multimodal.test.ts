@@ -500,6 +500,7 @@ function createServer(options: {
       isDefault: true,
       supportedReasoningEfforts: ["medium"],
       defaultReasoningEffort: "medium",
+      contextWindow: 32_768,
       inputModalities:
         options.inputModalities === undefined
           ? ["text", "image"]
@@ -511,6 +512,7 @@ function createServer(options: {
       isDefault: false,
       supportedReasoningEfforts: ["medium"],
       defaultReasoningEffort: "medium",
+      contextWindow: 32_768,
       inputModalities: ["text"],
       source: "manual",
     },

@@ -283,7 +283,9 @@ its connection fields and structured model catalog; every model records display
 metadata, hidden state, source, reasoning efforts/default, input modalities, and
 context window. Capability `null` means Unknown while an empty array means known
 unsupported, so an ID-only discovery result is never promoted into guessed
-reasoning, image, or context-window support. Default and title models remain
+reasoning, image, or context-window support. Such a row remains visible in the
+Provider editor for remediation, but a positive context window is required
+before it can be saved, selected, or used. Default and title models remain
 explicit `(providerProfileId, modelId)` references. The hosted App Server
 registers every configured profile, so profiles may expose the same model ID
 without sharing metadata, routing, or credentials. Applying relevant
@@ -308,8 +310,9 @@ built-in verified catalog. It never infers capabilities from model names;
 unmatched or bare-ID results start in the safe text-only baseline. Discovery
 does not persist credentials or modify the configured/manual catalog on success
 or failure. A model with no configured reasoning capability sends no
-`reasoning_effort` and does not claim image input, but remains selectable through
-the fixed Codex 0.146.0 `model/list`. An explicit manual capability override or a
+`reasoning_effort` and does not claim image input. It remains selectable through
+the fixed Codex 0.146.0 `model/list` only after its context window is configured.
+An explicit manual capability override or a
 Provider result with parseable metadata can enable the relevant control. ZenX
 currently consumes that shared `model/list` codec, so default and title models
 must have known text input plus either a supported default effort or this
@@ -321,8 +324,9 @@ host: `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, and `gpt-5.4`.
 Sol and Terra expose `low / medium / high / xhigh / max / ultra`; Luna exposes
 those efforts through `max`; 5.5 and 5.4 expose `low / medium / high / xhigh`.
 All default to `medium`. All five have verified text and image input in the
-versioned external catalog; Zen does not yet project their PDF input. Context
-windows remain Unknown in Zen's curated preset.
+versioned external catalog; Zen does not yet project their PDF input. Their
+curated `contextWindow` is the user-selected 256,000-token Zen cap, not a claim
+about the Provider's advertised API maximum.
 
 Host profiles live under Electron `userData` without credentials. Compatible
 provider API keys are encrypted with Electron `safeStorage` and keyed by stable
@@ -337,8 +341,10 @@ v1 single-provider profiles and v2 string-catalog profiles migrate
 deterministically on first start and are immediately persisted as v3 without
 changing the selected `(providerProfileId, modelId)` or rewriting Threads. The
 migrated ID preserves the old runtime identity (`fake`, `openai-codex`, or the
-configured compatible-provider name); legacy unknown model IDs retain the prior
-`medium`/text runtime contract so existing configurations remain runnable.
+configured compatible-provider name). Legacy and ID-only rows remain readable
+with their prior `medium`/text metadata, but an absent context window leaves the
+model incomplete until it is filled in through Settings; runtime startup and
+selection fail explicitly rather than treating `Context unknown` as normal.
 
 Settings → Models & providers exposes every profile as an independently editable
 row. Global Default and Title selectors show both Provider display name and model

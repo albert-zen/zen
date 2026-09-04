@@ -333,7 +333,7 @@ function createToolServer(
         providerProfileId: "fixture",
         adapter: model,
         modelCatalog: new StaticModelCatalog([
-          { id: "fixture", isDefault: true },
+          { id: "fixture", isDefault: true, contextWindow: 32_768 },
         ]),
       },
     ]),

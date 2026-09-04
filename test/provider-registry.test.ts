@@ -42,6 +42,7 @@ test("routes duplicate model ids and reasoning effort through the fixed Codex wi
           supportedReasoningEfforts: ["low", "high"],
           defaultReasoningEffort: "low",
           inputModalities: ["text", "image"],
+          contextWindow: 32_768,
         },
       ]),
     },
@@ -54,11 +55,13 @@ test("routes duplicate model ids and reasoning effort through the fixed Codex wi
           isDefault: true,
           supportedReasoningEfforts: ["low", "high"],
           defaultReasoningEffort: "high",
+          contextWindow: 32_768,
         },
         {
           id: "high-only-model",
           supportedReasoningEfforts: ["high"],
           defaultReasoningEffort: "high",
+          contextWindow: 32_768,
         },
       ]),
     },
@@ -204,11 +207,13 @@ test("preserves compatible effort and falls back for incompatible Core changes",
             isDefault: true,
             supportedReasoningEfforts: ["medium"],
             defaultReasoningEffort: "medium",
+            contextWindow: 32_768,
           },
           {
             id: "compatible-model",
             supportedReasoningEfforts: ["low", "medium"],
             defaultReasoningEffort: "low",
+            contextWindow: 32_768,
           },
         ]),
       },
@@ -221,6 +226,7 @@ test("preserves compatible effort and falls back for incompatible Core changes",
             isDefault: true,
             supportedReasoningEfforts: ["low"],
             defaultReasoningEffort: "low",
+            contextWindow: 32_768,
           },
         ]),
       },
@@ -270,13 +276,13 @@ test("fixed model/list omits unknown and non-runnable entries without hiding val
       providerProfileId: "profile-a",
       adapter: recordingAdapter("adapter-a", []),
       modelCatalog: new StaticModelCatalog([
-        { id: "shared-model", isDefault: true },
+        { id: "shared-model", isDefault: true, contextWindow: 8_192 },
         {
-          id: "unknown",
+          id: "missing-context",
           source: "discovered",
-          supportedReasoningEfforts: null,
+          supportedReasoningEfforts: [],
           defaultReasoningEffort: null,
-          inputModalities: null,
+          inputModalities: ["text"],
           contextWindow: null,
         },
         {
@@ -304,8 +310,8 @@ test("fixed model/list omits unknown and non-runnable entries without hiding val
     await client.initialize({ name: "test", title: "Test", version: "1" });
     const projected = registry.listModels();
     assert.equal(
-      projected.find((entry) => entry.model.id === "unknown")?.model
-        .supportedReasoningEfforts,
+      projected.find((entry) => entry.model.id === "missing-context")?.model
+        .contextWindow,
       null,
     );
     assert.deepEqual(
@@ -333,14 +339,14 @@ test("manual capability override makes an otherwise unknown model visible in fix
       providerProfileId: "profile-a",
       adapter: recordingAdapter("adapter-a", []),
       modelCatalog: new StaticModelCatalog([
-        { id: "shared-model", isDefault: true },
+        { id: "shared-model", isDefault: true, contextWindow: 8_192 },
         {
           id: "discovered-only",
           source: "manual",
           supportedReasoningEfforts: ["low", "high"],
           defaultReasoningEffort: "high",
           inputModalities: ["text", "image"],
-          contextWindow: null,
+          contextWindow: 32_768,
         },
       ]),
     },
@@ -388,14 +394,14 @@ test("text-only models are selectable, run without an effort, and remain in mode
       providerProfileId: "profile-a",
       adapter: recordingAdapter("adapter-a", requests),
       modelCatalog: new StaticModelCatalog([
-        { id: "shared-model", isDefault: true },
+        { id: "shared-model", isDefault: true, contextWindow: 8_192 },
         {
           id: "text-only-model",
           source: "discovered",
           supportedReasoningEfforts: [],
           defaultReasoningEffort: null,
           inputModalities: ["text"],
-          contextWindow: null,
+          contextWindow: 32_768,
         },
       ]),
     },
@@ -445,6 +451,35 @@ test("text-only models are selectable, run without an effort, and remain in mode
   }
 });
 
+test("rejects a model with incomplete context metadata before runtime selection", () => {
+  const registry = new ProviderRegistry([
+    {
+      providerProfileId: "profile-a",
+      adapter: recordingAdapter("adapter-a", []),
+      modelCatalog: new StaticModelCatalog([
+        {
+          id: "incomplete",
+          isDefault: true,
+          supportedReasoningEfforts: [],
+          defaultReasoningEffort: null,
+          inputModalities: ["text"],
+          contextWindow: null,
+          source: "discovered",
+        },
+      ]),
+    },
+  ]);
+
+  assert.throws(
+    () =>
+      registry.resolve({
+        providerProfileId: "profile-a",
+        modelId: "incomplete",
+      }),
+    hasZenCode("context_window_unknown"),
+  );
+});
+
 test("rejects an explicit effort for unknown reasoning without mutating the Thread or invoking the adapter", async () => {
   const requests: ModelRequest[] = [];
   const server = createRegistryServer({
@@ -453,14 +488,14 @@ test("rejects an explicit effort for unknown reasoning without mutating the Thre
         providerProfileId: "profile-a",
         adapter: recordingAdapter("adapter-a", requests),
         modelCatalog: new StaticModelCatalog([
-          { id: "shared-model", isDefault: true },
+          { id: "shared-model", isDefault: true, contextWindow: 32_768 },
           {
             id: "discovered-only",
             source: "discovered",
             supportedReasoningEfforts: null,
             defaultReasoningEffort: null,
             inputModalities: null,
-            contextWindow: null,
+            contextWindow: 32_768,
           },
         ]),
       },
@@ -628,8 +663,8 @@ test("reads legacy provider/model Items without rewriting the journal", async ()
         providerProfileId: "profile-a",
         adapter,
         modelCatalog: new StaticModelCatalog([
-          { id: "shared-model", isDefault: true },
-          { id: "second-model" },
+          { id: "shared-model", isDefault: true, contextWindow: 32_768 },
+          { id: "second-model", contextWindow: 32_768 },
         ]),
       },
     ]),
@@ -785,6 +820,7 @@ function catalog(): StaticModelCatalog {
       isDefault: true,
       supportedReasoningEfforts: ["low", "high"],
       defaultReasoningEffort: "low",
+      contextWindow: 32_768,
     },
   ]);
 }

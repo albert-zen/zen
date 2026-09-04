@@ -46,7 +46,9 @@ function runtimeServer(options: {
   approvalPolicy?: "always" | "never";
   toolPresentation?: ToolPresentation;
 }): ZenAppServer {
-  const catalog = new StaticModelCatalog([{ id: "model", isDefault: true }]);
+  const catalog = new StaticModelCatalog([
+    { id: "model", isDefault: true, contextWindow: 32_768 },
+  ]);
   return new ZenAppServer({
     journal: options.journal ?? new InMemoryThreadJournal(),
     runtime: new AgentRuntime({
@@ -328,7 +330,7 @@ test("a run_code Worker cannot guess a tool omitted from its frozen sample", asy
         providerProfileId: model.provider,
         adapter: model,
         modelCatalog: new StaticModelCatalog([
-          { id: "model", isDefault: true },
+          { id: "model", isDefault: true, contextWindow: 32_768 },
         ]),
       },
     ]),

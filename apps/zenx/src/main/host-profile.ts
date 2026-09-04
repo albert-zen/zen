@@ -313,7 +313,13 @@ export function validateHostProfile(
 function validateRunnableModel(
   model: ZenXModelCatalogEntry,
   label: "default" | "title",
+  options: { requireContextWindow?: boolean } = {},
 ): void {
+  if (options.requireContextWindow === true && model.contextWindow === null) {
+    throw new Error(
+      `ZenX ${label} model ${model.id} requires a positive context window`,
+    );
+  }
   if (
     model.supportedReasoningEfforts !== null &&
     model.supportedReasoningEfforts.length === 0 &&
@@ -340,6 +346,20 @@ function validateRunnableModel(
       `ZenX ${label} model requires known text input modalities or manual override`,
     );
   }
+}
+
+function validateRunnableModelReference(
+  profile: ZenXHostProfile,
+  reference: ZenXModelReference,
+  label: "default" | "title",
+  options: { requireContextWindow?: boolean } = {},
+): void {
+  const model = profile.providerProfiles
+    .find(
+      (provider) => provider.providerProfileId === reference.providerProfileId,
+    )!
+    .models.find((candidate) => candidate.id === reference.modelId)!;
+  validateRunnableModel(model, label, options);
 }
 
 export function migratedProviderProfileId(
@@ -435,6 +455,12 @@ export function hostConfigFromProfile(
   },
 ): ZenXHostConfig {
   const validated = validateHostProfile(profile);
+  validateRunnableModelReference(validated, validated.defaultModel, "default", {
+    requireContextWindow: true,
+  });
+  validateRunnableModelReference(validated, validated.titleModel, "title", {
+    requireContextWindow: true,
+  });
   return {
     cwd: validated.workspace ?? path.resolve(options.fallbackWorkspace),
     dataDirectory: options.dataDirectory,
@@ -454,6 +480,21 @@ export function hostConfigFromProfile(
     defaultSelection: validated.defaultModel,
     secretEnvironmentVariables: [],
   };
+}
+
+export function validateConfiguredModelContexts(
+  profile: ZenXHostProfile,
+  providers: readonly ZenXProviderProfile[] = profile.providerProfiles,
+): void {
+  for (const provider of providers) {
+    for (const model of provider.models) {
+      if (model.contextWindow === null) {
+        throw new Error(
+          `Provider profile ${provider.providerProfileId} model ${model.id} requires a positive context window`,
+        );
+      }
+    }
+  }
 }
 
 function validateToolPresentation(value: unknown): ToolPresentation {

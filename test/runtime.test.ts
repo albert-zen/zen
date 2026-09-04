@@ -69,7 +69,9 @@ function createServer(
   const model = options.model ?? new FakeModel();
   const modelCatalog =
     options.modelCatalog ??
-    new StaticModelCatalog([{ id: "fake", isDefault: true }]);
+    new StaticModelCatalog([
+      { id: "fake", isDefault: true, contextWindow: 32_768 },
+    ]);
   return new ZenAppServer({
     journal: options.journal ?? new InMemoryThreadJournal(),
     runtime:
@@ -125,8 +127,8 @@ test("requires one visible default while hidden models remain addressable", () =
     /default must be visible/u,
   );
   const catalog = new StaticModelCatalog([
-    { id: "model-one", isDefault: true },
-    { id: "model-hidden", hidden: true },
+    { id: "model-one", isDefault: true, contextWindow: 32_768 },
+    { id: "model-hidden", hidden: true, contextWindow: 32_768 },
   ]);
   assert.equal(catalog.defaultModel().id, "model-one");
   assert.equal(catalog.get("model-hidden")?.hidden, true);
@@ -465,8 +467,8 @@ test("derives each turn model from append-only configuration changes", async () 
     },
   };
   const catalog = new StaticModelCatalog([
-    { id: "model-one", isDefault: true },
-    { id: "model-two" },
+    { id: "model-one", isDefault: true, contextWindow: 32_768 },
+    { id: "model-two", contextWindow: 32_768 },
   ]);
   const server = createServer({ journal, model, modelCatalog: catalog });
   const thread = await server.startThread({ model: "model-one" });
@@ -532,8 +534,8 @@ test("freezes an active-turn model while real changes apply next", async () => {
   const server = createServer({
     model: slowModel,
     modelCatalog: new StaticModelCatalog([
-      { id: "fake", isDefault: true },
-      { id: "other" },
+      { id: "fake", isDefault: true, contextWindow: 32_768 },
+      { id: "other", contextWindow: 32_768 },
     ]),
   });
   const thread = await server.startThread();
@@ -1653,7 +1655,9 @@ test("keeps stale open turns interrupted while only the current turn is active",
   const server = createServer({
     journal,
     model: slowModel,
-    modelCatalog: new StaticModelCatalog([{ id: "slow", isDefault: true }]),
+    modelCatalog: new StaticModelCatalog([
+      { id: "slow", isDefault: true, contextWindow: 32_768 },
+    ]),
   });
 
   assert.equal(
@@ -2336,8 +2340,8 @@ test("refuses to run a persisted thread through a different provider", async () 
   const server = createServer({
     journal,
     modelCatalog: new StaticModelCatalog([
-      { id: "original-model", isDefault: true },
-      { id: "other-model" },
+      { id: "original-model", isDefault: true, contextWindow: 32_768 },
+      { id: "other-model", contextWindow: 32_768 },
     ]),
   });
 
@@ -2431,11 +2435,12 @@ test("runs an OpenAI-compatible tool round through the same Runtime and ItemList
   const server = createServer({
     model,
     modelCatalog: new StaticModelCatalog([
-      { id: "fake", isDefault: true },
+      { id: "fake", isDefault: true, contextWindow: 32_768 },
       {
         id: "vendor/qwen3.8-max",
         supportedReasoningEfforts: ["medium", "high"],
         defaultReasoningEffort: "medium",
+        contextWindow: 32_768,
       },
     ]),
   });

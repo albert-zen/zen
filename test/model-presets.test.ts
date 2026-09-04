@@ -7,8 +7,8 @@ import {
   legacyModelCatalogEntries,
 } from "../apps/cli/src/model-presets.js";
 
-test("built-in model presets are versioned and keep unconfirmed facts unknown", () => {
-  assert.equal(BUILTIN_MODEL_CATALOG_PRESET_VERSION, 3);
+test("built-in model presets are versioned and provide runnable context windows", () => {
+  assert.equal(BUILTIN_MODEL_CATALOG_PRESET_VERSION, 4);
   const subscription = builtInModelCatalogPreset("openai-subscription");
   assert.deepEqual(
     subscription.map((entry) => entry.id),
@@ -32,7 +32,11 @@ test("built-in model presets are versioned and keep unconfirmed facts unknown", 
     subscription.map((entry) => entry.inputModalities),
     Array.from({ length: 5 }, () => ["text", "image"]),
   );
-  assert.equal(subscription[0]?.contextWindow, null);
+  assert.deepEqual(
+    subscription.map((entry) => entry.contextWindow),
+    Array.from({ length: 5 }, () => 256_000),
+  );
+  assert.equal(builtInModelCatalogPreset("fake")[0]?.contextWindow, 16_384);
   assert.deepEqual(builtInModelCatalogPreset("openai-compatible"), []);
 });
 

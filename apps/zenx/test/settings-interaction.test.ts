@@ -73,7 +73,7 @@ function model(id: string): ZenXModelCatalogEntry {
     supportedReasoningEfforts: ["medium"],
     defaultReasoningEffort: "medium",
     inputModalities: ["text" as const],
-    contextWindow: null,
+    contextWindow: 32_768,
     source: "legacy",
   };
 }
@@ -211,6 +211,7 @@ test("Provider discovery starts text-only and manual overrides persist", async (
     source: "discovered" as const,
   };
   let edited: ZenXProviderProfile | undefined;
+  let editCalls = 0;
   const harness = await mountSettings("models", {
     initialSettings: multiProviderSettings,
     discoverProvider: async () => ({
@@ -221,6 +222,7 @@ test("Provider discovery starts text-only and manual overrides persist", async (
       ],
     }),
     editProvider: async (_id, provider) => {
+      editCalls += 1;
       edited = provider;
       return {
         ...multiProviderSettings,
@@ -244,8 +246,21 @@ test("Provider discovery starts text-only and manual overrides persist", async (
     assert.equal(requiredInput("Model 3").value, "alpha-vision");
     assert.match(
       document.body.textContent ?? "",
-      /text only · reasoning not configured · text · context unknown/u,
+      /text only · reasoning not configured · text · context required/u,
     );
+    assert.equal(
+      Array.from(labeledSelect("Default model")?.options ?? []).some(
+        (option) => option.textContent?.trim() === "Alpha · alpha-vision",
+      ),
+      false,
+    );
+    assert.ok(labelControl("Model 3 context window (Required)", "input"));
+    await click(exactButtonRequired("Save provider"));
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /model alpha-vision requires a positive context window/u,
+    );
+    assert.equal(editCalls, 0);
 
     const reasoningMode = labeledSelect("Model 3 reasoning metadata");
     const modalities = labeledSelect("Model 3 input modalities");
@@ -261,7 +276,10 @@ test("Provider discovery starts text-only and manual overrides persist", async (
       "high",
     );
     await changeControl(modalities, "text-image");
-    await changeControl(requiredInput("Model 3 context window"), "128000");
+    await changeControl(
+      requiredInput("Model 3 context window (Required)"),
+      "128000",
+    );
     await click(exactButtonRequired("Save provider"));
     await waitFor(() => edited);
     const configured = edited?.models.find(
@@ -356,8 +374,16 @@ test("Add custom provider submits an opaque identity, credential, and repeatable
     );
     await changeControl(requiredInput("API key"), "secret-replacement");
     await changeControl(requiredInput("Model 1"), "shared-model");
+    await changeControl(
+      requiredInput("Model 1 context window (Required)"),
+      "32768",
+    );
     await click(exactButtonRequired("Add model"));
     await changeControl(requiredInput("Model 2"), "acme-large");
+    await changeControl(
+      requiredInput("Model 2 context window (Required)"),
+      "65536",
+    );
     await click(exactButtonRequired("Add provider"));
     await waitFor(() => added);
 
@@ -375,7 +401,7 @@ test("Add custom provider submits an opaque identity, credential, and repeatable
           entry.supportedReasoningEfforts?.length === 0 &&
           entry.inputModalities?.length === 1 &&
           entry.inputModalities[0] === "text" &&
-          entry.contextWindow === null,
+          entry.contextWindow !== null,
       ),
     );
     assert.notEqual(added?.provider.providerProfileId, "Acme AI");
@@ -416,6 +442,10 @@ test("Add reconciles an applied provider when host restart rejects", async () =>
     );
     await changeControl(requiredInput("API key"), "committed-key");
     await changeControl(requiredInput("Model 1"), "committed-model");
+    await changeControl(
+      requiredInput("Model 1 context window (Required)"),
+      "32768",
+    );
     await click(exactButtonRequired("Add provider"));
     await waitFor(
       () =>
@@ -525,6 +555,10 @@ test("known Provider choice pre-fills its stable profile identity and connection
     assert.equal(requiredInput("Base URL").value, "https://api.deepseek.com");
     await changeControl(requiredInput("API key"), "deepseek-key");
     await changeControl(requiredInput("Model 1"), "deepseek-chat");
+    await changeControl(
+      requiredInput("Model 1 context window (Required)"),
+      "65536",
+    );
     await click(exactButtonRequired("Add provider"));
     await waitFor(() => added);
     assert.equal(added?.provider.providerProfileId, "deepseek");
@@ -861,6 +895,10 @@ test("Validation and mutation failures keep the provider editor recoverable", as
     );
     await changeControl(requiredInput("API key"), "new-key");
     await changeControl(requiredInput("Model 1"), "recover-model");
+    await changeControl(
+      requiredInput("Model 1 context window (Required)"),
+      "32768",
+    );
     await click(exactButtonRequired("Add provider"));
     await waitFor(() =>
       document

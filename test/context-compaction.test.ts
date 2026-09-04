@@ -292,7 +292,7 @@ test("automatically compacts exactly at 80% using the highest Provider usage sam
   );
 });
 
-test("automatic compaction does not guess below threshold, without usage, or with an unknown window", async (t) => {
+test("automatic compaction does not guess below threshold or from missing or invalid usage", async (t) => {
   const cases = [
     {
       name: "below threshold",
@@ -309,11 +309,6 @@ test("automatic compaction does not guess below threshold, without usage, or wit
       name: "partially invalid usage",
       contextWindow: 100,
       usage: { inputTokens: 80, outputTokens: -1 },
-    },
-    {
-      name: "unknown window",
-      contextWindow: null,
-      usage: { inputTokens: 80, outputTokens: 1 },
     },
   ] as const;
   for (const scenario of cases) {
@@ -1059,8 +1054,8 @@ test("freezes the admitted Provider selection while a settings update waits", as
     journal: new InMemoryThreadJournal(),
     model,
     modelCatalog: new StaticModelCatalog([
-      { id: "recording-model", isDefault: true },
-      { id: "other-model" },
+      { id: "recording-model", isDefault: true, contextWindow: 32_768 },
+      { id: "other-model", contextWindow: 32_768 },
     ]),
   });
   const thread = await server.startThread();
@@ -1104,7 +1099,9 @@ function createServer(options: {
 }): ZenAppServer {
   const modelCatalog =
     options.modelCatalog ??
-    new StaticModelCatalog([{ id: "recording-model", isDefault: true }]);
+    new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 32_768 },
+    ]);
   return new ZenAppServer({
     journal: options.journal,
     runtime:

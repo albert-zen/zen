@@ -63,9 +63,10 @@ test("migrates legacy environment config once without persisting or inheriting i
     assert.deepEqual((await first.publicSettings()).profile.contextCompaction, {
       summaryInstruction: "Keep the migration facts concise.",
     });
-    assert.deepEqual((await first.hostConfig()).contextCompaction, {
-      summaryInstruction: "Keep the migration facts concise.",
-    });
+    await assert.rejects(
+      first.hostConfig(),
+      /default model model-a requires a positive context window/u,
+    );
 
     const second = new ZenXSettingsService({
       userDataDirectory: directory,
@@ -1185,11 +1186,9 @@ test("a vault migration failure publishes no settings and succeeds on explicit r
     });
     await restarted.initialize({});
     assert.equal((await restarted.publicSettings()).profile.version, 3);
-    assert.equal(
-      await restarted
-        .hostConfig()
-        .then((config) => config.defaultSelection?.providerProfileId),
-      "legacy",
+    await assert.rejects(
+      restarted.hostConfig(),
+      /default model legacy-model requires a positive context window/u,
     );
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -1251,6 +1250,62 @@ test("adds, edits, and deletes Provider profiles with atomic replacements and is
     assert.equal(await vault.readApiKey("first"), undefined);
     assert.equal(await vault.readApiKey("second"), "second-key");
     assert.deepEqual(publicSettings.apiKeyProviderProfileIds, ["second"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("provider add, edit, and settings save reject incomplete context metadata without persisting", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-required-context-"),
+  );
+  const vault = new ZenXCredentialVault(
+    path.join(directory, "credentials.vault"),
+    encryption,
+  );
+  try {
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault,
+      subscription: inactiveSubscription(),
+    });
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    const configured = compatibleProfile("required").providerProfiles[0]!;
+    const incomplete = {
+      ...configured,
+      models: configured.models.map((model) => ({
+        ...model,
+        contextWindow: null,
+        source: "discovered" as const,
+      })),
+    };
+
+    await assert.rejects(
+      service.addProviderProfile(incomplete, "required-key"),
+      /Provider profile required.*model required-model.*positive context window/u,
+    );
+    await service.addProviderProfile(configured, "required-key");
+    await assert.rejects(
+      service.editProviderProfile("required", incomplete),
+      /Provider profile required.*model required-model.*positive context window/u,
+    );
+    const before = await service.publicSettings();
+    await assert.rejects(
+      service.save({
+        ...before.profile,
+        providerProfiles: before.profile.providerProfiles.map((provider) =>
+          provider.providerProfileId === "required" ? incomplete : provider,
+        ),
+      }),
+      /Provider profile required.*model required-model.*positive context window/u,
+    );
+    assert.equal(
+      (await service.publicSettings()).profile.providerProfiles.find(
+        (provider) => provider.providerProfileId === "required",
+      )?.models[0]?.contextWindow,
+      32_768,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -1609,7 +1664,10 @@ function fakeProfile(model: string): ZenXHostProfile {
         providerProfileId: "fake",
         type: "fake",
         displayName: "Local demo",
-        models: structuredLegacyModelCatalog("fake", [model]),
+        models: structuredLegacyModelCatalog("fake", [model]).map((entry) => ({
+          ...entry,
+          contextWindow: 16_384,
+        })),
       },
     ],
     defaultModel: { providerProfileId: "fake", modelId: model },
@@ -1635,7 +1693,7 @@ function compatibleProfile(name: string): ZenXHostProfile {
         baseUrl: `https://${name}.example.test/v1`,
         models: structuredLegacyModelCatalog("openai-compatible", [
           `${name}-model`,
-        ]),
+        ]).map((entry) => ({ ...entry, contextWindow: 32_768 })),
       },
     ],
     defaultModel: { providerProfileId: name, modelId: `${name}-model` },

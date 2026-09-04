@@ -1537,12 +1537,12 @@ function ModelCapabilityEditor({
           </select>
         </label>
         <label className="field">
-          <span>{`Model ${index + 1} context window`}</span>
+          <span>{`Model ${index + 1} context window (Required)`}</span>
           <input
             min="1"
             step="1"
             type="number"
-            placeholder="Unknown"
+            placeholder="Required"
             value={model.contextWindow ?? ""}
             onChange={(event) =>
               onChange(
@@ -1777,6 +1777,15 @@ function validateProviderEditor(
   ) {
     return "Model IDs must be unique within this Provider profile";
   }
+  const missingContext = provider.models.find(
+    (model) =>
+      model.contextWindow === null ||
+      !Number.isSafeInteger(model.contextWindow) ||
+      model.contextWindow <= 0,
+  );
+  if (missingContext !== undefined) {
+    return `Provider profile ${provider.providerProfileId} model ${missingContext.id} requires a positive context window`;
+  }
   if (provider.type !== "openai-compatible") return null;
   if (provider.name.trim().length === 0) return "Provider name is required";
   if (mode === "add" && apiKey.trim().length === 0)
@@ -1900,6 +1909,7 @@ function modelReferenceExists(
 
 function isRunnableModel(model: ZenXModelCatalogEntry): boolean {
   return (
+    model.contextWindow !== null &&
     model.supportedReasoningEfforts !== null &&
     ((model.defaultReasoningEffort !== null &&
       model.supportedReasoningEfforts.includes(model.defaultReasoningEffort)) ||
@@ -2301,7 +2311,8 @@ function legacyModelCatalogEntry(id: string): ZenXModelCatalogEntry {
     supportedReasoningEfforts: ["medium"],
     defaultReasoningEffort: "medium",
     inputModalities: ["text"],
-    contextWindow: null,
+    // The fake adapter uses a synthetic local ceiling, not provider metadata.
+    contextWindow: 16_384,
     source: "legacy",
   };
 }
@@ -2389,7 +2400,7 @@ function modelCapabilitySummary(model: ZenXModelCatalogEntry): string {
         : model.inputModalities.join(" + ");
   const context =
     model.contextWindow === null
-      ? "context unknown"
+      ? "context required"
       : `${model.contextWindow.toLocaleString()} context`;
   return `${reasoning} · ${modalities} · ${context}`;
 }

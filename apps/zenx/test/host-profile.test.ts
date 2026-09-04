@@ -29,7 +29,7 @@ const profile: ZenXHostProfile = {
         "qwen3",
         "deepseek-r1",
         "gpt-5.6-luna",
-      ]),
+      ]).map((model) => ({ ...model, contextWindow: 32_768 })),
     },
   ],
   defaultModel: { providerProfileId: "local", modelId: "qwen3" },
@@ -135,6 +135,62 @@ test("round-trips credential-free v3 profiles and builds all host registry entri
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("legacy profiles remain readable but an incomplete default or title model cannot build runtime config", async () => {
+  const incomplete = {
+    ...profile.providerProfiles[0]!.models[0]!,
+    contextWindow: null,
+    source: "discovered" as const,
+  };
+  const legacyTolerant = validateHostProfile({
+    ...profile,
+    providerProfiles: [
+      {
+        ...profile.providerProfiles[0]!,
+        models: [incomplete, ...profile.providerProfiles[0]!.models.slice(1)],
+      },
+    ],
+  });
+
+  assert.equal(
+    legacyTolerant.providerProfiles[0]?.models[0]?.contextWindow,
+    null,
+  );
+  assert.throws(
+    () =>
+      hostConfigFromProfile(legacyTolerant, {
+        dataDirectory: path.join(os.tmpdir(), "data"),
+        subscriptionProfilePath: path.join(os.tmpdir(), "auth"),
+        fallbackWorkspace: path.join(os.tmpdir(), "fallback"),
+        apiKeys: { local: "secret" },
+      }),
+    /default model qwen3.*positive context window/u,
+  );
+
+  const titleIncomplete = validateHostProfile({
+    ...profile,
+    providerProfiles: [
+      {
+        ...profile.providerProfiles[0]!,
+        models: profile.providerProfiles[0]!.models.map((model) =>
+          model.id === "gpt-5.6-luna"
+            ? { ...model, contextWindow: null, source: "legacy" as const }
+            : model,
+        ),
+      },
+    ],
+  });
+  assert.throws(
+    () =>
+      hostConfigFromProfile(titleIncomplete, {
+        dataDirectory: path.join(os.tmpdir(), "data"),
+        subscriptionProfilePath: path.join(os.tmpdir(), "auth"),
+        fallbackWorkspace: path.join(os.tmpdir(), "fallback"),
+        apiKeys: { local: "secret" },
+      }),
+    /title model gpt-5\.6-luna.*positive context window/u,
+  );
 });
 
 test("validates and projects an opt-in maximum tool round setting", () => {

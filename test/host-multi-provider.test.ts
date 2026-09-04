@@ -267,7 +267,10 @@ test("multi-provider host rejects duplicate profiles, catalogs, and dangling def
         providers: [
           {
             ...compatible("profile-a", "secret-a"),
-            models: ["shared-model", "shared-model"],
+            modelCatalog: [
+              { id: "shared-model", contextWindow: 32_768 },
+              { id: "shared-model", contextWindow: 32_768 },
+            ],
           },
         ],
         defaultSelection: {
@@ -275,7 +278,7 @@ test("multi-provider host rejects duplicate profiles, catalogs, and dangling def
           modelId: "shared-model",
         },
       }),
-    /must be non-empty and unique/u,
+    /Duplicate model catalog entry/u,
   );
   assert.throws(
     () =>
@@ -303,6 +306,7 @@ test("multi-provider host rejects duplicate profiles, catalogs, and dangling def
                 supportedReasoningEfforts: ["medium"],
                 defaultReasoningEffort: "medium",
                 inputModalities: null,
+                contextWindow: 32_768,
               },
             ],
           },
@@ -326,7 +330,16 @@ function compatible(providerProfileId: string, apiKey: string) {
       apiKey,
     },
     model: "shared-model",
-    models: ["shared-model"],
+    modelCatalog: [
+      {
+        id: "shared-model",
+        supportedReasoningEfforts: ["medium"],
+        defaultReasoningEffort: "medium",
+        inputModalities: ["text" as const],
+        contextWindow: 32_768,
+        source: "manual" as const,
+      },
+    ],
   };
 }
 

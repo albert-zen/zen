@@ -73,6 +73,9 @@
 - **ZenXThreadUsageProjection** — ZenX Electron main 从 canonical `model_usage`、
   当前模型目录 `contextWindow` 和可重放模型消息投影展示用 usage / context pressure，
   不进入 CAS schema、Agent 上下文或自动压缩决策。
+- **ZenXModelCatalogCompletion** — Provider 发现可以保留只有 ID、尚缺 `contextWindow` 的模型行供
+  Settings 补全，但缺少正整数窗口的行不得保存为可运行配置、进入模型选择或发起请求；legacy profile
+  读取保持宽容，以便用户修复，而 Host runtime、Provider resolve 与兼容 `model/list` 都显式拒绝该状态。
 - **ZenXImageAttachmentProjection** — ZenX Electron main 通过既有 host-local 边界从 canonical
   `user_message` 投影按 Item 顺序排列的 `AttachmentRef`，并以只接受这些引用的 typed preload IPC
   导入和读取 Attachment Store payload；renderer 只持有草稿引用与短时 object URL，不取得任意文件读取权。
@@ -557,7 +560,8 @@ Item，不隐藏重试。
 成功 Turn 使用 admission 时冻结的 Provider adapter、selection、catalog entry 与
 `contextWindow` 判断自动 compaction；只有 Provider 实际报告的有效 `inputTokens`
 达到窗口的 80% 整数上界才执行，多次采样或 tool round 取观察到的最高 input context。
-Unknown window、缺失或无效 usage、非成功 Turn 与已覆盖边界都不猜测、不追加。
+缺失窗口只可能来自尚待修复的 legacy/incomplete metadata，不能通过正常 runtime admission；这里仍
+防御性地不猜测窗口。缺失或无效 usage、非成功 Turn 与已覆盖边界都不追加。
 自动生成、验证或 persistence 在成功 Turn handle settle 前尝试一次；失败只记录 Host
 诊断，不得把已经 canonical completed 的 Turn 重新投影为 failed，也不在同一 Turn 内重试。
 下一次达到条件的 completed Turn 可以再次尝试，已完成 Turn 的原始 canonical trace 保持不变。

@@ -82,6 +82,12 @@ export class ProviderRegistry {
         `Model ${selection.modelId} is not available from provider profile ${selection.providerProfileId}`,
       );
     }
+    if (model.contextWindow === null) {
+      throw new ProviderRegistryError(
+        "context_window_unknown",
+        `Context window is missing for model ${selection.modelId} from provider profile ${selection.providerProfileId}; configure a positive context window before using this model`,
+      );
+    }
     const supportedReasoningEfforts = model.supportedReasoningEfforts;
     const explicitReasoningEffort = selection.reasoningEffort ?? undefined;
     if (supportedReasoningEfforts === null) {
@@ -142,6 +148,7 @@ export class ProviderRegistryError extends Error {
   readonly code:
     | "provider_unavailable"
     | "model_unavailable"
+    | "context_window_unknown"
     | "reasoning_effort_unavailable"
     | "reasoning_effort_unknown";
 
