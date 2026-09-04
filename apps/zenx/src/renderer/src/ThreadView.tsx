@@ -1060,11 +1060,51 @@ function ImagePreview({
   );
 }
 
-// Object URLs are cached per attachment identity for the renderer session so
-// streaming re-renders and disclosure remounts reuse the same URL instead of
-// re-reading the payload and flashing the loading placeholder. Read failures
-// are not cached, so a later mount retries.
-const attachmentUrlCache = new Map<string, string>();
+// Keep a small LRU of URLs after their last consumer unmounts so streaming
+// re-renders and disclosure remounts do not flash. Mounted URLs are never
+// evicted; at most this many inactive URLs remain retained for later reuse.
+const retainedAttachmentUrlLimit = 32;
+const attachmentUrlCache = new Map<
+  string,
+  { url: string; consumers: number }
+>();
+
+function touchAttachmentUrl(
+  cacheKey: string,
+  entry: { url: string; consumers: number },
+): void {
+  attachmentUrlCache.delete(cacheKey);
+  attachmentUrlCache.set(cacheKey, entry);
+}
+
+function trimAttachmentUrls(): void {
+  while (attachmentUrlCache.size > retainedAttachmentUrlLimit) {
+    const inactive = [...attachmentUrlCache].find(
+      ([, entry]) => entry.consumers === 0,
+    );
+    if (inactive === undefined) return;
+    const [cacheKey, entry] = inactive;
+    attachmentUrlCache.delete(cacheKey);
+    URL.revokeObjectURL(entry.url);
+  }
+}
+
+function releaseAttachmentUrl(
+  cacheKey: string,
+  entry: { url: string; consumers: number },
+): void {
+  if (attachmentUrlCache.get(cacheKey) !== entry) return;
+  entry.consumers = Math.max(0, entry.consumers - 1);
+  trimAttachmentUrls();
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", () => {
+    for (const entry of attachmentUrlCache.values())
+      URL.revokeObjectURL(entry.url);
+    attachmentUrlCache.clear();
+  });
+}
 
 function useAttachmentUrl(
   attachment: AttachmentRef,
@@ -1074,32 +1114,48 @@ function useAttachmentUrl(
   const [state, setState] = useState<{
     url: string | null;
     error: string | null;
-  }>(() => ({ url: attachmentUrlCache.get(cacheKey) ?? null, error: null }));
+  }>(() => ({
+    url: attachmentUrlCache.get(cacheKey)?.url ?? null,
+    error: null,
+  }));
   useEffect(() => {
     const cached = attachmentUrlCache.get(cacheKey);
     if (cached !== undefined) {
+      cached.consumers += 1;
+      touchAttachmentUrl(cacheKey, cached);
       setState((current) =>
-        current.url === cached && current.error === null
+        current.url === cached.url && current.error === null
           ? current
-          : { url: cached, error: null },
+          : { url: cached.url, error: null },
       );
-      return;
+      return () => releaseAttachmentUrl(cacheKey, cached);
     }
     let active = true;
+    let acquired: { url: string; consumers: number } | null = null;
     setState({ url: null, error: null });
     void read(attachment)
       .then((bytes) => {
         const objectUrl = URL.createObjectURL(
           new Blob([bytes.slice().buffer], { type: attachment.mediaType }),
         );
-        attachmentUrlCache.set(cacheKey, objectUrl);
-        if (active) setState({ url: objectUrl, error: null });
+        const raced = attachmentUrlCache.get(cacheKey);
+        const entry = raced ?? { url: objectUrl, consumers: 0 };
+        if (raced === undefined) attachmentUrlCache.set(cacheKey, entry);
+        else URL.revokeObjectURL(objectUrl);
+        if (active) {
+          entry.consumers += 1;
+          acquired = entry;
+          touchAttachmentUrl(cacheKey, entry);
+          setState({ url: entry.url, error: null });
+        }
+        trimAttachmentUrls();
       })
       .catch((error: unknown) => {
         if (active) setState({ url: null, error: describeError(error) });
       });
     return () => {
       active = false;
+      if (acquired !== null) releaseAttachmentUrl(cacheKey, acquired);
     };
   }, [cacheKey, attachment, read]);
   return state;

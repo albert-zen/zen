@@ -225,14 +225,14 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
   不以 base64 或源文件路径为权威。导入或读取失败在 Composer 附近明确显示并保留现有草稿。
 - 每张待发送图片显示紧凑、有稳定占位尺寸和 accessible name 的缩略图；删除一张不得清除文字或其他图片。
   picker、paste、drop 与 thumbnail 更新不得改变既有 Enter / Shift+Enter、组合 Model / Reasoning menu 或 primary action 语义。
-  删除控件是贴在缩略图右上角的小圆形 badge（约 18px 可见圆、22px hit target），不覆盖缩略图主体，也不沿用大号圆形按钮样式。
+  删除控件是贴在缩略图右上角的小圆形 badge（约 18px 可见圆；web pointer 为 24px hit target，touch/narrow 为 44px），不覆盖缩略图主体，也不沿用大号圆形按钮样式。
 - 已选模型明确不支持 image 时，Send / Interrupt & Send 在进入 Provider 前阻断并保留完整草稿。
   Unknown 必须显示为 Unknown，并提供“尝试发送”以及 Settings 中显式 probe / 手动配置的恢复入口；
   Unknown 不得冒充 unsupported。文字草稿的普通发送行为不受影响。
 - transcript 从 canonical `user_message` 的 `AttachmentRef` 投影图片；send 后与 resume 后使用同一渲染路径。
   缩略图可用鼠标或键盘打开应用内 modal preview；Escape、关闭按钮和 backdrop 可关闭，关闭后焦点返回触发缩略图。
   Transcript 附件渲染为文字气泡上方的独立紧凑缩略图行（右对齐、可换行），不被包进气泡边框内；只有存在文字时才渲染文字气泡。这是视觉校准，不改变 `AttachmentRef` 权威与投影路径。
-  附件 payload 读取按 `AttachmentRef` 身份（mediaType + sha256）在 renderer 会话内缓存 object URL：流式重渲染、projection 刷新与 disclosure 折叠重建都复用同一 URL，不重新读取、不闪回 loading 占位；读取失败不缓存，后续挂载重试。
+  附件 payload 读取按 `AttachmentRef` 身份（mediaType + sha256）复用 object URL：流式重渲染、projection 刷新与 disclosure 折叠重建不重新读取、不闪回 loading 占位；未挂载 URL 只保留最近 32 个并在驱逐时释放，renderer 退出时全部释放，读取失败不缓存且后续挂载重试。
 
 ### 4.6 Settings 与 onboarding
 

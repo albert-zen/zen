@@ -2108,10 +2108,10 @@ a:focus-visible {
 }
 .remove-draft-image {
   position: absolute;
-  top: -6px;
-  right: -6px;
-  width: 22px;
-  height: 22px;
+  top: -7px;
+  right: -7px;
+  width: 24px;
+  height: 24px;
   display: grid;
   place-items: center;
   padding: 0;
@@ -2124,11 +2124,12 @@ a:focus-visible {
 .remove-draft-image::before {
   content: "";
   position: absolute;
-  inset: 2px;
+  inset: 3px;
   border-radius: 50%;
   background: var(--surface-overlay);
   box-shadow: var(--shadow-low);
 }
+
 .remove-draft-image svg {
   position: relative;
   width: 10px;
@@ -5057,6 +5058,22 @@ a:focus-visible {
   }
   .metric strong {
     font-size: 17px;
+  }
+}
+
+@media (pointer: coarse), (max-width: 720px) {
+  .composer-images {
+    gap: 24px;
+    padding: 20px 32px 8px 14px;
+  }
+  .remove-draft-image {
+    top: -20px;
+    right: -20px;
+    width: 44px;
+    height: 44px;
+  }
+  .remove-draft-image::before {
+    inset: 13px;
   }
 }
 

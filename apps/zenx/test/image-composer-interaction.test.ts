@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import * as React from "react";
@@ -310,6 +311,73 @@ test("attachment thumbnails reuse cached payloads across streaming re-renders an
     assert.equal(createdUrls, 1);
     assert.equal(required<HTMLImageElement>(".draft-image img").src, firstSrc);
   });
+});
+
+test("attachment object URLs are bounded and revoked without evicting the recent remount", async () => {
+  await withDom(async (dom, root) => {
+    const created: string[] = [];
+    const revoked: string[] = [];
+    Object.assign(dom.window.URL, {
+      createObjectURL: () => {
+        const url = `blob:zenx-cache-${String(created.length + 1)}`;
+        created.push(url);
+        return url;
+      },
+      revokeObjectURL: (url: string) => revoked.push(url),
+    });
+    const attachmentAt = (index: number): AttachmentRef => ({
+      type: "attachment",
+      sha256: index.toString(16).padStart(64, "0"),
+      mediaType: "image/png",
+      byteLength: 4,
+      width: 1,
+      height: 1,
+    });
+    const renderAttachment = (attachment: AttachmentRef) =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: addComposerImages(emptyComposerState(), [
+            { id: "draft-cache", name: "cache.png", attachment },
+          ]),
+          thread: emptyThread(),
+          onDraftChange: () => undefined,
+          onInterrupt: async () => undefined,
+          onReadAttachment: async () => new Uint8Array([1, 2, 3, 4]),
+          onRespondToApproval: async () => undefined,
+          onSubmit: async () => undefined,
+        }),
+      );
+
+    for (let index = 1; index <= 40; index += 1) {
+      await act(async () => void renderAttachment(attachmentAt(index)));
+      await act(async () => Promise.resolve());
+    }
+    const recentSrc = required<HTMLImageElement>(".draft-image img").src;
+    assert.ok(revoked.includes(created[0] ?? "missing-first-url"));
+    assert.ok(!revoked.includes(recentSrc));
+
+    await act(async () => root.render(null));
+    await act(async () => void renderAttachment(attachmentAt(40)));
+    assert.equal(required<HTMLImageElement>(".draft-image img").src, recentSrc);
+    assert.equal(created.length, 40);
+  });
+});
+
+test("draft image remove badge keeps an 18px circle inside accessible pointer targets", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /\.remove-draft-image\s*\{[^}]*width:\s*24px;[^}]*height:\s*24px;/su,
+  );
+  assert.match(styles, /\.remove-draft-image::before\s*\{[^}]*inset:\s*3px;/su);
+  assert.match(
+    styles,
+    /@media \(pointer: coarse\), \(max-width: 720px\)\s*\{[\s\S]*?\.remove-draft-image\s*\{[^}]*width:\s*44px;[^}]*height:\s*44px;/u,
+  );
 });
 
 async function withDom(
