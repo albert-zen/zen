@@ -2243,7 +2243,8 @@ a:focus-visible {
   box-shadow: 0 12px 30px var(--color-shadow-low);
   font-size: 11px;
   line-height: 1.35;
-  white-space: nowrap;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
   opacity: 0;
   pointer-events: none;
   transform: translateY(3px);

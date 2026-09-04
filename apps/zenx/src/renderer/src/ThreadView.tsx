@@ -432,7 +432,10 @@ export function ThreadView({
                   switching={switchingModel}
                 />
               )}
-              <ContextUsageIndicator context={threadUsage?.context} />
+              <ContextUsageIndicator
+                context={threadUsage?.context}
+                threadCacheHitRate={threadUsage?.thread.cacheHitRate}
+              />
               {permissionLabel === null ? null : (
                 <button
                   className="composer-tool permission-control"
@@ -666,17 +669,26 @@ export function contextUsageLabel(
   return `Context ${String(Math.round(context.ratio * 100))}%${source} · ${input} / ${formatTokenCount(context.contextWindow)}`;
 }
 
+export function threadCacheUsageLabel(cacheHitRate: number | undefined): string {
+  return cacheHitRate === undefined
+    ? "Thread cache unknown"
+    : `Thread cache ${String(Math.round(cacheHitRate * 100))}%`;
+}
+
 export function ContextUsageIndicator({
   context,
+  threadCacheHitRate,
 }: {
   context?: ModelContextUsageProjection;
+  threadCacheHitRate?: number;
 }) {
   if (context?.ratio === null || context?.ratio === undefined) return null;
   const percent = Math.round(context.ratio * 100);
   const visualRatio = Math.max(0, Math.min(1, context.ratio));
   const visualPercent = Math.round(visualRatio * 100);
   const label = contextUsageLabel(context);
-  const tooltip = label ?? `Context ${String(percent)}%`;
+  const contextLabel = label ?? `Context ${String(percent)}%`;
+  const tooltip = `${contextLabel}\n${threadCacheUsageLabel(threadCacheHitRate)}`;
   const radius = 7;
   return (
     <span

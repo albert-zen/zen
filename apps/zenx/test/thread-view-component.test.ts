@@ -41,7 +41,12 @@ test("context usage renders beside the composer with honest tooltip details", ()
     emptyComposerState(),
     {},
     {
-      thread: { responseCount: 1, inputTokens: 10, outputTokens: 2 },
+      thread: {
+        responseCount: 1,
+        inputTokens: 10,
+        outputTokens: 2,
+        cacheHitRate: 0.5,
+      },
       turns: {},
       context: {
         inputTokens: 78_200,
@@ -57,10 +62,49 @@ test("context usage renders beside the composer with honest tooltip details", ()
   );
   assert.match(
     html,
-    /class="context-usage-indicator"[^>]*aria-label="Context 30% est/u,
+    /class="context-usage-indicator"[^>]*aria-label="Context 30% est[^"]*Thread cache 50%/u,
   );
-  assert.match(html, /data-tooltip="Context 30% est/u);
+  assert.match(html, /data-tooltip="Context 30% est[^"]*Thread cache 50%/u);
+  assert.match(html, /aria-valuetext="Context 30% est[^"]*Thread cache 50%/u);
   assert.match(html, /stroke-dasharray="0\.3 1"/u);
+});
+
+test("context tooltip exposes exact zero and unknown Thread cache rates", () => {
+  const zero = renderTurns(
+    [],
+    [],
+    emptyComposerState(),
+    {},
+    {
+      thread: { responseCount: 1, inputTokens: 10, outputTokens: 2, cacheHitRate: 0 },
+      turns: {},
+      context: {
+        inputTokens: 78_200,
+        inputTokenSource: "estimated",
+        contextWindow: 262_000,
+        ratio: 0.3,
+      },
+    },
+  );
+  assert.match(zero, /Context 30% est[^"]*Thread cache 0%/u);
+
+  const unknown = renderTurns(
+    [],
+    [],
+    emptyComposerState(),
+    {},
+    {
+      thread: { responseCount: 1, inputTokens: 10, outputTokens: 2 },
+      turns: {},
+      context: {
+        inputTokens: 78_200,
+        inputTokenSource: "estimated",
+        contextWindow: 262_000,
+        ratio: 0.3,
+      },
+    },
+  );
+  assert.match(unknown, /Context 30% est[^"]*Thread cache unknown/u);
 });
 
 test("context indicator hides unknown ratio instead of presenting zero", () => {
