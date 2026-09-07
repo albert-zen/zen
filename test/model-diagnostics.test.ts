@@ -23,7 +23,7 @@ const badStream = () =>
     { headers: { "x-request-id": "provider-request-123" } },
   );
 
-test("stream protocol failure persists diagnostic metadata without response content", async () => {
+test("stream protocol failure persists bounded actual payloads without the configured key", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zen-diagnostic-"));
   try {
     const model = new OpenAiCompatibleModel({
@@ -48,7 +48,11 @@ test("stream protocol failure persists diagnostic metadata without response cont
     assert.equal(record.toolIndex, 2);
     assert.equal(record.status, 200);
     assert.match(record.diagnosticId, /^[0-9a-f-]{36}$/u);
-    assert.doesNotMatch(raw, /private answer|private argument|private-key/u);
+    assert.match(raw, /private answer|private argument/u);
+    assert.doesNotMatch(raw, /private-key/u);
+    assert.equal(record.payloads.length, 2);
+    assert.equal(record.payloads[1].index, 2);
+    assert.match(record.payloads[1].text, /private argument/u);
     if (process.platform !== "win32")
       assert.equal((await stat(filename)).mode & 0o777, 0o600);
 
@@ -120,5 +124,53 @@ test("diagnostics cover missing body and malformed stream envelopes", async () =
     assert.equal(records.length, 1);
     assert.equal(records[0]?.field, field);
     assert.equal(records[0]?.valueType, valueType);
+  }
+});
+
+test("failure payload context is bounded, redacts the configured key, and is absent on success", async () => {
+  const payload = JSON.stringify({
+    choices: [
+      { index: 0, delta: { content: "private-key " + "中".repeat(9000) } },
+    ],
+  });
+  const records: Array<
+    import("../src/model/openai-compatible.js").ModelStreamDiagnostic
+  > = [];
+  const model = new OpenAiCompatibleModel({
+    baseUrl: "https://provider.test/v1",
+    apiKey: "private-key",
+    fetch: async () =>
+      new Response(
+        `data: ${payload}\n\n`.repeat(20) + 'data: {"choices":false}\n\n',
+      ),
+    onStreamFailure: async (event) => {
+      records.push(event);
+    },
+  });
+  await assert.rejects(async () => {
+    for await (const _event of model.stream(request)) {
+      /* consume */
+    }
+  });
+  const context = records[0]?.payloads;
+  assert.equal(context?.length, 8);
+  assert.equal(context?.[0]?.index, 14);
+  assert.equal(context?.at(-1)?.index, 21);
+  assert(context?.[0]?.truncated);
+  assert(context?.every((entry) => Buffer.byteLength(entry.text) <= 8192));
+  assert.doesNotMatch(JSON.stringify(records), /private-key/u);
+  const success = new OpenAiCompatibleModel({
+    baseUrl: "https://provider.test/v1",
+    apiKey: "private-key",
+    fetch: async () =>
+      new Response(
+        'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+      ),
+    onStreamFailure: async () => {
+      assert.fail("successful response must not be logged");
+    },
+  });
+  for await (const _event of success.stream(request)) {
+    /* consume */
   }
 });

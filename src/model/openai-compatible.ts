@@ -20,6 +20,8 @@ export interface ModelStreamDiagnostic {
   valueType?: string;
   toolIndex?: number;
   failure?: string;
+  /** Bounded received SSE payloads, oldest first; present only on failure. */
+  payloads?: Array<{ index: number; text: string; truncated: boolean }>;
 }
 
 export interface OpenAiCompatibleModelOptions {
@@ -233,6 +235,27 @@ export class OpenAiCompatibleModel implements ModelAdapter {
         request.signal,
         allowedToolNames,
         diagnostic,
+        this.#onStreamFailure === undefined
+          ? undefined
+          : (payload, index) => {
+              // Capture received payloads only, never request headers or request bodies.
+              const escapedKey = JSON.stringify(this.#apiKey).slice(1, -1);
+              const redacted = payload
+                .split(this.#apiKey)
+                .join("[redacted]")
+                .split(escapedKey)
+                .join("[redacted]");
+              const bytes = Buffer.from(redacted);
+              const payloads = (diagnostic.payloads ??= []);
+              payloads.push({
+                index,
+                text: new TextDecoder().decode(bytes.subarray(0, 8192), {
+                  stream: true,
+                }),
+                truncated: bytes.length > 8192,
+              });
+              if (payloads.length > 8) payloads.shift();
+            },
       );
     } catch (error) {
       if (!request.signal.aborted && this.#onStreamFailure !== undefined) {
@@ -606,6 +629,7 @@ async function* parseChatCompletionStream(
   signal: AbortSignal,
   allowedToolNames: ReadonlySet<string>,
   diagnostic: ModelStreamDiagnostic,
+  capturePayload?: (payload: string, index: number) => void,
 ): AsyncIterable<ModelEvent> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -634,6 +658,7 @@ async function* parseChatCompletionStream(
       );
       for (const payload of payloads) {
         diagnostic.payloadIndex += 1;
+        capturePayload?.(payload, diagnostic.payloadIndex);
         delete diagnostic.field;
         delete diagnostic.valueType;
         delete diagnostic.toolIndex;
@@ -649,6 +674,7 @@ async function* parseChatCompletionStream(
       const payloads = feedSse(sse, decoder.decode(), true);
       for (const payload of payloads) {
         diagnostic.payloadIndex += 1;
+        capturePayload?.(payload, diagnostic.payloadIndex);
         delete diagnostic.field;
         delete diagnostic.valueType;
         delete diagnostic.toolIndex;

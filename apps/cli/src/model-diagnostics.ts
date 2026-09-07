@@ -2,7 +2,7 @@ import { appendFile, mkdir, rename, stat } from "node:fs/promises";
 import path from "node:path";
 import type { ModelStreamDiagnostic } from "../../../src/model/openai-compatible.js";
 
-/** Host-owned failure diagnostics; never store response bodies or credentials. */
+/** Host-owned failure diagnostics; bounded received payload context; no request headers or bodies. */
 export function createModelDiagnosticWriter(directory: string) {
   let pending = Promise.resolve();
   const filename = path.join(directory, "model-stream-errors.jsonl");
