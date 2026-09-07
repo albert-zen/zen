@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import type { CanonicalItem } from "../../../src/item.js";
@@ -30,7 +33,7 @@ test("real ZenX host composition preserves builtin and capability bundle identit
     });
   assert.deepEqual(
     toolDefinitionProjection([]).map((definition) => definition.name),
-    ["shell", "fixture_inspect", "zenx_plugin"],
+    ["shell", "shell_wait", "fixture_inspect", "zenx_plugin"],
   );
   const signal = new AbortController().signal;
   const shell = toolEnvironment.prepare({
@@ -112,7 +115,7 @@ test("real ZenX child-host projection hides v2 schemas until canonical read hist
   const initial = toolDefinitionProjection([]);
   assert.deepEqual(
     initial.map((tool) => tool.name),
-    ["shell", "zenx_plugin"],
+    ["shell", "shell_wait", "zenx_plugin"],
   );
   assert.deepEqual(initial.at(-1), {
     name: "zenx_plugin",
@@ -375,6 +378,47 @@ test("prepared child calls keep their exact capability generation through consec
   await composition.close();
 });
 
+test(
+  "closing the ZenX tool composition terminates its active shell sessions",
+  { skip: process.platform === "win32" },
+  async () => {
+    const temporaryDirectory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-shell-close-"),
+    );
+    const marker = path.join(temporaryDirectory, "pid");
+    const toolOutputSpool = new ToolOutputSpool({
+      rootDirectory: path.join(temporaryDirectory, "spool"),
+    });
+    const composition = createZenXHostToolEnvironment({
+      capabilities: { definitions: [] },
+      send: () => undefined,
+      toolOutputSpool,
+    });
+    try {
+      const command = `printf '%s' "$$" > ${JSON.stringify(marker)}; while :; do :; done`;
+      const prepared = composition.toolEnvironment.prepare({
+        callId: "long-shell",
+        name: "shell",
+        arguments: { command, yield_time_ms: 10 },
+        cwd: temporaryDirectory,
+        signal: new AbortController().signal,
+        threadId: "thread-a",
+      });
+      const running = await composition.toolEnvironment.execute(prepared);
+      assert.equal(structuredStatus(running.structuredContent), "running");
+      const pid = Number(await readFile(marker, "utf8"));
+
+      await composition.close();
+      await waitForProcessExit(pid);
+      await toolOutputSpool.close();
+    } finally {
+      await composition.close();
+      await toolOutputSpool.close();
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  },
+);
+
 function tool(name: string, description: string) {
   return { name, description, inputSchema: { type: "object" } };
 }
@@ -414,4 +458,31 @@ function canonicalReadPair(result: unknown): CanonicalItem[] {
       exitCode: 0,
     },
   ];
+}
+
+async function waitForProcessExit(pid: number): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ESRCH"
+      ) {
+        return;
+      }
+      throw error;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`process ${String(pid)} survived composition close`);
+}
+
+function structuredStatus(value: unknown): unknown {
+  return typeof value === "object" && value !== null && "status" in value
+    ? value.status
+    : undefined;
 }

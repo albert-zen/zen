@@ -188,13 +188,12 @@ export function createZenXHostToolEnvironment(options: {
     send: options.send,
     state: invocationState,
   });
+  const shellRuntime = new ShellToolRuntime({
+    blockedEnvironmentVariables: options.blockedEnvironmentVariables,
+    toolOutputSpool: options.toolOutputSpool,
+  });
   const toolEnvironment = new ToolEnvironment({
-    runtimes: [
-      new ShellToolRuntime({
-        blockedEnvironmentVariables: options.blockedEnvironmentVariables,
-        toolOutputSpool: options.toolOutputSpool,
-      }),
-    ],
+    runtimes: [shellRuntime, shellRuntime.waitRuntime],
     bundles: [capabilityBundle],
   });
   let capabilities = structuredClone(options.capabilities);
@@ -248,6 +247,7 @@ export function createZenXHostToolEnvironment(options: {
     },
     currentGenerationToken: () => currentBundle.generationToken,
     close: async (reason = "ZenX capability bridge closed") => {
+      await shellRuntime.close();
       capabilityBundle.close(reason);
       const retiring = [...bundles].map(async (bundle) => {
         await bundle.retire();

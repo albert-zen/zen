@@ -722,7 +722,7 @@ export class ShellToolRuntime implements ToolRuntime {
   readonly specification: ModelTool = {
     name: this.name,
     description:
-      "Run a shell command in the thread working directory. Long-running commands return a host-local session_id for shell_wait.",
+      "Run a shell command in the thread working directory. After 10 seconds by default, a long-running command returns a host-local session_id for shell_wait. Commands time out after 10 minutes by default; timeout_ms may extend that deadline up to 24 hours.",
     inputSchema: {
       type: "object",
       properties: {
@@ -730,7 +730,7 @@ export class ShellToolRuntime implements ToolRuntime {
         yield_time_ms: {
           type: "integer",
           description:
-            "Milliseconds to wait before yielding a running session.",
+            "Milliseconds to wait before yielding a running session (default 10000).",
           minimum: 1,
           maximum: 60000,
         },
@@ -850,7 +850,7 @@ export class ShellToolRuntime implements ToolRuntime {
     });
     this.#sessions.set(session.id, session);
     const result = await session.initialResult(yieldTimeMs, invocation.signal);
-    if (session.final) {
+    if (shellSessionResultIsFinal(result)) {
       session.consume();
       this.#sessions.delete(session.id);
     } else if (threadId === undefined) {
@@ -898,7 +898,7 @@ export class ShellToolRuntime implements ToolRuntime {
       invocation.signal,
       terminate,
     );
-    if (session.final) {
+    if (shellSessionResultIsFinal(result)) {
       session.consume();
       this.#sessions.delete(id);
     }
@@ -917,18 +917,30 @@ export class ShellToolRuntime implements ToolRuntime {
   }
 }
 
+function shellSessionResultIsFinal(result: ToolExecutionResult): boolean {
+  if (result.contentType === undefined) return true;
+  const content = result.structuredContent;
+  return !(
+    typeof content === "object" &&
+    content !== null &&
+    "status" in content &&
+    content.status === "running"
+  );
+}
+
 export class ShellWaitToolRuntime implements ToolRuntime {
   readonly name = "shell_wait";
   readonly specification: ModelTool = {
     name: this.name,
     description:
-      "Wait for new output or completion from a shell session. Use terminate: true to stop that session. Running status is explicit in structuredContent; wait again only when the command's progress is needed.",
+      "Wait up to 10 seconds by default for new output or completion from a shell session. Use terminate: true to stop that session. Running status is explicit in structuredContent; wait again only when the command's progress is needed.",
     inputSchema: {
       type: "object",
       properties: {
         session_id: { type: "string" },
         yield_time_ms: {
           type: "integer",
+          description: "Milliseconds to wait for new output (default 10000).",
           minimum: 1,
           maximum: 60000,
         },
@@ -1233,7 +1245,7 @@ class ShellSession {
         : final?.reason === "interrupted" || final?.reason === "terminated"
           ? "cancelled"
           : (final?.reason ?? "running");
-    const sessionState =
+    const sessionState: JsonValue =
       final === undefined
         ? {
             status,

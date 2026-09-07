@@ -277,6 +277,8 @@ async function shutdown(): Promise<void> {
   shuttingDown = true;
   await server?.close();
   server = undefined;
+  await closeToolComposition?.();
+  closeToolComposition = undefined;
   if (appServer !== undefined) {
     await appServer.closeHostResources();
   } else {
@@ -284,11 +286,9 @@ async function shutdown(): Promise<void> {
   }
   appServer = undefined;
   toolOutputSpool = undefined;
-  await closeToolComposition?.();
   tools = undefined;
   replaceCapabilities = undefined;
   currentCapabilityGeneration = undefined;
-  closeToolComposition = undefined;
   if (process.connected) process.disconnect();
   process.exit(process.exitCode ?? 0);
 }

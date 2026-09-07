@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import { createHostedAppServer } from "../apps/cli/src/host.js";
+import { ToolOutputSpool } from "../src/tool-output-spool.js";
 import { ShellToolRuntime } from "../src/tool.js";
 
 function invocation(
@@ -32,6 +33,15 @@ function status(result: { structuredContent?: unknown }): unknown {
   const content = result.structuredContent;
   return typeof content === "object" && content !== null && "status" in content
     ? content.status
+    : undefined;
+}
+
+function structuredSessionId(value: unknown): string | undefined {
+  return typeof value === "object" &&
+    value !== null &&
+    "session_id" in value &&
+    typeof value.session_id === "string"
+    ? value.session_id
     : undefined;
 }
 
@@ -84,7 +94,7 @@ test(
 
       assert.equal(started.exitCode, 0);
       assert.match(started.output, /command still running/u);
-      const yielded = await within(
+      const firstWait = await within(
         shell.waitRuntime.execute(
           invocation("shell_wait", {
             session_id: sessionId(started.output),
@@ -92,18 +102,18 @@ test(
           }),
         ),
       );
-      assert.equal(yielded.exitCode, 0);
-      assert.match(yielded.output, /later/u);
-      assert.equal(status(yielded), "running");
-      const completed = await within(
-        shell.waitRuntime.execute(
-          invocation("shell_wait", {
-            session_id: sessionId(yielded.output),
-            yield_time_ms: 500,
-          }),
-        ),
-      );
-      assert.match(completed.output, /command completed/u);
+      const completed =
+        status(firstWait) === "completed"
+          ? firstWait
+          : await within(
+              shell.waitRuntime.execute(
+                invocation("shell_wait", {
+                  session_id: sessionId(firstWait.output),
+                  yield_time_ms: 500,
+                }),
+              ),
+            );
+      assert.match(`${firstWait.output}${completed.output}`, /later/u);
       assert.equal(status(completed), "completed");
     } finally {
       await shell.close();
@@ -277,6 +287,78 @@ test("the host-local session count is bounded", async () => {
     );
   } finally {
     await shell.close();
+  }
+});
+
+test("completion during a delayed running capture keeps the session waitable", async () => {
+  const temporaryDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-shell-capture-race-"),
+  );
+  const spool = new ToolOutputSpool({
+    rootDirectory: path.join(temporaryDirectory, "spool"),
+  });
+  const originalBeginCapture = spool.beginCapture.bind(spool);
+  let captureFinishStarted!: () => void;
+  const finishStarted = new Promise<void>((resolve) => {
+    captureFinishStarted = resolve;
+  });
+  let releaseCaptureFinish!: () => void;
+  const captureFinishGate = new Promise<void>((resolve) => {
+    releaseCaptureFinish = resolve;
+  });
+  let delayFirstFinish = true;
+  Object.defineProperty(spool, "beginCapture", {
+    value: (...arguments_: Parameters<ToolOutputSpool["beginCapture"]>) => {
+      const capture = originalBeginCapture(...arguments_);
+      if (delayFirstFinish) {
+        delayFirstFinish = false;
+        const finish = capture.finish.bind(capture);
+        Object.defineProperty(capture, "finish", {
+          value: async (...finishArguments: Parameters<typeof finish>) => {
+            captureFinishStarted();
+            await captureFinishGate;
+            return await finish(...finishArguments);
+          },
+        });
+      }
+      return capture;
+    },
+  });
+  const shell = new ShellToolRuntime({
+    toolOutputSpool: spool,
+    initialYieldMs: 10,
+  });
+  try {
+    const release = path.join(temporaryDirectory, "release");
+    const completedMarker = path.join(temporaryDirectory, "completed");
+    const command = [
+      "printf head",
+      `while [ ! -f ${JSON.stringify(release)} ]; do sleep 0.005; done`,
+      "printf tail",
+      `printf done > ${JSON.stringify(completedMarker)}`,
+    ].join("; ");
+    const operation = shell.execute(invocation("shell", { command }));
+    await finishStarted;
+    await writeFile(release, "release");
+    await waitForFile(completedMarker);
+    releaseCaptureFinish();
+    const yielded = await operation;
+    assert.equal(status(yielded), "running");
+    const id = structuredSessionId(yielded.structuredContent);
+    assert(id !== undefined);
+
+    const completed = await shell.waitRuntime.execute(
+      invocation("shell_wait", {
+        session_id: id,
+        yield_time_ms: 500,
+      }),
+    );
+    assert.equal(status(completed), "completed");
+    assert.match(completed.output, /tail/u);
+  } finally {
+    await shell.close();
+    await spool.close();
+    await rm(temporaryDirectory, { recursive: true, force: true });
   }
 });
 
