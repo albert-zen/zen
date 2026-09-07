@@ -80,7 +80,13 @@ function plugin(packageName, directory, tarball, manifest) {
 export async function packZenXFirstPartyPlugins(options) {
   await preparePluginSdk();
   const packed = [];
+  const builtPackages = new Set();
   for (const definition of FIRST_PARTY_PLUGINS) {
+    // Variants change only the staged manifest, not the compiled runtime.
+    if (!builtPackages.has(definition.packageName)) {
+      await runNpm(["run", "build", "--workspace", definition.packageName]);
+      builtPackages.add(definition.packageName);
+    }
     packed.push(await packFirstPartyPlugin(definition, options));
   }
   return packed;
@@ -88,6 +94,7 @@ export async function packZenXFirstPartyPlugins(options) {
 
 export async function packZenXRoomsPlugin(options) {
   await preparePluginSdk();
+  await runNpm(["run", "build", "--workspace", "@zenx/rooms-plugin"]);
   return (
     await packFirstPartyPlugin(
       FIRST_PARTY_PLUGINS.find(
@@ -101,7 +108,6 @@ export async function packZenXRoomsPlugin(options) {
 async function packFirstPartyPlugin(definition, options) {
   const pluginsDirectory = path.resolve(options.outputDirectory, "plugins");
   await mkdir(pluginsDirectory, { recursive: true, mode: 0o700 });
-  await runNpm(["run", "build", "--workspace", definition.packageName]);
   const staging = await mkdtemp(
     firstPartyPluginStagingPrefix(pluginsDirectory),
   );
