@@ -1,0 +1,344 @@
+import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+
+import { createHostedAppServer } from "../apps/cli/src/host.js";
+import { ShellToolRuntime } from "../src/tool.js";
+
+function invocation(
+  name: string,
+  arguments_: Record<string, unknown>,
+  options: { signal?: AbortSignal; threadId?: string } = {},
+) {
+  return {
+    callId: `call-${name}`,
+    name,
+    arguments: arguments_,
+    cwd: process.cwd(),
+    signal: options.signal ?? new AbortController().signal,
+    threadId: options.threadId ?? "thread-a",
+  };
+}
+
+function sessionId(output: string): string {
+  const match = /^session_id: ([a-f0-9-]+)$/mu.exec(output);
+  assert(match?.[1], `missing session_id in ${JSON.stringify(output)}`);
+  return match[1];
+}
+
+function status(result: { structuredContent?: unknown }): unknown {
+  const content = result.structuredContent;
+  return typeof content === "object" && content !== null && "status" in content
+    ? content.status
+    : undefined;
+}
+
+async function within<T>(operation: Promise<T>, milliseconds = 1_000) {
+  return await Promise.race([
+    operation,
+    new Promise<never>((_resolve, reject) => {
+      setTimeout(
+        () => reject(new Error(`operation exceeded ${String(milliseconds)}ms`)),
+        milliseconds,
+      ).unref();
+    }),
+  ]);
+}
+
+async function waitForProcessExit(pid: number, milliseconds = 1_000) {
+  const deadline = Date.now() + milliseconds;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ESRCH"
+      ) {
+        return;
+      }
+      throw error;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`process ${String(pid)} survived shell termination`);
+}
+
+test(
+  "inherited background pipes yield a session and shell_wait reports completion",
+  { skip: process.platform === "win32" },
+  async () => {
+    const shell = new ShellToolRuntime({ initialYieldMs: 25 });
+    try {
+      const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+        'setTimeout(() => process.stdout.write("later"), 80)',
+      )} &`;
+      const started = await within(
+        shell.execute(invocation("shell", { command })),
+        500,
+      );
+
+      assert.equal(started.exitCode, 0);
+      assert.match(started.output, /command still running/u);
+      const yielded = await within(
+        shell.waitRuntime.execute(
+          invocation("shell_wait", {
+            session_id: sessionId(started.output),
+            yield_time_ms: 500,
+          }),
+        ),
+      );
+      assert.equal(yielded.exitCode, 0);
+      assert.match(yielded.output, /later/u);
+      assert.equal(status(yielded), "running");
+      const completed = await within(
+        shell.waitRuntime.execute(
+          invocation("shell_wait", {
+            session_id: sessionId(yielded.output),
+            yield_time_ms: 500,
+          }),
+        ),
+      );
+      assert.match(completed.output, /command completed/u);
+      assert.equal(status(completed), "completed");
+    } finally {
+      await shell.close();
+    }
+  },
+);
+
+test(
+  "a hard timeout returns partial output and kills the owned process group",
+  { skip: process.platform === "win32" },
+  async () => {
+    const temporaryDirectory = await mkdtemp(
+      path.join(os.tmpdir(), "zen-shell-timeout-"),
+    );
+    const marker = path.join(temporaryDirectory, "pid");
+    const shell = new ShellToolRuntime({
+      initialYieldMs: 500,
+      defaultTimeoutMs: 60,
+      terminationGraceMs: 20,
+    });
+    try {
+      const command = [
+        "trap '' TERM",
+        `printf '%s' "$$" > ${JSON.stringify(marker)}`,
+        "printf partial",
+        "while :; do :; done",
+      ].join("; ");
+      const result = await within(
+        shell.execute(invocation("shell", { command })),
+      );
+      const pid = Number(await readFile(marker, "utf8"));
+
+      assert.equal(result.exitCode, 124);
+      assert.match(result.output, /partial/u);
+      assert.match(result.output, /timed out/u);
+      await waitForProcessExit(pid);
+    } finally {
+      await shell.close();
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "aborting shell returns partial output and kills a redirected TERM-ignoring descendant",
+  { skip: process.platform === "win32" },
+  async () => {
+    const controller = new AbortController();
+    const shell = new ShellToolRuntime({
+      initialYieldMs: 500,
+      terminationGraceMs: 20,
+    });
+    const temporaryDirectory = await mkdtemp(
+      path.join(os.tmpdir(), "zen-shell-abort-"),
+    );
+    const marker = path.join(temporaryDirectory, "pid");
+    try {
+      const command = [
+        `(trap '' TERM; while :; do :; done) >/dev/null 2>&1 & descendant=$!`,
+        `printf '%s|%s' "$$" "$descendant" > ${JSON.stringify(marker)}`,
+        "printf before-abort",
+        "wait",
+      ].join("; ");
+      const operation = shell.execute(
+        invocation("shell", { command }, { signal: controller.signal }),
+      );
+      const pids = (await waitForFile(marker))
+        .split("|")
+        .map((value) => Number(value));
+      controller.abort();
+      const result = await within(operation);
+
+      assert.equal(result.exitCode, 130);
+      assert.match(result.output, /before-abort/u);
+      assert.match(result.output, /interrupted/u);
+      for (const pid of pids) await waitForProcessExit(pid);
+    } finally {
+      await shell.close();
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  },
+);
+
+test("shell_wait sessions are owned by one thread", async () => {
+  const shell = new ShellToolRuntime({ initialYieldMs: 20 });
+  try {
+    const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+      "setTimeout(() => undefined, 150)",
+    )}`;
+    const started = await shell.execute(invocation("shell", { command }));
+    const id = sessionId(started.output);
+
+    await assert.rejects(
+      shell.waitRuntime.execute(
+        invocation("shell_wait", { session_id: id }, { threadId: "thread-b" }),
+      ),
+      /not found for this thread/u,
+    );
+    const completed = await shell.waitRuntime.execute(
+      invocation("shell_wait", {
+        session_id: id,
+        yield_time_ms: 500,
+        terminate: true,
+      }),
+    );
+    assert.equal(completed.exitCode, 130);
+    assert.equal(status(completed), "cancelled");
+  } finally {
+    await shell.close();
+  }
+});
+
+test(
+  "the originating turn signal still cancels a yielded session",
+  { skip: process.platform === "win32" },
+  async () => {
+    const controller = new AbortController();
+    const shell = new ShellToolRuntime({
+      initialYieldMs: 20,
+      terminationGraceMs: 20,
+    });
+    const temporaryDirectory = await mkdtemp(
+      path.join(os.tmpdir(), "zen-shell-yield-abort-"),
+    );
+    const marker = path.join(temporaryDirectory, "pid");
+    try {
+      const started = await shell.execute(
+        invocation(
+          "shell",
+          {
+            command: `printf '%s' "$$" > ${JSON.stringify(marker)}; while :; do :; done`,
+          },
+          { signal: controller.signal },
+        ),
+      );
+      const pid = Number(await waitForFile(marker));
+      controller.abort();
+      const completed = await shell.waitRuntime.execute(
+        invocation("shell_wait", {
+          session_id: sessionId(started.output),
+          yield_time_ms: 500,
+        }),
+      );
+
+      assert.equal(completed.exitCode, 130);
+      assert.equal(status(completed), "cancelled");
+      await waitForProcessExit(pid);
+    } finally {
+      await shell.close();
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  },
+);
+
+test("the host-local session count is bounded", async () => {
+  const shell = new ShellToolRuntime({ initialYieldMs: 10, maxSessions: 1 });
+  try {
+    const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+      "setTimeout(() => undefined, 500)",
+    )}`;
+    const started = await shell.execute(invocation("shell", { command }));
+    await assert.rejects(
+      shell.execute(invocation("shell", { command })),
+      /session limit reached/u,
+    );
+    await shell.waitRuntime.execute(
+      invocation("shell_wait", {
+        session_id: sessionId(started.output),
+        terminate: true,
+      }),
+    );
+  } finally {
+    await shell.close();
+  }
+});
+
+test("legacy unscoped quick shell execution keeps exact output", async () => {
+  const shell = new ShellToolRuntime();
+  try {
+    const result = await shell.execute({
+      callId: "legacy-shell",
+      name: "shell",
+      arguments: { command: "printf exact" },
+      cwd: process.cwd(),
+      signal: new AbortController().signal,
+    });
+    assert.deepEqual(result, { output: "exact", exitCode: 0 });
+  } finally {
+    await shell.close();
+  }
+});
+
+test(
+  "Host shutdown terminates its active shell sessions",
+  { skip: process.platform === "win32" },
+  async () => {
+    const temporaryDirectory = await mkdtemp(
+      path.join(os.tmpdir(), "zen-shell-host-close-"),
+    );
+    const marker = path.join(temporaryDirectory, "pid");
+    const server = createHostedAppServer({
+      cwd: temporaryDirectory,
+      dataDirectory: path.join(temporaryDirectory, "data"),
+      provider: { type: "fake" },
+      model: "fake",
+      approvalPolicy: "never",
+    });
+    try {
+      const command = `printf '%s' "$$" > ${JSON.stringify(marker)}; while :; do :; done`;
+      const thread = await server.startThread();
+      await (
+        await server.startTurn(
+          thread.id,
+          `!tool shell ${JSON.stringify({ command, yield_time_ms: 10 })}`,
+        )
+      ).done;
+      const pid = Number(await waitForFile(marker));
+
+      await within(server.closeHostResources());
+      await waitForProcessExit(pid);
+    } finally {
+      await server.closeHostResources();
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  },
+);
+
+async function waitForFile(filename: string): Promise<string> {
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline) {
+    try {
+      return await readFile(filename, "utf8");
+    } catch {
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    }
+  }
+  throw new Error("file was not created");
+}

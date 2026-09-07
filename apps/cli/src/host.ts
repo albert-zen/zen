@@ -219,15 +219,17 @@ export function createHostedAppServer(
   const toolOutputSpool =
     options.toolOutputSpool ??
     new ToolOutputSpool(options.toolOutputSpoolOptions);
+  const shellRuntime =
+    options.toolEnvironment === undefined
+      ? new ShellToolRuntime({
+          blockedEnvironmentVariables: options.secretEnvironmentVariables ?? [],
+          toolOutputSpool,
+        })
+      : undefined;
   const toolEnvironment =
     options.toolEnvironment ??
     new ToolEnvironment({
-      runtimes: [
-        new ShellToolRuntime({
-          blockedEnvironmentVariables: options.secretEnvironmentVariables ?? [],
-          toolOutputSpool,
-        }),
-      ],
+      runtimes: [shellRuntime!, shellRuntime!.waitRuntime],
     });
   toolEnvironment.registerRuntime(new ApplyPatchToolRuntime(), {
     kind: "builtin",
@@ -307,10 +309,16 @@ export function createHostedAppServer(
   let closeTransportPromise: Promise<void> | undefined;
   const closeProviderTransport = async () => {
     closeTransportPromise ??= (async () => {
-      const results = await Promise.allSettled([
-        ...fetches.map(async (fetch) => await fetch.close?.()),
-        toolOutputSpool.close(),
-      ]);
+      const shellResult = await Promise.allSettled(
+        shellRuntime === undefined ? [] : [shellRuntime.close()],
+      );
+      const results = [
+        ...shellResult,
+        ...(await Promise.allSettled([
+          ...fetches.map(async (fetch) => await fetch.close?.()),
+          toolOutputSpool.close(),
+        ])),
+      ];
       const failures = results.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : [],
       );

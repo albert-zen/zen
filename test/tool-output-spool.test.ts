@@ -16,7 +16,12 @@ import test from "node:test";
 import { ZenAppServer } from "../src/app-server.js";
 import { InMemoryThreadJournal } from "../src/journal.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
-import type { ModelAdapter, ModelEvent, ModelRequest } from "../src/model.js";
+import {
+  compileModelMessages,
+  type ModelAdapter,
+  type ModelEvent,
+  type ModelRequest,
+} from "../src/model.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
@@ -87,6 +92,49 @@ test("small shell output keeps its exact canonical text shape", async () => {
     assert.equal(result.exitCode, 0);
     assert(!JSON.stringify(result).includes("capturedBytes"));
   } finally {
+    await spool.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a saturated running shell capture keeps its wait receipt model-visible", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-spool-session-"));
+  const spool = new ToolOutputSpool({ rootDirectory: root, previewBytes: 8 });
+  const shell = new ShellToolRuntime({
+    toolOutputSpool: spool,
+    maxOutputBytes: 16,
+    initialYieldMs: 30,
+  });
+  try {
+    const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+      'process.stdout.write("x".repeat(1000)); setTimeout(() => undefined, 500)',
+    )}`;
+    const server = createToolServer(
+      spool,
+      shell,
+      "shell",
+      { command },
+      { kind: "builtin", id: "shell" },
+    );
+    const thread = await server.startThread();
+    await (
+      await server.startTurn(thread.id, "run noisy job")
+    ).done;
+
+    const snapshot = await server.readThread(thread.id);
+    const result = snapshot.items.find((item) => item.type === "tool_result");
+    assert(result?.type === "tool_result");
+    assert.match(result.output, /\[tool output receipt\]/u);
+    assert.match(result.output, /\[command still running\]/u);
+    assert.match(result.output, /^session_id: [a-f0-9-]+$/mu);
+    assert.match(result.output, /^timeout_ms: 600000$/mu);
+    const modelResult = compileModelMessages(snapshot.items).find(
+      (message) => message.role === "tool",
+    );
+    assert(modelResult?.role === "tool");
+    assert.match(modelResult.text, /^session_id: [a-f0-9-]+$/mu);
+  } finally {
+    await shell.close();
     await spool.close();
     await rm(root, { recursive: true, force: true });
   }

@@ -31,6 +31,7 @@ import {
   ToolResultNormalizationError,
   UnawaitedNestedToolCallError,
   capturedToolOutput,
+  toolOutputSuffix,
   type ApprovalHandler,
   type NestedToolObservation,
   type ToolExecutionMode,
@@ -919,7 +920,9 @@ export class AgentRuntime {
       createdAt: this.#now(),
       type: "tool_result",
       callId: toolCall.callId,
-      output: capture === undefined ? result.output : renderToolOutput(capture),
+      output: `${
+        capture === undefined ? result.output : renderToolOutput(capture)
+      }${toolOutputSuffix(result) ?? ""}`,
       exitCode: result.exitCode,
       executionStatus:
         outcome.executionStatus ??
