@@ -102,19 +102,58 @@ test("a saturated running shell capture keeps its wait receipt model-visible", a
   const spool = new ToolOutputSpool({ rootDirectory: root, previewBytes: 8 });
   const shell = new ShellToolRuntime({
     toolOutputSpool: spool,
-    maxOutputBytes: 16,
-    initialYieldMs: 30,
+    maxOutputBytes: 1,
+    initialYieldMs: 1,
   });
   try {
-    const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
-      'process.stdout.write("x".repeat(1000)); setTimeout(() => undefined, 500)',
-    )}`;
+    const emit = path.join(root, "emit");
+    const outputReady = path.join(root, "output-ready");
+    const command = [
+      `while [ ! -f ${JSON.stringify(emit)} ]; do sleep 0.005; done`,
+      "printf xx",
+      `printf ready > ${JSON.stringify(outputReady)}`,
+      "while :; do sleep 1; done",
+    ].join("; ");
+    const started = await shell.execute({
+      callId: "start-noisy-shell",
+      name: "shell",
+      arguments: { command },
+      cwd: root,
+      signal: new AbortController().signal,
+      threadId: "thread-a",
+    });
+    const structured = started.structuredContent;
+    assert(
+      typeof structured === "object" &&
+        structured !== null &&
+        "session_id" in structured &&
+        typeof structured.session_id === "string",
+    );
+    await writeFile(emit, "emit");
+    await waitForFile(outputReady);
+    const waitResult = await shell.waitRuntime.execute({
+      callId: "wait-noisy-shell",
+      name: "shell_wait",
+      arguments: {
+        session_id: structured.session_id,
+        yield_time_ms: 500,
+      },
+      cwd: root,
+      signal: new AbortController().signal,
+      threadId: "thread-a",
+    });
+    const fixture = testToolRuntime({
+      name: "fixture_shell_result",
+      description: "Return a captured shell wait result",
+      inputSchema: { type: "object" },
+      execute: async () => waitResult,
+    });
     const server = createToolServer(
       spool,
-      shell,
-      "shell",
-      { command },
-      { kind: "builtin", id: "shell" },
+      fixture,
+      "fixture_shell_result",
+      {},
+      { kind: "builtin", id: "fixture-shell-result" },
     );
     const thread = await server.startThread();
     await (
@@ -417,4 +456,17 @@ function parseReceipt(output: string): {
     sha256: hashMatch[1]!,
     sourceTruncated: truncatedMatch[1] === "true",
   };
+}
+
+async function waitForFile(filename: string): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline) {
+    try {
+      await stat(filename);
+      return;
+    } catch {
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    }
+  }
+  throw new Error(`file was not created: ${filename}`);
 }
