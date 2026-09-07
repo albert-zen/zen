@@ -668,7 +668,6 @@ export class ShellToolRuntime implements ToolRuntime {
   };
 
   readonly #maxOutputBytes: number;
-  readonly #redactedValues: readonly string[];
   readonly #terminationGraceMs: number;
   readonly #environment: NodeJS.ProcessEnv;
   readonly #toolOutputSpool: ToolOutputSpool | undefined;
@@ -679,7 +678,6 @@ export class ShellToolRuntime implements ToolRuntime {
       terminationGraceMs?: number;
       environment?: Readonly<NodeJS.ProcessEnv>;
       blockedEnvironmentVariables?: readonly string[];
-      redactedValues?: readonly string[];
       toolOutputSpool?: ToolOutputSpool;
     } = {},
   ) {
@@ -688,16 +686,6 @@ export class ShellToolRuntime implements ToolRuntime {
       options.blockedEnvironmentVariables ?? [];
     this.#maxOutputBytes =
       options.maxOutputBytes ?? DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES;
-    this.#redactedValues = Object.freeze(
-      [
-        ...(options.redactedValues ?? []),
-        ...blockedEnvironmentVariables.map(
-          (name) => sourceEnvironment[name] ?? "",
-        ),
-      ].filter((value, index, values) => {
-        return value.length > 0 && values.indexOf(value) === index;
-      }),
-    );
     this.#terminationGraceMs = options.terminationGraceMs ?? 250;
     this.#toolOutputSpool = options.toolOutputSpool;
     this.#environment = Object.freeze(
@@ -725,7 +713,6 @@ export class ShellToolRuntime implements ToolRuntime {
       });
 
       const capture = this.#toolOutputSpool?.beginCapture({
-        redactedValues: this.#redactedValues,
         maxCaptureBytes: this.#maxOutputBytes,
       });
       const stdoutDecoder =
@@ -847,10 +834,7 @@ export class ShellToolRuntime implements ToolRuntime {
         }
         const suffix =
           bytes >= this.#maxOutputBytes ? "\n[output truncated by Zen]" : "";
-        const output = redactValues(
-          `${Buffer.concat(chunks).toString("utf8")}${suffix}`,
-          this.#redactedValues,
-        );
+        const output = `${Buffer.concat(chunks).toString("utf8")}${suffix}`;
         resolve({
           output:
             signal === null ? output : `${output}\n[terminated by ${signal}]`,
@@ -906,14 +890,6 @@ function abortReason(signal: AbortSignal): unknown {
   return (
     signal.reason ?? new DOMException("The operation was aborted", "AbortError")
   );
-}
-
-function redactValues(output: string, values: readonly string[]): string {
-  let redacted = output;
-  for (const value of values) {
-    redacted = redacted.replaceAll(value, "[REDACTED]");
-  }
-  return redacted;
 }
 
 const SAFE_ENVIRONMENT_VARIABLES = new Set([

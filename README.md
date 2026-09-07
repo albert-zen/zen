@@ -65,8 +65,8 @@ T3 MCP tools。宿主内部使用 Provider-scoped 结构化目录；Unknown capa
 context window。
 
 真实模型使用 `--provider openai-compatible`、`--model`、`--base-url` 与
-`--api-key-env`。指定的 key 只由宿主读取，不进入协议、Thread 或 shell tool
-环境，并从工具输出中脱敏。当前 `danger-full-access` 仍不是安全沙箱；完整参数见
+`--api-key-env`。指定的 key 由宿主读取，不自动注入协议、Thread 或 shell tool
+环境；命令实际输出的内容保持原样，不按秘密值替换或脱敏。当前 `danger-full-access` 仍不是安全沙箱；完整参数见
 `node dist/apps/cli/src/cli.js help`。
 
 CLI 与 App Server 默认使用 Full Access：`sandbox=danger-full-access` 且

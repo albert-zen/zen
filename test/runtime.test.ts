@@ -1747,7 +1747,7 @@ test("declined shell call is explicit and is not executed", async () => {
   assertEveryToolCallHasOneResult(snapshot.items);
 });
 
-test("explicit shell redaction removes caller-designated values", async () => {
+test("shell preserves output values while excluding blocked environment variables", async () => {
   const providerKey = "sk-provider-key-must-not-enter-the-thread";
   const blockedPath = "/provider-secret/path";
   const temporaryDirectory = await mkdtemp(
@@ -1762,7 +1762,6 @@ test("explicit shell redaction removes caller-designated values", async () => {
         PATH: blockedPath,
       },
       blockedEnvironmentVariables: ["OPENAI_API_KEY", "PATH"],
-      redactedValues: [providerKey, blockedPath],
     });
     const server = createServer({ tools: executor });
     const thread = await server.startThread();
@@ -1785,9 +1784,8 @@ test("explicit shell redaction removes caller-designated values", async () => {
     assert(result?.type === "tool_result");
     assert.equal(result.exitCode, 0);
     assert(result.output.includes("KEY=|PATH="));
-    assert.equal(result.output.match(/\[REDACTED\]/gu)?.length, 4);
-    assert(!JSON.stringify(snapshot.items).includes(providerKey));
-    assert(!JSON.stringify(snapshot.items).includes(blockedPath));
+    assert.equal(result.output.split(providerKey).length - 1, 2);
+    assert.equal(result.output.split(blockedPath).length - 1, 2);
     assertEveryToolCallHasOneResult(snapshot.items);
   } finally {
     await rm(temporaryDirectory, { recursive: true });
