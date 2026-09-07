@@ -1068,6 +1068,7 @@ test("every Settings tab remains keyboard reachable after narrow-screen reflow",
         "Plugins",
         "Appearance",
         "General",
+        "Context compaction",
         "Archived threads",
       ],
     );
@@ -1086,10 +1087,10 @@ test("every Settings tab remains keyboard reachable after narrow-screen reflow",
       document.activeElement?.textContent?.trim(),
       "Archived threads",
     );
-    assert.equal(tabs[5]?.getAttribute("aria-selected"), "true");
+    assert.equal(tabs.at(-1)?.getAttribute("aria-selected"), "true");
 
     await act(async () => {
-      tabs[5]?.dispatchEvent(
+      tabs.at(-1)?.dispatchEvent(
         new harness.dom.window.KeyboardEvent("keydown", {
           bubbles: true,
           key: "Home",
