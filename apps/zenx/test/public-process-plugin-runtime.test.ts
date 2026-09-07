@@ -46,7 +46,7 @@ runProcessPlugin({
       const id = invocation?.id ?? String(input.id);
       appendFileSync(${JSON.stringify(lifecycleLog)}, "start:" + id + "\\n");
       await new Promise((resolve) => {
-        const timer = setTimeout(resolve, Number(input.delay ?? 80));
+        const timer = input.delay === undefined ? undefined : setTimeout(resolve, Number(input.delay));
         invocation?.signal.addEventListener("abort", () => {
           appendFileSync(${JSON.stringify(lifecycleLog)}, "abort:" + id + "\\n");
           clearTimeout(timer);

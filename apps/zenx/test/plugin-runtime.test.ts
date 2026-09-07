@@ -1282,3 +1282,31 @@ async function waitUntil(
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
+
+test("closed plugin stdin rejects invocation without an unhandled EPIPE and closes safely", async () => {
+  const script = String.raw`import { closeSync } from "node:fs";
+    closeSync(0);
+    process.stdout.write(JSON.stringify({version:1,type:"ready",pluginId:"closed-input",packageVersion:"1.0.0"})+"\n");
+    setInterval(()=>{}, 1000);`;
+  const runtime = await ProcessPluginRuntime.start(
+    { pluginId: "closed-input", packageVersion: "1.0.0" },
+    {
+      command: process.execPath,
+      args: ["--input-type=module", "-e", script],
+      requestTimeoutMs: 1000,
+      closeTimeoutMs: 100,
+    },
+  );
+  try {
+    await assert.rejects(
+      runtime.invoke(runtimeInvocation("echo", "closed-stdin")),
+      /stdin.*(EPIPE|closed|destroyed)/u,
+    );
+    await assert.rejects(
+      runtime.invoke(runtimeInvocation("echo", "closed-stdin-retry")),
+      /stdin/u,
+    );
+  } finally {
+    await runtime.close();
+  }
+});

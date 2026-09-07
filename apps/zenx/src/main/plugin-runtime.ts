@@ -553,6 +553,9 @@ export class ProcessPluginRuntime implements PluginRuntime {
     this.#closeTimeoutMs = options.closeTimeoutMs;
     this.#maxPendingRequests = options.maxPendingRequests;
     this.#sdk = sdk;
+    child.stdin.on("error", (error) =>
+      this.#fail(new Error(`Plugin runtime stdin error: ${error.message}`)),
+    );
     child.stderr.resume();
     child.stdout.on("data", (chunk: Buffer) => this.#onData(chunk));
     child.once("error", (error) =>
@@ -878,7 +881,7 @@ export class ProcessPluginRuntime implements PluginRuntime {
   }
 
   #write(value: unknown): void {
-    if (this.#child.stdin.destroyed) return;
+    if (this.#failure !== undefined || this.#child.stdin.destroyed) return;
     try {
       this.#child.stdin.write(encodeMessage(value, this.#maxMessageBytes));
     } catch {
