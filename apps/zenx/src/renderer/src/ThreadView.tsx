@@ -974,7 +974,7 @@ function StatusMark({ item }: { item: ThreadItem }) {
     <span className="mini-spinner" aria-label="Running" />
   ) : (
     <small className={`tool-status ${item.status}`}>
-      {commandStatus(item.status)}
+      {commandStatus(item)}
     </small>
   );
 }
@@ -1531,14 +1531,27 @@ function formatDuration(milliseconds: number): string {
 }
 
 function commandStatus(
-  status: Extract<ThreadItem, { type: "commandExecution" }>["status"],
+  item: Extract<ThreadItem, { type: "commandExecution" }>,
 ): string {
+  const data = item.structuredContent;
+  if (
+    (item.toolName === "shell" || item.toolName === "shell_wait") &&
+    item.contentType === "application/vnd.zen.shell-session+json" &&
+    typeof data === "object" &&
+    data !== null &&
+    !Array.isArray(data)
+  ) {
+    if (data.status === "running")
+      return item.toolName === "shell" ? "Started" : "Waiting";
+    if (data.status === "timed_out") return "Timed out";
+    if (data.status === "cancelled") return "Cancelled";
+  }
   return {
     inProgress: "Running",
     completed: "Done",
     failed: "Failed",
     declined: "Declined",
-  }[status];
+  }[item.status];
 }
 
 function describeError(error: unknown): string {

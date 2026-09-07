@@ -1447,3 +1447,58 @@ test("keyboard modifiers and send button honor all running send modes", async ()
     }
   });
 });
+
+test("yielded shell work is labelled Started or Waiting rather than Done", async () => {
+  await withDom(async (root) => {
+    const base = commandItem("shell-start", "npm run dev");
+    assert.equal(base.type, "commandExecution");
+    if (base.type !== "commandExecution") return;
+    const running = {
+      ...base,
+      toolName: "shell",
+      contentType: "application/vnd.zen.shell-session+json",
+      structuredContent: {
+        status: "running",
+        session_id: "session-one",
+        exit_code: null,
+      },
+      aggregatedOutput: "Command is still running",
+    };
+    await renderInteractive(root, turnWithItems("inProgress", [running]));
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".trace-toggle")?.click(),
+    );
+    assert.equal(
+      document.querySelector(".tool-status")?.textContent,
+      "Started",
+    );
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [{ ...running, toolName: "shell_wait" }]),
+    );
+    assert.equal(
+      document.querySelector(".tool-status")?.textContent,
+      "Waiting",
+    );
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        {
+          ...running,
+          toolName: "shell_wait",
+          status: "failed",
+          exitCode: 124,
+          structuredContent: {
+            status: "timed_out",
+            session_id: "session-one",
+            exit_code: 124,
+          },
+        },
+      ]),
+    );
+    assert.equal(
+      document.querySelector(".tool-status")?.textContent,
+      "Timed out",
+    );
+  });
+});
