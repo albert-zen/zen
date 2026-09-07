@@ -723,6 +723,9 @@ Preparation compiles each source package once, then independently stages and pac
 all provider variants. Rooms and other lifecycle tests copy these tarballs into
 private fixtures; dedicated packaging tests still build real packages, including
 from clean SDK output. No artifacts are reused across preparation invocations.
+The attached-browser connection/attachment tests and document/action tests run in
+separate files with private CDP servers, allowing file-level parallelism while
+preserving real timeout and late-response coverage.
 
 For a focused edit, run the relevant test file directly after preparation:
 

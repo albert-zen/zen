@@ -390,7 +390,6 @@ test("Host configuration restart keeps external clients on the same published au
         title: "ZX1 Host restart test",
         version: "0.1.0",
       },
-      reconnect: { maxAttempts: 8, minDelayMs: 25, maxDelayMs: 100 },
     });
     const thread = (await external.request("thread/start", {})).thread;
     const reconnected = deferred<void>();
