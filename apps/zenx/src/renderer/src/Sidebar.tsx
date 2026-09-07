@@ -1,4 +1,6 @@
 import {
+  type CSSProperties,
+  type ReactNode,
   useEffect,
   useId,
   useLayoutEffect,
@@ -9,6 +11,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
 } from "react";
+import { createPortal } from "react-dom";
 
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { Thread } from "../../protocol-client/index.js";
@@ -830,6 +833,7 @@ function ProjectRows({
   const [open, setOpen] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const actionsRef = useRef<HTMLDivElement>(null);
   const moreRef = useRef<HTMLButtonElement>(null);
   const restoreMenuFocusRef = useRef(false);
   const initialMenuFocusRef = useRef<"first" | "last">("first");
@@ -846,8 +850,8 @@ function ProjectRows({
     if (!menuOpen) return;
     const closeOnOutsidePointer = (event: MouseEvent) => {
       if (
-        menuRef.current !== null &&
-        !menuRef.current.contains(event.target as Node)
+        !actionsRef.current?.contains(event.target as Node) &&
+        !menuRef.current?.contains(event.target as Node)
       ) {
         closeMenu();
       }
@@ -936,7 +940,7 @@ function ProjectRows({
           <span>{group.label}</span>
         </button>
         {group.workspace === null || !group.configured ? null : (
-          <div className="project-actions" ref={menuRef}>
+          <div className="project-actions" ref={actionsRef}>
             <button
               type="button"
               aria-label={`New thread in ${group.label}`}
@@ -962,9 +966,11 @@ function ProjectRows({
               <Icon name="more" size={15} />
             </button>
             {menuOpen ? (
-              <div
+              <SidebarMenuPopover
+                anchorRef={moreRef}
                 className="project-menu"
                 id={projectMenuId}
+                menuRef={menuRef}
                 role="menu"
                 aria-labelledby={`project-more-trigger-${encodeURIComponent(group.key)}`}
                 aria-label={`${group.label} project actions`}
@@ -1045,7 +1051,7 @@ function ProjectRows({
                   <Icon name="x" size={13} />
                   <span>Remove from ZenX</span>
                 </button>
-              </div>
+              </SidebarMenuPopover>
             ) : null}
           </div>
         )}
@@ -1156,7 +1162,10 @@ function ThreadRow({
   useEffect(() => {
     if (!menuOpen) return;
     const closeOutside = (event: PointerEvent) => {
-      if (!rowRef.current?.contains(event.target as Node)) {
+      if (
+        !rowRef.current?.contains(event.target as Node) &&
+        !menuRef.current?.contains(event.target as Node)
+      ) {
         closeMenu();
       }
     };
@@ -1324,6 +1333,7 @@ function ThreadRow({
         labelledBy={`thread-menu-trigger-${thread.threadId}`}
         menuId={`thread-menu-${thread.threadId}`}
         menuRef={menuRef}
+        menuTriggerRef={menuTriggerRef}
         open={menuOpen}
         pinned={pinned}
         renaming={renaming}
@@ -1361,6 +1371,7 @@ export function ThreadItemMenu({
   labelledBy,
   menuId,
   menuRef,
+  menuTriggerRef,
   open,
   pinned,
   renaming,
@@ -1381,6 +1392,7 @@ export function ThreadItemMenu({
   labelledBy?: string;
   menuId?: string;
   menuRef?: RefObject<HTMLDivElement | null>;
+  menuTriggerRef?: RefObject<HTMLButtonElement | null>;
   open: boolean;
   pinned: boolean;
   renaming: boolean;
@@ -1397,10 +1409,11 @@ export function ThreadItemMenu({
   if (!open) return null;
   const busy = busyAction !== null;
   return (
-    <div
-      ref={menuRef}
+    <SidebarMenuPopover
+      anchorRef={menuTriggerRef}
       className="thread-item-menu"
       id={menuId}
+      menuRef={menuRef}
       role="menu"
       aria-labelledby={labelledBy}
       onKeyDown={(event) => {
@@ -1525,8 +1538,130 @@ export function ThreadItemMenu({
         </>
       )}
       {error === null ? null : <p role="alert">{error}</p>}
+    </SidebarMenuPopover>
+  );
+}
+
+const SIDEBAR_MENU_GAP = 6;
+const SIDEBAR_MENU_VIEWPORT_MARGIN = 8;
+
+function SidebarMenuPopover({
+  anchorRef,
+  children,
+  className,
+  menuRef,
+  ...props
+}: {
+  anchorRef?: RefObject<HTMLElement | null>;
+  children: ReactNode;
+  className: string;
+  menuRef?: RefObject<HTMLDivElement | null>;
+} & Omit<React.HTMLAttributes<HTMLDivElement>, "children" | "className">) {
+  const [layout, setLayout] = useState<SidebarMenuLayout | null>(null);
+
+  useLayoutEffect(() => {
+    const anchor = anchorRef?.current;
+    const menu = menuRef?.current;
+    if (
+      anchor === undefined ||
+      anchor === null ||
+      menu === undefined ||
+      menu === null
+    ) {
+      return;
+    }
+    const update = () => {
+      const next = sidebarMenuLayout(
+        anchor.getBoundingClientRect(),
+        menu.getBoundingClientRect(),
+        window.innerWidth,
+        window.innerHeight,
+      );
+      setLayout((current) =>
+        current?.left === next.left &&
+        current.top === next.top &&
+        current.placement === next.placement
+          ? current
+          : next,
+      );
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    const observer =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    observer?.observe(anchor);
+    observer?.observe(menu);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+      observer?.disconnect();
+    };
+  }, [anchorRef, menuRef]);
+
+  const element = (
+    <div
+      {...props}
+      ref={menuRef}
+      className={className}
+      data-placement={layout?.placement}
+      style={anchorRef === undefined ? undefined : popoverStyle(layout)}
+    >
+      {children}
     </div>
   );
+  return anchorRef === undefined || typeof document === "undefined"
+    ? element
+    : createPortal(element, document.body);
+}
+
+interface SidebarMenuLayout {
+  left: number;
+  top: number;
+  placement: "left" | "right";
+}
+
+function sidebarMenuLayout(
+  anchor: DOMRect,
+  menu: DOMRect,
+  viewportWidth: number,
+  viewportHeight: number,
+): SidebarMenuLayout {
+  const right = anchor.right + SIDEBAR_MENU_GAP;
+  const left = anchor.left - SIDEBAR_MENU_GAP - menu.width;
+  const rightFits =
+    right + menu.width <= viewportWidth - SIDEBAR_MENU_VIEWPORT_MARGIN;
+  const leftFits = left >= SIDEBAR_MENU_VIEWPORT_MARGIN;
+  const placement =
+    rightFits || (!leftFits && viewportWidth - anchor.right >= anchor.left)
+      ? "right"
+      : "left";
+  const preferredLeft = placement === "right" ? right : left;
+  const maxLeft = Math.max(
+    SIDEBAR_MENU_VIEWPORT_MARGIN,
+    viewportWidth - SIDEBAR_MENU_VIEWPORT_MARGIN - menu.width,
+  );
+  const maxTop = Math.max(
+    SIDEBAR_MENU_VIEWPORT_MARGIN,
+    viewportHeight - SIDEBAR_MENU_VIEWPORT_MARGIN - menu.height,
+  );
+  return {
+    left: Math.round(
+      Math.min(Math.max(preferredLeft, SIDEBAR_MENU_VIEWPORT_MARGIN), maxLeft),
+    ),
+    top: Math.round(
+      Math.min(Math.max(anchor.top, SIDEBAR_MENU_VIEWPORT_MARGIN), maxTop),
+    ),
+    placement,
+  };
+}
+
+function popoverStyle(layout: SidebarMenuLayout | null): CSSProperties {
+  return {
+    left: `${layout?.left ?? 0}px`,
+    top: `${layout?.top ?? 0}px`,
+    visibility: layout === null ? "hidden" : undefined,
+  };
 }
 
 function enabledMenuItems(container: HTMLElement | null): HTMLButtonElement[] {
