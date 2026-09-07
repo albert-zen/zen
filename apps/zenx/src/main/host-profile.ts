@@ -11,7 +11,10 @@ import {
   type ModelCatalogEntry,
   type ModelCatalogEntryInput,
 } from "../../../../src/model-catalog.js";
-import type { ContextCompactionConfig } from "../../../../src/context-compaction.js";
+import {
+  normalizeContextCompactionConfig,
+  type ContextCompactionConfig,
+} from "../../../../src/context-compaction.js";
 import type { ZenXHostConfig } from "./host-messages.js";
 import { resolveProjectPath } from "./project-projection.js";
 import type { ToolPresentation } from "../../../../src/tool-presentation.js";
@@ -969,15 +972,17 @@ function optionalContextCompactionConfig(
     throw new Error("ZenX context compaction config is invalid");
   }
   const instruction = value.summaryInstruction;
-  if (instruction === undefined) return undefined;
+
   if (
-    typeof instruction !== "string" ||
-    instruction.trim().length === 0 ||
-    instruction.length > MAX_CONTEXT_COMPACTION_PROMPT_LENGTH
+    instruction !== undefined &&
+    (typeof instruction !== "string" ||
+      instruction.trim().length === 0 ||
+      instruction.length > MAX_CONTEXT_COMPACTION_PROMPT_LENGTH)
   ) {
     throw new Error("ZenX context compaction prompt is invalid");
   }
-  return { summaryInstruction: instruction };
+  normalizeContextCompactionConfig(value as ContextCompactionConfig);
+  return structuredClone(value) as ContextCompactionConfig;
 }
 
 function nonEmpty(value: unknown, label: string): string {

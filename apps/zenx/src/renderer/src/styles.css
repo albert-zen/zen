@@ -5241,3 +5241,49 @@ a:focus-visible {
   flex-wrap: wrap;
   gap: 12px;
 }
+
+.compaction-settings {
+  padding: 20px;
+  display: grid;
+  gap: 16px;
+}
+.compaction-settings h3,
+.compaction-settings p {
+  margin: 0;
+}
+.compaction-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.compaction-count-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 16px;
+}
+.compaction-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.compaction-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+}
+.compaction-checkbox input {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.compaction-settings textarea {
+  min-height: 180px;
+  resize: vertical;
+}
+@media (max-width: 640px) {
+  .compaction-field-grid {
+    grid-template-columns: 1fr;
+  }
+}

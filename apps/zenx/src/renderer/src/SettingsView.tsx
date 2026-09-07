@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { normalizeContextCompactionConfig } from "../../../../../src/context-compaction.js";
+import { ContextCompactionPanel } from "./ContextCompactionPanel.js";
 
 import { builtInModelCatalogPreset } from "../../../../cli/src/model-presets.js";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
@@ -36,7 +38,13 @@ import { threadModelIdentity, threadTitle } from "./thread-list.js";
 import { PluginSettingsSurfaces } from "./PluginProductPage.js";
 
 export type SettingsTab =
-  "account" | "models" | "plugins" | "appearance" | "general" | "archived";
+  | "account"
+  | "models"
+  | "plugins"
+  | "appearance"
+  | "general"
+  | "compaction"
+  | "archived";
 
 export function SettingsView({
   archivedError,
@@ -94,6 +102,7 @@ export function SettingsView({
     setError(null);
     setStatus(null);
     try {
+      normalizeContextCompactionConfig(draft.contextCompaction);
       const value = await window.zenx.settings.save({
         onboardingComplete: true,
         computerForegroundControlEnabled:
@@ -129,6 +138,12 @@ export function SettingsView({
       </section>
     );
   }
+  let compactionError: string | null = null;
+  try {
+    normalizeContextCompactionConfig(draft.contextCompaction);
+  } catch (reason) {
+    compactionError = describeError(reason);
+  }
   const hostDirty = JSON.stringify(draft) !== JSON.stringify(settings.profile);
   const sendModeOnly =
     hostDirty &&
@@ -144,6 +159,7 @@ export function SettingsView({
     { id: "plugins", label: "Plugins", icon: "trigger" },
     { id: "appearance", label: "Appearance", icon: "moon" },
     { id: "general", label: "General", icon: "settings" },
+    { id: "compaction", label: "Context compaction", icon: "layers" },
     { id: "archived", label: "Archived threads", icon: "archive" },
   ];
   return (
@@ -267,6 +283,19 @@ export function SettingsView({
             {tab === "general" ? (
               <GeneralPanel draft={draft} setDraft={setDraft} />
             ) : null}
+            {tab === "compaction" ? (
+              <ContextCompactionPanel
+                config={draft.contextCompaction}
+                onChange={(contextCompaction) =>
+                  setDraft({ ...draft, contextCompaction })
+                }
+              />
+            ) : null}
+            {compactionError !== null ? (
+              <div className="settings-error" role="alert">
+                {compactionError}
+              </div>
+            ) : null}
             {tab === "archived" ? (
               <ArchivedThreadsPanel
                 error={archivedError}
@@ -276,9 +305,10 @@ export function SettingsView({
                 threads={archivedThreads}
               />
             ) : null}
-            {tab === "models" || tab === "general" ? (
+            {tab === "models" || tab === "general" || tab === "compaction" ? (
               <SettingsApplyBar
                 busy={busy === "save"}
+                disabled={compactionError !== null}
                 dirty={hostDirty}
                 requiresRestart={!sendModeOnly}
                 onApply={() => void save()}
@@ -308,7 +338,9 @@ export function SettingsApplyBar({
   dirty,
   onApply,
   requiresRestart = true,
+  disabled = false,
 }: {
+  disabled?: boolean;
   requiresRestart?: boolean;
   busy: boolean;
   dirty: boolean;
@@ -331,7 +363,7 @@ export function SettingsApplyBar({
       <button
         className={dirty ? "primary-button" : "quiet-button"}
         type="button"
-        disabled={!dirty || busy}
+        disabled={!dirty || busy || disabled}
         onClick={onApply}
       >
         {requiresRestart

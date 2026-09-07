@@ -1395,10 +1395,9 @@ function labeledButtonRequired(label: string): HTMLButtonElement {
   return button;
 }
 
-function labelControl<T extends HTMLInputElement | HTMLSelectElement>(
-  label: string,
-  selector: string,
-): T | undefined {
+function labelControl<
+  T extends HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement,
+>(label: string, selector: string): T | undefined {
   return (
     Array.from(document.querySelectorAll<HTMLLabelElement>("label"))
       .find(
@@ -1427,7 +1426,7 @@ async function click(button: HTMLElement): Promise<void> {
 }
 
 async function changeControl(
-  control: HTMLInputElement | HTMLSelectElement,
+  control: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement,
   value: string,
 ): Promise<void> {
   await act(async () => {
@@ -1555,6 +1554,96 @@ test("discovery selection preserves edits, supports search and cancel, and adds 
     assert.equal(requiredInput("Model 2").value, "unsaved-local-model");
     assert.equal(saves, 0);
     await click(exactButtonRequired("Cancel"));
+    assert.equal(saves, 0);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Context compaction has a dedicated tab and saves selectable retention and prompt", async () => {
+  let saved: ZenXSettingsUpdate | undefined;
+  const harness = await mountSettings("compaction", {
+    save: async (update) => {
+      saved = update;
+      return { ...settings, profile: { ...settings.profile, ...update } };
+    },
+  });
+  try {
+    await waitFor(() => labeledSelect("Retention mode"));
+    await changeControl(labeledSelect("Retention mode")!, "recent-items");
+    await click(exactButtonRequired("Last 10 items"));
+    await click(
+      document.querySelector<HTMLInputElement>(
+        'input[aria-label="Preserve all user messages"]',
+      )!,
+    );
+    await changeControl(labeledSelect("Agent final messages")!, "recent");
+    await changeControl(requiredInput("Number of final messages"), "7");
+    await changeControl(requiredInput("Compaction trigger (%)"), "85");
+    await changeControl(requiredInput("Post-compaction budget (%)"), "60");
+    const prompt = labelControl<HTMLTextAreaElement>(
+      "Compaction prompt",
+      "textarea",
+    );
+    assert.ok(prompt);
+    await changeControl(
+      prompt,
+      "Preserve user goals and exact decisions. Return only a summary.",
+    );
+    await click(exactButtonRequired("Apply & restart"));
+    await waitFor(() => saved);
+    assert.deepEqual(saved?.contextCompaction, {
+      triggerPercent: 85,
+      targetPercent: 60,
+      retention: {
+        mode: "recent-items",
+        recentItemCount: 10,
+        preserveUserMessages: true,
+        finalMessages: "recent",
+        finalMessageCount: 7,
+      },
+      summaryInstruction:
+        "Preserve user goals and exact decisions. Return only a summary.",
+    });
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Compaction rejects invalid budgets and supports selected-only retention and restoring defaults", async () => {
+  let saves = 0;
+  const harness = await mountSettings("compaction", {
+    save: async (update) => {
+      saves += 1;
+      return { ...settings, profile: { ...settings.profile, ...update } };
+    },
+  });
+  try {
+    await waitFor(() => labeledSelect("Retention mode"));
+    await changeControl(requiredInput("Post-compaction budget (%)"), "95");
+    assert.equal(exactButtonRequired("Apply & restart").disabled, true);
+    assert.ok(document.querySelector('[role="alert"]'));
+    assert.equal(saves, 0);
+    await changeControl(requiredInput("Post-compaction budget (%)"), "50");
+    await changeControl(labeledSelect("Retention mode")!, "selected-items");
+    assert.equal(labelControl("Number of recent items", "input"), undefined);
+    await changeControl(labeledSelect("Agent final messages")!, "all");
+    assert.equal(labelControl("Number of final messages", "input"), undefined);
+    const prompt = labelControl<HTMLTextAreaElement>(
+      "Compaction prompt",
+      "textarea",
+    )!;
+    const defaultPrompt = prompt.value;
+    await changeControl(prompt, "custom");
+    await click(exactButtonRequired("Restore default prompt"));
+    assert.equal(
+      labelControl<HTMLTextAreaElement>("Compaction prompt", "textarea")!.value,
+      defaultPrompt,
+    );
+    assert.equal(labeledSelect("Retention mode")?.value, "selected-items");
+    await click(exactButtonRequired("Reset all compaction settings"));
+    assert.equal(labeledSelect("Retention mode")?.value, "budget");
+    assert.equal(requiredInput("Post-compaction budget (%)").value, "80");
     assert.equal(saves, 0);
   } finally {
     await unmount(harness);

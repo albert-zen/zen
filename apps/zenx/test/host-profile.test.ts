@@ -671,3 +671,53 @@ test("composer send modes persist and reject unknown modes", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("compaction retention settings persist without requiring a custom prompt and reach the Host", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-compaction-settings-"),
+  );
+  try {
+    const config = {
+      triggerPercent: 90,
+      targetPercent: 60,
+      retention: {
+        mode: "recent-items" as const,
+        recentItemCount: 20,
+        preserveUserMessages: true,
+        finalMessages: "recent" as const,
+        finalMessageCount: 10,
+      },
+    };
+    const store = new ZenXHostProfileStore(
+      path.join(directory, "profile.json"),
+    );
+    await store.write({ ...profile, contextCompaction: config });
+    const loaded = await store.read(profile);
+    assert.deepEqual(loaded?.contextCompaction, config);
+    assert.deepEqual(
+      hostConfigFromProfile(loaded!, {
+        dataDirectory: directory,
+        subscriptionProfilePath: path.join(directory, "auth"),
+        fallbackWorkspace: directory,
+        apiKeys: { local: "test-key" },
+      }).contextCompaction,
+      config,
+    );
+    assert.throws(() =>
+      validateHostProfile({
+        ...profile,
+        contextCompaction: { ...config, targetPercent: 95 },
+      }),
+    );
+    assert.throws(() =>
+      validateHostProfile({
+        ...profile,
+        contextCompaction: {
+          retention: { mode: "recent-items", recentItemCount: 0 },
+        },
+      }),
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
