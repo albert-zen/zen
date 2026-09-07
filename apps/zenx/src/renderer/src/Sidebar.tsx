@@ -1009,7 +1009,10 @@ function ProjectRows({
               >
                 <div className="project-menu-summary">
                   <strong>{group.label}</strong>
-                  <span>{group.threads.length} threads</span>
+                  <span>
+                    {group.threads.length}{" "}
+                    {group.threads.length === 1 ? "thread" : "threads"}
+                  </span>
                   <span title={group.workspace ?? undefined}>
                     {group.workspace}
                   </span>
