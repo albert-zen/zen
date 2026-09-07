@@ -293,7 +293,12 @@ test("queued messages retain approval routing and drain through the hosted proto
     });
     await manager.request("turn/start", {
       threadId: started.thread.id,
-      input: [{ type: "text", text: `!shell ${shellPrintCommand("first")}` }],
+      input: [
+        {
+          type: "text",
+          text: `!tool run_code ${JSON.stringify({ code: "console.log('first')" })}`,
+        },
+      ],
     });
     const approvalId = await within(firstApproval.promise);
     await manager.request("turn/queue", {
