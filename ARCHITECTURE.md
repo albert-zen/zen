@@ -817,3 +817,5 @@ Host 为兼容模型流解析失败保存独立、限量轮转的结构化诊断
 消息队列由 canonical `user_message_queued` 记录及同clientId的已交付user_message推导，Core按FIFO在正常完成后启动新Turn，失败/中断暂停且可显式继续；接入端仅投影队列。运行中发送模式是桌面偏好，默认queue，Enter/按钮按偏好，Cmd/Ctrl+Enter在queue与steer间按用户规则切换。
 
 ZenX 在 app ready 后先打开无需IPC的静态启动页，同一窗口在Host/IPC准备就绪后切入应用；启动错误显示在该窗口，启动中再次激活只聚焦或恢复启动窗口。
+
+Context pressure estimation includes tool `modelContent` as the additional user content sent by adapters; image dimensions contribute a provider-neutral patch estimate, not an exact provider token count.

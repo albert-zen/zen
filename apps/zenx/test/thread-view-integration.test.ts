@@ -22,8 +22,8 @@ test("projects a streamed tool turn from the hosted App Server", async () => {
       model: "fake",
       models: ["fake"],
       modelCatalog: [
-        { id: "fake", isDefault: true, contextWindow: 100 },
-        { id: "other", contextWindow: 1_000 },
+        { id: "fake", isDefault: true, contextWindow: 10_000 },
+        { id: "other", contextWindow: 20_000 },
       ],
       approvalPolicy: "never",
       provider: { type: "fake" },
@@ -79,7 +79,7 @@ test("projects a streamed tool turn from the hosted App Server", async () => {
     assert.ok(usage.thread.inputTokens > 0);
     assert.deepEqual(usage.turns[usageTurn.turn.id], usage.thread);
     assert.equal(usage.context.inputTokenSource, "provider");
-    assert.equal(usage.context.contextWindow, 100);
+    assert.equal(usage.context.contextWindow, 10_000);
 
     await manager.request("thread/settings/update", {
       threadId: projected.id,
@@ -87,7 +87,7 @@ test("projects a streamed tool turn from the hosted App Server", async () => {
     });
     const switchedUsage = await manager.readThreadUsage(projected.id);
     assert.equal(switchedUsage.context.inputTokenSource, "estimated");
-    assert.equal(switchedUsage.context.contextWindow, 1_000);
+    assert.equal(switchedUsage.context.contextWindow, 20_000);
   } finally {
     await manager.stop();
     await rm(directory, { recursive: true, force: true });
@@ -258,3 +258,73 @@ async function within<T>(promise: Promise<T>, milliseconds = 10_000) {
     if (timer !== undefined) clearTimeout(timer);
   }
 }
+
+test("queued messages retain approval routing and drain through the hosted protocol", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-queue-"));
+  const manager = new AppServerManager({
+    entryPath: path.resolve("src/main/app-server-host.ts"),
+    tokenFile: path.join(directory, "runtime", "app-server.token"),
+    hostConfig: {
+      cwd: process.cwd(),
+      dataDirectory: path.join(directory, "data"),
+      model: "fake",
+      models: ["fake"],
+      approvalPolicy: "always",
+      provider: { type: "fake" },
+    },
+    execArgv: ["--import", "tsx"],
+    startupTimeoutMs: 10_000,
+  });
+  try {
+    await manager.start();
+    const started = await manager.request("thread/start", {});
+    const firstApproval = deferred<string>();
+    let approvals = 0;
+    let completions = 0;
+    const finished = deferred<void>();
+    manager.onApprovalRequest((request) => {
+      approvals += 1;
+      if (approvals === 1) firstApproval.resolve(request.requestId);
+      else manager.respondToApproval(request.requestId, "accept");
+    });
+    manager.onNotification((method) => {
+      if (method === "turn/completed" && ++completions === 2)
+        finished.resolve();
+    });
+    await manager.request("turn/start", {
+      threadId: started.thread.id,
+      input: [{ type: "text", text: `!shell ${shellPrintCommand("first")}` }],
+    });
+    const approvalId = await within(firstApproval.promise);
+    await manager.request("turn/queue", {
+      threadId: started.thread.id,
+      input: [{ type: "text", text: `!shell ${shellPrintCommand("queued")}` }],
+      clientUserMessageId: "queued-approval",
+    });
+    const queued = await manager.request("thread/read", {
+      threadId: started.thread.id,
+      includeTurns: true,
+    });
+    assert.equal(queued.thread.queuedMessages?.length, 1);
+    assert.equal(approvals, 1);
+    manager.respondToApproval(approvalId, "accept");
+    await within(finished.promise);
+    const result = await manager.request("thread/read", {
+      threadId: started.thread.id,
+      includeTurns: true,
+    });
+    assert.equal(approvals, 2);
+    assert.deepEqual(result.thread.queuedMessages, []);
+    assert.equal(result.thread.turns.length, 2);
+    assert.ok(
+      result.thread.turns[1]?.items.some(
+        (item) =>
+          item.type === "commandExecution" &&
+          item.aggregatedOutput === "queued",
+      ),
+    );
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

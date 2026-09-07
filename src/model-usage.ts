@@ -1,4 +1,4 @@
-import type { CanonicalItem, ModelUsageItem } from "./item.js";
+import type { CanonicalItem, ModelUsageItem, UserInput } from "./item.js";
 import type { ModelMessage } from "./model.js";
 
 export interface ModelUsageAggregate {
@@ -224,20 +224,35 @@ function estimateModelMessage(message: ModelMessage): number {
         `${message.reasoningContent}\n${message.summary ?? ""}`,
       );
     case "tool":
-      return estimateText(`${message.callId}\n${message.text}`);
+      return add(
+        estimateText(`${message.callId}\n${message.text}`),
+        message.modelContent === undefined
+          ? 0
+          : estimateUserInput(message.modelContent),
+      );
     case "user":
       return "content" in message
-        ? estimateText(
-            message.content
-              .map((part) =>
-                part.type === "text"
-                  ? part.text
-                  : `[image:${part.attachment.mediaType}:${part.attachment.byteLength}]`,
-              )
-              .join("\n"),
-          )
+        ? estimateUserInput(message.content)
         : estimateText(message.text);
   }
+}
+
+/** Provider-neutral pressure estimate, not an exact provider tokenizer or image meter. */
+function estimateUserInput(content: UserInput): number {
+  return content.reduce(
+    (total, part) =>
+      add(
+        total,
+        part.type === "text"
+          ? Math.ceil(part.text.length / 4)
+          : // Reserve one token per 32px patch plus image overhead. Provider resize/detail
+            // rules differ; counting dimensions avoids treating a large image as a tiny ref.
+            256 +
+              Math.ceil(part.attachment.width / 32) *
+                Math.ceil(part.attachment.height / 32),
+      ),
+    4,
+  );
 }
 
 function toolCallsText(message: ModelMessage): string {

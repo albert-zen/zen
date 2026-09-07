@@ -6,7 +6,10 @@ import test from "node:test";
 
 import type { CanonicalItem, ModelUsageItem } from "../src/item.js";
 import { JsonlThreadJournal } from "../src/journal.js";
-import { projectModelUsage } from "../src/model-usage.js";
+import {
+  estimateModelMessageInputTokens,
+  projectModelUsage,
+} from "../src/model-usage.js";
 import { Thread } from "../src/thread.js";
 
 test("projects token-weighted Turn and Thread cache usage with response replacement", () => {
@@ -167,3 +170,36 @@ function usage(
     ...(reasoningOutputTokens === undefined ? {} : { reasoningOutputTokens }),
   };
 }
+
+test("counts tool model content exactly as the additional user content sent to providers", () => {
+  const content = [
+    {
+      type: "image" as const,
+      attachment: {
+        type: "attachment" as const,
+        sha256: "a".repeat(64),
+        mediaType: "image/png" as const,
+        byteLength: 1024,
+        width: 1024,
+        height: 1024,
+      },
+    },
+    { type: "text" as const, text: "visual context" },
+  ];
+  const tool = {
+    role: "tool" as const,
+    callId: "image-call",
+    text: "viewed",
+    exitCode: 0,
+  };
+  const base = estimateModelMessageInputTokens([tool]);
+  const image = estimateModelMessageInputTokens([{ role: "user", content }]);
+  assert.ok(
+    image > 1000,
+    "image cost must reflect dimensions, not a short ref label",
+  );
+  assert.equal(
+    estimateModelMessageInputTokens([{ ...tool, modelContent: content }]),
+    base + image,
+  );
+});

@@ -502,9 +502,6 @@ async function bootstrapZenX(): Promise<void> {
   }
 
   bootstrapFence.throwIfCancelled();
-  app.on("activate", () => {
-    hostLifecycle.activate();
-  });
 }
 
 void app
@@ -531,6 +528,10 @@ app.on("before-quit", (event) => {
 
 app.on("window-all-closed", () => {
   if (ownsSingleInstance) hostLifecycle.windowAllClosed();
+});
+
+app.on("activate", () => {
+  if (ownsSingleInstance) hostLifecycle.activate();
 });
 
 app.on("second-instance", () => {
