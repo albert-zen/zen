@@ -1539,7 +1539,8 @@ function commandStatus(
     item.contentType === "application/vnd.zen.shell-session+json" &&
     typeof data === "object" &&
     data !== null &&
-    !Array.isArray(data)
+    !Array.isArray(data) &&
+    "status" in data
   ) {
     if (data.status === "running")
       return item.toolName === "shell" ? "Started" : "Waiting";
