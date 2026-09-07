@@ -747,7 +747,14 @@ function DisplayNode({
   return node.kind === "agent" ? (
     <AgentMessage
       item={node.item}
-      showActions={false}
+      showActions={
+        (turn.status === "failed" || turn.status === "interrupted") &&
+        turn.items
+          .filter(
+            (item) => item.type === "agentMessage" && item.text.length > 0,
+          )
+          .at(-1)?.id === node.item.id
+      }
       turn={turn}
       usage={usage}
     />

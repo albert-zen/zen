@@ -1352,3 +1352,34 @@ function commandItem(id: string, value: string): ThreadItem {
     durationMs: null,
   };
 }
+
+test("failed turn opens received trace and preserves the error without a final answer", () => {
+  const failed = turnWithItems("failed", [
+    user("request"),
+    reasoning("Observed trace"),
+    agent("Partial answer"),
+  ]);
+  failed.error = {
+    message: "invalid tool call id",
+    codexErrorInfo: null,
+    additionalDetails: null,
+  };
+  const document = new JSDOM(renderTurns([failed])).window.document;
+  assert.equal(
+    document.querySelector(".turn-toggle")?.getAttribute("aria-expanded"),
+    "true",
+  );
+  assert.match(
+    document.querySelector(".turn-history")?.textContent ?? "",
+    /Partial answer/u,
+  );
+  assert.match(
+    document.querySelector(".turn-history")?.textContent ?? "",
+    /Observed trace/u,
+  );
+  assert.equal(document.querySelector(".turn-final"), null);
+  assert.equal(
+    document.querySelector(".turn-terminal")?.textContent,
+    "invalid tool call id",
+  );
+});
