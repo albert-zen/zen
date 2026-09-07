@@ -144,11 +144,11 @@ test("UTF-8 head and tail stay valid while the full normalized bytes match", asy
   }
 });
 
-test("stream redaction crosses chunk and UTF-8 decoder boundaries before disk", async () => {
+test("capture preserves original values across chunk and UTF-8 decoder boundaries", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-spool-redact-"));
   const spool = new ToolOutputSpool({ rootDirectory: root, previewBytes: 12 });
   try {
-    const capture = spool.beginCapture({ redactedValues: ["密钥SECRET"] });
+    const capture = spool.beginCapture();
     const source = Buffer.from("start-密钥SECRET-end-and-padding", "utf8");
     capture.write(source.subarray(0, 8));
     capture.write(source.subarray(8, 13));
@@ -156,9 +156,8 @@ test("stream redaction crosses chunk and UTF-8 decoder boundaries before disk", 
     const metadata = await capture.finish();
     assert(metadata.path !== undefined);
     const stored = await readFile(metadata.path, "utf8");
-    assert.equal(stored, "start-[REDACTED]-end-and-padding");
-    assert(!renderToolOutput(metadata).includes("密钥SECRET"));
-    assert(!stored.includes("密钥SECRET"));
+    assert.equal(stored, "start-密钥SECRET-end-and-padding");
+    assert(!stored.includes("[REDACTED]"));
   } finally {
     await spool.close();
     await rm(root, { recursive: true, force: true });
@@ -288,7 +287,11 @@ function createShellServer(
 ): ZenAppServer {
   return createToolServer(
     spool,
-    new ShellToolRuntime({ toolOutputSpool: spool }),
+    new ShellToolRuntime({
+      toolOutputSpool: spool,
+      environment: { ...process.env, ZEN_TEST_SECRET: "-MIDDLE-" },
+      blockedEnvironmentVariables: ["ZEN_TEST_SECRET"],
+    }),
     "shell",
     { command },
     { kind: "builtin", id: "shell" },

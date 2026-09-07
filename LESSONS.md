@@ -25,6 +25,8 @@
   工具策略只保留默认 `full_access` 与可选 `ask_unknown`
 - 把首版 `run_code` 宣传或实现成可运行 hostile code 的安全沙箱；它与 builtin shell
   权限等同，Worker 的空环境、heap/time/output 限制和 termination 只负责运行 containment
+- 按配置的秘密值替换或脱敏工具实际输出；head/tail 与临时文件是上下文节约策略，
+  必须保留已捕获原文，不能借该策略改写真实内容
 - 把超长 tool output 临时文件变成 durable artifact store 或第二份会话权威；canonical
   结果只是有界 head/tail receipt，需要跨重启保存完整结果时必须另行设计内容寻址 artifact
 - 完整 marketplace 平台、registry backend、发布后台、签名 PKI、自定义 package store

@@ -397,3 +397,6 @@ ThreadView
 - 合成品牌标记、配色常量、内嵌 SVG 与某次截图的宽度、坐标和 DOM count。
 
 需要调整 durable semantics 时更新本文；只调整视觉校准时也应说明它没有改变状态归属、导航语义或 interaction contract。Git 历史负责保存旧决策，不在仓库中维护第二份当前规则。
+
+Plugin Spaces 标题是展开/收起按钮，默认展开；收起隐藏插件入口并释放侧栏空间，
+不改变当前插件页面。按钮支持键盘激活并通过 `aria-expanded` 表达状态。

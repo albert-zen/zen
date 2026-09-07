@@ -170,7 +170,6 @@ export class ZenXHostToolBundle implements ToolBundle {
 export function createZenXHostToolEnvironment(options: {
   capabilities: ZenXCapabilityHostSnapshot & { generationToken?: string };
   blockedEnvironmentVariables?: readonly string[];
-  redactedValues?: readonly string[];
   send: (event: HostEvent) => void;
   toolOutputSpool: ToolOutputSpool;
 }): {
@@ -193,7 +192,6 @@ export function createZenXHostToolEnvironment(options: {
     runtimes: [
       new ShellToolRuntime({
         blockedEnvironmentVariables: options.blockedEnvironmentVariables,
-        redactedValues: options.redactedValues,
         toolOutputSpool: options.toolOutputSpool,
       }),
     ],

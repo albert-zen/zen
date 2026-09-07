@@ -381,8 +381,8 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   preview 只保留 16 KiB head 与 16 KiB tail；完整已捕获输出以 POSIX 0700 directory /
   0600 file 或 Windows current-user private temp/ACL 暂存，receipt 记录 captured bytes、SHA-256、绝对路径和 temporary lifetime，
   Agent 需要中段时必须主动再读。Provider 已截断或达到 64 MiB capture hard cap 时必须
-  标记 `source_truncated: true`，不能声称 temp file 完整；caller-designated shell redaction 在写盘
-  前完成。Host clean shutdown 删除当前 instance spool，启动只 best-effort 清理 stale
+  标记 `source_truncated: true`，不能声称 temp file 完整。捕获的原文不按秘密值替换、脱敏或改写；
+  head/tail 只节省模型上下文，临时文件保留已捕获原文。Host clean shutdown 删除当前 instance spool，启动只 best-effort 清理 stale
   directories，缺失路径显式失败且不建立 durable recovery。
 - `structuredContent` 继续使用既有 1 MiB JSON-compatible 校验和 canonical 存储合同，
   不写入 Tool Output Spool，也不以临时文件替代结构化结果。
@@ -711,8 +711,8 @@ claim，不得被称为 Codex extension 或因固定 CAS schema 缺失而删除�
   sandbox 限制工具实际上能做什么，approval 决定何时询问用户。当前只接受明确
   支持的 sandbox mode，其他 mode 返回 unsupported；审批不能冒充隔离，外部字段
   也不能反向要求 Zen 建立新的权限产品。MCP 相关方法在未实现时同样明确返回 unsupported。
-  当前唯一模式 `danger-full-access` **不是安全隔离**；最小环境与已知 secret
-  脱敏只防止意外泄漏，不能阻止已批准的命令主动读取本机可访问的文件。
+  当前唯一模式 `danger-full-access` **不是安全隔离**；shell 环境过滤只控制子进程继承的环境变量，
+  不修改实际工具输出，也不能阻止已批准的命令主动读取本机可访问的文件。
 - **CAS 边界是目录不是包**：内部保持极小的 `Item` / `Thread` 类型，
   CAS-specific types、普通函数映射和兼容文档只放在 `src/protocol/codex/`；当前
   shared connection 也在这里分发 ZAS native calls，但目录位置不赋予 CAS 语义权威。

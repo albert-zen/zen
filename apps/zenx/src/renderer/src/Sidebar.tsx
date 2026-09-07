@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -372,24 +373,37 @@ export function PluginSpaces({
   onOpen(route: string): void;
   selectedPage: string;
 }) {
+  const [expanded, setExpanded] = useState(true);
+  const linksId = useId();
   if (contributions.length === 0) return null;
   return (
     <section className="plugin-spaces" aria-label="Enabled plugin spaces">
-      <strong>Plugin spaces</strong>
-      {contributions.map((contribution) => (
-        <button
-          className="plugin-space-link"
-          type="button"
-          aria-current={
-            selectedPage === contribution.page.route ? "page" : undefined
-          }
-          key={contribution.key}
-          onClick={() => onOpen(contribution.page.route)}
-        >
-          <Icon name={contribution.icon} />
-          <span>{contribution.label}</span>
-        </button>
-      ))}
+      <button
+        type="button"
+        className="plugin-spaces-toggle"
+        aria-expanded={expanded}
+        aria-controls={linksId}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <Icon name={expanded ? "chevron-down" : "chevron-right"} />
+        <span>Plugin spaces</span>
+      </button>
+      <div id={linksId} hidden={!expanded}>
+        {contributions.map((contribution) => (
+          <button
+            className="plugin-space-link"
+            type="button"
+            aria-current={
+              selectedPage === contribution.page.route ? "page" : undefined
+            }
+            key={contribution.key}
+            onClick={() => onOpen(contribution.page.route)}
+          >
+            <Icon name={contribution.icon} />
+            <span>{contribution.label}</span>
+          </button>
+        ))}
+      </div>
     </section>
   );
 }
