@@ -1079,6 +1079,13 @@ function ProviderEditor({
     initialProvider.models.map((model) => ({ ...model })),
   );
   const [discovering, setDiscovering] = useState(false);
+  const [availableModels, setAvailableModels] = useState<
+    ZenXModelCatalogEntry[] | null
+  >(null);
+  const [selectedAvailableModels, setSelectedAvailableModels] = useState<
+    string[]
+  >([]);
+  const [modelSearch, setModelSearch] = useState("");
   const [probingModel, setProbingModel] = useState<string | null>(null);
   const [catalogStatus, setCatalogStatus] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
@@ -1271,10 +1278,9 @@ function ProviderEditor({
                   void window.zenx.settings
                     .discoverProvider(provider.providerProfileId)
                     .then((snapshot) => {
-                      setModels(snapshot.models.map((model) => ({ ...model })));
-                      setCatalogStatus(
-                        `Found ${snapshot.models.length} configured and available models`,
-                      );
+                      setAvailableModels(snapshot.models);
+                      setSelectedAvailableModels([]);
+                      setModelSearch("");
                     })
                     .catch((reason: unknown) =>
                       setValidationError(describeError(reason)),
@@ -1290,6 +1296,103 @@ function ProviderEditor({
             <p className="model-catalog-status" role="status">
               {catalogStatus}
             </p>
+          )}
+          {availableModels === null ? null : (
+            <section
+              className="available-model-picker"
+              aria-label="Available models"
+            >
+              <h4>Choose models to add</h4>
+              <p className="settings-note">
+                Select the models you want. Existing models and their settings
+                stay unchanged.
+              </p>
+              <label className="field">
+                <span>Search available models</span>
+                <input
+                  type="search"
+                  value={modelSearch}
+                  onChange={(event) => setModelSearch(event.target.value)}
+                />
+              </label>
+              <div className="available-model-list">
+                {availableModels
+                  .filter((model) =>
+                    model.id
+                      .toLowerCase()
+                      .includes(modelSearch.trim().toLowerCase()),
+                  )
+                  .map((model) => {
+                    const exists = models.some(
+                      (entry) => entry.id === model.id,
+                    );
+                    return (
+                      <label className="available-model-option" key={model.id}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${model.id}`}
+                          disabled={exists}
+                          checked={
+                            exists || selectedAvailableModels.includes(model.id)
+                          }
+                          onChange={(event) =>
+                            setSelectedAvailableModels((current) =>
+                              event.target.checked
+                                ? [...current, model.id]
+                                : current.filter((id) => id !== model.id),
+                            )
+                          }
+                        />
+                        <span>{model.id}</span>
+                        {exists ? <small>Already added</small> : null}
+                      </label>
+                    );
+                  })}
+                {availableModels.every(
+                  (model) =>
+                    !model.id
+                      .toLowerCase()
+                      .includes(modelSearch.trim().toLowerCase()),
+                ) ? (
+                  <p className="settings-note">No matching models.</p>
+                ) : null}
+              </div>
+              <div className="available-model-actions">
+                <button
+                  type="button"
+                  className="quiet-button"
+                  onClick={() => {
+                    setAvailableModels(null);
+                    setSelectedAvailableModels([]);
+                  }}
+                >
+                  Cancel selection
+                </button>
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={selectedAvailableModels.length === 0}
+                  onClick={() => {
+                    const additions = availableModels.filter(
+                      (entry) =>
+                        selectedAvailableModels.includes(entry.id) &&
+                        !models.some((model) => model.id === entry.id),
+                    );
+                    setModels((current) => [
+                      ...current,
+                      ...additions.map((model) => ({ ...model })),
+                    ]);
+                    setAvailableModels(null);
+                    setSelectedAvailableModels([]);
+                    setCatalogStatus(
+                      `Added ${additions.length} models to the draft. Save provider to apply.`,
+                    );
+                  }}
+                >
+                  Add selected models ({selectedAvailableModels.length})
+                </button>
+              </div>
+            </section>
           )}
           {models.map((model, index) => (
             <div className="provider-model-row" key={index}>

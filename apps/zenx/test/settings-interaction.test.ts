@@ -242,6 +242,15 @@ test("Provider discovery starts text-only and manual overrides persist", async (
     await waitFor(() => labeledButton("Edit Alpha"));
     await click(labeledButtonRequired("Edit Alpha"));
     await click(exactButtonRequired("Get available models"));
+    const choice = await waitFor(() =>
+      document.querySelector<HTMLInputElement>(
+        'input[aria-label="Select alpha-vision"]',
+      ),
+    );
+    assert.equal(labelControl<HTMLInputElement>("Model 3", "input"), undefined);
+    assert.equal(choice.checked, false);
+    await click(choice);
+    await click(exactButtonRequired("Add selected models (1)"));
     await waitFor(() => labelControl<HTMLInputElement>("Model 3", "input"));
     assert.equal(requiredInput("Model 3").value, "alpha-vision");
     assert.match(
@@ -1410,7 +1419,7 @@ function labeledSelect(label: string): HTMLSelectElement | undefined {
   return labelControl<HTMLSelectElement>(label, "select");
 }
 
-async function click(button: HTMLButtonElement): Promise<void> {
+async function click(button: HTMLElement): Promise<void> {
   await act(async () => {
     button.click();
     await Promise.resolve();
@@ -1486,3 +1495,68 @@ function archivedSummary(): NativeThreadSummary {
     status: "idle",
   };
 }
+
+test("discovery selection preserves edits, supports search and cancel, and adds only selected models", async () => {
+  let saves = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: multiProviderSettings,
+    discoverProvider: async () => ({
+      providerProfileId: "profile-alpha",
+      models: [
+        ...multiProviderSettings.profile.providerProfiles[0]!.models,
+        model("candidate-a"),
+        model("candidate-b"),
+      ],
+    }),
+    editProvider: async () => {
+      saves += 1;
+      return multiProviderSettings;
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await changeControl(requiredInput("Model 2"), "unsaved-local-model");
+    await click(exactButtonRequired("Get available models"));
+    await waitFor(() =>
+      document.querySelector('[aria-label="Available models"]'),
+    );
+    assert.equal(requiredInput("Model 2").value, "unsaved-local-model");
+    assert.equal(exactButtonRequired("Add selected models (0)").disabled, true);
+    assert.equal(
+      document.querySelector<HTMLInputElement>(
+        'input[aria-label="Select shared-model"]',
+      )?.disabled,
+      true,
+    );
+    await click(exactButtonRequired("Cancel selection"));
+    assert.equal(labelControl("Model 3", "input"), undefined);
+    assert.equal(requiredInput("Model 2").value, "unsaved-local-model");
+    await click(exactButtonRequired("Get available models"));
+    await waitFor(() =>
+      document.querySelector('[aria-label="Available models"]'),
+    );
+    await changeControl(
+      requiredInput("Search available models"),
+      "candidate-b",
+    );
+    assert.equal(
+      document.querySelector('input[aria-label="Select candidate-a"]'),
+      null,
+    );
+    const candidate = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Select candidate-b"]',
+    );
+    assert.ok(candidate);
+    await click(candidate);
+    await click(exactButtonRequired("Add selected models (1)"));
+    assert.equal(requiredInput("Model 3").value, "candidate-b");
+    assert.equal(labelControl("Model 4", "input"), undefined);
+    assert.equal(requiredInput("Model 2").value, "unsaved-local-model");
+    assert.equal(saves, 0);
+    await click(exactButtonRequired("Cancel"));
+    assert.equal(saves, 0);
+  } finally {
+    await unmount(harness);
+  }
+});

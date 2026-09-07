@@ -5199,3 +5199,45 @@ a:focus-visible {
   overflow-wrap: anywhere;
   margin: 4px 0;
 }
+
+.available-model-picker {
+  margin-block: 16px;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+}
+.available-model-picker h4 {
+  margin: 0 0 8px;
+}
+.available-model-list {
+  max-height: 280px;
+  overflow-y: auto;
+  margin-block: 12px;
+}
+.available-model-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 6px 4px;
+}
+.available-model-option input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+.available-model-option span {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.available-model-option small {
+  margin-left: auto;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+.available-model-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
