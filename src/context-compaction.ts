@@ -5,7 +5,7 @@ import type {
   ToolResultItem,
 } from "./item.js";
 
-export const CONTEXT_COMPACTION_ALGORITHM_VERSION = "zen.context-compaction.v1";
+export const CONTEXT_COMPACTION_ALGORITHM_VERSION = "zen.context-compaction.v2";
 export const CONTEXT_COMPACTION_SUMMARY_MARKER = "ZEN_CONTEXT_COMPACTION_V1";
 export const CONTEXT_COMPACTION_SUMMARY_PREFIX = "[Zen compacted context]\n";
 
@@ -26,6 +26,11 @@ export interface CompactionBoundary {
   item: Extract<CanonicalItem, { type: "turn_completed" }>;
   index: number;
   retainedItemIds: string[];
+}
+
+export interface BoundedCompactionBoundaryOptions {
+  retainedTokenBudget: number;
+  estimateRetainedTokens: (items: readonly CanonicalItem[]) => number;
 }
 
 export function normalizeContextCompactionConfig(
@@ -76,6 +81,74 @@ export function latestEligibleCompactionBoundary(
     };
   }
   return undefined;
+}
+
+export function boundedCompactionBoundary(
+  items: readonly CanonicalItem[],
+  options: BoundedCompactionBoundaryOptions,
+): CompactionBoundary | undefined {
+  if (
+    !Number.isSafeInteger(options.retainedTokenBudget) ||
+    options.retainedTokenBudget < 0
+  ) {
+    throw new Error(
+      "Context compaction retained token budget must be a non-negative integer",
+    );
+  }
+  const boundary = latestEligibleCompactionBoundary(items);
+  if (boundary === undefined) return undefined;
+
+  const coveredItems = items.slice(0, boundary.index + 1);
+  const turnItems = coveredItems.filter(
+    (candidate) => candidate.turnId === boundary.item.turnId,
+  );
+  validateRetainedToolClosure(coveredItems, new Set(boundary.retainedItemIds));
+
+  for (let suffixStart = 0; suffixStart <= turnItems.length; suffixStart += 1) {
+    const retainedItems = turnItems.filter(
+      (candidate, index) =>
+        index >= suffixStart || !projectsIntoModelContext(candidate),
+    );
+    const retained = new Set(retainedItems.map((candidate) => candidate.id));
+    try {
+      validateRetainedToolClosure(coveredItems, retained);
+    } catch {
+      continue;
+    }
+    if (
+      options.estimateRetainedTokens(retainedItems) <=
+      options.retainedTokenBudget
+    ) {
+      return {
+        ...boundary,
+        retainedItemIds: retainedItems.map((candidate) => candidate.id),
+      };
+    }
+  }
+
+  throw new Error("Context compaction could not produce a bounded projection");
+}
+
+export function contextCompactionTokenBudget(contextWindow: number): number {
+  if (!Number.isSafeInteger(contextWindow) || contextWindow <= 0) {
+    throw new Error("Context window must be a positive integer");
+  }
+  const quotient = Math.floor(contextWindow / 5);
+  const remainder = contextWindow % 5;
+  return quotient * 4 + Math.ceil((remainder * 4) / 5);
+}
+
+function projectsIntoModelContext(item: CanonicalItem): boolean {
+  return ![
+    "context_compaction",
+    "model_usage",
+    "thread_configuration_changed",
+    "thread_metadata",
+    "turn_aborted",
+    "turn_completed",
+    "turn_replacement_requested",
+    "turn_started",
+  ].includes(item.type);
 }
 
 export function validateContextCompactionItem(

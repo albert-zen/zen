@@ -14,6 +14,7 @@ import type {
 } from "../src/item.js";
 import { InMemoryThreadJournal, type ThreadJournal } from "../src/journal.js";
 import { StaticModelCatalog, type ModelCatalog } from "../src/model-catalog.js";
+import { estimateModelMessageInputTokens } from "../src/model-usage.js";
 import {
   compileModelMessages,
   type ModelAdapter,
@@ -74,7 +75,7 @@ test("manually compacts long history without changing the complete transcript", 
   assert.equal(result.compactionItemId, item.id);
   assert.equal(item.coveredThroughItemId, before.items.at(-1)?.id);
   assert.equal(item.summary, "summary bytes\nkept verbatim");
-  assert.equal(item.algorithmVersion, "zen.context-compaction.v1");
+  assert.equal(item.algorithmVersion, "zen.context-compaction.v2");
   assert.deepEqual(item.tokenUsage, { inputTokens: 101, outputTokens: 7 });
   assert.deepEqual(
     item.retainedItemIds,
@@ -290,6 +291,92 @@ test("automatically compacts exactly at 80% using the highest Provider usage sam
         message.contentVisibility === "public",
     ),
   );
+});
+
+test("bounds an oversized latest completed Turn without splitting its tool lifecycle", async () => {
+  const toolOutput = "x".repeat(400);
+  let normalSamples = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (isSummaryRequest(request)) {
+        yield { type: "text_delta", delta: "tool work completed" };
+        return;
+      }
+      normalSamples += 1;
+      if (normalSamples === 1) {
+        yield {
+          type: "tool_call",
+          callId: "large-result",
+          name: "shell",
+          arguments: { command: `printf ${toolOutput}` },
+        };
+        yield { type: "usage", inputTokens: 80, outputTokens: 1 };
+        return;
+      }
+      yield { type: "text_delta", delta: "finished" };
+      yield { type: "usage", inputTokens: 80, outputTokens: 1 };
+    },
+  };
+  const server = createServer({
+    journal: new InMemoryThreadJournal(),
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 100 },
+    ]),
+  });
+  const thread = await server.startThread();
+
+  await (
+    await server.startTurn(thread.id, "produce a large result")
+  ).done;
+
+  const snapshot = await server.readThread(thread.id);
+  const compaction = snapshot.items.at(-1);
+  assert(compaction?.type === "context_compaction");
+  const call = snapshot.items.find((item) => item.type === "tool_call");
+  const result = snapshot.items.find((item) => item.type === "tool_result");
+  assert(call?.type === "tool_call");
+  assert(result?.type === "tool_result");
+  assert.equal(result.output, toolOutput);
+  assert.equal(compaction.retainedItemIds.includes(call.id), false);
+  assert.equal(compaction.retainedItemIds.includes(result.id), false);
+  assert(
+    estimateModelMessageInputTokens(compileModelMessages(snapshot.items)) <= 80,
+  );
+});
+
+test("does not append a compaction when its summary alone exceeds the target", async () => {
+  const journal = new InMemoryThreadJournal();
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (isSummaryRequest(request)) {
+        yield { type: "text_delta", delta: "s".repeat(400) };
+        return;
+      }
+      yield { type: "text_delta", delta: "answer" };
+    },
+  };
+  const server = createServer({
+    journal,
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 100 },
+    ]),
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "one")
+  ).done;
+  const before = await journal.read(thread.id);
+
+  await expectAppServerCode(
+    server.compactThread(thread.id),
+    "compaction_budget_exceeded",
+  );
+
+  assert.deepEqual(await journal.read(thread.id), before);
 });
 
 test("automatic compaction does not guess below threshold or from missing or invalid usage", async (t) => {

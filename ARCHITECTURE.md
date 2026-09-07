@@ -549,16 +549,19 @@ telemetry。`inputTokens` 始终是包含 cached 部分的 total input，uncache
 cached 数据的 response 做 token-weighted 归约：`sum(cachedInputTokens) / sum(inputTokens)`。
 ZenX 的上下文占比读模型不能使用 Thread 累计 input tokens；它用最新未被 compaction 覆盖的
 Provider `inputTokens`，若 compaction 已经使该样本代表旧上下文，则用当前 `compileModelMessages`
-的固定轻量估算并在展示中标记 estimated。该估算只用于 UI 参考，不参与自动 compaction。
+的固定轻量估算并在展示中标记 estimated。同一估算也为 compaction v2 提供保守且确定的
+投影预算边界；Provider usage 仍只决定何时触发自动 compaction。
 
 手动 context compaction 只在没有 active / incomplete Turn 时取最新
 `turn_completed` 作为覆盖边界；调用者不能指定任意 Item。Zen 以 admission 时
 Thread 当前生效的 `providerProfileId / modelId / reasoningEffort` 调用所选 Provider，
 默认使用版本化、provider-neutral 的 summary 指令且不使用 Provider opaque compaction
 或 cache。Host 可以配置替代的 summary 指令；该配置只影响未来 summary 生成，不写入
-Thread Item，也不改变已生成 compaction 的重放语义。v1 确定性保留该最新完整 Turn 的全部
-canonical Item；生成、abort、验证或 journal append 失败都明确返回且不追加 compaction
-Item，不隐藏重试。
+Thread Item，也不改变已生成 compaction 的重放语义。v2 以 context window 的 80% 为目标：
+summary 生成后，从最新完整 Turn 中保留预算可容纳的最大模型消息后缀；不参与模型投影的
+Turn/usage 控制 Item 可以继续保留。候选后缀必须完整保留同一模型响应的 tool-call 集及每个
+call/result 对，不能为满足预算拆开 lifecycle。summary 自身已经超过目标时明确失败；生成、
+abort、验证或 journal append 失败也都明确返回且不追加 compaction Item，不隐藏重试。
 
 成功 Turn 使用 admission 时冻结的 Provider adapter、selection、catalog entry 与
 `contextWindow` 判断自动 compaction；只有 Provider 实际报告的有效 `inputTokens`
@@ -576,6 +579,11 @@ Item，不隐藏重试。
 并完整保留同一模型响应的 tool-call 集及每个 call/result 对。相同或更早的有效边界
 不得再次追加。最新有效 compaction 决定模型投影并 supersede 更早投影状态，但所有
 compaction 与原始 Item 都继续留在 journal。
+
+Provider 请求报告 context-window overflow 时，只有已经成功追加 compaction、且重新编译后的
+估算输入严格缩小时，Host 才可以重试一次。当前 Turn 在 Provider 失败时仍是 incomplete，因而
+没有满足该条件的 durable reduction；Runtime 按普通失败写入原始事实且不自动重试，也不增加
+durable 自愈状态。未来若在请求前完成并持久化压缩，可以在同一限制下增加一次 retry。
 
 模型上下文编译器先投影最新 compaction 的 retained canonical Item，再加入稳定标记的
 summary，最后加入覆盖边界后的 canonical Item；当前实现没有独立 system/developer

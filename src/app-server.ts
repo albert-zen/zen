@@ -9,7 +9,10 @@ import {
   type AttachmentStore,
 } from "./attachment.js";
 import {
+  boundedCompactionBoundary,
   CONTEXT_COMPACTION_ALGORITHM_VERSION,
+  CONTEXT_COMPACTION_SUMMARY_PREFIX,
+  contextCompactionTokenBudget,
   latestCompaction,
   latestEligibleCompactionBoundary,
   normalizeContextCompactionConfig,
@@ -47,6 +50,7 @@ import {
   type ModelEvent,
   type ModelMessage,
 } from "./model.js";
+import { estimateModelMessageInputTokens } from "./model-usage.js";
 import {
   ProviderRegistryError,
   type ProviderModel,
@@ -1220,6 +1224,39 @@ export class ZenAppServer {
       summaryInstruction: this.#contextCompaction.summaryInstruction,
       signal: options.signal,
     });
+    const contextWindow = options.selection.model.contextWindow;
+    if (contextWindow === null) {
+      throw new AppServerError(
+        "compaction_budget_unavailable",
+        "Context compaction requires a known model context window",
+      );
+    }
+    const targetTokenBudget = contextCompactionTokenBudget(contextWindow);
+    const summaryTokens = estimateModelMessageInputTokens([
+      {
+        role: "user",
+        text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${summary.text}`,
+      },
+    ]);
+    if (summaryTokens > targetTokenBudget) {
+      throw new AppServerError(
+        "compaction_budget_exceeded",
+        `Context compaction summary exceeds the ${String(targetTokenBudget)} token target`,
+      );
+    }
+    const boundedBoundary = boundedCompactionBoundary(options.thread.items, {
+      retainedTokenBudget: targetTokenBudget - summaryTokens,
+      estimateRetainedTokens: (retainedItems) =>
+        estimateModelMessageInputTokens(
+          compileModelMessages(retainedItems, options.selection.selection),
+        ),
+    });
+    if (boundedBoundary?.item.id !== options.boundary.item.id) {
+      throw new AppServerError(
+        "compaction_boundary_changed",
+        "Context compaction boundary changed during generation",
+      );
+    }
     const item: ContextCompactionItem = {
       id: this.#id(),
       threadId: options.thread.id,
@@ -1227,7 +1264,7 @@ export class ZenAppServer {
       type: "context_compaction",
       coveredThroughItemId: options.boundary.item.id,
       summary: summary.text,
-      retainedItemIds: options.boundary.retainedItemIds,
+      retainedItemIds: boundedBoundary.retainedItemIds,
       providerProfileId: options.selection.selection.providerProfileId,
       modelId: options.selection.selection.modelId,
       reasoningEffort: options.selection.selection.reasoningEffort,
@@ -1783,9 +1820,7 @@ function sameSelection(
 }
 
 function automaticCompactionThreshold(contextWindow: number): number {
-  const quotient = Math.floor(contextWindow / 5);
-  const remainder = contextWindow % 5;
-  return quotient * 4 + Math.ceil((remainder * 4) / 5);
+  return contextCompactionTokenBudget(contextWindow);
 }
 
 async function generateContextCompactionSummary(options: {
