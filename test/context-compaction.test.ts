@@ -214,7 +214,7 @@ test("automatically compacts exactly at 80% using the highest Provider usage sam
           name: "shell",
           arguments: { command: "printf tool-bytes" },
         };
-        yield { type: "usage", inputTokens: 80, outputTokens: 4 };
+        yield { type: "usage", inputTokens: 205, outputTokens: 4 };
         return;
       }
       yield {
@@ -224,7 +224,7 @@ test("automatically compacts exactly at 80% using the highest Provider usage sam
         contentVisibility: "public",
       };
       yield { type: "text_delta", delta: "answer bytes" };
-      yield { type: "usage", inputTokens: 79, outputTokens: 5 };
+      yield { type: "usage", inputTokens: 204, outputTokens: 5 };
     },
   };
   const journal = new InMemoryThreadJournal();
@@ -232,7 +232,7 @@ test("automatically compacts exactly at 80% using the highest Provider usage sam
     journal,
     model,
     modelCatalog: new StaticModelCatalog([
-      { id: "recording-model", isDefault: true, contextWindow: 100 },
+      { id: "recording-model", isDefault: true, contextWindow: 256 },
     ]),
   });
   const thread = await server.startThread();
@@ -270,7 +270,7 @@ test("automatically compacts exactly at 80% using the highest Provider usage sam
     journal,
     model,
     modelCatalog: new StaticModelCatalog([
-      { id: "recording-model", isDefault: true, contextWindow: 100 },
+      { id: "recording-model", isDefault: true, contextWindow: 256 },
     ]),
   });
   const afterRestart = await restarted.readThread(thread.id);
@@ -296,10 +296,16 @@ test("automatically compacts exactly at 80% using the highest Provider usage sam
 test("bounds an oversized latest completed Turn without splitting its tool lifecycle", async () => {
   const toolOutput = "x".repeat(400);
   let normalSamples = 0;
+  const contextWindow = 256;
+  const summaryRequests: ModelRequest[] = [];
   const model: ModelAdapter = {
     provider: "recording",
     async *stream(request): AsyncIterable<ModelEvent> {
       if (isSummaryRequest(request)) {
+        summaryRequests.push(cloneRequest(request));
+        assert(
+          estimateModelMessageInputTokens(request.messages) <= contextWindow,
+        );
         yield { type: "text_delta", delta: "tool work completed" };
         return;
       }
@@ -311,18 +317,18 @@ test("bounds an oversized latest completed Turn without splitting its tool lifec
           name: "shell",
           arguments: { command: `printf ${toolOutput}` },
         };
-        yield { type: "usage", inputTokens: 80, outputTokens: 1 };
+        yield { type: "usage", inputTokens: 205, outputTokens: 1 };
         return;
       }
       yield { type: "text_delta", delta: "finished" };
-      yield { type: "usage", inputTokens: 80, outputTokens: 1 };
+      yield { type: "usage", inputTokens: 205, outputTokens: 1 };
     },
   };
   const server = createServer({
     journal: new InMemoryThreadJournal(),
     model,
     modelCatalog: new StaticModelCatalog([
-      { id: "recording-model", isDefault: true, contextWindow: 100 },
+      { id: "recording-model", isDefault: true, contextWindow },
     ]),
   });
   const thread = await server.startThread();
@@ -341,8 +347,84 @@ test("bounds an oversized latest completed Turn without splitting its tool lifec
   assert.equal(result.output, toolOutput);
   assert.equal(compaction.retainedItemIds.includes(call.id), false);
   assert.equal(compaction.retainedItemIds.includes(result.id), false);
+  assert(summaryRequests.length > 1);
+  const excerptSource = summaryRequests
+    .flatMap((request) => request.messages)
+    .filter(
+      (message) =>
+        message.role === "user" &&
+        "text" in message &&
+        message.text.startsWith("[excerpt]\n"),
+    )
+    .map((message) => ("text" in message ? message.text.slice(10) : ""))
+    .join("");
+  assert(excerptSource.includes(toolOutput));
   assert(
-    estimateModelMessageInputTokens(compileModelMessages(snapshot.items)) <= 80,
+    estimateModelMessageInputTokens(compileModelMessages(snapshot.items)) <=
+      205,
+  );
+});
+
+test("compacts an oversized completed history before admitting the next model sample", async () => {
+  const contextWindow = 256;
+  const requests: ModelRequest[] = [];
+  let normalSamples = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      if (isSummaryRequest(request)) {
+        assert(
+          estimateModelMessageInputTokens(request.messages) <= contextWindow,
+        );
+        yield { type: "text_delta", delta: "s" };
+        return;
+      }
+      normalSamples += 1;
+      yield {
+        type: "text_delta",
+        delta: normalSamples === 1 ? "x".repeat(900) : "next answer",
+      };
+    },
+  };
+  const server = createServer({
+    journal: new InMemoryThreadJournal(),
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow },
+    ]),
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "first")
+  ).done;
+  assert.equal(
+    (await server.readThread(thread.id)).items.some(
+      (item) => item.type === "context_compaction",
+    ),
+    false,
+  );
+
+  await (
+    await server.startTurn(thread.id, "second")
+  ).done;
+
+  const snapshot = await server.readThread(thread.id);
+  const compactionIndex = snapshot.items.findIndex(
+    (item) => item.type === "context_compaction",
+  );
+  const secondTurnId = snapshot.turns[1]?.id;
+  const secondTurnIndex = snapshot.items.findIndex(
+    (item) => item.type === "turn_started" && item.turnId === secondTurnId,
+  );
+  assert(compactionIndex >= 0);
+  assert(secondTurnIndex > compactionIndex);
+  const secondRequest = requests
+    .filter((request) => !isSummaryRequest(request))
+    .at(-1);
+  assert(secondRequest !== undefined);
+  assert(
+    estimateModelMessageInputTokens(secondRequest.messages) < contextWindow,
   );
 });
 

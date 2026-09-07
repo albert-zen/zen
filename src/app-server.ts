@@ -662,6 +662,13 @@ export class ZenAppServer {
       const resolved = this.#requireSelection(configuration);
       const turnId = internal.turnId ?? this.#id();
       const controller = new AbortController();
+      await this.#compactBeforeTurnIfNeeded({
+        thread,
+        turnId,
+        input,
+        resolved,
+        signal: controller.signal,
+      });
       const ready = deferred<void>();
       let highestInputTokens: number | undefined;
       let executionSucceeded = false;
@@ -1206,6 +1213,63 @@ export class ZenAppServer {
     }
   }
 
+  async #compactBeforeTurnIfNeeded(options: {
+    thread: Thread;
+    turnId: string;
+    input: UserInput;
+    resolved: ResolvedProviderSelection;
+    signal: AbortSignal;
+  }): Promise<void> {
+    const contextWindow = options.resolved.model.contextWindow;
+    if (contextWindow === null) return;
+    const previewItems: CanonicalItem[] = [
+      ...options.thread.items,
+      {
+        id: `${options.turnId}:context-preview-started`,
+        threadId: options.thread.id,
+        turnId: options.turnId,
+        createdAt: this.#now(),
+        type: "turn_started",
+        selection: options.resolved.selection,
+      },
+      {
+        id: `${options.turnId}:context-preview-input`,
+        threadId: options.thread.id,
+        turnId: options.turnId,
+        createdAt: this.#now(),
+        type: "user_message",
+        content: options.input,
+      },
+    ];
+    if (
+      estimateModelMessageInputTokens(
+        compileModelMessages(previewItems, options.resolved.selection),
+      ) < contextCompactionTokenBudget(contextWindow)
+    ) {
+      return;
+    }
+
+    let boundary: ReturnType<typeof latestEligibleCompactionBoundary>;
+    try {
+      boundary = latestEligibleCompactionBoundary(options.thread.items);
+    } catch {
+      return;
+    }
+    if (
+      boundary === undefined ||
+      latestCompaction(options.thread.items)?.coveredThroughItemId ===
+        boundary.item.id
+    ) {
+      return;
+    }
+    await this.#appendContextCompaction({
+      thread: options.thread,
+      boundary,
+      selection: options.resolved,
+      signal: options.signal,
+    });
+  }
+
   async #appendContextCompaction(options: {
     thread: Thread;
     boundary: NonNullable<ReturnType<typeof latestEligibleCompactionBoundary>>;
@@ -1222,6 +1286,7 @@ export class ZenAppServer {
       reasoningEffort: options.selection.selection.reasoningEffort,
       messages: sourceMessages,
       summaryInstruction: this.#contextCompaction.summaryInstruction,
+      inputTokenBudget: options.selection.model.contextWindow,
       signal: options.signal,
     });
     const contextWindow = options.selection.model.contextWindow;
@@ -1829,46 +1894,67 @@ async function generateContextCompactionSummary(options: {
   reasoningEffort: string | null;
   messages: ModelMessage[];
   summaryInstruction: string;
+  inputTokenBudget: number | null;
   signal: AbortSignal;
 }): Promise<{
   text: string;
   tokenUsage: { inputTokens: number; outputTokens: number };
 }> {
-  let text = "";
+  if (options.inputTokenBudget === null) {
+    throw new AppServerError(
+      "compaction_budget_unavailable",
+      "Context compaction requires a known model context window",
+    );
+  }
+  const chunks = contextCompactionSummaryChunks(
+    options.messages,
+    options.summaryInstruction,
+    options.inputTokenBudget,
+  );
+  const summaries: string[] = [];
   let inputTokens = 0;
   let outputTokens = 0;
-  const messages: ModelMessage[] = [
-    ...options.messages,
-    { role: "user", text: options.summaryInstruction },
-  ];
   try {
-    for await (const event of options.adapter.stream({
-      model: options.model,
-      reasoningEffort: options.reasoningEffort,
-      messages,
-      tools: [],
-      signal: options.signal,
-    })) {
-      options.signal.throwIfAborted();
-      if (event.type === "text_delta") {
-        text += event.delta;
-      } else if (event.type === "usage") {
-        validateCompactionUsage(event);
-        inputTokens += event.inputTokens;
-        outputTokens += event.outputTokens;
-        if (
-          !Number.isSafeInteger(inputTokens) ||
-          !Number.isSafeInteger(outputTokens)
-        ) {
+    for (const chunk of chunks) {
+      let text = "";
+      const messages: ModelMessage[] = [
+        ...chunk,
+        { role: "user", text: options.summaryInstruction },
+      ];
+      for await (const event of options.adapter.stream({
+        model: options.model,
+        reasoningEffort: options.reasoningEffort,
+        messages,
+        tools: [],
+        signal: options.signal,
+      })) {
+        options.signal.throwIfAborted();
+        if (event.type === "text_delta") {
+          text += event.delta;
+        } else if (event.type === "usage") {
+          validateCompactionUsage(event);
+          inputTokens += event.inputTokens;
+          outputTokens += event.outputTokens;
+          if (
+            !Number.isSafeInteger(inputTokens) ||
+            !Number.isSafeInteger(outputTokens)
+          ) {
+            throw new CompactionSummaryValidationError(
+              "Context compaction token usage exceeded safe integer range",
+            );
+          }
+        } else if (event.type === "tool_call") {
           throw new CompactionSummaryValidationError(
-            "Context compaction token usage exceeded safe integer range",
+            "Context compaction summary generation must not call tools",
           );
         }
-      } else if (event.type === "tool_call") {
+      }
+      if (text.trim().length === 0) {
         throw new CompactionSummaryValidationError(
-          "Context compaction summary generation must not call tools",
+          "Context compaction Provider returned an empty summary",
         );
       }
+      summaries.push(text);
     }
   } catch (error) {
     if (options.signal.aborted || isCompactionAbort(error)) {
@@ -1889,13 +1975,102 @@ async function generateContextCompactionSummary(options: {
       describeCompactionError(error, "Context compaction generation failed"),
     );
   }
-  if (text.trim().length === 0) {
+  return {
+    text: summaries.join("\n\n"),
+    tokenUsage: { inputTokens, outputTokens },
+  };
+}
+
+function contextCompactionSummaryChunks(
+  messages: readonly ModelMessage[],
+  summaryInstruction: string,
+  inputTokenBudget: number,
+): ModelMessage[][] {
+  const instructionTokens = estimateModelMessageInputTokens([
+    { role: "user", text: summaryInstruction },
+  ]);
+  const sourceTokenBudget = inputTokenBudget - instructionTokens;
+  if (sourceTokenBudget <= 4) {
     throw new AppServerError(
-      "compaction_invalid_summary",
-      "Context compaction Provider returned an empty summary",
+      "compaction_budget_exceeded",
+      "Context compaction instruction leaves no room for source context",
     );
   }
-  return { text, tokenUsage: { inputTokens, outputTokens } };
+
+  const groups = summaryMessageGroups(messages).flatMap((group) =>
+    fitSummaryMessageGroup(group, sourceTokenBudget),
+  );
+  const chunks: ModelMessage[][] = [];
+  let current: ModelMessage[] = [];
+  for (const group of groups) {
+    const candidate = [...current, ...group];
+    if (
+      current.length > 0 &&
+      estimateModelMessageInputTokens(candidate) > sourceTokenBudget
+    ) {
+      chunks.push(current);
+      current = [...group];
+    } else {
+      current = candidate;
+    }
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks.length === 0 ? [[]] : chunks;
+}
+
+function summaryMessageGroups(
+  messages: readonly ModelMessage[],
+): ModelMessage[][] {
+  const groups: ModelMessage[][] = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (
+      message?.role !== "assistant" ||
+      !("toolCalls" in message) ||
+      message.toolCalls.length === 0
+    ) {
+      if (message !== undefined) groups.push([message]);
+      continue;
+    }
+    const callIds = new Set(message.toolCalls.map((call) => call.callId));
+    const group: ModelMessage[] = [message];
+    while (index + 1 < messages.length) {
+      const next = messages[index + 1];
+      if (next?.role !== "tool" || !callIds.has(next.callId)) break;
+      group.push(next);
+      index += 1;
+    }
+    groups.push(group);
+  }
+  return groups;
+}
+
+function fitSummaryMessageGroup(
+  group: readonly ModelMessage[],
+  tokenBudget: number,
+): ModelMessage[][] {
+  if (estimateModelMessageInputTokens(group) <= tokenBudget) {
+    return [[...group]];
+  }
+  const source = JSON.stringify(group);
+  const prefix = "[excerpt]\n";
+  const payloadCharacters = (tokenBudget - 4) * 4 - prefix.length;
+  if (payloadCharacters <= 0) {
+    throw new AppServerError(
+      "compaction_budget_exceeded",
+      "Context compaction budget cannot fit a source excerpt",
+    );
+  }
+  const excerpts: ModelMessage[][] = [];
+  for (let offset = 0; offset < source.length; offset += payloadCharacters) {
+    excerpts.push([
+      {
+        role: "user",
+        text: `${prefix}${source.slice(offset, offset + payloadCharacters)}`,
+      },
+    ]);
+  }
+  return excerpts;
 }
 
 class CompactionSummaryValidationError extends Error {}

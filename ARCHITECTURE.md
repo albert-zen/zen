@@ -563,6 +563,12 @@ Turn/usage 控制 Item 可以继续保留。候选后缀必须完整保留同一
 call/result 对，不能为满足预算拆开 lifecycle。summary 自身已经超过目标时明确失败；生成、
 abort、验证或 journal append 失败也都明确返回且不追加 compaction Item，不隐藏重试。
 
+Summary Provider 的每个请求也必须落在所选模型的 context window 内。输入按模型消息顺序分块；
+能放入预算的 tool-call/result 响应组保持完整，单个已经超预算的组则无损序列化为带 excerpt
+标记的普通文本片段，使每个请求都有合法消息形状且全部序列化内容都进入某个 summary 请求。
+每块独立摘要后按原顺序合并，累计 usage 写入同一个 compaction Item；合并摘要仍须满足上述
+80% 最终投影目标，否则不写 journal 并明确失败。
+
 成功 Turn 使用 admission 时冻结的 Provider adapter、selection、catalog entry 与
 `contextWindow` 判断自动 compaction；只有 Provider 实际报告的有效 `inputTokens`
 达到窗口的 80% 整数上界才执行，多次采样或 tool round 取观察到的最高 input context。
@@ -571,6 +577,9 @@ abort、验证或 journal append 失败也都明确返回且不追加 compaction
 自动生成、验证或 persistence 在成功 Turn handle settle 前尝试一次；失败只记录 Host
 诊断，不得把已经 canonical completed 的 Turn 重新投影为 failed，也不在同一 Turn 内重试。
 下一次达到条件的 completed Turn 可以再次尝试，已完成 Turn 的原始 canonical trace 保持不变。
+若 Provider 没有报告 usage，Host 在下一 Turn 写入任何 canonical Item 前，用包含待提交输入的
+消息估算检查 80% 阈值；存在尚未覆盖的 completed boundary 时先完成并持久化同一压缩流程，
+再 admission 新 Turn。这样 oversized completed Turn 不必等下一次普通模型请求失败才被发现。
 
 `context_compaction` canonical Item 记录 `coveredThroughItemId`、原样 summary、
 稳定 canonical 顺序的 `retainedItemIds`、实际 Provider selection、
