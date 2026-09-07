@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   ModelAdapter,
   ModelEvent,
@@ -7,7 +8,23 @@ import type {
 } from "../model.js";
 import type { AttachmentStore } from "../attachment.js";
 
+export interface ModelStreamDiagnostic {
+  timestamp: string;
+  diagnosticId: string;
+  sessionId?: string;
+  model: string;
+  requestId?: string;
+  status: number;
+  payloadIndex: number;
+  field?: string;
+  valueType?: string;
+  toolIndex?: number;
+  failure?: string;
+}
+
 export interface OpenAiCompatibleModelOptions {
+  onStreamFailure?: (event: ModelStreamDiagnostic) => Promise<void>;
+
   baseUrl: string;
   apiKey: string;
   provider?: string;
@@ -54,6 +71,7 @@ export class OpenAiCompatibleModelError extends Error {
 export class OpenAiCompatibleModel implements ModelAdapter {
   readonly provider: string;
 
+  readonly #onStreamFailure: OpenAiCompatibleModelOptions["onStreamFailure"];
   readonly #apiKey: string;
   readonly #defaultParams: Readonly<Record<string, unknown>>;
   readonly #endpoint: string;
@@ -70,6 +88,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     this.#defaultParams = compatibleDefaultParams(options.defaultParams ?? {});
     this.#fetch = options.fetch ?? globalThis.fetch;
     this.#attachments = options.attachments;
+    this.#onStreamFailure = options.onStreamFailure;
   }
 
   async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
@@ -193,11 +212,42 @@ export class OpenAiCompatibleModel implements ModelAdapter {
       );
     }
 
-    yield* parseChatCompletionStream(
-      response.body,
-      request.signal,
-      allowedToolNames,
-    );
+    const diagnostic: ModelStreamDiagnostic = {
+      timestamp: new Date().toISOString(),
+      diagnosticId: randomUUID(),
+      model: request.model.includes(this.#apiKey)
+        ? "[redacted]"
+        : request.model.slice(0, 200),
+      status: response.status,
+      payloadIndex: 0,
+      ...(request.sessionId === undefined
+        ? {}
+        : { sessionId: request.sessionId }),
+      ...(safeRequestId(response.headers, this.#apiKey) === undefined
+        ? {}
+        : { requestId: safeRequestId(response.headers, this.#apiKey)! }),
+    };
+    try {
+      yield* parseChatCompletionStream(
+        response.body,
+        request.signal,
+        allowedToolNames,
+        diagnostic,
+      );
+    } catch (error) {
+      if (!request.signal.aborted && this.#onStreamFailure !== undefined) {
+        diagnostic.failure =
+          error instanceof OpenAiCompatibleModelError
+            ? error.message
+            : "Model stream read failed";
+        try {
+          await this.#onStreamFailure(diagnostic);
+        } catch {
+          console.error("Model stream diagnostic could not be persisted");
+        }
+      }
+      throw error;
+    }
   }
 }
 
@@ -555,6 +605,7 @@ async function* parseChatCompletionStream(
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal,
   allowedToolNames: ReadonlySet<string>,
+  diagnostic: ModelStreamDiagnostic,
 ): AsyncIterable<ModelEvent> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -582,7 +633,11 @@ async function* parseChatCompletionStream(
         false,
       );
       for (const payload of payloads) {
-        yield* consumePayload(payload, state);
+        diagnostic.payloadIndex += 1;
+        delete diagnostic.field;
+        delete diagnostic.valueType;
+        delete diagnostic.toolIndex;
+        yield* consumePayload(payload, state, diagnostic);
       }
       if (state.doneSeen) {
         endedByDone = true;
@@ -593,7 +648,11 @@ async function* parseChatCompletionStream(
     if (!endedByDone) {
       const payloads = feedSse(sse, decoder.decode(), true);
       for (const payload of payloads) {
-        yield* consumePayload(payload, state);
+        diagnostic.payloadIndex += 1;
+        delete diagnostic.field;
+        delete diagnostic.valueType;
+        delete diagnostic.toolIndex;
+        yield* consumePayload(payload, state, diagnostic);
       }
     }
   } finally {
@@ -670,6 +729,7 @@ async function* parseChatCompletionStream(
 async function* consumePayload(
   payload: string,
   state: StreamState,
+  diagnostic: ModelStreamDiagnostic,
 ): AsyncIterable<ModelEvent> {
   if (payload.trim() === "[DONE]") {
     if (state.doneSeen) {
@@ -793,7 +853,7 @@ async function* consumePayload(
           "OpenAI-compatible model stream continued after finishing",
         );
       }
-      mergeToolCalls(state.toolCalls, delta.tool_calls);
+      mergeToolCalls(state.toolCalls, delta.tool_calls, diagnostic);
     }
 
     const finishReason = choice.finish_reason;
@@ -907,9 +967,12 @@ function isTokenCount(value: unknown): value is number {
 function mergeToolCalls(
   calls: Map<number, ToolCallAccumulator>,
   deltas: readonly unknown[],
+  diagnostic: ModelStreamDiagnostic,
 ): void {
   for (const value of deltas) {
     const delta = record(value, "tool call delta");
+    diagnostic.field = "tool_calls.index";
+    diagnostic.valueType = diagnosticValueType(delta.index);
     const index = delta.index ?? 0;
     if (
       typeof index !== "number" ||
@@ -922,6 +985,9 @@ function mergeToolCalls(
       );
     }
 
+    diagnostic.toolIndex = index;
+    diagnostic.field = "tool_calls.id";
+    diagnostic.valueType = diagnosticValueType(delta.id);
     const current = calls.get(index) ?? { arguments: "" };
     const id = nonEmptyFragment(delta.id, "tool call id");
     if (id !== undefined && current.id !== undefined && id !== current.id) {
@@ -931,10 +997,14 @@ function mergeToolCalls(
       );
     }
 
+    diagnostic.field = "tool_calls.function";
+    diagnostic.valueType = diagnosticValueType(delta.function);
     const functionDelta =
       delta.function === undefined
         ? {}
         : record(delta.function, "tool call function");
+    diagnostic.field = "tool_calls.function.name";
+    diagnostic.valueType = diagnosticValueType(functionDelta.name);
     const name = nonEmptyFragment(functionDelta.name, "tool name");
     if (
       name !== undefined &&
@@ -947,6 +1017,8 @@ function mergeToolCalls(
       );
     }
 
+    diagnostic.field = "tool_calls.function.arguments";
+    diagnostic.valueType = diagnosticValueType(functionDelta.arguments);
     const argumentDelta = functionDelta.arguments;
     if (argumentDelta !== undefined && typeof argumentDelta !== "string") {
       throw modelError(
@@ -962,7 +1034,18 @@ function mergeToolCalls(
       ...(mergedName === undefined ? {} : { name: mergedName }),
       arguments: current.arguments + (argumentDelta ?? ""),
     });
+    delete diagnostic.field;
+    delete diagnostic.valueType;
+    delete diagnostic.toolIndex;
   }
+}
+
+function diagnosticValueType(value: unknown): string {
+  return value === null
+    ? "null"
+    : Array.isArray(value)
+      ? "array"
+      : typeof value;
 }
 
 function nonEmptyFragment(value: unknown, label: string): string | undefined {

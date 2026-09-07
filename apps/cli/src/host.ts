@@ -1,3 +1,4 @@
+import { createModelDiagnosticWriter } from "./model-diagnostics.js";
 import path from "node:path";
 import { fetch as undiciFetch, ProxyAgent } from "undici";
 
@@ -235,12 +236,20 @@ export function createHostedAppServer(
     });
   }
   const fetches: ProviderFetch[] = [];
+  const onStreamFailure = createModelDiagnosticWriter(
+    path.join(options.dataDirectory, "diagnostics"),
+  );
   const profiles = preparedProfiles.map((profile) => {
     const fetch = createProviderFetch(profile.transport);
     fetches.push(fetch);
     return {
       providerProfileId: profile.providerProfileId,
-      adapter: createModel(profile.provider, fetch, attachments),
+      adapter: createModel(
+        profile.provider,
+        fetch,
+        attachments,
+        onStreamFailure,
+      ),
       modelCatalog: profile.catalog,
     };
   });
@@ -448,6 +457,7 @@ function createModel(
   provider: HostProvider,
   fetch: typeof globalThis.fetch,
   attachments: AttachmentStore,
+  onStreamFailure?: ReturnType<typeof createModelDiagnosticWriter>,
 ): ModelAdapter {
   if (provider.type === "fake") {
     return new FakeModel();
@@ -466,6 +476,7 @@ function createModel(
     });
   }
   return new OpenAiCompatibleModel({
+    ...(onStreamFailure === undefined ? {} : { onStreamFailure }),
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
     ...(provider.name === undefined ? {} : { provider: provider.name }),

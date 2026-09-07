@@ -791,3 +791,5 @@ root；这些 package 关系不会长出 Project、第二套 Agent 或调度语�
 CAS mapped surface 的机会型验收，不反向塑造 ZAS 或 Zen Core。
 
 模型流异常终止时，Runtime 将已收到的公开文本与 reasoning 一次性提交为 canonical 快照，再记录失败或中断；不记录流式 delta、不执行未完成工具调用。Reasoning 的 `incomplete: true` 标记只供历史显示，禁止作为 Provider reasoning 重放；失败回合的文本属于 trace，不作为成功最终答复。
+
+Host 为兼容模型流解析失败保存独立、限量轮转的结构化诊断（请求关联、分片序号、字段类型），不保存响应正文、工具参数或凭证，不作为会话语义来源；诊断写入失败不得替换原始模型错误。
