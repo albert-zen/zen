@@ -686,6 +686,63 @@ export class ZenXSettingsService {
     });
   }
 
+  async editWorkspace(
+    workspace: string,
+    name: string,
+    nextWorkspace: string,
+  ): Promise<boolean> {
+    if (typeof name !== "string" || !name.trim() || name.trim().length > 200)
+      throw new Error("Project name must contain 1–200 characters");
+    if (typeof nextWorkspace !== "string" || !nextWorkspace.trim())
+      throw new Error("Project folder is required");
+    const resolved = resolveProjectPath(nextWorkspace, this.#projectPlatform);
+    return await this.#queueProfileOperation(async () => {
+      const snapshot = await this.#stableWorkspaceSnapshot(
+        this.#requireProfile(),
+        [workspace, resolved],
+      );
+      const oldKey = snapshot.requested[0]!.key;
+      const selected = snapshot.entries.find((entry) => entry.key === oldKey);
+      if (!selected) throw new Error("Project is not configured");
+      const target = snapshot.requested[1]!;
+      if (
+        target.key !== oldKey &&
+        snapshot.entries.some((entry) => entry.key === target.key)
+      )
+        throw new Error("That folder already belongs to another project");
+      const targetPath =
+        target.key === oldKey ? selected.displayPath : target.displayPath;
+      const names = { ...snapshot.profile.projectNames };
+      delete names[selected.displayPath];
+      names[targetPath] = name.trim();
+      const isDefault = snapshot.defaultKey === oldKey;
+      const next = validateHostProfile(
+        {
+          ...snapshot.profile,
+          workspaces: snapshot.entries.map((entry) =>
+            entry.key === oldKey ? targetPath : entry.displayPath,
+          ),
+          workspace: isDefault ? targetPath : snapshot.profile.workspace,
+          lastUsedWorkspace:
+            snapshot.profile.lastUsedWorkspace === selected.displayPath
+              ? targetPath
+              : snapshot.profile.lastUsedWorkspace,
+          projectNames: names,
+          sidebarOrder: {
+            ...snapshot.profile.sidebarOrder,
+            projectKeys: snapshot.profile.sidebarOrder.projectKeys.map((key) =>
+              key === oldKey ? target.key : key,
+            ),
+          },
+        },
+        this.#projectPlatform,
+      );
+      await this.#profileStore.write(next);
+      this.#profile = next;
+      return isDefault && target.key !== oldKey;
+    });
+  }
+
   async removeWorkspace(workspace: string): Promise<boolean> {
     return await this.#queueProfileOperation(async () => {
       const snapshot = await this.#stableWorkspaceSnapshot(

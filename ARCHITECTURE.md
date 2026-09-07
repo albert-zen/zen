@@ -82,6 +82,7 @@
 - **ZenXImageAttachmentProjection** — ZenX Electron main 通过既有 host-local 边界从 canonical
   `user_message` 投影按 Item 顺序排列的 `AttachmentRef`，并以只接受这些引用的 typed preload IPC
   导入和读取 Attachment Store payload；renderer 只持有草稿引用与短时 object URL，不取得任意文件读取权。
+- **ZenXProjectNamePreference** — host-profile 按已配置 workspace 保存可编辑显示名称；名称不改变目录身份、Thread cwd 或 journal，修改只刷新 Project 投影，不重启 Host。
 - **ZenXProjectProjection** — ZenX main 的同一个实例把 host-profile workspace 与 ZAS
   原生 Thread cwd 按最近存在祖先的异步 realpath 归一为 UI 和 Agent self-control 共用的
   Project 读模型；Windows 路径折叠大小写，POSIX 路径保留大小写，配置保留用户选择的展示路径，

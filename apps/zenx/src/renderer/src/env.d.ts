@@ -132,6 +132,11 @@ declare global {
           modelId: string,
         ): Promise<ZenXImageCapabilityProbeResult>;
         addWorkspace(workspace: string): Promise<PublicHostSettings>;
+        editWorkspace(
+          workspace: string,
+          name: string,
+          nextWorkspace: string,
+        ): Promise<PublicHostSettings>;
         removeWorkspace(workspace: string): Promise<PublicHostSettings>;
         setDefaultWorkspace(workspace: string): Promise<PublicHostSettings>;
         markWorkspaceUsed(workspace: string): Promise<PublicHostSettings>;

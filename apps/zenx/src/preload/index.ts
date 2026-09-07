@@ -205,6 +205,17 @@ contextBridge.exposeInMainWorld("zenx", {
         providerProfileId,
         modelId,
       ),
+    editWorkspace: async (
+      workspace: string,
+      name: string,
+      nextWorkspace: string,
+    ): Promise<PublicHostSettings> =>
+      await ipcRenderer.invoke(
+        ipcChannels.workspaceEdit,
+        workspace,
+        name,
+        nextWorkspace,
+      ),
     addWorkspace: async (workspace: string): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.workspaceAdd, workspace),
     removeWorkspace: async (workspace: string): Promise<PublicHostSettings> =>

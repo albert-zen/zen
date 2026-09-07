@@ -53,6 +53,7 @@ interface SidebarProps {
   newThreadDisabled?: boolean;
   onAddProject(): void;
   onRemoveProject(workspace: string): void;
+  onEditProject?(workspace: string, name: string): void;
   onSetDefaultProject(workspace: string): void;
   onOpenContribution(route: string): void;
   onOpenSettings(): void;
@@ -86,6 +87,7 @@ export function Sidebar({
   newThreadDisabled = false,
   onAddProject,
   onRemoveProject,
+  onEditProject,
   onSetDefaultProject,
   onOpenContribution,
   onOpenSettings,
@@ -316,6 +318,7 @@ export function Sidebar({
                   onNewThread={onNewThread}
                   newThreadDisabled={newThreadDisabled}
                   onRemoveProject={onRemoveProject}
+                  onEditProject={onEditProject}
                   onSetDefaultProject={onSetDefaultProject}
                   onSelectThread={onSelectThread}
                   onChangeThreadLifecycle={onChangeThreadLifecycle}
@@ -545,6 +548,7 @@ function ProjectsView({
   onNewThread,
   newThreadDisabled,
   onRemoveProject,
+  onEditProject,
   onSetDefaultProject,
   threads,
   selectedThreadId,
@@ -566,6 +570,7 @@ function ProjectsView({
   onNewThread(workspace?: string): void;
   newThreadDisabled: boolean;
   onRemoveProject(workspace: string): void;
+  onEditProject?(workspace: string, name: string): void;
   onSetDefaultProject(workspace: string): void;
   threads: readonly NativeThreadSummary[];
   selectedThreadId: string | null;
@@ -610,6 +615,7 @@ function ProjectsView({
       onNewThread={onNewThread}
       newThreadDisabled={newThreadDisabled}
       onRemoveProject={onRemoveProject}
+      onEditProject={onEditProject}
       onSetDefaultProject={onSetDefaultProject}
       onSelectThread={onSelectThread}
       pendingApprovalThreadIds={pendingApprovalThreadIds}
@@ -788,6 +794,7 @@ function ProjectRows({
   onNewThread,
   newThreadDisabled,
   onRemoveProject,
+  onEditProject,
   onSetDefaultProject,
   selectedThreadId,
   onSelectThread,
@@ -805,6 +812,7 @@ function ProjectRows({
   onNewThread(workspace?: string): void;
   newThreadDisabled: boolean;
   onRemoveProject(workspace: string): void;
+  onEditProject?(workspace: string, name: string): void;
   onSetDefaultProject(workspace: string): void;
   selectedThreadId: string | null;
   onSelectThread(threadId: string): void;
@@ -992,6 +1000,26 @@ function ProjectRows({
                   items[nextIndex]?.focus();
                 }}
               >
+                <div className="project-menu-summary">
+                  <strong>{group.label}</strong>
+                  <span>{group.threads.length} threads</span>
+                  <span title={group.workspace ?? undefined}>
+                    {group.workspace}
+                  </span>
+                </div>
+                {onEditProject ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMenu(false);
+                      onEditProject(group.workspace!, group.label);
+                    }}
+                  >
+                    <Icon name="settings" size={13} />
+                    <span>Edit project</span>
+                  </button>
+                ) : null}
                 {!group.isDefault ? (
                   <button
                     type="button"

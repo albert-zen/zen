@@ -1768,3 +1768,97 @@ class FailingCompensationVault extends ZenXCredentialVault {
     await super.clearApiKey(providerProfileId);
   }
 }
+
+test("project names persist without changing workspace identity or unrelated settings", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-project-edit-"));
+  const options = {
+    userDataDirectory: directory,
+    zenDataDirectory: path.join(directory, "zen"),
+    vault: new ZenXCredentialVault(
+      path.join(directory, "credentials.vault"),
+      encryption,
+    ),
+  };
+  try {
+    const service = new ZenXSettingsService(options);
+    await service.initialize({ ZENX_PROVIDER: "fake", ZENX_CWD: directory });
+    const before = (await service.publicSettings()).profile;
+    await service.editWorkspace(directory, "My project", directory);
+    const reloaded = new ZenXSettingsService(options);
+    await reloaded.initialize({});
+    const after = (await reloaded.publicSettings()).profile;
+    assert.equal(after.projectNames?.[directory], "My project");
+    assert.deepEqual(after.workspaces, before.workspaces);
+    assert.deepEqual(after.defaultModel, before.defaultModel);
+    await assert.rejects(
+      service.editWorkspace(directory, "  ", directory),
+      /name/i,
+    );
+    await assert.rejects(
+      service.editWorkspace(
+        path.join(directory, "missing"),
+        "Other",
+        directory,
+      ),
+      /configured/i,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("single-folder edits save atomically, reject collisions and preserve unrelated project names", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-project-folder-edit-"),
+  );
+  const options = {
+    userDataDirectory: directory,
+    zenDataDirectory: path.join(directory, "zen"),
+    vault: new ZenXCredentialVault(
+      path.join(directory, "credentials.vault"),
+      encryption,
+    ),
+  };
+  try {
+    const service = new ZenXSettingsService(options);
+    await service.initialize({ ZENX_PROVIDER: "fake", ZENX_CWD: directory });
+    const other = path.join(directory, "other"),
+      changed = path.join(directory, "changed");
+    await mkdir(other);
+    await mkdir(changed);
+    await service.addWorkspace(other);
+    await service.editWorkspace(other, "Other name", other);
+    await assert.rejects(
+      service.editWorkspace(directory, "Collision", other),
+      /already belongs/,
+    );
+    assert.equal(
+      (await service.publicSettings()).profile.projectNames?.[directory],
+      undefined,
+    );
+    assert.equal(
+      await service.editWorkspace(directory, "Changed", changed),
+      true,
+    );
+    const reloaded = new ZenXSettingsService(options);
+    await reloaded.initialize({});
+    const profile = (await reloaded.publicSettings()).profile;
+    assert.equal(profile.workspace, changed);
+    assert.deepEqual(profile.workspaces, [changed, other]);
+    assert.deepEqual(profile.projectNames, {
+      [changed]: "Changed",
+      [other]: "Other name",
+    });
+    assert.equal(
+      await reloaded.editWorkspace(other, "Renamed again", other),
+      false,
+    );
+    await reloaded.removeWorkspace(other);
+    assert.equal(
+      (await reloaded.publicSettings()).profile.projectNames?.[other],
+      undefined,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

@@ -22,6 +22,7 @@ export const ipcChannels = {
   providerDelete: "zenx:settings:provider-delete",
   providerDiscover: "zenx:settings:provider-discover",
   providerImageProbe: "zenx:settings:provider-image-probe",
+  workspaceEdit: "zenx:settings:workspace-edit",
   workspaceAdd: "zenx:settings:workspace-add",
   workspaceRemove: "zenx:settings:workspace-remove",
   workspaceDefault: "zenx:settings:workspace-default",

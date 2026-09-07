@@ -59,6 +59,7 @@ import {
   type ComposerSubmission,
 } from "./composer-state.js";
 import { Icon } from "./icons.js";
+import { ProjectEditor } from "./ProjectEditor.js";
 import { DirectoryPicker } from "./DirectoryPicker.js";
 import {
   applySettingsMirror,
@@ -280,6 +281,10 @@ export function App() {
   }, [page]);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [editingProject, setEditingProject] = useState<{
+    workspace: string;
+    name: string;
+  } | null>(null);
   const [projectPickerIntent, setProjectPickerIntent] = useState<
     "add-project" | "new-thread" | null
   >(null);
@@ -1701,6 +1706,9 @@ export function App() {
             .then(async () => await loadProjects())
             .catch((error: unknown) => setRequestError(describeError(error)));
         }}
+        onEditProject={(workspace, name) =>
+          setEditingProject({ workspace, name })
+        }
         onSetDefaultProject={(workspace) => {
           void window.zenx.settings
             .addWorkspace(workspace)
@@ -1933,6 +1941,47 @@ export function App() {
           onClose={() => setWorkspaceOpen(false)}
           settings={selectedSettings}
           thread={threadDetail}
+        />
+      ) : null}
+      {editingProject !== null ? (
+        <ProjectEditor
+          workspace={editingProject.workspace}
+          name={editingProject.name}
+          isDefault={projects.projects.some(
+            (project) =>
+              project.workspace === editingProject.workspace &&
+              project.isDefault,
+          )}
+          hostBusy={activeSummaries.some((summary) =>
+            threadHasActiveTurn(summary, threadDetail),
+          )}
+          onClose={() => {
+            const key = projects.projects.find(
+              (project) => project.workspace === editingProject.workspace,
+            )?.key;
+            setEditingProject(null);
+            requestAnimationFrame(() =>
+              document
+                .getElementById(
+                  `project-more-trigger-${encodeURIComponent(key ?? "")}`,
+                )
+                ?.focus(),
+            );
+          }}
+          onSave={async (name, folder) => {
+            await window.zenx.settings.editWorkspace(
+              editingProject.workspace,
+              name,
+              folder,
+            );
+            await loadProjects();
+          }}
+          onRemove={async () => {
+            await window.zenx.settings.removeWorkspace(
+              editingProject.workspace,
+            );
+            await loadProjects();
+          }}
         />
       ) : null}
       {projectPickerIntent !== null ? (

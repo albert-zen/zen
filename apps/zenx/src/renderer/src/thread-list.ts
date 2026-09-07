@@ -160,7 +160,7 @@ export function deriveProjectGroups(
       );
       return {
         key: project.key,
-        label: projectLabel(project.workspace),
+        label: project.name ?? projectLabel(project.workspace),
         workspace: project.workspace,
         configured: project.configured,
         isDefault: project.isDefault,
@@ -207,7 +207,7 @@ export function moveSidebarProject(
   const stableProjects = projection.projects
     .map((project) => ({
       key: project.key,
-      label: projectLabel(project.workspace),
+      label: project.name ?? projectLabel(project.workspace),
     }))
     .sort(
       (left, right) =>

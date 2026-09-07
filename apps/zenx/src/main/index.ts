@@ -883,6 +883,30 @@ function installSettingsIpc(
     async () => await settings.publicSettings(),
   );
   ipcMain.handle(
+    ipcChannels.workspaceEdit,
+    async (
+      _event,
+      workspace: unknown,
+      name: unknown,
+      nextWorkspace: unknown,
+    ) => {
+      if (
+        typeof workspace !== "string" ||
+        typeof name !== "string" ||
+        typeof nextWorkspace !== "string"
+      )
+        throw new Error("Invalid project edit");
+      const requiresRestart = await settings.editWorkspace(
+        workspace,
+        name,
+        nextWorkspace,
+      );
+      await refreshProjects();
+      if (requiresRestart) await restartHost();
+      return await settings.publicSettings();
+    },
+  );
+  ipcMain.handle(
     ipcChannels.workspaceAdd,
     async (_event, workspace: unknown) => {
       if (typeof workspace !== "string") throw new Error("Invalid workspace");
@@ -1099,6 +1123,7 @@ async function syncProjectProjection(
     profile.workspaces,
     profile.workspace,
     profile.lastUsedWorkspace,
+    profile.projectNames,
   );
 }
 

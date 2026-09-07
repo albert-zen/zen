@@ -513,3 +513,29 @@ function deferred<T>(): {
   });
   return { promise, resolve, reject };
 }
+
+test("project display names do not move existing conversations when the configured folder changes", async () => {
+  const projection = new ZenXProjectProjection(
+    "linux",
+    async (candidate) => candidate,
+  );
+  await projection.updateConfiguration(["/new"], "/new", null, {
+    "/new": "Named project",
+  });
+  const snapshot = await projection.project([{ id: "existing", cwd: "/old" }]);
+  const current = snapshot.projects.find(
+    (project) => project.workspace === "/new",
+  )!;
+  assert.equal(current.name, "Named project");
+  assert.deepEqual(current.threadIds, []);
+  assert.deepEqual(
+    snapshot.projects.find((project) => project.workspace === "/old")
+      ?.threadIds,
+    ["existing"],
+  );
+  const starts: string[] = [];
+  await startConfiguredProjectThread(projection, "/new", async ({ cwd }) =>
+    starts.push(cwd),
+  );
+  assert.deepEqual(starts, ["/new"]);
+});

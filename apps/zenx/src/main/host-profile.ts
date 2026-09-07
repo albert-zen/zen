@@ -56,6 +56,7 @@ export interface ZenXHostProfile {
   titleModel: ZenXModelReference;
   workspace: string | null;
   workspaces: string[];
+  projectNames?: Record<string, string>;
   lastUsedWorkspace: string | null;
   approvalPolicy: "always" | "never";
   /** Missing in an older v3 profile means the product default, both. */
@@ -312,6 +313,15 @@ export function validateHostProfile(
     titleModel,
     workspace,
     workspaces,
+    ...(value.projectNames === undefined
+      ? {}
+      : {
+          projectNames: normalizeProjectNames(
+            value.projectNames,
+            workspaces,
+            projectPlatform,
+          ),
+        }),
     lastUsedWorkspace,
     approvalPolicy: value.approvalPolicy,
     toolPresentation,
@@ -994,4 +1004,23 @@ function nonEmpty(value: unknown, label: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeProjectNames(
+  value: unknown,
+  workspaces: readonly string[],
+  platform: NodeJS.Platform,
+): Record<string, string> {
+  if (!isRecord(value)) throw new Error("Invalid project names");
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([workspace, name]) => {
+        const resolved = resolveProjectPath(workspace, platform);
+        const label = nonEmpty(name, "Project name");
+        if (label.length > 200)
+          throw new Error("Project name must be at most 200 characters");
+        return [resolved, label];
+      })
+      .filter(([workspace]) => workspaces.includes(workspace!)),
+  );
 }
