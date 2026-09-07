@@ -238,6 +238,8 @@ export interface ToolResultItem extends ItemBase {
   /** Optional provider-neutral data for product rendering; absent on legacy Items. */
   contentType?: string;
   structuredContent?: JsonValue;
+  /** Provider-neutral content returned to the model by a trusted builtin tool. */
+  modelContent?: UserInput;
 }
 
 export type JsonPrimitive = string | number | boolean | null;
@@ -598,6 +600,9 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         requireNonEmptyString(item.contentType, `${type}.contentType`);
         validateJsonValue(item.structuredContent, `${type}.structuredContent`);
       }
+      if (item.modelContent !== undefined) {
+        validateUserInput(item.modelContent, `${type}.modelContent`);
+      }
       break;
     }
     case "failure":
@@ -694,7 +699,7 @@ function requireReasoningEffort(value: unknown, name: string): void {
   requireNonEmptyString(value, name);
 }
 
-function validateUserInput(value: unknown, name: string): void {
+export function validateUserInput(value: unknown, name: string): void {
   if (!Array.isArray(value) || value.length === 0) {
     throw new Error(`${name} must be a non-empty array`);
   }

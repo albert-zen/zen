@@ -242,13 +242,23 @@ async function toResponsesInput(
   }
 
   if (message.role === "tool") {
-    return [
+    const input: Array<Record<string, unknown>> = [
       {
         type: "function_call_output",
         call_id: providerCallId(message.callId),
         output: `Exit code: ${String(message.exitCode)}\n${message.text}`,
       },
     ];
+    if (message.modelContent !== undefined) {
+      input.push(
+        ...(await toResponsesInput(
+          { role: "user", content: message.modelContent },
+          index,
+          attachments,
+        )),
+      );
+    }
+    return input;
   }
 
   if ("toolCalls" in message) {

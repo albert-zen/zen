@@ -134,6 +134,11 @@ export class OpenAiCompatibleModel implements ModelAdapter {
         pendingReasoning = "";
       }
       messages.push(encoded);
+      if (message.role === "tool" && message.modelContent !== undefined) {
+        messages.push(
+          await toChatUserContent(message.modelContent, this.#attachments),
+        );
+      }
     }
     if (
       pendingReasoning.length > 0 &&
@@ -526,30 +531,37 @@ async function toChatMessage(
   }
 
   if ("content" in message) {
-    const content: Array<Record<string, unknown>> = [];
-    for (const part of message.content) {
-      if (part.type === "text") {
-        content.push({ type: "text", text: part.text });
-      } else {
-        if (attachments === undefined) {
-          throw modelError(
-            "configuration",
-            "OpenAI-compatible attachment reader is required for image input",
-          );
-        }
-        const bytes = await attachments.read(part.attachment);
-        content.push({
-          type: "image_url",
-          image_url: {
-            url: `data:${part.attachment.mediaType};base64,${Buffer.from(bytes).toString("base64")}`,
-          },
-        });
-      }
-    }
-    return { role: "user", content };
+    return await toChatUserContent(message.content, attachments);
   }
 
   return { role: message.role, content: message.text };
+}
+
+async function toChatUserContent(
+  modelContent: import("../item.js").UserInput,
+  attachments: Pick<AttachmentStore, "read"> | undefined,
+): Promise<Readonly<Record<string, unknown>>> {
+  const content: Array<Record<string, unknown>> = [];
+  for (const part of modelContent) {
+    if (part.type === "text") {
+      content.push({ type: "text", text: part.text });
+    } else {
+      if (attachments === undefined) {
+        throw modelError(
+          "configuration",
+          "OpenAI-compatible attachment reader is required for image input",
+        );
+      }
+      const bytes = await attachments.read(part.attachment);
+      content.push({
+        type: "image_url",
+        image_url: {
+          url: `data:${part.attachment.mediaType};base64,${Buffer.from(bytes).toString("base64")}`,
+        },
+      });
+    }
+  }
+  return { role: "user", content };
 }
 
 function chatCompletionsEndpoint(baseUrl: string): string {

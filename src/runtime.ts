@@ -45,6 +45,8 @@ export interface RuntimeConfiguration {
   reasoningEffort: string | null;
   sandbox: SandboxMode;
   approvalPolicy: ApprovalPolicy;
+  /** null preserves the existing Unknown capability semantics. */
+  inputModalities?: readonly string[] | null;
 }
 
 export type RuntimeEvent =
@@ -695,6 +697,7 @@ export class AgentRuntime {
         arguments: toolCall.arguments,
         cwd: options.configuration.cwd,
         signal: execution.signal,
+        threadId: options.thread.id,
       });
     } catch (error) {
       const result = {
@@ -788,6 +791,7 @@ export class AgentRuntime {
               scheduler,
               execution.nestedToolNames,
             ),
+            options.configuration.inputModalities,
           );
           const result =
             execution.admission === "inherited"
@@ -926,6 +930,9 @@ export class AgentRuntime {
             contentType: result.contentType,
             structuredContent: result.structuredContent,
           }),
+      ...(result.modelContent === undefined
+        ? {}
+        : { modelContent: result.modelContent }),
     };
     await this.#completeItem(resultItem, options);
   }

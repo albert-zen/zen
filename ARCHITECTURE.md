@@ -22,6 +22,8 @@
 - **Tool Output Spool** — Host 把超出模型 preview 上限的完整已捕获 text result 暂存到权限收窄的临时文件，并只把含 head/tail、大小、hash 和易失路径的 receipt canonicalize；临时副本不是 Thread authority。
 - **Tool Execution Mode** — Tool Runtime 对执行 body 只声明 `parallel_safe` 或 `exclusive`；未声明与 builtin shell 一律按 `exclusive`，该分类不是权限或资源 scope。
 - **Tool Execution Status** — AgentRuntime 为每条新 `tool_result` 记录 `completed`、`failed` 或 `declined` 的 provider-neutral canonical 事实，Tool Runtime 只返回结果内容和 exit code，不能决定审批语义。
+- **Tool Model Content** — trusted builtin 可以让 canonical `tool_result` 携带 provider-neutral `UserInput`，由既有 Attachment Store 在后续模型采样时投影为真实媒体内容，并随 ItemList 重放而不保存 payload 副本。
+- **Tool Model Modality Requirement** — Tool Runtime 可声明执行所需的模型输入 modality；AgentRuntime 对已知不支持的模型在执行 body 前明确失败，而 `null` 继续表示 Unknown 并沿用尝试语义。
 - **Tool Policy Store** — Host 按稳定 tool name 持有 `ask_unknown` 的 approved/denied 决定并通过可持久化 port 注入 Tool Environment，不进入 Thread 或 canonical ItemList。
 - **Tool Runtime** — Tool Environment 按一个精确 stable tool name 注册的 specification、execution mode 与 execution body；builtin、plugin proxy 与 external proxy 使用同一单工具合同。
 - **Tool Bundle** — 可选的瞬时共享归属对象，用一个 identity 原子发布或替换一组 Tool Runtime，并为 plugin 或跨进程 bridge 持有 prepared-invocation lease；它不参与模型展示或按 name 二次分发。
@@ -56,6 +58,7 @@
 - **AttachmentStore** — ZAS 管理的不可变、SHA-256 内容寻址 payload store；
   canonical Item 只保存 provider-neutral `AttachmentRef`，Store 与 ItemList 合起来才足以重放输入，
   它不保存消息、Turn、引用关系或任何第二份会话状态。
+- **View Image Tool** — host-owned builtin `view_image` 把按 Thread cwd 解析并导入的本地图片，或当前 Thread 已引用的 `AttachmentRef`，作为 Tool Model Content 重新加入下一次视觉模型采样。
 - **ContextCompactionItem** — Zen 在完整 Turn 边界生成并追加的 provider-neutral
   context summary；它记录覆盖边界、稳定有序的保留 Item、冻结的 Provider selection、
   版本化算法与 token usage，使后续模型上下文和重启投影都只由 append-only ItemList 推导。

@@ -44,6 +44,7 @@ import {
   type ToolOutputSpoolOptions,
 } from "../../../src/tool-output-spool.js";
 import type { ToolPresentation } from "../../../src/tool-presentation.js";
+import { ViewImageToolRuntime } from "../../../src/view-image.js";
 import { OpenAiSubscriptionAuthProfile } from "./subscription-auth.js";
 import { legacyModelCatalogEntries } from "./model-presets.js";
 
@@ -129,18 +130,21 @@ export type HostedZenAppServer = ZenAppServer & {
 export function createHostedAppServer(
   options: ZenHostOptions,
 ): HostedZenAppServer {
-  if (
-    options.toolEnvironment?.definitions.some(
-      (definition) => definition.name === "apply_patch",
-    )
-  ) {
+  const reservedTool = options.toolEnvironment?.definitions.find(
+    (definition) =>
+      definition.name === "apply_patch" || definition.name === "view_image",
+  );
+  if (reservedTool !== undefined) {
     throw new Error(
-      "Tool name apply_patch is reserved for the builtin runtime",
+      `Tool name ${reservedTool.name} is reserved for the builtin runtime`,
     );
   }
   const attachments =
     options.attachments ??
     new FileAttachmentStore(path.join(options.dataDirectory, "attachments"));
+  const journal =
+    options.journal ??
+    new JsonlThreadJournal(path.join(options.dataDirectory, "threads"));
   const configuredProfiles = normalizeProviderProfiles(options);
   const seenProfileIds = new Set<string>();
   const preparedProfiles = configuredProfiles.map((profile) => {
@@ -229,6 +233,10 @@ export function createHostedAppServer(
     kind: "builtin",
     id: "apply-patch",
   });
+  toolEnvironment.registerRuntime(
+    new ViewImageToolRuntime({ attachments, journal }),
+    { kind: "builtin", id: "view-image" },
+  );
   if (codeRuntime.runtime !== undefined) {
     toolEnvironment.registerRuntime(codeRuntime.runtime, {
       kind: "builtin",
@@ -254,9 +262,7 @@ export function createHostedAppServer(
     };
   });
   const appServer = new ZenAppServer({
-    journal:
-      options.journal ??
-      new JsonlThreadJournal(path.join(options.dataDirectory, "threads")),
+    journal,
     attachments,
     runtime: new AgentRuntime({
       toolEnvironment,

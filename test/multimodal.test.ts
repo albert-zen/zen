@@ -10,6 +10,7 @@ import { ZenAppServer } from "../src/app-server.js";
 import {
   FileAttachmentStore,
   InMemoryAttachmentStore,
+  type AttachmentRef,
   type AttachmentStore,
 } from "../src/attachment.js";
 import type { CanonicalItem } from "../src/item.js";
@@ -31,7 +32,215 @@ import { CodexConnection } from "../src/protocol/codex/connection.js";
 import { projectThread } from "../src/protocol/codex/mapper.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
-import { ShellToolRuntime, ToolEnvironment } from "../src/tool.js";
+import {
+  ShellToolRuntime,
+  ToolEnvironment,
+  type ToolRuntime,
+} from "../src/tool.js";
+import { ViewImageToolRuntime } from "../src/view-image.js";
+
+test("view_image imports a cwd-relative file and sends its image content to the next provider sample", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-view-image-"));
+  const journal = new JsonlThreadJournal(path.join(root, "threads"));
+  const attachments = new FileAttachmentStore(path.join(root, "attachments"));
+  const imagePath = path.join(root, "downloaded.png");
+  const requests: ModelMessage[][] = [];
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "image-provider",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(structuredClone(request.messages));
+      if (samples++ === 0) {
+        yield {
+          type: "tool_call",
+          callId: "view-1",
+          name: "view_image",
+          arguments: { path: "downloaded.png" },
+        };
+      } else {
+        yield { type: "text_delta", delta: "seen" };
+      }
+    },
+  };
+  try {
+    await writeFile(imagePath, png1x1());
+    const server = createServer({
+      journal,
+      attachments,
+      model,
+      cwd: root,
+      extraTools: [new ViewImageToolRuntime({ attachments, journal })],
+    });
+    const thread = await server.startThread();
+    await (
+      await server.startTurn(thread.id, "inspect it")
+    ).done;
+
+    const result = (await server.readThread(thread.id)).items.find(
+      (item) => item.type === "tool_result",
+    );
+    assert(result?.type === "tool_result");
+    assert.equal(result.modelContent?.[0]?.type, "image");
+    assert.deepEqual(requests[1]?.at(-1), {
+      role: "tool",
+      callId: "view-1",
+      text: result.output,
+      exitCode: 0,
+      modelContent: result.modelContent,
+    });
+
+    const bodies: Array<Record<string, unknown>> = [];
+    await drainModel(
+      capturingCompatibleModel(attachments, bodies),
+      requests[1]!,
+    );
+    assert.equal(
+      JSON.stringify(bodies[0]).includes(
+        `data:image/png;base64,${Buffer.from(png1x1()).toString("base64")}`,
+      ),
+      true,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("view_image accepts only current-thread AttachmentRefs and replays model content after restart", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-view-ref-"));
+  const journal = new JsonlThreadJournal(path.join(root, "threads"));
+  const attachments = new FileAttachmentStore(path.join(root, "attachments"));
+  let requestedRef: AttachmentRef | undefined;
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "image-provider",
+    async *stream(): AsyncIterable<ModelEvent> {
+      if (samples++ === 0) {
+        assert(requestedRef !== undefined);
+        yield {
+          type: "tool_call",
+          callId: "view-ref",
+          name: "view_image",
+          arguments: { attachment: requestedRef },
+        };
+      } else {
+        yield { type: "text_delta", delta: "seen" };
+      }
+    },
+  };
+  try {
+    const server = createServer({
+      journal,
+      attachments,
+      model,
+      extraTools: [new ViewImageToolRuntime({ attachments, journal })],
+    });
+    const thread = await server.startThread();
+    const ref = await server.importImageBytes(png1x1());
+    requestedRef = structuredClone(ref);
+    await (
+      await server.startTurn(thread.id, [
+        { type: "text", text: "keep this" },
+        { type: "image", attachment: ref },
+      ])
+    ).done;
+
+    const replayed = await new JsonlThreadJournal(
+      path.join(root, "threads"),
+    ).read(thread.id);
+    const result = replayed.find(
+      (item) => item.type === "tool_result" && item.callId === "view-ref",
+    );
+    assert(result?.type === "tool_result");
+    assert.deepEqual(result.modelContent, [{ type: "image", attachment: ref }]);
+    assert.deepEqual(
+      compileModelMessages(replayed).find(
+        (message) => message.role === "tool" && message.callId === "view-ref",
+      ),
+      {
+        role: "tool",
+        callId: "view-ref",
+        text: result.output,
+        exitCode: 0,
+        modelContent: [{ type: "image", attachment: ref }],
+      },
+    );
+
+    const foreignRef = await attachments.importBytes(png1x1(), "image/png");
+    const foreignJournal = new InMemoryThreadJournal();
+    const runtime = new ViewImageToolRuntime({
+      attachments,
+      journal: foreignJournal,
+    });
+    await assert.rejects(
+      runtime.execute({
+        callId: "foreign",
+        name: "view_image",
+        arguments: { attachment: foreignRef },
+        cwd: root,
+        threadId: "other-thread",
+        signal: new AbortController().signal,
+      }),
+      /not referenced by the current thread/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("view_image gates known text-only models while Unknown capability still executes", async () => {
+  for (const [inputModalities, expectedExecutions] of [
+    [["text"] as const, 0],
+    [null, 1],
+  ] as const) {
+    const journal = new InMemoryThreadJournal();
+    const attachments = new InMemoryAttachmentStore();
+    let executions = 0;
+    const viewImage = new ViewImageToolRuntime({ attachments, journal });
+    const instrumented: ToolRuntime = {
+      ...viewImage,
+      execute: async (invocation) => {
+        executions += 1;
+        return await viewImage.execute(invocation);
+      },
+    };
+    let samples = 0;
+    const model: ModelAdapter = {
+      provider: "image-provider",
+      async *stream(): AsyncIterable<ModelEvent> {
+        if (samples++ === 0) {
+          yield {
+            type: "tool_call",
+            callId: "view-gated",
+            name: "view_image",
+            arguments: { attachment: await attachments.importBytes(png1x1()) },
+          };
+        } else {
+          yield { type: "text_delta", delta: "done" };
+        }
+      },
+    };
+    const server = createServer({
+      journal,
+      attachments,
+      model,
+      inputModalities,
+      extraTools: [instrumented],
+    });
+    const thread = await server.startThread();
+    await (
+      await server.startTurn(thread.id, "try image")
+    ).done;
+    assert.equal(executions, expectedExecutions);
+    const result = (await server.readThread(thread.id)).items.find(
+      (item) => item.type === "tool_result",
+    );
+    assert(result?.type === "tool_result");
+    if (inputModalities !== null) {
+      assert.match(result.output, /does not support image input/u);
+      assert.equal(result.exitCode, 1);
+    }
+  }
+});
 
 test("runs typed image input through AttachmentRef to provider and replays it after restart", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-multimodal-"));
@@ -402,6 +611,59 @@ test("legacy text-only user messages still compile after restart", async () => {
   ]);
 });
 
+test("nested view_image content follows the visible parent tool result", async () => {
+  const attachments = new InMemoryAttachmentStore();
+  const ref = await attachments.importBytes(png1x1());
+  const base = {
+    threadId: "thread",
+    turnId: "turn",
+    createdAt: "2026-09-07T00:00:00.000Z",
+  } as const;
+  const messages = compileModelMessages([
+    {
+      ...base,
+      id: "outer-call",
+      type: "tool_call",
+      callId: "outer",
+      name: "run_code",
+      arguments: {},
+    },
+    {
+      ...base,
+      id: "nested-call",
+      type: "tool_call",
+      callId: "nested",
+      parentCallId: "outer",
+      name: "view_image",
+      arguments: {},
+    },
+    {
+      ...base,
+      id: "nested-result",
+      type: "tool_result",
+      callId: "nested",
+      output: "Viewed image",
+      exitCode: 0,
+      modelContent: [{ type: "image", attachment: ref }],
+    },
+    {
+      ...base,
+      id: "outer-result",
+      type: "tool_result",
+      callId: "outer",
+      output: "done",
+      exitCode: 0,
+    },
+  ]);
+  assert.deepEqual(messages.at(-1), {
+    role: "tool",
+    callId: "outer",
+    text: "done",
+    exitCode: 0,
+    modelContent: [{ type: "image", attachment: ref }],
+  });
+});
+
 test("retained AttachmentRefs survive compaction projection and restart", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-compaction-image-"));
   const journal = new JsonlThreadJournal(path.join(root, "threads"));
@@ -492,6 +754,8 @@ function createServer(options: {
   attachments: AttachmentStore;
   model?: ModelAdapter;
   inputModalities?: readonly "text"[] | null;
+  cwd?: string;
+  extraTools?: readonly ToolRuntime[];
 }): ZenAppServer {
   const model = options.model ?? echoModel();
   const catalog = new StaticModelCatalog([
@@ -522,7 +786,7 @@ function createServer(options: {
     attachments: options.attachments,
     runtime: new AgentRuntime({
       toolEnvironment: new ToolEnvironment({
-        runtimes: [new ShellToolRuntime()],
+        runtimes: [new ShellToolRuntime(), ...(options.extraTools ?? [])],
       }),
     }),
     providerRegistry: new ProviderRegistry([
@@ -534,7 +798,7 @@ function createServer(options: {
     ]),
     threadMetadata: new InMemoryThreadMetadataStore(),
     defaults: {
-      cwd: process.cwd(),
+      cwd: options.cwd ?? process.cwd(),
       providerProfileId: model.provider,
       modelId: "image-model",
       reasoningEffort: "medium",

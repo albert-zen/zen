@@ -1,7 +1,12 @@
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 
-import type { ApprovalDecision, JsonValue } from "./item.js";
+import {
+  validateUserInput,
+  type ApprovalDecision,
+  type JsonValue,
+  type UserInput,
+} from "./item.js";
 import type { ModelTool } from "./model.js";
 import {
   DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES,
@@ -17,6 +22,7 @@ export interface ToolInvocation {
   arguments: Record<string, unknown>;
   cwd: string;
   signal: AbortSignal;
+  threadId?: string;
 }
 
 export interface ToolExecutionResult {
@@ -24,6 +30,8 @@ export interface ToolExecutionResult {
   exitCode: number;
   contentType?: string;
   structuredContent?: JsonValue;
+  /** Content a trusted builtin asks Zen to include in the next model sample. */
+  modelContent?: UserInput;
   /** Host-local capture state; AgentRuntime renders it before canonical append. */
   [TOOL_OUTPUT_CAPTURE]?: ToolOutputCaptureMetadata;
   /** True when the runtime already omitted source bytes before returning. */
@@ -47,6 +55,8 @@ export interface ToolRuntime {
   readonly specification: ModelTool;
   /** Runtime body scheduling only; not permission or resource scope. */
   readonly executionMode?: ToolExecutionMode;
+  /** Known model modalities required before this tool body may execute. */
+  readonly requiredModelInputModalities?: readonly string[];
   execute(invocation: ToolInvocation): Promise<ToolExecutionResult>;
 }
 
@@ -154,6 +164,7 @@ export interface PreparedToolInvocation {
   readonly definition: ModelTool;
   readonly invocation: ToolInvocation;
   readonly executionMode: ToolExecutionMode;
+  readonly requiredModelInputModalities: readonly string[];
 }
 
 export interface ToolAdmissionOptions {
@@ -377,6 +388,9 @@ export class ToolEnvironment {
       owner: registration.identity,
       definition: structuredClone(registration.definition),
       executionMode: executionModeFor(registration.runtime),
+      requiredModelInputModalities: Object.freeze([
+        ...(registration.runtime.requiredModelInputModalities ?? []),
+      ]),
       invocation: Object.freeze({
         ...invocation,
         arguments: Object.freeze(structuredClone(invocation.arguments)),
@@ -470,10 +484,24 @@ export class ToolEnvironment {
   async execute(
     prepared: PreparedToolInvocation,
     nested?: NestedToolInvocationPort,
+    modelInputModalities?: readonly string[] | null,
   ): Promise<ToolExecutionResult> {
     const runtime = this.#requirePrepared(prepared).runtime;
     try {
       prepared.invocation.signal.throwIfAborted();
+      if (
+        modelInputModalities !== undefined &&
+        modelInputModalities !== null &&
+        prepared.requiredModelInputModalities.some(
+          (modality) => !modelInputModalities.includes(modality),
+        )
+      ) {
+        throw new Error(
+          `The selected model does not support ${prepared.requiredModelInputModalities.join(
+            ", ",
+          )} input required by ${prepared.invocation.name}`,
+        );
+      }
       const result =
         nested !== undefined &&
         prepared.owner.kind === "builtin" &&
@@ -551,7 +579,29 @@ export function normalizeToolExecutionResult(
       "Structured tool results require both contentType and structuredContent",
     );
   }
-  if (!hasContentType || !hasStructuredContent) return result;
+  if (result.modelContent !== undefined) {
+    if (owner.kind !== "builtin") {
+      throw new Error("Only builtin tools may return model content");
+    }
+    validateUserInput(result.modelContent, "$modelContent");
+  }
+  if (!hasContentType || !hasStructuredContent) {
+    return result.modelContent === undefined
+      ? result
+      : {
+          output: result.output,
+          exitCode: result.exitCode,
+          modelContent: Object.freeze(
+            structuredClone(result.modelContent),
+          ) as UserInput,
+          ...(result[TOOL_OUTPUT_CAPTURE] === undefined
+            ? {}
+            : { [TOOL_OUTPUT_CAPTURE]: result[TOOL_OUTPUT_CAPTURE] }),
+          ...(result.sourceTruncated === undefined
+            ? {}
+            : { sourceTruncated: result.sourceTruncated }),
+        };
+  }
   const contentType = result.contentType!;
   if (!/^[a-z][a-z0-9-]{1,62}\/[a-z][a-z0-9.-]{0,127}$/u.test(contentType)) {
     throw new Error(`Invalid structured result contentType: ${contentType}`);
@@ -573,6 +623,13 @@ export function normalizeToolExecutionResult(
     exitCode: result.exitCode,
     contentType,
     structuredContent: deepFreeze(structuredClone(result.structuredContent)),
+    ...(result.modelContent === undefined
+      ? {}
+      : {
+          modelContent: Object.freeze(
+            structuredClone(result.modelContent),
+          ) as UserInput,
+        }),
     ...(result[TOOL_OUTPUT_CAPTURE] === undefined
       ? {}
       : { [TOOL_OUTPUT_CAPTURE]: result[TOOL_OUTPUT_CAPTURE] }),

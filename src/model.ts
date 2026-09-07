@@ -35,6 +35,7 @@ export interface ToolResultModelMessage {
   callId: string;
   text: string;
   exitCode: number;
+  modelContent?: UserInput;
 }
 
 export interface ReasoningModelMessage {
@@ -239,6 +240,9 @@ function compileCanonicalModelMessages(
           callId: item.callId,
           text: item.output,
           exitCode: item.exitCode,
+          ...(item.modelContent === undefined
+            ? {}
+            : { modelContent: item.modelContent }),
         });
         break;
       case "reasoning": {
@@ -289,18 +293,50 @@ function compileCanonicalModelMessages(
 function withoutNestedToolLifecycle(
   items: readonly CanonicalItem[],
 ): readonly CanonicalItem[] {
-  const nestedCalls = new Set<string>();
+  const nestedCalls = new Map<string, string>();
   for (const item of items) {
     if (item.type === "tool_call" && item.parentCallId !== undefined) {
-      nestedCalls.add(`${item.turnId}\0${item.callId}`);
+      nestedCalls.set(
+        `${item.turnId}\0${item.callId}`,
+        `${item.turnId}\0${item.parentCallId}`,
+      );
     }
   }
   if (nestedCalls.size === 0) return items;
-  return items.filter((item) => {
-    if (item.type === "tool_call") return item.parentCallId === undefined;
-    if (item.type !== "tool_result") return true;
-    return !nestedCalls.has(`${item.turnId}\0${item.callId}`);
-  });
+  const modelContentByParent = new Map<string, UserInput>();
+  for (const item of items) {
+    if (item.type !== "tool_result" || item.modelContent === undefined)
+      continue;
+    const parent = nestedCalls.get(`${item.turnId}\0${item.callId}`);
+    if (parent === undefined) continue;
+    modelContentByParent.set(parent, [
+      ...(modelContentByParent.get(parent) ?? []),
+      ...item.modelContent,
+    ]);
+  }
+  const projected: CanonicalItem[] = [];
+  for (const item of items) {
+    if (item.type === "tool_call") {
+      if (item.parentCallId === undefined) projected.push(item);
+      continue;
+    }
+    if (item.type !== "tool_result") {
+      projected.push(item);
+      continue;
+    }
+    const key = `${item.turnId}\0${item.callId}`;
+    if (nestedCalls.has(key)) continue;
+    const nestedContent = modelContentByParent.get(key);
+    projected.push(
+      nestedContent === undefined
+        ? item
+        : {
+            ...item,
+            modelContent: [...(item.modelContent ?? []), ...nestedContent],
+          },
+    );
+  }
+  return projected;
 }
 
 /**

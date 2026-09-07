@@ -131,6 +131,57 @@ test("maps AttachmentRef input to a Responses image part", async () => {
   ]);
 });
 
+test("maps canonical tool model content after its function output", async () => {
+  const attachments = new InMemoryAttachmentStore();
+  const ref = await attachments.importBytes(png1x1());
+  let body: Record<string, unknown> = {};
+  const adapter = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+    attachments,
+    fetch: async (_input, init) => {
+      body = requestBody(init);
+      return sseResponse([
+        {
+          type: "response.completed",
+          response: { status: "completed", output: [] },
+        },
+      ]);
+    },
+  });
+
+  await collect(
+    adapter.stream(
+      request({
+        messages: [
+          {
+            role: "tool",
+            callId: "view-call|provider-call",
+            text: "Viewed image",
+            exitCode: 0,
+            modelContent: [{ type: "image", attachment: ref }],
+          },
+        ],
+      }),
+    ),
+  );
+  assert.deepEqual(body.input, [
+    {
+      type: "function_call_output",
+      call_id: "view-call",
+      output: "Exit code: 0\nViewed image",
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "input_image",
+          image_url: `data:image/png;base64,${Buffer.from(png1x1()).toString("base64")}`,
+        },
+      ],
+    },
+  ]);
+});
+
 test("sends a native Codex Responses request and maps SSE output", async () => {
   let capturedUrl = "";
   let capturedInit: RequestInit | undefined;

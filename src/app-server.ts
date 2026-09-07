@@ -680,6 +680,7 @@ export class ZenAppServer {
                   reasoningEffort: configuration.reasoningEffort,
                   sandbox: configuration.sandbox,
                   approvalPolicy: configuration.approvalPolicy,
+                  inputModalities: resolved.model.inputModalities,
                 },
                 modelAdapter: resolved.adapter,
                 signal: controller.signal,
