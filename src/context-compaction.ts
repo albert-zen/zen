@@ -16,10 +16,28 @@ and tool outcomes that affect future work. Do not call tools. Return only the su
 
 export interface ContextCompactionConfig {
   summaryInstruction?: string;
+  triggerPercent?: number;
+  targetPercent?: number;
+  retention?: {
+    mode?: "budget" | "recent-items" | "selected-items";
+    recentItemCount?: number;
+    preserveUserMessages?: boolean;
+    finalMessages?: "none" | "all" | "recent";
+    finalMessageCount?: number;
+  };
 }
 
 export interface ResolvedContextCompactionConfig {
   summaryInstruction: string;
+  triggerPercent: number;
+  targetPercent: number;
+  retention: {
+    mode: "budget" | "recent-items" | "selected-items";
+    recentItemCount: number;
+    preserveUserMessages: boolean;
+    finalMessages: "none" | "all" | "recent";
+    finalMessageCount: number;
+  };
 }
 
 export interface CompactionBoundary {
@@ -31,15 +49,70 @@ export interface CompactionBoundary {
 export interface BoundedCompactionBoundaryOptions {
   retainedTokenBudget: number;
   estimateRetainedTokens: (items: readonly CanonicalItem[]) => number;
+  retention?: ResolvedContextCompactionConfig["retention"];
 }
 
 export function normalizeContextCompactionConfig(
   config: ContextCompactionConfig = {},
 ): ResolvedContextCompactionConfig {
+  requirePlainObject(config, "config");
+  requireKnownKeys(config, "config", [
+    "summaryInstruction",
+    "triggerPercent",
+    "targetPercent",
+    "retention",
+  ]);
   const summaryInstruction =
     config.summaryInstruction ?? CONTEXT_COMPACTION_SUMMARY_INSTRUCTION;
   requireNonEmpty(summaryInstruction, "summaryInstruction", true);
-  return { summaryInstruction };
+  const triggerPercent = config.triggerPercent ?? 80;
+  requirePercentage(triggerPercent, "triggerPercent");
+  const targetPercent = config.targetPercent ?? 80;
+  requirePercentage(targetPercent, "targetPercent");
+  if (targetPercent > triggerPercent) {
+    throw new Error(
+      "Context compaction targetPercent must not exceed triggerPercent",
+    );
+  }
+  const retention = config.retention ?? {};
+  requirePlainObject(retention, "retention");
+  requireKnownKeys(retention, "retention", [
+    "mode",
+    "recentItemCount",
+    "preserveUserMessages",
+    "finalMessages",
+    "finalMessageCount",
+  ]);
+  const mode = retention.mode ?? "budget";
+  if (!["budget", "recent-items", "selected-items"].includes(mode)) {
+    throw new Error("Context compaction retention.mode is invalid");
+  }
+  const recentItemCount = retention.recentItemCount ?? 20;
+  requirePositiveInteger(recentItemCount, "retention.recentItemCount");
+  const preserveUserMessages = retention.preserveUserMessages ?? false;
+  if (typeof preserveUserMessages !== "boolean") {
+    throw new Error(
+      "Context compaction retention.preserveUserMessages must be a boolean",
+    );
+  }
+  const finalMessages = retention.finalMessages ?? "none";
+  if (!["none", "all", "recent"].includes(finalMessages)) {
+    throw new Error("Context compaction retention.finalMessages is invalid");
+  }
+  const finalMessageCount = retention.finalMessageCount ?? 10;
+  requirePositiveInteger(finalMessageCount, "retention.finalMessageCount");
+  return {
+    summaryInstruction,
+    triggerPercent,
+    targetPercent,
+    retention: {
+      mode,
+      recentItemCount,
+      preserveUserMessages,
+      finalMessages,
+      finalMessageCount,
+    },
+  };
 }
 
 export function latestCompaction(
@@ -104,17 +177,52 @@ export function boundedCompactionBoundary(
   );
   validateRetainedToolClosure(coveredItems, new Set(boundary.retainedItemIds));
 
+  const retention =
+    options.retention ?? normalizeContextCompactionConfig().retention;
+  const pinned = expandRetainedToolClosure(
+    coveredItems,
+    explicitlyRetainedIds(coveredItems, retention),
+  );
+
+  if (retention.mode !== "budget") {
+    const selected = new Set(pinned);
+    if (retention.mode === "recent-items") {
+      const candidates = recentItemCandidates(coveredItems);
+      for (const candidate of candidates.slice(-retention.recentItemCount)) {
+        selected.add(candidate.id);
+      }
+    }
+    const retained = expandRetainedToolClosure(coveredItems, selected);
+    const retainedItems = itemsInCanonicalOrder(coveredItems, retained);
+    validateRetainedToolClosure(coveredItems, retained);
+    if (
+      options.estimateRetainedTokens(retainedItems) >
+      options.retainedTokenBudget
+    ) {
+      throw new Error(
+        "Context compaction could not produce a bounded projection",
+      );
+    }
+    return {
+      ...boundary,
+      retainedItemIds: retainedItems.map((candidate) => candidate.id),
+    };
+  }
+
   for (let suffixStart = 0; suffixStart <= turnItems.length; suffixStart += 1) {
-    const retainedItems = turnItems.filter(
+    const retained = new Set(pinned);
+    for (const candidate of turnItems.filter(
       (candidate, index) =>
         index >= suffixStart || !projectsIntoModelContext(candidate),
-    );
-    const retained = new Set(retainedItems.map((candidate) => candidate.id));
+    )) {
+      retained.add(candidate.id);
+    }
     try {
       validateRetainedToolClosure(coveredItems, retained);
     } catch {
       continue;
     }
+    const retainedItems = itemsInCanonicalOrder(coveredItems, retained);
     if (
       options.estimateRetainedTokens(retainedItems) <=
       options.retainedTokenBudget
@@ -129,26 +237,151 @@ export function boundedCompactionBoundary(
   throw new Error("Context compaction could not produce a bounded projection");
 }
 
-export function contextCompactionTokenBudget(contextWindow: number): number {
+export function contextCompactionTokenBudget(
+  contextWindow: number,
+  percent = 80,
+): number {
   if (!Number.isSafeInteger(contextWindow) || contextWindow <= 0) {
     throw new Error("Context window must be a positive integer");
   }
-  const quotient = Math.floor(contextWindow / 5);
-  const remainder = contextWindow % 5;
-  return quotient * 4 + Math.ceil((remainder * 4) / 5);
+  requirePercentage(percent, "percent");
+  const quotient = Math.floor(contextWindow / 100);
+  const remainder = contextWindow % 100;
+  return quotient * percent + Math.ceil((remainder * percent) / 100);
 }
 
 function projectsIntoModelContext(item: CanonicalItem): boolean {
-  return ![
-    "context_compaction",
-    "model_usage",
-    "thread_configuration_changed",
-    "thread_metadata",
-    "turn_aborted",
-    "turn_completed",
-    "turn_replacement_requested",
-    "turn_started",
-  ].includes(item.type);
+  return (
+    item.type === "user_message" ||
+    item.type === "agent_message" ||
+    item.type === "tool_call" ||
+    item.type === "tool_result" ||
+    item.type === "failure" ||
+    (item.type === "reasoning" && item.incomplete !== true)
+  );
+}
+
+function recentItemCandidates(
+  coveredItems: readonly CanonicalItem[],
+): CanonicalItem[] {
+  const nestedCalls = new Set(
+    coveredItems
+      .filter(
+        (item): item is ToolCallItem =>
+          item.type === "tool_call" && item.parentCallId !== undefined,
+      )
+      .map((item) => `${item.turnId}\0${item.callId}`),
+  );
+  return coveredItems.filter((item) => {
+    if (!projectsIntoModelContext(item)) return false;
+    if (item.type === "tool_call") return item.parentCallId === undefined;
+    if (item.type === "tool_result") {
+      return !nestedCalls.has(`${item.turnId}\0${item.callId}`);
+    }
+    return true;
+  });
+}
+
+function explicitlyRetainedIds(
+  coveredItems: readonly CanonicalItem[],
+  retention: ResolvedContextCompactionConfig["retention"],
+): Set<string> {
+  const retained = new Set<string>();
+  if (retention.preserveUserMessages) {
+    for (const item of coveredItems) {
+      if (item.type === "user_message") retained.add(item.id);
+    }
+  }
+  if (retention.finalMessages !== "none") {
+    const finals = successfulFinalMessages(coveredItems);
+    const selected =
+      retention.finalMessages === "all"
+        ? finals
+        : finals.slice(-retention.finalMessageCount);
+    for (const item of selected) retained.add(item.id);
+  }
+  return retained;
+}
+
+function successfulFinalMessages(
+  coveredItems: readonly CanonicalItem[],
+): Extract<CanonicalItem, { type: "agent_message" }>[] {
+  const finalByTurn = new Map<
+    string,
+    Extract<CanonicalItem, { type: "agent_message" }>
+  >();
+  const finals: Extract<CanonicalItem, { type: "agent_message" }>[] = [];
+  for (const item of coveredItems) {
+    if (item.type === "agent_message") {
+      finalByTurn.set(item.turnId, item);
+    } else if (item.type === "turn_completed") {
+      if (item.status === "completed") {
+        const final = finalByTurn.get(item.turnId);
+        if (final !== undefined) finals.push(final);
+      }
+      finalByTurn.delete(item.turnId);
+    } else if (item.type === "turn_aborted") {
+      finalByTurn.delete(item.turnId);
+    }
+  }
+  return finals;
+}
+
+function expandRetainedToolClosure(
+  coveredItems: readonly CanonicalItem[],
+  initial: ReadonlySet<string>,
+): Set<string> {
+  const retained = new Set(initial);
+  const calls = coveredItems.filter(
+    (item): item is ToolCallItem => item.type === "tool_call",
+  );
+  const itemIds = new Set(coveredItems.map((item) => item.id));
+  const callByIdentity = new Map(
+    calls.map((call) => [`${call.turnId}\0${call.callId}`, call]),
+  );
+  const related = new Map<string, Set<string>>();
+  const connect = (left: string, right: string) => {
+    if (!itemIds.has(left) || !itemIds.has(right)) return;
+    const leftRelations = related.get(left) ?? new Set<string>();
+    leftRelations.add(right);
+    related.set(left, leftRelations);
+    const rightRelations = related.get(right) ?? new Set<string>();
+    rightRelations.add(left);
+    related.set(right, rightRelations);
+  };
+  for (const call of calls) {
+    if (call.modelResponseId !== undefined) {
+      connect(call.id, call.modelResponseId);
+    }
+    if (call.parentCallId !== undefined) {
+      const parent = callByIdentity.get(`${call.turnId}\0${call.parentCallId}`);
+      if (parent !== undefined) connect(call.id, parent.id);
+    }
+  }
+  for (const result of coveredItems) {
+    if (result.type !== "tool_result") continue;
+    const call = callByIdentity.get(`${result.turnId}\0${result.callId}`);
+    if (call !== undefined) connect(call.id, result.id);
+  }
+
+  const pending = [...retained];
+  while (pending.length > 0) {
+    const id = pending.pop();
+    if (id === undefined) continue;
+    for (const relatedId of related.get(id) ?? []) {
+      if (retained.has(relatedId)) continue;
+      retained.add(relatedId);
+      pending.push(relatedId);
+    }
+  }
+  return retained;
+}
+
+function itemsInCanonicalOrder(
+  coveredItems: readonly CanonicalItem[],
+  retained: ReadonlySet<string>,
+): CanonicalItem[] {
+  return coveredItems.filter((item) => retained.has(item.id));
 }
 
 export function validateContextCompactionItem(
@@ -358,6 +591,42 @@ function requireTokenCount(value: number, name: string): void {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error(
       `Context compaction ${name} must be a non-negative integer`,
+    );
+  }
+}
+
+function requirePercentage(value: number, name: string): void {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 100) {
+    throw new Error(
+      `Context compaction ${name} must be an integer from 1 through 100`,
+    );
+  }
+}
+
+function requirePositiveInteger(value: number, name: string): void {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`Context compaction ${name} must be a positive integer`);
+  }
+}
+
+function requirePlainObject(
+  value: unknown,
+  name: string,
+): asserts value is object {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`Context compaction ${name} must be an object`);
+  }
+}
+
+function requireKnownKeys(
+  value: object,
+  name: string,
+  knownKeys: readonly string[],
+): void {
+  const unknown = Object.keys(value).find((key) => !knownKeys.includes(key));
+  if (unknown !== undefined) {
+    throw new Error(
+      `Context compaction ${name} contains unknown field ${unknown}`,
     );
   }
 }

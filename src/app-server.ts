@@ -1165,7 +1165,11 @@ export class ZenAppServer {
     if (
       contextWindow === null ||
       inputTokens === undefined ||
-      inputTokens < automaticCompactionThreshold(contextWindow)
+      inputTokens <
+        automaticCompactionThreshold(
+          contextWindow,
+          this.#contextCompaction.triggerPercent,
+        )
     ) {
       return;
     }
@@ -1244,7 +1248,11 @@ export class ZenAppServer {
     if (
       estimateModelMessageInputTokens(
         compileModelMessages(previewItems, options.resolved.selection),
-      ) < contextCompactionTokenBudget(contextWindow)
+      ) <
+      contextCompactionTokenBudget(
+        contextWindow,
+        this.#contextCompaction.triggerPercent,
+      )
     ) {
       return;
     }
@@ -1296,7 +1304,10 @@ export class ZenAppServer {
         "Context compaction requires a known model context window",
       );
     }
-    const targetTokenBudget = contextCompactionTokenBudget(contextWindow);
+    const targetTokenBudget = contextCompactionTokenBudget(
+      contextWindow,
+      this.#contextCompaction.targetPercent,
+    );
     const summaryTokens = estimateModelMessageInputTokens([
       {
         role: "user",
@@ -1309,13 +1320,22 @@ export class ZenAppServer {
         `Context compaction summary exceeds the ${String(targetTokenBudget)} token target`,
       );
     }
-    const boundedBoundary = boundedCompactionBoundary(options.thread.items, {
-      retainedTokenBudget: targetTokenBudget - summaryTokens,
-      estimateRetainedTokens: (retainedItems) =>
-        estimateModelMessageInputTokens(
-          compileModelMessages(retainedItems, options.selection.selection),
-        ),
-    });
+    let boundedBoundary: ReturnType<typeof boundedCompactionBoundary>;
+    try {
+      boundedBoundary = boundedCompactionBoundary(options.thread.items, {
+        retainedTokenBudget: targetTokenBudget - summaryTokens,
+        estimateRetainedTokens: (retainedItems) =>
+          estimateModelMessageInputTokens(
+            compileModelMessages(retainedItems, options.selection.selection),
+          ),
+        retention: this.#contextCompaction.retention,
+      });
+    } catch (error) {
+      throw new AppServerError(
+        "compaction_budget_exceeded",
+        `Context compaction retained Items exceed the ${String(targetTokenBudget)} token target: ${describeCompactionError(error, "bounded projection unavailable")}`,
+      );
+    }
     if (boundedBoundary?.item.id !== options.boundary.item.id) {
       throw new AppServerError(
         "compaction_boundary_changed",
@@ -1884,8 +1904,11 @@ function sameSelection(
   );
 }
 
-function automaticCompactionThreshold(contextWindow: number): number {
-  return contextCompactionTokenBudget(contextWindow);
+function automaticCompactionThreshold(
+  contextWindow: number,
+  triggerPercent: number,
+): number {
+  return contextCompactionTokenBudget(contextWindow, triggerPercent);
 }
 
 async function generateContextCompactionSummary(options: {

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { AppServerError, ZenAppServer } from "../src/app-server.js";
 import {
+  boundedCompactionBoundary,
   normalizeContextCompactionConfig,
   validateContextCompactionItem,
   type ContextCompactionConfig,
@@ -192,6 +193,173 @@ test("rejects an empty configured context compaction prompt", () => {
   );
 });
 
+test("normalizes legacy prompt-only and complete compaction policy defaults", () => {
+  assert.deepEqual(normalizeContextCompactionConfig(), {
+    summaryInstruction:
+      "ZEN_CONTEXT_COMPACTION_V1\nSummarize the conversation context above for a provider-neutral agent continuation.\nPreserve concrete user goals, decisions, constraints, unfinished work, exact identifiers,\nand tool outcomes that affect future work. Do not call tools. Return only the summary.",
+    triggerPercent: 80,
+    targetPercent: 80,
+    retention: {
+      mode: "budget",
+      recentItemCount: 20,
+      preserveUserMessages: false,
+      finalMessages: "none",
+      finalMessageCount: 10,
+    },
+  });
+  assert.deepEqual(
+    normalizeContextCompactionConfig({ summaryInstruction: "legacy prompt" }),
+    {
+      summaryInstruction: "legacy prompt",
+      triggerPercent: 80,
+      targetPercent: 80,
+      retention: {
+        mode: "budget",
+        recentItemCount: 20,
+        preserveUserMessages: false,
+        finalMessages: "none",
+        finalMessageCount: 10,
+      },
+    },
+  );
+});
+
+test("rejects unknown and out-of-range compaction policy values", () => {
+  for (const config of [
+    { unexpected: true },
+    { triggerPercent: 0 },
+    { triggerPercent: 101 },
+    { triggerPercent: 50, targetPercent: 51 },
+    { retention: { mode: "unknown" } },
+    { retention: { recentItemCount: 0 } },
+    { retention: { preserveUserMessages: "yes" } },
+    { retention: { finalMessages: "latest" } },
+    { retention: { finalMessageCount: 1.5 } },
+    { retention: { unexpected: true } },
+  ] as unknown[]) {
+    assert.throws(
+      () => normalizeContextCompactionConfig(config as ContextCompactionConfig),
+      /Context compaction/u,
+    );
+  }
+});
+
+test("selected retention keeps users and only finals from successful completed Turns", () => {
+  const items = canonicalRetentionHistory();
+  const boundary = boundedCompactionBoundary(items, {
+    retainedTokenBudget: 10_000,
+    estimateRetainedTokens: (retained) => retained.length,
+    retention: {
+      mode: "selected-items",
+      recentItemCount: 20,
+      preserveUserMessages: true,
+      finalMessages: "recent",
+      finalMessageCount: 2,
+    },
+  });
+  assert.deepEqual(boundary?.retainedItemIds, [
+    "user-1",
+    "final-1",
+    "user-2",
+    "user-3",
+    "final-3",
+  ]);
+});
+
+test("recent retention counts model-context Items and expands complete tool closure", () => {
+  const items = canonicalToolHistory();
+  const boundary = boundedCompactionBoundary(items, {
+    retainedTokenBudget: 10_000,
+    estimateRetainedTokens: (retained) => retained.length,
+    retention: {
+      mode: "recent-items",
+      recentItemCount: 3,
+      preserveUserMessages: false,
+      finalMessages: "none",
+      finalMessageCount: 10,
+    },
+  });
+  assert.deepEqual(boundary?.retainedItemIds, [
+    "response",
+    "call-1",
+    "call-2",
+    "result-1",
+    "result-2",
+    "final",
+  ]);
+});
+
+test("recent retention supports exact 10 and 20 Item selections across Turns", () => {
+  const items = canonicalPlainHistory(25);
+  for (const count of [10, 20]) {
+    const boundary = boundedCompactionBoundary(items, {
+      retainedTokenBudget: 10_000,
+      estimateRetainedTokens: (retained) => retained.length,
+      retention: {
+        mode: "recent-items",
+        recentItemCount: count,
+        preserveUserMessages: false,
+        finalMessages: "none",
+        finalMessageCount: 10,
+      },
+    });
+    assert.equal(boundary?.retainedItemIds.length, count);
+    assert.deepEqual(
+      boundary?.retainedItemIds,
+      items
+        .filter(
+          (item) =>
+            item.type === "user_message" || item.type === "agent_message",
+        )
+        .slice(-count)
+        .map((item) => item.id),
+    );
+  }
+});
+
+test("tool closure follows nested parent calls and response siblings", () => {
+  const items = canonicalNestedToolHistory();
+  const boundary = boundedCompactionBoundary(items, {
+    retainedTokenBudget: 10_000,
+    estimateRetainedTokens: (retained) => retained.length,
+    retention: {
+      mode: "recent-items",
+      recentItemCount: 2,
+      preserveUserMessages: false,
+      finalMessages: "none",
+      finalMessageCount: 10,
+    },
+  });
+  assert.deepEqual(boundary?.retainedItemIds, [
+    "response",
+    "outer-call",
+    "sibling-call",
+    "child-call",
+    "child-result",
+    "outer-result",
+    "sibling-result",
+    "final",
+  ]);
+});
+
+test("explicit retained selections fail instead of being trimmed over budget", () => {
+  assert.throws(
+    () =>
+      boundedCompactionBoundary(canonicalRetentionHistory(), {
+        retainedTokenBudget: 1,
+        estimateRetainedTokens: (retained) => retained.length,
+        retention: {
+          mode: "selected-items",
+          recentItemCount: 20,
+          preserveUserMessages: true,
+          finalMessages: "all",
+          finalMessageCount: 10,
+        },
+      }),
+    /bounded projection/u,
+  );
+});
+
 test("automatically compacts exactly at 80% using the highest Provider usage sample", async () => {
   const requests: ModelRequest[] = [];
   let normalSamples = 0;
@@ -291,6 +459,122 @@ test("automatically compacts exactly at 80% using the highest Provider usage sam
         message.contentVisibility === "public",
     ),
   );
+});
+
+test("uses triggerPercent for admission and targetPercent for the compacted projection", async () => {
+  let normalCalls = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (isSummaryRequest(request)) {
+        yield { type: "text_delta", delta: "s" };
+        return;
+      }
+      normalCalls += 1;
+      yield { type: "text_delta", delta: `answer-${String(normalCalls)}` };
+      yield {
+        type: "usage",
+        inputTokens: normalCalls === 1 ? 59 : 60,
+        outputTokens: 1,
+      };
+    },
+  };
+  const server = createServer({
+    journal: new InMemoryThreadJournal(),
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 100 },
+    ]),
+    contextCompaction: { triggerPercent: 60, targetPercent: 40 },
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "one")
+  ).done;
+  assert.equal(
+    (await server.readThread(thread.id)).items.some(
+      (item) => item.type === "context_compaction",
+    ),
+    false,
+  );
+  await (
+    await server.startTurn(thread.id, "two")
+  ).done;
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(snapshot.items.at(-1)?.type, "context_compaction");
+  assert(
+    estimateModelMessageInputTokens(compileModelMessages(snapshot.items)) <= 40,
+  );
+});
+
+test("recompacts a legacy projection with the selected retention policy and replays it", async () => {
+  const journal = new InMemoryThreadJournal();
+  const model = summaryModel();
+  const server = createServer({
+    journal,
+    model,
+    contextCompaction: {
+      retention: {
+        mode: "selected-items",
+        preserveUserMessages: true,
+        finalMessages: "all",
+      },
+    },
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "one")
+  ).done;
+  await server.compactThread(thread.id);
+  await (
+    await server.startTurn(thread.id, "two")
+  ).done;
+  await server.compactThread(thread.id);
+
+  const snapshot = await server.readThread(thread.id);
+  const messages = snapshot.items.filter(
+    (item) => item.type === "user_message" || item.type === "agent_message",
+  );
+  const latest = snapshot.items.at(-1);
+  assert(latest?.type === "context_compaction");
+  assert.deepEqual(
+    latest.retainedItemIds,
+    messages.map((item) => item.id),
+  );
+  const restarted = createServer({ journal, model });
+  assert.deepEqual(
+    compileModelMessages((await restarted.readThread(thread.id)).items),
+    compileModelMessages(snapshot.items),
+  );
+});
+
+test("does not append when explicit selected Items exceed the target", async () => {
+  const journal = new InMemoryThreadJournal();
+  const server = createServer({
+    journal,
+    model: summaryModel(),
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 100 },
+    ]),
+    contextCompaction: {
+      triggerPercent: 80,
+      targetPercent: 30,
+      retention: {
+        mode: "selected-items",
+        preserveUserMessages: true,
+      },
+    },
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "x".repeat(200))
+  ).done;
+  const before = await journal.read(thread.id);
+  await expectAppServerCode(
+    server.compactThread(thread.id),
+    "compaction_budget_exceeded",
+  );
+  assert.deepEqual(await journal.read(thread.id), before);
 });
 
 test("bounds an oversized latest completed Turn without splitting its tool lifecycle", async () => {
@@ -1485,6 +1769,163 @@ function canonicalToolHistory(): CanonicalItem[] {
       status: "completed",
     },
   ];
+}
+
+function canonicalRetentionHistory(): CanonicalItem[] {
+  const items: CanonicalItem[] = [canonicalMetadata()];
+  const addTurn = (
+    turn: number,
+    status: "completed" | "failed",
+    agentTexts: readonly string[],
+  ) => {
+    const turnId = `turn-${String(turn)}`;
+    items.push(
+      {
+        id: `started-${String(turn)}`,
+        threadId: "thread",
+        turnId,
+        createdAt: `2026-01-01T00:00:0${String(turn)}.000Z`,
+        type: "turn_started",
+        selection: {
+          providerProfileId: "recording",
+          modelId: "recording-model",
+          reasoningEffort: "medium",
+        },
+      },
+      {
+        id: `user-${String(turn)}`,
+        threadId: "thread",
+        turnId,
+        createdAt: `2026-01-01T00:00:0${String(turn)}.001Z`,
+        type: "user_message",
+        text: `question ${String(turn)}`,
+      },
+    );
+    for (const [index, text] of agentTexts.entries()) {
+      items.push({
+        id:
+          index === agentTexts.length - 1
+            ? `final-${String(turn)}`
+            : `partial-${String(turn)}-${String(index)}`,
+        threadId: "thread",
+        turnId,
+        createdAt: `2026-01-01T00:00:0${String(turn)}.00${String(index + 2)}Z`,
+        type: "agent_message",
+        text,
+      });
+    }
+    items.push({
+      id: `completed-${String(turn)}`,
+      threadId: "thread",
+      turnId,
+      createdAt: `2026-01-01T00:00:0${String(turn)}.009Z`,
+      type: "turn_completed",
+      status,
+    });
+  };
+  addTurn(1, "completed", ["tool preface", "answer 1"]);
+  addTurn(2, "failed", ["failed partial"]);
+  addTurn(3, "completed", ["answer 3"]);
+  return items;
+}
+
+function canonicalPlainHistory(turnCount: number): CanonicalItem[] {
+  const items: CanonicalItem[] = [canonicalMetadata()];
+  for (let turn = 1; turn <= turnCount; turn += 1) {
+    const turnId = `plain-turn-${String(turn)}`;
+    items.push(
+      {
+        id: `plain-start-${String(turn)}`,
+        threadId: "thread",
+        turnId,
+        createdAt: `2026-01-02T00:00:${String(turn).padStart(2, "0")}.000Z`,
+        type: "turn_started",
+      },
+      {
+        id: `plain-user-${String(turn)}`,
+        threadId: "thread",
+        turnId,
+        createdAt: `2026-01-02T00:00:${String(turn).padStart(2, "0")}.001Z`,
+        type: "user_message",
+        text: `question ${String(turn)}`,
+      },
+      {
+        id: `plain-agent-${String(turn)}`,
+        threadId: "thread",
+        turnId,
+        createdAt: `2026-01-02T00:00:${String(turn).padStart(2, "0")}.002Z`,
+        type: "agent_message",
+        text: `answer ${String(turn)}`,
+      },
+      {
+        id: `plain-completed-${String(turn)}`,
+        threadId: "thread",
+        turnId,
+        createdAt: `2026-01-02T00:00:${String(turn).padStart(2, "0")}.003Z`,
+        type: "turn_completed",
+        status: "completed",
+      },
+    );
+  }
+  return items;
+}
+
+function canonicalNestedToolHistory(): CanonicalItem[] {
+  const base = canonicalToolHistory();
+  const replacements: Record<string, CanonicalItem> = {
+    "call-1": {
+      ...base.find((item) => item.id === "call-1")!,
+      id: "outer-call",
+      type: "tool_call",
+      callId: "outer",
+    } as CanonicalItem,
+    "call-2": {
+      ...base.find((item) => item.id === "call-2")!,
+      id: "sibling-call",
+      type: "tool_call",
+      callId: "sibling",
+    } as CanonicalItem,
+    "result-1": {
+      ...base.find((item) => item.id === "result-1")!,
+      id: "outer-result",
+      type: "tool_result",
+      callId: "outer",
+    } as CanonicalItem,
+    "result-2": {
+      ...base.find((item) => item.id === "result-2")!,
+      id: "sibling-result",
+      type: "tool_result",
+      callId: "sibling",
+    } as CanonicalItem,
+  };
+  const items = base.map((item) => replacements[item.id] ?? item);
+  const insertion = items.findIndex((item) => item.id === "outer-result");
+  items.splice(
+    insertion,
+    0,
+    {
+      id: "child-call",
+      threadId: "thread",
+      turnId: "turn",
+      createdAt: "2026-01-01T00:00:00.0055Z",
+      type: "tool_call",
+      callId: "child",
+      parentCallId: "outer",
+      name: "nested",
+      arguments: {},
+    },
+    {
+      id: "child-result",
+      threadId: "thread",
+      turnId: "turn",
+      createdAt: "2026-01-01T00:00:00.0056Z",
+      type: "tool_result",
+      callId: "child",
+      output: "child",
+      exitCode: 0,
+    },
+  );
+  return items;
 }
 
 function contextCompactionItem(

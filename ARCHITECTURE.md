@@ -62,8 +62,8 @@
 - **ContextCompactionItem** — Zen 在完整 Turn 边界生成并追加的 provider-neutral
   context summary；它记录覆盖边界、稳定有序的保留 Item、冻结的 Provider selection、
   版本化算法与 token usage，使后续模型上下文和重启投影都只由 append-only ItemList 推导。
-- **ContextCompactionConfig** — Host-owned 压缩策略配置；当前只允许替换模型摘要指令，
-  省略时使用 Core 默认，配置本身不写入 Thread canonical ItemList。
+- **ContextCompactionConfig** — Host-owned 压缩策略配置；它规范化摘要指令、触发与目标占比及
+  canonical Item 保留规则，省略字段时使用 Core 默认，配置本身不写入 Thread canonical ItemList。
 - **ModelUsageItem** — Provider 对一次稳定 model response 报告的 canonical 执行事实，
   保存包含 cached 部分的 total input、可选 cached input、output 与可选 reasoning output tokens。
 - **NativeThreadSummaryProjection** — ZAS 把 canonical journal 与
@@ -556,12 +556,21 @@ Provider `inputTokens`，若 compaction 已经使该样本代表旧上下文，�
 `turn_completed` 作为覆盖边界；调用者不能指定任意 Item。Zen 以 admission 时
 Thread 当前生效的 `providerProfileId / modelId / reasoningEffort` 调用所选 Provider，
 默认使用版本化、provider-neutral 的 summary 指令且不使用 Provider opaque compaction
-或 cache。Host 可以配置替代的 summary 指令；该配置只影响未来 summary 生成，不写入
-Thread Item，也不改变已生成 compaction 的重放语义。v2 以 context window 的 80% 为目标：
-summary 生成后，从最新完整 Turn 中保留预算可容纳的最大模型消息后缀；不参与模型投影的
-Turn/usage 控制 Item 可以继续保留。候选后缀必须完整保留同一模型响应的 tool-call 集及每个
-call/result 对，不能为满足预算拆开 lifecycle。summary 自身已经超过目标时明确失败；生成、
-abort、验证或 journal append 失败也都明确返回且不追加 compaction Item，不隐藏重试。
+或 cache。Host 可以配置替代的 summary 指令、1–100 的 trigger/target 百分比与保留策略；
+target 不得高于 trigger，这些配置只影响未来 compaction，不写入 Thread Item，也不改变已生成
+compaction 的重放语义。默认 trigger 与 target 均为 context window 的 80%，`budget` 模式保持
+v2 原行为：summary 生成后，从最新完整 Turn 中保留目标预算可容纳的最大模型消息后缀；
+不参与模型投影的 Turn/usage 控制 Item 可以继续保留。`recent-items` 从完整覆盖历史中取最近 N 条
+会进入模型上下文的 canonical Item，`selected-items` 不自动选择尾部；两者都可以叠加所有
+`user_message`，以及所有或最近 N 条成功 `turn_completed` 前该 Turn 最后一条 `agent_message`。
+失败 Turn 的 partial agent text 不算 final。默认 N 分别为 20 和 10。
+
+显式保留与 recent-items 选择是硬约束；Core 先取得它们，再让 budget 模式使用剩余预算选择后缀，
+不能为满足 target 静默删除所选 Item。任何被选中的 tool call、result、同一 model response 的
+agent message 与 sibling calls，以及嵌套 parent/child calls 都扩展为完整闭包，因此实际保留数
+可以超过 N。summary 或闭包后的保留投影超出目标时明确失败并不追加 compaction；自动完成后的
+失败沿既有 Host warning 路径，手动与 next-Turn admission 路径向调用者返回错误。生成、abort、
+验证或 journal append 失败也都明确处理且不追加 compaction Item，不隐藏重试。
 
 Summary Provider 的每个请求也必须落在所选模型的 context window 内。输入按模型消息顺序分块；
 能放入预算的 tool-call/result 响应组保持完整，单个已经超预算的组则无损序列化为带 excerpt
@@ -571,14 +580,14 @@ Summary Provider 的每个请求也必须落在所选模型的 context window �
 
 成功 Turn 使用 admission 时冻结的 Provider adapter、selection、catalog entry 与
 `contextWindow` 判断自动 compaction；只有 Provider 实际报告的有效 `inputTokens`
-达到窗口的 80% 整数上界才执行，多次采样或 tool round 取观察到的最高 input context。
+达到配置 trigger 百分比的整数上界才执行，多次采样或 tool round 取观察到的最高 input context。
 缺失窗口只可能来自尚待修复的 legacy/incomplete metadata，不能通过正常 runtime admission；这里仍
 防御性地不猜测窗口。缺失或无效 usage、非成功 Turn 与已覆盖边界都不追加。
 自动生成、验证或 persistence 在成功 Turn handle settle 前尝试一次；失败只记录 Host
 诊断，不得把已经 canonical completed 的 Turn 重新投影为 failed，也不在同一 Turn 内重试。
 下一次达到条件的 completed Turn 可以再次尝试，已完成 Turn 的原始 canonical trace 保持不变。
 若 Provider 没有报告 usage，Host 在下一 Turn 写入任何 canonical Item 前，用包含待提交输入的
-消息估算检查 80% 阈值；存在尚未覆盖的 completed boundary 时先完成并持久化同一压缩流程，
+消息估算检查配置 trigger 阈值；存在尚未覆盖的 completed boundary 时先完成并持久化同一压缩流程，
 再 admission 新 Turn。这样 oversized completed Turn 不必等下一次普通模型请求失败才被发现。
 
 `context_compaction` canonical Item 记录 `coveredThroughItemId`、原样 summary、
