@@ -205,13 +205,6 @@ export class OpenAiCompatibleModel implements ModelAdapter {
       );
     }
 
-    if (response.body === null) {
-      throw modelError(
-        "protocol",
-        "OpenAI-compatible model response had no stream body",
-      );
-    }
-
     const diagnostic: ModelStreamDiagnostic = {
       timestamp: new Date().toISOString(),
       diagnosticId: randomUUID(),
@@ -228,6 +221,13 @@ export class OpenAiCompatibleModel implements ModelAdapter {
         : { requestId: safeRequestId(response.headers, this.#apiKey)! }),
     };
     try {
+      if (response.body === null) {
+        diagnosticField(diagnostic, "response.body", null);
+        throw modelError(
+          "protocol",
+          "OpenAI-compatible model response had no stream body",
+        );
+      }
       yield* parseChatCompletionStream(
         response.body,
         request.signal,
@@ -749,19 +749,23 @@ async function* consumePayload(
     );
   }
 
+  diagnosticField(diagnostic, "payload", payload);
   const chunk = parseChunk(payload);
   if ("error" in chunk) {
+    diagnosticField(diagnostic, "error", chunk.error);
     throw modelError(
       "protocol",
       "OpenAI-compatible provider reported a streaming error",
     );
   }
 
+  diagnosticField(diagnostic, "usage", chunk.usage);
   const usage = readUsage(chunk.usage);
   if (usage !== undefined) {
     yield { type: "usage", ...usage };
   }
 
+  diagnosticField(diagnostic, "choices", chunk.choices);
   if (!Array.isArray(chunk.choices)) {
     throw modelError(
       "protocol",
@@ -770,7 +774,9 @@ async function* consumePayload(
   }
 
   for (const choiceValue of chunk.choices) {
+    diagnosticField(diagnostic, "choices[]", choiceValue);
     const choice = record(choiceValue, "choice");
+    diagnosticField(diagnostic, "choices[].index", choice.index);
     const choiceIndex = choice.index;
     if (choiceIndex !== undefined && choiceIndex !== 0) {
       throw modelError(
@@ -779,8 +785,10 @@ async function* consumePayload(
       );
     }
 
+    diagnosticField(diagnostic, "choices[].delta", choice.delta);
     const delta =
       choice.delta === undefined ? {} : record(choice.delta, "choice delta");
+    diagnosticField(diagnostic, "choices[].delta.content", delta.content);
     const content = delta.content;
     if (
       content !== undefined &&
@@ -806,6 +814,11 @@ async function* consumePayload(
       yield { type: "text_delta", delta: content };
     }
 
+    diagnosticField(
+      diagnostic,
+      "choices[].delta.reasoning_content",
+      delta.reasoning_content,
+    );
     const reasoningContent = delta.reasoning_content;
     if (
       reasoningContent !== undefined &&
@@ -840,6 +853,7 @@ async function* consumePayload(
       state.reasoningContent += reasoningContent;
     }
 
+    diagnosticField(diagnostic, "tool_calls", delta.tool_calls);
     if (delta.tool_calls !== undefined) {
       if (!Array.isArray(delta.tool_calls)) {
         throw modelError(
@@ -856,6 +870,11 @@ async function* consumePayload(
       mergeToolCalls(state.toolCalls, delta.tool_calls, diagnostic);
     }
 
+    diagnosticField(
+      diagnostic,
+      "choices[].finish_reason",
+      choice.finish_reason,
+    );
     const finishReason = choice.finish_reason;
     if (finishReason !== undefined && finishReason !== null) {
       if (typeof finishReason !== "string" || finishReason.length === 0) {
@@ -883,6 +902,8 @@ async function* consumePayload(
       state.finishReason = finishReason;
     }
   }
+  delete diagnostic.field;
+  delete diagnostic.valueType;
 }
 
 function parseChunk(payload: string): Readonly<Record<string, unknown>> {
@@ -970,6 +991,7 @@ function mergeToolCalls(
   diagnostic: ModelStreamDiagnostic,
 ): void {
   for (const value of deltas) {
+    diagnosticField(diagnostic, "tool_calls[]", value);
     const delta = record(value, "tool call delta");
     diagnostic.field = "tool_calls.index";
     diagnostic.valueType = diagnosticValueType(delta.index);
@@ -1038,6 +1060,15 @@ function mergeToolCalls(
     delete diagnostic.valueType;
     delete diagnostic.toolIndex;
   }
+}
+
+function diagnosticField(
+  diagnostic: ModelStreamDiagnostic,
+  field: string,
+  value: unknown,
+): void {
+  diagnostic.field = field;
+  diagnostic.valueType = diagnosticValueType(value);
 }
 
 function diagnosticValueType(value: unknown): string {

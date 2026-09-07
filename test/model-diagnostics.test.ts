@@ -80,3 +80,45 @@ test("diagnostic sink failure does not replace the original model failure", asyn
     }
   }, /invalid tool call id/u);
 });
+
+test("diagnostics cover missing body and malformed stream envelopes", async () => {
+  const cases: Array<[Response, string, string]> = [
+    [new Response(null), "response.body", "null"],
+    [new Response("data: {bad\n\n"), "payload", "string"],
+    [new Response('data: {"choices":{}}\n\n'), "choices", "object"],
+    [
+      new Response('data: {"choices":[{"delta":{"content":7}}]}\n\n'),
+      "choices[].delta.content",
+      "number",
+    ],
+    [
+      new Response('data: {"choices":[],"usage":false}\n\n'),
+      "usage",
+      "boolean",
+    ],
+    [
+      new Response('data: {"choices":[{"finish_reason":3}]}\n\n'),
+      "choices[].finish_reason",
+      "number",
+    ],
+  ];
+  for (const [response, field, valueType] of cases) {
+    const records: Array<{ field?: string; valueType?: string }> = [];
+    const model = new OpenAiCompatibleModel({
+      baseUrl: "https://provider.test/v1",
+      apiKey: "private-key",
+      fetch: async () => response,
+      onStreamFailure: async (event) => {
+        records.push(event);
+      },
+    });
+    await assert.rejects(async () => {
+      for await (const _event of model.stream(request)) {
+        /* consume */
+      }
+    });
+    assert.equal(records.length, 1);
+    assert.equal(records[0]?.field, field);
+    assert.equal(records[0]?.valueType, valueType);
+  }
+});
