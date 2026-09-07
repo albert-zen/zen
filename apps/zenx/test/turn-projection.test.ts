@@ -191,3 +191,22 @@ function command(
     durationMs: null,
   };
 }
+
+test("failed turns retain prior text and reasoning as history alongside the error", () => {
+  const failed = turn("failed", [
+    reasoning("trace", "Thinking"),
+    agent("partial", "Already received"),
+  ]);
+  failed.error = {
+    message: "invalid tool call id",
+    codexErrorInfo: null,
+    additionalDetails: null,
+  };
+  const projection = projectTurn(failed);
+  assert.equal(projection.finalItem, null);
+  assert.deepEqual(
+    projection.history.map((node) => node.kind),
+    ["traceItem", "agent"],
+  );
+  assert.equal(projection.terminalFallback, "invalid tool call id");
+});

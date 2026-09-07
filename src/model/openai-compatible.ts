@@ -966,7 +966,7 @@ function mergeToolCalls(
 }
 
 function nonEmptyFragment(value: unknown, label: string): string | undefined {
-  if (value === undefined || value === "") {
+  if (value === undefined || value === null || value === "") {
     return undefined;
   }
   if (typeof value !== "string") {

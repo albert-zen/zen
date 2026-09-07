@@ -355,6 +355,10 @@ export class AgentRuntime {
       arguments: Record<string, unknown>;
     }> = [];
     const reasoningItems = new Map<string, string>();
+    const reasoningDeltas = new Map<
+      string,
+      { content: string; summary: string }
+    >();
     let latestUsage:
       | {
           inputTokens: number;
@@ -369,6 +373,7 @@ export class AgentRuntime {
       if (existing !== undefined) return existing;
       const reasoningItemId = this.#id();
       reasoningItems.set(reasoningId, reasoningItemId);
+      reasoningDeltas.set(reasoningId, { content: "", summary: "" });
       options.emit({
         type: "item_started",
         threadId: options.thread.id,
@@ -428,6 +433,11 @@ export class AgentRuntime {
           event.type === "reasoning_content_delta"
         ) {
           if (event.delta.length === 0) continue;
+          ensureReasoningItem(event.reasoningId);
+          const partial = reasoningDeltas.get(event.reasoningId)!;
+          if (event.type === "reasoning_content_delta")
+            partial.content += event.delta;
+          else partial.summary += event.delta;
           options.emit({
             type: event.type,
             threadId: options.thread.id,
@@ -466,6 +476,7 @@ export class AgentRuntime {
           options.emit({ type: "item_completed", item: reasoning });
           if (event.reasoningId !== undefined) {
             reasoningItems.delete(event.reasoningId);
+            reasoningDeltas.delete(event.reasoningId);
           }
         } else if (event.type === "tool_call") {
           toolCalls.push({
@@ -499,6 +510,42 @@ export class AgentRuntime {
           });
         }
       }
+      if (reasoningItems.size > 0) {
+        throw new Error("Model stream ended with incomplete reasoning");
+      }
+    } catch (error) {
+      // Never retry a journal append whose outcome is unknown.
+      if (error instanceof ThreadJournalAppendOutcomeUnknownError) throw error;
+      for (const [reasoningId, partialId] of reasoningItems) {
+        const partial = reasoningDeltas.get(reasoningId)!;
+        if (!partial.content && !partial.summary) continue;
+        const snapshot: ReasoningItem = {
+          id: partialId,
+          threadId: options.thread.id,
+          turnId,
+          createdAt: this.#now(),
+          type: "reasoning",
+          incomplete: true,
+          reasoningContent: partial.content,
+          contentVisibility: "public",
+          ...(partial.summary ? { summary: partial.summary } : {}),
+        };
+        await options.commit(snapshot);
+        options.emit({ type: "item_completed", item: snapshot });
+      }
+      if (text.length > 0) {
+        const snapshot: AgentMessageItem = {
+          id: itemId,
+          threadId: options.thread.id,
+          turnId,
+          createdAt: this.#now(),
+          type: "agent_message",
+          text,
+        };
+        await options.commit(snapshot);
+        options.emit({ type: "item_completed", item: snapshot });
+      }
+      throw error;
     } finally {
       if (latestUsage !== undefined) {
         const usage: ModelUsageItem = {
@@ -513,10 +560,6 @@ export class AgentRuntime {
         await options.commit(usage);
         options.emit({ type: "item_completed", item: usage });
       }
-    }
-
-    if (reasoningItems.size > 0) {
-      throw new Error("Model stream ended with incomplete reasoning");
     }
 
     if (!started && toolCalls.length === 0) {

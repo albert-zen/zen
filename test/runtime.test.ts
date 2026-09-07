@@ -1432,7 +1432,7 @@ test("streams one correlated reasoning lifecycle and journals one complete item"
   }
 });
 
-test("failed reasoning streams leave no incomplete canonical reasoning", async () => {
+test("failed reasoning streams preserve an incomplete canonical trace", async () => {
   const model: ModelAdapter = {
     provider: "reasoning-stream-failure",
     async *stream(): AsyncIterable<ModelEvent> {
@@ -1455,17 +1455,27 @@ test("failed reasoning streams leave no incomplete canonical reasoning", async (
 
   const snapshot = await server.readThread(thread.id);
   assert.equal(
-    snapshot.items.some((item) => item.type === "reasoning"),
-    false,
+    snapshot.items.some(
+      (item) => item.type === "reasoning" && item.incomplete === true,
+    ),
+    true,
   );
   assert(events.some((event) => event.type === "reasoning_content_delta"));
+  const partial = snapshot.items.find((item) => item.type === "reasoning");
+  assert.equal(partial?.reasoningContent, "transient only");
+  assert.equal(
+    compileModelMessages(snapshot.items).some(
+      (message) => message.role === "reasoning",
+    ),
+    false,
+  );
   assert.equal(
     snapshot.items.find((item) => item.type === "failure")?.message,
     "reasoning stream failed",
   );
 });
 
-test("aborted reasoning streams leave no incomplete canonical reasoning", async () => {
+test("aborted reasoning streams preserve the public summary", async () => {
   const streamed = testDeferred<void>();
   const model: ModelAdapter = {
     provider: "reasoning-stream-abort",
@@ -1496,13 +1506,15 @@ test("aborted reasoning streams leave no incomplete canonical reasoning", async 
 
   const snapshot = await server.readThread(thread.id);
   assert.equal(
-    snapshot.items.some((item) => item.type === "reasoning"),
-    false,
+    snapshot.items.some(
+      (item) => item.type === "reasoning" && item.incomplete === true,
+    ),
+    true,
   );
   assert.equal(snapshot.turns[0]?.status, "interrupted");
 });
 
-test("partial model deltas are not canonicalized when the model ends incomplete", async () => {
+test("partial model text is retained when the model ends incomplete", async () => {
   const incompleteModel: ModelAdapter = {
     provider: "incomplete-test",
     async *stream(): AsyncIterable<ModelEvent> {
@@ -1525,8 +1537,12 @@ test("partial model deltas are not canonicalized when the model ends incomplete"
   const snapshot = await server.readThread(thread.id);
   assert(events.some((event) => event.type === "item_delta"));
   assert.equal(
-    snapshot.items.some((item) => item.type === "agent_message"),
-    false,
+    snapshot.items.some(
+      (item) =>
+        item.type === "agent_message" &&
+        item.text === "transient partial answer",
+    ),
+    true,
   );
   assert.equal(
     snapshot.items.find((item) => item.type === "failure")?.message,
@@ -3001,3 +3017,58 @@ async function testWithin<T>(promise: Promise<T>, label: string): Promise<T> {
     }
   }
 }
+
+test("failed sample trace survives journal reload without executing a queued tool", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-failed-trace-"));
+  const model: ModelAdapter = {
+    provider: "failed-trace",
+    async *stream(): AsyncIterable<ModelEvent> {
+      yield {
+        type: "reasoning_content_delta",
+        reasoningId: "r",
+        delta: "observed reasoning",
+      };
+      yield { type: "text_delta", delta: "observed answer" };
+      yield {
+        type: "tool_call",
+        callId: "queued",
+        name: "shell",
+        arguments: { command: "must not execute" },
+      };
+      throw new Error("invalid tool call id");
+    },
+  };
+  try {
+    const server = createServer({
+      model,
+      journal: new JsonlThreadJournal(directory),
+    });
+    const thread = await server.startThread();
+    await (
+      await server.startTurn(thread.id, "request")
+    ).done;
+    const reloaded = createServer({
+      model,
+      journal: new JsonlThreadJournal(directory),
+    });
+    const snapshot = await reloaded.readThread(thread.id);
+    assert.equal(snapshot.turns[0]?.status, "failed");
+    assert.equal(
+      snapshot.items.find((item) => item.type === "reasoning")
+        ?.reasoningContent,
+      "observed reasoning",
+    );
+    assert.equal(
+      snapshot.items.find((item) => item.type === "agent_message")?.text,
+      "observed answer",
+    );
+    assert.equal(
+      snapshot.items.some(
+        (item) => item.type === "tool_call" || item.type === "tool_result",
+      ),
+      false,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

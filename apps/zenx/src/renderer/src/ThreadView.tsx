@@ -549,7 +549,10 @@ function TurnBlock({
   usage?: ModelUsageAggregate;
 }) {
   const projection = useMemo(() => projectTurn(turn), [turn]);
-  const [expanded, setExpanded] = useState(false);
+  const [expandedOverride, setExpanded] = useState<boolean | null>(null);
+  const expanded =
+    expandedOverride ??
+    (turn.status === "failed" || turn.status === "interrupted");
   const complete = turn.status !== "inProgress";
   const renderUserItem = (
     item: Extract<ThreadItem, { type: "userMessage" }>,
@@ -578,7 +581,7 @@ function TurnBlock({
           className="turn-toggle"
           type="button"
           aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
+          onClick={() => setExpanded(!expanded)}
         >
           <span>{completedTurnLabel(turn)}</span>
           <Icon name="chevron-down" size={14} />

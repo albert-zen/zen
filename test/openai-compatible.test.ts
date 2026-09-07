@@ -968,6 +968,71 @@ test("assembles interleaved parallel tool-call deltas without losing ids", async
   );
 });
 
+test("accepts null metadata on continuation deltas but still requires a complete identity", async () => {
+  const response = (id: unknown) =>
+    streamResponse([
+      chunk({
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id,
+                  function: { name: "shell", arguments: '{"command":' },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+      }),
+      chunk({
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: null,
+                  function: { name: null, arguments: '"pwd"}' },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      }),
+      "[DONE]",
+    ]);
+  assert.deepEqual(
+    await collect(
+      adapterReturning(response("call-null")).stream(
+        request({ tools: [shellTool()] }),
+      ),
+    ),
+    [
+      {
+        type: "tool_call",
+        callId: "call-null",
+        name: "shell",
+        arguments: { command: "pwd" },
+      },
+    ],
+  );
+  for (const id of [null, 123, {}, false]) {
+    await assert.rejects(
+      collect(
+        adapterReturning(response(id)).stream(
+          request({ tools: [shellTool()] }),
+        ),
+      ),
+    );
+  }
+});
+
 test("rejects malformed or unavailable tool calls instead of executing raw input", async (t) => {
   await t.test("malformed arguments", async () => {
     const adapter = adapterReturning(

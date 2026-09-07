@@ -242,6 +242,7 @@ function compileCanonicalModelMessages(
         });
         break;
       case "reasoning": {
+        if (item.incomplete === true) break;
         const producingSelection = turnSelections.get(item.turnId);
         if (
           targetSelection !== undefined &&

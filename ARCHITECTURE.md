@@ -789,3 +789,5 @@ root；这些 package 关系不会长出 Project、第二套 Agent 或调度语�
 
 自建薄 CLI 是首个稳定接入端；原版 `codex --remote` / T3 Code 只作为固定版本
 CAS mapped surface 的机会型验收，不反向塑造 ZAS 或 Zen Core。
+
+模型流异常终止时，Runtime 将已收到的公开文本与 reasoning 一次性提交为 canonical 快照，再记录失败或中断；不记录流式 delta、不执行未完成工具调用。Reasoning 的 `incomplete: true` 标记只供历史显示，禁止作为 Provider reasoning 重放；失败回合的文本属于 trace，不作为成功最终答复。

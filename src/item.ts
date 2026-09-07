@@ -195,6 +195,8 @@ export type ReasoningItem =
       type: "reasoning";
       turnId: string;
       reasoningContent: string;
+      /** Observed public trace from an interrupted model sample; never replayed. */
+      incomplete?: true;
       summary?: string;
       contentVisibility: "public" | "opaque";
       /** Stable provider identity retained only when its adapter requires replay. */
@@ -208,6 +210,7 @@ export type ReasoningItem =
       reasoningContent?: never;
       contentVisibility?: never;
       providerItemId?: never;
+      incomplete?: never;
     });
 
 export interface ToolCallItem extends ItemBase {
@@ -524,6 +527,9 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       break;
     case "reasoning":
       requireTurnId(item, type);
+      if (item.incomplete !== undefined && item.incomplete !== true) {
+        throw new Error("reasoning.incomplete must be true when present");
+      }
       if (hasOwn(item, "reasoningContent")) {
         requireString(item.reasoningContent, `${type}.reasoningContent`);
         requireOptionalString(item.summary, `${type}.summary`);
@@ -538,7 +544,11 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         );
       } else {
         requireString(item.summary, `${type}.summary`);
-        rejectPresent(item, ["contentVisibility", "providerItemId"], type);
+        rejectPresent(
+          item,
+          ["contentVisibility", "providerItemId", "incomplete"],
+          type,
+        );
       }
       break;
     case "tool_call":

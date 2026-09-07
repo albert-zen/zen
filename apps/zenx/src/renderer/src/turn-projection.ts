@@ -78,7 +78,7 @@ export function projectTurn(turn: Turn): TurnDisplayProjection {
       item.type === "agentMessage" && item.text.length > 0,
   );
   const finalItem =
-    turn.status === "inProgress" ? null : (agentItems.at(-1) ?? null);
+    turn.status === "completed" ? (agentItems.at(-1) ?? null) : null;
   const historySource =
     finalItem === null
       ? responseItems
