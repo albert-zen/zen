@@ -1724,7 +1724,7 @@ export function App() {
         pendingApprovalThreadIds={pendingThreadIds}
         pluginContributions={pluginContributions}
         selectedPage={selectedSidebarPage}
-        selectedThreadId={selectedThreadId}
+        selectedThreadId={page === "agent" ? selectedThreadId : null}
         serverStatus={serverStatus}
         projects={projects}
         sidebarOrder={sidebarOrder}

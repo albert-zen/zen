@@ -3019,3 +3019,87 @@ function deferred<T>(): {
   });
   return { promise, reject, resolve };
 }
+
+test("Settings and thread navigation are mutually exclusive, including return to the same thread", async () => {
+  const harness = await mountApp(
+    {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: true,
+          threadIds: ["thread-1", "thread-2"],
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/zen",
+    },
+    {
+      threads: async () => [
+        summary(false, "thread-1", "Thread one"),
+        summary(false, "thread-2", "Thread two"),
+      ],
+      request: async (method, params) => {
+        if (method === "thread/resume")
+          return resumed({
+            ...liveThread(),
+            id: (params as { threadId: string }).threadId,
+          });
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+    },
+  );
+  try {
+    await selectedComposer();
+    for (const id of ["thread-1", "thread-2", "thread-1"]) {
+      await act(async () =>
+        document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
+      );
+      await waitFor(() =>
+        document.querySelector('[aria-label="ZenX settings"]'),
+      );
+      assert.equal(
+        document.querySelectorAll('.thread-row[aria-current="page"]').length,
+        0,
+      );
+      assert.equal(
+        document
+          .querySelector(".settings-nav-row")
+          ?.getAttribute("aria-current"),
+        "page",
+      );
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(
+            `[data-thread-id="${id}"] .thread-row`,
+          )!
+          .click(),
+      );
+      await waitFor(() => document.querySelector("#thread-composer"));
+      assert.equal(
+        document.querySelector('[aria-label="ZenX settings"]'),
+        null,
+      );
+      assert.equal(
+        document.querySelectorAll('.thread-row[aria-current="page"]').length,
+        1,
+      );
+      assert.equal(
+        document
+          .querySelector('.thread-row[aria-current="page"]')
+          ?.closest("[data-thread-id]")
+          ?.getAttribute("data-thread-id"),
+        id,
+      );
+      assert.equal(
+        document
+          .querySelector(".settings-nav-row")
+          ?.getAttribute("aria-current"),
+        null,
+      );
+    }
+  } finally {
+    await unmountApp(harness);
+  }
+});
