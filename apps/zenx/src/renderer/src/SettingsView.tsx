@@ -130,6 +130,10 @@ export function SettingsView({
     );
   }
   const hostDirty = JSON.stringify(draft) !== JSON.stringify(settings.profile);
+  const sendModeOnly =
+    hostDirty &&
+    JSON.stringify({ ...draft, composerSendMode: undefined }) ===
+      JSON.stringify({ ...settings.profile, composerSendMode: undefined });
   const tabs: Array<{
     id: SettingsTab;
     label: string;
@@ -276,6 +280,7 @@ export function SettingsView({
               <SettingsApplyBar
                 busy={busy === "save"}
                 dirty={hostDirty}
+                requiresRestart={!sendModeOnly}
                 onApply={() => void save()}
               />
             ) : null}
@@ -302,7 +307,9 @@ export function SettingsApplyBar({
   busy,
   dirty,
   onApply,
+  requiresRestart = true,
 }: {
+  requiresRestart?: boolean;
   busy: boolean;
   dirty: boolean;
   onApply(): void;
@@ -310,10 +317,14 @@ export function SettingsApplyBar({
   return (
     <div className={`settings-apply-bar${dirty ? " dirty" : ""}`}>
       <div>
-        <strong>Local host configuration</strong>
+        <strong>
+          {requiresRestart ? "Local host configuration" : "Message sending"}
+        </strong>
         <span>
           {dirty
-            ? "Apply these changes when you are ready. ZenX will restart the local host."
+            ? requiresRestart
+              ? "Apply these changes when you are ready. ZenX will restart the local host."
+              : "Apply this sending preference without interrupting the running turn."
             : "No unapplied host changes."}
         </span>
       </div>
@@ -323,7 +334,13 @@ export function SettingsApplyBar({
         disabled={!dirty || busy}
         onClick={onApply}
       >
-        {busy ? "Applying & restarting…" : "Apply & restart"}
+        {requiresRestart
+          ? busy
+            ? "Applying & restarting…"
+            : "Apply & restart"
+          : busy
+            ? "Applying…"
+            : "Apply"}
       </button>
     </div>
   );
@@ -2265,8 +2282,9 @@ function GeneralPanel({
           <div>
             <strong>Zen App Server</strong>
             <span>
-              Applying changes restarts the local host with these defaults.
-              Existing Thread settings remain authoritative.
+              Changes to runtime defaults restart the local host. The sending
+              preference applies without a restart. Existing Thread settings
+              remain authoritative.
             </span>
           </div>
           <span className="status-good">Local</span>
