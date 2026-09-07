@@ -718,6 +718,24 @@ npm --workspace apps/zenx run smoke:windows-user-browser
 npm --workspace apps/zenx run smoke:providers
 ```
 
+`check` prepares the first-party tarballs once for the test and build phases.
+Preparation compiles each source package once, then independently stages and packs
+all provider variants. Rooms and other lifecycle tests copy these tarballs into
+private fixtures; dedicated packaging tests still build real packages, including
+from clean SDK output. No artifacts are reused across preparation invocations.
+
+For a focused edit, run the relevant test file directly after preparation:
+
+```sh
+npm --workspace apps/zenx run prepare:first-party-plugins
+npm --workspace apps/zenx exec -- tsx --test test/app-server-connection.test.ts
+```
+
+Repeat only the second command while editing Host tests. Repeat preparation when
+plugin or SDK sources change. `npm --workspace apps/zenx test` always prepares
+fresh artifacts; `test:prepared` deliberately requires that preparation already
+matches the checkout. Full checks and platform smokes remain the integration gates.
+
 The automated integration suite runs the timer → wakeup → App Server Turn →
 streamed response → history chain, explicit cyclic/self relay and cancellation,
 bounded source snapshots, two-member Room routing, strict persisted-state
