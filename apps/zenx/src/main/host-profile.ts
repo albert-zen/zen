@@ -982,6 +982,7 @@ function optionalContextCompactionConfig(
     throw new Error("ZenX context compaction prompt is invalid");
   }
   normalizeContextCompactionConfig(value as ContextCompactionConfig);
+  if (Object.keys(value).length === 0) return undefined;
   return structuredClone(value) as ContextCompactionConfig;
 }
 
