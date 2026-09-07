@@ -170,11 +170,12 @@ test(
       path.join(os.tmpdir(), "zen-shell-abort-"),
     );
     const marker = path.join(temporaryDirectory, "pid");
+    const descendantReady = path.join(temporaryDirectory, "descendant-ready");
     try {
       const command = [
-        `(trap '' TERM; while :; do :; done) >/dev/null 2>&1 & descendant=$!`,
-        `printf '%s|%s' "$$" "$descendant" > ${JSON.stringify(marker)}`,
+        `(trap '' TERM; printf ready > ${JSON.stringify(descendantReady)}; while :; do :; done) >/dev/null 2>&1 & descendant=$!`,
         "printf before-abort",
+        `printf '%s|%s' "$$" "$descendant" > ${JSON.stringify(marker)}`,
         "wait",
       ].join("; ");
       const operation = shell.execute(
@@ -183,6 +184,7 @@ test(
       const pids = (await waitForFile(marker))
         .split("|")
         .map((value) => Number(value));
+      await waitForFile(descendantReady);
       controller.abort();
       const result = await within(operation);
 
