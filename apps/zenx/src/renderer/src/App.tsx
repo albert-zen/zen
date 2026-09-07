@@ -281,6 +281,7 @@ export function App() {
   }, [page]);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const editingProjectFocusWorkspace = useRef<string | null>(null);
   const [editingProject, setEditingProject] = useState<{
     workspace: string;
     name: string;
@@ -1706,9 +1707,10 @@ export function App() {
             .then(async () => await loadProjects())
             .catch((error: unknown) => setRequestError(describeError(error)));
         }}
-        onEditProject={(workspace, name) =>
-          setEditingProject({ workspace, name })
-        }
+        onEditProject={(workspace, name) => {
+          editingProjectFocusWorkspace.current = workspace;
+          setEditingProject({ workspace, name });
+        }}
         onSetDefaultProject={(workspace) => {
           void window.zenx.settings
             .addWorkspace(workspace)
@@ -1956,17 +1958,20 @@ export function App() {
             threadHasActiveTurn(summary, threadDetail),
           )}
           onClose={() => {
-            const key = projects.projects.find(
-              (project) => project.workspace === editingProject.workspace,
+            const key = projectsRef.current.projects.find(
+              (project) =>
+                project.workspace ===
+                (editingProjectFocusWorkspace.current ??
+                  editingProject.workspace),
             )?.key;
             setEditingProject(null);
-            requestAnimationFrame(() =>
-              document
-                .getElementById(
+            requestAnimationFrame(() => {
+              const target =
+                document.getElementById(
                   `project-more-trigger-${encodeURIComponent(key ?? "")}`,
-                )
-                ?.focus(),
-            );
+                ) ?? document.getElementById("sidebar-thread-list-heading");
+              target?.focus();
+            });
           }}
           onSave={async (name, folder) => {
             await window.zenx.settings.editWorkspace(
@@ -1974,6 +1979,7 @@ export function App() {
               name,
               folder,
             );
+            editingProjectFocusWorkspace.current = folder;
             await loadProjects();
           }}
           onRemove={async () => {
@@ -3133,11 +3139,13 @@ function projectDisplayLabel(
   workspace: string,
   projects: readonly ZenXProjectProjectionEntry[],
 ): string {
-  const leaf = projectLabel(workspace);
+  const leaf =
+    projects.find((project) => project.workspace === workspace)?.name ??
+    projectLabel(workspace);
   const ambiguous = projects.some(
     (project) =>
       project.workspace !== workspace &&
-      projectLabel(project.workspace) === leaf,
+      (project.name ?? projectLabel(project.workspace)) === leaf,
   );
   if (!ambiguous) return leaf;
   const normalized = workspace.replace(/[\\/]+$/u, "");

@@ -205,7 +205,8 @@ export function Sidebar({
                   ? configuredProjects.length === 0
                     ? "Add project first"
                     : "Choose project"
-                  : projectLabelForSidebar(lastUsedProject.workspace)}
+                  : (lastUsedProject.name ??
+                    projectLabelForSidebar(lastUsedProject.workspace))}
               </small>
             </button>
           </div>

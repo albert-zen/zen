@@ -721,3 +721,17 @@ test("compaction retention settings persist without requiring a custom prompt an
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("project names preserve Windows case-insensitive workspace identity", () => {
+  const configured = validateHostProfile(
+    {
+      ...profile,
+      workspace: "C:\\Work",
+      workspaces: ["C:\\Work"],
+      lastUsedWorkspace: null,
+      projectNames: { "c:\\work": "Renamed" },
+    },
+    "win32",
+  );
+  assert.deepEqual(configured.projectNames, { "C:\\Work": "Renamed" });
+});

@@ -1012,15 +1012,21 @@ function normalizeProjectNames(
   platform: NodeJS.Platform,
 ): Record<string, string> {
   if (!isRecord(value)) throw new Error("Invalid project names");
+  const configured = new Map(
+    workspaces.map((workspace) => [
+      workspaceKey(workspace, platform),
+      workspace,
+    ]),
+  );
   return Object.fromEntries(
-    Object.entries(value)
-      .map(([workspace, name]) => {
-        const resolved = resolveProjectPath(workspace, platform);
-        const label = nonEmpty(name, "Project name");
-        if (label.length > 200)
-          throw new Error("Project name must be at most 200 characters");
-        return [resolved, label];
-      })
-      .filter(([workspace]) => workspaces.includes(workspace!)),
+    Object.entries(value).flatMap(([workspace, name]) => {
+      const label = nonEmpty(name, "Project name");
+      if (label.length > 200)
+        throw new Error("Project name must be at most 200 characters");
+      const displayPath = configured.get(
+        workspaceKey(resolveProjectPath(workspace, platform), platform),
+      );
+      return displayPath === undefined ? [] : [[displayPath, label]];
+    }),
   );
 }
