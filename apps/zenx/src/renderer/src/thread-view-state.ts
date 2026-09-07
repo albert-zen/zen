@@ -12,6 +12,12 @@ export function applyThreadViewNotification(
   params: ServerNotificationParams[ServerNotificationMethod],
   nowSeconds = Math.floor(Date.now() / 1_000),
 ): Thread {
+  if (method === "thread/queue/updated") {
+    const event = params as ServerNotificationParams["thread/queue/updated"];
+    return event.threadId === thread.id
+      ? { ...thread, queuedMessages: event.queuedMessages }
+      : thread;
+  }
   if (method === "thread/name/updated") {
     const event = params as ServerNotificationParams["thread/name/updated"];
     return event.threadId === thread.id

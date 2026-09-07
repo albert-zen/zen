@@ -138,6 +138,12 @@ export interface ClientRequestParams {
     input: UserInputPart[];
     clientUserMessageId?: string;
   };
+  "turn/queue": {
+    threadId: string;
+    input: UserInputPart[];
+    clientUserMessageId: string;
+  };
+  "turn/queue/resume": { threadId: string };
   "turn/replace": {
     threadId: string;
     expectedTurnId: string;
@@ -171,6 +177,8 @@ export interface ClientRequestResults {
   };
   "turn/start": { turn: Turn };
   "turn/steer": { turnId: string };
+  "turn/queue": Record<string, never>;
+  "turn/queue/resume": Record<string, never>;
   "turn/replace": { interruptedTurnId: string; turnId: string };
   "turn/interrupt": Record<string, never>;
 }
@@ -185,6 +193,10 @@ export interface ServerNotificationParams {
   "thread/settings/updated": {
     threadId: string;
     threadSettings: UpdatedThreadSettings;
+  };
+  "thread/queue/updated": {
+    threadId: string;
+    queuedMessages: NonNullable<Thread["queuedMessages"]>;
   };
   "turn/started": { threadId: string; turn: Turn };
   "item/started": {

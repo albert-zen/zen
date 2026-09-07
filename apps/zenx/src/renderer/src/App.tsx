@@ -162,6 +162,7 @@ function retainsActiveTurnNotification(
   method: ServerNotificationMethod,
 ): boolean {
   return (
+    method === "thread/queue/updated" ||
     method === "turn/started" ||
     method === "item/started" ||
     method === "item/agentMessage/delta" ||
@@ -250,6 +251,9 @@ export function App() {
   const pinnedThreadIdsRef = useRef<string[]>([]);
   const sidebarOrderRef = useRef<ZenXSidebarOrder>(EMPTY_SIDEBAR_ORDER);
   const profilePreferenceQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const [composerSendMode, setComposerSendMode] = useState<
+    "queue" | "soft" | "hard"
+  >("queue");
   const [page, setPage] = useState<ProductPage>("agent");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -261,6 +265,19 @@ export function App() {
       return false;
     }
   });
+  useEffect(() => {
+    let active = true;
+    void window.zenx.settings
+      .get()
+      .then((value) => {
+        if (active)
+          setComposerSendMode(value.profile.composerSendMode ?? "queue");
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [page]);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [projectPickerIntent, setProjectPickerIntent] = useState<
@@ -1045,6 +1062,14 @@ export function App() {
         input,
         clientUserMessageId: submission.clientUserMessageId,
       });
+    } else if (submission.intent === "queue") {
+      if (archivingThreadIdsRef.current.has(threadId))
+        throw new Error("This Thread is being archived.");
+      await window.zenx.protocol.request("turn/queue", {
+        threadId,
+        input,
+        clientUserMessageId: submission.clientUserMessageId,
+      });
     } else if (submission.intent === "steer") {
       if (submission.expectedTurnId === null)
         throw new Error("The active turn changed before steering");
@@ -1772,6 +1797,7 @@ export function App() {
           />
         ) : (
           <AgentSurface
+            composerSendMode={composerSendMode}
             approvals={approvals}
             pluginSnapshot={pluginSnapshot}
             composerStates={composerStates}
@@ -2064,6 +2090,7 @@ function PageTitleBar({
 }
 
 function AgentSurface({
+  composerSendMode,
   approvals,
   pluginSnapshot,
   composerStates,
@@ -2104,6 +2131,7 @@ function AgentSurface({
   threadError,
   threadLoading,
 }: {
+  composerSendMode: "queue" | "soft" | "hard";
   approvals: ApprovalCardState[];
   pluginSnapshot: ZenXPluginSnapshot | null;
   composerStates: Record<string, ComposerState>;
@@ -2282,6 +2310,12 @@ function AgentSurface({
       ) : selectedSummary === null || threadDetail === null ? null : (
         <>
           <ThreadView
+            composerSendMode={composerSendMode}
+            onResumeQueue={async () => {
+              await window.zenx.protocol.request("turn/queue/resume", {
+                threadId: threadDetail.id,
+              });
+            }}
             approvals={approvals.filter(
               (approval) => approval.params.threadId === threadDetail.id,
             )}

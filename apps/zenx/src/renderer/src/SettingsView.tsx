@@ -103,11 +103,13 @@ export function SettingsView({
         titleModel: draft.titleModel,
         approvalPolicy: draft.approvalPolicy,
         toolPresentation: draft.toolPresentation ?? "both",
+        composerSendMode: draft.composerSendMode ?? "queue",
         maxToolRounds: draft.maxToolRounds,
+        contextCompaction: draft.contextCompaction,
       });
       setSettings(value);
       setDraft(value.profile);
-      setStatus("Changes applied · local host restarted");
+      setStatus("Changes applied");
     } catch (reason) {
       setError(describeError(reason));
     } finally {
@@ -2160,6 +2162,29 @@ function GeneralPanel({
               <option value="never">Full access</option>
             </select>
           </label>
+          <label className="field">
+            <span>Send during a running turn</span>
+            <select
+              value={draft.composerSendMode ?? "queue"}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  composerSendMode: event.target.value as
+                    "queue" | "soft" | "hard",
+                })
+              }
+              aria-describedby="composer-send-help"
+            >
+              <option value="queue">Queue</option>
+              <option value="soft">Soft steer</option>
+              <option value="hard">Hard steer (interrupt and send)</option>
+            </select>
+          </label>
+          <p id="composer-send-help" className="settings-note">
+            Enter and the send button use this choice. Cmd/Ctrl+Enter uses soft
+            steer when Queue is selected, and Queue when either steer mode is
+            selected. Shift+Enter adds a new line.
+          </p>
           <label className="field">
             <span>Tool presentation</span>
             <select

@@ -1,3 +1,4 @@
+import { startupScreenHtml } from "./startup-screen.js";
 import {
   app,
   BrowserWindow,
@@ -127,6 +128,15 @@ const externalZasAcceptancePath = externalZasAcceptanceConfigPath(
   externalZasAcceptanceEnvironment,
 );
 
+let rendererReady = false;
+let bootstrapFailure: string | undefined;
+
+function loadAppRenderer(window: BrowserWindow): void {
+  if (process.env["ELECTRON_RENDERER_URL"])
+    void window.loadURL(process.env["ELECTRON_RENDERER_URL"]);
+  else void window.loadFile(join(__dirname, "../renderer/index.html"));
+}
+
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1280,
@@ -158,11 +168,11 @@ function createWindow(): BrowserWindow {
     return { action: "deny" };
   });
 
-  if (process.env["ELECTRON_RENDERER_URL"]) {
-    void window.loadURL(process.env["ELECTRON_RENDERER_URL"]);
-  } else {
-    void window.loadFile(join(__dirname, "../renderer/index.html"));
-  }
+  if (rendererReady) loadAppRenderer(window);
+  else
+    void window.loadURL(
+      `data:text/html;charset=utf-8,${encodeURIComponent(startupScreenHtml(bootstrapFailure))}`,
+    );
 
   return window;
 }
@@ -449,7 +459,10 @@ async function bootstrapZenX(): Promise<void> {
     async () => await syncProjectProjection(settingsService!),
   );
   bootstrapFence.throwIfCancelled();
-  const mainWindow = createWindow();
+  rendererReady = true;
+  const existingWindow = BrowserWindow.getAllWindows()[0];
+  const mainWindow = existingWindow ?? createWindow();
+  if (existingWindow !== undefined) loadAppRenderer(existingWindow);
   bootstrapFence.throwIfCancelled();
   if (
     projectWorkspaceAcceptancePath !== null &&
@@ -496,11 +509,19 @@ async function bootstrapZenX(): Promise<void> {
 
 void app
   .whenReady()
-  .then(async () => await bootstrapFence.run(bootstrapZenX))
+  .then(async () => {
+    if (!ownsSingleInstance || bootstrapFence.cancelled) return;
+    createWindow();
+    await bootstrapFence.run(bootstrapZenX);
+  })
   .catch((error: unknown) => {
     console.error("ZenX bootstrap failed", error);
-    process.exitCode = 1;
-    app.quit();
+    if (hostLifecycle.quitting) return;
+    bootstrapFailure = error instanceof Error ? error.message : String(error);
+    const window = BrowserWindow.getAllWindows()[0] ?? createWindow();
+    void window.loadURL(
+      `data:text/html;charset=utf-8,${encodeURIComponent(startupScreenHtml(bootstrapFailure))}`,
+    );
   });
 
 app.on("before-quit", (event) => {
@@ -933,7 +954,16 @@ function installSettingsIpc(
       if (apiKey !== undefined && typeof apiKey !== "string") {
         throw new Error("Invalid API key");
       }
+      const before = (await settings.publicSettings()).profile;
       await settings.save(update, apiKey);
+      const after = (await settings.publicSettings()).profile;
+      if (
+        !apiKey &&
+        JSON.stringify({ ...before, composerSendMode: undefined }) ===
+          JSON.stringify({ ...after, composerSendMode: undefined })
+      ) {
+        return await settings.publicSettings();
+      }
       const foregroundPolicyChanged =
         capabilityService?.setForegroundRequiredAllowed(
           update.computerForegroundControlEnabled === true,

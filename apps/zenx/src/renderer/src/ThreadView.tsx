@@ -27,6 +27,8 @@ import type {
 import type { ApprovalCardState } from "./approval-state.js";
 import {
   composerDraftHasContent,
+  defaultComposerIntent,
+  type ComposerSendMode,
   type ComposerDraftImage,
   type ComposerIntent,
   type ComposerState,
@@ -46,6 +48,8 @@ import {
 } from "./turn-projection.js";
 
 interface ThreadViewProps {
+  composerSendMode?: ComposerSendMode;
+  onResumeQueue?(): Promise<void>;
   approvals: readonly ApprovalCardState[];
   composer: ComposerState;
   composerContext?: ReactNode;
@@ -87,6 +91,8 @@ interface ThreadViewProps {
 }
 
 export function ThreadView({
+  composerSendMode = "queue",
+  onResumeQueue,
   approvals,
   composer,
   composerContext = null,
@@ -228,17 +234,30 @@ export function ThreadView({
     }
   };
 
+  const sendIntent = defaultComposerIntent(
+    runningTurn !== null,
+    composerSendMode,
+  );
+  const alternateIntent = defaultComposerIntent(
+    runningTurn !== null,
+    composerSendMode,
+    true,
+  );
   const primaryMode =
-    runningTurn === null ? "send" : !hasDraft ? "stop" : "replace";
+    runningTurn === null ? "send" : !hasDraft ? "stop" : sendIntent;
+  const intentLabel = (intent: ComposerIntent) =>
+    intent === "queue"
+      ? "Queue message"
+      : intent === "steer"
+        ? "Soft steer"
+        : intent === "replace"
+          ? "Interrupt and send"
+          : "Send";
   const primaryLabel =
-    primaryMode === "send"
-      ? "Send"
-      : primaryMode === "stop"
-        ? "Stop"
-        : "Interrupt and send";
+    primaryMode === "stop" ? "Stop" : intentLabel(sendIntent);
   const primary = () => {
     if (primaryMode === "stop") void interrupt();
-    else submit(primaryMode === "replace" ? "replace" : "start");
+    else submit(sendIntent);
   };
 
   return (
@@ -339,6 +358,34 @@ export function ThreadView({
             onRespond={onRespondToApproval}
           />
         ))}
+        {(thread?.queuedMessages?.length ?? 0) > 0 ? (
+          <div
+            className="queued-messages"
+            aria-label="Message queue"
+            aria-live="polite"
+          >
+            <strong>{thread!.queuedMessages!.length} queued</strong>
+            <ol>
+              {thread!.queuedMessages!.map((message) => (
+                <li key={message.id}>
+                  {message.text || `${message.imageCount} image(s)`}
+                </li>
+              ))}
+            </ol>
+            {runningTurn === null && onResumeQueue !== undefined ? (
+              <button
+                type="button"
+                onClick={() =>
+                  void onResumeQueue().catch((error: unknown) =>
+                    setInterruptError(describeError(error)),
+                  )
+                }
+              >
+                Continue queue
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         <form
           className="composer"
           onSubmit={(event) => {
@@ -389,14 +436,22 @@ export function ThreadView({
               if (event.nativeEvent.isComposing) return;
               event.preventDefault();
               if (event.repeat) return;
-              submit(runningTurn === null ? "start" : "steer");
+              submit(
+                defaultComposerIntent(
+                  runningTurn !== null,
+                  composerSendMode,
+                  event.metaKey || event.ctrlKey,
+                ),
+              );
             }}
             placeholder={
               runningTurn === null
                 ? watching
                   ? "Send a message to wake this thread…"
                   : "Ask ZenX anything…"
-                : "Steer the current run…"
+                : composerSendMode === "queue"
+                  ? "Queue a message…"
+                  : "Steer the current run…"
             }
             ref={composerTextareaRef}
             rows={1}
@@ -456,11 +511,9 @@ export function ThreadView({
                   disabled={
                     composerDisabled || submitting || blockedByImageCapability
                   }
-                  onClick={() => submit("steer")}
+                  onClick={() => submit(alternateIntent)}
                 >
-                  {submitting && composer.submission?.intent === "steer"
-                    ? "Steering…"
-                    : "Steer"}
+                  {intentLabel(alternateIntent)}
                 </button>
               ) : null}
               <button

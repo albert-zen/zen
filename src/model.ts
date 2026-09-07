@@ -277,6 +277,7 @@ function compileCanonicalModelMessages(
       case "thread_metadata":
       case "turn_aborted":
       case "turn_completed":
+      case "user_message_queued":
       case "turn_replacement_requested":
       case "turn_started":
         break;

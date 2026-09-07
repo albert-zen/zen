@@ -538,6 +538,38 @@ export class CodexConnection {
         });
         return;
       }
+      case "turn/queue": {
+        rejectUnsupportedValues(params, [
+          "threadId",
+          "input",
+          "clientUserMessageId",
+        ]);
+        const threadId = requiredString(params, "threadId");
+        const input = await readUserInput(params.input, this.#appServer);
+        this.#subscribedThreads.add(threadId);
+        await this.#appServer.queueMessage(
+          threadId,
+          input,
+          requiredString(params, "clientUserMessageId"),
+          {
+            requestApproval: async (approval) =>
+              await this.#requestApproval(approval),
+          },
+        );
+        this.#send({ id: request.id, result: {} });
+        return;
+      }
+      case "turn/queue/resume": {
+        rejectUnsupportedValues(params, ["threadId"]);
+        const threadId = requiredString(params, "threadId");
+        await this.#appServer.readThread(threadId);
+        await this.#appServer.resumeQueue(threadId, {
+          requestApproval: async (approval) =>
+            await this.#requestApproval(approval),
+        });
+        this.#send({ id: request.id, result: {} });
+        return;
+      }
       case "turn/steer": {
         rejectUnsupportedValues(params, [
           "threadId",
@@ -832,6 +864,22 @@ export class CodexConnection {
       return;
     }
     if (event.type === "item_completed") {
+      if (
+        event.item.type === "user_message_queued" ||
+        (event.item.type === "user_message" &&
+          event.item.clientId !== undefined)
+      ) {
+        const snapshot = await this.#appServer.readThread(event.item.threadId);
+        this.#send({
+          method: "thread/queue/updated",
+          params: {
+            threadId: snapshot.id,
+            queuedMessages:
+              projectThread(snapshot, { includeTurns: false }).queuedMessages ??
+              [],
+          },
+        });
+      }
       if (event.item.type === "reasoning" && event.item.turnId !== undefined) {
         this.#reasoningSummaryParts.delete(
           reasoningItemKey(

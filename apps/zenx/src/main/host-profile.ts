@@ -57,6 +57,7 @@ export interface ZenXHostProfile {
   approvalPolicy: "always" | "never";
   /** Missing in an older v3 profile means the product default, both. */
   toolPresentation?: ToolPresentation;
+  composerSendMode?: "queue" | "soft" | "hard";
   /** Omitted means tool rounds are unlimited. */
   maxToolRounds?: number;
   /** Omitted means Core uses its default compaction prompt. */
@@ -74,6 +75,7 @@ export type ZenXSettingsUpdate = Pick<
   | "titleModel"
   | "approvalPolicy"
   | "toolPresentation"
+  | "composerSendMode"
   | "maxToolRounds"
   | "contextCompaction"
 >;
@@ -270,6 +272,13 @@ export function validateHostProfile(
   }
   const maxToolRounds = optionalMaximumToolRounds(value.maxToolRounds);
   const toolPresentation = validateToolPresentation(value.toolPresentation);
+  const composerSendMode = value.composerSendMode ?? "queue";
+  if (
+    composerSendMode !== "queue" &&
+    composerSendMode !== "soft" &&
+    composerSendMode !== "hard"
+  )
+    throw new Error("Invalid composer send mode");
   const contextCompaction = optionalContextCompactionConfig(
     value.contextCompaction,
   );
@@ -303,6 +312,7 @@ export function validateHostProfile(
     lastUsedWorkspace,
     approvalPolicy: value.approvalPolicy,
     toolPresentation,
+    composerSendMode,
     ...(maxToolRounds === undefined ? {} : { maxToolRounds }),
     ...(contextCompaction === undefined ? {} : { contextCompaction }),
     pinnedThreadIds: normalizePinnedThreadIds(value.pinnedThreadIds),

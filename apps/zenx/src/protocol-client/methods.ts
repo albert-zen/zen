@@ -15,6 +15,8 @@ export const clientRequestMethods = [
   "thread/unsubscribe",
   "turn/start",
   "turn/steer",
+  "turn/queue",
+  "turn/queue/resume",
   "turn/replace",
   "turn/interrupt",
 ] as const satisfies readonly Exclude<ClientRequestMethod, "initialize">[];

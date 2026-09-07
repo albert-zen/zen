@@ -1,3 +1,5 @@
+import { pendingQueuedMessages } from "../../input-queue.js";
+import { textFromUserInput } from "../../item.js";
 import type {
   ThreadListEntry,
   ThreadSnapshot,
@@ -39,6 +41,12 @@ export interface CodexThread {
   agentRole: null;
   gitInfo: null;
   name: string | null;
+  queuedMessages?: Array<{
+    id: string;
+    clientId: string;
+    text: string;
+    imageCount: number;
+  }>;
   turns: CodexTurn[];
 }
 
@@ -142,6 +150,12 @@ export function projectThread(
     agentRole: null,
     gitInfo: null,
     name: snapshot.name ?? null,
+    queuedMessages: pendingQueuedMessages(snapshot.items).map((item) => ({
+      id: item.id,
+      clientId: item.clientId,
+      text: textFromUserInput(item.input),
+      imageCount: item.input.filter((part) => part.type === "image").length,
+    })),
     turns: options.includeTurns
       ? snapshot.turns.map((turn) => projectTurn(turn, true, snapshot.cwd))
       : [],
@@ -307,6 +321,7 @@ export function projectCompletedItem(
     case "tool_result":
     case "turn_aborted":
     case "turn_completed":
+    case "user_message_queued":
     case "turn_replacement_requested":
     case "turn_started":
       return null;

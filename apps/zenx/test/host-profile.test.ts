@@ -39,6 +39,7 @@ const profile: ZenXHostProfile = {
   lastUsedWorkspace: null,
   approvalPolicy: "always",
   toolPresentation: "both",
+  composerSendMode: "queue",
   pinnedThreadIds: [],
   sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
 };
@@ -644,6 +645,28 @@ test("concurrent profile stores use independent atomic staging files", async () 
       ["qwen3", "deepseek-r1"].includes(persisted.defaultModel.modelId),
     );
     assert.deepEqual(await readdir(directory), ["host-profile.json"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("composer send modes persist and reject unknown modes", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-send-mode-"));
+  try {
+    const store = new ZenXHostProfileStore(
+      path.join(directory, "profile.json"),
+    );
+    for (const composerSendMode of ["queue", "soft", "hard"] as const) {
+      await store.write({ ...profile, composerSendMode });
+      assert.equal(
+        (await store.read(profile)).composerSendMode,
+        composerSendMode,
+      );
+    }
+    assert.throws(
+      () => validateHostProfile({ ...profile, composerSendMode: "invalid" }),
+      /send mode/u,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

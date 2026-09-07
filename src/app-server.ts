@@ -1,3 +1,4 @@
+import { pendingQueuedMessages } from "./input-queue.js";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
@@ -28,6 +29,7 @@ import type {
   TurnReplacementRequestedItem,
   UserInput,
   UserMessageItem,
+  QueuedUserMessageItem,
 } from "./item.js";
 import {
   contentFromUserMessage,
@@ -403,6 +405,107 @@ export class ZenAppServer {
     });
   }
 
+  async queueMessage(
+    threadId: string,
+    requestedInput: string | UserInput,
+    clientId: string,
+    options: { requestApproval?: ApprovalHandler } = {},
+  ): Promise<void> {
+    const input = normalizeAppServerInput(requestedInput, "Queue");
+    if (clientId.trim().length === 0)
+      throw new AppServerError("invalid_input", "Queue client id is required");
+    await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#requireThread(threadId);
+      const duplicate = thread.items.find(
+        (item) =>
+          (item.type === "user_message_queued" ||
+            item.type === "user_message") &&
+          item.clientId === clientId,
+      );
+      if (
+        duplicate?.type === "user_message_queued" ||
+        duplicate?.type === "user_message"
+      ) {
+        const prior =
+          duplicate.type === "user_message_queued"
+            ? duplicate.input
+            : contentFromUserMessage(duplicate);
+        if (!sameUserInput(prior, input))
+          throw new AppServerError(
+            "idempotency_conflict",
+            "Queue client id was already used for different input",
+          );
+        return;
+      }
+      const resolved = this.#requireSelection(thread.effectiveConfiguration());
+      await this.#validateInput(input, resolved.model.inputModalities);
+      const queued: QueuedUserMessageItem = {
+        id: this.#id(),
+        type: "user_message_queued",
+        threadId,
+        createdAt: this.#now(),
+        clientId,
+        input,
+      };
+      await this.#commit(thread, queued);
+      this.#emit({ type: "item_completed", item: queued });
+    });
+    await this.resumeQueue(threadId, options);
+  }
+
+  async resumeQueue(
+    threadId: string,
+    options: { requestApproval?: ApprovalHandler } = {},
+  ): Promise<void> {
+    const thread = await this.#requireThread(threadId);
+    if (this.#activeTurns.has(threadId)) return;
+    const first = pendingQueuedMessages(thread.items)[0];
+    if (first !== undefined) {
+      const selection = this.#requireSelection(thread.effectiveConfiguration());
+      await this.#validateInput(first.input, selection.model.inputModalities);
+    }
+    void this.#drainQueue(threadId, options).catch(() => {
+      console.error(
+        "Queued message could not start; the durable queue remains available for retry",
+      );
+    });
+  }
+
+  readonly #drainingQueues = new Set<string>();
+
+  async #drainQueue(
+    threadId: string,
+    options: { requestApproval?: ApprovalHandler },
+  ): Promise<void> {
+    if (this.#drainingQueues.has(threadId) || this.#activeTurns.has(threadId))
+      return;
+    this.#drainingQueues.add(threadId);
+    try {
+      while (!this.#activeTurns.has(threadId)) {
+        const thread = await this.#requireThread(threadId);
+        if (this.#pendingReplacement(thread) !== undefined) return;
+        const queued = pendingQueuedMessages(thread.items)[0];
+        if (queued === undefined) return;
+        const turn = await this.#launchTurn(threadId, queued.input, {
+          ...options,
+          clientId: queued.clientId,
+        });
+        await turn.done;
+        if (
+          !thread.items.some(
+            (item) =>
+              item.type === "turn_completed" &&
+              item.turnId === turn.id &&
+              item.status === "completed",
+          )
+        )
+          return;
+      }
+    } finally {
+      this.#drainingQueues.delete(threadId);
+    }
+  }
+
   async startTurn(
     threadId: string,
     input: string | UserInput,
@@ -557,6 +660,7 @@ export class ZenAppServer {
       const controller = new AbortController();
       const ready = deferred<void>();
       let highestInputTokens: number | undefined;
+      let executionSucceeded = false;
 
       const done = new Promise<void>((resolve, reject) => {
         setImmediate(() => {
@@ -633,6 +737,7 @@ export class ZenAppServer {
                   ? {}
                   : { requestApproval: options.requestApproval }),
               });
+              executionSucceeded = true;
               resolve();
             } catch (error) {
               const normalized =
@@ -643,6 +748,23 @@ export class ZenAppServer {
               const active = this.#activeTurns.get(threadId);
               if (active?.turnId === turnId) {
                 this.#activeTurns.delete(threadId);
+                if (
+                  executionSucceeded &&
+                  thread.items.some(
+                    (item) =>
+                      item.type === "turn_completed" &&
+                      item.turnId === turnId &&
+                      item.status === "completed",
+                  )
+                ) {
+                  queueMicrotask(() => {
+                    void this.resumeQueue(threadId, options).catch(() =>
+                      console.error(
+                        "Queued input is paused because it could not be admitted",
+                      ),
+                    );
+                  });
+                }
               }
             }
           })();

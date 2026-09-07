@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { pendingQueuedMessages } from "../src/input-queue.js";
 import { shellPrintCommand } from "./fixtures.js";
 
 import { type AppServerEvent, ZenAppServer } from "../src/app-server.js";
@@ -3067,6 +3068,109 @@ test("failed sample trace survives journal reload without executing a queued too
         (item) => item.type === "tool_call" || item.type === "tool_result",
       ),
       false,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("queued input waits for the active turn and drains in FIFO order", async () => {
+  const release = testDeferred<void>();
+  const entered = testDeferred<void>();
+  const finished = testDeferred<void>();
+  let calls = 0;
+  const model: ModelAdapter = {
+    provider: "queue-test",
+    async *stream(): AsyncIterable<ModelEvent> {
+      calls += 1;
+      if (calls === 1) {
+        entered.resolve();
+        await release.promise;
+      }
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const server = createServer({ model });
+  let completions = 0;
+  server.subscribe((event) => {
+    if (event.type === "turn_completed" && ++completions === 3)
+      finished.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  await server.queueMessage(thread.id, "second", "queue-2");
+  await server.queueMessage(thread.id, "third", "queue-3");
+  await server.queueMessage(thread.id, "second", "queue-2");
+  assert.equal(calls, 1);
+  release.resolve();
+  await first.done;
+  await finished.promise;
+  const snapshot = await server.readThread(thread.id);
+  assert.deepEqual(
+    snapshot.items
+      .filter((item) => item.type === "user_message")
+      .map(textFromUserMessage),
+    ["first", "second", "third"],
+  );
+});
+
+test("queued input survives restart and pauses after interruption until explicit resume", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-queue-reload-"));
+  try {
+    const started = testDeferred<void>();
+    const model: ModelAdapter = {
+      provider: "blocked",
+      async *stream(request) {
+        started.resolve();
+        await new Promise<void>((_resolve, reject) =>
+          request.signal.addEventListener(
+            "abort",
+            () => reject(request.signal.reason),
+            { once: true },
+          ),
+        );
+        yield { type: "text_delta" as const, delta: "unreachable" };
+      },
+    };
+    const server = createServer({
+      model,
+      journal: new JsonlThreadJournal(directory),
+    });
+    const thread = await server.startThread();
+    const turn = await server.startTurn(thread.id, "first");
+    await started.promise;
+    await server.queueMessage(thread.id, "queued", "queued-client");
+    await server.interruptTurn(thread.id, turn.id);
+    await turn.done;
+    const reloaded = createServer({
+      journal: new JsonlThreadJournal(directory),
+      model: {
+        provider: "blocked",
+        async *stream() {
+          yield { type: "text_delta" as const, delta: "done" };
+        },
+      },
+    });
+    assert.equal(
+      pendingQueuedMessages((await reloaded.readThread(thread.id)).items)
+        .length,
+      1,
+    );
+    const done = testDeferred<void>();
+    reloaded.subscribe((event) => {
+      if (event.type === "turn_completed") done.resolve();
+    });
+    reloaded.resumeQueue(thread.id);
+    await done.promise;
+    const snapshot = await reloaded.readThread(thread.id);
+    assert.equal(pendingQueuedMessages(snapshot.items).length, 0);
+    assert.equal(
+      snapshot.items.filter(
+        (item) =>
+          item.type === "user_message" && item.clientId === "queued-client",
+      ).length,
+      1,
     );
   } finally {
     await rm(directory, { recursive: true, force: true });

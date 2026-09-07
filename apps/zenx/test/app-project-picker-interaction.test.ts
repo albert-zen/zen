@@ -1826,56 +1826,43 @@ test("Composer keyboard and form routes do not duplicate one submit event", asyn
   }
 });
 
-test("running Steer and Interrupt and send each own one pending admission", async () => {
-  const steerResponse = deferred<unknown>();
-  const replaceResponse = deferred<unknown>();
-  let steerCalls = 0;
-  let replaceCalls = 0;
-  const harness = await mountThreadApp({
-    request: async (method) => {
-      if (method === "thread/resume") return resumed(runningThread());
-      if (method === "turn/steer") {
-        steerCalls += 1;
-        return await steerResponse.promise;
-      }
-      if (method === "turn/replace") {
-        replaceCalls += 1;
-        return await replaceResponse.promise;
-      }
-      throw new Error(`Unexpected protocol request: ${method}`);
-    },
-  });
-  try {
-    const composer = await selectedComposer();
-    await setTextareaValue(composer, "Guide this turn");
-    const steer = await waitFor(() => exactButton("Steer"));
-    await invokeButtonClick(steer, 2);
-    assert.equal(steerCalls, 1);
-    await act(async () => {
-      steerResponse.resolve({ turnId: "turn-1" });
-      await Promise.resolve();
-      await Promise.resolve();
+test("running queue, soft steer and hard steer each own one pending admission", async () => {
+  for (const [mode, method, label] of [
+    ["queue", "turn/queue", "Queue message"],
+    ["soft", "turn/steer", "Soft steer"],
+    ["hard", "turn/replace", "Interrupt and send"],
+  ] as const) {
+    const response = deferred<unknown>();
+    let calls = 0;
+    const harness = await mountThreadApp({
+      composerSendMode: mode,
+      request: async (requestedMethod) => {
+        if (requestedMethod === "thread/resume")
+          return resumed(runningThread());
+        if (requestedMethod === method) {
+          calls += 1;
+          return await response.promise;
+        }
+        throw new Error(`Unexpected protocol request: ${requestedMethod}`);
+      },
     });
-    await waitFor(() => composer.value === "");
-
-    await setTextareaValue(composer, "Replace this turn");
-    const replace = await waitFor(() =>
-      document.querySelector<HTMLButtonElement>(
-        '[aria-label="Interrupt and send"]',
-      ),
-    );
-    await invokePrimarySubmit(replace, 2);
-    assert.equal(replaceCalls, 1);
-    await act(async () => {
-      replaceResponse.resolve({
-        interruptedTurnId: "turn-1",
-        turnId: "turn-2",
+    try {
+      const composer = await selectedComposer();
+      await setTextareaValue(composer, "Guide this turn");
+      const send = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`),
+      );
+      await invokePrimarySubmit(send, 2);
+      assert.equal(calls, 1);
+      await act(async () => {
+        response.resolve({ turnId: "turn-1" });
+        await Promise.resolve();
+        await Promise.resolve();
       });
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-  } finally {
-    await unmountApp(harness);
+      await waitFor(() => composer.value === "");
+    } finally {
+      await unmountApp(harness);
+    }
   }
 });
 
@@ -2511,6 +2498,7 @@ async function mountApp(
     addWorkspace?(workspace: string): Promise<void>;
     getStatus?(): Promise<AppServerHostStatus>;
     initialPinnedThreadIds?: string[];
+    composerSendMode?: "queue" | "soft" | "hard";
     onStatus?(listener: (status: AppServerHostStatus) => void): () => void;
     onPinnedThreadIds?(threadIds: readonly string[]): void;
     models?: ModelSummary[];
@@ -2550,6 +2538,8 @@ async function mountApp(
     detachEvent: { value: () => undefined },
   });
   let currentSettings = publicSettings(options.initialPinnedThreadIds ?? []);
+  currentSettings.profile.composerSendMode =
+    options.composerSendMode ?? "queue";
   const zenx = {
     platform: "darwin",
     protocol: {
@@ -2675,6 +2665,7 @@ function publicSettings(pinnedThreadIds: string[]) {
   return {
     profile: {
       version: 3 as const,
+      composerSendMode: "queue" as "queue" | "soft" | "hard",
       onboardingComplete: true,
       providerProfiles: [
         {

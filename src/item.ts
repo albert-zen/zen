@@ -13,6 +13,7 @@ export type ItemType =
   | "turn_completed"
   | "turn_aborted"
   | "turn_replacement_requested"
+  | "user_message_queued"
   | "user_message"
   | "agent_message"
   | "model_usage"
@@ -29,6 +30,7 @@ const CANONICAL_ITEM_TYPES = {
   turn_completed: true,
   turn_aborted: true,
   turn_replacement_requested: true,
+  user_message_queued: true,
   user_message: true,
   agent_message: true,
   model_usage: true,
@@ -264,7 +266,14 @@ export interface ContextCompactionItem extends ItemBase {
   };
 }
 
+export interface QueuedUserMessageItem extends ItemBase {
+  type: "user_message_queued";
+  clientId: string;
+  input: UserInput;
+}
+
 export type CanonicalItem =
+  | QueuedUserMessageItem
   | ThreadMetadataItem
   | ThreadConfigurationChangedItem
   | ContextCompactionItem
@@ -494,6 +503,10 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       if (hasOwn(item, "text"))
         requireNonEmptyString(item.text, `${type}.text`);
       else validateUserInput(item.input, `${type}.input`);
+      break;
+    case "user_message_queued":
+      requireNonEmptyString(item.clientId, `${type}.clientId`);
+      validateUserInput(item.input, `${type}.input`);
       break;
     case "user_message":
       requireTurnId(item, type);

@@ -239,11 +239,11 @@ test("running empty composer exposes Stop without locking the editor", () => {
   assert.match(html, /aria-label="Stop"/u);
 });
 
-test("running draft exposes Steer and Interrupt and send", () => {
+test("running draft defaults to Queue with a Soft steer alternative", () => {
   const composer = editComposer(emptyComposerState(), "change direction");
   const html = render(true, [], composer);
-  assert.match(html, />Steer</u);
-  assert.match(html, /aria-label="Interrupt and send"/u);
+  assert.match(html, />Soft steer</u);
+  assert.match(html, /aria-label="Queue message"/u);
   assert.doesNotMatch(html, /Interrupt without sending the draft/u);
 });
 
@@ -1382,4 +1382,68 @@ test("failed turn opens received trace and preserves the error without a final a
     document.querySelector(".turn-terminal")?.textContent,
     "invalid tool call id",
   );
+});
+
+test("keyboard modifiers and send button honor all running send modes", async () => {
+  await withDom(async (root) => {
+    for (const [mode, normal, alternate] of [
+      ["queue", "queue", "steer"],
+      ["soft", "steer", "queue"],
+      ["hard", "replace", "queue"],
+    ] as const) {
+      const intents: string[] = [];
+      await act(async () =>
+        root.render(
+          createElement(ThreadView, {
+            composerSendMode: mode,
+            approvals: [],
+            composer: editComposer(emptyComposerState(), "follow up"),
+            thread: thread([turnWithItems("inProgress", [])]),
+            onDraftChange: () => undefined,
+            onInterrupt: noop,
+            onRespondToApproval: noop,
+            onSubmit: async (intent) => {
+              intents.push(intent);
+            },
+          }),
+        ),
+      );
+      const textarea = document.querySelector("textarea")!;
+      await act(async () => {
+        textarea.focus();
+        textarea.dispatchEvent(
+          new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+        );
+      });
+      await act(async () => {
+        textarea.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            key: "Enter",
+            metaKey: true,
+            bubbles: true,
+          }),
+        );
+      });
+      await act(async () => {
+        textarea.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            key: "Enter",
+            ctrlKey: true,
+            bubbles: true,
+          }),
+        );
+      });
+      await act(async () => requiredButton(".action-orb").click());
+      await act(async () => {
+        textarea.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            key: "Enter",
+            shiftKey: true,
+            bubbles: true,
+          }),
+        );
+      });
+      assert.deepEqual(intents, [normal, alternate, alternate, normal]);
+    }
+  });
 });

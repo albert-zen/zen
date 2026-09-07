@@ -482,6 +482,8 @@ export class ZenXSettingsService {
             titleModel: settings.titleModel,
             approvalPolicy: settings.approvalPolicy,
             toolPresentation: settings.toolPresentation ?? "both",
+            composerSendMode:
+              settings.composerSendMode ?? current.composerSendMode ?? "queue",
             maxToolRounds: settings.maxToolRounds,
             contextCompaction: settings.contextCompaction,
           }),

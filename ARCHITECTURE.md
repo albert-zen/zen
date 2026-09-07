@@ -793,3 +793,7 @@ CAS mapped surface 的机会型验收，不反向塑造 ZAS 或 Zen Core。
 模型流异常终止时，Runtime 将已收到的公开文本与 reasoning 一次性提交为 canonical 快照，再记录失败或中断；不记录流式 delta、不执行未完成工具调用。Reasoning 的 `incomplete: true` 标记只供历史显示，禁止作为 Provider reasoning 重放；失败回合的文本属于 trace，不作为成功最终答复。
 
 Host 为兼容模型流解析失败保存独立、限量轮转的结构化诊断（请求关联、分片序号、字段类型），失败时附带最近8个接收分片（各至多8KiB，明确标记截断），保留实际响应及工具参数以支持诊断；不记录请求头或请求正文，遮盖配置的API密钥，不作为会话语义来源；诊断写入失败不得替换原始模型错误。
+
+消息队列由 canonical `user_message_queued` 记录及同clientId的已交付user_message推导，Core按FIFO在正常完成后启动新Turn，失败/中断暂停且可显式继续；接入端仅投影队列。运行中发送模式是桌面偏好，默认queue，Enter/按钮按偏好，Cmd/Ctrl+Enter在queue与steer间按用户规则切换。
+
+ZenX 在 app ready 后先打开无需IPC的静态启动页，同一窗口在Host/IPC准备就绪后切入应用；启动错误显示在该窗口，启动中再次激活只聚焦或恢复启动窗口。

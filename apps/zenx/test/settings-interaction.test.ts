@@ -157,7 +157,7 @@ test("Settings saves global model routing by Provider profile identity", async (
       providerProfileId: "profile-beta",
       modelId: "shared-model",
     });
-    assert.match(document.body.textContent ?? "", /local host restarted/u);
+    assert.match(document.body.textContent ?? "", /Changes applied/u);
     assert.equal(apply.disabled, true);
   } finally {
     await unmount(harness);
