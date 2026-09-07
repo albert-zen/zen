@@ -73,7 +73,11 @@ test("keyboard reorder restores focus while preserving selection, Pin, and activ
       requiredButton('[data-thread-id="idle"] .thread-menu-trigger').click(),
     );
     assert.ok(
-      document.querySelector('[data-thread-id="idle"] .thread-item-menu'),
+      document.getElementById(
+        requiredButton(
+          '[data-thread-id="idle"] .thread-menu-trigger',
+        ).getAttribute("aria-controls")!,
+      ),
     );
     const idleRow = requiredButton('[data-thread-id="idle"] .thread-row');
     idleRow.focus();
@@ -98,7 +102,11 @@ test("keyboard reorder restores focus while preserving selection, Pin, and activ
     assert.deepEqual(projectAThreads, ["idle", "active"]);
     assert.equal(document.activeElement, idleRow);
     assert.ok(
-      document.querySelector('[data-thread-id="idle"] .thread-item-menu'),
+      document.getElementById(
+        requiredButton(
+          '[data-thread-id="idle"] .thread-menu-trigger',
+        ).getAttribute("aria-controls")!,
+      ),
     );
     assert.equal(
       document
