@@ -1,3 +1,4 @@
+import { fetchModelResponse } from "./request-retry.js";
 import { randomUUID } from "node:crypto";
 import type {
   ModelAdapter,
@@ -176,16 +177,20 @@ export class OpenAiCompatibleModel implements ModelAdapter {
 
     let response: Response;
     try {
-      response = await this.#fetch(this.#endpoint, {
-        method: "POST",
-        signal: request.signal,
-        headers: {
-          accept: "text/event-stream",
-          authorization: `Bearer ${this.#apiKey}`,
-          "content-type": "application/json",
-        },
-        body,
-      });
+      response = await fetchModelResponse(
+        () =>
+          this.#fetch(this.#endpoint, {
+            method: "POST",
+            signal: request.signal,
+            headers: {
+              accept: "text/event-stream",
+              authorization: `Bearer ${this.#apiKey}`,
+              "content-type": "application/json",
+            },
+            body,
+          }),
+        request.signal,
+      );
     } catch {
       request.signal.throwIfAborted();
       throw modelError(

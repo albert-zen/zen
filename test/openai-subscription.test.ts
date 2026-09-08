@@ -1479,3 +1479,22 @@ async function collect(
   }
   return events;
 }
+
+test("subscription adapter recovers transient admission failure", async () => {
+  let calls = 0;
+  const adapter = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+    fetch: async () => {
+      calls++;
+      if (calls === 1) throw new TypeError("fetch failed");
+      return sseResponse([
+        {
+          type: "response.completed",
+          response: { status: "completed", output: [] },
+        },
+      ]);
+    },
+  });
+  await collect(adapter.stream(request()));
+  assert.equal(calls, 2);
+});

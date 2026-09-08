@@ -7,6 +7,8 @@ export type IconName =
   | ZenXPluginIconName
   | "arrow-down"
   | "archive"
+  | "compress"
+  | "chip"
   | "check"
   | "chevron-down"
   | "chevron-left"
@@ -48,6 +50,13 @@ type IconProps = SVGProps<SVGSVGElement> & {
 
 const paths: Record<IconName, ReactNode> = {
   "arrow-down": <path d="M8 2.2v11.2m-4-4 4 4 4-4" />,
+  compress: <path d="M2 1v4h4M14 1v4h-4M2 15v-4h4M14 15v-4h-4M5 8h6" />,
+  chip: (
+    <>
+      <rect x="4" y="4" width="8" height="8" rx="2" />
+      <path d="M6 1v3m4-3v3M6 12v3m4-3v3M1 6h3m-3 4h3m8-4h3m-3 4h3" />
+    </>
+  ),
   archive: (
     <>
       <path d="M2.2 4.8h11.6v8.5H2.2zM1.6 2.3h12.8v2.5H1.6z" />

@@ -836,3 +836,5 @@ ZenX 在 app ready 后先打开无需IPC的静态启动页，同一窗口在Host
 Context pressure estimation includes tool `modelContent` as the additional user content sent by adapters; image dimensions contribute a provider-neutral patch estimate, not an exact provider token count.
 
 工具适配器返回的 ToolExecutionResult 必须代表底层操作的真实最终结果（包括非零退出）；仅停止本地等待或不确认远端状态时必须 reject，不能伪造最终结果。默认取消后 reject 保留未知状态与资源 fence，但其诊断输出会回传一次。wait 的固定控制 envelope 不占用已独立校验的原工具 structuredContent 预算。
+
+模型请求在适配器共享的 request admission 边界最多尝试 4 次：临时连接错误及 HTTP 408/429/500/502/503/504 采用可取消、带抖动的指数退避，遵守 Retry-After，累计退避不超过 120 秒。成功响应开始后不重放流、Turn 或工具；耗尽后由原有 failure 路径告知用户，不引入 durable 重试状态。

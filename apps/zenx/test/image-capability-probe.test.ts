@@ -85,7 +85,15 @@ test("explicit image probe uses the real adapter request and classifies supporte
       ),
     );
   }
-  assert.equal(requests.length, 7);
+  assert.equal(requests.length, 10);
+  assert.equal(
+    requests.filter((request) => request.model === "rate-limited").length,
+    4,
+  );
+  assert.equal(
+    requests.filter((request) => request.model === "auth").length,
+    1,
+  );
   for (const request of requests) {
     assert.equal(request.max_tokens, 1);
     assert.equal(request.stream, true);

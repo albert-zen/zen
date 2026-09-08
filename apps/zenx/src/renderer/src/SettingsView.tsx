@@ -32,7 +32,7 @@ import {
   type AppearancePreset,
 } from "./appearance.js";
 import { PluginSettings } from "./PluginSettings.js";
-import { Icon } from "./icons.js";
+import { Icon, type IconName } from "./icons.js";
 import { ProviderLogo, providerLogoKindForIdentity } from "./ProviderLogo.js";
 import { threadModelIdentity, threadTitle } from "./thread-list.js";
 import { PluginSettingsSurfaces } from "./PluginProductPage.js";
@@ -152,14 +152,14 @@ export function SettingsView({
   const tabs: Array<{
     id: SettingsTab;
     label: string;
-    icon: "users" | "layers" | "trigger" | "moon" | "settings" | "archive";
+    icon: IconName;
   }> = [
     { id: "account", label: "Account", icon: "users" },
-    { id: "models", label: "Models & provider", icon: "layers" },
+    { id: "models", label: "Models & provider", icon: "chip" },
     { id: "plugins", label: "Plugins", icon: "trigger" },
     { id: "appearance", label: "Appearance", icon: "moon" },
     { id: "general", label: "General", icon: "settings" },
-    { id: "compaction", label: "Context compaction", icon: "layers" },
+    { id: "compaction", label: "Context compaction", icon: "compress" },
     { id: "archived", label: "Archived threads", icon: "archive" },
   ];
   return (
@@ -180,7 +180,7 @@ export function SettingsView({
             </button>
             <div>
               <h1>Settings</h1>
-              <p>Account, appearance, models, plugins, and local host</p>
+              <p>Make ZenX your own</p>
             </div>
           </div>
         </header>
@@ -349,15 +349,13 @@ export function SettingsApplyBar({
   return (
     <div className={`settings-apply-bar${dirty ? " dirty" : ""}`}>
       <div>
-        <strong>
-          {requiresRestart ? "Local host configuration" : "Message sending"}
-        </strong>
+        <strong>{requiresRestart ? "App settings" : "Message sending"}</strong>
         <span>
           {dirty
             ? requiresRestart
               ? "Apply these changes when you are ready. ZenX will restart the local host."
               : "Apply this sending preference without interrupting the running turn."
-            : "No unapplied host changes."}
+            : "Your settings are up to date."}
         </span>
       </div>
       <button
@@ -746,8 +744,7 @@ function ModelsPanel({
       <header>
         <h2>Models & providers</h2>
         <p>
-          Manage independent Provider profiles and choose which profile owns
-          each global model role.
+          Connect your providers and choose the models you want to work with.
         </p>
       </header>
       {error === null ? null : (
@@ -765,10 +762,9 @@ function ModelsPanel({
       <div className="page-card settings-card model-routing-card">
         <div className="settings-card-head">
           <div>
-            <h3>Global model routing</h3>
+            <h3>Default models</h3>
             <p>
-              Provider identity is part of each selection, including when two
-              profiles use the same model ID.
+              Choose a model for new conversations and another for naming them.
             </p>
           </div>
           <span className="status-muted">New work</span>
@@ -788,8 +784,8 @@ function ModelsPanel({
           />
         </div>
         <p className="settings-note">
-          Existing Threads keep their ZAS-authoritative selection until you
-          change it explicitly in the Composer.
+          Existing conversations keep their model. You can change it from the
+          message box at any time.
         </p>
       </div>
       <section
@@ -799,7 +795,7 @@ function ModelsPanel({
         <div className="provider-section-head">
           <div>
             <h3 id="provider-list-title">Provider profiles</h3>
-            <p>Credentials and model IDs stay scoped to one profile.</p>
+            <p>Manage each connection and its available models.</p>
           </div>
           {editor === null ? (
             <div className="provider-section-actions">
@@ -2245,7 +2241,7 @@ function GeneralPanel({
     <>
       <header>
         <h2>General</h2>
-        <p>Local workspace defaults and Zen App Server behavior.</p>
+        <p>Choose how ZenX works with you and your projects.</p>
       </header>
       <div className="page-card settings-card">
         <div className="settings-card-head">

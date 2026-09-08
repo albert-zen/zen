@@ -1428,3 +1428,33 @@ async function collect(
   }
   return collected;
 }
+
+test("compatible adapter recovers a transient admission failure without replaying the stream", async () => {
+  let calls = 0;
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: "https://provider.test/v1",
+    apiKey: fakeKey,
+    fetch: async () => {
+      calls++;
+      if (calls === 1) return new Response(null, { status: 429 });
+      return streamResponse([
+        chunk({
+          choices: [
+            {
+              index: 0,
+              delta: { content: "Recovered" },
+              finish_reason: "stop",
+            },
+          ],
+        }),
+        "[DONE]",
+      ]);
+    },
+  });
+  const events = await collect(adapter.stream(request()));
+  assert.equal(calls, 2);
+  assert.deepEqual(
+    events.filter((event) => event.type === "text_delta"),
+    [{ type: "text_delta", delta: "Recovered" }],
+  );
+});

@@ -7,9 +7,12 @@ test("startup screen is visible content with no scripts or IPC dependency", () =
   const document = new JSDOM(startupScreenHtml()).window.document;
   assert.match(
     document.querySelector('[role="status"]')?.textContent ?? "",
-    /Starting ZenX/u,
+    /Preparing your superpower/u,
   );
   assert.equal(document.querySelectorAll("script").length, 0);
+  assert.ok(
+    document.querySelector('svg[data-geometry="zenx-board04-mechanical-v1"]'),
+  );
   assert.match(
     document
       .querySelector('meta[http-equiv="Content-Security-Policy"]')

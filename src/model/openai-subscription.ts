@@ -1,3 +1,4 @@
+import { fetchModelResponse } from "./request-retry.js";
 import type {
   ModelAdapter,
   ModelEvent,
@@ -142,12 +143,16 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       headers.set("x-client-request-id", sessionHint);
     }
     try {
-      return await this.#fetch(this.#endpoint, {
-        method: "POST",
-        body,
-        headers,
+      return await fetchModelResponse(
+        () =>
+          this.#fetch(this.#endpoint, {
+            method: "POST",
+            body,
+            headers,
+            signal,
+          }),
         signal,
-      });
+      );
     } catch {
       signal.throwIfAborted();
       throw new Error(
