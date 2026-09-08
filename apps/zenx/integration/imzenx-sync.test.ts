@@ -4,6 +4,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import {
+  observeCompletedUserMessageTitle,
+  observeDiscoveredThreadTitle,
+} from "../src/main/thread-title-notification.js";
 import { AppServerManager } from "../src/main/app-server-manager.js";
 import { readZenXConnectionDescriptor } from "../src/protocol-client/index.js";
 import { applyThreadViewNotification } from "../src/renderer/src/thread-view-state.js";
@@ -36,10 +40,27 @@ test(
       const created = await manager.request("thread/start", {});
       let view = created.thread;
       const discovered: string[] = [];
+      const observedTitles: string[] = [];
+      const titles = {
+        synchronizeNativeName: async () => {},
+        observe: async (_id: string, input: string) => {
+          observedTitles.push(input);
+        },
+      };
       manager.onNotification((method, params) => {
+        void observeCompletedUserMessageTitle(titles, method, params);
         view = applyThreadViewNotification(view, method, params);
-        if (method === "thread/started")
-          discovered.push((params as { thread: { id: string } }).thread.id);
+        if (method === "thread/started") {
+          const event =
+            params as import("../src/protocol-client/index.js").ServerNotificationParams["thread/started"];
+          discovered.push(event.thread.id);
+          void observeDiscoveredThreadTitle(
+            titles,
+            async (threadId) =>
+              (await manager.request("thread/resume", { threadId })).thread,
+            event.thread,
+          );
+        }
       });
       const imRoot = path.resolve("../imzen");
       const python = path.join(
@@ -90,6 +111,16 @@ test(
       assert.equal(
         discovered.filter((id) => id !== created.thread.id).length,
         1,
+      );
+      const namingDeadline = Date.now() + 2000;
+      while (
+        !observedTitles.includes("im-new-thread") &&
+        Date.now() < namingDeadline
+      )
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      assert(
+        observedTitles.includes("im-new-thread"),
+        "IM-created first input must reach desktop automatic naming without selecting the thread",
       );
       const snapshot = await manager.request("thread/read", {
         threadId: created.thread.id,

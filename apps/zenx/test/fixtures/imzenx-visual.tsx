@@ -6,7 +6,19 @@ import type { PluginUiSdkV1 } from "../../src/renderer/src/plugin-ui-host.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
 
-const failed = location.search.includes("failed");
+let failed = location.search.includes("failed");
+const configured = !location.search.includes("new");
+document.documentElement.dataset.appearance = location.search.includes("dark")
+  ? "dark"
+  : "light";
+let configuration: unknown = configured
+  ? {
+      pythonExecutable:
+        "/Users/demo/Library/Application Support/ZenX/imzenx/.venv/bin/python",
+      channelsConfigFile: "/Users/demo/.config/imzen/channels.json",
+      cwd: "/Users/demo/work",
+    }
+  : null;
 const sdk: PluginUiSdkV1 = {
   version: 1,
   pluginId: "imzenx",
@@ -17,11 +29,14 @@ const sdk: PluginUiSdkV1 = {
   commands: {
     execute: async (command, input) => {
       await new Promise((resolve) => setTimeout(resolve, 100));
-      if (command === "configure")
-        return { state: "connected", configuration: input };
+      if (command === "configure") {
+        configuration = input;
+        failed = false;
+      }
+      if (command === "connect") failed = false;
       return {
-        state: failed ? "failed" : "unconfigured",
-        configuration: null,
+        state: failed ? "failed" : configuration ? "connected" : "unconfigured",
+        configuration,
         ...(failed
           ? {
               error:

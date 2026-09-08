@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Icon } from "./icons.js";
 import type {
   PluginUiRegistry,
   PluginUiSurfaceProps,
@@ -27,6 +28,7 @@ const empty: Configuration = {
 };
 const states: Record<string, string> = {
   unconfigured: "尚未配置",
+  "waiting-for-activation": "等待插件启动",
   "waiting-for-zas": "等待 ZenX Agent 服务",
   starting: "正在连接",
   connected: "已连接",
@@ -41,6 +43,8 @@ export function registerImZenXUi(registry: PluginUiRegistry): () => void {
 export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
   const [config, setConfig] = useState(empty);
   const [status, setStatus] = useState<Status | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -52,6 +56,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
         const result = value as Status;
         setStatus(result);
         setConfig({ ...empty, ...result.configuration });
+        setSettingsOpen(!result.configuration);
       })
       .catch((reason: unknown) => {
         if (active) setError(String(reason));
@@ -63,9 +68,28 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
       active = false;
     };
   }, [sdk]);
+  useEffect(() => {
+    if (busy) return;
+    let active = true;
+    const timer = setInterval(() => {
+      void sdk.commands
+        .execute("status")
+        .then((value) => {
+          if (active) setStatus(value as Status);
+        })
+        .catch(() => {
+          /* Explicit refresh reports request errors. */
+        });
+    }, 5000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [sdk, busy]);
   const run = async (command: string) => {
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
       setStatus(
         (await sdk.commands.execute(
@@ -73,31 +97,91 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
           command === "configure" ? config : undefined,
         )) as Status,
       );
+      if (command === "configure") setNotice("配置已保存");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
+      try {
+        setStatus((await sdk.commands.execute("status")) as Status);
+      } catch {
+        /* Keep the original action error visible. */
+      }
     } finally {
       setBusy(false);
     }
   };
   return (
     <div className="imzenx-page">
-      <div className="page-intro">
+      <header className="imzenx-heading">
+        <span className="imzenx-mark">
+          <Icon name="imzenx" size={24} />
+        </span>
         <div>
-          <h2>同一个 Agent，随时从 IM 接着聊。</h2>
-          <p>
-            订阅 ZenX 会话后，桌面发起的回复也会送达 IM。IM
-            发出的消息和后续回复会出现在同一桌面会话中。
-          </p>
+          <h2>IM 连接</h2>
+          <p>在 IM 和桌面之间，继续同一个会话。</p>
         </div>
-      </div>
-      <div className="page-card">
-        <h2>IMZenX</h2>
-        <p role="status">
-          {status ? (states[status.state] ?? status.state) : "正在读取状态…"}
-        </p>
+      </header>
+      <section className="imzenx-connection" aria-label="连接概览">
+        <div className="imzenx-connection-top">
+          <div className="imzenx-endpoint">
+            <Icon name="terminal" size={20} />
+            <div>
+              <h3>本机 ZenX Agent</h3>
+              <p>使用当前 ZenX 的会话服务</p>
+            </div>
+          </div>
+          <span
+            className="imzenx-status"
+            data-state={status?.state}
+            role="status"
+          >
+            <span aria-hidden="true" />
+            {status ? (states[status.state] ?? status.state) : "正在读取…"}
+          </span>
+        </div>
         {error || status?.error ? (
-          <p role="alert">{error ?? status?.error}</p>
+          <p className="imzenx-error" role="alert">
+            {error ?? status?.error}
+          </p>
         ) : null}
+        <div className="imzenx-connection-bottom">
+          <span>消息与回复双端同步 · 订阅自动保留</span>
+          <div className="imzenx-actions">
+            <button
+              className="imzenx-text-button"
+              type="button"
+              disabled={busy}
+              onClick={() => void run("status")}
+            >
+              刷新状态
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={busy || !status?.configuration}
+              onClick={() => void run("connect")}
+            >
+              {busy ? "处理中…" : "重新连接"}
+            </button>
+          </div>
+        </div>
+      </section>
+      <details
+        className="imzenx-settings"
+        open={settingsOpen}
+        onToggle={(event) => setSettingsOpen(event.currentTarget.open)}
+      >
+        <summary>
+          <Icon name="settings" size={18} />
+          <span>
+            连接设置
+            <small>
+              {status?.configuration
+                ? "已配置，可随时修改"
+                : "设置运行环境与频道"}
+            </small>
+          </span>
+          <Icon name="chevron-down" className="imzenx-disclosure" />
+        </summary>
         <form
           onSubmit={(event) => {
             event.preventDefault();
@@ -105,7 +189,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
           }}
         >
           <fieldset disabled={busy} className="imzenx-fields">
-            <div className="form-grid">
+            <div className="imzenx-form-grid">
               {(
                 [
                   ["pythonExecutable", "Python 可执行文件"],
@@ -125,13 +209,12 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
                 </label>
               ))}
             </div>
-            <p>
-              填写绝对路径。Python 需要安装 IMZen 固定版本的 IM Agent
-              SDK；频道配置沿用 IMZen 格式，凭证保存在私有文件中。
+            <p className="imzenx-hint">
+              使用绝对路径。频道沿用 IMZen 配置，凭证保存在本机私有文件中。
             </p>
             <details>
               <summary>高级设置</summary>
-              <div className="form-grid">
+              <div className="imzenx-form-grid">
                 <label className="field">
                   <span>图片共享目录（可选）</span>
                   <input
@@ -174,57 +257,59 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
                 </label>
               </div>
             </details>
-            <div
-              className="page-actions"
-              style={{
-                display: "flex",
-                gap: 8,
-                flexWrap: "wrap",
-                marginTop: 16,
-              }}
-            >
+            {notice ? (
+              <p className="imzenx-notice" role="status">
+                {notice}
+              </p>
+            ) : null}
+            <div className="imzenx-save">
+              <span>保存后将重新连接频道</span>
               <button className="primary-button" type="submit">
-                {busy ? "处理中…" : "保存并连接"}
-              </button>
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => void run("connect")}
-              >
-                重新连接
-              </button>
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => void run("status")}
-              >
-                刷新状态
+                {busy ? "保存中…" : "保存并连接"}
               </button>
             </div>
           </fieldset>
         </form>
-      </div>
-      <div className="page-card">
-        <h2>在 IM 中订阅</h2>
-        <ol>
-          <li>
-            发送 <code>/threads</code> 查看 ZenX 会话。
-          </li>
-          <li>
-            发送 <code>/subscribe 会话编号或ID</code>，此后在 IM
-            和桌面都可以继续该会话。
-          </li>
-          <li>
-            发送 <code>/unsubscribe</code>{" "}
-            停止当前订阅；下一条普通消息会新建会话。
-          </li>
-        </ol>
-        <p>
-          每个 IM 会话选择一个 Thread；多个频道可以订阅同一个
-          Thread。订阅会在插件重启后保留。关闭窗口继续运行，退出 ZenX
-          或停用插件会断开 IM。
-        </p>
-      </div>
+      </details>
+      <section className="imzenx-guide" aria-labelledby="imzenx-guide-title">
+        <div className="imzenx-section-heading">
+          <h3 id="imzenx-guide-title">从 IM 开始</h3>
+          <span>在机器人聊天中发送</span>
+        </div>
+        <div className="imzenx-quickstart">
+          <Icon name="compose" size={18} />
+          <p>
+            直接发消息，即可新建会话。
+            <span>已有会话？先查看列表，再订阅。</span>
+          </p>
+        </div>
+        <dl className="imzenx-commands">
+          <div>
+            <dt>
+              <code>/threads</code>
+            </dt>
+            <dd>查看会话列表</dd>
+          </div>
+          <div>
+            <dt>
+              <code>
+                /subscribe <span>编号或 ID</span>
+              </code>
+            </dt>
+            <dd>关联会话，双端接着聊</dd>
+          </div>
+          <div>
+            <dt>
+              <code>/unsubscribe</code>
+            </dt>
+            <dd>取消当前订阅</dd>
+          </div>
+        </dl>
+      </section>
+      <footer className="imzenx-footer">
+        <Icon name="imzenx" />
+        <span>关闭窗口仍保持连接；退出 ZenX 或停用插件后断开。</span>
+      </footer>
     </div>
   );
 }

@@ -43,7 +43,11 @@ import { createBundledAutomationPluginService } from "./automation-plugin-servic
 import { ZenXThreadTitleCoordinator } from "./thread-title-coordinator.js";
 import { normalizeTitleOwnershipFailure } from "./thread-title-failure.js";
 import { ZenXThreadTitleStore } from "./thread-title-store.js";
-import { observeCompletedUserMessageTitle } from "./thread-title-notification.js";
+import {
+  observeCompletedUserMessageTitle,
+  observeDiscoveredThreadTitle,
+  observeThreadSnapshotTitle,
+} from "./thread-title-notification.js";
 import { ZenXConfiguredTitleInference } from "./title-inference.js";
 import { ZenXCapabilityService } from "./capability-service.js";
 import { PACKAGED_PROVIDER_MANIFEST_SHA256 } from "./capabilities/packaged-provider-integrity.js";
@@ -731,7 +735,20 @@ function installProtocolIpc(
       if (!isClientRequestMethod(method)) {
         throw new Error(`Unsupported ZenX protocol method: ${String(method)}`);
       }
-      return await manager.request(method, params as never);
+      const result = await manager.request(method, params as never);
+      if (method === "thread/resume" || method === "thread/read") {
+        const snapshot =
+          result as import("../protocol-client/index.js").ClientRequestResults["thread/read"];
+        void observeThreadSnapshotTitle(titles, snapshot.thread).catch(
+          (error: unknown) => {
+            console.warn(
+              "Could not observe Thread snapshot for ZenX title",
+              error,
+            );
+          },
+        );
+      }
+      return result;
     },
   );
   ipcMain.handle(
@@ -750,6 +767,15 @@ function installProtocolIpc(
   });
   manager.onNotification((method, params) => {
     void observeCompletedUserMessageTitle(titles, method, params);
+    if (method === "thread/started") {
+      const event = params as ServerNotificationParams["thread/started"];
+      void observeDiscoveredThreadTitle(
+        titles,
+        async (threadId) =>
+          (await manager.request("thread/resume", { threadId })).thread,
+        event.thread,
+      );
+    }
     if (method === "thread/name/updated") {
       const event = params as ServerNotificationParams["thread/name/updated"];
       void titles

@@ -87,3 +87,10 @@ require a Python environment.
 Disable or uninstall IMZenX in Plugins. This stops its process and subscriptions
 without deleting ZAS Threads. Restore the prior ZenX application to revert the
 Host integration; private plugin configuration and bridge SQLite are retained.
+
+The management page shows connection state while open and keeps configured paths
+under Connection settings. Saving preserves a visible result; failed connections
+can be retried explicitly. Desktop discovery subscribes to new external Threads
+without changing the selected Thread and feeds their first canonical input into
+ZenX's existing automatic naming coordinator. Opening an older unnamed Thread
+also supplies its first input; native and manually assigned names are preserved.
