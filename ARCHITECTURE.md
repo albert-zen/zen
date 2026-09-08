@@ -153,6 +153,7 @@
   committed，使 post-commit credential cleanup 即使失败也必须先尝试把 live Host 重启到新配置再明确报错。
 - **ZenX Bootstrap Fence** — Electron 主进程用一个 process-local cancellation/join fence 把 asynchronous
   bootstrap 与显式 Quit 串行，并只允许在未取消时发布 Host/window；它不持久化或扩展成通用 lifecycle framework。
+- ZenX 启动页与主 renderer 使用同一 origin 及同一个首帧前外观脚本，直接读取 `zenx.appearance`；不复制偏好，也不等待 Host 或 IPC。
 - **ZenXModelDiscovery** — ZenX 主进程从同一份瞬时 Provider operation snapshot 取得所选
   OpenAI-compatible profile 的 endpoint、credential、transport 与 model metadata，发起一次无持久状态的
   `GET /models` 并在返回前精确重验目标，采信响应中可明确解析的 modality metadata，再按完整 model id

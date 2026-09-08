@@ -1,4 +1,3 @@
-import { startupScreenHtml } from "./startup-screen.js";
 import {
   app,
   BrowserWindow,
@@ -137,6 +136,22 @@ function loadAppRenderer(window: BrowserWindow): void {
   else void window.loadFile(join(__dirname, "../renderer/index.html"));
 }
 
+function loadStartupPage(window: BrowserWindow): void {
+  const query: Record<string, string> =
+    bootstrapFailure === undefined ? {} : { error: bootstrapFailure };
+  const rendererUrl = process.env["ELECTRON_RENDERER_URL"];
+  if (rendererUrl) {
+    const url = new URL("/startup.html", rendererUrl);
+    if (bootstrapFailure !== undefined)
+      url.searchParams.set("error", bootstrapFailure);
+    void window.loadURL(url.href);
+  } else {
+    void window.loadFile(join(__dirname, "../renderer/startup.html"), {
+      query,
+    });
+  }
+}
+
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1280,
@@ -169,10 +184,7 @@ function createWindow(): BrowserWindow {
   });
 
   if (rendererReady) loadAppRenderer(window);
-  else
-    void window.loadURL(
-      `data:text/html;charset=utf-8,${encodeURIComponent(startupScreenHtml(bootstrapFailure))}`,
-    );
+  else loadStartupPage(window);
 
   return window;
 }
@@ -516,9 +528,7 @@ void app
     if (hostLifecycle.quitting) return;
     bootstrapFailure = error instanceof Error ? error.message : String(error);
     const window = BrowserWindow.getAllWindows()[0] ?? createWindow();
-    void window.loadURL(
-      `data:text/html;charset=utf-8,${encodeURIComponent(startupScreenHtml(bootstrapFailure))}`,
-    );
+    loadStartupPage(window);
   });
 
 app.on("before-quit", (event) => {

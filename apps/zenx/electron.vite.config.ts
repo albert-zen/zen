@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { startupScreenHtml } from "./src/main/startup-screen.js";
 import { defineConfig } from "electron-vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
@@ -79,6 +81,33 @@ const viteDevelopmentCsp: Plugin = {
   transformIndexHtml: allowViteDevelopmentStyles,
 };
 
+const startupPage: Plugin = {
+  name: "zenx-startup-page",
+  generateBundle() {
+    this.emitFile({
+      type: "asset",
+      fileName: "startup.html",
+      source: startupHtml(),
+    });
+  },
+  configureServer(server) {
+    server.middlewares.use((request, response, next) => {
+      if (request.url?.split("?")[0] !== "/startup.html") return next();
+      response.setHeader("Content-Type", "text/html; charset=utf-8");
+      response.end(startupHtml());
+    });
+  },
+};
+function startupHtml(): string {
+  const index = readFileSync(
+    resolve(__dirname, "src/renderer/index.html"),
+    "utf8",
+  );
+  const bootstrap = index.match(/<script>([\s\S]*?)<\/script>/u)?.[1];
+  if (!bootstrap) throw new Error("Missing appearance bootstrap");
+  return startupScreenHtml(bootstrap);
+}
+
 export default defineConfig({
   main: {
     build: {
@@ -115,6 +144,6 @@ export default defineConfig({
     },
   },
   renderer: {
-    plugins: [viteDevelopmentCsp, react()],
+    plugins: [viteDevelopmentCsp, startupPage, react()],
   },
 });
