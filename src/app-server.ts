@@ -719,7 +719,12 @@ export class ZenAppServer {
                     }
                     active.deliveryAnchorId = modelResponseId;
                     const items = thread.items;
-                    const contextBoundaryItemId = items.at(-1)?.id;
+                    // Thread-level settings may be appended between samples.
+                    // They do not enter model messages; anchor the reset to the
+                    // latest observed Item in this Turn under the same lock.
+                    const contextBoundaryItemId = items.findLast(
+                      (item) => item.turnId === turnId,
+                    )?.id;
                     if (contextBoundaryItemId === undefined) {
                       throw new AppServerError(
                         "runtime_error",

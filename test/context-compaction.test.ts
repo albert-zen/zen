@@ -180,6 +180,110 @@ test("agentic compaction preserves user steering unseen by its model sample", as
   ]);
 });
 
+test("agentic compaction accepts a sample following an active settings change", async () => {
+  const requests: ModelRequest[] = [];
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      samples += 1;
+      if (samples === 1) {
+        yield {
+          type: "tool_call",
+          callId: "read-first",
+          name: "fixture_read",
+          arguments: {},
+        };
+      } else if (samples === 2) {
+        yield {
+          type: "tool_call",
+          callId: "compact-after-settings",
+          name: "compact_context",
+          arguments: { text: "resume after settings change" },
+        };
+      } else {
+        yield { type: "text_delta", delta: "done" };
+      }
+    },
+  };
+  let server: ZenAppServer;
+  let lastItemBeforeSample: CanonicalItem["type"] | undefined;
+  class SettingsBeforeSampleRuntime extends AgentRuntime {
+    override async runTurn(options: RunTurnOptions): Promise<void> {
+      let preparations = 0;
+      await super.runTurn({
+        ...options,
+        prepareModelSample: async (responseId) => {
+          preparations += 1;
+          if (preparations === 2) {
+            const updated = await server.updateThreadSettings(
+              options.thread.id,
+              { model: "other-model" },
+            );
+            lastItemBeforeSample = updated.items.at(-1)?.type;
+          }
+          return await options.prepareModelSample(responseId);
+        },
+      });
+    }
+  }
+  const journal = new InMemoryThreadJournal();
+  const modelCatalog = new StaticModelCatalog([
+    { id: "recording-model", isDefault: true, contextWindow: 32_768 },
+    { id: "other-model", contextWindow: 32_768 },
+  ]);
+  server = createServer({
+    journal,
+    model,
+    modelCatalog,
+    contextCompaction: { agenticEnabled: true },
+    runtime: new SettingsBeforeSampleRuntime({
+      toolEnvironment: new ToolEnvironment({
+        runtimes: [
+          {
+            name: "fixture_read",
+            executionMode: "parallel_safe",
+            specification: {
+              name: "fixture_read",
+              description: "Read fixture",
+              inputSchema: { type: "object", properties: {} },
+            },
+            async execute() {
+              return { output: "working state", exitCode: 0 };
+            },
+          },
+        ],
+      }),
+    }),
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "old working request")
+  ).done;
+  assert.equal(lastItemBeforeSample, "thread_configuration_changed");
+  const snapshot = await server.readThread(thread.id);
+  const result = snapshot.items.find(
+    (item) =>
+      item.type === "tool_result" && item.callId === "compact-after-settings",
+  );
+  assert(result?.type === "tool_result");
+  assert.equal(result.exitCode, 0, result.output);
+  assert.deepEqual(requests[2]?.messages, [
+    {
+      role: "user",
+      text: "[Zen compacted context]\nresume after settings change",
+    },
+  ]);
+  assert.equal(snapshot.modelId, "other-model");
+  assert(requests.every((request) => request.model === "recording-model"));
+  const restarted = createServer({ journal, model, modelCatalog });
+  assert.deepEqual(
+    compileModelMessages((await restarted.readThread(thread.id)).items),
+    compileModelMessages(snapshot.items),
+  );
+});
+
 test("repeated agentic resets supersede deterministically in one active Turn", async () => {
   const requests: ModelRequest[] = [];
   let samples = 0;

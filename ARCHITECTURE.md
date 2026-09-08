@@ -630,10 +630,10 @@ model response 所产生的 reasoning、pre-tool agent message 与 compact call/
 barrier 后仍有效的 canonical Items 选择 retention，不能复活已替换的 source trace。Agentic reset
 同时开始新的本 Turn usage epoch，完成 Turn 的自动策略只使用 reset 后观察到的 Provider usage。
 
-Provider 请求报告 context-window overflow 时，只有已经成功追加 compaction、且重新编译后的
-估算输入严格缩小时，Host 才可以重试一次。当前 Turn 在 Provider 失败时仍是 incomplete，因而
-没有满足该条件的 durable reduction；Runtime 按普通失败写入原始事实且不自动重试，也不增加
-durable 自愈状态。未来若在请求前完成并持久化压缩，可以在同一限制下增加一次 retry。
+Provider 请求报告 context-window overflow 时，本版本仍按普通失败写入原始事实，不自动重试，
+也不增加 durable 自愈状态。活动 Turn 可以已经包含早先成功的 Agentic reset，但失败请求已经
+使用该投影，不能把此前的缩减当作再次请求会缩小输入的证据。若未来引入 retry 策略，必须先在
+失败请求之后成功持久化新的 compaction，并确认重新编译的估算输入严格缩小；该策略不属于本次实验。
 
 模型上下文编译器先投影最新 compaction 的 retained canonical Item，再加入稳定标记的
 summary，最后按上述 provenance 规则加入覆盖边界后的 canonical Item；当前实现没有独立 system/developer
