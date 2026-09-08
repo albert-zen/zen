@@ -14,6 +14,7 @@ export const MAX_CAPABILITY_OUTPUT_BYTES = 1024 * 1024;
 
 export const ZENX_PLUGIN_ICON_NAMES = [
   "clock",
+  "imzenx",
   "layers",
   "plug",
   "settings",
