@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type {
+  AgenticContextCompactionItem,
   AgentMessageItem,
   ApprovalDecision,
   ApprovalPolicy,
@@ -17,8 +18,20 @@ import type {
   UserInput,
   UserMessageItem,
 } from "./item.js";
+import {
+  AGENTIC_CONTEXT_COMPACTION_ALGORITHM_VERSION,
+  AGENTIC_CONTEXT_COMPACTION_TOOL,
+  AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
+  CONTEXT_COMPACTION_SUMMARY_PREFIX,
+} from "./context-compaction.js";
 import { ThreadJournalAppendOutcomeUnknownError } from "./journal.js";
-import type { ModelAdapter, ModelMessage, ModelTool } from "./model.js";
+import {
+  compileModelMessages,
+  type ModelAdapter,
+  type ModelMessage,
+  type ModelTool,
+} from "./model.js";
+import { estimateModelMessageInputTokens } from "./model-usage.js";
 import {
   buildToolPresentation,
   type ToolPresentation,
@@ -48,6 +61,16 @@ export interface RuntimeConfiguration {
   approvalPolicy: ApprovalPolicy;
   /** null preserves the existing Unknown capability semantics. */
   inputModalities?: readonly string[] | null;
+  /** Present only when Host admission enables agent-authored context resets. */
+  agenticContextCompaction?: {
+    contextWindow: number;
+  };
+}
+
+export interface PreparedModelSample {
+  messages: ModelMessage[];
+  /** Last canonical Item included in the atomically captured projection. */
+  contextBoundaryItemId: string;
 }
 
 export type RuntimeEvent =
@@ -106,13 +129,16 @@ export interface RunTurnOptions {
   modelAdapter: ModelAdapter;
   signal: AbortSignal;
   commit: (item: CanonicalItem) => Promise<void>;
-  prepareModelSample: (modelResponseId: string) => Promise<ModelMessage[]>;
+  prepareModelSample: (
+    modelResponseId: string,
+  ) => Promise<ModelMessage[] | PreparedModelSample>;
   commitFinal: (
     message: AgentMessageItem,
     modelResponseId: string,
   ) => Promise<boolean>;
   emit: (event: RuntimeEvent) => void;
   initialInputCommitted?: () => void;
+  agenticCompactionCommitted?: () => void;
   requestApproval?: ApprovalHandler;
 }
 
@@ -269,6 +295,7 @@ export class AgentRuntime {
           turnId,
           toolCallItems,
           result.presentation,
+          result.contextBoundaryItemId,
           options,
           scheduler,
         );
@@ -343,6 +370,7 @@ export class AgentRuntime {
     itemId: string;
     text: string;
     presentation: ToolPresentationSnapshot;
+    contextBoundaryItemId: string;
     toolCalls: Array<{
       callId: string;
       name: string;
@@ -387,10 +415,31 @@ export class AgentRuntime {
       return reasoningItemId;
     };
 
-    const messages = await options.prepareModelSample(itemId);
-    const definitions =
+    const preparedSample = await options.prepareModelSample(itemId);
+    if (
+      Array.isArray(preparedSample) &&
+      options.configuration.agenticContextCompaction !== undefined
+    ) {
+      throw new Error(
+        "Agentic context compaction requires an atomic model sample boundary",
+      );
+    }
+    const messages = Array.isArray(preparedSample)
+      ? preparedSample
+      : preparedSample.messages;
+    const contextBoundaryItemId = Array.isArray(preparedSample)
+      ? options.thread.items.at(-1)?.id
+      : preparedSample.contextBoundaryItemId;
+    if (contextBoundaryItemId === undefined) {
+      throw new Error("Model sample requires a canonical context boundary");
+    }
+    const projectedDefinitions =
       this.#toolDefinitionProjection?.(options.thread.items) ??
       this.#tools.definitions;
+    const definitions =
+      options.configuration.agenticContextCompaction === undefined
+        ? projectedDefinitions
+        : [...projectedDefinitions, AGENTIC_CONTEXT_COMPACTION_TOOL];
     const presentation = buildToolPresentation(
       definitions,
       this.#toolPresentation ??
@@ -574,13 +623,20 @@ export class AgentRuntime {
         itemType: "agent_message",
       });
     }
-    return { itemId, text, toolCalls, presentation };
+    return {
+      itemId,
+      text,
+      toolCalls,
+      presentation,
+      contextBoundaryItemId,
+    };
   }
 
   async #runToolBatch(
     turnId: string,
     toolCalls: readonly ToolCallItem[],
     presentation: ToolPresentationSnapshot,
+    contextBoundaryItemId: string,
     options: RunTurnOptions,
     scheduler: TurnToolScheduler,
   ): Promise<void> {
@@ -600,6 +656,13 @@ export class AgentRuntime {
           nestedToolNames: presentation.nestedToolNames,
         },
         scheduler,
+        undefined,
+        {
+          contextBoundaryItemId,
+          standalone:
+            toolCalls.length === 1 &&
+            toolCall.name === AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
+        },
       );
       tickets.push(ticket);
       try {
@@ -646,6 +709,10 @@ export class AgentRuntime {
     execution: ScheduledToolCapability,
     scheduler: TurnToolScheduler,
     observation?: Promise<NestedToolObservation>,
+    agentic?: {
+      contextBoundaryItemId: string;
+      standalone: boolean;
+    },
   ): ScheduledToolCall {
     return scheduler.schedule(
       scope,
@@ -666,6 +733,16 @@ export class AgentRuntime {
             exitCode: 1,
           });
         }
+        if (
+          toolCall.parentCallId === undefined &&
+          toolCall.name === AGENTIC_CONTEXT_COMPACTION_TOOL_NAME
+        ) {
+          return await this.#prepareAgenticContextCompaction(
+            toolCall,
+            options,
+            agentic,
+          );
+        }
         return await this.#prepareToolCall(
           turnId,
           toolCall,
@@ -676,6 +753,109 @@ export class AgentRuntime {
       },
       async (outcome) => this.#completeToolResult(toolCall, outcome, options),
     );
+  }
+
+  async #prepareAgenticContextCompaction(
+    toolCall: ToolCallItem,
+    options: RunTurnOptions,
+    agentic:
+      | {
+          contextBoundaryItemId: string;
+          standalone: boolean;
+        }
+      | undefined,
+  ): Promise<ScheduledToolExecution> {
+    const configuration = options.configuration.agenticContextCompaction;
+    if (configuration === undefined || agentic === undefined) {
+      return immediateScheduledExecution({
+        output: "Agentic context compaction is not enabled for this Turn.",
+        exitCode: 1,
+      });
+    }
+    if (!agentic.standalone) {
+      return immediateScheduledExecution({
+        output:
+          "compact_context must be the only top-level tool call in its model response.",
+        exitCode: 1,
+      });
+    }
+    const argumentKeys = Object.keys(toolCall.arguments);
+    const text = toolCall.arguments.text;
+    if (
+      argumentKeys.length !== 1 ||
+      argumentKeys[0] !== "text" ||
+      typeof text !== "string" ||
+      text.trim().length === 0
+    ) {
+      return immediateScheduledExecution({
+        output:
+          "compact_context requires exactly one non-empty string argument named text.",
+        exitCode: 1,
+      });
+    }
+    if (toolCall.modelResponseId === undefined) {
+      return immediateScheduledExecution({
+        output: "compact_context requires a stable source model response.",
+        exitCode: 1,
+      });
+    }
+    const projectedTokens = estimateModelMessageInputTokens([
+      {
+        role: "user",
+        text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${text}`,
+      },
+    ]);
+    if (projectedTokens > configuration.contextWindow) {
+      return immediateScheduledExecution({
+        output: `compact_context text exceeds the selected model context window (${String(projectedTokens)} > ${String(configuration.contextWindow)} estimated input tokens).`,
+        exitCode: 1,
+      });
+    }
+
+    const compaction: AgenticContextCompactionItem = {
+      id: this.#id(),
+      threadId: options.thread.id,
+      turnId: toolCall.turnId,
+      createdAt: this.#now(),
+      type: "context_compaction",
+      provenance: "agentic",
+      coveredThroughItemId: agentic.contextBoundaryItemId,
+      summary: text,
+      retainedItemIds: [],
+      callId: toolCall.callId,
+      sourceModelResponseId: toolCall.modelResponseId,
+      algorithmVersion: AGENTIC_CONTEXT_COMPACTION_ALGORITHM_VERSION,
+    };
+    return {
+      mode: "exclusive",
+      run: async (): Promise<ScheduledToolOutcome> => {
+        try {
+          options.signal.throwIfAborted();
+          await options.commit(compaction);
+          options.emit({ type: "item_completed", item: compaction });
+          options.agenticCompactionCommitted?.();
+          return {
+            result: {
+              output: "Working context replaced with the supplied text.",
+              exitCode: 0,
+            },
+          };
+        } catch (error) {
+          if (error instanceof ThreadJournalAppendOutcomeUnknownError) {
+            throw error;
+          }
+          const interrupted = options.signal.aborted || isAbortError(error);
+          return {
+            result: {
+              output: `Context compaction failed: ${describeError(error)}`,
+              exitCode: interrupted ? 130 : 1,
+            },
+            ...(interrupted ? { controlError: error } : {}),
+            ...(interrupted ? { executionStatus: "declined" as const } : {}),
+          };
+        }
+      },
+    };
   }
 
   async #prepareToolCall(

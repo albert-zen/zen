@@ -5,7 +5,10 @@ import type {
   SandboxMode,
   ThreadMetadataItem,
 } from "./item.js";
-import { validateContextCompactionItem } from "./context-compaction.js";
+import {
+  isAgenticContextCompaction,
+  validateContextCompactionItem,
+} from "./context-compaction.js";
 
 export type DerivedTurnStatus =
   "inProgress" | "completed" | "failed" | "interrupted";
@@ -96,6 +99,7 @@ export class Thread {
     }
     if (item.type === "context_compaction") {
       validateContextCompactionItem(this.#items, item);
+      if (isAgenticContextCompaction(item)) return;
       const current = this.effectiveConfiguration();
       const boundaryTurn = this.deriveTurns().find((turn) =>
         turn.items.some(

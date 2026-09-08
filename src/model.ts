@@ -7,6 +7,8 @@ import {
 } from "./item.js";
 import {
   CONTEXT_COMPACTION_SUMMARY_PREFIX,
+  isAgenticContextCompaction,
+  itemsAfterLatestAgenticCompaction,
   latestCompaction,
 } from "./context-compaction.js";
 
@@ -151,6 +153,9 @@ export function compileModelMessages(
     }
     return item;
   });
+  const afterBoundary = isAgenticContextCompaction(compaction)
+    ? itemsAfterLatestAgenticCompaction(items)
+    : items.slice(boundaryIndex + 1);
   return [
     ...compileCanonicalModelMessages(retained, targetSelection, turnSelections),
     {
@@ -158,7 +163,7 @@ export function compileModelMessages(
       text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${compaction.summary}`,
     },
     ...compileCanonicalModelMessages(
-      items.slice(boundaryIndex + 1),
+      afterBoundary,
       targetSelection,
       turnSelections,
     ),

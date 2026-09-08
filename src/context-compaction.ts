@@ -1,11 +1,33 @@
 import type {
+  AgenticContextCompactionItem,
   CanonicalItem,
   ContextCompactionItem,
   ToolCallItem,
   ToolResultItem,
 } from "./item.js";
+import type { ModelTool } from "./model.js";
 
 export const CONTEXT_COMPACTION_ALGORITHM_VERSION = "zen.context-compaction.v2";
+export const AGENTIC_CONTEXT_COMPACTION_ALGORITHM_VERSION =
+  "zen.context-compaction.agentic.v1";
+export const AGENTIC_CONTEXT_COMPACTION_TOOL_NAME = "compact_context";
+export const AGENTIC_CONTEXT_COMPACTION_TOOL: ModelTool = Object.freeze({
+  name: AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
+  description:
+    "Replace the working context for this active Turn with the supplied continuation text. Call this alone as a top-level tool. After success, earlier working context including this tool trace is no longer provided to the model; only the supplied text and newer user input continue. The complete trace remains in the journal for people to inspect.",
+  inputSchema: Object.freeze({
+    type: "object",
+    properties: Object.freeze({
+      text: Object.freeze({
+        type: "string",
+        description:
+          "Exact continuation text retained for subsequent reasoning. Before calling, save details that must remain available to durable files when useful, then include their ordinary paths and the next steps here so they can be read on demand.",
+      }),
+    }),
+    required: Object.freeze(["text"]),
+    additionalProperties: false,
+  }),
+});
 export const CONTEXT_COMPACTION_SUMMARY_MARKER = "ZEN_CONTEXT_COMPACTION_V1";
 export const CONTEXT_COMPACTION_SUMMARY_PREFIX = "[Zen compacted context]\n";
 
@@ -15,6 +37,7 @@ Preserve concrete user goals, decisions, constraints, unfinished work, exact ide
 and tool outcomes that affect future work. Do not call tools. Return only the summary.`;
 
 export interface ContextCompactionConfig {
+  agenticEnabled?: boolean;
   summaryInstruction?: string;
   triggerPercent?: number;
   targetPercent?: number;
@@ -28,6 +51,7 @@ export interface ContextCompactionConfig {
 }
 
 export interface ResolvedContextCompactionConfig {
+  agenticEnabled: boolean;
   summaryInstruction: string;
   triggerPercent: number;
   targetPercent: number;
@@ -57,11 +81,16 @@ export function normalizeContextCompactionConfig(
 ): ResolvedContextCompactionConfig {
   requirePlainObject(config, "config");
   requireKnownKeys(config, "config", [
+    "agenticEnabled",
     "summaryInstruction",
     "triggerPercent",
     "targetPercent",
     "retention",
   ]);
+  const agenticEnabled = config.agenticEnabled ?? false;
+  if (typeof agenticEnabled !== "boolean") {
+    throw new Error("Context compaction agenticEnabled must be a boolean");
+  }
   const summaryInstruction =
     config.summaryInstruction ?? CONTEXT_COMPACTION_SUMMARY_INSTRUCTION;
   requireNonEmpty(summaryInstruction, "summaryInstruction", true);
@@ -102,6 +131,7 @@ export function normalizeContextCompactionConfig(
   const finalMessageCount = retention.finalMessageCount ?? 10;
   requirePositiveInteger(finalMessageCount, "retention.finalMessageCount");
   return {
+    agenticEnabled,
     summaryInstruction,
     triggerPercent,
     targetPercent,
@@ -124,6 +154,82 @@ export function latestCompaction(
       (item): item is ContextCompactionItem =>
         item.type === "context_compaction",
     );
+}
+
+export function isAgenticContextCompaction(
+  item: ContextCompactionItem,
+): item is AgenticContextCompactionItem {
+  return item.provenance === "agentic";
+}
+
+/**
+ * Return canonical Items that remain eligible for future retention after the
+ * latest agent-authored reset. The reset summary itself is projected
+ * separately and therefore has no canonical retained Item.
+ */
+export function itemsAfterLatestAgenticCompaction(
+  items: readonly CanonicalItem[],
+): readonly CanonicalItem[] {
+  const compactionIndex = items.findLastIndex(
+    (item) =>
+      item.type === "context_compaction" && isAgenticContextCompaction(item),
+  );
+  const compaction = items[compactionIndex];
+  if (
+    compactionIndex < 0 ||
+    compaction?.type !== "context_compaction" ||
+    !isAgenticContextCompaction(compaction)
+  ) {
+    return items;
+  }
+  const boundaryIndex = items.findIndex(
+    (item) => item.id === compaction.coveredThroughItemId,
+  );
+  if (boundaryIndex < 0) return items;
+  const sourceCallIds = new Set(
+    items
+      .slice(boundaryIndex + 1)
+      .filter(
+        (item): item is ToolCallItem =>
+          item.type === "tool_call" &&
+          item.turnId === compaction.turnId &&
+          item.modelResponseId === compaction.sourceModelResponseId,
+      )
+      .map((item) => item.callId),
+  );
+  return items.slice(boundaryIndex + 1).filter((item, offset) => {
+    const index = boundaryIndex + 1 + offset;
+    if (item.type === "context_compaction") return false;
+    if (
+      index < compactionIndex &&
+      item.type === "reasoning" &&
+      item.turnId === compaction.turnId
+    ) {
+      return false;
+    }
+    if (
+      item.type === "agent_message" &&
+      item.turnId === compaction.turnId &&
+      item.id === compaction.sourceModelResponseId
+    ) {
+      return false;
+    }
+    if (
+      item.type === "tool_call" &&
+      item.turnId === compaction.turnId &&
+      item.modelResponseId === compaction.sourceModelResponseId
+    ) {
+      return false;
+    }
+    if (
+      item.type === "tool_result" &&
+      item.turnId === compaction.turnId &&
+      sourceCallIds.has(item.callId)
+    ) {
+      return false;
+    }
+    return true;
+  });
 }
 
 export function latestEligibleCompactionBoundary(
@@ -172,29 +278,33 @@ export function boundedCompactionBoundary(
   if (boundary === undefined) return undefined;
 
   const coveredItems = items.slice(0, boundary.index + 1);
-  const turnItems = coveredItems.filter(
+  const retainableItems = itemsAfterLatestAgenticCompaction(coveredItems);
+  const turnItems = retainableItems.filter(
     (candidate) => candidate.turnId === boundary.item.turnId,
   );
-  validateRetainedToolClosure(coveredItems, new Set(boundary.retainedItemIds));
+  validateRetainedToolClosure(
+    retainableItems,
+    new Set(boundary.retainedItemIds),
+  );
 
   const retention =
     options.retention ?? normalizeContextCompactionConfig().retention;
   const pinned = expandRetainedToolClosure(
-    coveredItems,
-    explicitlyRetainedIds(coveredItems, retention),
+    retainableItems,
+    explicitlyRetainedIds(retainableItems, retention),
   );
 
   if (retention.mode !== "budget") {
     const selected = new Set(pinned);
     if (retention.mode === "recent-items") {
-      const candidates = recentItemCandidates(coveredItems);
+      const candidates = recentItemCandidates(retainableItems);
       for (const candidate of candidates.slice(-retention.recentItemCount)) {
         selected.add(candidate.id);
       }
     }
-    const retained = expandRetainedToolClosure(coveredItems, selected);
-    const retainedItems = itemsInCanonicalOrder(coveredItems, retained);
-    validateRetainedToolClosure(coveredItems, retained);
+    const retained = expandRetainedToolClosure(retainableItems, selected);
+    const retainedItems = itemsInCanonicalOrder(retainableItems, retained);
+    validateRetainedToolClosure(retainableItems, retained);
     if (
       options.estimateRetainedTokens(retainedItems) >
       options.retainedTokenBudget
@@ -218,11 +328,11 @@ export function boundedCompactionBoundary(
       retained.add(candidate.id);
     }
     try {
-      validateRetainedToolClosure(coveredItems, retained);
+      validateRetainedToolClosure(retainableItems, retained);
     } catch {
       continue;
     }
-    const retainedItems = itemsInCanonicalOrder(coveredItems, retained);
+    const retainedItems = itemsInCanonicalOrder(retainableItems, retained);
     if (
       options.estimateRetainedTokens(retainedItems) <=
       options.retainedTokenBudget
@@ -393,11 +503,22 @@ export function validateContextCompactionItem(
   if (runtimeItem.type !== "context_compaction") {
     throw new Error("Context compaction type must be context_compaction");
   }
-  if ("turnId" in runtimeItem) {
-    throw new Error("Context compaction must not belong to a Turn");
-  }
   if (!Array.isArray(runtimeItem.retainedItemIds)) {
     throw new Error("Context compaction retainedItemIds must be an array");
+  }
+
+  requireNonEmpty(item.coveredThroughItemId, "coveredThroughItemId");
+  requireNonEmpty(item.summary, "summary", true);
+  requireNonEmpty(item.algorithmVersion, "algorithmVersion");
+
+  if (isAgenticContextCompaction(item)) {
+    validateAgenticContextCompactionItem(items, item);
+    return;
+  }
+  if ("turnId" in runtimeItem) {
+    throw new Error(
+      "Provider-generated context compaction must not belong to a Turn",
+    );
   }
   if (
     typeof runtimeItem.tokenUsage !== "object" ||
@@ -406,15 +527,11 @@ export function validateContextCompactionItem(
   ) {
     throw new Error("Context compaction tokenUsage must be an object");
   }
-
-  requireNonEmpty(item.coveredThroughItemId, "coveredThroughItemId");
-  requireNonEmpty(item.summary, "summary", true);
   requireNonEmpty(item.providerProfileId, "providerProfileId");
   requireNonEmpty(item.modelId, "modelId");
   if (item.reasoningEffort !== null) {
     requireNonEmpty(item.reasoningEffort, "reasoningEffort");
   }
-  requireNonEmpty(item.algorithmVersion, "algorithmVersion");
   requireTokenCount(item.tokenUsage.inputTokens, "inputTokens");
   requireTokenCount(item.tokenUsage.outputTokens, "outputTokens");
 
@@ -452,6 +569,11 @@ export function validateContextCompactionItem(
   }
 
   const retained = new Set<string>();
+  const retainableIds = new Set(
+    itemsAfterLatestAgenticCompaction(items.slice(0, boundaryIndex + 1)).map(
+      (candidate) => candidate.id,
+    ),
+  );
   let previousIndex = -1;
   for (const retainedId of item.retainedItemIds) {
     requireNonEmpty(retainedId, "retainedItemIds entry");
@@ -468,13 +590,121 @@ export function validateContextCompactionItem(
         `Retained Item is after the compaction boundary: ${retainedId}`,
       );
     }
+    if (!retainableIds.has(retainedId)) {
+      throw new Error(
+        `Retained Item precedes the latest agentic compaction: ${retainedId}`,
+      );
+    }
     if (index <= previousIndex) {
       throw new Error("Retained Item ids must follow stable canonical order");
     }
     previousIndex = index;
   }
 
-  validateRetainedToolClosure(items.slice(0, boundaryIndex + 1), retained);
+  validateRetainedToolClosure(
+    itemsAfterLatestAgenticCompaction(items.slice(0, boundaryIndex + 1)),
+    retained,
+  );
+}
+
+function validateAgenticContextCompactionItem(
+  items: readonly CanonicalItem[],
+  item: AgenticContextCompactionItem,
+): void {
+  requireNonEmpty(item.turnId, "turnId");
+  requireNonEmpty(item.callId, "callId");
+  requireNonEmpty(item.sourceModelResponseId, "sourceModelResponseId");
+  if (item.retainedItemIds.length !== 0) {
+    throw new Error("Agentic context compaction cannot retain covered Items");
+  }
+  const boundaryIndex = items.findIndex(
+    (candidate) => candidate.id === item.coveredThroughItemId,
+  );
+  if (boundaryIndex < 0) {
+    throw new Error(
+      `Context compaction boundary does not exist: ${item.coveredThroughItemId}`,
+    );
+  }
+  if (items[boundaryIndex]?.turnId !== item.turnId) {
+    throw new Error(
+      "Agentic context compaction boundary must belong to its Turn",
+    );
+  }
+  const callIndexes = items.flatMap((candidate, index) =>
+    candidate.type === "tool_call" &&
+    candidate.turnId === item.turnId &&
+    candidate.callId === item.callId
+      ? [index]
+      : [],
+  );
+  if (callIndexes.length !== 1) {
+    throw new Error(
+      "Agentic context compaction requires exactly one source tool call",
+    );
+  }
+  const callIndex = callIndexes[0]!;
+  const call = items[callIndex];
+  if (
+    call?.type !== "tool_call" ||
+    call.name !== AGENTIC_CONTEXT_COMPACTION_TOOL_NAME ||
+    call.parentCallId !== undefined ||
+    call.modelResponseId !== item.sourceModelResponseId
+  ) {
+    throw new Error(
+      "Agentic context compaction must reference one top-level compact_context call",
+    );
+  }
+  if (callIndex <= boundaryIndex) {
+    throw new Error(
+      "Agentic context compaction source call must follow its sample boundary",
+    );
+  }
+  const sourceCalls = items
+    .slice(boundaryIndex + 1)
+    .filter(
+      (candidate): candidate is ToolCallItem =>
+        candidate.type === "tool_call" &&
+        candidate.turnId === item.turnId &&
+        candidate.modelResponseId === item.sourceModelResponseId,
+    );
+  if (sourceCalls.length !== 1 || sourceCalls[0]?.id !== call.id) {
+    throw new Error(
+      "Agentic context compaction source model response must contain only its standalone call",
+    );
+  }
+  if (
+    items.some(
+      (candidate) =>
+        candidate.type === "tool_result" &&
+        candidate.turnId === item.turnId &&
+        candidate.callId === item.callId,
+    )
+  ) {
+    throw new Error(
+      "Agentic context compaction must commit before its source tool result",
+    );
+  }
+  if (
+    items.some(
+      (candidate) =>
+        candidate.turnId === item.turnId &&
+        (candidate.type === "turn_completed" ||
+          candidate.type === "turn_aborted"),
+    )
+  ) {
+    throw new Error("Agentic context compaction requires an active Turn");
+  }
+  const previous = latestCompaction(items);
+  if (previous !== undefined) {
+    const previousBoundaryIndex = items.findIndex(
+      (candidate) => candidate.id === previous.coveredThroughItemId,
+    );
+    if (boundaryIndex <= previousBoundaryIndex) {
+      throw new Error(
+        "Context compaction boundary must advance beyond the effective boundary",
+      );
+    }
+  }
 }
 
 function validateRetainedToolClosure(
