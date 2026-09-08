@@ -1650,3 +1650,36 @@ test("Compaction rejects invalid budgets and supports selected-only retention an
     await unmount(harness);
   }
 });
+
+test("Agentic compaction is opt-in, saves alongside automatic settings, and resets off", async () => {
+  let saved: ZenXSettingsUpdate | undefined;
+  const harness = await mountSettings("compaction", {
+    save: async (update) => {
+      saved = update;
+      return { ...settings, profile: { ...settings.profile, ...update } };
+    },
+  });
+  try {
+    await waitFor(() => labeledSelect("Retention mode"));
+    const toggle = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Enable Agentic compaction (experimental)"]',
+    );
+    assert.ok(toggle, "the experimental feature has a labeled opt-in control");
+    assert.equal(toggle.checked, false);
+    await click(toggle);
+    await changeControl(requiredInput("Compaction trigger (%)"), "85");
+    await click(exactButtonRequired("Apply & restart"));
+    await waitFor(() => saved);
+    assert.deepEqual(saved?.contextCompaction, {
+      agenticEnabled: true,
+      triggerPercent: 85,
+    });
+    await click(exactButtonRequired("Reset all compaction settings"));
+    assert.equal(toggle.checked, false);
+    await click(exactButtonRequired("Apply & restart"));
+    await waitFor(() => saved?.contextCompaction === undefined);
+    assert.equal(saved?.contextCompaction, undefined);
+  } finally {
+    await unmount(harness);
+  }
+});

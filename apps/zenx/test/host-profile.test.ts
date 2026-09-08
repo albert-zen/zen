@@ -735,3 +735,40 @@ test("project names preserve Windows case-insensitive workspace identity", () =>
   );
   assert.deepEqual(configured.projectNames, { "C:\\Work": "Renamed" });
 });
+
+test("Agentic compaction opt-in persists, reaches Host configuration, and validates its type", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-agentic-settings-"),
+  );
+  try {
+    const store = new ZenXHostProfileStore(
+      path.join(directory, "profile.json"),
+    );
+    assert.equal(profile.contextCompaction?.agenticEnabled, undefined);
+    for (const agenticEnabled of [true, false]) {
+      const contextCompaction = { agenticEnabled, triggerPercent: 90 };
+      await store.write({ ...profile, contextCompaction });
+      const loaded = await store.read(profile);
+      assert.deepEqual(loaded?.contextCompaction, contextCompaction);
+      assert.deepEqual(
+        hostConfigFromProfile(loaded!, {
+          dataDirectory: directory,
+          subscriptionProfilePath: path.join(directory, "auth"),
+          fallbackWorkspace: directory,
+          apiKeys: { local: "test-key" },
+        }).contextCompaction,
+        contextCompaction,
+      );
+    }
+    assert.throws(
+      () =>
+        validateHostProfile({
+          ...profile,
+          contextCompaction: { agenticEnabled: "true" },
+        }),
+      /agenticEnabled/u,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
