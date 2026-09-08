@@ -730,6 +730,14 @@ export class ZenXSettingsService {
           projectNames: names,
           sidebarOrder: {
             ...snapshot.profile.sidebarOrder,
+            ...(snapshot.profile.sidebarOrder.pinnedProjectKeys === undefined
+              ? {}
+              : {
+                  pinnedProjectKeys:
+                    snapshot.profile.sidebarOrder.pinnedProjectKeys.map(
+                      (key) => (key === oldKey ? target.key : key),
+                    ),
+                }),
             projectKeys: snapshot.profile.sidebarOrder.projectKeys.map((key) =>
               key === oldKey ? target.key : key,
             ),

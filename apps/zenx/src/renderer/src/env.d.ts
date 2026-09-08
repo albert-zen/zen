@@ -88,6 +88,10 @@ declare global {
         ): Promise<NativeThreadSummary[]>;
       };
       imageAttachments: {
+        readLocal(
+          source: string,
+          cwd?: string,
+        ): Promise<{ bytes: Uint8Array; mediaType: string }>;
         pick(): Promise<ZenXImageDraft[]>;
         import(images: readonly ZenXImageImport[]): Promise<ZenXImageDraft[]>;
         read(attachment: AttachmentRef): Promise<Uint8Array>;

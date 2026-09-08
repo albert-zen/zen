@@ -794,3 +794,18 @@ and a real timer wakeup card.
 Still requiring user verification: a real OpenAI subscription OAuth grant, a
 real compatible-provider key/model, and multi-person Room wording in production
 work. Those flows are intentionally not claimed complete by the smoke fixture.
+
+### Sidebar preferences and shortcuts
+
+Project, Projects and Plugin spaces disclosures remember their local expanded state across parent toggles and app restarts. Project menus offer Pin project / Unpin project; pinned projects stay above other projects while keeping the saved ordering inside each group. Reordering does not move projects across the pin boundary.
+
+- macOS: Cmd+1–9 switches to the corresponding selectable thread in the expanded sidebar, top to bottom; Cmd+N opens a new thread draft.
+- Windows/Linux: Ctrl+1–9 and Ctrl+N provide the same actions.
+
+Pinned threads come first, collapsed project threads do not consume a number, and missing numbers do nothing. New thread uses the same recent-project/chooser behavior as its sidebar button. Shortcuts also work from the composer, but leave dialogs, menus, composition and additional modifiers alone.
+
+### Images in conversations
+
+Markdown images render inline and open a full-window preview when clicked. PNG/JPEG/GIF/WebP data URLs, HTTP(S) image URLs, absolute local paths, file URLs, and paths relative to the current thread workspace are supported. Local files are read only for display, validated as images, and never imported into the journal. Missing or unsupported images show a placeholder. Escape, the close button or the backdrop closes the preview.
+
+Tool image content already returned by `view_image` appears in its expanded tool detail with the same preview. Tool commands, arguments and output text remain unchanged; a plain path alone remains text.

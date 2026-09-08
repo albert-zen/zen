@@ -181,6 +181,11 @@ export function deriveProjectGroups(
     preference.projectKeys,
     (group) => group.key,
   );
+  const pinnedKeys = new Set(preference.pinnedProjectKeys ?? []);
+  orderedGroups.sort(
+    (left, right) =>
+      Number(pinnedKeys.has(right.key)) - Number(pinnedKeys.has(left.key)),
+  );
   const unavailable = projection.unavailableThreadIds.flatMap((threadId) => {
     const thread = byId.get(threadId);
     return thread === undefined ? [] : [thread];
@@ -204,6 +209,8 @@ export function moveSidebarProject(
   targetKey: string,
   placement: SidebarOrderPlacement,
 ): ZenXSidebarOrder {
+  const pins = new Set(preference.pinnedProjectKeys ?? []);
+  if (pins.has(sourceKey) !== pins.has(targetKey)) return preference;
   const stableProjects = projection.projects
     .map((project) => ({
       key: project.key,
@@ -222,6 +229,7 @@ export function moveSidebarProject(
   const moved = moveIdentifier(order, sourceKey, targetKey, placement);
   if (moved === null) return preference;
   return {
+    ...preference,
     projectKeys: moved,
     threadIdsByProject: preference.threadIdsByProject,
   };
@@ -268,6 +276,7 @@ export function moveSidebarThread(
   );
   if (moved === null) return preference;
   return {
+    ...preference,
     projectKeys: preference.projectKeys,
     threadIdsByProject: {
       ...preference.threadIdsByProject,

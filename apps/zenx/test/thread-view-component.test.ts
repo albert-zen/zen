@@ -1579,3 +1579,53 @@ test("partial canonical reasoning remains visibly interrupted after reopening", 
   assert.ok(item?.type === "reasoning");
   assert.equal((item as { status?: string }).status, "interrupted");
 });
+
+test("tool image thumbnails are a display projection beside unchanged call and output", async () => {
+  await withDom(async (root) => {
+    const value = commandItem(
+      "view-call",
+      'view_image {"path":"/tmp/image.png"}',
+    );
+    assert.equal(value.type, "commandExecution");
+    if (value.type !== "commandExecution") return;
+    value.aggregatedOutput = "Viewed image /tmp/image.png";
+    const original = JSON.stringify(value);
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: emptyComposerState(),
+          thread: thread([turnWithItems("inProgress", [value])]),
+          threadAttachments: {
+            "view-call": [
+              {
+                type: "attachment",
+                sha256: "f".repeat(64),
+                mediaType: "image/png",
+                byteLength: 68,
+                width: 1,
+                height: 1,
+              },
+            ],
+          },
+          onDraftChange: () => {},
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      ),
+    );
+    await act(async () => requiredButton(".trace-item-toggle").click());
+    assert.ok(document.querySelector('[aria-label="Tool images"]'));
+    assert.ok(document.querySelector('[aria-label="Preview Tool image 1"]'));
+    assert.equal(
+      document.querySelector(".trace-command")?.textContent,
+      value.command,
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /Viewed image \/tmp\/image.png/,
+    );
+    assert.equal(JSON.stringify(value), original);
+  });
+});

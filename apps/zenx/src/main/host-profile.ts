@@ -42,6 +42,7 @@ export interface ZenXModelReference {
 }
 
 export interface ZenXSidebarOrder {
+  pinnedProjectKeys?: string[];
   projectKeys: string[];
   threadIdsByProject: Record<string, string[]>;
 }
@@ -873,7 +874,19 @@ function normalizeSidebarOrder(value: unknown): ZenXSidebarOrder {
       return [normalizedProjectKey, normalizedThreadIds] as const;
     }),
   );
-  return { projectKeys, threadIdsByProject };
+  return {
+    projectKeys,
+    threadIdsByProject,
+    ...(value.pinnedProjectKeys === undefined
+      ? {}
+      : {
+          pinnedProjectKeys: normalizeOrderIdentifiers(
+            value.pinnedProjectKeys,
+            "Pinned Project key",
+            32_768,
+          ),
+        }),
+  };
 }
 
 function normalizeOrderIdentifiers(

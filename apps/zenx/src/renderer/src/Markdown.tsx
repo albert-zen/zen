@@ -1,6 +1,8 @@
 import { Children, isValidElement, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { MarkdownImage } from "./MarkdownImage.js";
+import { classifyImageSource } from "../../image-source.js";
 import { classifyZenXLink } from "../../external-link-policy.js";
 
 export type MarkdownBlock =
@@ -48,7 +50,13 @@ export function Markdown({ text }: { text: string }) {
 }
 
 const markdownComponents: Components = {
-  a({ href, children }) {
+  a({ href, children, node }) {
+    if (
+      node?.children.some(
+        (child) => child.type === "element" && child.tagName === "img",
+      )
+    )
+      return <span>{children}</span>;
     const target = classifyZenXLink(href ?? "");
     if (target.kind === "rejected") return <>{children}</>;
     if (target.kind === "anchor") return <a href={target.href}>{children}</a>;
@@ -58,8 +66,14 @@ const markdownComponents: Components = {
       </a>
     );
   },
-  img() {
-    return null;
+  img({ src, alt }) {
+    return (
+      <MarkdownImage
+        key={typeof src === "string" ? src : ""}
+        source={typeof src === "string" ? src : ""}
+        name={alt ?? ""}
+      />
+    );
   },
   pre({ children }) {
     const child = Children.only(children);
@@ -243,7 +257,9 @@ function findUnclosedFence(source: string): {
     : { prefix: normalized.slice(0, opening.index) };
 }
 
-function safeUrlTransform(url: string): string {
+function safeUrlTransform(url: string, key: string): string {
+  if (key === "src")
+    return classifyImageSource(url).kind === "rejected" ? "" : url;
   const target = classifyZenXLink(url);
   return target.kind === "rejected" ? "" : target.href;
 }
@@ -271,7 +287,7 @@ function prepareMarkdown(source: string): string {
       }
       if (opening !== null) return line;
       return line.replace(
-        /\[([^\]]+)\]\(([^\s)]+)(?:\s+"[^"]*")?\)/gu,
+        /(?<!!)\[([^\]]+)\]\(([^\s)]+)(?:\s+"[^"]*")?\)/gu,
         (match, label: string, href: string) =>
           classifyZenXLink(href).kind === "rejected" ? label : match,
       );

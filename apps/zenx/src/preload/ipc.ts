@@ -10,6 +10,7 @@ export const ipcChannels = {
   threadSummariesList: "zenx:threads:list",
   imageAttachmentsPick: "zenx:image-attachments:pick",
   imageAttachmentsImport: "zenx:image-attachments:import",
+  imageLocalRead: "zenx:image-local:read",
   imageAttachmentsRead: "zenx:image-attachments:read",
   threadAttachmentsRead: "zenx:thread-attachments:read",
   threadUsageRead: "zenx:thread-usage:read",
