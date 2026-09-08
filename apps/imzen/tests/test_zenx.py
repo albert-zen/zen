@@ -100,3 +100,36 @@ async def test_restart_restores_subscription_and_im_input_targets_same_thread(tm
     finally:
         await gateway.stop()
         await state.close()
+
+
+def test_macos_ipv6_host_exclusion_preserves_proxy_routing(monkeypatch):
+    import httpx
+
+    from imzen.zenx import normalize_proxy_exclusions
+
+    for key in (
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(
+        "imzen.zenx.urllib.request.getproxies",
+        lambda: {
+            "no": "127.0.0.1,localhost,::1,127.0.0.0/8,::1/128",
+            "https": "http://127.0.0.1:7890",
+        },
+    )
+    normalize_proxy_exclusions()
+    import os
+
+    assert os.environ["no_proxy"] == "127.0.0.1,localhost,::1,127.0.0.0/8,::1"
+    assert os.environ["https_proxy"] == "http://127.0.0.1:7890"
+    # The actual pinned HTTPX constructor failed before any QQ request.
+    with httpx.Client():
+        pass

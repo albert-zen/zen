@@ -5487,3 +5487,16 @@ select:focus-visible {
 .imzenx-page [role="alert"] {
   color: var(--danger);
 }
+
+/* PluginProductPage has no internal title row unless it contributes a menu. */
+.product-page.plugin-product-page {
+  grid-template-rows: minmax(0, 1fr);
+}
+.product-page.plugin-product-page:has(> .plugin-menu-header) {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.imzenx-page {
+  min-width: 0;
+  max-width: 980px;
+  margin-inline: auto;
+}

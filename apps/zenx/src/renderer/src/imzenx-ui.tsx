@@ -80,7 +80,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
     }
   };
   return (
-    <div className="page-scroll imzenx-page">
+    <div className="imzenx-page">
       <div className="page-intro">
         <div>
           <h2>同一个 Agent，随时从 IM 接着聊。</h2>
