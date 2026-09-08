@@ -105,6 +105,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #projectProjection?: ZenXProjectProjection;
   readonly #appServerPort?: AppServerRequestPort & PluginHostAppServerPort;
   #browserProfilePackage: ZenXCapabilityPackage | undefined;
+  readonly #browserObservationChanges = new Set<() => void>();
   #computerProfilePackage: ZenXCapabilityPackage | undefined;
   #stagedBrowserProfilePackage: ZenXCapabilityPackage | undefined;
   #stagedComputerProfilePackage: ZenXCapabilityPackage | undefined;
@@ -477,15 +478,52 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     request: BrowserThreadRequest,
     listener: BrowserThreadListener,
   ): () => void {
-    const capabilityPackage = this.#browserProfilePackage;
-    if (capabilityPackage instanceof BrowserZenXCapabilityPackage)
-      return capabilityPackage.observeThread(request, listener);
-    listener({
-      type: "status",
-      status: "unavailable",
-      message: "Live observation is unavailable for this Browser provider.",
-    });
-    return () => undefined;
+    let selected: ZenXCapabilityPackage | undefined;
+    let initialized = false;
+    let active = true;
+    let stop: (() => void) | undefined;
+    const send: BrowserThreadListener = (event) => {
+      if (!active) return;
+      try {
+        listener(event);
+      } catch {
+        dispose();
+      }
+    };
+    const refresh = () => {
+      const enabled = this.pluginSnapshot().plugins.some(
+        (plugin) =>
+          plugin.id === "browser" && plugin.enabled && plugin.available,
+      );
+      const next = enabled ? this.#browserProfilePackage : undefined;
+      if (initialized && next === selected) return;
+      initialized = true;
+      selected = next;
+      stop?.();
+      stop = undefined;
+      if (next instanceof BrowserZenXCapabilityPackage) {
+        stop = next.observeThread(request, send);
+        if (!active) stop();
+      } else {
+        send({ type: "targets", targets: [] });
+        send({
+          type: "status",
+          status: "unavailable",
+          message:
+            "Browser observation is unavailable. Enable an available Browser plugin to view this thread.",
+        });
+      }
+    };
+    const unsubscribe = this.#registry.onChange(refresh);
+    const dispose = () => {
+      active = false;
+      unsubscribe();
+      this.#browserObservationChanges.delete(refresh);
+      stop?.();
+    };
+    this.#browserObservationChanges.add(refresh);
+    refresh();
+    return dispose;
   }
 
   computerProfilePackage(): ZenXCapabilityPackage {
@@ -699,6 +737,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   ): void {
     if (pluginId === "browser") {
       this.#browserProfilePackage = capabilityPackage;
+      for (const refresh of this.#browserObservationChanges) refresh();
     } else {
       this.#computerProfilePackage = capabilityPackage;
     }

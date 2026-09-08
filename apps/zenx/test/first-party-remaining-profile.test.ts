@@ -11,6 +11,7 @@ import type { ZenXAutomationControlPort } from "../src/main/capabilities/automat
 import {
   BrowserZenXCapabilityPackage,
   type ZenXBrowserBackend,
+  type BrowserLiveObservationEvent,
 } from "../src/main/capabilities/browser-provider.js";
 import type { ZenXComputerBackend } from "../src/main/capabilities/computer-provider.js";
 import { JsonZenXPluginCatalogStore } from "../src/main/capabilities/plugin-catalog-store.js";
@@ -54,6 +55,7 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
   await selfPort.attach({ request: async () => ({ data: [] }) as never });
   const self = new ZenXSelfControlCapabilityPackage({ appServer: selfPort });
   const triggers = new ZenXTriggersCapabilityPackage(automationPort());
+  const liveCallbacks: Array<(event: BrowserLiveObservationEvent) => void> = [];
   let service!: ZenXCapabilityService;
   const create = (missingPnpm = false) => {
     service = new ZenXCapabilityService({
@@ -61,7 +63,13 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       resourcesDirectory: resources,
       pnpmCliPath: missingPnpm ? path.join(root, "missing-pnpm.cjs") : pnpmCli,
       bundledProvidersOnly: true,
-      browserBackend: browserBackend(),
+      browserBackend: {
+        ...browserBackend(),
+        observeTab(_sessionId, _tabId, listener) {
+          liveCallbacks.push(listener);
+          return () => {};
+        },
+      },
       computerBackend: computerBackend(),
       providerCatalogOptions: { platform: "darwin" },
       trustedProfileLoaders: {
@@ -143,6 +151,37 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
         .sidebar.some((item) => item.pluginId === "browser"),
       false,
     );
+    const liveEvents: unknown[] = [];
+    const stopLive = service.observeBrowserLive(
+      { threadId: "profile-a", frames: true },
+      (event) => liveEvents.push(event),
+    );
+    const oldCallback = liveCallbacks.at(-1)!;
+    await service.setEnabled("browser", false);
+    assert.equal(
+      (liveEvents.at(-1) as { status: string }).status,
+      "unavailable",
+    );
+    const countAfterDisable = liveEvents.length;
+    oldCallback({
+      type: "frame",
+      frame: {
+        sequence: 1,
+        mimeType: "image/jpeg",
+        data: "YQ==",
+        width: 1,
+        height: 1,
+      },
+    });
+    assert.equal(liveEvents.length, countAfterDisable);
+    stopLive();
+    assert.deepEqual(resourcesA.at(-1), []);
+    assert.deepEqual(resourcesB.at(-1), []);
+    await service.setEnabled("browser", true);
+    assert.equal(
+      (resourcesA.at(-1) as { url: string }[])[0]?.url,
+      "https://a.test/",
+    );
     stopA();
     stopB();
     assert.equal(
@@ -203,6 +242,13 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       ).triggers,
       [],
     );
+    const providerTargets: unknown[] = [];
+    const stopProvider = service.observeBrowserLive(
+      { threadId: "provider-switch", frames: false },
+      (event) => {
+        if (event.type === "targets") providerTargets.push(event.targets);
+      },
+    );
     const playwrightCandidate = await browserCandidate(
       "../../../packages/zenx-browser-plugin/variants/playwright.zenx.plugin.json",
       browserBackend("playwright"),
@@ -228,6 +274,16 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       )[0].title,
       "playwright",
     );
+    await call(
+      service,
+      "browser_list_tabs",
+      { sessionId: "test" },
+      "provider-switch",
+    );
+    assert.equal(
+      (providerTargets.at(-1) as { title: string }[])[0]?.title,
+      "playwright",
+    );
     const electronCandidate = await browserCandidate(
       "../../../packages/zenx-browser-plugin/zenx.plugin.json",
       browserBackend("electron"),
@@ -237,6 +293,18 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       { pluginId: "browser", packageName: "@zenx/browser-plugin" },
       electronCandidate,
     );
+    assert.deepEqual(providerTargets.at(-1), []);
+    await call(
+      service,
+      "browser_list_tabs",
+      { sessionId: "test" },
+      "provider-switch",
+    );
+    assert.equal(
+      (providerTargets.at(-1) as { title: string }[])[0]?.title,
+      "electron",
+    );
+    stopProvider();
     for (const pluginId of [
       "browser",
       "computer",
