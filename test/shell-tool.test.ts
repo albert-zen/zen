@@ -333,6 +333,7 @@ test("completion during a delayed running capture keeps the session waitable", a
   const shell = createShell({
     toolOutputSpool: spool,
     initialYieldMs: 10,
+    retentionMs: 1,
   });
   try {
     const release = path.join(temporaryDirectory, "release");
@@ -347,6 +348,7 @@ test("completion during a delayed running capture keeps the session waitable", a
     await finishStarted;
     await writeFile(release, "release");
     await waitForFile(completedMarker);
+    await new Promise((resolve) => setTimeout(resolve, 5));
     releaseCaptureFinish();
     const yielded = await operation;
     assert.equal(status(yielded), "running");
@@ -436,13 +438,19 @@ function createShell(
     initialYieldMs?: number;
     defaultTimeoutMs?: number;
     maxSessions?: number;
+    retentionMs?: number;
     terminationGraceMs?: number;
     toolOutputSpool?: ToolOutputSpool;
     maxOutputBytes?: number;
   } = {},
 ) {
-  const { initialYieldMs, defaultTimeoutMs, maxSessions, ...bodyOptions } =
-    options;
+  const {
+    initialYieldMs,
+    defaultTimeoutMs,
+    maxSessions,
+    retentionMs,
+    ...bodyOptions
+  } = options;
   const env = new ToolEnvironment({
     runtimes: [new ShellToolRuntime(bodyOptions)],
     taskOptions: {
@@ -451,6 +459,7 @@ function createShell(
         ? {}
         : { timeoutMs: defaultTimeoutMs }),
       ...(maxSessions === undefined ? {} : { maxTasks: maxSessions }),
+      ...(retentionMs === undefined ? {} : { retentionMs }),
       ...(bodyOptions.maxOutputBytes === undefined
         ? {}
         : { maxOutputBytes: bodyOptions.maxOutputBytes }),

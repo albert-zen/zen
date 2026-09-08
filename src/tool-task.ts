@@ -17,6 +17,8 @@ import {
 export interface ToolTaskPolicy {
   yieldTimeMs?: number;
   timeoutMs?: number;
+  /** Optional tool-schema fields exposing generic timing controls. */
+  timingArguments?: { yieldTimeMs?: string; timeoutMs?: string };
   /** Independent processes may coexist; otherwise the retained owner stays fenced. */
   resourceScope?: "independent" | "runtime" | "bundle";
   /** Only adapters which confirm the underlying operation has stopped may opt in. */
@@ -113,9 +115,9 @@ export class ToolTaskManager {
     const timing = invocation.task;
     const yieldMs = integer(
       timing?.yieldTimeMs ??
-        (runtime.name === "shell"
-          ? invocation.arguments.yield_time_ms
-          : undefined) ??
+        (policy?.timingArguments?.yieldTimeMs === undefined
+          ? undefined
+          : invocation.arguments[policy.timingArguments.yieldTimeMs]) ??
         policy?.yieldTimeMs ??
         this.#options.yieldTimeMs,
       "yield_time_ms",
@@ -123,9 +125,9 @@ export class ToolTaskManager {
     );
     const timeoutMs = integer(
       timing?.timeoutMs ??
-        (runtime.name === "shell"
-          ? invocation.arguments.timeout_ms
-          : undefined) ??
+        (policy?.timingArguments?.timeoutMs === undefined
+          ? undefined
+          : invocation.arguments[policy.timingArguments.timeoutMs]) ??
         policy?.timeoutMs ??
         this.#options.timeoutMs,
       "timeout_ms",
@@ -148,24 +150,29 @@ export class ToolTaskManager {
     if (options.resourceKey !== undefined)
       this.#resources.set(options.resourceKey, task);
     this.#invocations.add(invocation);
-    task.start();
-    await task.observe(yieldMs, false, true);
-    if (invocation.threadId === undefined && !task.terminal) {
-      task.cancel(false);
-      await task.observe(this.#options.shutdownWaitMs, false);
-      // A missing thread must never create an inaccessible running operation.
-      if (!task.terminal)
-        throw new Error(
-          "Long-running tool calls require a thread id; cancellation was requested but is unconfirmed",
-        );
-    }
+    const releaseObservation = task.acquireObservation();
     try {
-      const result = await task.drain(!task.yielded && task.directResult);
-      if (!task.yielded || finalResult(result)) await this.#consume(task);
-      return result;
-    } catch (error) {
-      if (task.terminal) await this.#consume(task);
-      throw error;
+      task.start();
+      await task.observe(yieldMs, false, true);
+      if (invocation.threadId === undefined && !task.terminal) {
+        task.cancel(false);
+        await task.observe(this.#options.shutdownWaitMs, false);
+        // A missing thread must never create an inaccessible running operation.
+        if (!task.terminal)
+          throw new Error(
+            "Long-running tool calls require a thread id; cancellation was requested but is unconfirmed",
+          );
+      }
+      try {
+        const result = await task.drain(!task.yielded && task.directResult);
+        if (!task.yielded || finalResult(result)) await this.#consume(task);
+        return result;
+      } catch (error) {
+        if (task.terminal) await this.#consume(task);
+        throw error;
+      }
+    } finally {
+      releaseObservation();
     }
   }
   async wait(invocation: ToolInvocation): Promise<ToolExecutionResult> {
@@ -189,6 +196,16 @@ export class ToolTaskManager {
     if (typeof terminate !== "boolean")
       throw new Error("wait.terminate must be a boolean");
     if (terminate) task.cancel(false);
+    if (task.observed) {
+      if (terminate)
+        return task.snapshot(
+          "Cancellation requested; the existing wait owns incremental output.",
+        );
+      throw new Error(
+        "Tool task is already being observed; await the existing wait before waiting again",
+      );
+    }
+    const releaseObservation = task.acquireObservation();
     const abort = () => task.cancel(false);
     invocation.signal.addEventListener("abort", abort, { once: true });
     try {
@@ -198,6 +215,7 @@ export class ToolTaskManager {
       return result;
     } finally {
       invocation.signal.removeEventListener("abort", abort);
+      releaseObservation();
     }
   }
   async #consume(task: Task) {
@@ -242,6 +260,8 @@ class Task {
   #expiry: NodeJS.Timeout | undefined;
   #released = false;
   #closed = false;
+  #observed = false;
+  #diagnosticReported = false;
   #drainTail = Promise.resolve();
   readonly #abort = () => this.cancel(false);
   yielded = false;
@@ -262,6 +282,27 @@ class Task {
     this.threadId = invocation.threadId;
     this.#window = this.#newWindow();
   }
+  get observed() {
+    return this.#observed;
+  }
+  acquireObservation() {
+    if (this.#observed) throw new Error("Tool task is already being observed");
+    this.#observed = true;
+    this.dispose();
+    return () => {
+      this.#observed = false;
+      this.#retainCompleted();
+    };
+  }
+  #retainCompleted() {
+    if (!this.terminal || this.#observed || this.#closed) return;
+    this.dispose();
+    this.#expiry = setTimeout(() => {
+      void this.shutdown();
+      this.#options.onExpire();
+    }, this.#options.retentionMs);
+    this.#expiry.unref();
+  }
   get status(): Status {
     if (this.#cancelReason !== undefined) {
       if (
@@ -272,9 +313,9 @@ class Task {
       if (
         this.#settled &&
         this.#error === undefined &&
-        this.#result?.exitCode === 0
+        this.#result !== undefined
       )
-        return "completed";
+        return this.#result.exitCode === 0 ? "completed" : "failed";
       return this.#runtime.taskPolicy?.cancellation === "confirmed-on-settle"
         ? "cancel_requested"
         : "cancellation_unconfirmed";
@@ -329,11 +370,7 @@ class Task {
         this.#invocation.signal.removeEventListener("abort", this.#abort);
         if (this.terminal) {
           this.#release();
-          this.#expiry = setTimeout(() => {
-            void this.shutdown();
-            this.#options.onExpire();
-          }, this.#options.retentionMs);
-          this.#expiry.unref();
+          this.#retainCompleted();
         }
         this.#notify();
       });
@@ -393,7 +430,8 @@ class Task {
     try {
       const status = this.status;
       const terminal = this.terminal;
-      if (quiet && this.#error !== undefined) throw this.#error;
+      if (quiet && this.#error !== undefined && !this.#window.hasOutput)
+        throw this.#error;
       const result = terminal ? this.#result : undefined;
       const window = this.#window;
       this.#window = this.#newWindow();
@@ -410,12 +448,14 @@ class Task {
             (toolOutputSuffix(result) ?? ""),
         );
       }
-      if (this.#error !== undefined && terminal)
+      if (this.#error !== undefined && !this.#diagnosticReported) {
+        this.#diagnosticReported = true;
         window.write(
           this.#error instanceof Error
             ? this.#error.message
             : String(this.#error),
         );
+      }
       const capture = await window.finish(result?.sourceTruncated ?? false);
       if (quiet && result !== undefined && !window.hasOutput) return result;
       if (quiet && result !== undefined) {
@@ -425,46 +465,72 @@ class Task {
         );
       }
       this.yielded = true;
-      const exitCode = terminal
-        ? status === "timed_out"
-          ? 124
-          : status === "cancelled"
-            ? 130
-            : (result?.exitCode ?? 1)
-        : 0;
-      const control = `\n[tool task ${status}]\ntask_id: ${this.id}\ntool_name: ${this.#runtime.name}\ntimeout_ms: ${this.#options.timeoutMs}${terminal ? `\nexit_code: ${exitCode}` : ""}${status === "cancellation_unconfirmed" ? "\nCancellation is unconfirmed; the underlying operation may still be running." : ""}`;
-      return attachToolOutputCapture(
-        {
-          output: capture.output,
-          exitCode,
-          contentType: TOOL_TASK_CONTENT_TYPE,
-          structuredContent: {
-            status,
-            task_id: this.id,
-            tool_name: this.#runtime.name,
-            timeout_ms: this.#options.timeoutMs,
-            exit_code: terminal ? exitCode : null,
-            ...(result?.structuredContent === undefined
-              ? {}
-              : { result: result.structuredContent }),
-            ...(result?.contentType === undefined
-              ? {}
-              : { result_content_type: result.contentType }),
-          },
-          ...(result?.modelContent === undefined
-            ? {}
-            : { modelContent: result.modelContent }),
-          ...(result?.sourceTruncated === undefined
-            ? {}
-            : { sourceTruncated: result.sourceTruncated }),
-        },
-        capture.metadata,
-        control,
-      );
+      return this.#receipt(status, capture, result);
     } finally {
       release();
     }
   }
+  snapshot(output: string): ToolExecutionResult {
+    return this.#receipt(this.status, { output });
+  }
+  #receipt(
+    status: Status,
+    capture: Awaited<ReturnType<ToolOutputWindow["finish"]>>,
+    result?: ToolExecutionResult,
+  ): ToolExecutionResult {
+    const terminal = ["completed", "failed", "timed_out", "cancelled"].includes(
+      status,
+    );
+    const exitCode = terminal
+      ? status === "timed_out"
+        ? 124
+        : status === "cancelled"
+          ? 130
+          : (result?.exitCode ?? this.#result?.exitCode ?? 1)
+      : 0;
+    const cancellation =
+      this.#runtime.taskPolicy?.cancellation === "confirmed-on-settle"
+        ? "confirmable"
+        : "best_effort";
+    const resourceScope =
+      this.#runtime.taskPolicy?.resourceScope ??
+      (this.#runtime.executionMode === "parallel_safe"
+        ? "independent"
+        : "bundle");
+    const control = `\n[tool task ${status}]\ntask_id: ${this.id}\ntool_name: ${this.#runtime.name}\ntimeout_ms: ${this.#options.timeoutMs}\ncancellation: ${cancellation}\nresource_scope: ${resourceScope}\nlifetime: host_instance${terminal ? `\nexit_code: ${exitCode}` : ""}${status === "cancellation_unconfirmed" ? "\nCancellation is unconfirmed; the underlying operation may still be running." : ""}`;
+    return attachToolOutputCapture(
+      {
+        output: capture.output,
+        exitCode,
+        contentType: TOOL_TASK_CONTENT_TYPE,
+        structuredContent: {
+          status,
+          task_id: this.id,
+          tool_name: this.#runtime.name,
+          timeout_ms: this.#options.timeoutMs,
+          cancellation,
+          resource_scope: resourceScope,
+          lifetime: "host_instance",
+          exit_code: terminal ? exitCode : null,
+          ...(result?.structuredContent === undefined
+            ? {}
+            : { result: result.structuredContent }),
+          ...(result?.contentType === undefined
+            ? {}
+            : { result_content_type: result.contentType }),
+        },
+        ...(result?.modelContent === undefined
+          ? {}
+          : { modelContent: result.modelContent }),
+        ...(result?.sourceTruncated === undefined
+          ? {}
+          : { sourceTruncated: result.sourceTruncated }),
+      },
+      capture.metadata,
+      control,
+    );
+  }
+
   #release() {
     if (!this.#released) {
       this.#released = true;
@@ -503,7 +569,7 @@ export class ToolWaitRuntime implements ToolRuntime {
     this.specification = {
       name: this.name,
       description:
-        "Wait for incremental output or completion of a host-local tool task. terminate requests cancellation; only cancelled/timed_out confirm execution stopped. A running task may be waited again later.",
+        "Ordinary tools automatically return task_id when they exceed their yield time; no separate background mode is required. Use wait for incremental output or completion. terminate requests cancellation; receipts report confirmable or best_effort cancellation and resource_scope. Running bundle/runtime resources stay busy; independent tasks can coexist. Only cancelled/timed_out confirm cancellation. Tasks belong to this Host instance and do not resume after restart.",
       inputSchema: {
         type: "object",
         properties: {

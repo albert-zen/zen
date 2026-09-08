@@ -543,6 +543,11 @@ export class ToolEnvironment {
           )} input required by ${prepared.invocation.name}`,
         );
       }
+      // The manager owns this envelope; its nested tool payload was already
+      // normalized at the original execution boundary. Do not charge the
+      // fixed control envelope against the tool's original JSON byte budget.
+      if (runtime === this.waitRuntime)
+        return await runtime.execute(prepared.invocation);
       const execute = async (invocation: ToolInvocation) => {
         const result =
           nested !== undefined &&
@@ -790,6 +795,7 @@ export class ShellToolRuntime implements ToolRuntime {
   readonly taskPolicy: ToolTaskPolicy = {
     resourceScope: "independent",
     cancellation: "confirmed-on-settle",
+    timingArguments: { yieldTimeMs: "yield_time_ms", timeoutMs: "timeout_ms" },
   };
   readonly specification: ModelTool = {
     name: this.name,

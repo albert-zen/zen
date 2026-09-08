@@ -311,3 +311,220 @@ test("fast result and failure retain their exact semantics", async () => {
   );
   await env.close();
 });
+
+test("concurrent waits never duplicate a terminal result", async () => {
+  const pending = deferred<typeof done>();
+  const env = new ToolEnvironment({
+    runtimes: [tool("slow", async () => await pending.promise)],
+    taskOptions: { yieldTimeMs: 1 },
+  });
+  try {
+    const start = await env.execute(env.prepare(invocation("slow")));
+    const first = env.waitRuntime.execute(
+      invocation("wait", { task_id: data(start).task_id, yield_time_ms: 100 }),
+    );
+    const duplicate = env.waitRuntime.execute(
+      invocation("wait", { task_id: data(start).task_id, yield_time_ms: 100 }),
+    );
+    const rejected = assert.rejects(duplicate, /already being observed/);
+    pending.resolve(done);
+    await rejected;
+    assert.equal(data(await first).status, "completed");
+  } finally {
+    pending.resolve(done);
+    await env.close();
+  }
+});
+
+test("wait name cannot be replaced or removed by a tool bundle", async () => {
+  const env = new ToolEnvironment();
+  assert.throws(
+    () => env.registerRuntime(tool("wait", async () => done)),
+    /reserved/,
+  );
+  assert.throws(
+    () =>
+      env.stageBundle(
+        { identity: { kind: "builtin", id: "wait" }, tools: [] },
+        { replaceCurrent: true },
+      ),
+    /reserved/,
+  );
+  assert.equal(env.unregisterBundle({ kind: "builtin", id: "wait" }), false);
+  await env.close();
+});
+
+test("authoritative nonzero completion after cancellation releases its resource", async () => {
+  const pending = deferred<typeof done>();
+  const env = new ToolEnvironment({
+    runtimes: [tool("remote", async () => await pending.promise)],
+    taskOptions: { yieldTimeMs: 1 },
+  });
+  try {
+    const start = await env.execute(env.prepare(invocation("remote")));
+    await env.waitRuntime.execute(
+      invocation("wait", { task_id: data(start).task_id, terminate: true }),
+    );
+    pending.resolve({ output: "remote failure", exitCode: 7 });
+    const final = await env.waitRuntime.execute(
+      invocation("wait", { task_id: data(start).task_id, yield_time_ms: 100 }),
+    );
+    assert.equal(data(final).status, "failed");
+    assert.equal(final.exitCode, 7);
+    assert.match(final.output, /remote failure/);
+    assert.equal(
+      (await env.execute(env.prepare(invocation("remote")))).exitCode,
+      7,
+    );
+  } finally {
+    pending.resolve(done);
+    await env.close();
+  }
+});
+test("fast streaming rejection preserves preceding output", async () => {
+  const env = new ToolEnvironment({
+    runtimes: [
+      tool("broken", async (call) => {
+        call.taskContext!.onOutput("before failure");
+        throw new Error("specific failure");
+      }),
+    ],
+  });
+  try {
+    const result = await env.execute(env.prepare(invocation("broken")));
+    assert.equal(result.exitCode, 1);
+    assert.match(result.output, /before failure/);
+    assert.match(result.output, /specific failure/);
+  } finally {
+    await env.close();
+  }
+});
+test("wait envelope preserves a valid result at the original JSON byte limit", async () => {
+  const pending = deferred<typeof done>();
+  const payload = { value: "x".repeat(1024 * 1024 - 12) };
+  assert.equal(Buffer.byteLength(JSON.stringify(payload)), 1024 * 1024);
+  const env = new ToolEnvironment({
+    runtimes: [
+      tool("large", async () => {
+        await pending.promise;
+        return {
+          output: "large",
+          exitCode: 0,
+          contentType: "application/json",
+          structuredContent: payload,
+        };
+      }),
+    ],
+    taskOptions: { yieldTimeMs: 1 },
+  });
+  try {
+    const start = await env.execute(env.prepare(invocation("large")));
+    pending.resolve(done);
+    const last = await env.execute(
+      env.prepare(
+        invocation("wait", {
+          task_id: data(start).task_id,
+          yield_time_ms: 100,
+        }),
+      ),
+    );
+    assert.deepEqual(
+      (last.structuredContent as { result: unknown }).result,
+      payload,
+    );
+  } finally {
+    pending.resolve(done);
+    await env.close();
+  }
+});
+test("an unconfirmed local cancellation failure is reported once", async () => {
+  const body = tool(
+    "remote",
+    async (call) =>
+      await new Promise((_r, reject) =>
+        call.signal.addEventListener("abort", () =>
+          reject(new Error("transport stopped waiting")),
+        ),
+      ),
+  );
+  const env = new ToolEnvironment({
+    runtimes: [body],
+    taskOptions: { yieldTimeMs: 1, shutdownWaitMs: 1 },
+  });
+  try {
+    const start = await env.execute(env.prepare(invocation("remote")));
+    await env.waitRuntime.execute(
+      invocation("wait", {
+        task_id: data(start).task_id,
+        terminate: true,
+        yield_time_ms: 1,
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    const diagnostic = await env.waitRuntime.execute(
+      invocation("wait", { task_id: data(start).task_id, yield_time_ms: 1 }),
+    );
+    assert.equal(data(diagnostic).status, "cancellation_unconfirmed");
+    assert.match(diagnostic.output, /transport stopped waiting/);
+    const next = await env.waitRuntime.execute(
+      invocation("wait", { task_id: data(start).task_id, yield_time_ms: 1 }),
+    );
+    assert.doesNotMatch(next.output, /transport stopped waiting/);
+  } finally {
+    await env.close();
+  }
+});
+
+test("concurrent cancellation stays reachable while one wait owns output", async () => {
+  const body = tool(
+    "cooperative",
+    async (call) =>
+      await new Promise((resolve) =>
+        call.signal.addEventListener("abort", () =>
+          resolve({ output: "stopped", exitCode: 130 }),
+        ),
+      ),
+    { cancellation: "confirmed-on-settle" },
+  );
+  const env = new ToolEnvironment({
+    runtimes: [body],
+    taskOptions: { yieldTimeMs: 1 },
+  });
+  try {
+    const start = await env.execute(env.prepare(invocation("cooperative")));
+    const observing = env.waitRuntime.execute(
+      invocation("wait", { task_id: data(start).task_id, yield_time_ms: 100 }),
+    );
+    const cancellation = await env.waitRuntime.execute(
+      invocation("wait", { task_id: data(start).task_id, terminate: true }),
+    );
+    assert.match(cancellation.output, /existing wait owns/);
+    assert.doesNotMatch(cancellation.output, /stopped/);
+    const final = await observing;
+    assert.equal(data(final).status, "cancelled");
+    assert.match(final.output, /stopped/);
+  } finally {
+    await env.close();
+  }
+});
+test("non-shell timing controls are declared by policy and capabilities are exposed", async () => {
+  const pending = deferred<typeof done>();
+  const body = tool("build", async () => await pending.promise, {
+    resourceScope: "independent",
+    timingArguments: { yieldTimeMs: "return_after", timeoutMs: "deadline" },
+  });
+  const env = new ToolEnvironment({ runtimes: [body] });
+  try {
+    const result = await env.execute(
+      env.prepare(invocation("build", { return_after: 1, deadline: 99 })),
+    );
+    assert.equal(data(result).status, "running");
+    assert.match(result.output, /timeout_ms: 99/);
+    assert.match(result.output, /cancellation: best_effort/);
+    assert.match(result.output, /resource_scope: independent/);
+    assert.match(result.output, /lifetime: host_instance/);
+  } finally {
+    pending.resolve(done);
+    await env.close();
+  }
+});
