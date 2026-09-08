@@ -121,6 +121,12 @@ test("image preview closes with Escape and returns focus to its named trigger", 
       required('[role="dialog"]').getAttribute("aria-modal"),
       "true",
     );
+    assert.ok(required(".image-preview-layer").parentElement === document.body);
+    assert.equal(
+      required('[role="dialog"]').getAttribute("aria-label"),
+      "focus.png",
+    );
+    assert.equal(document.querySelector(".image-preview header"), null);
     assert.equal(
       document.activeElement?.getAttribute("aria-label"),
       "Close image preview",

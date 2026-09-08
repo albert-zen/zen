@@ -287,8 +287,12 @@ textarea:focus-visible,
 input:focus-visible,
 select:focus-visible,
 a:focus-visible {
-  outline: 2px solid var(--color-focus-ring);
-  outline-offset: 2px;
+  outline: none;
+}
+button:focus-visible,
+a:focus-visible,
+select:focus-visible {
+  filter: brightness(0.9);
 }
 .sr-only {
   position: absolute;
@@ -1497,8 +1501,7 @@ a:focus-visible {
 }
 .image-thumbnail:focus-visible,
 .remove-draft-image:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: none;
 }
 .image-thumbnail img {
   width: 100%;
@@ -1905,8 +1908,7 @@ a:focus-visible {
   color: var(--text-accent);
 }
 .new-thread-project-trigger:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 4px;
+  outline: none;
   border-radius: 3px;
 }
 .new-thread-project-popover {
@@ -1993,8 +1995,7 @@ a:focus-visible {
 }
 .new-thread-project-menu button:focus-visible,
 .new-thread-project-actions button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline: none;
 }
 .new-thread-project-menu button span,
 .new-thread-project-actions button span {
@@ -2108,14 +2109,7 @@ a:focus-visible {
     0 18px 52px var(--color-shadow-low),
     inset 0 1px var(--color-surface-wash);
 }
-.composer:focus-within {
-  border-color: var(--color-border-focus);
-  outline: 2px solid var(--color-focus-ring);
-  outline-offset: 1px;
-  box-shadow:
-    0 18px 52px var(--color-shadow-low),
-    inset 0 1px var(--color-surface-wash);
-}
+
 .composer > textarea {
   width: 100%;
   min-height: 68px;
@@ -2283,8 +2277,7 @@ a:focus-visible {
   background: var(--color-surface-elevated);
 }
 .context-usage-indicator:focus-visible {
-  outline: 2px solid var(--color-focus-ring);
-  outline-offset: 1px;
+  outline: none;
 }
 .context-usage-indicator::after {
   content: attr(data-tooltip);
@@ -2480,58 +2473,40 @@ a:focus-visible {
 }
 
 .image-preview-layer {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  z-index: 90;
+  z-index: 1000;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: 72px 24px 24px;
   background: var(--overlay-strong);
   backdrop-filter: blur(6px);
+  -webkit-app-region: no-drag;
 }
-.image-preview {
-  width: min(920px, 100%);
-  max-height: 100%;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  overflow: hidden;
-  border: 1px solid var(--border-control);
-  border-radius: 16px;
+.image-preview-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
   background: var(--surface-overlay);
-  box-shadow: var(--shadow-high);
-}
-.image-preview > header {
-  min-height: 52px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 6px 8px 6px 16px;
-  border-bottom: 1px solid var(--border-soft);
-}
-.image-preview > header strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  font-weight: 560;
+  color: var(--text-1);
 }
 .image-preview-content {
-  min-height: 220px;
-  display: grid;
-  place-items: center;
-  overflow: auto;
-  padding: 16px;
-  background: var(--surface-inset);
+  display: contents;
+  pointer-events: none;
 }
 .image-preview-content img {
   max-width: 100%;
-  max-height: calc(100vh - 140px);
+  max-height: calc(100dvh - 96px);
   display: block;
   object-fit: contain;
+  pointer-events: auto;
 }
 .image-preview-content p {
-  color: var(--text-3);
+  color: var(--text-1);
 }
 
 .page-title {
@@ -3506,8 +3481,7 @@ a:focus-visible {
   background: var(--accent-soft);
 }
 .appearance-options input:focus-visible + span {
-  outline: 2px solid var(--color-focus-ring);
-  outline-offset: 2px;
+  outline: none;
 }
 .appearance-preview {
   min-height: 104px;
@@ -3652,8 +3626,7 @@ a:focus-visible {
 .appearance-preset-options input:focus-visible + span,
 .appearance-accent-options input:focus-visible + span,
 .appearance-inline-options input:focus-visible + span {
-  outline: 2px solid var(--color-focus-ring);
-  outline-offset: 2px;
+  outline: none;
 }
 .appearance-accent-group {
   margin-bottom: 10px;
@@ -5017,10 +4990,7 @@ a:focus-visible {
     padding-inline: 10px;
   }
   .image-preview-layer {
-    padding: 8px;
-  }
-  .image-preview {
-    border-radius: 12px;
+    padding: 72px 12px 24px;
   }
   .message-images .image-thumbnail {
     width: 96px;

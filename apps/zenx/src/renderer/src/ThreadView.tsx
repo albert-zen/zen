@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import {
   useEffect,
   useLayoutEffect,
@@ -1179,41 +1180,34 @@ function ImagePreview({
       trigger.focus();
     };
   }, [onClose, trigger]);
-  return (
+  return createPortal(
     <div
       className="image-preview-layer"
-      role="presentation"
+      role="dialog"
+      aria-modal="true"
+      aria-label={name}
       onPointerDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <section
-        className="image-preview"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="image-preview-title"
+      <button
+        ref={closeRef}
+        className="icon-button image-preview-close"
+        type="button"
+        aria-label="Close image preview"
+        onClick={onClose}
       >
-        <header>
-          <strong id="image-preview-title">{name}</strong>
-          <button
-            ref={closeRef}
-            className="icon-button"
-            type="button"
-            aria-label="Close image preview"
-            onClick={onClose}
-          >
-            <Icon name="x" />
-          </button>
-        </header>
-        <div className="image-preview-content">
-          {url === null ? (
-            <p role={error ? "alert" : "status"}>{error ?? "Loading image…"}</p>
-          ) : (
-            <img alt={name} src={url} />
-          )}
-        </div>
-      </section>
-    </div>
+        <Icon name="x" />
+      </button>
+      <div className="image-preview-content">
+        {url === null ? (
+          <p role={error ? "alert" : "status"}>{error ?? "Loading image…"}</p>
+        ) : (
+          <img alt={name} src={url} />
+        )}
+      </div>
+    </div>,
+    document.body,
   );
 }
 
