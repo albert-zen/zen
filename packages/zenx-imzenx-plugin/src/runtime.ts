@@ -26,6 +26,7 @@ interface Invocation {
   signal: AbortSignal;
 }
 type State =
+  | "waiting-for-activation"
   | "unconfigured"
   | "waiting-for-zas"
   | "starting"
@@ -43,6 +44,8 @@ export class ImZenXRuntime {
   #unsubscribe: (() => void) | undefined;
   #queue: Promise<unknown> = Promise.resolve();
   #closed = false;
+  #activated = false;
+  #generation = 0;
   #state: State = "unconfigured";
   #error: string | undefined;
 
@@ -51,18 +54,42 @@ export class ImZenXRuntime {
   }
 
   async start(sdk: ZenXPluginHostSdkV1): Promise<void> {
+    this.#closed = false;
+    this.#activated = false;
+    this.#generation += 1;
+    this.#state = "waiting-for-activation";
+    this.#error = undefined;
     this.#sdk = sdk;
     const value = await sdk.storage.get();
-    if (value["configuration"] !== undefined)
-      this.#config = configuration(value["configuration"]);
-    this.#unsubscribe = this.#host.onServerStatus(() => {
-      void this.#serialize(async () => {
-        await this.#stop();
-        if (!this.#closed) await this.#connect();
-      }).catch(() => {});
-    });
-    // Plugin initialization precedes ZAS startup. Never block the Host on IM.
-    void this.#serialize(() => this.#connect()).catch(() => {});
+    this.#config =
+      value["configuration"] === undefined
+        ? undefined
+        : configuration(value["configuration"]);
+  }
+
+  /** Preparation has no IM side effects; replacement waits for the old consumer. */
+  activate(previousRetired: Promise<void>): void {
+    const generation = this.#generation;
+    void previousRetired.then(
+      () => {
+        if (this.#closed || generation !== this.#generation) return;
+        this.#activated = true;
+        this.#unsubscribe = this.#host.onServerStatus(() => {
+          void this.#serialize(async () => {
+            await this.#stop();
+            if (!this.#closed) await this.#connect();
+          }).catch(() => {});
+        });
+        // Never block Catalog publication or Host startup on an IM connection.
+        void this.#serialize(() => this.#connect()).catch(() => {});
+      },
+      () => {
+        if (this.#closed || generation !== this.#generation) return;
+        this.#state = "failed";
+        this.#error =
+          "Previous IM Gateway did not stop. Restart ZenX before reconnecting.";
+      },
+    );
   }
 
   async invoke(name: string, invocation: Invocation): Promise<unknown> {
@@ -72,6 +99,8 @@ export class ImZenXRuntime {
       invocation.signal.throwIfAborted();
       if (this.#closed || this.#sdk === undefined)
         throw new Error("IMZenX is stopped");
+      if (!this.#activated)
+        throw new Error("IMZenX is waiting for runtime activation");
       if (name === "imzenx_configure") {
         const input = invocation.arguments["input"] ?? invocation.arguments;
         const next = configuration(input);
@@ -99,6 +128,8 @@ export class ImZenXRuntime {
 
   async close(): Promise<void> {
     this.#closed = true;
+    this.#generation += 1;
+    this.#activated = false;
     this.#unsubscribe?.();
     this.#unsubscribe = undefined;
     // Stop promptly even if the queue is waiting for the child's ready message.
@@ -114,7 +145,7 @@ export class ImZenXRuntime {
   }
 
   async #connect(): Promise<void> {
-    if (this.#closed) return;
+    if (this.#closed || !this.#activated) return;
     this.#error = undefined;
     if (this.#config === undefined) {
       this.#state = "unconfigured";

@@ -47,6 +47,7 @@ export interface PluginRuntimeInvocation {
 /** Provider-neutral boundary implemented by plugin code or its transport adapter. */
 export interface PluginRuntime {
   readonly identity: PluginRuntimeIdentity;
+  activate?(previousRetired: Promise<void>): void;
   invoke(invocation: PluginRuntimeInvocation): Promise<ToolExecutionResult>;
   close(): Promise<void>;
 }
@@ -167,9 +168,11 @@ export class PluginRuntimeSupervisor {
             bundle: staged.bundle,
             unregisterBundle,
           });
-          if (previous !== undefined && previous.token !== token) {
-            this.#scheduleRetirement(previous.bundle, "replacement commit");
-          }
+          const previousRetired =
+            previous !== undefined && previous.token !== token
+              ? this.#scheduleRetirement(previous.bundle, "replacement commit")
+              : Promise.resolve();
+          staged.bundle.activate(previousRetired);
         },
         rollback: async () => {
           await this.#rollback(pluginId, token);
@@ -337,10 +340,13 @@ export class PluginRuntimeSupervisor {
     return await result;
   }
 
-  #scheduleRetirement(bundle: SupervisedPluginBundle, context: string): void {
+  #scheduleRetirement(
+    bundle: SupervisedPluginBundle,
+    context: string,
+  ): Promise<void> {
+    const completion = bundle.retire();
     let retirement!: Promise<void>;
-    retirement = bundle
-      .retire()
+    retirement = completion
       .catch((error: unknown) => {
         const failure = asError(error);
         this.#deferredRetirementFailures.push(failure);
@@ -350,6 +356,7 @@ export class PluginRuntimeSupervisor {
       })
       .finally(() => this.#deferredRetirements.delete(retirement));
     this.#deferredRetirements.add(retirement);
+    return completion;
   }
 }
 
@@ -378,6 +385,10 @@ class SupervisedPluginBundle implements ToolBundle {
     }));
     this.#toolNames = new Set(definitions.map((definition) => definition.name));
     this.#runtime = runtime;
+  }
+
+  activate(previousRetired: Promise<void>): void {
+    this.#runtime.activate?.(previousRetired);
   }
 
   async #execute(
@@ -475,6 +486,7 @@ export interface BundledPluginModule {
     invocation: PluginRuntimeInvocation,
     sdk: ZenXPluginHostSdkV1,
   ): Promise<ToolExecutionResult>;
+  activate?(previousRetired: Promise<void>): void;
   close?(): Promise<void> | void;
 }
 
@@ -492,6 +504,10 @@ export class BundledModulePluginRuntime implements PluginRuntime {
     this.identity = Object.freeze({ ...identity });
     this.#module = module;
     this.#sdk = sdk ?? unavailableHostSdk(identity.pluginId);
+  }
+
+  activate(previousRetired: Promise<void>): void {
+    this.#module.activate?.(previousRetired);
   }
 
   async invoke(
@@ -1197,6 +1213,8 @@ export function bundledPackageRegistration(
                 hostSdk,
               ),
             ),
+          activate: (previousRetired) =>
+            registration.package.activate?.(previousRetired),
           close: async () => await registration.package.close?.(),
         },
         hostSdk,

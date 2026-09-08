@@ -169,6 +169,8 @@ export interface ZenXCapabilityPackage {
   };
   /** Called whenever a v2 bundled runtime is admitted. */
   start?(hostSdk: ZenXPluginHostSdkV1): Promise<void> | void;
+  /** Called after publication; background consumers wait for predecessor retirement. */
+  activate?(previousRetired: Promise<void>): void;
   invoke(
     toolName: string,
     invocation: ToolInvocation,

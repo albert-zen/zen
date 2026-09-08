@@ -130,7 +130,7 @@
   `providerProfileId / modelId / reasoningEffort` 的原子三元组，Thread 只记录生效选择而不持有 profile 或 credential；
   输入省略 effort 时，目标支持当前 effort 就保留，否则使用目标 model 的默认 effort。
 - **IMZen App Server Read Projection** — 产品 client 把 ZAS 的有界原生列表页投影为 SDK 所需排序/搜索，并以无配置的 `thread/resume` 建立当前 socket 的 snapshot + live 订阅；它不激活桌面、不改变 Thread，IM 目的地仍只由 SDK routes 授权。
-- **IMZenX Plugin** — 第一方 npm package 在 ZenX Host 生命周期内组合 IMZen 与固定 IM Agent SDK；Host 注入唯一 ZAS descriptor，Plugin SDK 存储连接配置，SDK SQLite 只持久化频道绑定、订阅投影和去重，不产生第二份 Thread 或 transcript；ZAS 在 canonical metadata 提交后广播 Thread 创建通知，使桌面发现 IM 新建会话而不自动订阅其 transcript。
+- **IMZenX Plugin** — 第一方 npm package 在 ZenX Host 生命周期内组合 IMZen 与固定 IM Agent SDK；Host 在 Catalog 发布后通过可选 activate 钩子交付前代 runtime 退出屏障，后台消费者等待前代退出才连接；准备阶段不连接 IM。Host 注入唯一 ZAS descriptor，Plugin SDK 存储连接配置，SDK SQLite 只持久化频道绑定、订阅投影和去重，不产生第二份 Thread 或 transcript；ZAS 在 canonical metadata 提交后广播 Thread 创建通知，使桌面发现 IM 新建会话而不自动订阅其 transcript。
 - **IMZenController** — IMZen 通过 IM Agent SDK typed actions，以及 SDK 明确保留
   的 App Server native Thread profile seam，组合 `/model`、`/permission` 与审批
   快捷命令的产品 UX；`/model` 是当前 typed contracts 外的 Zen native operation，

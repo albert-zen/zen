@@ -52,6 +52,7 @@ export interface StagedProfileRemoval {
 export interface ZenXTrustedProfilePluginRuntime {
   readonly storage?: ZenXCapabilityPackage["storage"];
   start?(sdk: ZenXPluginHostSdkV1): Promise<void> | void;
+  activate?(previousRetired: Promise<void>): void;
   invoke(
     toolName: string,
     invocation: Omit<ToolInvocation, "name">,
@@ -588,6 +589,10 @@ class ProfileTrustedPluginPackage implements ZenXCapabilityPackage {
 
   async start(hostSdk: ZenXPluginHostSdkV1): Promise<void> {
     await this.#runtime.start?.(hostSdk);
+  }
+
+  activate(previousRetired: Promise<void>): void {
+    this.#runtime.activate?.(previousRetired);
   }
 
   async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {

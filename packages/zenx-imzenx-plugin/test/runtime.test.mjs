@@ -45,6 +45,8 @@ test(
     let runtime = new ImZenXRuntime(host);
     try {
       await runtime.start(sdk);
+      runtime.activate(Promise.resolve());
+      await waitFor(() => runtime.status().state !== "waiting-for-activation");
       await invoke(runtime, "imzenx_configure", {
         pythonExecutable: executable,
         channelsConfigFile: path.join(root, "channels.json"),
@@ -69,8 +71,10 @@ test(
       await waitFor(() => runtime.status().state === "waiting-for-zas");
       await runtime.close();
       assert.equal(listeners.size, 0);
-      runtime = new ImZenXRuntime(host);
+      // Host reuses this exact object on disable → enable.
       await runtime.start(sdk);
+      runtime.activate(Promise.resolve());
+      await waitFor(() => runtime.status().state !== "waiting-for-activation");
       ready = true;
       for (const listener of listeners) listener();
       await waitFor(() => runtime.status().state === "connected");
@@ -95,6 +99,8 @@ test("invalid configuration is rejected before persisted configuration changes",
     },
   });
   await runtime.start(sdk);
+  runtime.activate(Promise.resolve());
+  await waitFor(() => runtime.status().state !== "waiting-for-activation");
   await assert.rejects(
     invoke(runtime, "imzenx_configure", { pythonExecutable: "relative" }),
     /absolute path/,
@@ -117,6 +123,8 @@ test("missing Python fails promptly and remains failed until explicit reconnect"
   });
   try {
     await runtime.start(sdk);
+    runtime.activate(Promise.resolve());
+    await waitFor(() => runtime.status().state !== "waiting-for-activation");
     await assert.rejects(
       invoke(runtime, "imzenx_configure", {
         pythonExecutable: path.join(root, "missing-python"),
@@ -130,4 +138,44 @@ test("missing Python fails promptly and remains failed until explicit reconnect"
     await runtime.close();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("a closed pending activation cannot revive and re-enable reloads cleared storage", async () => {
+  const { sdk } = createFixturePluginHost({ pluginId: "imzenx" });
+  const listeners = new Set();
+  const runtime = new ImZenXRuntime({
+    dataDirectory: os.tmpdir(),
+    isServerReady: () => false,
+    onServerStatus: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    readConnection: async () => {
+      throw new Error("unexpected connection");
+    },
+  });
+  await sdk.storage.set({
+    configuration: {
+      pythonExecutable: "/old/python",
+      channelsConfigFile: "/old/channels.json",
+      cwd: "/old",
+    },
+  });
+  let release;
+  const retired = new Promise((resolve) => {
+    release = resolve;
+  });
+  await runtime.start(sdk);
+  runtime.activate(retired);
+  await runtime.close();
+  await sdk.storage.set({});
+  await runtime.start(sdk);
+  runtime.activate(Promise.resolve());
+  await waitFor(() => runtime.status().state === "unconfigured");
+  release();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(runtime.status().configuration, null);
+  assert.equal(listeners.size, 1);
+  await runtime.close();
+  assert.equal(listeners.size, 0);
 });
