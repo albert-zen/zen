@@ -1007,6 +1007,10 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     let packageName: string;
     let tarball: string;
     switch (pluginId) {
+      case "imzenx":
+        packageName = FIRST_PARTY_PLUGIN_PACKAGES.imzenx.packageName;
+        tarball = FIRST_PARTY_PLUGIN_PACKAGES.imzenx.tarball;
+        break;
       case "browser":
         packageName = FIRST_PARTY_PLUGIN_PACKAGES.browser.packageName;
         tarball = firstPartyProviderTarball(

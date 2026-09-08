@@ -229,3 +229,8 @@ codex --version
 codex app-server generate-ts --out /tmp/codex-app-server-types
 codex app-server generate-json-schema --out /tmp/codex-app-server-schema
 ```
+
+New Thread discovery is broadcast as `thread/started` to all initialized
+connections after the canonical Thread metadata commits. It does not subscribe
+those connections to transcript output or activate their UI. The creator gets
+one notification through the same event projection, alongside its request result.

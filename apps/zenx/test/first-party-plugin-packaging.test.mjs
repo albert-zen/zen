@@ -17,6 +17,7 @@ const run = promisify(execFile);
 const repositoryRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 
 const expected = [
+  ["@zenx/imzenx-plugin", "zenx-imzenx-plugin-1.0.0.tgz"],
   ["@zenx/browser-plugin", "zenx-browser-plugin-electron-1.0.0.tgz"],
   ["@zenx/browser-plugin", "zenx-browser-plugin-playwright-1.0.0.tgz"],
   ["@zenx/browser-plugin", "zenx-browser-plugin-user-session-1.0.0.tgz"],
@@ -102,12 +103,21 @@ test("all first-party plugins validate and pack as self-contained ordinary npm t
       );
       const files = listed[0]?.files?.map((entry) => entry.path).sort();
       assert.equal(listed[0]?.name, packageName);
-      assert.deepEqual(files, [
-        "README.md",
-        "dist/runtime.js",
-        "package.json",
-        "zenx.plugin.json",
-      ]);
+      if (packageName === "@zenx/imzenx-plugin") {
+        assert(files.includes("python/src/imzen/zenx.py"));
+        assert(files.includes("python/uv.lock"));
+        assert(
+          !files.some(
+            (file) => file.includes(".venv") || file.includes("__pycache__"),
+          ),
+        );
+      } else
+        assert.deepEqual(files, [
+          "README.md",
+          "dist/runtime.js",
+          "package.json",
+          "zenx.plugin.json",
+        ]);
       const expectedVariant = providerVariants.get(filename);
       if (expectedVariant !== undefined) {
         const manifest = JSON.parse(

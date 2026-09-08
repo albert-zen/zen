@@ -460,7 +460,9 @@ export class ZenXSettingsService {
         baseUrl: provider.baseUrl,
         apiKey,
         provider: provider.name,
-        defaultParams: { temperature: 0.2, max_tokens: 40 },
+        // Reasoning and visible output share this budget on compatible providers.
+        // A 40-token cap can end with finish_reason=length before any title.
+        defaultParams: { temperature: 0.2, max_tokens: 4096 },
       }),
       model: titleReference.modelId,
       reasoningEffort,

@@ -147,7 +147,8 @@ export interface ZenXPluginContributions {
       | "settings"
       | "terminal"
       | "trigger"
-      | "users";
+      | "users"
+      | "imzenx";
     pageId: string;
     order?: number;
   }>;

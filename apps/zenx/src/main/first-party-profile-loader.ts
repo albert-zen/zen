@@ -3,6 +3,11 @@ import type { MarketplaceBuiltInEntry } from "../marketplace.js";
 import type { ZenXTrustedProfilePluginLoader } from "./plugin-profile.js";
 
 export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
+  imzenx: {
+    pluginId: "imzenx",
+    packageName: "@zenx/imzenx-plugin",
+    tarball: "zenx-imzenx-plugin-1.0.0.tgz",
+  },
   browser: {
     pluginId: "browser",
     packageName: "@zenx/browser-plugin",
@@ -26,6 +31,14 @@ export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
 });
 
 export const FIRST_PARTY_MARKETPLACE_ENTRIES = Object.freeze([
+  {
+    pluginId: "imzenx",
+    packageName: FIRST_PARTY_PLUGIN_PACKAGES.imzenx.packageName,
+    name: "IMZenX",
+    description:
+      "Connect IM conversations to your local ZenX Agent with shared Thread subscriptions.",
+    icon: "users",
+  },
   {
     pluginId: "browser",
     packageName: FIRST_PARTY_PLUGIN_PACKAGES.browser.packageName,

@@ -10,7 +10,8 @@
     "packages/zenx-computer-plugin",
     "packages/zenx-rooms-plugin",
     "packages/zenx-self-control-plugin",
-    "packages/zenx-triggers-plugin"
+    "packages/zenx-triggers-plugin",
+    "packages/zenx-imzenx-plugin"
   ],
   "bin": {
     "zen": "./dist/apps/cli/src/cli.js"
@@ -23,8 +24,8 @@
     "lint": "uv run --project apps/imzen --extra dev ruff check apps/imzen",
     "start": "node dist/apps/cli/src/cli.js",
     "test": "npm run test:node && npm run test:imzen",
-    "test:imzen": "uv run --project apps/imzen --extra dev pytest -q apps/imzen/tests",
-    "test:node": "npm test --workspace @zenx/plugin-sdk && npm run build && node --test dist/test/*.test.js",
+    "test:imzen": "uv run --project apps/imzen --extra dev pytest -q apps/imzen/tests && npm run test:imzenx --workspace @zen/zenx",
+    "test:node": "npm test --workspace @zenx/plugin-sdk && npm run build && npm test --workspace @zenx/imzenx-plugin && node --test dist/test/*.test.js",
     "typecheck": "npm run typecheck --workspace @zenx/plugin-sdk && tsc -p tsconfig.json --noEmit"
   },
   "engines": {

@@ -189,6 +189,21 @@ Project row 的 New thread 始终选择被点击 Project 的 canonical workspace
 固定版本 T3 Code 仍是机会型互操作目标：它可以通过已验收的 CAS mapped surface
 把 Zen 当 provider 驱动，但不会替代 ZenX 的外层产品能力，也不会反向扩大 Zen Core。
 
+## IMZenX
+
+IMZenX 是可从内置 Plugins 库存安装的可选第一方插件，复用 IMZen 与同一固定 IM Agent SDK。
+Plugin Host 注入本实例 ZAS 发现入口；Python Gateway 跟随 Host 服务就绪、停用、卸载和 Quit
+生命周期连接或停止，配置由 Plugin SDK namespace 保存，频道 credential 留在私有文件。
+侧栏配置页提供 Python / 频道配置路径、默认 cwd、连接状态及显式重新连接。
+
+每个 IM Conversation 通过 `/subscribe <Thread>`（也可 `/pick`）选择并订阅一个 ZenX Thread；
+多个 Conversation 可订阅同一 Thread。桌面发起的 Agent 回复投递到订阅频道；IM 用户消息和
+Agent 回复通过同一 ZAS canonical Item 投影到桌面。订阅不改变桌面选择。
+`/unsubscribe` 清除当前绑定，下一条普通消息创建新 Thread。SDK SQLite 保存绑定、路由、
+checkpoint 与去重；没有第二份 Thread / transcript 或插件恢复队列。插件重启可恢复绑定和
+SDK 的有界 catch-up；平台原生机器人推送限制仍适用。部署需安装 pinned SDK 的 Python 3.13+
+及频道凭证，真实平台投递需单独联调，不能以本地 FakeChannel 互操作测试替代。
+
 ## IMZen
 
 IMZen 和 CLI、桌面、Web 一样，是 App Server 上的一种接入端；它不是单独的

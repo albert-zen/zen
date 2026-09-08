@@ -5479,3 +5479,359 @@ select:focus-visible {
 .trace-detail .message-images {
   justify-content: flex-start;
 }
+
+/* Plugin pages without a menu use one full-height content row. */
+.product-page.plugin-product-page {
+  grid-template-rows: minmax(0, 1fr);
+}
+.product-page.plugin-product-page:has(> .plugin-menu-header) {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.imzenx-page {
+  min-width: 0;
+  max-width: 760px;
+  margin: 12px auto 24px;
+  color: var(--text-1);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.imzenx-page h2,
+.imzenx-page h3,
+.imzenx-page p {
+  margin: 0;
+}
+.imzenx-heading {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 28px;
+}
+.imzenx-mark {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  flex: none;
+  border: 1px solid var(--border-accent);
+  border-radius: 14px;
+  background: var(--accent-soft);
+  color: var(--text-accent);
+}
+.imzenx-heading h2 {
+  font-size: 23px;
+  font-weight: 650;
+  letter-spacing: -0.5px;
+  line-height: 1.4;
+}
+.imzenx-heading p {
+  color: var(--text-2);
+  margin-top: 3px;
+}
+.imzenx-connection {
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.imzenx-connection-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 24px;
+  flex-wrap: wrap;
+}
+.imzenx-endpoint {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.imzenx-endpoint > svg {
+  color: var(--text-2);
+}
+.imzenx-endpoint h3 {
+  font-size: 14px;
+  font-weight: 600;
+}
+.imzenx-endpoint p {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-top: 2px;
+}
+.imzenx-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--surface-wash);
+  color: var(--text-2);
+  font-size: 12px;
+}
+.imzenx-status > span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.imzenx-status[data-state="connected"] {
+  color: var(--text-accent);
+  background: var(--accent-soft);
+}
+.imzenx-status[data-state="failed"] {
+  color: var(--danger);
+  background: var(--surface-danger);
+}
+.imzenx-connection-bottom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 24px;
+  border-top: 1px solid var(--border-soft);
+}
+.imzenx-connection-bottom > span {
+  color: var(--text-2);
+  font-size: 12px;
+}
+.imzenx-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.imzenx-page button {
+  min-height: 34px;
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 7px;
+}
+.imzenx-text-button {
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.imzenx-text-button:hover {
+  background: var(--surface-hover);
+  color: var(--text-1);
+}
+.imzenx-page button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.imzenx-error {
+  margin: 0 24px 16px !important;
+  padding: 10px 12px;
+  background: var(--surface-danger);
+  color: var(--danger);
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+.imzenx-settings {
+  margin-top: 16px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+.imzenx-settings > summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  cursor: pointer;
+  list-style: none;
+}
+.imzenx-settings > summary::-webkit-details-marker {
+  display: none;
+}
+.imzenx-settings > summary:hover {
+  background: var(--surface-hover);
+  border-radius: 10px;
+}
+.imzenx-settings > summary > svg {
+  color: var(--text-2);
+  flex: none;
+}
+.imzenx-settings > summary > span {
+  flex: 1;
+  font-weight: 550;
+}
+.imzenx-settings small {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-2);
+  margin-left: 14px;
+}
+.imzenx-settings[open] > summary .imzenx-disclosure {
+  transform: rotate(180deg);
+}
+.imzenx-settings form {
+  padding: 4px 20px 20px;
+}
+.imzenx-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.imzenx-form-grid {
+  display: grid;
+  gap: 16px;
+}
+.imzenx-form-grid .field {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+.imzenx-page .field > span {
+  color: var(--text-2);
+  font-size: 12px;
+}
+.imzenx-page input:not([type="checkbox"]),
+.imzenx-page select {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  border: 1px solid var(--border-control);
+  border-radius: 6px;
+  padding: 7px 10px;
+  background: var(--surface-control);
+  color: var(--text-1);
+  font-size: 12px;
+}
+.imzenx-page input:not([type="checkbox"]) {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.imzenx-page input:focus-visible,
+.imzenx-page select:focus-visible,
+.imzenx-page button:focus-visible,
+.imzenx-page summary:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 3px;
+}
+.imzenx-page .imzenx-hint {
+  margin: 12px 0 16px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.imzenx-fields details {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 12px;
+}
+.imzenx-fields summary {
+  cursor: pointer;
+  color: var(--text-2);
+}
+.imzenx-fields details .imzenx-form-grid {
+  margin-top: 16px;
+}
+.imzenx-save {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 20px;
+}
+.imzenx-save > span {
+  font-size: 12px;
+  color: var(--text-2);
+}
+.imzenx-guide {
+  margin-top: 30px;
+}
+.imzenx-section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.imzenx-section-heading h3 {
+  font-size: 14px;
+  font-weight: 600;
+}
+.imzenx-section-heading > span {
+  color: var(--text-2);
+  font-size: 12px;
+}
+.imzenx-quickstart {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 14px 0;
+  color: var(--text-2);
+}
+.imzenx-quickstart > svg {
+  flex: none;
+}
+.imzenx-quickstart p span {
+  display: block;
+  font-size: 12px;
+}
+.imzenx-commands {
+  margin: 0;
+  border-top: 1px solid var(--border-soft);
+}
+.imzenx-commands > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.imzenx-commands dt,
+.imzenx-commands dd {
+  margin: 0;
+}
+.imzenx-commands dd {
+  color: var(--text-2);
+  font-size: 12px;
+}
+.imzenx-commands code {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 12px;
+}
+.imzenx-commands code span {
+  color: var(--text-2);
+}
+.imzenx-footer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 24px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.imzenx-footer svg {
+  flex: none;
+}
+@media (max-width: 680px) {
+  .imzenx-page {
+    margin-top: 0;
+  }
+  .imzenx-connection-top,
+  .imzenx-connection-bottom {
+    padding: 16px;
+  }
+  .imzenx-form-grid .field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+  .imzenx-settings small {
+    display: block;
+    margin-left: 0;
+  }
+  .imzenx-commands > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+  }
+  .imzenx-save {
+    flex-wrap: wrap;
+  }
+}
+
+.imzenx-page .imzenx-notice {
+  margin-top: 16px;
+  font-size: 12px;
+  color: var(--text-accent);
+}

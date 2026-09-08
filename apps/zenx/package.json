@@ -32,7 +32,8 @@
     "smoke:windows-projects": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/windows-project-workspace-smoke.ps1",
     "smoke:windows-user-browser": "tsx src/main/user-browser-smoke.ts",
     "smoke:providers": "npm run build && electron ./out/main/provider-smoke.js",
-    "check": "npm run brand:check && npm run typecheck && npm run prepare:first-party-plugins && npm run test:prepared && npm run build:prepared"
+    "check": "npm run brand:check && npm run typecheck && npm run prepare:first-party-plugins && npm run test:prepared && npm run build:prepared",
+    "test:imzenx": "tsx --test integration/imzenx-sync.test.ts"
   },
   "dependencies": {
     "@zenx/plugin-sdk": "0.1.0",

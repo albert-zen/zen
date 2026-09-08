@@ -47,6 +47,7 @@ export interface PluginRuntimeInvocation {
 /** Provider-neutral boundary implemented by plugin code or its transport adapter. */
 export interface PluginRuntime {
   readonly identity: PluginRuntimeIdentity;
+  activate?(previousRetired: Promise<void>): void;
   invoke(invocation: PluginRuntimeInvocation): Promise<ToolExecutionResult>;
   close(): Promise<void>;
 }
@@ -87,6 +88,7 @@ export class PluginRuntimeSupervisor {
     }
   >();
   readonly #deferredRetirements = new Set<Promise<void>>();
+  readonly #retirementBarriers = new Map<string, Promise<void>>();
   readonly #deferredRetirementFailures: Error[] = [];
   #mutationTail: Promise<void> = Promise.resolve();
 
@@ -167,9 +169,11 @@ export class PluginRuntimeSupervisor {
             bundle: staged.bundle,
             unregisterBundle,
           });
-          if (previous !== undefined && previous.token !== token) {
-            this.#scheduleRetirement(previous.bundle, "replacement commit");
-          }
+          const previousRetired =
+            previous !== undefined && previous.token !== token
+              ? this.#scheduleRetirement(previous.bundle, "replacement commit")
+              : (this.#retirementBarriers.get(pluginId) ?? Promise.resolve());
+          staged.bundle.activate(previousRetired);
         },
         rollback: async () => {
           await this.#rollback(pluginId, token);
@@ -204,8 +208,10 @@ export class PluginRuntimeSupervisor {
     if (active === undefined) return;
     this.#active.delete(pluginId);
     active.unregisterBundle();
-    if (active.bundle.hasHostGenerationLease) {
+    if (active.bundle.hasHostGenerationLease || active.bundle.hasActivation) {
+      const leased = active.bundle.hasHostGenerationLease;
       this.#scheduleRetirement(active.bundle, "Catalog commit");
+      if (!leased) await active.bundle.retire();
       return;
     }
     await active.bundle.retire();
@@ -337,10 +343,27 @@ export class PluginRuntimeSupervisor {
     return await result;
   }
 
-  #scheduleRetirement(bundle: SupervisedPluginBundle, context: string): void {
+  #scheduleRetirement(
+    bundle: SupervisedPluginBundle,
+    context: string,
+  ): Promise<void> {
+    const pluginId = bundle.identity.id;
+    const previous = this.#retirementBarriers.get(pluginId);
+    const ownRetirement = bundle.retire();
+    const completion = Promise.all([previous, ownRetirement]).then(() => {});
+    if (bundle.hasActivation || previous !== undefined)
+      this.#retirementBarriers.set(pluginId, completion);
+    void completion.then(
+      () => {
+        if (this.#retirementBarriers.get(pluginId) === completion)
+          this.#retirementBarriers.delete(pluginId);
+      },
+      () => {
+        /* Keep a failed barrier: the consumer may still be alive. */
+      },
+    );
     let retirement!: Promise<void>;
-    retirement = bundle
-      .retire()
+    retirement = completion
       .catch((error: unknown) => {
         const failure = asError(error);
         this.#deferredRetirementFailures.push(failure);
@@ -350,6 +373,7 @@ export class PluginRuntimeSupervisor {
       })
       .finally(() => this.#deferredRetirements.delete(retirement));
     this.#deferredRetirements.add(retirement);
+    return completion;
   }
 }
 
@@ -378,6 +402,14 @@ class SupervisedPluginBundle implements ToolBundle {
     }));
     this.#toolNames = new Set(definitions.map((definition) => definition.name));
     this.#runtime = runtime;
+  }
+
+  get hasActivation(): boolean {
+    return this.#runtime.activate !== undefined;
+  }
+
+  activate(previousRetired: Promise<void>): void {
+    this.#runtime.activate?.(previousRetired);
   }
 
   async #execute(
@@ -475,10 +507,12 @@ export interface BundledPluginModule {
     invocation: PluginRuntimeInvocation,
     sdk: ZenXPluginHostSdkV1,
   ): Promise<ToolExecutionResult>;
+  activate?(previousRetired: Promise<void>): void;
   close?(): Promise<void> | void;
 }
 
 export class BundledModulePluginRuntime implements PluginRuntime {
+  readonly activate?: (previousRetired: Promise<void>) => void;
   readonly identity: PluginRuntimeIdentity;
   readonly #module: BundledPluginModule;
   readonly #sdk: ZenXPluginHostSdkV1;
@@ -491,6 +525,8 @@ export class BundledModulePluginRuntime implements PluginRuntime {
   ) {
     this.identity = Object.freeze({ ...identity });
     this.#module = module;
+    if (module.activate !== undefined)
+      this.activate = (previousRetired) => module.activate!(previousRetired);
     this.#sdk = sdk ?? unavailableHostSdk(identity.pluginId);
   }
 
@@ -1179,13 +1215,15 @@ export function bundledPackageRegistration(
     })),
     start: async (sdk) => {
       const hostSdk = sdk ?? unavailableHostSdk(manifest.id);
-      await registration.package.start?.(hostSdk);
+      const runtimePackage =
+        registration.package.createRuntime?.() ?? registration.package;
+      await runtimePackage.start?.(hostSdk);
       return new BundledModulePluginRuntime(
         { pluginId: manifest.id, packageVersion: manifest.version },
         {
           invoke: async (invocation, hostSdk) =>
             normalizePackageResult(
-              await registration.package.invoke(
+              await runtimePackage.invoke(
                 invocation.tool,
                 {
                   callId: invocation.context.callId,
@@ -1197,7 +1235,13 @@ export function bundledPackageRegistration(
                 hostSdk,
               ),
             ),
-          close: async () => await registration.package.close?.(),
+          ...(runtimePackage.activate === undefined
+            ? {}
+            : {
+                activate: (previousRetired: Promise<void>) =>
+                  runtimePackage.activate!(previousRetired),
+              }),
+          close: async () => await runtimePackage.close?.(),
         },
         hostSdk,
       );

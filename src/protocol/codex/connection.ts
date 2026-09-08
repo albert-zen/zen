@@ -271,7 +271,6 @@ export class CodexConnection {
           id: request.id,
           result: { thread, ...threadSettings(snapshot) },
         });
-        this.#send({ method: "thread/started", params: { thread } });
         return;
       }
       case "thread/resume": {
@@ -719,6 +718,15 @@ export class CodexConnection {
   }
 
   async #projectEvent(event: AppServerEvent): Promise<void> {
+    if (event.type === "thread_started") {
+      this.#send({
+        method: "thread/started",
+        params: {
+          thread: projectThread(event.thread, { includeTurns: false }),
+        },
+      });
+      return;
+    }
     if (event.type === "thread_archived_updated") {
       this.#send({
         method: event.archived ? "thread/archived" : "thread/unarchived",
@@ -1146,6 +1154,7 @@ export class CodexConnection {
 
   #sendErrorNotification(error: unknown, event: AppServerEvent): void {
     if (
+      event.type === "thread_started" ||
       event.type === "thread_name_updated" ||
       event.type === "thread_settings_updated" ||
       event.type === "thread_archived_updated"
@@ -1206,6 +1215,8 @@ function eventRepresentedInSnapshot(
   snapshot: ThreadSnapshot,
 ): boolean {
   switch (event.type) {
+    case "thread_started":
+      return snapshot.id === event.threadId;
     case "thread_archived_updated":
       return snapshot.archived === event.archived;
     case "thread_name_updated":

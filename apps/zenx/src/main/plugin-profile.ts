@@ -52,6 +52,7 @@ export interface StagedProfileRemoval {
 export interface ZenXTrustedProfilePluginRuntime {
   readonly storage?: ZenXCapabilityPackage["storage"];
   start?(sdk: ZenXPluginHostSdkV1): Promise<void> | void;
+  activate?(previousRetired: Promise<void>): void;
   invoke(
     toolName: string,
     invocation: Omit<ToolInvocation, "name">,
@@ -369,7 +370,7 @@ export async function loadProfilePluginPackage(
   const module = (await import(
     `${pathToFileURL(runtimeEntry).href}?generation=${encodeURIComponent(path.basename(generationDirectory))}`
   )) as Readonly<Record<string, unknown>>;
-  return new ProfileTrustedPluginPackage(manifest, trustedLoader(module));
+  return new ProfileTrustedPluginPackage(manifest, () => trustedLoader(module));
 }
 
 async function prepareInstallSpec(
@@ -576,13 +577,21 @@ class ProfileTrustedPluginPackage implements ZenXCapabilityPackage {
   readonly manifest: ZenXPluginManifestV2;
   readonly storage?: ZenXCapabilityPackage["storage"];
   readonly #runtime: ZenXTrustedProfilePluginRuntime;
+  readonly activate?: (previousRetired: Promise<void>) => void;
+  readonly createRuntime?: ZenXCapabilityPackage["createRuntime"];
 
   constructor(
     manifest: ZenXPluginManifestV2,
-    runtime: ZenXTrustedProfilePluginRuntime,
+    create: () => ZenXTrustedProfilePluginRuntime,
   ) {
     this.manifest = manifest;
+    const runtime = create();
     this.#runtime = runtime;
+    if (runtime.activate !== undefined) {
+      this.activate = (previousRetired) => runtime.activate!(previousRetired);
+      this.createRuntime = () =>
+        new ProfileTrustedPluginPackage(manifest, create);
+    }
     if (runtime.storage !== undefined) this.storage = runtime.storage;
   }
 

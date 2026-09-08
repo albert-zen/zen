@@ -1,0 +1,151 @@
+{
+  "schemaVersion": 2,
+  "id": "imzenx",
+  "name": "IMZenX",
+  "version": "1.0.0",
+  "description": "Use IM and ZenX with the same local Agent and Thread.",
+  "compatibility": {
+    "zenx": ">=0.1.0 <0.2.0"
+  },
+  "runtime": {
+    "type": "bundled",
+    "entry": "./dist/runtime.js"
+  },
+  "mainDocument": "IMZenX connects explicitly configured IM channels to this ZenX Host. Use status to inspect it. Configure only with user-supplied private channel configuration and a Python executable with the pinned SDK. In IM, /threads and /subscribe <thread> select and persist one shared Thread per conversation; /unsubscribe clears it. Desktop replies on a subscribed Thread are delivered to IM. Never put bot credentials in tool arguments.",
+  "storageVersion": 1,
+  "provider": {
+    "id": "imzenx-sdk",
+    "platforms": ["*"],
+    "interactionModes": ["background_safe"],
+    "capabilities": ["imzenx.bridge"]
+  },
+  "permissions": [
+    {
+      "id": "imzenx.connect",
+      "title": "Connect IM channels",
+      "description": "Start the configured IM channels and submit their admitted messages to local ZenX.",
+      "scope": "local-device"
+    }
+  ],
+  "tools": [
+    {
+      "name": "imzenx_status",
+      "description": "Read IMZenX connection status and non-secret configuration.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": [],
+      "interactionMode": "background_safe",
+      "capabilities": ["imzenx.bridge"],
+      "maxOutputBytes": 16000
+    },
+    {
+      "name": "imzenx_configure",
+      "description": "Save IMZenX connection configuration and connect to the same local ZenX App Server.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pythonExecutable": {
+            "type": "string",
+            "description": "Absolute path of Python 3.13+ with the pinned IM Agent SDK installed."
+          },
+          "channelsConfigFile": {
+            "type": "string",
+            "description": "Absolute path to the private IMZen-format channel configuration."
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Default directory for new IM Threads."
+          },
+          "sharedFilesystemRoot": {
+            "type": "string",
+            "description": "Optional shared local directory containing downloaded images."
+          },
+          "permissionMode": {
+            "type": "string",
+            "enum": ["full-access", "approval-required"]
+          },
+          "allowUnrestrictedFullAccess": {
+            "type": "boolean"
+          }
+        },
+        "required": ["pythonExecutable", "channelsConfigFile", "cwd"],
+        "additionalProperties": false
+      },
+      "permissions": ["imzenx.connect"],
+      "interactionMode": "background_safe",
+      "capabilities": ["imzenx.bridge"],
+      "maxOutputBytes": 16000
+    },
+    {
+      "name": "imzenx_connect",
+      "description": "Explicitly reconnect IMZenX after checking its configuration.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": ["imzenx.connect"],
+      "interactionMode": "background_safe",
+      "capabilities": ["imzenx.bridge"],
+      "maxOutputBytes": 16000
+    }
+  ],
+  "ui": {
+    "bundles": [
+      {
+        "id": "main",
+        "apiVersion": 1,
+        "kind": "trusted",
+        "entry": "zenx/bundled/imzenx-ui"
+      }
+    ],
+    "surfaces": [
+      {
+        "id": "connection",
+        "bundleId": "main",
+        "exportName": "connection"
+      }
+    ]
+  },
+  "contributions": {
+    "pages": [
+      {
+        "id": "connection",
+        "title": "IMZenX",
+        "route": "/plugins/imzenx/connection",
+        "surfaceId": "connection"
+      }
+    ],
+    "sidebar": [
+      {
+        "id": "imzenx",
+        "label": "IMZenX",
+        "icon": "imzenx",
+        "pageId": "connection",
+        "order": 30
+      }
+    ],
+    "commands": [
+      {
+        "id": "status",
+        "title": "Status",
+        "tool": "imzenx_status"
+      },
+      {
+        "id": "configure",
+        "title": "Configure",
+        "tool": "imzenx_configure"
+      },
+      {
+        "id": "connect",
+        "title": "Connect",
+        "tool": "imzenx_connect"
+      }
+    ]
+  }
+}

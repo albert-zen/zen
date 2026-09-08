@@ -1347,6 +1347,15 @@ test("title inference resolves the selected profile's adapter and credential", a
   globalThis.fetch = async (input, init) => {
     requestUrl = String(input);
     authorization = new Headers(init?.headers).get("authorization");
+    const requestedBudget = (
+      JSON.parse(String(init?.body)) as { max_tokens: number }
+    ).max_tokens;
+    // A reasoning provider needs tokens before it can emit the short title.
+    if (requestedBudget < 512)
+      return new Response(
+        'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\ndata: [DONE]\n\n',
+        { status: 200 },
+      );
     return new Response(
       'data: {"choices":[{"delta":{"content":"Title second-key"},"finish_reason":null}]}\n\n' +
         'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n' +

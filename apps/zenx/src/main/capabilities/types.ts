@@ -14,6 +14,7 @@ export const MAX_CAPABILITY_OUTPUT_BYTES = 1024 * 1024;
 
 export const ZENX_PLUGIN_ICON_NAMES = [
   "clock",
+  "imzenx",
   "layers",
   "plug",
   "settings",
@@ -167,8 +168,15 @@ export interface ZenXCapabilityPackage {
     migrations?: readonly PluginStorageMigration[];
     initialValue?: PluginStorageValue;
   };
+  /** Isolate mutable runtime state when a package has overlapping generations. */
+  createRuntime?(): Pick<
+    ZenXCapabilityPackage,
+    "start" | "activate" | "invoke" | "close"
+  >;
   /** Called whenever a v2 bundled runtime is admitted. */
   start?(hostSdk: ZenXPluginHostSdkV1): Promise<void> | void;
+  /** Called after publication; background consumers wait for predecessor retirement. */
+  activate?(previousRetired: Promise<void>): void;
   invoke(
     toolName: string,
     invocation: ToolInvocation,

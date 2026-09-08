@@ -209,6 +209,12 @@ const paths: Record<IconName, ReactNode> = {
       <circle cx="3" cy="12.5" r=".2" />
     </>
   ),
+  imzenx: (
+    <>
+      <path d="M4 2h8a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H7l-4 2v-2.3A2 2 0 0 1 2 10V4a2 2 0 0 1 2-2Z" />
+      <path d="M5.8 5h4.4L5.8 9h4.4" />
+    </>
+  ),
   users: (
     <>
       <circle cx="6" cy="5.2" r="2.2" />

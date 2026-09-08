@@ -38,7 +38,7 @@ export class ZenXConfiguredTitleInference implements ThreadTitleInference {
       messages: [
         {
           role: "user",
-          text: `Create a concise title for this request. Return only the title.\n\nRequest:\n${input}`,
+          text: `Create a concise title of at most 64 characters in the same language as this request. Return only the title.\n\nRequest:\n${input}`,
         },
       ],
       tools: [],
