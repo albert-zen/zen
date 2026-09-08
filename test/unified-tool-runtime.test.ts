@@ -179,7 +179,7 @@ test("interrupting the turn cancels a yielded nested task after its composite ca
           _invocation: import("../src/tool.js").ToolInvocation,
           nested: import("../src/tool.js").NestedToolInvocationPort,
         ) => await nested.invoke("slow", {}, new AbortController().signal),
-      },
+      } satisfies CompositeToolRuntime,
     ],
   });
   let samples = 0;
