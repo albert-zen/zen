@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "./icons.js";
 import type {
   PluginUiRegistry,
@@ -41,6 +41,10 @@ export function registerImZenXUi(registry: PluginUiRegistry): () => void {
   });
 }
 export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
+  const sdkRef = useRef(sdk);
+  useEffect(() => {
+    sdkRef.current = sdk;
+  }, [sdk]);
   const [config, setConfig] = useState(empty);
   const [status, setStatus] = useState<Status | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -49,7 +53,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
-    void sdk.commands
+    void sdkRef.current.commands
       .execute("status")
       .then((value) => {
         if (!active) return;
@@ -67,12 +71,12 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
     return () => {
       active = false;
     };
-  }, [sdk]);
+  }, [sdk.pluginId]);
   useEffect(() => {
     if (busy) return;
     let active = true;
     const timer = setInterval(() => {
-      void sdk.commands
+      void sdkRef.current.commands
         .execute("status")
         .then((value) => {
           if (active) setStatus(value as Status);
@@ -85,7 +89,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
       active = false;
       clearInterval(timer);
     };
-  }, [sdk, busy]);
+  }, [sdk.pluginId, busy]);
   const run = async (command: string) => {
     setBusy(true);
     setError(null);
