@@ -823,9 +823,7 @@ select:focus-visible {
   transition: opacity 140ms ease;
 }
 .project-header:hover .project-actions,
-.project-header:focus-within .project-actions,
-.project-header.selected .project-actions,
-.project-actions:focus-within {
+.project-header:has(:focus-visible) .project-actions {
   opacity: 1;
 }
 .project-actions button {
