@@ -5,7 +5,10 @@ import path from "node:path";
 import test from "node:test";
 
 import { AppServerManager } from "../src/main/app-server-manager.js";
-import { readAppServerConnectionDescriptor } from "../src/main/app-server-connection.js";
+import {
+  AppServerConnectionPublisher,
+  readAppServerConnectionDescriptor,
+} from "../src/main/app-server-connection.js";
 import { ZenXHostLifecycle } from "../src/main/host-lifecycle.js";
 import type { ZenXCapabilityHost } from "../src/main/capabilities/types.js";
 import { ZenXProtocolClient } from "../src/protocol-client/index.js";
@@ -131,7 +134,7 @@ test("a cancelled bootstrap revokes an App Server descriptor published in flight
   }
 });
 
-test("startup rejects a Host that exits while its descriptor is publishing", async () => {
+test("startup rejects a Host that exits while its descriptor is publishing", async (t) => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-invalidated-zas-"),
   );
@@ -139,6 +142,25 @@ test("startup rejects a Host that exits while its descriptor is publishing", asy
   const descriptorFile = path.join(directory, "runtime", "app-server.json");
   const tokenFile = path.join(directory, "runtime", "app-server.token");
   let killed = false;
+  const publish = AppServerConnectionPublisher.prototype.publish;
+  t.mock.method(
+    AppServerConnectionPublisher.prototype,
+    "publish",
+    async function (
+      this: AppServerConnectionPublisher,
+      ...args: Parameters<AppServerConnectionPublisher["publish"]>
+    ) {
+      await publish.apply(this, args);
+      // SIGKILL requests termination; it does not synchronously deliver the
+      // child's exit event. Keep publication in flight until the Host exit is
+      // observed so this test exercises invalidation, not scheduler ordering.
+      const deadline = Date.now() + 5_000;
+      while (manager.processId !== undefined) {
+        assert.ok(Date.now() < deadline, "Host exit must be observed");
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    },
+  );
   try {
     await assert.rejects(
       manager.start({
