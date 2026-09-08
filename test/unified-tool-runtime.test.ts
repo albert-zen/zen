@@ -7,7 +7,7 @@ import type { ModelAdapter, ModelEvent, ModelRequest } from "../src/model.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
-import { ToolEnvironment } from "../src/tool.js";
+import { ToolEnvironment, type CompositeToolRuntime } from "../src/tool.js";
 import { testToolRuntime } from "./tool-fixtures.js";
 
 test("model continues independent work then observes a generic task through canonical wait results", async () => {
