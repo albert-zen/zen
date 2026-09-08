@@ -67,6 +67,7 @@ import {
   canSendWithModel,
   canChangeThreadModel,
   modelChangeRequest,
+  permissionModeFromPolicy,
   imageCapabilityMessage,
   imageCapabilityNotice,
   reasoningChangeRequest,
@@ -2452,17 +2453,15 @@ function AgentSurface({
             models={models}
             providerProfiles={providerProfiles}
             permissionLabel={
-              selectedSummary.status !== "systemError" &&
-              selectedSummary.currentMetadata.sandbox ===
-                "danger-full-access" &&
-              selectedSummary.currentMetadata.approvalPolicy === "always"
-                ? "Approval required"
-                : "File permissions"
+              selectedSettings === null
+                ? null
+                : selectedSettings.permissionMode === "danger-full-access" &&
+                    selectedSettings.approvalPolicy === "on-request"
+                  ? "Approval required"
+                  : "File permissions"
             }
             permissionMode={
-              selectedSummary.status === "systemError"
-                ? "danger-full-access"
-                : selectedSummary.currentMetadata.sandbox
+              selectedSettings?.permissionMode ?? "danger-full-access"
             }
             permissionError={permissionError}
             switchingPermission={switchingPermission}
@@ -3111,6 +3110,8 @@ function defaultDraftSettings(
   }
   return {
     threadId: "",
+    permissionMode: "danger-full-access",
+    approvalPolicy: "never",
     model: model.id,
     modelProvider,
     reasoningEffort: model.defaultReasoningEffort,
@@ -3139,6 +3140,8 @@ function draftSettingsForModel(
     : model.defaultReasoningEffort;
   return {
     threadId: "",
+    permissionMode: "danger-full-access",
+    approvalPolicy: "never",
     model: model.id,
     modelProvider,
     reasoningEffort,
@@ -3167,12 +3170,7 @@ export function optimisticThreadSummary(
       model: result.model,
       provider: result.modelProvider,
       cwd: result.cwd,
-      sandbox:
-        result.sandbox.type === "readOnly"
-          ? "read-only"
-          : result.sandbox.type === "workspaceWrite"
-            ? "workspace-write"
-            : "danger-full-access",
+      sandbox: permissionModeFromPolicy(result.sandbox),
       approvalPolicy:
         result.approvalPolicy === "on-request" ? "always" : "never",
     },

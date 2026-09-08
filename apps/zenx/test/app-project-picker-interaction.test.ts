@@ -2023,7 +2023,7 @@ test("conversation header omits usage while Composer owns context indicator and 
       }),
       request: async (method) => {
         if (method === "thread/resume")
-          return { thread: liveThread(), model: "fake", modelProvider: "fake" };
+          return started(liveThread(), "/work/zen");
         throw new Error(`Unexpected protocol request: ${method}`);
       },
     },
@@ -2510,6 +2510,84 @@ test("serializes cross-row Pin mutations against the latest confirmed order", as
   }
 });
 
+test("current permissions follow notifications even when the Thread list fails", async () => {
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  let failList = false;
+  const projects = oneProject();
+  projects.projects[0]!.threadIds = ["thread-1"];
+  const harness = await mountApp(projects, {
+    threads: async (archived) => {
+      if (failList) throw new Error("list unavailable");
+      return archived
+        ? []
+        : [
+            {
+              ...summary(false),
+              currentMetadata: {
+                model: "fake",
+                provider: "fake",
+                cwd: "/work/zen",
+                sandbox: "read-only",
+                approvalPolicy: "always",
+              },
+            } as NativeThreadSummary,
+          ];
+    },
+    onNotification: (listener) => {
+      notify = listener;
+      return () => undefined;
+    },
+    request: async (method) => {
+      if (method === "thread/resume")
+        return {
+          ...started(liveThread(), "/work/zen"),
+          sandbox: { type: "readOnly" },
+          approvalPolicy: "on-request",
+        };
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".thread-row")?.click(),
+    );
+    const select = await waitFor(() =>
+      document.querySelector<HTMLSelectElement>(
+        '[aria-label="File permissions"]',
+      ),
+    );
+    assert.equal(select.value, "read-only");
+    failList = true;
+    await act(async () =>
+      notify?.("thread/settings/updated", {
+        threadId: "thread-1",
+        threadSettings: {
+          approvalPolicy: "never",
+          approvalsReviewer: "user",
+          collaborationMode: {
+            mode: "default",
+            settings: { model: "fake", reasoning_effort: null },
+          },
+          cwd: "/work/zen",
+          effort: null,
+          model: "fake",
+          modelProvider: "fake",
+          personality: null,
+          sandboxPolicy: { type: "dangerFullAccess" },
+          serviceTier: null,
+          summary: null,
+        },
+      }),
+    );
+    await waitFor(() => select.value === "danger-full-access");
+    assert.equal(select.disabled, false);
+    assert.match(document.body.textContent ?? "", /list unavailable/);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 async function mountApp(
   projects: ZenXProjectProjectionSnapshot,
   options: {
@@ -2517,6 +2595,7 @@ async function mountApp(
     getStatus?(): Promise<AppServerHostStatus>;
     initialPinnedThreadIds?: string[];
     composerSendMode?: "queue" | "soft" | "hard";
+    onNotification?: Window["zenx"]["protocol"]["onNotification"];
     onStatus?(listener: (status: AppServerHostStatus) => void): () => void;
     onPinnedThreadIds?(threadIds: readonly string[]): void;
     models?: ModelSummary[];
@@ -2572,8 +2651,21 @@ async function mountApp(
             data: options.models ?? [wireModel("fake", true)],
             nextCursor: null,
           };
-        if (options.request !== undefined)
-          return await options.request(method, params);
+        if (options.request !== undefined) {
+          const result = await options.request(method, params);
+          // Navigation fixtures may override only model/turn fields; supply the
+          // remaining fields of a real resume response from the common fixture.
+          if (
+            method === "thread/resume" &&
+            typeof result === "object" &&
+            result !== null &&
+            "thread" in result
+          ) {
+            const thread = result.thread as Thread;
+            return { ...started(thread, thread.cwd ?? "/work/zen"), ...result };
+          }
+          return result;
+        }
         throw new Error(`Unexpected protocol request: ${method}`);
       },
       respondToApproval: async () => undefined,
@@ -2581,7 +2673,9 @@ async function mountApp(
       onApprovalResolved: () => () => undefined,
       onStatus: (listener: (status: AppServerHostStatus) => void) =>
         options.onStatus?.(listener) ?? (() => undefined),
-      onNotification: () => () => undefined,
+      onNotification: (
+        listener: Parameters<Window["zenx"]["protocol"]["onNotification"]>[0],
+      ) => options.onNotification?.(listener) ?? (() => undefined),
     },
     threads: {
       list: async ({ archived }: { archived: boolean }) =>
