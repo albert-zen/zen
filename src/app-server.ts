@@ -692,6 +692,14 @@ export class ZenAppServer {
                   sandbox: configuration.sandbox,
                   approvalPolicy: configuration.approvalPolicy,
                   inputModalities: resolved.model.inputModalities,
+                  ...(this.#contextCompaction.agenticEnabled &&
+                  resolved.model.contextWindow !== null
+                    ? {
+                        agenticContextCompaction: {
+                          contextWindow: resolved.model.contextWindow,
+                        },
+                      }
+                    : {}),
                 },
                 modelAdapter: resolved.adapter,
                 signal: controller.signal,
@@ -710,10 +718,23 @@ export class ZenAppServer {
                       );
                     }
                     active.deliveryAnchorId = modelResponseId;
-                    return compileModelMessages(
-                      thread.items,
-                      resolved.selection,
-                    );
+                    const items = thread.items;
+                    // Thread-level settings may be appended between samples.
+                    // They do not enter model messages; anchor the reset to the
+                    // latest observed Item in this Turn under the same lock.
+                    const contextBoundaryItemId = items.findLast(
+                      (item) => item.turnId === turnId,
+                    )?.id;
+                    if (contextBoundaryItemId === undefined) {
+                      throw new AppServerError(
+                        "runtime_error",
+                        "Model sample has no canonical context boundary",
+                      );
+                    }
+                    return {
+                      messages: compileModelMessages(items, resolved.selection),
+                      contextBoundaryItemId,
+                    };
                   }),
                 commitFinal: async (message, modelResponseId) =>
                   await this.#commitFinalResponse(
@@ -729,6 +750,9 @@ export class ZenAppServer {
                   ),
                 initialInputCommitted: () => {
                   ready.resolve();
+                },
+                agenticCompactionCommitted: () => {
+                  highestInputTokens = undefined;
                 },
                 emit: (event) => {
                   if (
@@ -1347,6 +1371,7 @@ export class ZenAppServer {
       threadId: options.thread.id,
       createdAt: this.#now(),
       type: "context_compaction",
+      provenance: "provider_generated",
       coveredThroughItemId: options.boundary.item.id,
       summary: summary.text,
       retainedItemIds: boundedBoundary.retainedItemIds,

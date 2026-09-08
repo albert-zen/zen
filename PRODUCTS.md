@@ -122,6 +122,14 @@ ZenX host profile 也可以保存可选的 context compaction summary instructio
 Core 默认 prompt，配置只影响未来 compaction，不进入 Thread canonical state 或 CAS/ZAS
 wire。
 
+Context compaction 设置页另提供默认关闭的 Agentic compaction 实验开关，保存为
+`contextCompaction.agenticEnabled`，通过既有 Apply & restart 生效。启用后，当前 Agent 可以
+单独顶层调用 `compact_context({ text })`，在同一活动 Turn 中用原样接续文本替换旧工作上下文，
+然后继续推理；完整 journal 和用户可见历史保留。`direct | code | both` 均有这个独立控制入口，
+不能嵌入 `run_code` 或与同一响应的其他工具调用混用。文件路径作为普通文本，Agent 按需读取。
+现有自动压缩的触发策略保持不变，生成摘要的 prompt/retention 不应用于 Agent 接续文本；
+关闭开关只停止未来披露，不撤销已经保存的上下文切换事实。
+
 CLI 与 ZenX 现在通过同一个 Host composition 默认发布 `both` Tool Presentation；Host-owned
 配置可显式切换 `direct | code | both`，不进入 Item。`run_code` 使用 fresh、可取消的 Node
 Worker 执行与 shell 权限等同的 erasable TypeScript，并通过同一 Tool Environment 形成
@@ -133,7 +141,7 @@ artifact 定位 Worker，覆盖 Node builtin、nested、`text`、abort 与 tempo
 同一个 exclusive `apply_patch` runtime；direct 与 `tools.apply_patch(...)` 共享 Tool Environment、
 approval、scheduler 和 canonical lifecycle。patch 使用普通 JSON function 的 `{ patch: string }`
 包装和 Codex-style supported subset（Begin/End Patch、Add/Update/Move/Delete、`@@` exact context、
-可选 End of File），不宣称实现完整宽松 parser；UTF-8 输入在全部内容精确预检后写回 LF。
+可选 End of File），不宣称实现完整宽松 parser；每个修改 hunk 只有一个精确候选时，UTF-8 输入才在全部内容预检后写回 LF，零候选或多个候选要求扩展上下文。
 I/O 阶段不是 durable transaction，失败必须报告已经落盘的前缀。
 
 目标插件生命周期只有 installed / enabled / uninstalled；bundled plugin 同样可卸载、以后重装，

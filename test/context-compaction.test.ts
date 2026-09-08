@@ -11,6 +11,7 @@ import {
 import type {
   CanonicalItem,
   ContextCompactionItem,
+  ProviderGeneratedContextCompactionItem,
   ThreadMetadataItem,
 } from "../src/item.js";
 import { InMemoryThreadJournal, type ThreadJournal } from "../src/journal.js";
@@ -31,6 +32,604 @@ import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { ShellToolRuntime, ToolEnvironment } from "../src/tool.js";
 
 const SUMMARY_MARKER = "ZEN_CONTEXT_COMPACTION_V1";
+
+test("agentic compaction replaces the active context and replays identically", async () => {
+  const requests: ModelRequest[] = [];
+  let normalSamples = 0;
+  let generatedSummaries = 0;
+  const source = "  exact agent-owned continuation\nwith paths /tmp/a kept  ";
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      if (isSummaryRequest(request)) {
+        generatedSummaries += 1;
+        yield { type: "text_delta", delta: "unexpected generated summary" };
+        return;
+      }
+      normalSamples += 1;
+      if (normalSamples === 1) {
+        yield {
+          type: "reasoning",
+          reasoningContent: "discarded working reasoning",
+          summary: "discarded reasoning summary",
+          contentVisibility: "public",
+        };
+        yield { type: "text_delta", delta: "discarded pre-tool text" };
+        yield {
+          type: "tool_call",
+          callId: "compact-call",
+          name: "compact_context",
+          arguments: { text: source },
+        };
+        yield { type: "usage", inputTokens: 900, outputTokens: 20 };
+        return;
+      }
+      yield { type: "text_delta", delta: "continued in the same Turn" };
+      yield { type: "usage", inputTokens: 30, outputTokens: 8 };
+    },
+  };
+  const journal = new InMemoryThreadJournal();
+  const server = createServer({
+    journal,
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 1_000 },
+    ]),
+    contextCompaction: { agenticEnabled: true },
+  });
+  const thread = await server.startThread();
+
+  await (
+    await server.startTurn(thread.id, "old context that must be replaced")
+  ).done;
+
+  assert.equal(normalSamples, 2);
+  assert.equal(generatedSummaries, 0);
+  assert(requests[0]?.tools.some((tool) => tool.name === "compact_context"));
+  assert.deepEqual(requests[1]?.messages, [
+    { role: "user", text: `[Zen compacted context]\n${source}` },
+  ]);
+  const snapshot = await server.readThread(thread.id);
+  const compaction = snapshot.items.find(
+    (item) =>
+      item.type === "context_compaction" && item.provenance === "agentic",
+  );
+  assert(compaction !== undefined);
+  assert.equal(compaction.summary, source);
+  assert.equal(compaction.turnId, snapshot.turns[0]?.id);
+  assert.equal(compaction.callId, "compact-call");
+  assert.deepEqual(compaction.retainedItemIds, []);
+  assert.equal("tokenUsage" in compaction, false);
+  assert.equal("providerProfileId" in compaction, false);
+  assert.equal(
+    snapshot.items.filter(
+      (item) => item.type === "tool_call" && item.callId === "compact-call",
+    ).length,
+    1,
+  );
+  assert.equal(
+    snapshot.items.filter(
+      (item) => item.type === "tool_result" && item.callId === "compact-call",
+    ).length,
+    1,
+  );
+  assert(
+    snapshot.items.some(
+      (item) =>
+        item.type === "agent_message" &&
+        item.text === "discarded pre-tool text",
+    ),
+  );
+  assert.deepEqual(compileModelMessages(snapshot.items), [
+    { role: "user", text: `[Zen compacted context]\n${source}` },
+    { role: "assistant", text: "continued in the same Turn" },
+  ]);
+
+  const restarted = createServer({ journal, model });
+  assert.deepEqual(
+    compileModelMessages((await restarted.readThread(thread.id)).items),
+    compileModelMessages(snapshot.items),
+  );
+});
+
+test("agentic compaction preserves user steering unseen by its model sample", async () => {
+  const firstSampleStarted = deferred<void>();
+  const releaseFirstSample = deferred<void>();
+  const requests: ModelRequest[] = [];
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      samples += 1;
+      if (samples === 1) {
+        firstSampleStarted.resolve();
+        await releaseFirstSample.promise;
+        yield {
+          type: "tool_call",
+          callId: "steered-compact",
+          name: "compact_context",
+          arguments: { text: "continuation" },
+        };
+        return;
+      }
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const server = createServer({
+    journal: new InMemoryThreadJournal(),
+    model,
+    contextCompaction: { agenticEnabled: true },
+  });
+  const thread = await server.startThread();
+  const handle = await server.startTurn(thread.id, "initial request");
+  await firstSampleStarted.promise;
+  await server.steerTurn(thread.id, handle.id, "new instruction", {
+    clientId: "agentic-steer",
+  });
+  releaseFirstSample.resolve();
+  await handle.done;
+
+  assert.deepEqual(requests[1]?.messages, [
+    { role: "user", text: "[Zen compacted context]\ncontinuation" },
+    {
+      role: "user",
+      content: [{ type: "text", text: "new instruction" }],
+    },
+  ]);
+});
+
+test("agentic compaction accepts a sample following an active settings change", async () => {
+  const requests: ModelRequest[] = [];
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      samples += 1;
+      if (samples === 1) {
+        yield {
+          type: "tool_call",
+          callId: "read-first",
+          name: "fixture_read",
+          arguments: {},
+        };
+      } else if (samples === 2) {
+        yield {
+          type: "tool_call",
+          callId: "compact-after-settings",
+          name: "compact_context",
+          arguments: { text: "resume after settings change" },
+        };
+      } else {
+        yield { type: "text_delta", delta: "done" };
+      }
+    },
+  };
+  let server: ZenAppServer;
+  let lastItemBeforeSample: CanonicalItem["type"] | undefined;
+  class SettingsBeforeSampleRuntime extends AgentRuntime {
+    override async runTurn(options: RunTurnOptions): Promise<void> {
+      let preparations = 0;
+      await super.runTurn({
+        ...options,
+        prepareModelSample: async (responseId) => {
+          preparations += 1;
+          if (preparations === 2) {
+            const updated = await server.updateThreadSettings(
+              options.thread.id,
+              { model: "other-model" },
+            );
+            lastItemBeforeSample = updated.items.at(-1)?.type;
+          }
+          return await options.prepareModelSample(responseId);
+        },
+      });
+    }
+  }
+  const journal = new InMemoryThreadJournal();
+  const modelCatalog = new StaticModelCatalog([
+    { id: "recording-model", isDefault: true, contextWindow: 32_768 },
+    { id: "other-model", contextWindow: 32_768 },
+  ]);
+  server = createServer({
+    journal,
+    model,
+    modelCatalog,
+    contextCompaction: { agenticEnabled: true },
+    runtime: new SettingsBeforeSampleRuntime({
+      toolEnvironment: new ToolEnvironment({
+        runtimes: [
+          {
+            name: "fixture_read",
+            executionMode: "parallel_safe",
+            specification: {
+              name: "fixture_read",
+              description: "Read fixture",
+              inputSchema: { type: "object", properties: {} },
+            },
+            async execute() {
+              return { output: "working state", exitCode: 0 };
+            },
+          },
+        ],
+      }),
+    }),
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "old working request")
+  ).done;
+  assert.equal(lastItemBeforeSample, "thread_configuration_changed");
+  const snapshot = await server.readThread(thread.id);
+  const result = snapshot.items.find(
+    (item) =>
+      item.type === "tool_result" && item.callId === "compact-after-settings",
+  );
+  assert(result?.type === "tool_result");
+  assert.equal(result.exitCode, 0, result.output);
+  assert.deepEqual(requests[2]?.messages, [
+    {
+      role: "user",
+      text: "[Zen compacted context]\nresume after settings change",
+    },
+  ]);
+  assert.equal(snapshot.modelId, "other-model");
+  assert(requests.every((request) => request.model === "recording-model"));
+  const restarted = createServer({ journal, model, modelCatalog });
+  assert.deepEqual(
+    compileModelMessages((await restarted.readThread(thread.id)).items),
+    compileModelMessages(snapshot.items),
+  );
+});
+
+test("repeated agentic resets supersede deterministically in one active Turn", async () => {
+  const requests: ModelRequest[] = [];
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      samples += 1;
+      if (samples <= 2) {
+        yield {
+          type: "tool_call",
+          callId: `compact-${String(samples)}`,
+          name: "compact_context",
+          arguments: { text: `continuation-${String(samples)}` },
+        };
+        return;
+      }
+      yield { type: "text_delta", delta: "final" };
+    },
+  };
+  const journal = new InMemoryThreadJournal();
+  const server = createServer({
+    journal,
+    model,
+    contextCompaction: { agenticEnabled: true },
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "replace twice")
+  ).done;
+
+  assert.deepEqual(requests[1]?.messages, [
+    { role: "user", text: "[Zen compacted context]\ncontinuation-1" },
+  ]);
+  assert.deepEqual(requests[2]?.messages, [
+    { role: "user", text: "[Zen compacted context]\ncontinuation-2" },
+  ]);
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(
+    snapshot.items.filter(
+      (item) =>
+        item.type === "context_compaction" && item.provenance === "agentic",
+    ).length,
+    2,
+  );
+  const restarted = createServer({ journal, model });
+  assert.deepEqual(
+    compileModelMessages((await restarted.readThread(thread.id)).items),
+    [
+      { role: "user", text: "[Zen compacted context]\ncontinuation-2" },
+      { role: "assistant", text: "final" },
+    ],
+  );
+});
+
+test("later generated compaction cannot retain an agentic reset source trace", async () => {
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (isSummaryRequest(request)) {
+        yield { type: "text_delta", delta: "generated after reset" };
+        return;
+      }
+      samples += 1;
+      if (samples === 1) {
+        yield { type: "text_delta", delta: "source response text" };
+        yield {
+          type: "tool_call",
+          callId: "reset-source",
+          name: "compact_context",
+          arguments: { text: "agent continuation" },
+        };
+        return;
+      }
+      yield { type: "text_delta", delta: "post-reset final" };
+    },
+  };
+  const journal = new InMemoryThreadJournal();
+  const server = createServer({
+    journal,
+    model,
+    contextCompaction: { agenticEnabled: true },
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "old input")
+  ).done;
+  await server.compactThread(thread.id);
+
+  const snapshot = await server.readThread(thread.id);
+  const latest = snapshot.items.at(-1);
+  assert(latest?.type === "context_compaction");
+  assert.equal(latest.provenance, "provider_generated");
+  const sourceIds = new Set(
+    snapshot.items
+      .filter(
+        (item) =>
+          (item.type === "agent_message" &&
+            item.text === "source response text") ||
+          ((item.type === "tool_call" || item.type === "tool_result") &&
+            item.callId === "reset-source"),
+      )
+      .map((item) => item.id),
+  );
+  assert.equal(
+    latest.retainedItemIds.some((itemId) => sourceIds.has(itemId)),
+    false,
+  );
+  const projected = compileModelMessages(snapshot.items);
+  assert.equal(
+    projected.some(
+      (message) =>
+        (message.role === "assistant" &&
+          "text" in message &&
+          message.text === "source response text") ||
+        message.role === "tool" ||
+        (message.role === "assistant" && "toolCalls" in message),
+    ),
+    false,
+  );
+});
+
+test("agentic compaction stays off by default and mixed calls fail locally", async () => {
+  for (const scenario of ["off", "mixed"] as const) {
+    await test(`agentic ${scenario}`, async () => {
+      const requests: ModelRequest[] = [];
+      let samples = 0;
+      const model: ModelAdapter = {
+        provider: "recording",
+        async *stream(request): AsyncIterable<ModelEvent> {
+          requests.push(cloneRequest(request));
+          samples += 1;
+          if (samples === 1) {
+            yield {
+              type: "tool_call",
+              callId: "rejected-compact",
+              name: "compact_context",
+              arguments: { text: "must not replace" },
+            };
+            if (scenario === "mixed") {
+              yield {
+                type: "tool_call",
+                callId: "ordinary-call",
+                name: "shell",
+                arguments: { command: "printf ordinary-result" },
+              };
+            }
+            return;
+          }
+          yield { type: "text_delta", delta: "done" };
+        },
+      };
+      const server = createServer({
+        journal: new InMemoryThreadJournal(),
+        model,
+        ...(scenario === "mixed"
+          ? { contextCompaction: { agenticEnabled: true } }
+          : {}),
+      });
+      const thread = await server.startThread();
+      await (
+        await server.startTurn(thread.id, "keep the original context")
+      ).done;
+      const snapshot = await server.readThread(thread.id);
+
+      assert.equal(
+        requests[0]?.tools.some((tool) => tool.name === "compact_context"),
+        scenario === "mixed",
+      );
+      assert.equal(
+        snapshot.items.some((item) => item.type === "context_compaction"),
+        false,
+      );
+      const rejected = snapshot.items.find(
+        (item) =>
+          item.type === "tool_result" && item.callId === "rejected-compact",
+      );
+      assert(rejected?.type === "tool_result");
+      assert.notEqual(rejected.exitCode, 0);
+      if (scenario === "mixed") {
+        const ordinary = snapshot.items.find(
+          (item) =>
+            item.type === "tool_result" && item.callId === "ordinary-call",
+        );
+        assert(ordinary?.type === "tool_result");
+        assert.equal(ordinary.exitCode, 0);
+        assert.equal(ordinary.output, "ordinary-result");
+      }
+      assert(
+        requests[1]?.messages.some(
+          (message) =>
+            message.role === "user" &&
+            "content" in message &&
+            message.content[0]?.type === "text" &&
+            message.content[0].text === "keep the original context",
+        ),
+      );
+    });
+  }
+});
+
+test("oversized agentic text fails without changing the effective projection", async () => {
+  const requests: ModelRequest[] = [];
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      samples += 1;
+      if (samples === 1) {
+        yield {
+          type: "tool_call",
+          callId: "oversized-compact",
+          name: "compact_context",
+          arguments: { text: "x".repeat(2_000) },
+        };
+        return;
+      }
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const server = createServer({
+    journal: new InMemoryThreadJournal(),
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 100 },
+    ]),
+    contextCompaction: {
+      agenticEnabled: true,
+      triggerPercent: 80,
+      targetPercent: 80,
+    },
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "original survives")
+  ).done;
+
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(
+    snapshot.items.some((item) => item.type === "context_compaction"),
+    false,
+  );
+  assert(
+    requests[1]?.messages.some(
+      (message) =>
+        message.role === "user" &&
+        "content" in message &&
+        message.content[0]?.type === "text" &&
+        message.content[0].text === "original survives",
+    ),
+  );
+});
+
+test("agentic compaction abort and journal failure never admit another sample", async () => {
+  await test("abort before compaction commit", async () => {
+    const modelStarted = deferred<void>();
+    const releaseModel = deferred<void>();
+    let samples = 0;
+    const model: ModelAdapter = {
+      provider: "recording",
+      async *stream(): AsyncIterable<ModelEvent> {
+        samples += 1;
+        modelStarted.resolve();
+        await releaseModel.promise;
+        yield {
+          type: "tool_call",
+          callId: "aborted-compact",
+          name: "compact_context",
+          arguments: { text: "must not become effective" },
+        };
+      },
+    };
+    const server = createServer({
+      journal: new InMemoryThreadJournal(),
+      model,
+      contextCompaction: { agenticEnabled: true },
+    });
+    const thread = await server.startThread();
+    const handle = await server.startTurn(thread.id, "stop before reset");
+    await modelStarted.promise;
+    const interruption = server.interruptTurn(thread.id, handle.id);
+    releaseModel.resolve();
+    await interruption;
+    await handle.done;
+
+    const snapshot = await server.readThread(thread.id);
+    assert.equal(samples, 1);
+    assert.equal(
+      snapshot.items.some((item) => item.type === "context_compaction"),
+      false,
+    );
+    assert.equal(snapshot.turns[0]?.status, "interrupted");
+  });
+
+  await test("journal append outcome failure", async () => {
+    const backing = new InMemoryThreadJournal();
+    const journal: ThreadJournal = {
+      append: async (item) => {
+        if (item.type === "context_compaction") {
+          throw new Error("compaction journal unavailable");
+        }
+        await backing.append(item);
+      },
+      listThreadIds: async () => await backing.listThreadIds(),
+      read: async (threadId) => await backing.read(threadId),
+    };
+    let samples = 0;
+    const model: ModelAdapter = {
+      provider: "recording",
+      async *stream(): AsyncIterable<ModelEvent> {
+        samples += 1;
+        yield {
+          type: "tool_call",
+          callId: "failed-persist-compact",
+          name: "compact_context",
+          arguments: { text: "must not become effective" },
+        };
+      },
+    };
+    const server = createServer({
+      journal,
+      model,
+      contextCompaction: { agenticEnabled: true },
+    });
+    const thread = await server.startThread();
+    const handle = await server.startTurn(thread.id, "surviving source");
+    await assert.rejects(handle.done, /compaction journal unavailable/u);
+
+    const persisted = await backing.read(thread.id);
+    assert.equal(samples, 1);
+    assert.equal(
+      persisted.some((item) => item.type === "context_compaction"),
+      false,
+    );
+    assert.equal(
+      persisted.some(
+        (item) =>
+          item.type === "tool_result" &&
+          item.callId === "failed-persist-compact",
+      ),
+      false,
+    );
+  });
+});
 
 test("manually compacts long history without changing the complete transcript", async () => {
   const requests: ModelRequest[] = [];
@@ -195,6 +794,7 @@ test("rejects an empty configured context compaction prompt", () => {
 
 test("normalizes legacy prompt-only and complete compaction policy defaults", () => {
   assert.deepEqual(normalizeContextCompactionConfig(), {
+    agenticEnabled: false,
     summaryInstruction:
       "ZEN_CONTEXT_COMPACTION_V1\nSummarize the conversation context above for a provider-neutral agent continuation.\nPreserve concrete user goals, decisions, constraints, unfinished work, exact identifiers,\nand tool outcomes that affect future work. Do not call tools. Return only the summary.",
     triggerPercent: 80,
@@ -210,6 +810,7 @@ test("normalizes legacy prompt-only and complete compaction policy defaults", ()
   assert.deepEqual(
     normalizeContextCompactionConfig({ summaryInstruction: "legacy prompt" }),
     {
+      agenticEnabled: false,
       summaryInstruction: "legacy prompt",
       triggerPercent: 80,
       targetPercent: 80,
@@ -1930,7 +2531,7 @@ function canonicalNestedToolHistory(): CanonicalItem[] {
 
 function contextCompactionItem(
   items: readonly CanonicalItem[],
-): ContextCompactionItem {
+): ProviderGeneratedContextCompactionItem {
   return {
     id: "compaction",
     threadId: "thread",

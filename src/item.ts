@@ -253,20 +253,42 @@ export interface FailureItem extends ItemBase {
   message: string;
 }
 
-export interface ContextCompactionItem extends ItemBase {
+interface ContextCompactionItemBase extends ItemBase {
   type: "context_compaction";
   coveredThroughItemId: string;
   summary: string;
   retainedItemIds: string[];
+  algorithmVersion: string;
+}
+
+/** Existing journals omit provenance; current generated writers identify it. */
+export interface ProviderGeneratedContextCompactionItem extends ContextCompactionItemBase {
+  provenance?: "provider_generated";
+  turnId?: never;
+  callId?: never;
+  sourceModelResponseId?: never;
   providerProfileId: string;
   modelId: string;
   reasoningEffort: string | null;
-  algorithmVersion: string;
   tokenUsage: {
     inputTokens: number;
     outputTokens: number;
   };
 }
+
+export interface AgenticContextCompactionItem extends ContextCompactionItemBase {
+  provenance: "agentic";
+  turnId: string;
+  callId: string;
+  sourceModelResponseId: string;
+  providerProfileId?: never;
+  modelId?: never;
+  reasoningEffort?: never;
+  tokenUsage?: never;
+}
+
+export type ContextCompactionItem =
+  ProviderGeneratedContextCompactionItem | AgenticContextCompactionItem;
 
 export interface QueuedUserMessageItem extends ItemBase {
   type: "user_message_queued";
@@ -443,37 +465,64 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       }
       break;
     case "context_compaction": {
-      requireNoTurnId(item);
-      for (const key of [
-        "coveredThroughItemId",
-        "summary",
-        "providerProfileId",
-        "modelId",
-        "reasoningEffort",
-        "algorithmVersion",
-      ]) {
-        if (key === "reasoningEffort") {
-          requireReasoningEffort(item[key], `context_compaction.${key}`);
-        } else {
-          requireNonEmptyString(item[key], `context_compaction.${key}`);
-        }
-      }
+      requireNonEmptyString(
+        item.coveredThroughItemId,
+        "context_compaction.coveredThroughItemId",
+      );
+      requireNonEmptyString(item.summary, "context_compaction.summary");
+      requireNonEmptyString(
+        item.algorithmVersion,
+        "context_compaction.algorithmVersion",
+      );
       requireStringArray(
         item.retainedItemIds,
         "context_compaction.retainedItemIds",
       );
-      const usage = requireRecord(
-        item.tokenUsage,
-        "context_compaction.tokenUsage",
-      );
-      requireTokenCount(
-        usage.inputTokens,
-        "context_compaction.tokenUsage.inputTokens",
-      );
-      requireTokenCount(
-        usage.outputTokens,
-        "context_compaction.tokenUsage.outputTokens",
-      );
+      if (item.provenance === "agentic") {
+        requireTurnId(item, type);
+        requireNonEmptyString(item.callId, "context_compaction.callId");
+        requireNonEmptyString(
+          item.sourceModelResponseId,
+          "context_compaction.sourceModelResponseId",
+        );
+        rejectPresent(
+          item,
+          ["providerProfileId", "modelId", "reasoningEffort", "tokenUsage"],
+          type,
+        );
+      } else {
+        if (
+          item.provenance !== undefined &&
+          item.provenance !== "provider_generated"
+        ) {
+          throw new Error(
+            "context_compaction.provenance has an unsupported value",
+          );
+        }
+        requireNoTurnId(item);
+        requireNonEmptyString(
+          item.providerProfileId,
+          "context_compaction.providerProfileId",
+        );
+        requireNonEmptyString(item.modelId, "context_compaction.modelId");
+        requireReasoningEffort(
+          item.reasoningEffort,
+          "context_compaction.reasoningEffort",
+        );
+        rejectPresent(item, ["callId", "sourceModelResponseId"], type);
+        const usage = requireRecord(
+          item.tokenUsage,
+          "context_compaction.tokenUsage",
+        );
+        requireTokenCount(
+          usage.inputTokens,
+          "context_compaction.tokenUsage.inputTokens",
+        );
+        requireTokenCount(
+          usage.outputTokens,
+          "context_compaction.tokenUsage.outputTokens",
+        );
+      }
       break;
     }
     case "turn_started":

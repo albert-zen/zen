@@ -27,6 +27,35 @@ export function ContextCompactionPanel({
       </header>
       <section
         className="settings-card compaction-settings"
+        aria-label="Agentic compaction experiment"
+      >
+        <h3>Agentic compaction · Experimental</h3>
+        <label className="compaction-checkbox">
+          <input
+            type="checkbox"
+            aria-label="Enable Agentic compaction (experimental)"
+            aria-describedby="agentic-compaction-description"
+            checked={config?.agenticEnabled ?? false}
+            onChange={(event) =>
+              onChange({ ...config, agenticEnabled: event.target.checked })
+            }
+          />
+          <span>Enable Agentic compaction</span>
+        </label>
+        <p id="agentic-compaction-description" className="settings-note">
+          Let the agent choose when to replace its working context during a
+          task. It writes continuation notes, saves details to files, and reads
+          them when needed. Complete conversation history stays available to
+          you.
+        </p>
+        <p className="settings-note">
+          The summary prompt and retention rules below apply to generated
+          summaries, not to the agent’s own continuation text. Automatic
+          compaction keeps its existing behavior.
+        </p>
+      </section>
+      <section
+        className="settings-card compaction-settings"
         aria-label="Compaction budget"
       >
         <h3>Trigger and budget</h3>

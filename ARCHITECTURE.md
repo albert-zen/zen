@@ -19,11 +19,11 @@
 - **Tool Presentation** — AgentRuntime 把同一个 Tool Environment 以 `direct`、`code` 或 `both` 形态投影给模型；它只改变模型调用入口，不拥有第二套工具、权限或会话语义。
 - **Code Runtime** — 每次调用在 fresh、空环境、有限 heap/time/output 且可硬终止的 Node Worker 中运行 erasable TypeScript，权限明确等同 builtin shell，并用同一个 Tool Environment 的 `tools.*` bindings 调用结构化工具。
 - **Nested Tool Invocation Port** — AgentRuntime 只向可信 builtin 组合工具提供的 turn-scoped capability，用同一 Tool Environment 和 canonical lifecycle 提交子调用，不序列化或下放给 plugin / external provider。
-- **Tool Output Spool** — Host 把超出模型 preview 上限的完整已捕获 text result 暂存到权限收窄的临时文件，并只把含 head/tail、大小、hash 和易失路径的 receipt canonicalize；临时副本不是 Thread authority。
+- **Tool Output Spool** — Host 把超出默认 8 KiB 模型 preview（4 KiB head 与 4 KiB tail）的完整已捕获 text result 暂存到权限收窄的临时文件，并只把含 head/tail、大小、hash 和易失路径的 receipt canonicalize；临时副本不是 Thread authority。
 - **Tool Execution Mode** — Tool Runtime 对执行 body 只声明 `parallel_safe` 或 `exclusive`；未声明与 builtin shell 一律按 `exclusive`，该分类不是权限或资源 scope。
-- **ToolTaskManager** — ToolEnvironment 统一拥有普通工具的 Host-local 执行、按 Thread 隔离的 task_id、增量输出与 wait；交回时间（默认 10 秒）和执行超时（默认 10 分钟）分开，快速结果原样返回，任务不参与 journal 重建。
+- **ToolTaskManager** — ToolEnvironment 统一拥有普通工具的 Host-local 执行、按 Thread 隔离的 task_id、增量输出与 wait；交回时间（默认 10 秒、最高 180 秒）和执行超时（默认 10 分钟）分开，快速结果原样返回，任务不参与 journal 重建。
 - **ToolTaskPolicy** — 具体工具只声明取消确认能力、资源作用域和可选 timingArguments 字段映射；默认未知取消保留 owner fence 与执行容量直到真实完成或 Host 关闭，shell 在进程组停止后确认取消，composite 保留原有嵌套调度权且不由任务管理器拆离。
-- **ToolWaitRuntime** — 内建且保留名称的 wait 仅观察或请求取消同 Thread 已获准任务，不重新授权、不占执行体容量；取消请求、无法确认取消和已停止是不同状态，Host 关闭有界清理临时资源；每个任务同时只有一个增量输出消费者，并发取消可返回不消费输出的状态，活动观察持有结果保留期。
+- **ToolWaitRuntime** — 内建且保留名称的 wait 仅观察或请求取消同 Thread 已获准任务，只在任务完成或本次 wait 到期时返回自上次领取后的增量输出，到期不停止底层执行；它不重新授权、不占执行体容量，取消请求、无法确认取消和已停止是不同状态，Host 关闭有界清理临时资源；每个任务同时只有一个增量输出消费者，并发取消可返回不消费输出的状态，活动观察持有结果保留期。
 - **ToolTaskBounds** — 同一 Environment 默认最多 8 个尚未确认结束的执行体、64 个含待领取结果的任务，已完成结果保留 5 分钟；交回不释放 prepared bundle lease 或资源 fence，完成/关闭才释放，达到容量时立即告知模型等待现有任务。
 - **Tool Execution Status** — AgentRuntime 为每条新 `tool_result` 记录 `completed`、`failed` 或 `declined` 的 provider-neutral canonical 事实，Tool Runtime 只返回结果内容和 exit code，不能决定审批语义。
 - **Tool Model Content** — trusted builtin 可以让 canonical `tool_result` 携带 provider-neutral `UserInput`，由既有 Attachment Store 在后续模型采样时投影为真实媒体内容，并随 ItemList 重放而不保存 payload 副本。
@@ -63,11 +63,15 @@
   canonical Item 只保存 provider-neutral `AttachmentRef`，Store 与 ItemList 合起来才足以重放输入，
   它不保存消息、Turn、引用关系或任何第二份会话状态。
 - **View Image Tool** — host-owned builtin `view_image` 把按 Thread cwd 解析并导入的本地图片，或当前 Thread 已引用的 `AttachmentRef`，作为 Tool Model Content 重新加入下一次视觉模型采样。
-- **ContextCompactionItem** — Zen 在完整 Turn 边界生成并追加的 provider-neutral
-  context summary；它记录覆盖边界、稳定有序的保留 Item、冻结的 Provider selection、
-  版本化算法与 token usage，使后续模型上下文和重启投影都只由 append-only ItemList 推导。
+- **ContextCompactionItem** — Zen 追加的 provider-neutral context projection reset；
+  discriminator 区分完整 Turn 边界的 Provider-generated summary 与 active Turn 内 agent
+  提供的 continuation text，使覆盖边界、来源和重启投影都只由 append-only ItemList 推导。
+- **Agentic Context Compaction Tool** — Host admission 可选启用的 `compact_context` 顶层
+  Runtime control，让当前模型用原样 continuation text 在同一 active Turn 建立新的 durable
+  context projection boundary，而不把它下放给通用 Tool Environment 或 nested `tools.*`。
 - **ContextCompactionConfig** — Host-owned 压缩策略配置；它规范化摘要指令、触发与目标占比及
-  canonical Item 保留规则，省略字段时使用 Core 默认，配置本身不写入 Thread canonical ItemList。
+  canonical Item 保留规则，并以默认关闭的实验开关控制 agentic compaction admission；省略字段时
+  使用 Core 默认，配置本身不写入 Thread canonical ItemList。
 - **ModelUsageItem** — Provider 对一次稳定 model response 报告的 canonical 执行事实，
   保存包含 cached 部分的 total input、可选 cached input、output 与可选 reasoning output tokens。
 - **NativeThreadSummaryProjection** — ZAS 把 canonical journal 与
@@ -354,8 +358,10 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   prepare、Host policy、调度、取消、归一化与回写路径。需要共享生命周期的插件或跨进程
   bridge 以 Tool Bundle 原子发布多个 proxy runtimes，bundle 不按 invocation name 再分发。
 - Tool Presentation 支持 `direct`、`code` 与 `both`。`direct` 投影普通 structured
-  tool schemas；`code` 只投影普通 JSON function `run_code({ code, description })`，并在
-  TypeScript SDK 中声明当前可用的 `tools.*` bindings；`both` 同时投影两者，作为目标
+  tool schemas；`code` 投影普通 JSON function `run_code({ code, description })` 与显式启用的
+  顶层 Runtime control，并在
+  TypeScript SDK 中保留工具与参数说明并声明当前可用的 `tools.*` bindings；代码是支持
+  top-level await 与 `await import(...)` 的 async function body，不提供 `require`；`both` 同时投影两者，作为目标
   默认，使简单调用无需经过 JavaScript，而循环、分支、并发和中间结果过滤可以使用
   `run_code`。默认 `both` 的 composition 无法初始化 Code Runtime 时明确 warning 并退回
   `direct`；显式选择 `code` 时则启动失败，不得假装执行成功。
@@ -388,7 +394,7 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   return 和 console 不自动进入上下文。多次 `text` 按调用顺序连接，无输出时返回固定
   提示；非字符串值只接受 lossless JSON。
 - direct、nested 与 outer `run_code` 的 text result 共用 Tool Output Spool。默认模型
-  preview 只保留 16 KiB head 与 16 KiB tail；完整已捕获输出以 POSIX 0700 directory /
+  preview 只保留 4 KiB head 与 4 KiB tail；完整已捕获输出以 POSIX 0700 directory /
   0600 file 或 Windows current-user private temp/ACL 暂存，receipt 记录 captured bytes、SHA-256、绝对路径和 temporary lifetime，
   Agent 需要中段时必须主动再读。Provider 已截断或达到 64 MiB capture hard cap 时必须
   标记 `source_truncated: true`，不能声称 temp file 完整。捕获的原文不按秘密值替换、脱敏或改写；
@@ -424,7 +430,7 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   `apply_patch({ patch })` 提交 Codex-style supported subset，使用 Begin/End Patch 边界、
   Add/Update/Move/Delete、`@@` exact context 与可选 `*** End of File`；不宣称复制
   Codex 的完整宽松 parser。relative path 以 Thread cwd 解析，输入文件必须是 UTF-8，更新写回
-  LF；全部内容预检通过后才开始写盘。它与 shell/run_code 拥有相同机器权限并默认跟随 Node
+  LF；每个修改 hunk 必须有且只有一个精确匹配，零匹配或多匹配都要求扩展上下文，全部内容预检通过后才开始写盘。它与 shell/run_code 拥有相同机器权限并默认跟随 Node
   文件 API 的 symlink 语义；预检失败不产生文件修改，真正 I/O 失败可能留下已明确报告的提交
   前缀，不提供 durable filesystem transaction。
 - 显式用户取消或 Turn abort 仍是中断 Turn 的控制流；模型流、journal append、Runtime
@@ -572,6 +578,16 @@ v2 原行为：summary 生成后，从最新完整 Turn 中保留目标预算可
 `user_message`，以及所有或最近 N 条成功 `turn_completed` 前该 Turn 最后一条 `agent_message`。
 失败 Turn 的 partial agent text 不算 final。默认 N 分别为 20 和 10。
 
+实验性 `agenticEnabled` 默认 `false`。启用后，Runtime 在每次模型采样原子捕获当时最后一个
+canonical Item 作为 active boundary，并提供 `compact_context({ text })`；它只能作为该模型响应
+唯一的顶层 tool call，`code` presentation 仍把它作为独立顶层入口且不加入 `tools.*`。混合响应只让
+compaction call 返回局部失败，其他 call 沿原调度语义结算。Runtime 校验非空原样文本及所选模型
+`contextWindow`，自己创建并提交 canonical compaction，通用 Tool Runtime 的 result 不能触发 reset。
+成功 append 后才提交普通配对 `tool_result`，两项都 durable 后才继续同一 Turn 的下一次采样；
+validation、abort 或已知提交失败不改变旧 projection，journal append 结果未知则停止 Turn 而不继续采样。
+这项路径不调用 summary Provider，不记录伪造的 Provider selection 或 summary token usage，也不使用
+generated compaction 的 prompt、trigger/target 百分比或 retention policy。
+
 显式保留与 recent-items 选择是硬约束；Core 先取得它们，再让 budget 模式使用剩余预算选择后缀，
 不能为满足 target 静默删除所选 Item。任何被选中的 tool call、result、同一 model response 的
 agent message 与 sibling calls，以及嵌套 parent/child calls 都扩展为完整闭包，因此实际保留数
@@ -597,21 +613,30 @@ Summary Provider 的每个请求也必须落在所选模型的 context window �
 消息估算检查配置 trigger 阈值；存在尚未覆盖的 completed boundary 时先完成并持久化同一压缩流程，
 再 admission 新 Turn。这样 oversized completed Turn 不必等下一次普通模型请求失败才被发现。
 
-`context_compaction` canonical Item 记录 `coveredThroughItemId`、原样 summary、
-稳定 canonical 顺序的 `retainedItemIds`、实际 Provider selection、
-`algorithmVersion` 与 input/output token usage。覆盖目标必须是已存在的
-`turn_completed`；保留引用必须已存在、不重复、不晚于覆盖边界且按 journal 顺序排列，
+Provider-generated `context_compaction` canonical Item 记录 `provenance`、`coveredThroughItemId`、
+原样 summary、稳定 canonical 顺序的 `retainedItemIds`、实际 Provider selection、
+`algorithmVersion` 与 input/output token usage；旧 journal 缺少 `provenance` 时仍按此形态读取。
+覆盖目标必须是已存在的 `turn_completed`；保留引用必须已存在、不重复、不晚于覆盖边界且按 journal 顺序排列，
 并完整保留同一模型响应的 tool-call 集及每个 call/result 对。相同或更早的有效边界
 不得再次追加。最新有效 compaction 决定模型投影并 supersede 更早投影状态，但所有
 compaction 与原始 Item 都继续留在 journal。
 
-Provider 请求报告 context-window overflow 时，只有已经成功追加 compaction、且重新编译后的
-估算输入严格缩小时，Host 才可以重试一次。当前 Turn 在 Provider 失败时仍是 incomplete，因而
-没有满足该条件的 durable reduction；Runtime 按普通失败写入原始事实且不自动重试，也不增加
-durable 自愈状态。未来若在请求前完成并持久化压缩，可以在同一限制下增加一次 retry。
+Agentic compaction 记录 `provenance: agentic`、active `turnId`、source `callId` /
+`sourceModelResponseId`、采样时已见的 `coveredThroughItemId`、原样 text 与版本化算法，不记录
+Provider fields 或 token usage，也不保留 covered Item。模型投影从 text 开始，排除发起 reset 的
+model response 所产生的 reasoning、pre-tool agent message 与 compact call/result，同时保留 boundary
+之后模型没有见过的 steer/user input；journal 与 transcript 仍保存全部原始 trace 和完整 call/result 对。
+后续 agentic reset 以更晚 boundary supersede 前者；后续 generated compaction 只能从最新 agentic
+barrier 后仍有效的 canonical Items 选择 retention，不能复活已替换的 source trace。Agentic reset
+同时开始新的本 Turn usage epoch，完成 Turn 的自动策略只使用 reset 后观察到的 Provider usage。
+
+Provider 请求报告 context-window overflow 时，本版本仍按普通失败写入原始事实，不自动重试，
+也不增加 durable 自愈状态。活动 Turn 可以已经包含早先成功的 Agentic reset，但失败请求已经
+使用该投影，不能把此前的缩减当作再次请求会缩小输入的证据。若未来引入 retry 策略，必须先在
+失败请求之后成功持久化新的 compaction，并确认重新编译的估算输入严格缩小；该策略不属于本次实验。
 
 模型上下文编译器先投影最新 compaction 的 retained canonical Item，再加入稳定标记的
-summary，最后加入覆盖边界后的 canonical Item；当前实现没有独立 system/developer
+summary，最后按上述 provenance 规则加入覆盖边界后的 canonical Item；当前实现没有独立 system/developer
 message，未来若有则必须置于这些 compaction 输入之前。未包含 compaction 的 legacy
 journal 继续按原始 ItemList 编译。Thread/Turn transcript 始终从完整原始历史派生，
 默认忽略 compaction Item；保留 Item 中的 `AttachmentRef` 仍通过同一 Attachment Store
