@@ -843,7 +843,8 @@ async function drainModel(
     model: "image-model",
     reasoningEffort: "medium",
     messages,
-    tools: [new ShellToolRuntime().specification],
+    tools: new ToolEnvironment({ runtimes: [new ShellToolRuntime()] })
+      .definitions,
     signal: new AbortController().signal,
   })) {
     // Consume the provider stream so the captured request is complete.

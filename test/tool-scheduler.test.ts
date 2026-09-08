@@ -595,10 +595,18 @@ test("both presentation freezes direct and nested capabilities through scheduler
 
   assert.deepEqual(
     requests[0]?.tools.map(({ name }) => name),
-    ["visible_child", "run_code"],
+    ["wait", "visible_child", "run_code"],
   );
-  assert.match(requests[0]?.tools[1]?.description ?? "", /visible_child/u);
-  assert.doesNotMatch(requests[0]?.tools[1]?.description ?? "", /late_hidden/u);
+  assert.match(
+    requests[0]?.tools.find(({ name }) => name === "run_code")?.description ??
+      "",
+    /visible_child/u,
+  );
+  assert.doesNotMatch(
+    requests[0]?.tools.find(({ name }) => name === "run_code")?.description ??
+      "",
+    /late_hidden/u,
+  );
   assert.equal(hiddenExecutions, 0);
   const snapshot = await server.readThread(thread.id);
   const children = snapshot.items.filter(
@@ -748,6 +756,7 @@ test("abort settles every admitted parallel call once and leaves no body active"
     testToolRuntime({
       name: "parallel",
       description: "Abort fixture.",
+      taskPolicy: { cancellation: "confirmed-on-settle" },
       executionMode: "parallel_safe",
       execute: async (invocation) => {
         starts += 1;

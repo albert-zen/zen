@@ -72,7 +72,7 @@ test("a bundle publishes exact single-tool runtimes without name redispatch", as
 
   assert.deepEqual(
     environment.definitions.map(({ name }) => name),
-    ["first", "second"],
+    ["wait", "first", "second"],
   );
   const prepared = environment.prepare(invocation("second"));
   assert.deepEqual(prepared.owner, { kind: "plugin", id: "fixture" });
@@ -121,7 +121,7 @@ test("bundle staging validates every runtime before atomically publishing any", 
   );
   assert.deepEqual(
     environment.definitions.map(({ name }) => name),
-    ["taken"],
+    ["wait", "taken"],
   );
   assert.throws(
     () => environment.prepare(invocation("new-name")),

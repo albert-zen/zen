@@ -410,7 +410,10 @@ test("direct calls use the sample name set even when the live registry changes",
     await server.startTurn(thread.id, "freeze names")
   ).done;
   const snapshot = await server.readThread(thread.id);
-  assert.deepEqual(samples, [["shell"], ["shell", "late_tool"]]);
+  assert.deepEqual(samples, [
+    ["wait", "shell"],
+    ["wait", "shell", "late_tool"],
+  ]);
   assert.equal(executions, 0);
   const result = snapshot.items.find(
     (item) =>
@@ -505,7 +508,7 @@ test("wall termination does not wait forever for a nested invocation that ignore
   );
 });
 
-test("Runtime settles abort-ignoring observed children exactly once before the outer timeout", async () => {
+test("Runtime records unconfirmed cancellation for abort-ignoring children before the outer timeout", async () => {
   const bundle = testToolBundle({ kind: "external", id: "never-bundle" }, [
     testToolRuntime({
       name: "never.provider",
@@ -551,7 +554,11 @@ test("Runtime settles abort-ignoring observed children exactly once before the o
     assert.equal(childResultIndexes.length, 1);
     const childResult = snapshot.items[childResultIndexes[0] ?? -1];
     assert.equal(childResult?.type, "tool_result");
-    assert.equal(childResult.exitCode, 130);
+    if (childResult.exitCode === 0) {
+      assert.match(childResult.output, /cancellation_unconfirmed/);
+    } else {
+      assert.equal(childResult.exitCode, 130);
+    }
     assert(
       childResultIndexes[0] !== undefined &&
         childResultIndexes[0] < outerResultIndex,

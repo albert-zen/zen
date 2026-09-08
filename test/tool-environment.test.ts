@@ -249,7 +249,9 @@ test("a prepared invocation keeps its exact runtime after bundle removal", async
     true,
   );
   assert.equal(preparedLeases, 1);
-  assert.deepEqual(environment.definitions, []);
+  assert.deepEqual(environment.definitions, [
+    environment.waitRuntime.specification,
+  ]);
   assert.deepEqual(await environment.execute(prepared), {
     output: "fixture result",
     exitCode: 0,
@@ -378,9 +380,9 @@ test("bundle definitions appear and disappear on consecutive model samples", asy
     JSON.stringify(snapshot.items),
   );
   assert.deepEqual(sampledTools, [
-    ["shell"],
-    ["shell", "fixture_echo"],
-    ["shell"],
+    ["wait", "shell"],
+    ["wait", "shell", "fixture_echo"],
+    ["wait", "shell"],
   ]);
   assert.equal(executedSignals.length, 1);
   assert.equal(executedSignals[0]?.aborted, false);
@@ -480,6 +482,7 @@ test("interrupt sends the exact runtime signal to the admitted runtime", async (
   const runtime = testToolRuntime({
     name: "external_wait",
     description: "Wait for cancellation.",
+    taskPolicy: { cancellation: "confirmed-on-settle" },
     execute: async (invocation) => {
       receivedSignal = invocation.signal;
       started();
