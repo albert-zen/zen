@@ -294,7 +294,13 @@ export class ZenAppServer {
       cwd: path.resolve(input.cwd ?? this.#defaults.cwd),
       ...selection,
       sandbox: input.sandbox ?? this.#defaults.sandbox,
-      approvalPolicy: input.approvalPolicy ?? this.#defaults.approvalPolicy,
+      approvalPolicy:
+        input.approvalPolicy ??
+        (input.sandbox === "danger-full-access"
+          ? "never"
+          : (input.sandbox ?? this.#defaults.sandbox) === "danger-full-access"
+            ? this.#defaults.approvalPolicy
+            : "always"),
     };
     this.#threads.set(threadId, thread);
     try {
@@ -360,6 +366,52 @@ export class ZenAppServer {
       }
       this.#requireSelection(selection);
       return await this.#updateThreadSettingsUnlocked(thread, { selection });
+    });
+  }
+
+  async setThreadPermissions(
+    threadId: string,
+    sandbox: SandboxMode,
+  ): Promise<ThreadSnapshot> {
+    return await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#requireThread(threadId);
+      const current = thread.effectiveConfiguration();
+      const approvalPolicy =
+        sandbox === "danger-full-access" ? "never" : "always";
+      if (
+        current.sandbox === sandbox &&
+        current.approvalPolicy === approvalPolicy
+      )
+        return await this.#snapshot(thread);
+      if (
+        this.#activeTurns.has(threadId) ||
+        this.#pendingReplacement(thread) !== undefined ||
+        this.#runtime.hasActiveToolTasks(threadId)
+      ) {
+        throw new AppServerError(
+          "thread_busy",
+          "Wait for the running turn and tools to finish before changing permissions",
+        );
+      }
+      await this.#commit(thread, {
+        id: this.#id(),
+        threadId,
+        createdAt: this.#now(),
+        type: "thread_configuration_changed",
+        permissions: {
+          from: {
+            sandbox: current.sandbox,
+            approvalPolicy: current.approvalPolicy,
+          },
+          to: { sandbox, approvalPolicy },
+        },
+      });
+      this.#emit({
+        type: "thread_settings_updated",
+        threadId,
+        settings: thread.effectiveConfiguration(),
+      });
+      return await this.#snapshot(thread);
     });
   }
 

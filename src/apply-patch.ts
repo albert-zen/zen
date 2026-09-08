@@ -1,5 +1,6 @@
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { assertWritablePaths } from "./sandbox.js";
 
 import type { ModelTool } from "./model.js";
 import type {
@@ -72,6 +73,7 @@ type PlannedOperation =
 /** Exact single-tool runtime for Codex-style patch text. */
 export class ApplyPatchToolRuntime implements ToolRuntime {
   readonly name = "apply_patch";
+  readonly enforcesSandbox = true;
   readonly specification: ModelTool = {
     name: this.name,
     description:
@@ -115,6 +117,15 @@ export class ApplyPatchToolRuntime implements ToolRuntime {
         hunks,
         invocation.cwd,
         invocation.signal,
+      );
+      await assertWritablePaths(
+        invocation.sandbox ?? "danger-full-access",
+        invocation.cwd,
+        operations.flatMap((operation) =>
+          operation.kind === "move"
+            ? [operation.sourcePath, operation.destinationPath]
+            : [operation.path],
+        ),
       );
       return await commitPatch(operations, invocation.signal);
     } catch (error) {

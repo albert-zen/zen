@@ -156,12 +156,31 @@ export function compileModelMessages(
   const afterBoundary = isAgenticContextCompaction(compaction)
     ? itemsAfterLatestAgenticCompaction(items)
     : items.slice(boundaryIndex + 1);
+  const policyItem = items
+    .slice(0, boundaryIndex + 1)
+    .findLast(
+      (item) =>
+        item.type === "thread_metadata" ||
+        (item.type === "thread_configuration_changed" && "permissions" in item),
+    );
+  const policy =
+    policyItem?.type === "thread_metadata"
+      ? policyItem.sandbox
+      : policyItem?.type === "thread_configuration_changed" &&
+          "permissions" in policyItem
+        ? policyItem.permissions.to.sandbox
+        : undefined;
   return [
     ...compileCanonicalModelMessages(retained, targetSelection, turnSelections),
     {
       role: "user",
       text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${compaction.summary}`,
     },
+    ...(policy !== undefined &&
+    (policy !== "danger-full-access" ||
+      policyItem?.type === "thread_configuration_changed")
+      ? [{ role: "user" as const, text: filePermissionContext(policy) }]
+      : []),
     ...compileCanonicalModelMessages(
       afterBoundary,
       targetSelection,
@@ -280,10 +299,22 @@ function compileCanonicalModelMessages(
           text: `[failure: ${item.message}]`,
         });
         break;
+      case "thread_metadata":
+        if (item.sandbox !== "danger-full-access")
+          messages.push({
+            role: "user",
+            text: filePermissionContext(item.sandbox),
+          });
+        break;
+      case "thread_configuration_changed":
+        if ("permissions" in item)
+          messages.push({
+            role: "user",
+            text: filePermissionContext(item.permissions.to.sandbox),
+          });
+        break;
       case "context_compaction":
       case "model_usage":
-      case "thread_configuration_changed":
-      case "thread_metadata":
       case "turn_aborted":
       case "turn_completed":
       case "user_message_queued":
@@ -548,4 +579,12 @@ async function* streamWords(
     yield { type: "text_delta", delta: part };
     await Promise.resolve();
   }
+}
+
+function filePermissionContext(
+  sandbox: import("./item.js").SandboxMode,
+): string {
+  if (sandbox === "danger-full-access")
+    return "File permission mode: Full Access. File operations may run without approval.";
+  return `File permission mode: ${sandbox === "read-only" ? "Read Only: no automatic file writes" : "Workspace Write: write only within the thread working directory"}. Shell enforces the file policy; apply_patch rejects disallowed paths. Use shell sandbox_permissions: require_escalated to request one-time approval when broader file access is needed. run_code and plugin tools require one-time approval because their execution is not file-sandboxed. Network access is unchanged.`;
 }

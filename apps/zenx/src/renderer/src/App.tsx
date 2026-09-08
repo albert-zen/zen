@@ -1,3 +1,4 @@
+import type { FilePermissionMode } from "../../protocol-client/types.js";
 import {
   useCallback,
   useEffect,
@@ -102,6 +103,7 @@ const MODEL_CATALOG_LOADING = "Models are still loading. Try again.";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "zenx.sidebar-collapsed";
 
 interface NewThreadDraft {
+  permissionMode?: FilePermissionMode;
   id: string;
   workspace: string | null;
   composer: ComposerState;
@@ -337,6 +339,8 @@ export function App() {
   const [selectedSettings, setSelectedSettings] =
     useState<SelectedThreadSettings | null>(null);
   const [switchingModel, setSwitchingModel] = useState(false);
+  const [switchingPermission, setSwitchingPermission] = useState(false);
+  const [permissionError, setPermissionError] = useState<string | null>(null);
   const [modelUpdateError, setModelUpdateError] = useState<string | null>(null);
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>(() => {
     try {
@@ -1170,6 +1174,7 @@ export function App() {
     try {
       await window.zenx.settings.addWorkspace(workspace);
       const result = await window.zenx.projects.startThread(workspace, {
+        sandbox: current.permissionMode ?? "danger-full-access",
         model: draftSettings.model,
         ...(draftSettings.reasoningEffort === null
           ? {}
@@ -1383,6 +1388,28 @@ export function App() {
     } catch (error) {
       setApprovals((current) => restoreApprovalPending(current, requestId));
       throw error;
+    }
+  };
+
+  useEffect(() => {
+    setPermissionError(null);
+  }, [selectedThreadId]);
+
+  const changePermission = async (sandbox: FilePermissionMode) => {
+    const threadId = threadDetail?.id;
+    if (!threadId) return;
+    setSwitchingPermission(true);
+    setPermissionError(null);
+    try {
+      await window.zenx.protocol.request("thread/permissions/update", {
+        threadId,
+        sandbox,
+      });
+    } catch (error) {
+      if (selectedThreadIdRef.current === threadId)
+        setPermissionError(describeError(error));
+    } finally {
+      setSwitchingPermission(false);
     }
   };
 
@@ -1932,6 +1959,12 @@ export function App() {
               });
             }}
             onModelChange={(model) => void changeModel(model)}
+            onPermissionChange={(mode) => void changePermission(mode)}
+            onNewThreadPermissionChange={(permissionMode) =>
+              updateNewThreadDraft((draft) => ({ ...draft, permissionMode }))
+            }
+            permissionError={permissionError}
+            switchingPermission={switchingPermission}
             onReasoningChange={(effort) => void changeReasoning(effort)}
             onOpenSidebar={() => setSidebarOpen(true)}
             onRespondToApproval={respondToApproval}
@@ -2185,6 +2218,10 @@ function AgentSurface({
   onAddNewThreadProject,
   onInterrupt,
   onModelChange,
+  onPermissionChange,
+  onNewThreadPermissionChange,
+  permissionError,
+  switchingPermission,
   onReasoningChange,
   onOpenSidebar,
   onRespondToApproval,
@@ -2227,6 +2264,10 @@ function AgentSurface({
   onNewThreadProjectChange(workspace: string): void;
   onAddNewThreadProject(): void;
   onInterrupt(turnId: string): Promise<void>;
+  onPermissionChange(mode: FilePermissionMode): void;
+  onNewThreadPermissionChange(mode: FilePermissionMode): void;
+  permissionError: string | null;
+  switchingPermission: boolean;
   onModelChange(model: string): void;
   onReasoningChange(effort: string): void;
   onOpenSidebar(): void;
@@ -2360,7 +2401,8 @@ function AgentSurface({
           }
           models={models}
           providerProfiles={providerProfiles}
-          permissionLabel={null}
+          permissionMode={newThreadDraft.permissionMode ?? "danger-full-access"}
+          onPermissionChange={onNewThreadPermissionChange}
           selectedModel={draftSettings?.model}
           selectedReasoningEffort={draftSettings?.reasoningEffort}
           thread={null}
@@ -2411,10 +2453,20 @@ function AgentSurface({
             providerProfiles={providerProfiles}
             permissionLabel={
               selectedSummary.status !== "systemError" &&
-              selectedSummary.currentMetadata.approvalPolicy === "never"
-                ? "Full access"
-                : "Approval required"
+              selectedSummary.currentMetadata.sandbox ===
+                "danger-full-access" &&
+              selectedSummary.currentMetadata.approvalPolicy === "always"
+                ? "Approval required"
+                : "File permissions"
             }
+            permissionMode={
+              selectedSummary.status === "systemError"
+                ? "danger-full-access"
+                : selectedSummary.currentMetadata.sandbox
+            }
+            permissionError={permissionError}
+            switchingPermission={switchingPermission}
+            onPermissionChange={onPermissionChange}
             selectedModel={selectedSettings?.model}
             selectedReasoningEffort={selectedSettings?.reasoningEffort}
             switchingModel={switchingModel}
@@ -3105,6 +3157,7 @@ export function optimisticThreadSummary(
     modelProvider: string;
     cwd: string;
     approvalPolicy: "never" | "on-request";
+    sandbox: import("../../protocol-client/types.js").FileSandboxPolicy;
   },
   preview: string,
 ): NativeThreadSummary {
@@ -3114,7 +3167,12 @@ export function optimisticThreadSummary(
       model: result.model,
       provider: result.modelProvider,
       cwd: result.cwd,
-      sandbox: "danger-full-access",
+      sandbox:
+        result.sandbox.type === "readOnly"
+          ? "read-only"
+          : result.sandbox.type === "workspaceWrite"
+            ? "workspace-write"
+            : "danger-full-access",
       approvalPolicy:
         result.approvalPolicy === "on-request" ? "always" : "never",
     },

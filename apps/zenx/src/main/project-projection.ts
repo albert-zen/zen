@@ -26,6 +26,7 @@ export type ProjectRealpath = (candidate: string) => Promise<string>;
 export interface ProjectThreadStartOptions {
   model?: string;
   effort?: string;
+  sandbox?: import("../protocol-client/types.js").FilePermissionMode;
 }
 
 export async function startConfiguredProjectThread<T>(

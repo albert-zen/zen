@@ -35,8 +35,8 @@ export interface ThreadConfigurationParams {
   effort?: string;
   approvalPolicy?: "on-request" | "never";
   approvalsReviewer?: "user";
-  sandbox?: "danger-full-access";
-  sandboxPolicy?: { type: "dangerFullAccess" };
+  sandbox?: FilePermissionMode;
+  sandboxPolicy?: FileSandboxPolicy;
   collaborationMode?: {
     mode: "default";
     settings: {
@@ -47,6 +47,19 @@ export interface ThreadConfigurationParams {
   };
 }
 
+export type FilePermissionMode =
+  "read-only" | "workspace-write" | "danger-full-access";
+export type FileSandboxPolicy =
+  | { type: "dangerFullAccess" }
+  | { type: "readOnly" }
+  | {
+      type: "workspaceWrite";
+      writableRoots: string[];
+      networkAccess: boolean;
+      excludeTmpdirEnvVar: boolean;
+      excludeSlashTmp: boolean;
+    };
+
 export interface ThreadSettingsSnapshot {
   model: string;
   modelProvider: string;
@@ -55,7 +68,7 @@ export interface ThreadSettingsSnapshot {
   instructionSources: unknown[];
   approvalPolicy: "on-request" | "never";
   approvalsReviewer: "user";
-  sandbox: { type: "dangerFullAccess" };
+  sandbox: FileSandboxPolicy;
   reasoningEffort: string | null;
 }
 
@@ -71,7 +84,7 @@ export interface UpdatedThreadSettings {
   model: string;
   modelProvider: string;
   personality: null;
-  sandboxPolicy: { type: "dangerFullAccess" };
+  sandboxPolicy: FileSandboxPolicy;
   serviceTier: null;
   summary: null;
 }
@@ -120,6 +133,10 @@ export interface ClientRequestParams {
   "thread/name/set": { threadId: string; name: string };
   "thread/archive": { threadId: string };
   "thread/unarchive": { threadId: string };
+  "thread/permissions/update": {
+    threadId: string;
+    sandbox: FilePermissionMode;
+  };
   "thread/settings/update": {
     threadId: string;
     model: string;
@@ -171,6 +188,7 @@ export interface ClientRequestResults {
   "thread/name/set": Record<string, never>;
   "thread/archive": Record<string, never>;
   "thread/unarchive": { thread: Thread };
+  "thread/permissions/update": Record<string, never>;
   "thread/settings/update": Record<string, never>;
   "thread/unsubscribe": {
     status: "unsubscribed" | "notSubscribed";
@@ -268,6 +286,7 @@ export interface ServerRequestParams {
     environmentId: null;
     reason: null;
     command: string;
+    approvalScope?: "once";
     toolName?: string;
     toolArguments?: Readonly<Record<string, unknown>>;
     cwd: string;

@@ -166,13 +166,23 @@ test("startup opens a local welcome draft without creating a Thread", async () =
 
 test("optimistic summary preserves Thread seconds, identity, and idle status", () => {
   const value = optimisticThreadSummary(
-    started(liveThread(), "/work/zen"),
+    {
+      ...started(liveThread(), "/work/zen"),
+      sandbox: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        networkAccess: true,
+        excludeTmpdirEnvVar: true,
+        excludeSlashTmp: true,
+      },
+    },
     "preview",
   );
   assert.equal(value.createdAt, new Date(1_000).toISOString());
   assert.equal(value.updatedAt, new Date(2_000).toISOString());
   assert.equal(value.threadId, "thread-1");
   assert.equal(value.status, "idle");
+  assert.equal(value.currentMetadata.sandbox, "workspace-write");
   assert.equal(value.currentMetadata.cwd, "/work/zen");
 });
 
@@ -330,7 +340,7 @@ test("New thread stays local, switches Project, and creates on first Send", asyn
   }
 });
 
-test("New thread sends its selected model and reasoning effort to Project start", async () => {
+test("New thread sends its selected model, reasoning and file permissions to Project start", async () => {
   const starts: Array<{
     workspace: string;
     selection: { model?: string; effort?: string } | undefined;
@@ -399,6 +409,14 @@ test("New thread sends its selected model and reasoning effort to Project start"
     const composer = await waitFor(() =>
       document.querySelector<HTMLTextAreaElement>("#thread-composer"),
     );
+    const permission = document.querySelector<HTMLSelectElement>(
+      '[aria-label="File permissions"]',
+    )!;
+    assert.equal(permission.value, "danger-full-access");
+    await act(async () => {
+      permission.value = "read-only";
+      permission.dispatchEvent(new window.Event("change", { bubbles: true }));
+    });
     await setTextareaValue(composer, "Use the selected model");
     await invokeButtonClick(
       await waitFor(() =>
@@ -409,7 +427,7 @@ test("New thread sends its selected model and reasoning effort to Project start"
     assert.deepEqual(starts, [
       {
         workspace: "/work/zen",
-        selection: { model: advanced.id, effort: "low" },
+        selection: { model: advanced.id, effort: "low", sandbox: "read-only" },
       },
     ]);
   } finally {

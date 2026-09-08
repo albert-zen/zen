@@ -22,7 +22,8 @@
 - 扫描、脱敏、重写模型文本、reasoning、tool call/result、title 等既有 trace；
   provider/plugin 能力变化只影响后续投影与调用结果
 - risk scoring、参数级 scope graph、permission rules engine 或复杂 sandbox 产品矩阵；
-  工具策略只保留默认 `full_access` 与可选 `ask_unknown`
+  用户已要求 Read Only / Workspace Write / Full Access 三档文件权限及切换，默认 Full Access。
+  原有只做两档工具审批的阶段限制不再覆盖文件权限，兼容 `ask_unknown` 仍保留。
 - 把首版 `run_code` 宣传或实现成可运行 hostile code 的安全沙箱；它与 builtin shell
   权限等同，Worker 的空环境、heap/time/output 限制和 termination 只负责运行 containment
 - 按配置的秘密值替换或脱敏工具实际输出；head/tail 与临时文件是上下文节约策略，

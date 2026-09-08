@@ -195,6 +195,10 @@ export class AgentRuntime {
     this.#maxConcurrentToolBodies = maxConcurrentToolBodies;
   }
 
+  hasActiveToolTasks(threadId: string): boolean {
+    return this.#tools.taskManager.hasActiveTasks(threadId);
+  }
+
   async runTurn(options: RunTurnOptions): Promise<void> {
     const turnId = options.turnId ?? this.#id();
     const scheduler = new TurnToolScheduler(this.#maxConcurrentToolBodies);
@@ -877,6 +881,10 @@ export class AgentRuntime {
         name: toolCall.name,
         arguments: toolCall.arguments,
         cwd: options.configuration.cwd,
+        sandbox:
+          execution.admission === "inherited"
+            ? "danger-full-access"
+            : options.configuration.sandbox,
         // Yielded nested tasks outlive their composite request, but must still
         // observe a later interruption of the owning Turn.
         signal:
@@ -1143,7 +1151,9 @@ export class AgentRuntime {
   }
 
   #assertSandbox(sandbox: string): asserts sandbox is SandboxMode {
-    if (sandbox !== "danger-full-access") {
+    if (
+      !["danger-full-access", "read-only", "workspace-write"].includes(sandbox)
+    ) {
       throw new UnsupportedSandboxError(sandbox);
     }
   }

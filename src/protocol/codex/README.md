@@ -60,6 +60,8 @@ Server request：`item/commandExecution/requestApproval`。
 
 - `turn/replace`
 - `thread/compact`
+- `thread/permissions/update` accepts `{ threadId, sandbox }`, where sandbox is `read-only`, `workspace-write`, or `danger-full-access`. It changes the canonical file permission preset only when the Thread and its tool tasks are idle, then broadcasts `thread/settings/updated`. Defaults remain Full Access.
+- Approval requests may include native `approvalScope: "once"`. Such decisions never reuse or create session/capability grants, even when a client responds with `acceptForSession`.
 - `turn/start`、`turn/steer` 与 `turn/replace` input 的
   `{ type: "attachment", attachment: AttachmentRef }` variant
 - `commandExecution` item / approval 上可选的 `contentType`、`structuredContent`、
@@ -79,7 +81,7 @@ history 仍作为普通 command trace 显示。模型上下文仍只使用 canon
 `exitCode`。
 
 除上述 ZAS native 与 CAS mapped surface 外，其他方法返回 JSON-RPC `-32601`。
-当前只接受 `danger-full-access` sandbox；
+当前接受 `read-only`、`workspace-write` 与 `danger-full-access` sandbox；
 approval 只接受 `on-request` 与 `never`，二者是不同维度。resume 与 turn
 携带 cwd、sandbox 或 approval 时只接受和 Thread metadata 等价的值；model 与
 `turn/start` 的标准 effort 则走同一 canonical selection update。service tier 与 plan collaboration mode 等
@@ -217,7 +219,7 @@ canonical `turn_replacement_requested` intent，再中断并等待旧 Turn 的
 兼容声明必须绑定具体客户端、版本与已验收调用面。仓库测试覆盖 Zen CLI 的一轮
 会话、streaming、command approval、interrupt、resume 与双连接事件投影；对
 T3 Code 0.0.31 只验收了 `account/read`、`skills/list`、`model/list` bootstrap 和
-full-access 配置投影。其他 sandbox 模式未实现；在真实 T3 Code 完成一轮会话与
+full-access 配置投影。限制模式已在 ZAS/ZenX 实现，但未在 T3 Code 验收；在真实 T3 Code 完成一轮会话与
 一次工具执行前，不宣称完整兼容。原版 `codex --remote` TUI 0.146.0 还要求
 `config/*`、`hooks/list` 等方法，当前仍不兼容。这些互操作缺口不改变 ZAS native
 surface 已经支持的产品能力，也不构成修改 Core 的理由。

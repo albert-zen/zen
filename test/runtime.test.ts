@@ -494,7 +494,13 @@ test("derives each turn model from append-only configuration changes", async () 
   assert.deepEqual(
     changed.items
       .filter((item) => item.type === "thread_configuration_changed")
-      .map((item) => ("selection" in item ? item.selection : item.model)),
+      .map((item) =>
+        "selection" in item
+          ? item.selection
+          : "model" in item
+            ? item.model
+            : item.permissions,
+      ),
     [
       {
         from: {

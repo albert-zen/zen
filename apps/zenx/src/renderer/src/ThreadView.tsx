@@ -37,6 +37,8 @@ import {
 import type { ZenXThreadAttachmentProjection } from "../../main/image-attachments.js";
 import { ComposerModelMenu } from "./ComposerModelMenu.js";
 import { Icon } from "./icons.js";
+import { PermissionSelect } from "./PermissionSelect.js";
+import type { FilePermissionMode } from "../../protocol-client/types.js";
 import { Markdown } from "./Markdown.js";
 import {
   AttachmentImage,
@@ -68,6 +70,10 @@ interface ThreadViewProps {
   imageCapabilityNotice?: string | null;
   models?: readonly ModelSummary[];
   permissionLabel?: string | null;
+  permissionMode?: FilePermissionMode;
+  permissionError?: string | null;
+  switchingPermission?: boolean;
+  onPermissionChange?(mode: FilePermissionMode): void;
   providerProfiles?: readonly ZenXProviderProfile[];
   selectedModel?: string;
   selectedReasoningEffort?: string | null;
@@ -111,6 +117,10 @@ export function ThreadView({
   imageCapabilityNotice = null,
   models = [],
   permissionLabel = "Full access",
+  permissionMode = "danger-full-access",
+  permissionError,
+  switchingPermission,
+  onPermissionChange,
   providerProfiles = [],
   selectedModel,
   selectedReasoningEffort = null,
@@ -509,15 +519,18 @@ export function ThreadView({
                 threadCacheHitRate={threadUsage?.thread.cacheHitRate}
               />
               {permissionLabel === null ? null : (
-                <button
-                  className="composer-tool permission-control"
-                  type="button"
-                  aria-label={`Permission policy: ${permissionLabel}`}
-                  disabled
-                >
-                  <Icon name="lock" size={14} />
-                  <span>{permissionLabel}</span>
-                </button>
+                <PermissionSelect
+                  legacyApproval={permissionLabel === "Approval required"}
+                  value={permissionMode}
+                  disabled={
+                    runningTurn !== null ||
+                    composerDisabled ||
+                    composer.submission?.status === "pending"
+                  }
+                  switching={switchingPermission ?? false}
+                  error={permissionError ?? null}
+                  onChange={onPermissionChange}
+                />
               )}
             </div>
             <div className="composer-actions">
@@ -1251,6 +1264,7 @@ function ApprovalBar({
       setError(describeError(reason));
     }
   };
+  const once = approval.params.approvalScope === "once";
   const runCode = approval.params.toolName === "run_code";
   const toolName = approval.params.toolName ?? "tool";
   const code =
@@ -1264,13 +1278,16 @@ function ApprovalBar({
       </span>
       <div>
         <strong>
-          {runCode
-            ? "Allow the shell-equivalent run_code capability?"
-            : `Allow the ${toolName} capability?`}
+          {once
+            ? `Allow ${toolName} with full file access once?`
+            : runCode
+              ? "Allow the shell-equivalent run_code capability?"
+              : `Allow the ${toolName} capability?`}
         </strong>
         <p>
-          Approval is remembered for the stable {toolName} capability, not
-          granted per command or code segment.
+          {once
+            ? "This call runs outside the file sandbox. Approval applies only to this call and its nested operations."
+            : `Approval is remembered for the stable ${toolName} capability, not granted per command or code segment.`}
         </p>
         <pre className="approval-command">
           <code>{code}</code>
@@ -1289,7 +1306,7 @@ function ApprovalBar({
           type="button"
           onClick={() => void respond("accept")}
         >
-          Allow capability
+          {once ? "Allow once" : "Allow capability"}
         </button>
       </div>
     </section>
