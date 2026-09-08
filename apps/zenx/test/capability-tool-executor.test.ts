@@ -33,7 +33,7 @@ test("real ZenX host composition preserves builtin and capability bundle identit
     });
   assert.deepEqual(
     toolDefinitionProjection([]).map((definition) => definition.name),
-    ["shell", "shell_wait", "fixture_inspect", "zenx_plugin"],
+    ["wait", "shell", "fixture_inspect", "zenx_plugin"],
   );
   const signal = new AbortController().signal;
   const shell = toolEnvironment.prepare({
@@ -115,7 +115,7 @@ test("real ZenX child-host projection hides v2 schemas until canonical read hist
   const initial = toolDefinitionProjection([]);
   assert.deepEqual(
     initial.map((tool) => tool.name),
-    ["shell", "shell_wait", "zenx_plugin"],
+    ["wait", "shell", "zenx_plugin"],
   );
   assert.deepEqual(initial.at(-1), {
     name: "zenx_plugin",
@@ -194,35 +194,44 @@ test("exposes capability definitions and resolves main-process execution", async
   assert.deepEqual(await execution, { output: "bounded", exitCode: 0 });
 });
 
-test("propagates cancellation to the main-process provider", async (t) => {
-  const toolOutputSpool = new ToolOutputSpool();
-  t.after(async () => await toolOutputSpool.close());
+test("cancellation requests retain the provider result until execution actually settles", async () => {
   const events: HostEvent[] = [];
-  const { toolEnvironment } = createZenXHostToolEnvironment({
-    capabilities: {
-      definitions: [
-        {
-          name: "fixture_wait",
-          description: "Wait",
-          inputSchema: { type: "object" },
-        },
-      ],
-    },
+  const bundle = new ZenXHostToolBundle({
+    capabilities: { definitions: [tool("fixture_wait", "Wait")] },
     send: (event) => events.push(event),
-    toolOutputSpool,
   });
   const controller = new AbortController();
-  const prepared = toolEnvironment.prepare({
-    callId: "call-2",
+  const operation = bundle.tools[0]!.execute({
+    callId: "cancel-provider",
     name: "fixture_wait",
     arguments: {},
-    cwd: "/workspace",
+    cwd: process.cwd(),
     signal: controller.signal,
   });
-  const execution = toolEnvironment.execute(prepared);
-  controller.abort(new DOMException("stop", "AbortError"));
-  await assert.rejects(execution, /stop/u);
+  let settled = false;
+  void operation.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  const request = events.find((event) => event.type === "capability/invoke");
+  if (request?.type !== "capability/invoke") throw new Error("missing request");
+  controller.abort();
+  await Promise.resolve();
   assert.equal(events.at(-1)?.type, "capability/cancel");
+  assert.equal(settled, false);
+  bundle.handleResult({
+    type: "capability/result",
+    invocationId: request.invocationId,
+    generationToken: request.generationToken,
+    output: "remote operation completed despite cancellation",
+    exitCode: 0,
+  });
+  assert.match((await operation).output, /completed despite cancellation/u);
+  bundle.close();
 });
 
 test("replaces one target projection while an invocation from another plugin remains active", async (t) => {
@@ -486,3 +495,58 @@ function structuredStatus(value: unknown): unknown {
     ? value.status
     : undefined;
 }
+
+test("production ZenX routes an ordinary delayed capability through unified wait", async () => {
+  const spool = new ToolOutputSpool();
+  const events: HostEvent[] = [];
+  const composition = createZenXHostToolEnvironment({
+    capabilities: { definitions: [tool("image_generate", "Generate image")] },
+    send: (event) => events.push(event),
+    toolOutputSpool: spool,
+  });
+  try {
+    const environment = composition.toolEnvironment;
+    const result = await environment.execute(
+      environment.prepare({
+        callId: "delayed-image",
+        name: "image_generate",
+        arguments: {},
+        cwd: process.cwd(),
+        threadId: "image-thread",
+        signal: new AbortController().signal,
+        task: { yieldTimeMs: 1 },
+      }),
+    );
+    assert.equal(result.contentType, "application/vnd.zen.tool-task+json");
+    const state = result.structuredContent as {
+      status: string;
+      task_id: string;
+    };
+    assert.equal(state.status, "running");
+    const request = events.find((event) => event.type === "capability/invoke");
+    if (request?.type !== "capability/invoke")
+      throw new Error("missing request");
+    composition.capabilityBundle.handleResult({
+      type: "capability/result",
+      invocationId: request.invocationId,
+      generationToken: request.generationToken,
+      output: "image file ready",
+      exitCode: 0,
+    });
+    const waited = await environment.execute(
+      environment.prepare({
+        callId: "wait-image",
+        name: "wait",
+        arguments: { task_id: state.task_id, yield_time_ms: 100 },
+        cwd: process.cwd(),
+        threadId: "image-thread",
+        signal: new AbortController().signal,
+      }),
+    );
+    assert.equal(structuredStatus(waited.structuredContent), "completed");
+    assert.match(waited.output, /image file ready/u);
+  } finally {
+    await composition.close();
+    await spool.close();
+  }
+});

@@ -229,7 +229,8 @@ export function createHostedAppServer(
   const toolEnvironment =
     options.toolEnvironment ??
     new ToolEnvironment({
-      runtimes: [shellRuntime!, shellRuntime!.waitRuntime],
+      runtimes: [shellRuntime!],
+      toolOutputSpool,
     });
   toolEnvironment.registerRuntime(new ApplyPatchToolRuntime(), {
     kind: "builtin",
@@ -309,11 +310,9 @@ export function createHostedAppServer(
   let closeTransportPromise: Promise<void> | undefined;
   const closeProviderTransport = async () => {
     closeTransportPromise ??= (async () => {
-      const shellResult = await Promise.allSettled(
-        shellRuntime === undefined ? [] : [shellRuntime.close()],
-      );
+      const toolResults = await Promise.allSettled([toolEnvironment.close()]);
       const results = [
-        ...shellResult,
+        ...toolResults,
         ...(await Promise.allSettled([
           ...fetches.map(async (fetch) => await fetch.close?.()),
           toolOutputSpool.close(),

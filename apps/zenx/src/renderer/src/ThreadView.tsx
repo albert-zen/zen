@@ -1535,15 +1535,19 @@ function commandStatus(
 ): string {
   const data = item.structuredContent;
   if (
-    (item.toolName === "shell" || item.toolName === "shell_wait") &&
-    item.contentType === "application/vnd.zen.shell-session+json" &&
+    item.contentType === "application/vnd.zen.tool-task+json" &&
     typeof data === "object" &&
     data !== null &&
     !Array.isArray(data) &&
     "status" in data
   ) {
     if (data.status === "running")
-      return item.toolName === "shell" ? "Started" : "Waiting";
+      return item.toolName === "wait" ? "Waiting" : "Started";
+    if (data.status === "cancel_requested") return "Cancelling";
+    if (data.status === "cancellation_unconfirmed")
+      return "Cancellation unconfirmed";
+    if (data.status === "failed") return "Failed";
+    if (data.status === "completed") return "Done";
     if (data.status === "timed_out") return "Timed out";
     if (data.status === "cancelled") return "Cancelled";
   }

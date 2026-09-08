@@ -1456,10 +1456,10 @@ test("yielded shell work is labelled Started or Waiting rather than Done", async
     const running = {
       ...base,
       toolName: "shell",
-      contentType: "application/vnd.zen.shell-session+json",
+      contentType: "application/vnd.zen.tool-task+json",
       structuredContent: {
         status: "running",
-        session_id: "session-one",
+        task_id: "session-one",
         exit_code: null,
       },
       aggregatedOutput: "Command is still running",
@@ -1474,7 +1474,7 @@ test("yielded shell work is labelled Started or Waiting rather than Done", async
     );
     await renderInteractive(
       root,
-      turnWithItems("inProgress", [{ ...running, toolName: "shell_wait" }]),
+      turnWithItems("inProgress", [{ ...running, toolName: "wait" }]),
     );
     assert.equal(
       document.querySelector(".tool-status")?.textContent,
@@ -1485,12 +1485,12 @@ test("yielded shell work is labelled Started or Waiting rather than Done", async
       turnWithItems("inProgress", [
         {
           ...running,
-          toolName: "shell_wait",
+          toolName: "wait",
           status: "failed",
           exitCode: 124,
           structuredContent: {
             status: "timed_out",
-            session_id: "session-one",
+            task_id: "session-one",
             exit_code: 124,
           },
         },
@@ -1500,5 +1500,49 @@ test("yielded shell work is labelled Started or Waiting rather than Done", async
       document.querySelector(".tool-status")?.textContent,
       "Timed out",
     );
+  });
+});
+
+test("generic tool task observations distinguish waiting and unconfirmed cancellation", async () => {
+  await withDom(async (root) => {
+    const base = commandItem("image-task", "generate image");
+    if (base.type !== "commandExecution") throw new Error("missing command");
+    const cases = [
+      ["image_generate", "running", "Started"],
+      ["wait", "running", "Waiting"],
+      ["wait", "cancel_requested", "Cancelling"],
+      ["wait", "cancellation_unconfirmed", "Cancellation unconfirmed"],
+      ["wait", "cancelled", "Cancelled"],
+      ["wait", "timed_out", "Timed out"],
+      ["wait", "failed", "Failed"],
+      ["wait", "completed", "Done"],
+    ] as const;
+    for (const [toolName, status, expected] of cases) {
+      await renderInteractive(
+        root,
+        turnWithItems("inProgress", [
+          {
+            ...base,
+            toolName,
+            contentType: "application/vnd.zen.tool-task+json",
+            structuredContent: {
+              status,
+              task_id: "task-image",
+              exit_code: null,
+            },
+            aggregatedOutput: "Existing partial output",
+          },
+        ]),
+      );
+      if (!document.querySelector(".tool-status")) {
+        await act(async () =>
+          document.querySelector<HTMLButtonElement>(".trace-toggle")?.click(),
+        );
+      }
+      assert.equal(
+        document.querySelector(".tool-status")?.textContent,
+        expected,
+      );
+    }
   });
 });
