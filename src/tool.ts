@@ -1,6 +1,10 @@
-import { spawn, type ChildProcessByStdio } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import type { Readable } from "node:stream";
+import {
+  ToolTaskManager,
+  ToolWaitRuntime,
+  type ToolTaskOptions,
+  type ToolTaskPolicy,
+} from "./tool-task.js";
+import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 
 import {
@@ -26,6 +30,9 @@ export interface ToolInvocation {
   cwd: string;
   signal: AbortSignal;
   threadId?: string;
+  task?: { yieldTimeMs?: number; timeoutMs?: number };
+  /** Host-owned streaming sink; bytes emitted here must not be repeated in final output. */
+  taskContext?: { onOutput(text: string): void };
 }
 
 export interface ToolExecutionResult {
@@ -60,6 +67,7 @@ export interface ToolRuntime {
   readonly specification: ModelTool;
   /** Runtime body scheduling only; not permission or resource scope. */
   readonly executionMode?: ToolExecutionMode;
+  readonly taskPolicy?: ToolTaskPolicy;
   /** Known model modalities required before this tool body may execute. */
   readonly requiredModelInputModalities?: readonly string[];
   execute(invocation: ToolInvocation): Promise<ToolExecutionResult>;
@@ -211,6 +219,8 @@ interface PreparedRuntimeRegistration {
  * captures the exact runtime so later bundle changes affect only future calls.
  */
 export class ToolEnvironment {
+  readonly taskManager: ToolTaskManager;
+  readonly waitRuntime: ToolWaitRuntime;
   readonly #bundles = new Map<string, BundleRegistration>();
   readonly #tools = new Map<string, BundleRegistration & RuntimeRegistration>();
   readonly #reservedBundleKeys = new Set<string>();
@@ -224,6 +234,8 @@ export class ToolEnvironment {
 
   constructor(
     options: {
+      taskOptions?: ToolTaskOptions;
+      toolOutputSpool?: ToolOutputSpool;
       runtimes?: readonly ToolRuntime[];
       bundles?: readonly ToolBundle[];
       policyStore?: ToolPolicyStore;
@@ -247,6 +259,14 @@ export class ToolEnvironment {
             deniedTools: options.deniedTools ?? new Set<string>(),
           })
         : new InMemoryToolPolicyStore());
+    this.taskManager = new ToolTaskManager({
+      ...options.taskOptions,
+      ...(options.toolOutputSpool === undefined
+        ? {}
+        : { toolOutputSpool: options.toolOutputSpool }),
+    });
+    this.waitRuntime = new ToolWaitRuntime(this.taskManager);
+    this.registerRuntime(this.waitRuntime);
     for (const runtime of options.runtimes ?? []) {
       this.registerRuntime(runtime);
     }
@@ -289,6 +309,15 @@ export class ToolEnvironment {
     bundle: ToolBundle,
     options: { replaceCurrent?: boolean } = {},
   ): StagedToolBundleRegistration {
+    if (
+      bundle.tools.some(
+        (runtime) => runtime.name === "wait" && runtime !== this.waitRuntime,
+      ) ||
+      (bundle.identity.kind === "builtin" &&
+        bundle.identity.id === "wait" &&
+        bundle.tools[0] !== this.waitRuntime)
+    )
+      throw new Error("The wait tool is reserved by the runtime");
     const identity = Object.freeze({ ...bundle.identity });
     const key = bundleIdentityKey(identity);
     if (
@@ -365,6 +394,7 @@ export class ToolEnvironment {
 
   unregisterBundle(identity: ToolBundleIdentity): boolean {
     const key = bundleIdentityKey(identity);
+    if (key === "builtin:wait") return false;
     const registration = this.#bundles.get(key);
     if (registration === undefined) return false;
     return this.#unregisterRegistration(key, registration);
@@ -414,7 +444,11 @@ export class ToolEnvironment {
     options: ToolAdmissionOptions,
   ): Promise<ApprovalDecision> {
     this.#requirePrepared(prepared);
-    if (options.policy === "full_access") return "accept";
+    if (
+      this.#requirePrepared(prepared).runtime === this.waitRuntime ||
+      options.policy === "full_access"
+    )
+      return "accept";
 
     const toolName = prepared.invocation.name;
     try {
@@ -472,7 +506,8 @@ export class ToolEnvironment {
   async admitInherited(
     prepared: PreparedToolInvocation,
   ): Promise<ApprovalDecision> {
-    this.#requirePrepared(prepared);
+    if (this.#requirePrepared(prepared).runtime === this.waitRuntime)
+      return "accept";
     try {
       const stored = await this.#policyStore.get(prepared.invocation.name);
       if (stored === "denied") {
@@ -492,6 +527,7 @@ export class ToolEnvironment {
     modelInputModalities?: readonly string[] | null,
   ): Promise<ToolExecutionResult> {
     const runtime = this.#requirePrepared(prepared).runtime;
+    let retained = false;
     try {
       prepared.invocation.signal.throwIfAborted();
       if (
@@ -507,20 +543,51 @@ export class ToolEnvironment {
           )} input required by ${prepared.invocation.name}`,
         );
       }
-      const result =
-        nested !== undefined &&
-        prepared.owner.kind === "builtin" &&
-        isCompositeToolRuntime(runtime)
-          ? await runtime.executeComposite(prepared.invocation, nested)
-          : await runtime.execute(prepared.invocation);
+      const execute = async (invocation: ToolInvocation) => {
+        const result =
+          nested !== undefined &&
+          prepared.owner.kind === "builtin" &&
+          isCompositeToolRuntime(runtime)
+            ? await runtime.executeComposite(invocation, nested)
+            : await runtime.execute(invocation);
+        try {
+          return normalizeToolExecutionResult(result, prepared.owner);
+        } catch (error) {
+          throw new ToolResultNormalizationError(error);
+        }
+      };
+      if (runtime instanceof ToolWaitRuntime || isCompositeToolRuntime(runtime))
+        return await execute(prepared.invocation);
+      const scope =
+        runtime.taskPolicy?.resourceScope ??
+        (runtime.executionMode === "parallel_safe" ? "independent" : "bundle");
+      const key =
+        scope === "independent"
+          ? undefined
+          : scope === "runtime"
+            ? runtime
+            : bundleIdentityKey(prepared.owner);
+      retained = true;
       try {
-        return normalizeToolExecutionResult(result, prepared.owner);
+        return await this.taskManager.run(
+          runtime,
+          prepared.invocation,
+          execute,
+          { resourceKey: key, release: () => this.#releasePrepared(prepared) },
+        );
       } catch (error) {
-        throw new ToolResultNormalizationError(error);
+        // Admission/validation can fail before the task acquires its lease.
+        if (!this.taskManager.ownsInvocation(prepared.invocation))
+          this.#releasePrepared(prepared);
+        throw error;
       }
     } finally {
-      this.#releasePrepared(prepared);
+      if (!retained) this.#releasePrepared(prepared);
     }
+  }
+
+  async close(): Promise<void> {
+    await this.taskManager.close();
   }
 
   #requirePrepared(
@@ -717,578 +784,136 @@ export type ApprovalHandler = (
   request: ApprovalRequest,
 ) => Promise<ApprovalDecision>;
 
+/** Concrete process execution only; the environment owns waiting and deadlines. */
 export class ShellToolRuntime implements ToolRuntime {
   readonly name = "shell";
+  readonly taskPolicy: ToolTaskPolicy = {
+    resourceScope: "independent",
+    cancellation: "confirmed-on-settle",
+  };
   readonly specification: ModelTool = {
     name: this.name,
     description:
-      "Run a shell command in the thread working directory. After 10 seconds by default, a long-running command returns a host-local session_id for shell_wait. Commands time out after 10 minutes by default; timeout_ms may extend that deadline up to 24 hours.",
+      "Run a shell command. Long operations return a task_id for wait. yield_time_ms controls how soon control returns; timeout_ms controls the execution deadline (default 10 minutes, maximum 24 hours).",
     inputSchema: {
       type: "object",
       properties: {
         command: { type: "string" },
-        yield_time_ms: {
-          type: "integer",
-          description:
-            "Milliseconds to wait before yielding a running session (default 10000).",
-          minimum: 1,
-          maximum: 60000,
-        },
-        timeout_ms: {
-          type: "integer",
-          description:
-            "Hard command deadline in milliseconds (maximum 24 hours).",
-          minimum: 1,
-          maximum: 86400000,
-        },
+        yield_time_ms: { type: "integer", minimum: 1, maximum: 60000 },
+        timeout_ms: { type: "integer", minimum: 1, maximum: 86400000 },
       },
       required: ["command"],
       additionalProperties: false,
     },
   };
-
-  readonly #maxOutputBytes: number;
-  readonly #initialYieldMs: number;
-  readonly #defaultTimeoutMs: number;
-  readonly #terminationGraceMs: number;
-  readonly #completedSessionRetentionMs: number;
-  readonly #maxSessions: number;
   readonly #environment: NodeJS.ProcessEnv;
-  readonly #toolOutputSpool: ToolOutputSpool | undefined;
-  readonly #sessions = new Map<string, ShellSession>();
-  readonly waitRuntime: ShellWaitToolRuntime;
-  #closed = false;
-
+  readonly #terminationGraceMs: number;
+  readonly #maxOutputBytes: number;
+  readonly #spool: ToolOutputSpool | undefined;
   constructor(
     options: {
-      maxOutputBytes?: number;
-      initialYieldMs?: number;
-      defaultTimeoutMs?: number;
-      terminationGraceMs?: number;
-      completedSessionRetentionMs?: number;
-      maxSessions?: number;
       environment?: Readonly<NodeJS.ProcessEnv>;
       blockedEnvironmentVariables?: readonly string[];
+      terminationGraceMs?: number;
+      maxOutputBytes?: number;
       toolOutputSpool?: ToolOutputSpool;
     } = {},
   ) {
-    const sourceEnvironment = options.environment ?? process.env;
-    const blockedEnvironmentVariables =
-      options.blockedEnvironmentVariables ?? [];
-    this.#maxOutputBytes =
-      options.maxOutputBytes ?? DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES;
-    this.#initialYieldMs = boundedInteger(
-      options.initialYieldMs ?? 10_000,
-      "Shell initial yield",
-      1,
-      60_000,
-    );
-    this.#defaultTimeoutMs = boundedInteger(
-      options.defaultTimeoutMs ?? 10 * 60_000,
-      "Shell timeout",
-      1,
-      24 * 60 * 60_000,
-    );
-    this.#terminationGraceMs = options.terminationGraceMs ?? 250;
-    this.#completedSessionRetentionMs =
-      options.completedSessionRetentionMs ?? 5 * 60_000;
-    this.#maxSessions = boundedInteger(
-      options.maxSessions ?? 64,
-      "Shell session limit",
-      1,
-      1_024,
-    );
-    this.#toolOutputSpool = options.toolOutputSpool;
     this.#environment = Object.freeze(
-      sanitizeToolEnvironment(sourceEnvironment, blockedEnvironmentVariables),
-    );
-    this.waitRuntime = new ShellWaitToolRuntime(this);
-  }
-
-  async execute(invocation: ToolInvocation): Promise<ToolExecutionResult> {
-    if (invocation.name !== "shell") {
-      throw new Error(`Unsupported tool: ${invocation.name}`);
-    }
-    const command = invocation.arguments.command;
-    if (typeof command !== "string" || command.length === 0) {
-      throw new Error("shell.command must be a non-empty string");
-    }
-    invocation.signal.throwIfAborted();
-    if (this.#closed) throw new Error("Shell runtime is closed");
-    if (this.#sessions.size >= this.#maxSessions) {
-      throw new Error(
-        `Shell session limit reached (${String(this.#maxSessions)}); wait for or terminate an existing session`,
-      );
-    }
-    const threadId = invocation.threadId;
-    const yieldTimeMs = optionalBoundedInteger(
-      invocation.arguments.yield_time_ms,
-      this.#initialYieldMs,
-      "shell.yield_time_ms",
-      1,
-      60_000,
-    );
-    const timeoutMs = optionalBoundedInteger(
-      invocation.arguments.timeout_ms,
-      this.#defaultTimeoutMs,
-      "shell.timeout_ms",
-      1,
-      24 * 60 * 60_000,
-    );
-    const session = new ShellSession({
-      id: randomUUID(),
-      threadId,
-      command,
-      cwd: invocation.cwd,
-      environment: this.#environment,
-      timeoutMs,
-      maxOutputBytes: this.#maxOutputBytes,
-      terminationGraceMs: this.#terminationGraceMs,
-      completedSessionRetentionMs: this.#completedSessionRetentionMs,
-      toolOutputSpool: this.#toolOutputSpool,
-      onExpired: (id) => this.#sessions.delete(id),
-    });
-    this.#sessions.set(session.id, session);
-    const result = await session.initialResult(yieldTimeMs, invocation.signal);
-    if (shellSessionResultIsFinal(result)) {
-      session.consume();
-      this.#sessions.delete(session.id);
-    } else if (threadId === undefined) {
-      const unscoped = await session.wait(yieldTimeMs, invocation.signal, true);
-      session.consume();
-      this.#sessions.delete(session.id);
-      return {
-        ...unscoped,
-        output: `${result.output}\n${unscoped.output}\n[long-running shell commands require a thread id]`,
-        exitCode: 1,
-      };
-    }
-    return result;
-  }
-
-  async wait(invocation: ToolInvocation): Promise<ToolExecutionResult> {
-    if (invocation.name !== "shell_wait") {
-      throw new Error(`Unsupported tool: ${invocation.name}`);
-    }
-    const id = invocation.arguments.session_id;
-    if (typeof id !== "string" || id.length === 0) {
-      throw new Error("shell_wait.session_id must be a non-empty string");
-    }
-    const session = this.#sessions.get(id);
-    if (
-      session === undefined ||
-      invocation.threadId === undefined ||
-      session.threadId !== invocation.threadId
-    ) {
-      throw new Error("Shell session not found for this thread");
-    }
-    const yieldTimeMs = optionalBoundedInteger(
-      invocation.arguments.yield_time_ms,
-      this.#initialYieldMs,
-      "shell_wait.yield_time_ms",
-      1,
-      60_000,
-    );
-    const terminate = invocation.arguments.terminate ?? false;
-    if (typeof terminate !== "boolean") {
-      throw new Error("shell_wait.terminate must be a boolean");
-    }
-    const result = await session.wait(
-      yieldTimeMs,
-      invocation.signal,
-      terminate,
-    );
-    if (shellSessionResultIsFinal(result)) {
-      session.consume();
-      this.#sessions.delete(id);
-    }
-    return result;
-  }
-
-  async close(): Promise<void> {
-    if (this.#closed) return;
-    this.#closed = true;
-    await Promise.allSettled(
-      [...this.#sessions.values()].map(
-        async (session) => await session.close(),
+      sanitizeToolEnvironment(
+        options.environment ?? process.env,
+        options.blockedEnvironmentVariables ?? [],
       ),
     );
-    this.#sessions.clear();
+    this.#terminationGraceMs = options.terminationGraceMs ?? 250;
+    this.#maxOutputBytes =
+      options.maxOutputBytes ?? DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES;
+    this.#spool = options.toolOutputSpool;
   }
-}
-
-function shellSessionResultIsFinal(result: ToolExecutionResult): boolean {
-  if (result.contentType === undefined) return true;
-  const content = result.structuredContent;
-  return !(
-    typeof content === "object" &&
-    content !== null &&
-    "status" in content &&
-    content.status === "running"
-  );
-}
-
-export class ShellWaitToolRuntime implements ToolRuntime {
-  readonly name = "shell_wait";
-  readonly specification: ModelTool = {
-    name: this.name,
-    description:
-      "Wait up to 10 seconds by default for new output or completion from a shell session. Use terminate: true to stop that session. Running status is explicit in structuredContent; wait again only when the command's progress is needed.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        session_id: { type: "string" },
-        yield_time_ms: {
-          type: "integer",
-          description: "Milliseconds to wait for new output (default 10000).",
-          minimum: 1,
-          maximum: 60000,
-        },
-        terminate: { type: "boolean" },
-      },
-      required: ["session_id"],
-      additionalProperties: false,
-    },
-  };
-
-  readonly #shell: ShellToolRuntime;
-
-  constructor(shell: ShellToolRuntime) {
-    this.#shell = shell;
-  }
-
   async execute(invocation: ToolInvocation): Promise<ToolExecutionResult> {
-    return await this.#shell.wait(invocation);
-  }
-}
-
-type ShellFinalReason = "completed" | "timeout" | "interrupted" | "terminated";
-
-interface ShellFinalState {
-  reason: ShellFinalReason;
-  exitCode: number;
-  signal: NodeJS.Signals | null;
-}
-
-class ShellSession {
-  readonly id: string;
-  readonly threadId: string | undefined;
-  readonly #timeoutMs: number;
-  readonly #terminationGraceMs: number;
-  readonly #completedSessionRetentionMs: number;
-  readonly #maxOutputBytes: number;
-  readonly #toolOutputSpool: ToolOutputSpool | undefined;
-  readonly #onExpired: (id: string) => void;
-  readonly #child: ChildProcessByStdio<null, Readable, Readable>;
-  readonly #stdoutDecoder = new StringDecoder("utf8");
-  readonly #stderrDecoder = new StringDecoder("utf8");
-  readonly #listeners = new Set<() => void>();
-  #window: ShellOutputWindow;
-  #final: ShellFinalState | undefined;
-  #terminationReason: Exclude<ShellFinalReason, "completed"> | undefined;
-  #hardTimeout: NodeJS.Timeout | undefined;
-  #forceKillTimer: NodeJS.Timeout | undefined;
-  #expiryTimer: NodeJS.Timeout | undefined;
-  #originSignal: AbortSignal | undefined;
-  #originAbort: (() => void) | undefined;
-
-  get final(): boolean {
-    return this.#final !== undefined;
-  }
-
-  constructor(options: {
-    id: string;
-    threadId: string | undefined;
-    command: string;
-    cwd: string;
-    environment: NodeJS.ProcessEnv;
-    timeoutMs: number;
-    maxOutputBytes: number;
-    terminationGraceMs: number;
-    completedSessionRetentionMs: number;
-    toolOutputSpool: ToolOutputSpool | undefined;
-    onExpired(id: string): void;
-  }) {
-    this.id = options.id;
-    this.threadId = options.threadId;
-    this.#timeoutMs = options.timeoutMs;
-    this.#maxOutputBytes = options.maxOutputBytes;
-    this.#terminationGraceMs = options.terminationGraceMs;
-    this.#completedSessionRetentionMs = options.completedSessionRetentionMs;
-    this.#toolOutputSpool = options.toolOutputSpool;
-    this.#onExpired = options.onExpired;
-    this.#window = this.#newWindow();
-    this.#child = spawn(options.command, {
-      cwd: options.cwd,
-      env: options.environment,
+    invocation.signal.throwIfAborted();
+    const command = invocation.arguments.command;
+    if (typeof command !== "string" || command.length === 0)
+      throw new Error("shell.command must be a non-empty string");
+    const capture =
+      invocation.taskContext === undefined
+        ? new ToolOutputWindow(this.#maxOutputBytes, this.#spool)
+        : undefined;
+    const write = (text: string) => {
+      if (capture !== undefined) capture.write(text);
+      else invocation.taskContext?.onOutput(text);
+    };
+    const child = spawn(command, {
+      cwd: invocation.cwd,
+      env: this.#environment,
       shell: true,
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
-    this.#child.stdout.on("data", (chunk: Buffer) => {
-      this.#window.write(this.#stdoutDecoder.write(chunk));
-      this.#notify();
-    });
-    this.#child.stderr.on("data", (chunk: Buffer) => {
-      this.#window.write(this.#stderrDecoder.write(chunk));
-      this.#notify();
-    });
-    this.#child.once("error", (error) => {
-      this.#window.write(`\n[shell spawn failed: ${error.message}]`);
-      this.#finish({ reason: "completed", exitCode: 1, signal: null });
-    });
-    this.#child.once("close", (code, signal) => {
-      this.#window.write(this.#stdoutDecoder.end());
-      this.#window.write(this.#stderrDecoder.end());
-      const reason = this.#terminationReason ?? "completed";
-      // TERM can close the wrapper while a redirected descendant remains in
-      // the owned group. Do not cancel the final group kill in that state.
-      if (this.#terminationReason !== undefined)
-        this.#killProcessTree("SIGKILL");
-      this.#finish({
-        reason,
-        exitCode:
-          reason === "timeout"
-            ? 124
-            : reason === "interrupted" || reason === "terminated"
-              ? 130
-              : (code ?? 128),
-        signal,
-      });
-    });
-    this.#hardTimeout = setTimeout(() => {
-      this.#terminate("timeout");
-    }, this.#timeoutMs);
-    this.#hardTimeout.unref();
-  }
-
-  async initialResult(
-    yieldTimeMs: number,
-    signal: AbortSignal,
-  ): Promise<ToolExecutionResult> {
-    this.#originSignal = signal;
-    this.#originAbort = () => this.#terminate("interrupted");
-    signal.addEventListener("abort", this.#originAbort, { once: true });
-    await this.#waitForChange(yieldTimeMs, signal, false, false);
-    if (this.#final === undefined) {
-      return await this.#drain("running");
-    }
-    return await this.#drain(
-      this.#final.reason === "completed" ? "quiet-final" : "final",
-    );
-  }
-
-  async wait(
-    yieldTimeMs: number,
-    signal: AbortSignal,
-    terminate: boolean,
-  ): Promise<ToolExecutionResult> {
-    if (terminate && this.#final === undefined) this.#terminate("terminated");
-    await this.#waitForChange(yieldTimeMs, signal, true, terminate);
-    if (this.#final === undefined) return await this.#drain("running");
-    return await this.#drain("final");
-  }
-
-  consume(): void {
-    if (this.#expiryTimer !== undefined) {
-      clearTimeout(this.#expiryTimer);
-      this.#expiryTimer = undefined;
-    }
-  }
-
-  async close(): Promise<void> {
-    if (this.#final === undefined) this.#terminate("terminated");
-    if (this.#final === undefined) {
-      await new Promise<void>((resolve) => {
-        const finish = () => {
-          if (this.#final === undefined) return;
-          this.#listeners.delete(finish);
-          resolve();
-        };
-        this.#listeners.add(finish);
-      });
-    }
-    await this.#window.discard();
-    if (this.#expiryTimer !== undefined) clearTimeout(this.#expiryTimer);
-  }
-
-  async #waitForChange(
-    yieldTimeMs: number,
-    signal: AbortSignal,
-    returnOnOutput: boolean,
-    terminationRequested: boolean,
-  ): Promise<void> {
-    if (signal.aborted && this.#final === undefined)
-      this.#terminate("interrupted");
-    if (
-      this.#final !== undefined ||
-      (returnOnOutput &&
-        this.#window.hasOutput &&
-        !terminationRequested &&
-        this.#terminationReason === undefined)
-    ) {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      let timer: NodeJS.Timeout | undefined;
-      const done = () => {
-        cleanup();
-        resolve();
+    const stdout = new StringDecoder("utf8"),
+      stderr = new StringDecoder("utf8");
+    child.stdout.on("data", (chunk: Buffer) => write(stdout.write(chunk)));
+    child.stderr.on("data", (chunk: Buffer) => write(stderr.write(chunk)));
+    let killTimer: NodeJS.Timeout | undefined;
+    let aborted = false;
+    const kill = (signal: NodeJS.Signals) => {
+      if (process.platform !== "win32" && child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch {
+          /* Group already exited. */
+        }
+      }
+      try {
+        child.kill(signal);
+      } catch {
+        /* Child already exited. */
+      }
+    };
+    const exitCode = await new Promise<number>((resolve) => {
+      let finished = false;
+      const finish = (code: number) => {
+        if (finished) return;
+        finished = true;
+        if (killTimer !== undefined) clearTimeout(killTimer);
+        invocation.signal.removeEventListener("abort", abort);
+        write(stdout.end());
+        write(stderr.end());
+        resolve(code);
       };
       const abort = () => {
-        if (this.#final === undefined) this.#terminate("interrupted");
-        if (this.#final !== undefined) done();
+        if (aborted || finished) return;
+        aborted = true;
+        kill("SIGTERM");
+        killTimer = setTimeout(() => {
+          kill("SIGKILL");
+          child.stdout.destroy();
+          child.stderr.destroy();
+          finish(130);
+        }, this.#terminationGraceMs);
       };
-      const changed = () => {
-        if (
-          this.#final !== undefined ||
-          (returnOnOutput &&
-            !terminationRequested &&
-            this.#terminationReason === undefined &&
-            this.#window.hasOutput)
-        ) {
-          done();
-        }
-      };
-      const cleanup = () => {
-        if (timer !== undefined) clearTimeout(timer);
-        signal.removeEventListener("abort", abort);
-        this.#listeners.delete(changed);
-      };
-      this.#listeners.add(changed);
-      signal.addEventListener("abort", abort, { once: true });
-      timer = setTimeout(done, yieldTimeMs);
-      if (this.#final !== undefined) done();
-    });
-  }
-
-  #terminate(reason: Exclude<ShellFinalReason, "completed">): void {
-    if (this.#final !== undefined || this.#terminationReason !== undefined)
-      return;
-    this.#terminationReason = reason;
-    this.#killProcessTree("SIGTERM");
-    this.#forceKillTimer = setTimeout(() => {
-      this.#killProcessTree("SIGKILL");
-      this.#child.stdout.destroy();
-      this.#child.stderr.destroy();
-      this.#finish({
-        reason,
-        exitCode: reason === "timeout" ? 124 : 130,
-        signal: "SIGKILL",
+      child.once("error", (error) => {
+        write(`\n[shell spawn failed: ${error.message}]`);
+        finish(1);
       });
-    }, this.#terminationGraceMs);
-  }
-
-  #killProcessTree(signal: NodeJS.Signals): void {
-    if (process.platform !== "win32" && this.#child.pid !== undefined) {
-      try {
-        process.kill(-this.#child.pid, signal);
-        return;
-      } catch {
-        // The group may have exited between observation and termination.
-      }
-    }
-    try {
-      this.#child.kill(signal);
-    } catch {
-      // A concurrent exit is equivalent to successful cleanup.
-    }
-  }
-
-  #finish(final: ShellFinalState): void {
-    if (this.#final !== undefined) return;
-    this.#final = final;
-    if (this.#hardTimeout !== undefined) clearTimeout(this.#hardTimeout);
-    if (this.#forceKillTimer !== undefined) clearTimeout(this.#forceKillTimer);
-    if (this.#originSignal !== undefined && this.#originAbort !== undefined) {
-      this.#originSignal.removeEventListener("abort", this.#originAbort);
-    }
-    this.#expiryTimer = setTimeout(() => {
-      void this.#window.discard();
-      this.#onExpired(this.id);
-    }, this.#completedSessionRetentionMs);
-    this.#expiryTimer.unref();
-    this.#notify();
-  }
-
-  async #drain(
-    kind: "running" | "quiet-final" | "final",
-  ): Promise<ToolExecutionResult> {
-    const final = this.#final;
-    let control = "";
-    if (kind === "running") {
-      control = `${this.#window.hasOutput ? "\n" : ""}[command still running]\nsession_id: ${this.id}\ntimeout_ms: ${String(this.#timeoutMs)}`;
-    } else if (kind === "final" && final !== undefined) {
-      const status =
-        final.reason === "timeout"
-          ? `command timed out after ${String(this.#timeoutMs)} ms`
-          : final.reason === "completed"
-            ? "command completed"
-            : final.reason === "terminated"
-              ? "command terminated by shell_wait"
-              : "command interrupted";
-      control = `${this.#window.hasOutput ? "\n" : ""}[${status}]\nexit_code: ${String(final.exitCode)}`;
-    }
-    if (
-      final?.signal !== null &&
-      final?.signal !== undefined &&
-      final.reason === "completed"
-    ) {
-      control += `\n[terminated by ${final.signal}]`;
-    }
-    const window = this.#window;
-    if (final === undefined) this.#window = this.#newWindow();
-    const capture = await window.finish();
-    const status =
-      final?.reason === "timeout"
-        ? "timed_out"
-        : final?.reason === "interrupted" || final?.reason === "terminated"
-          ? "cancelled"
-          : (final?.reason ?? "running");
-    const sessionState: JsonValue =
-      final === undefined
-        ? {
-            status,
-            session_id: this.id,
-            timeout_ms: this.#timeoutMs,
-            exit_code: null,
-          }
-        : {
-            status,
-            session_id: this.id,
-            exit_code: final.exitCode,
-          };
-    return {
-      output:
-        capture.metadata === undefined
-          ? `${capture.output}${control}`
-          : capture.output,
-      ...(capture.metadata === undefined
-        ? {}
-        : {
-            [TOOL_OUTPUT_CAPTURE]: capture.metadata,
-            ...(control.length === 0 ? {} : { [TOOL_OUTPUT_SUFFIX]: control }),
-          }),
-      exitCode: final?.exitCode ?? 0,
-      ...(kind === "quiet-final"
-        ? {}
-        : {
-            contentType: "application/vnd.zen.shell-session+json",
-            structuredContent: sessionState,
-          }),
-    };
-  }
-
-  #newWindow(): ShellOutputWindow {
-    return new ShellOutputWindow(this.#maxOutputBytes, this.#toolOutputSpool);
-  }
-
-  #notify(): void {
-    for (const listener of [...this.#listeners]) listener();
+      child.once("close", (code) => {
+        if (aborted) kill("SIGKILL");
+        finish(aborted ? 130 : (code ?? 128));
+      });
+      invocation.signal.addEventListener("abort", abort, { once: true });
+      if (invocation.signal.aborted) abort();
+    });
+    if (capture === undefined) return { output: "", exitCode };
+    const output = await capture.finish();
+    return attachToolOutputCapture(
+      { output: output.output, exitCode },
+      output.metadata,
+    );
   }
 }
 
-class ShellOutputWindow {
+export class ToolOutputWindow {
   readonly #maxOutputBytes: number;
   readonly #capture: ReturnType<ToolOutputSpool["beginCapture"]> | undefined;
   readonly #chunks: Buffer[] = [];
@@ -1320,17 +945,17 @@ class ShellOutputWindow {
     this.#truncated ||= kept.length < encoded.length;
   }
 
-  async finish(): Promise<{
+  async finish(sourceTruncated = false): Promise<{
     output: string;
     metadata?: ToolOutputCaptureMetadata;
   }> {
     if (this.#capture !== undefined) {
-      const metadata = await this.#capture.finish();
+      const metadata = await this.#capture.finish({ sourceTruncated });
       return { output: metadata.output ?? "", metadata };
     }
     return {
       output: `${Buffer.concat(this.#chunks).toString("utf8")}${
-        this.#truncated ? "\n[output truncated by Zen]" : ""
+        this.#truncated || sourceTruncated ? "\n[output truncated by Zen]" : ""
       }`,
     };
   }
@@ -1340,35 +965,19 @@ class ShellOutputWindow {
   }
 }
 
-function optionalBoundedInteger(
-  value: unknown,
-  fallback: number,
-  label: string,
-  minimum: number,
-  maximum: number,
-): number {
-  return value === undefined
-    ? fallback
-    : boundedInteger(value, label, minimum, maximum);
-}
-
-function boundedInteger(
-  value: unknown,
-  label: string,
-  minimum: number,
-  maximum: number,
-): number {
-  if (
-    typeof value !== "number" ||
-    !Number.isSafeInteger(value) ||
-    value < minimum ||
-    value > maximum
-  ) {
-    throw new Error(
-      `${label} must be an integer from ${String(minimum)} to ${String(maximum)}`,
-    );
-  }
-  return value;
+export function attachToolOutputCapture(
+  result: ToolExecutionResult,
+  metadata?: ToolOutputCaptureMetadata,
+  suffix = "",
+): ToolExecutionResult {
+  return {
+    ...result,
+    output: metadata === undefined ? result.output + suffix : result.output,
+    ...(metadata === undefined ? {} : { [TOOL_OUTPUT_CAPTURE]: metadata }),
+    ...(metadata === undefined || suffix.length === 0
+      ? {}
+      : { [TOOL_OUTPUT_SUFFIX]: suffix }),
+  };
 }
 
 export function capturedToolOutput(

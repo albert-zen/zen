@@ -6,7 +6,11 @@ import test from "node:test";
 
 import { createHostedAppServer } from "../apps/cli/src/host.js";
 import { ToolOutputSpool } from "../src/tool-output-spool.js";
-import { ShellToolRuntime } from "../src/tool.js";
+import {
+  ShellToolRuntime,
+  ToolEnvironment,
+  type ToolInvocation,
+} from "../src/tool.js";
 
 function invocation(
   name: string,
@@ -24,8 +28,8 @@ function invocation(
 }
 
 function sessionId(output: string): string {
-  const match = /^session_id: ([a-f0-9-]+)$/mu.exec(output);
-  assert(match?.[1], `missing session_id in ${JSON.stringify(output)}`);
+  const match = /^task_id: ([a-f0-9-]+)$/mu.exec(output);
+  assert(match?.[1], `missing task_id in ${JSON.stringify(output)}`);
   return match[1];
 }
 
@@ -39,9 +43,9 @@ function status(result: { structuredContent?: unknown }): unknown {
 function structuredSessionId(value: unknown): string | undefined {
   return typeof value === "object" &&
     value !== null &&
-    "session_id" in value &&
-    typeof value.session_id === "string"
-    ? value.session_id
+    "task_id" in value &&
+    typeof value.task_id === "string"
+    ? value.task_id
     : undefined;
 }
 
@@ -79,10 +83,10 @@ async function waitForProcessExit(pid: number, milliseconds = 1_000) {
 }
 
 test(
-  "inherited background pipes yield a session and shell_wait reports completion",
+  "inherited background pipes yield a session and wait reports completion",
   { skip: process.platform === "win32" },
   async () => {
-    const shell = new ShellToolRuntime({ initialYieldMs: 25 });
+    const shell = createShell({ initialYieldMs: 25 });
     try {
       const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
         'setTimeout(() => process.stdout.write("later"), 80)',
@@ -93,11 +97,11 @@ test(
       );
 
       assert.equal(started.exitCode, 0);
-      assert.match(started.output, /command still running/u);
+      assert.match(started.output, /tool task running/u);
       const firstWait = await within(
         shell.waitRuntime.execute(
-          invocation("shell_wait", {
-            session_id: sessionId(started.output),
+          invocation("wait", {
+            task_id: sessionId(started.output),
             yield_time_ms: 500,
           }),
         ),
@@ -107,8 +111,8 @@ test(
           ? firstWait
           : await within(
               shell.waitRuntime.execute(
-                invocation("shell_wait", {
-                  session_id: sessionId(firstWait.output),
+                invocation("wait", {
+                  task_id: sessionId(firstWait.output),
                   yield_time_ms: 500,
                 }),
               ),
@@ -129,7 +133,7 @@ test(
       path.join(os.tmpdir(), "zen-shell-timeout-"),
     );
     const marker = path.join(temporaryDirectory, "pid");
-    const shell = new ShellToolRuntime({
+    const shell = createShell({
       initialYieldMs: 500,
       defaultTimeoutMs: 60,
       terminationGraceMs: 20,
@@ -148,7 +152,7 @@ test(
 
       assert.equal(result.exitCode, 124);
       assert.match(result.output, /partial/u);
-      assert.match(result.output, /timed out/u);
+      assert.match(result.output, /timed_out/u);
       await waitForProcessExit(pid);
     } finally {
       await shell.close();
@@ -162,7 +166,7 @@ test(
   { skip: process.platform === "win32" },
   async () => {
     const controller = new AbortController();
-    const shell = new ShellToolRuntime({
+    const shell = createShell({
       initialYieldMs: 500,
       terminationGraceMs: 20,
     });
@@ -190,7 +194,7 @@ test(
 
       assert.equal(result.exitCode, 130);
       assert.match(result.output, /before-abort/u);
-      assert.match(result.output, /interrupted/u);
+      assert.match(result.output, /cancelled/u);
       for (const pid of pids) await waitForProcessExit(pid);
     } finally {
       await shell.close();
@@ -199,8 +203,8 @@ test(
   },
 );
 
-test("shell_wait sessions are owned by one thread", async () => {
-  const shell = new ShellToolRuntime({ initialYieldMs: 20 });
+test("wait sessions are owned by one thread", async () => {
+  const shell = createShell({ initialYieldMs: 20 });
   try {
     const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
       "setTimeout(() => undefined, 150)",
@@ -210,13 +214,13 @@ test("shell_wait sessions are owned by one thread", async () => {
 
     await assert.rejects(
       shell.waitRuntime.execute(
-        invocation("shell_wait", { session_id: id }, { threadId: "thread-b" }),
+        invocation("wait", { task_id: id }, { threadId: "thread-b" }),
       ),
       /not found for this thread/u,
     );
     const completed = await shell.waitRuntime.execute(
-      invocation("shell_wait", {
-        session_id: id,
+      invocation("wait", {
+        task_id: id,
         yield_time_ms: 500,
         terminate: true,
       }),
@@ -233,7 +237,7 @@ test(
   { skip: process.platform === "win32" },
   async () => {
     const controller = new AbortController();
-    const shell = new ShellToolRuntime({
+    const shell = createShell({
       initialYieldMs: 20,
       terminationGraceMs: 20,
     });
@@ -254,8 +258,8 @@ test(
       const pid = Number(await waitForFile(marker));
       controller.abort();
       const completed = await shell.waitRuntime.execute(
-        invocation("shell_wait", {
-          session_id: sessionId(started.output),
+        invocation("wait", {
+          task_id: sessionId(started.output),
           yield_time_ms: 500,
         }),
       );
@@ -271,7 +275,7 @@ test(
 );
 
 test("the host-local session count is bounded", async () => {
-  const shell = new ShellToolRuntime({ initialYieldMs: 10, maxSessions: 1 });
+  const shell = createShell({ initialYieldMs: 10, maxSessions: 1 });
   try {
     const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
       "setTimeout(() => undefined, 500)",
@@ -279,11 +283,11 @@ test("the host-local session count is bounded", async () => {
     const started = await shell.execute(invocation("shell", { command }));
     await assert.rejects(
       shell.execute(invocation("shell", { command })),
-      /session limit reached/u,
+      /task limit reached/u,
     );
     await shell.waitRuntime.execute(
-      invocation("shell_wait", {
-        session_id: sessionId(started.output),
+      invocation("wait", {
+        task_id: sessionId(started.output),
         terminate: true,
       }),
     );
@@ -326,7 +330,7 @@ test("completion during a delayed running capture keeps the session waitable", a
       return capture;
     },
   });
-  const shell = new ShellToolRuntime({
+  const shell = createShell({
     toolOutputSpool: spool,
     initialYieldMs: 10,
   });
@@ -350,8 +354,8 @@ test("completion during a delayed running capture keeps the session waitable", a
     assert(id !== undefined);
 
     const completed = await shell.waitRuntime.execute(
-      invocation("shell_wait", {
-        session_id: id,
+      invocation("wait", {
+        task_id: id,
         yield_time_ms: 500,
       }),
     );
@@ -365,7 +369,7 @@ test("completion during a delayed running capture keeps the session waitable", a
 });
 
 test("legacy unscoped quick shell execution keeps exact output", async () => {
-  const shell = new ShellToolRuntime();
+  const shell = createShell();
   try {
     const result = await shell.execute({
       callId: "legacy-shell",
@@ -425,4 +429,40 @@ async function waitForFile(filename: string): Promise<string> {
     }
   }
   throw new Error("file was not created");
+}
+
+function createShell(
+  options: {
+    initialYieldMs?: number;
+    defaultTimeoutMs?: number;
+    maxSessions?: number;
+    terminationGraceMs?: number;
+    toolOutputSpool?: ToolOutputSpool;
+    maxOutputBytes?: number;
+  } = {},
+) {
+  const { initialYieldMs, defaultTimeoutMs, maxSessions, ...bodyOptions } =
+    options;
+  const env = new ToolEnvironment({
+    runtimes: [new ShellToolRuntime(bodyOptions)],
+    taskOptions: {
+      ...(initialYieldMs === undefined ? {} : { yieldTimeMs: initialYieldMs }),
+      ...(defaultTimeoutMs === undefined
+        ? {}
+        : { timeoutMs: defaultTimeoutMs }),
+      ...(maxSessions === undefined ? {} : { maxTasks: maxSessions }),
+      ...(bodyOptions.maxOutputBytes === undefined
+        ? {}
+        : { maxOutputBytes: bodyOptions.maxOutputBytes }),
+    },
+    ...(bodyOptions.toolOutputSpool === undefined
+      ? {}
+      : { toolOutputSpool: bodyOptions.toolOutputSpool }),
+  });
+  return {
+    execute: (invocation: ToolInvocation) =>
+      env.execute(env.prepare(invocation)),
+    waitRuntime: env.waitRuntime,
+    close: () => env.close(),
+  };
 }

@@ -21,7 +21,10 @@
 - **Nested Tool Invocation Port** — AgentRuntime 只向可信 builtin 组合工具提供的 turn-scoped capability，用同一 Tool Environment 和 canonical lifecycle 提交子调用，不序列化或下放给 plugin / external provider。
 - **Tool Output Spool** — Host 把超出模型 preview 上限的完整已捕获 text result 暂存到权限收窄的临时文件，并只把含 head/tail、大小、hash 和易失路径的 receipt canonicalize；临时副本不是 Thread authority。
 - **Tool Execution Mode** — Tool Runtime 对执行 body 只声明 `parallel_safe` 或 `exclusive`；未声明与 builtin shell 一律按 `exclusive`，该分类不是权限或资源 scope。
-- **Shell Session** — builtin `shell` 在有界初始等待后把仍在运行的命令交给同一 Host 实例内、按 Thread 隔离的临时 session；`shell_wait` 只读取或终止已获准命令，session 有硬超时且不参与 journal 重建。
+- **ToolTaskManager** — ToolEnvironment 统一拥有普通工具的 Host-local 执行、按 Thread 隔离的 task_id、增量输出与 wait；交回时间（默认 10 秒）和执行超时（默认 10 分钟）分开，快速结果原样返回，任务不参与 journal 重建。
+- **ToolTaskPolicy** — 具体工具只声明取消确认能力和资源作用域；默认未知取消保留 owner fence 与执行容量直到真实成功完成或 Host 关闭，shell 在进程组停止后确认取消，composite 保留原有嵌套调度权且不由任务管理器拆离。
+- **ToolWaitRuntime** — 内建且保留名称的 wait 仅观察或请求取消同 Thread 已获准任务，不重新授权、不占执行体容量；取消请求、无法确认取消和已停止是不同状态，Host 关闭有界清理临时资源。
+- **ToolTaskBounds** — 同一 Environment 默认最多 8 个尚未确认结束的执行体、64 个含待领取结果的任务，已完成结果保留 5 分钟；交回不释放 prepared bundle lease 或资源 fence，完成/关闭才释放，达到容量时立即告知模型等待现有任务。
 - **Tool Execution Status** — AgentRuntime 为每条新 `tool_result` 记录 `completed`、`failed` 或 `declined` 的 provider-neutral canonical 事实，Tool Runtime 只返回结果内容和 exit code，不能决定审批语义。
 - **Tool Model Content** — trusted builtin 可以让 canonical `tool_result` 携带 provider-neutral `UserInput`，由既有 Attachment Store 在后续模型采样时投影为真实媒体内容，并随 ItemList 重放而不保存 payload 副本。
 - **Tool Model Modality Requirement** — Tool Runtime 可声明执行所需的模型输入 modality；AgentRuntime 对已知不支持的模型在执行 body 前明确失败，而 `null` 继续表示 Unknown 并沿用尝试语义。

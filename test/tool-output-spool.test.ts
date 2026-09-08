@@ -28,6 +28,7 @@ import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { renderToolOutput, ToolOutputSpool } from "../src/tool-output-spool.js";
 import {
   ShellToolRuntime,
+  type ToolInvocation,
   ToolEnvironment,
   type ToolBundleIdentity,
   type ToolRuntime,
@@ -100,11 +101,17 @@ test("small shell output keeps its exact canonical text shape", async () => {
 test("a saturated running shell capture keeps its wait receipt model-visible", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-spool-session-"));
   const spool = new ToolOutputSpool({ rootDirectory: root, previewBytes: 8 });
-  const shell = new ShellToolRuntime({
+  const environment = new ToolEnvironment({
+    runtimes: [new ShellToolRuntime()],
     toolOutputSpool: spool,
-    maxOutputBytes: 1,
-    initialYieldMs: 1,
+    taskOptions: { maxOutputBytes: 1, yieldTimeMs: 1 },
   });
+  const shell = {
+    execute: (invocation: ToolInvocation) =>
+      environment.execute(environment.prepare(invocation)),
+    waitRuntime: environment.waitRuntime,
+    close: () => environment.close(),
+  };
   try {
     const emit = path.join(root, "emit");
     const outputReady = path.join(root, "output-ready");
@@ -126,16 +133,16 @@ test("a saturated running shell capture keeps its wait receipt model-visible", a
     assert(
       typeof structured === "object" &&
         structured !== null &&
-        "session_id" in structured &&
-        typeof structured.session_id === "string",
+        "task_id" in structured &&
+        typeof structured.task_id === "string",
     );
     await writeFile(emit, "emit");
     await waitForFile(outputReady);
     const waitResult = await shell.waitRuntime.execute({
       callId: "wait-noisy-shell",
-      name: "shell_wait",
+      name: "wait",
       arguments: {
-        session_id: structured.session_id,
+        task_id: structured.task_id,
         yield_time_ms: 500,
       },
       cwd: root,
@@ -164,14 +171,14 @@ test("a saturated running shell capture keeps its wait receipt model-visible", a
     const result = snapshot.items.find((item) => item.type === "tool_result");
     assert(result?.type === "tool_result");
     assert.match(result.output, /\[tool output receipt\]/u);
-    assert.match(result.output, /\[command still running\]/u);
-    assert.match(result.output, /^session_id: [a-f0-9-]+$/mu);
+    assert.match(result.output, /\[tool task running\]/u);
+    assert.match(result.output, /^task_id: [a-f0-9-]+$/mu);
     assert.match(result.output, /^timeout_ms: 600000$/mu);
     const modelResult = compileModelMessages(snapshot.items).find(
       (message) => message.role === "tool",
     );
     assert(modelResult?.role === "tool");
-    assert.match(modelResult.text, /^session_id: [a-f0-9-]+$/mu);
+    assert.match(modelResult.text, /^task_id: [a-f0-9-]+$/mu);
   } finally {
     await shell.close();
     await spool.close();
@@ -414,6 +421,7 @@ function createToolServer(
     journal: new InMemoryThreadJournal(),
     runtime: new AgentRuntime({
       toolEnvironment: new ToolEnvironment({
+        toolOutputSpool: spool,
         bundles: [testToolBundle(owner, [tools])],
       }),
       toolOutputSpool: spool,
