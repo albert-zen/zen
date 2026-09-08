@@ -231,6 +231,11 @@ export function createHostedAppServer(
     new ToolEnvironment({
       runtimes: [shellRuntime!],
       toolOutputSpool,
+      ...(options.maxConcurrentToolBodies === undefined
+        ? {}
+        : {
+            taskOptions: { maxRunningTasks: options.maxConcurrentToolBodies },
+          }),
     });
   toolEnvironment.registerRuntime(new ApplyPatchToolRuntime(), {
     kind: "builtin",
