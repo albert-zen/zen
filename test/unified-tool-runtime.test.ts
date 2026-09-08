@@ -136,3 +136,103 @@ test("model continues independent work then observes a generic task through cano
     await environment.close();
   }
 });
+
+test("interrupting the turn cancels a yielded nested task after its composite call has returned", async () => {
+  let sampling!: () => void;
+  const nextSample = new Promise<void>((resolve) => {
+    sampling = resolve;
+  });
+  let stopped = false;
+  const environment = new ToolEnvironment({
+    taskOptions: { yieldTimeMs: 1 },
+    runtimes: [
+      {
+        ...testToolRuntime({
+          name: "slow",
+          execute: async (invocation) => {
+            await new Promise<void>((resolve) => {
+              invocation.signal.addEventListener(
+                "abort",
+                () => {
+                  stopped = true;
+                  resolve();
+                },
+                { once: true },
+              );
+            });
+            return { output: "stopped", exitCode: 130 };
+          },
+        }),
+        taskPolicy: { cancellation: "confirmed-on-settle" as const },
+      },
+      {
+        name: "run_code",
+        specification: {
+          name: "run_code",
+          description: "Composite fixture",
+          inputSchema: { type: "object" },
+        },
+        execute: async () => {
+          throw new Error("must execute composite");
+        },
+        executeComposite: async (
+          _invocation: import("../src/tool.js").ToolInvocation,
+          nested: import("../src/tool.js").NestedToolInvocationPort,
+        ) => await nested.invoke("slow", {}, new AbortController().signal),
+      },
+    ],
+  });
+  let samples = 0;
+  const adapter: ModelAdapter = {
+    provider: "fixture",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (++samples === 1) {
+        yield {
+          type: "tool_call",
+          callId: "composite",
+          name: "run_code",
+          arguments: {},
+        };
+      } else {
+        sampling();
+        await new Promise<void>((resolve) =>
+          request.signal.addEventListener("abort", () => resolve(), {
+            once: true,
+          }),
+        );
+      }
+    },
+  };
+  const server = new ZenAppServer({
+    journal: new InMemoryThreadJournal(),
+    runtime: new AgentRuntime({ toolEnvironment: environment }),
+    providerRegistry: new ProviderRegistry([
+      {
+        providerProfileId: "fixture",
+        adapter,
+        modelCatalog: new StaticModelCatalog([
+          { id: "fixture", isDefault: true, contextWindow: 32768 },
+        ]),
+      },
+    ]),
+    threadMetadata: new InMemoryThreadMetadataStore(),
+    defaults: {
+      cwd: process.cwd(),
+      providerProfileId: "fixture",
+      modelId: "fixture",
+      reasoningEffort: "medium",
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    },
+  });
+  try {
+    const thread = await server.startThread();
+    const turn = await server.startTurn(thread.id, "start nested work");
+    await nextSample;
+    await server.interruptTurn(thread.id, turn.id);
+    await turn.done;
+    assert.equal(stopped, true);
+  } finally {
+    await environment.close();
+  }
+});

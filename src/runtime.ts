@@ -697,7 +697,12 @@ export class AgentRuntime {
         name: toolCall.name,
         arguments: toolCall.arguments,
         cwd: options.configuration.cwd,
-        signal: execution.signal,
+        // Yielded nested tasks outlive their composite request, but must still
+        // observe a later interruption of the owning Turn.
+        signal:
+          execution.signal === options.signal
+            ? options.signal
+            : AbortSignal.any([execution.signal, options.signal]),
         threadId: options.thread.id,
       });
     } catch (error) {
