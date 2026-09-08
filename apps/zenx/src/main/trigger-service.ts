@@ -130,7 +130,7 @@ interface TriggerGeneration {
   retiring: boolean;
   storeUnavailable: boolean;
   wakeupAdmission: boolean;
-  timers: Map<string, unknown>;
+  timers: Map<string, { handle: unknown; scheduledAt: number }>;
   completedTurnItems: Map<string, CompletedItemBuffer>;
   pendingCompletedTurns: Map<string, PendingCompletion>;
   activeWakeups: Map<string, ActiveWakeup>;
@@ -235,7 +235,7 @@ export class ZenXTriggerService {
     generation.disposeNotifications?.();
     generation.disposeNotifications = undefined;
     for (const timer of generation.timers.values())
-      this.#cancelScheduled(timer);
+      this.#cancelScheduled(timer.handle);
     generation.timers.clear();
     for (const controller of generation.programControllers.values())
       controller.abort();
@@ -311,7 +311,7 @@ export class ZenXTriggerService {
       generation.disposeNotifications?.();
       generation.disposeNotifications = undefined;
       for (const timer of generation.timers.values())
-        this.#cancelScheduled(timer);
+        this.#cancelScheduled(timer.handle);
       generation.timers.clear();
       generation.completedTurnItems.clear();
       generation.pendingCompletedTurns.clear();
@@ -383,10 +383,8 @@ export class ZenXTriggerService {
       );
       if (trigger === undefined) throw new Error("Trigger was not found");
       trigger.active = false;
-      const timer = generation.timers.get(trigger.id);
-      if (timer !== undefined) this.#cancelScheduled(timer);
-      generation.timers.delete(trigger.id);
     });
+    this.#rescheduleTimers(generation);
   }
 
   async delete(triggerId: string): Promise<void> {
@@ -398,10 +396,8 @@ export class ZenXTriggerService {
       );
       if (index < 0) throw new Error("Trigger was not found");
       snapshot.triggers.splice(index, 1);
-      const timer = generation.timers.get(normalized);
-      if (timer !== undefined) this.#cancelScheduled(timer);
-      generation.timers.delete(normalized);
     });
+    this.#rescheduleTimers(generation);
   }
 
   async signal(name: string, detail: string): Promise<void> {
@@ -772,6 +768,14 @@ export class ZenXTriggerService {
       (item) => item.id === triggerId && item.active,
     );
     if (trigger === undefined) return undefined;
+    // A timer callback may have queued behind a definition update. Check the
+    // committed schedule here, after acquiring the mutation slot.
+    if (
+      wakeup.scheduledAt !== undefined &&
+      (trigger.kind !== "timer" ||
+        trigger.timer?.nextRunAt !== wakeup.scheduledAt)
+    )
+      return undefined;
     if (
       trigger.kind === "roomMention" &&
       (trigger.room === undefined ||
@@ -1211,12 +1215,19 @@ export class ZenXTriggerService {
 
   #rescheduleTimers(generation: TriggerGeneration): void {
     if (!this.#isWakeupOperational(generation)) return;
-    for (const timer of generation.timers.values())
-      this.#cancelScheduled(timer);
-    generation.timers.clear();
+    const schedules = new Map<string, number>();
     for (const trigger of this.#snapshot.triggers) {
       if (trigger.active && trigger.timer !== undefined)
-        this.#scheduleTimer(generation, trigger.id, trigger.timer.nextRunAt);
+        schedules.set(trigger.id, trigger.timer.nextRunAt);
+    }
+    for (const [triggerId, timer] of generation.timers) {
+      if (schedules.get(triggerId) === timer.scheduledAt) continue;
+      this.#cancelScheduled(timer.handle);
+      generation.timers.delete(triggerId);
+    }
+    for (const [triggerId, scheduledAt] of schedules) {
+      if (!generation.timers.has(triggerId))
+        this.#scheduleTimer(generation, triggerId, scheduledAt);
     }
   }
 
@@ -1229,22 +1240,32 @@ export class ZenXTriggerService {
       0,
       Math.min(2_147_000_000, scheduledAt - this.#now()),
     );
-    const timer = this.#schedule(() => {
-      if (!this.#isWakeupOperational(generation)) return;
-      generation.timers.delete(triggerId);
-      if (this.#now() < scheduledAt) {
-        this.#scheduleTimer(generation, triggerId, scheduledAt);
-        return;
-      }
-      void this.#fire(generation, triggerId, {
-        reason: `Timer reached ${new Date(scheduledAt).toISOString()}`,
-        occurrenceKey: `timer:${scheduledAt}`,
-        scheduledAt,
-      }).catch((error: unknown) => {
-        if (this.#isWakeupOperational(generation))
-          console.warn(`Could not fire Timer: ${describeError(error)}`);
-      });
-    }, delay);
+    const timer = {
+      scheduledAt,
+      handle: this.#schedule(() => {
+        if (
+          !this.#isWakeupOperational(generation) ||
+          generation.timers.get(triggerId) !== timer
+        )
+          return;
+        if (this.#now() < scheduledAt) {
+          this.#scheduleTimer(generation, triggerId, scheduledAt);
+          return;
+        }
+        // Retain this registration until the occurrence commits, so an
+        // unrelated mutation cannot register a second callback while it waits.
+        void this.#fire(generation, triggerId, {
+          reason: `Timer reached ${new Date(scheduledAt).toISOString()}`,
+          occurrenceKey: `timer:${scheduledAt}`,
+          scheduledAt,
+        }).catch((error: unknown) => {
+          if (generation.timers.get(triggerId) === timer)
+            generation.timers.delete(triggerId);
+          if (this.#isWakeupOperational(generation))
+            console.warn(`Could not fire Timer: ${describeError(error)}`);
+        });
+      }, delay),
+    };
     generation.timers.set(triggerId, timer);
   }
 
