@@ -380,6 +380,7 @@ export function App() {
 
   const confirmSidebarOrder = (order: ZenXSidebarOrder) => {
     const confirmed = {
+      ...order,
       projectKeys: [...order.projectKeys],
       threadIdsByProject: Object.fromEntries(
         Object.entries(order.threadIdsByProject).map(
@@ -1737,6 +1738,16 @@ export function App() {
         selectedThreadId={page === "agent" ? selectedThreadId : null}
         serverStatus={serverStatus}
         projects={projects}
+        onChangeProjectPinned={(key) =>
+          queueSidebarOrderMutation((current) => ({
+            ...current,
+            pinnedProjectKeys: current.pinnedProjectKeys?.includes(key)
+              ? current.pinnedProjectKeys.filter(
+                  (candidate) => candidate !== key,
+                )
+              : [...(current.pinnedProjectKeys ?? []), key],
+          }))
+        }
         sidebarOrder={sidebarOrder}
         pinnedThreads={pinnedSummaries}
         threadError={threadListErrors.active}

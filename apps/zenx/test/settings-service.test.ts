@@ -202,6 +202,7 @@ test("persists Sidebar Project and per-Project Thread order across reload", asyn
     const first = settingsFor(directory, inactiveSubscription());
     await first.initialize({});
     await first.setSidebarOrder({
+      pinnedProjectKeys: ["/work/a"],
       projectKeys: ["/work/b", "/work/a"],
       threadIdsByProject: {
         "/work/a": ["thread-2", "thread-1"],
@@ -211,6 +212,7 @@ test("persists Sidebar Project and per-Project Thread order across reload", asyn
     const reloaded = settingsFor(directory, inactiveSubscription());
     await reloaded.initialize({});
     assert.deepEqual((await reloaded.publicSettings()).profile.sidebarOrder, {
+      pinnedProjectKeys: ["/work/a"],
       projectKeys: ["/work/b", "/work/a"],
       threadIdsByProject: {
         "/work/a": ["thread-2", "thread-1"],

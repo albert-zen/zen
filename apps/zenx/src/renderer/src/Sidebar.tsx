@@ -33,6 +33,8 @@ import {
   type SidebarOrderPlacement,
 } from "./thread-list.js";
 
+import { useSidebarExpansion } from "./sidebar-expansion.js";
+
 interface SidebarProps {
   collapsed?: boolean;
   mode: SidebarMode;
@@ -40,6 +42,7 @@ interface SidebarProps {
   onClose(): void;
   onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
   onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
+  onChangeProjectPinned?(key: string): Promise<void>;
   onReorderProject?(
     sourceKey: string,
     targetKey: string,
@@ -84,6 +87,7 @@ export function Sidebar({
   onClose,
   onChangeThreadLifecycle,
   onChangeThreadPinned,
+  onChangeProjectPinned,
   onReorderProject,
   onReorderThread,
   onNewThread,
@@ -116,7 +120,8 @@ export function Sidebar({
   const [sidebarOrderRetry, setSidebarOrderRetry] = useState<
     (() => Promise<void>) | null
   >(null);
-  const [projectsOpen, setProjectsOpen] = useState(true);
+  const [projectsOpen, toggleProjects, expansionError] =
+    useSidebarExpansion("projects");
   const lastUsedProject =
     projects.lastUsedWorkspace === null
       ? undefined
@@ -172,6 +177,51 @@ export function Sidebar({
     target.focus();
     setPendingPinFocus(null);
   }, [mode, pendingPinFocus, pinnedThreads]);
+  useEffect(() => {
+    const switchThread = (event: KeyboardEvent) => {
+      const mac = window.zenx?.platform === "darwin";
+      if (
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.repeat ||
+        event.altKey ||
+        event.shiftKey ||
+        (mac
+          ? !event.metaKey || event.ctrlKey
+          : !event.ctrlKey || event.metaKey) ||
+        !(/^[1-9]$/u.test(event.key) || event.key.toLowerCase() === "n")
+      )
+        return;
+      if (
+        document.querySelector(
+          '[role="dialog"], dialog[open], [aria-modal="true"]',
+        ) !== null ||
+        (event.target instanceof window.Element &&
+          event.target.closest(
+            '[role="menu"], .project-menu, .thread-menu-rename',
+          ))
+      )
+        return;
+      if (event.key.toLowerCase() === "n") {
+        const button = document.querySelector<HTMLButtonElement>(
+          "#primary-sidebar .new-thread-action",
+        );
+        if (button === null || button.disabled) return;
+        event.preventDefault();
+        button.click();
+        return;
+      }
+      const rows = document.querySelectorAll<HTMLButtonElement>(
+        "#primary-sidebar .thread-row-shell > button.thread-row",
+      );
+      const target = rows[Number(event.key) - 1];
+      if (target === undefined) return;
+      event.preventDefault();
+      target.click();
+    };
+    document.addEventListener("keydown", switchThread);
+    return () => document.removeEventListener("keydown", switchThread);
+  }, []);
   const watchingThreadIds = new Set<string>();
   return (
     <>
@@ -191,6 +241,18 @@ export function Sidebar({
           <div className="new-thread-control">
             <button
               className="new-thread-action"
+              title={
+                typeof window !== "undefined" &&
+                window.zenx?.platform === "darwin"
+                  ? "New thread (⌘N)"
+                  : "New thread (Ctrl+N)"
+              }
+              aria-keyshortcuts={
+                typeof window !== "undefined" &&
+                window.zenx?.platform === "darwin"
+                  ? "Meta+n"
+                  : "Control+n"
+              }
               type="button"
               disabled={newThreadDisabled}
               onClick={() => {
@@ -221,7 +283,7 @@ export function Sidebar({
                 className="projects-section-toggle"
                 type="button"
                 aria-expanded={projectsOpen}
-                onClick={() => setProjectsOpen((value) => !value)}
+                onClick={toggleProjects}
               >
                 <Icon
                   className={projectsOpen ? "expanded" : undefined}
@@ -255,6 +317,9 @@ export function Sidebar({
           className="sidebar-scroll"
           aria-labelledby="sidebar-thread-list-heading"
         >
+          {expansionError !== null ? (
+            <p role="alert">{expansionError}</p>
+          ) : null}
           {sidebarOrderError !== null ? (
             <div className="sidebar-empty sidebar-error" role="alert">
               <p>{sidebarOrderError}</p>
@@ -328,6 +393,7 @@ export function Sidebar({
                   onChangeThreadLifecycle={onChangeThreadLifecycle}
                   onChangeThreadPinned={changeThreadPinned}
                   onRenameThread={onRenameThread}
+                  onChangeProjectPinned={onChangeProjectPinned}
                   onReorderProject={onReorderProject}
                   onReorderThread={onReorderThread}
                   onSidebarOrderError={reportSidebarOrderError}
@@ -380,7 +446,8 @@ export function PluginSpaces({
   onOpen(route: string): void;
   selectedPage: string;
 }) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, toggleExpanded, expansionError] =
+    useSidebarExpansion("plugins");
   const linksId = useId();
   if (contributions.length === 0) return null;
   return (
@@ -390,11 +457,12 @@ export function PluginSpaces({
         className="plugin-spaces-toggle"
         aria-expanded={expanded}
         aria-controls={linksId}
-        onClick={() => setExpanded((value) => !value)}
+        onClick={toggleExpanded}
       >
         <Icon name={expanded ? "chevron-down" : "chevron-right"} />
         <span>Plugin spaces</span>
       </button>
+      {expansionError !== null ? <p role="alert">{expansionError}</p> : null}
       <div id={linksId} hidden={!expanded}>
         {contributions.map((contribution) => (
           <button
@@ -560,6 +628,7 @@ function ProjectsView({
   onChangeThreadLifecycle,
   onChangeThreadPinned,
   onRenameThread,
+  onChangeProjectPinned,
   onReorderProject,
   onReorderThread,
   onSidebarOrderError,
@@ -582,6 +651,7 @@ function ProjectsView({
   onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
   onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
   onRenameThread(threadId: string, title: string): Promise<void>;
+  onChangeProjectPinned?: SidebarProps["onChangeProjectPinned"];
   onReorderProject?: SidebarProps["onReorderProject"];
   onReorderThread?: SidebarProps["onReorderThread"];
   onSidebarOrderError?: (error: unknown, retry: () => Promise<void>) => void;
@@ -610,6 +680,10 @@ function ProjectsView({
   const groups = deriveProjectGroups(threads, projects, sidebarOrder);
   return groups.map((group, projectIndex) => (
     <ProjectRows
+      pinnedProject={
+        sidebarOrder.pinnedProjectKeys?.includes(group.key) ?? false
+      }
+      onChangeProjectPinned={onChangeProjectPinned}
       group={group}
       key={group.key}
       liveThread={liveThread}
@@ -795,6 +869,8 @@ interface ThreadReorderHandlers {
 
 function ProjectRows({
   group,
+  pinnedProject,
+  onChangeProjectPinned,
   onNewThread,
   newThreadDisabled,
   onRemoveProject,
@@ -813,6 +889,8 @@ function ProjectRows({
   threadReorder,
 }: {
   group: ReturnType<typeof deriveProjectGroups>[number];
+  pinnedProject: boolean;
+  onChangeProjectPinned?: SidebarProps["onChangeProjectPinned"];
   onNewThread(workspace?: string): void;
   newThreadDisabled: boolean;
   onRemoveProject(workspace: string): void;
@@ -830,8 +908,12 @@ function ProjectRows({
   projectReorder?: ProjectReorderHandlers;
   threadReorder?: ThreadReorderHandlers;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, toggleOpen, expansionError] = useSidebarExpansion(
+    `project:${group.key}`,
+  );
   const [menuOpen, setMenuOpen] = useState(false);
+  const [pinBusy, setPinBusy] = useState(false);
+  const [pinError, setPinError] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
   const moreRef = useRef<HTMLButtonElement>(null);
@@ -906,6 +988,7 @@ function ProjectRows({
       onDragOver={projectReorder?.onDragOver}
       onDrop={projectReorder?.onDrop}
     >
+      {expansionError !== null ? <p role="alert">{expansionError}</p> : null}
       <div
         className={`project-header${projectSelected ? " selected" : ""}${projectReorder === undefined ? "" : " reorderable"}`}
         draggable={projectReorder !== undefined}
@@ -933,11 +1016,14 @@ function ProjectRows({
               : "Alt+ArrowUp Alt+ArrowDown"
           }
           title={group.workspace ?? undefined}
-          onClick={() => setOpen((value) => !value)}
+          onClick={toggleOpen}
           onKeyDown={projectReorder?.onKeyDown}
         >
           <Icon name="folder" size={14} />
           <span>{group.label}</span>
+          {pinnedProject ? (
+            <Icon name="pin" size={12} aria-label="Pinned project" />
+          ) : null}
         </button>
         {group.workspace === null || !group.configured ? null : (
           <div className="project-actions" ref={actionsRef}>
@@ -1017,6 +1103,37 @@ function ProjectRows({
                     {group.workspace}
                   </span>
                 </div>
+                {onChangeProjectPinned ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={pinBusy}
+                    onClick={async () => {
+                      setPinBusy(true);
+                      setPinError(null);
+                      try {
+                        await onChangeProjectPinned(group.key);
+                        closeMenu();
+                      } catch (error) {
+                        setPinError(
+                          `Could not save project pin: ${error instanceof Error ? error.message : String(error)}`,
+                        );
+                      } finally {
+                        setPinBusy(false);
+                      }
+                    }}
+                  >
+                    <Icon name={pinnedProject ? "pin-off" : "pin"} size={13} />
+                    <span>
+                      {pinBusy
+                        ? "Saving…"
+                        : pinnedProject
+                          ? "Unpin project"
+                          : "Pin project"}
+                    </span>
+                  </button>
+                ) : null}
+                {pinError !== null ? <p role="alert">{pinError}</p> : null}
                 {onEditProject ? (
                   <button
                     type="button"
