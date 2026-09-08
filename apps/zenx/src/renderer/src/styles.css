@@ -1348,6 +1348,11 @@ a:focus-visible {
   display: block;
   overflow: hidden;
 }
+/* One content column shared by history, trace rows and composer. */
+:root {
+  --conversation-width: 840px;
+  --conversation-gutter: 24px;
+}
 .messages {
   position: absolute;
   inset: 0;
@@ -1357,12 +1362,16 @@ a:focus-visible {
   overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: var(--border-control) transparent;
-  padding: 28px max(24px, calc((100% - 820px) / 2))
+  padding: 28px
+    max(
+      var(--conversation-gutter),
+      calc((100% - var(--conversation-width)) / 2)
+    )
     calc(38px + var(--bottom-zone-height, 0px));
 }
 .messages-inner {
   width: 100%;
-  max-width: 820px;
+  max-width: var(--conversation-width);
   margin: 0 auto;
   display: grid;
   gap: 24px;
@@ -1542,15 +1551,18 @@ a:focus-visible {
   transform: rotate(180deg);
 }
 .turn-history {
-  max-width: 760px;
+  width: 100%;
+  min-width: 0;
   display: grid;
   gap: 12px;
 }
 .turn-final {
-  max-width: 760px;
+  width: 100%;
+  min-width: 0;
 }
 .turn-terminal {
-  max-width: 760px;
+  width: 100%;
+  min-width: 0;
   padding: 10px 12px;
   border-left: 2px solid var(--warn);
   color: var(--text-2);
@@ -1558,7 +1570,8 @@ a:focus-visible {
 }
 .agent-copy {
   position: relative;
-  max-width: 760px;
+  width: 100%;
+  min-width: 0;
   color: var(--color-text-primary);
   font-size: 14px;
   line-height: 1.68;
@@ -1646,11 +1659,11 @@ a:focus-visible {
   }
 }
 .trace-group {
-  max-width: 760px;
+  width: 100%;
   min-width: 0;
 }
 .trace-singleton {
-  max-width: 760px;
+  width: 100%;
   min-width: 0;
 }
 .trace-toggle {
@@ -1682,12 +1695,15 @@ a:focus-visible {
   font-size: 9px;
   white-space: nowrap;
 }
+.trace-toggle > svg:last-child {
+  justify-self: center;
+}
 .trace-toggle > svg:last-child,
-.trace-item-toggle > svg:last-child {
+.trace-item-chevron svg {
   transition: transform 180ms ease;
 }
 .trace-toggle[aria-expanded="true"] > svg:last-child,
-.trace-item-toggle[aria-expanded="true"] > svg:last-child {
+.trace-item-toggle[aria-expanded="true"] .trace-item-chevron svg {
   transform: rotate(180deg);
 }
 .trace-items {
@@ -1708,18 +1724,36 @@ a:focus-visible {
   width: 100%;
   min-height: 30px;
   display: grid;
-  grid-template-columns: 16px auto minmax(0, 1fr) auto 13px;
+  grid-template-columns: 16px auto minmax(0, 1fr) auto 14px;
   align-items: center;
   gap: 7px;
-  padding: 1px 3px;
+  padding: 1px 4px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--text-3);
   text-align: left;
 }
-.trace-item-static {
-  grid-template-columns: 16px auto minmax(0, 1fr) auto;
+.trace-item-status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 14px;
+  grid-column: 4;
+}
+.trace-item-chevron {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  grid-column: 5;
+}
+.trace-item-status small {
+  font-size: 9px;
+  white-space: nowrap;
+}
+.tool-status.interrupted {
+  color: var(--warn);
 }
 .trace-item-toggle:hover {
   background: var(--surface-wash);
@@ -1819,7 +1853,12 @@ a:focus-visible {
   left: 0;
   z-index: 4;
   min-width: 0;
-  padding: 0 max(18px, calc((100% - 840px) / 2)) 18px;
+  padding: 0
+    max(
+      var(--conversation-gutter),
+      calc((100% - var(--conversation-width)) / 2)
+    )
+    18px;
   background: linear-gradient(
     180deg,
     transparent,
@@ -1828,7 +1867,7 @@ a:focus-visible {
 }
 .new-thread-project-context {
   width: 100%;
-  max-width: 840px;
+  max-width: var(--conversation-width);
   min-height: 32px;
   margin: 0 auto 6px;
   display: inline-flex;
@@ -1983,7 +2022,7 @@ a:focus-visible {
 }
 .approval-bar {
   width: 100%;
-  max-width: 840px;
+  max-width: var(--conversation-width);
   min-height: 58px;
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr) auto;
@@ -2059,7 +2098,7 @@ a:focus-visible {
 .composer {
   position: relative;
   width: 100%;
-  max-width: 840px;
+  max-width: var(--conversation-width);
   min-width: 0;
   margin: 0 auto;
   border: 1px solid var(--color-border-control);
@@ -4722,11 +4761,8 @@ a:focus-visible {
   .workspace-header {
     padding-left: 16px;
   }
-  .messages {
-    padding-inline: 22px;
-  }
-  .bottom-zone {
-    padding-inline: 16px;
+  :root {
+    --conversation-gutter: 16px;
   }
   .user-row {
     padding-left: 10%;
@@ -4938,7 +4974,8 @@ a:focus-visible {
     flex-basis: 100%;
   }
   .messages {
-    padding: 20px 14px calc(28px + var(--bottom-zone-height, 0px));
+    padding: 20px var(--conversation-gutter)
+      calc(28px + var(--bottom-zone-height, 0px));
   }
   .messages-inner {
     gap: 20px;
@@ -4958,7 +4995,7 @@ a:focus-visible {
     min-height: 44px;
   }
   .bottom-zone {
-    padding: 0 8px 8px;
+    padding: 0 var(--conversation-gutter) 8px;
   }
   .approval-bar {
     grid-template-columns: 30px minmax(0, 1fr);

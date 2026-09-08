@@ -954,8 +954,12 @@ function TraceItemHeader({
             : "Tool"}
       </strong>
       <span>{traceItemLabel(item)}</span>
-      <StatusMark item={item} />
-      {expandable ? <Icon name="chevron-down" size={13} /> : null}
+      <span className="trace-item-status">
+        <StatusMark item={item} />
+      </span>
+      <span className="trace-item-chevron">
+        {expandable ? <Icon name="chevron-down" size={13} /> : null}
+      </span>
     </>
   );
 }
@@ -969,6 +973,13 @@ function traceItemExpandable(
 }
 
 function StatusMark({ item }: { item: ThreadItem }) {
+  if (item.type === "reasoning") {
+    if (item.status === "inProgress")
+      return <span className="mini-spinner" aria-label="Thinking" />;
+    if (item.status === "interrupted")
+      return <small className="tool-status interrupted">Interrupted</small>;
+    return null;
+  }
   if (item.type !== "commandExecution") return null;
   return item.status === "inProgress" ? (
     <span className="mini-spinner" aria-label="Running" />

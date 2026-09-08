@@ -84,6 +84,8 @@ export type CodexThreadItem =
   | {
       type: "reasoning";
       id: string;
+      /** Zen presentation metadata; absent on completed legacy/CAS items. */
+      status?: "inProgress" | "interrupted";
       summary: string[];
       content: string[];
     }
@@ -307,6 +309,7 @@ export function projectCompletedItem(
       return {
         type: "reasoning",
         id: item.id,
+        ...(item.incomplete === true ? { status: "interrupted" as const } : {}),
         summary: item.summary === undefined ? [] : [item.summary],
         content:
           item.contentVisibility === "public" ? [item.reasoningContent] : [],

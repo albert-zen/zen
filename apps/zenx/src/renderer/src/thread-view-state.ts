@@ -51,7 +51,12 @@ export function applyThreadViewNotification(
       | ServerNotificationParams["item/completed"];
     if (event.threadId !== thread.id) return thread;
     return updateTurnItems(thread, event.turnId, (items) =>
-      upsertItem(items, event.item),
+      upsertItem(
+        items,
+        event.item.type === "reasoning" && method === "item/started"
+          ? { ...event.item, status: "inProgress" }
+          : event.item,
+      ),
     );
   }
   if (method === "item/agentMessage/delta") {
@@ -129,7 +134,11 @@ export function applyThreadViewNotification(
     const existing = thread.turns.find((turn) => turn.id === event.turn.id);
     const completed = {
       ...event.turn,
-      items: existing?.items ?? event.turn.items,
+      items: (existing?.items ?? event.turn.items).map((item) =>
+        item.type === "reasoning" && item.status === "inProgress"
+          ? { ...item, status: "interrupted" as const }
+          : item,
+      ),
     };
     return {
       ...thread,

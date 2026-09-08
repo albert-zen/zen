@@ -113,6 +113,7 @@ test("streams reasoning summary and content in memory before canonical completio
     id: "reasoning-1",
     summary: ["checked the plan"],
     content: ["public thought"],
+    status: "inProgress",
   });
 
   current = applyThreadViewNotification(current, "item/completed", {
@@ -309,3 +310,26 @@ function commandOutput(value: Thread): string | null | undefined {
 function reasoningValue(value: Thread): ThreadItem | undefined {
   return value.turns[0]?.items.find((item) => item.type === "reasoning");
 }
+
+test("reasoning follows its own lifecycle and terminal turns settle unfinished thinking", () => {
+  const running = turn("thinking", "inProgress");
+  let value = thread([running]);
+  value = applyThreadViewNotification(value, "item/started", {
+    threadId: value.id,
+    turnId: running.id,
+    item: reasoningItem("r"),
+    startedAtMs: 1,
+  });
+  assert.equal(
+    (reasoningValue(value) as { status?: string }).status,
+    "inProgress",
+  );
+  value = applyThreadViewNotification(value, "turn/completed", {
+    threadId: value.id,
+    turn: turn(running.id, "interrupted"),
+  });
+  assert.equal(
+    (reasoningValue(value) as { status?: string }).status,
+    "interrupted",
+  );
+});

@@ -1546,3 +1546,36 @@ test("generic tool task observations distinguish waiting and unconfirmed cancell
     }
   });
 });
+
+test("Think reserves the status column and uses live or interrupted state without Done", async () => {
+  await withDom(async (root) => {
+    const item = {
+      ...reasoningItem("thinking-status", ["Thought"], ["Retained thought"]),
+      status: "inProgress",
+    };
+    await openReasoningRow(root, item as ReturnType<typeof reasoningItem>);
+    assert.ok(
+      document.querySelector('.trace-item-status [aria-label="Thinking"]'),
+    );
+    assert.ok(document.querySelector(".trace-item-chevron"));
+    assert.doesNotMatch(
+      requiredElement(".trace-item-toggle").textContent ?? "",
+      /Done/,
+    );
+  });
+});
+
+test("partial canonical reasoning remains visibly interrupted after reopening", () => {
+  const item = projectCompletedItem({
+    id: "partial-thought",
+    threadId: "t",
+    turnId: "r",
+    createdAt: "2026-09-08T00:00:00.000Z",
+    type: "reasoning",
+    reasoningContent: "partial",
+    contentVisibility: "public",
+    incomplete: true,
+  });
+  assert.ok(item?.type === "reasoning");
+  assert.equal((item as { status?: string }).status, "interrupted");
+});
