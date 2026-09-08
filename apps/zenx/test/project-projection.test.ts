@@ -539,3 +539,25 @@ test("project display names do not move existing conversations when the configur
   );
   assert.deepEqual(starts, ["/new"]);
 });
+
+test("ZenX file presets supply both file scope and approval policy to Thread start", async () => {
+  const projection = new ZenXProjectProjection("win32");
+  await projection.updateConfiguration(["C:\\Work"], "C:\\Work");
+  for (const sandbox of [
+    "read-only",
+    "workspace-write",
+    "danger-full-access",
+  ] as const) {
+    const params = await startConfiguredProjectThread(
+      projection,
+      "C:\\Work",
+      async (value) => value,
+      { sandbox },
+    );
+    assert.deepEqual(params, {
+      cwd: "C:\\Work",
+      sandbox,
+      approvalPolicy: sandbox === "danger-full-access" ? "never" : "on-request",
+    });
+  }
+});

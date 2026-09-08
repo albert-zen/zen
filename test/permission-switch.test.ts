@@ -377,3 +377,25 @@ test("permission changes wait for yielded tool bodies after their turn completes
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("Core explicit full sandbox preserves the Host approval default when approval is omitted", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-permission-default-"));
+  const server = createHostedAppServer({
+    cwd: root,
+    dataDirectory: root,
+    model: "fake",
+    provider: { type: "fake" },
+    toolPresentation: "direct",
+    approvalPolicy: "always",
+  });
+  try {
+    assert.equal(
+      (await server.startThread({ sandbox: "danger-full-access" }))
+        .approvalPolicy,
+      "always",
+    );
+  } finally {
+    await server.closeHostResources();
+    await rm(root, { recursive: true, force: true });
+  }
+});

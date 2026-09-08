@@ -296,11 +296,9 @@ export class ZenAppServer {
       sandbox: input.sandbox ?? this.#defaults.sandbox,
       approvalPolicy:
         input.approvalPolicy ??
-        (input.sandbox === "danger-full-access"
-          ? "never"
-          : (input.sandbox ?? this.#defaults.sandbox) === "danger-full-access"
-            ? this.#defaults.approvalPolicy
-            : "always"),
+        ((input.sandbox ?? this.#defaults.sandbox) === "danger-full-access"
+          ? this.#defaults.approvalPolicy
+          : "always"),
     };
     this.#threads.set(threadId, thread);
     try {
