@@ -4,6 +4,7 @@ export interface TrustedInvocation {
   readonly callId: string;
   readonly arguments: Readonly<Record<string, unknown>>;
   readonly cwd: string;
+  readonly threadId?: string;
   readonly signal: AbortSignal;
 }
 export interface BrowserTrustedService {

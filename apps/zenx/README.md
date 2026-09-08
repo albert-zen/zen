@@ -524,6 +524,22 @@ The default `ZENX_BROWSER_MODE=isolated` continues to select Playwright CLI or
 the bundled ephemeral Electron/CDP provider. This implementation does not claim
 parity with any proprietary browser automation product.
 
+Browser observation belongs to the selected thread's right panel. The thread
+header opens or closes it; wide windows open it once when the thread acquires a
+Browser page, while narrow windows require an explicit open. Closing the panel
+stops frame delivery and preserves the task and browser pages. The panel can
+follow the Agent, select one of that thread's pages, resize, or expand; Escape
+restores an expanded view. Returning from the narrow view preserves the chat draft.
+Trusted invocation `threadId` scopes the model's logical `sessionId` to a distinct
+provider session. Calls without that identity never attach to the selected thread.
+These mappings survive empty tab lists until explicit session/provider closure.
+User-browser CDP supports one live panel per provider at a time; opening another
+live view explicitly marks the previous observer unavailable. Playwright and
+Electron show the latest timestamped Agent inspection screenshot, labeled as
+non-live. Thread/provider changes discard old subscription events and images.
+The Browser 1.0.1 bundled package removes the global sidebar contribution; its
+legacy route explains the thread-panel entry point.
+
 The computer contract is platform-neutral: tools describe semantic observation,
 press/value/capture operations and their interaction impact, while a platform
 provider reports what it implements. The macOS provider offers targeted

@@ -53,7 +53,11 @@ import type {
 import type { ModelUsageProjection } from "../../../../src/model-usage.js";
 import type { AttachmentRef } from "../../../../src/attachment.js";
 import type { MarketplaceCatalogLoadSnapshot } from "../marketplace.js";
-import type { BrowserLiveObservationEvent } from "../main/capabilities/browser-provider.js";
+import type {
+  BrowserThreadRequest,
+  BrowserThreadEvent,
+} from "../main/capabilities/browser-thread-observation.js";
+import type { BrowserObservationEnvelope } from "../main/browser-live-observation-ipc.js";
 
 contextBridge.exposeInMainWorld("zenx", {
   platform: process.platform,
@@ -288,30 +292,38 @@ contextBridge.exposeInMainWorld("zenx", {
   },
   browserObservation: {
     subscribe: (
-      listener: (event: BrowserLiveObservationEvent) => void,
+      request: BrowserThreadRequest,
+      listener: (event: BrowserThreadEvent) => void,
     ): (() => void) => {
       let active = true;
+      const subscriptionId = crypto.randomUUID();
       const wrapped = (
         _event: Electron.IpcRendererEvent,
-        value: BrowserLiveObservationEvent,
+        value: BrowserObservationEnvelope,
       ) => {
-        if (active) listener(value);
+        if (active && value.subscriptionId === subscriptionId)
+          listener(value.event);
       };
       ipcRenderer.on(ipcChannels.browserLiveEvent, wrapped);
-      void ipcRenderer.invoke(ipcChannels.browserLiveSubscribe).catch(() => {
-        if (active) {
-          listener({
-            type: "status",
-            status: "failed",
-            message: "The live browser view could not be connected.",
-          });
-        }
-      });
+      void ipcRenderer
+        .invoke(ipcChannels.browserLiveSubscribe, subscriptionId, request)
+        .catch(() => {
+          if (active) {
+            listener({
+              type: "status",
+              status: "failed",
+              message: "The live browser view could not be connected.",
+            });
+          }
+        });
       return () => {
         if (!active) return;
         active = false;
         ipcRenderer.off(ipcChannels.browserLiveEvent, wrapped);
-        void ipcRenderer.invoke(ipcChannels.browserLiveUnsubscribe);
+        void ipcRenderer.invoke(
+          ipcChannels.browserLiveUnsubscribe,
+          subscriptionId,
+        );
       };
     },
   },

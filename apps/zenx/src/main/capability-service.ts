@@ -1,3 +1,7 @@
+import type {
+  BrowserThreadRequest,
+  BrowserThreadListener,
+} from "./capabilities/browser-thread-observation.js";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -12,7 +16,6 @@ import {
 import { ToolEnvironment, type ToolInvocation } from "../../../../src/tool.js";
 import {
   BrowserZenXCapabilityPackage,
-  type BrowserLiveObservationListener,
   type ZenXBrowserBackend,
 } from "./capabilities/browser-provider.js";
 import {
@@ -470,11 +473,13 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     return capabilityPackage;
   }
 
-  observeBrowserLive(listener: BrowserLiveObservationListener): () => void {
-    const capabilityPackage =
-      this.#stagedBrowserProfilePackage ?? this.#browserProfilePackage;
+  observeBrowserLive(
+    request: BrowserThreadRequest,
+    listener: BrowserThreadListener,
+  ): () => void {
+    const capabilityPackage = this.#browserProfilePackage;
     if (capabilityPackage instanceof BrowserZenXCapabilityPackage)
-      return capabilityPackage.observeLive(listener);
+      return capabilityPackage.observeThread(request, listener);
     listener({
       type: "status",
       status: "unavailable",

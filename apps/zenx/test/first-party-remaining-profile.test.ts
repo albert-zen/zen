@@ -102,6 +102,49 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       await call(service, "browser_list_tabs", { sessionId: "test" }),
       [],
     );
+    const resourcesA: unknown[] = [];
+    const resourcesB: unknown[] = [];
+    const stopA = service.observeBrowserLive(
+      { threadId: "profile-a", frames: false },
+      (event) => {
+        if (event.type === "targets") resourcesA.push(event.targets);
+      },
+    );
+    const stopB = service.observeBrowserLive(
+      { threadId: "profile-b", frames: false },
+      (event) => {
+        if (event.type === "targets") resourcesB.push(event.targets);
+      },
+    );
+    const opened = await call(
+      service,
+      "browser_open",
+      { sessionId: "same", url: "https://a.test/" },
+      "profile-a",
+    );
+    assert.equal((opened as { sessionId: string }).sessionId, "same");
+    await call(
+      service,
+      "browser_open",
+      { sessionId: "same", url: "https://b.test/" },
+      "profile-b",
+    );
+    assert.equal(
+      (resourcesA.at(-1) as { url: string }[])[0]?.url,
+      "https://a.test/",
+    );
+    assert.equal(
+      (resourcesB.at(-1) as { url: string }[])[0]?.url,
+      "https://b.test/",
+    );
+    assert.equal(
+      service
+        .pluginSnapshot()
+        .sidebar.some((item) => item.pluginId === "browser"),
+      false,
+    );
+    stopA();
+    stopB();
     assert.equal(
       (
         (await call(service, "computer_inspect", {
@@ -168,7 +211,7 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       path.join(
         resources,
         "plugins",
-        "zenx-browser-plugin-playwright-1.0.0.tgz",
+        "zenx-browser-plugin-playwright-1.0.1.tgz",
       ),
       { pluginId: "browser", packageName: "@zenx/browser-plugin" },
       playwrightCandidate,
@@ -190,7 +233,7 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       browserBackend("electron"),
     );
     await service.replaceBundledProviderVariant(
-      path.join(resources, "plugins", "zenx-browser-plugin-electron-1.0.0.tgz"),
+      path.join(resources, "plugins", "zenx-browser-plugin-electron-1.0.1.tgz"),
       { pluginId: "browser", packageName: "@zenx/browser-plugin" },
       electronCandidate,
     );
@@ -306,7 +349,7 @@ test("an uninstalled Browser reinstalls the current Host-selected App Resource v
     assert.equal(browser?.lifecycle, "enabled");
     assert.equal(
       path.basename(browser?.profileSource?.packageSpec ?? ""),
-      "zenx-browser-plugin-electron-1.0.0.tgz",
+      "zenx-browser-plugin-electron-1.0.1.tgz",
     );
     assert.equal(
       (
@@ -368,7 +411,7 @@ test("provider variant admission and Catalog failures retain the old backend and
   const electronTarball = path.join(
     resources,
     "plugins",
-    "zenx-browser-plugin-electron-1.0.0.tgz",
+    "zenx-browser-plugin-electron-1.0.1.tgz",
   );
   try {
     await service.initialize();
@@ -376,7 +419,7 @@ test("provider variant admission and Catalog failures retain the old backend and
       path.join(
         resources,
         "plugins",
-        "zenx-browser-plugin-user-session-1.0.0.tgz",
+        "zenx-browser-plugin-user-session-1.0.1.tgz",
       ),
       { pluginId: "browser", packageName: "@zenx/browser-plugin" },
     );
@@ -425,13 +468,13 @@ test("restart keeps a committed Browser backend isolated from a different curren
         name: "user-session-to-electron",
         initialMode: "user-session",
         selectedMode: "isolated",
-        initialTarball: "zenx-browser-plugin-user-session-1.0.0.tgz",
+        initialTarball: "zenx-browser-plugin-user-session-1.0.1.tgz",
       },
       {
         name: "electron-to-user-session",
         initialMode: "isolated",
         selectedMode: "user-session",
-        initialTarball: "zenx-browser-plugin-electron-1.0.0.tgz",
+        initialTarball: "zenx-browser-plugin-electron-1.0.1.tgz",
       },
     ] as const) {
       for (const outcome of [
@@ -962,8 +1005,10 @@ async function call(
   service: ZenXCapabilityService,
   name: string,
   arguments_: Record<string, unknown>,
+  threadId?: string,
 ) {
   const result = await service.execute({
+    ...(threadId === undefined ? {} : { threadId }),
     callId: `call-${name}`,
     name,
     arguments: arguments_,
@@ -990,9 +1035,13 @@ function browserBackend(
               loading: false,
             },
           ],
-    open: async () => {
-      throw new Error("unused");
-    },
+    open: async (sessionId, url) => ({
+      sessionId,
+      tabId: "opened-tab",
+      title: url,
+      url,
+      loading: false,
+    }),
     navigate: async () => {
       throw new Error("unused");
     },

@@ -7,7 +7,15 @@ import { createRoot } from "react-dom/client";
 import test from "node:test";
 
 import type { BrowserLiveObservationEvent } from "../src/main/capabilities/browser-provider.js";
-import { BrowserPage } from "../src/renderer/src/bundled-browser-ui.js";
+import { BrowserThreadPanel } from "../src/renderer/src/browser-thread-panel.js";
+const BrowserPage = () =>
+  React.createElement(BrowserThreadPanel, {
+    threadId: "thread-a",
+    title: "Thread A",
+    open: true,
+    onOpenChange: () => {},
+    providerRevision: "test",
+  });
 
 test("Browser observer keeps status, privacy, and mode in one compact toolbar", async () => {
   const dom = new JSDOM('<div id="root"></div>', {
@@ -49,7 +57,7 @@ test("Browser observer keeps status, privacy, and mode in one compact toolbar", 
     toolbar.textContent ?? "",
     /private page content may be visible/iu,
   );
-  assert.match(toolbar.textContent ?? "", /not recorded/iu);
+  assert.match(toolbar.textContent ?? "", /temporary local artifacts/iu);
   assert.equal(
     dom.window.document.querySelectorAll("[role='status']").length,
     1,
@@ -164,7 +172,10 @@ test("Browser page updates frames without moving focus or announcing every frame
     configurable: true,
     value: {
       browserObservation: {
-        subscribe(next: (event: BrowserLiveObservationEvent) => void) {
+        subscribe(
+          _request: unknown,
+          next: (event: BrowserLiveObservationEvent) => void,
+        ) {
           listener = next;
           return () => {
             listener = undefined;
@@ -178,7 +189,7 @@ test("Browser page updates frames without moving focus or announcing every frame
   await act(async () => root.render(React.createElement(BrowserPage)));
   assert.match(
     dom.window.document.querySelector("[role='status']")?.textContent ?? "",
-    /waiting for the agent/iu,
+    /ask the agent/iu,
   );
   assert.match(
     dom.window.document.body.textContent ?? "",
@@ -326,7 +337,10 @@ test("Browser page clears its frame while hidden and resumes with a fresh sequen
     configurable: true,
     value: {
       browserObservation: {
-        subscribe(next: (event: BrowserLiveObservationEvent) => void) {
+        subscribe(
+          _request: unknown,
+          next: (event: BrowserLiveObservationEvent) => void,
+        ) {
           subscriptions += 1;
           listener = next;
           return () => {
@@ -389,7 +403,7 @@ test("Browser page clears its frame while hidden and resumes with a fresh sequen
   await act(async () =>
     dom.window.document.dispatchEvent(new dom.window.Event("visibilitychange")),
   );
-  assert.equal(subscriptions, 2);
+  assert.equal(subscriptions, 3);
   assert.equal(image.getAttribute("src"), null);
   await act(async () => {
     listener?.({
@@ -417,7 +431,7 @@ test("Browser page clears its frame while hidden and resumes with a fresh sequen
   assert.equal(dom.window.document.activeElement, before);
 
   await act(async () => root.unmount());
-  assert.equal(disposals, 2);
+  assert.equal(disposals, 3);
   dom.window.close();
 });
 

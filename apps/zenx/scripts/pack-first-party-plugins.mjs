@@ -34,18 +34,18 @@ export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
     "@zenx/browser-plugin",
     "zenx-browser-plugin",
-    "zenx-browser-plugin-electron-1.0.0.tgz",
+    "zenx-browser-plugin-electron-1.0.1.tgz",
   ),
   plugin(
     "@zenx/browser-plugin",
     "zenx-browser-plugin",
-    "zenx-browser-plugin-playwright-1.0.0.tgz",
+    "zenx-browser-plugin-playwright-1.0.1.tgz",
     "variants/playwright.zenx.plugin.json",
   ),
   plugin(
     "@zenx/browser-plugin",
     "zenx-browser-plugin",
-    "zenx-browser-plugin-user-session-1.0.0.tgz",
+    "zenx-browser-plugin-user-session-1.0.1.tgz",
     "variants/user-session.zenx.plugin.json",
   ),
   plugin(

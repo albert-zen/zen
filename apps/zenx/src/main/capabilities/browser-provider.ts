@@ -1,3 +1,8 @@
+import {
+  BrowserThreadObservation,
+  type BrowserThreadRequest,
+  type BrowserThreadListener,
+} from "./browser-thread-observation.js";
 import { randomUUID } from "node:crypto";
 import {
   chmod,
@@ -74,7 +79,11 @@ export type BrowserLiveObservationListener = (
 ) => void;
 
 export interface ZenXBrowserBackend {
-  observeLive?(listener: BrowserLiveObservationListener): () => void;
+  observeTab?(
+    sessionId: string,
+    tabId: string,
+    listener: BrowserLiveObservationListener,
+  ): () => void;
   listTabs(
     sessionId: string,
     signal?: AbortSignal,
@@ -127,7 +136,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
   schemaVersion: 2,
   id: "browser",
   name: "Browser",
-  version: "1.0.0",
+  version: "1.0.1",
   description:
     "A dedicated ephemeral ZenX browser session with bounded DOM inspection and narrow navigation and interaction tools.",
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
@@ -195,15 +204,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
         surfaceId: "browser-page",
       },
     ],
-    sidebar: [
-      {
-        id: "browser",
-        label: "Browser",
-        icon: "layers",
-        pageId: "browser",
-        order: 5,
-      },
-    ],
+    sidebar: [],
   },
   tools: [
     {
@@ -300,16 +301,58 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
 export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
   readonly manifest: ZenXPluginManifestV2;
   readonly #backend: ZenXBrowserBackend;
+  readonly #threadObservation: BrowserThreadObservation;
 
   constructor(
     backend: ZenXBrowserBackend,
     manifest: ZenXPluginManifestV2 = browserCapabilityManifest,
   ) {
     this.#backend = backend;
+    this.#threadObservation = new BrowserThreadObservation(backend);
     this.manifest = manifest;
   }
 
   async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
+    if (invocation.threadId === undefined)
+      return await this.#invoke(toolName, invocation);
+    const publicSessionId = requiredTargetId(invocation.arguments, "sessionId");
+    const session = this.#threadObservation.session(
+      invocation.threadId,
+      publicSessionId,
+    );
+    const result = await this.#invoke(toolName, {
+      ...invocation,
+      arguments: {
+        ...invocation.arguments,
+        sessionId: session.providerSessionId,
+      },
+    });
+    this.#threadObservation.publish(
+      session,
+      toolName,
+      result,
+      typeof invocation.arguments.tabId === "string"
+        ? invocation.arguments.tabId
+        : undefined,
+    );
+    const project = (value: unknown) =>
+      typeof value === "object" && value !== null && "sessionId" in value
+        ? { ...value, sessionId: publicSessionId }
+        : value;
+    return Array.isArray(result) ? result.map(project) : project(result);
+  }
+
+  observeThread(
+    request: BrowserThreadRequest,
+    listener: BrowserThreadListener,
+  ): () => void {
+    return this.#threadObservation.observe(request, listener);
+  }
+
+  async #invoke(
+    toolName: string,
+    invocation: ToolInvocation,
+  ): Promise<unknown> {
     const sessionId = requiredTargetId(invocation.arguments, "sessionId");
     switch (toolName) {
       case "browser_list_tabs":
@@ -369,19 +412,8 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
     }
   }
 
-  observeLive(listener: BrowserLiveObservationListener): () => void {
-    if (this.#backend.observeLive === undefined) {
-      listener({
-        type: "status",
-        status: "unavailable",
-        message: "Live observation is unavailable for this Browser provider.",
-      });
-      return () => undefined;
-    }
-    return this.#backend.observeLive(listener);
-  }
-
   async close(): Promise<void> {
+    this.#threadObservation.close();
     await this.#backend.close();
   }
 }

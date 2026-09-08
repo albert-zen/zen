@@ -231,7 +231,7 @@ export interface PluginRuntimeInvocationRequest {
   id: string;
   tool: string;
   arguments: Record<string, unknown>;
-  context: { callId: string; cwd: string };
+  context: { callId: string; cwd: string; threadId?: string };
 }
 
 export type PluginRuntimeRequest =

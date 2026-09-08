@@ -5835,3 +5835,145 @@ select:focus-visible {
   font-size: 12px;
   color: var(--text-accent);
 }
+
+/* Browser belongs beside the selected Thread; other Workspace views stay intact. */
+.workspace:has(> .browser-thread-panel) {
+  display: flex;
+  position: relative;
+  overflow: hidden;
+}
+.workspace:has(> .browser-thread-panel) > .agent-surface {
+  flex: 1;
+  min-width: 0;
+  width: 0;
+}
+.workspace:has(> .browser-thread-panel[data-expanded="true"]) > .agent-surface {
+  visibility: hidden;
+}
+.browser-thread-panel {
+  position: relative;
+  flex: 0 1 var(--browser-panel-width, 520px);
+  width: var(--browser-panel-width, 520px);
+  min-width: 360px;
+  max-width: 55%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  border-left: 1px solid var(--border-control);
+  background: var(--color-surface-main);
+  color: var(--color-text-primary);
+}
+.browser-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+}
+.browser-panel-heading > div:first-child {
+  display: grid;
+  min-width: 0;
+}
+.browser-panel-heading small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+}
+.browser-panel-heading > div:last-child {
+  display: flex;
+  flex-shrink: 0;
+}
+.browser-panel-target {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 0 14px 10px;
+  min-width: 0;
+  font-size: 12px;
+}
+.browser-panel-target select {
+  flex: 1;
+  min-width: 0;
+  max-width: 100%;
+  background: var(--color-surface-main);
+  color: inherit;
+  border: 1px solid var(--border-control);
+  padding: 5px;
+  border-radius: 4px;
+}
+.browser-panel-target > span {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+}
+.browser-follow-button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 5px;
+}
+.browser-panel-resizer {
+  position: absolute;
+  left: -4px;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 2;
+  touch-action: none;
+}
+.browser-panel-resizer:focus-visible {
+  background: var(--border-control);
+}
+.browser-thread-panel .browser-live-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 14px;
+}
+.browser-thread-panel .browser-live-privacy-note {
+  flex: 1;
+  min-width: 140px;
+}
+.browser-thread-panel .browser-live-status {
+  width: 100%;
+  max-width: 100%;
+  margin-left: 0;
+}
+.browser-thread-panel .browser-live-status small {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.browser-thread-panel .browser-live-frame {
+  object-fit: contain;
+}
+.browser-thread-panel[data-expanded="true"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  max-width: none;
+  z-index: 3;
+}
+.browser-thread-panel[data-expanded="true"] .browser-panel-resizer {
+  display: none;
+}
+@media (max-width: 1099px) {
+  .workspace:has(> .browser-thread-panel) > .agent-surface {
+    display: none;
+  }
+  .browser-thread-panel {
+    flex: 1;
+    min-width: 0;
+    width: 100%;
+    max-width: none;
+    border-left: 0;
+  }
+  .browser-panel-resizer {
+    display: none;
+  }
+}

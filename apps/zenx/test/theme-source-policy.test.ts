@@ -17,6 +17,7 @@ const consumption = /var\((--[a-z0-9_-]+)/giu;
 const dynamicProductTokens = new Set([
   "--zenx-brand-asset",
   "--bottom-zone-height",
+  "--browser-panel-width", // BrowserThreadPanel owns user-resized width.
 ]);
 
 test("renderer product styles keep raw colors in the single theme source", async () => {

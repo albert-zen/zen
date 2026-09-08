@@ -1,6 +1,6 @@
 {
   "id": "browser",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "An explicit attachment to a user-opened Chrome, Edge, or Chromium CDP session that uses authenticated page state in place without exporting session material.",
   "provider": {
     "id": "user-browser-cdp",
@@ -288,14 +288,6 @@
         "surfaceId": "browser-page"
       }
     ],
-    "sidebar": [
-      {
-        "id": "browser",
-        "label": "Browser",
-        "icon": "layers",
-        "pageId": "browser",
-        "order": 5
-      }
-    ]
+    "sidebar": []
   }
 }

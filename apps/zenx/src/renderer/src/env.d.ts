@@ -51,7 +51,10 @@ import type {
 import type { AttachmentRef } from "../../../../../src/attachment.js";
 import type { MarketplaceCatalogLoadSnapshot } from "../../marketplace.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
-import type { BrowserLiveObservationEvent } from "../../main/capabilities/browser-provider.js";
+import type {
+  BrowserThreadRequest,
+  BrowserThreadEvent,
+} from "../../main/capabilities/browser-thread-observation.js";
 
 declare global {
   interface Window {
@@ -170,7 +173,8 @@ declare global {
       };
       browserObservation: {
         subscribe(
-          listener: (event: BrowserLiveObservationEvent) => void,
+          request: BrowserThreadRequest,
+          listener: (event: BrowserThreadEvent) => void,
         ): () => void;
       };
       plugins: {

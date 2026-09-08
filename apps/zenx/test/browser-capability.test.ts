@@ -219,7 +219,7 @@ test("browser advertises a cross-platform dedicated background-safe provider", (
   );
 });
 
-test("browser contributes its trusted observer-only product page", () => {
+test("browser keeps its legacy route without global sidebar navigation", () => {
   assert.deepEqual(browserCapabilityManifest.ui, {
     bundles: [
       {
@@ -246,15 +246,7 @@ test("browser contributes its trusted observer-only product page", () => {
         surfaceId: "browser-page",
       },
     ],
-    sidebar: [
-      {
-        id: "browser",
-        label: "Browser",
-        icon: "layers",
-        pageId: "browser",
-        order: 5,
-      },
-    ],
+    sidebar: [],
   });
 });
 
