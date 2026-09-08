@@ -5,9 +5,16 @@ import path from "node:path";
 import test from "node:test";
 import { createFixturePluginHost } from "@zenx/plugin-sdk";
 import { ImZenXRuntime } from "../../../packages/zenx-imzenx-plugin/src/runtime.js";
+import { ZenXPluginCatalog } from "../src/main/capabilities/plugin-catalog.js";
+import type {
+  ZenXCapabilityPackage,
+  ZenXPluginCatalogState,
+} from "../src/main/capabilities/types.js";
 import { ToolEnvironment } from "../../../src/tool.js";
 import {
   PluginRuntimeSupervisor,
+  bundledPackageRegistration,
+  CatalogPluginRuntimeLifecycle,
   type PluginRuntimeRegistration,
 } from "../src/main/plugin-runtime.js";
 
@@ -61,29 +68,30 @@ test(
       hostSdkFor: async () => hostSdk,
     });
     const runtimes: ImZenXRuntime[] = [];
-    function registration(version: string): PluginRuntimeRegistration {
-      const runtime = new ImZenXRuntime(host);
-      runtimes.push(runtime);
-      const identity = { pluginId: "imzenx", packageVersion: version };
+    const manifest = JSON.parse(
+      await readFile(
+        path.resolve("../../packages/zenx-imzenx-plugin/zenx.plugin.json"),
+        "utf8",
+      ),
+    );
+    function runtimePackage(version: string): ZenXCapabilityPackage {
       return {
-        identity,
-        definitions: [
-          {
-            name: "imzenx_status",
-            description: "status",
-            inputSchema: { type: "object", properties: {} },
-          },
-        ],
-        start: async () => {
-          await runtime.start(sdk);
-          return {
-            identity,
-            activate: (previousRetired) => runtime.activate(previousRetired),
-            invoke: async () => ({ output: "", exitCode: 0 }),
-            close: () => runtime.close(),
-          };
+        manifest: { ...manifest, version },
+        invoke: async () => {
+          throw new Error("unadmitted package");
+        },
+        createRuntime: () => {
+          const runtime = new ImZenXRuntime(host);
+          runtimes.push(runtime);
+          return runtime;
         },
       };
+    }
+    function registration(version: string): PluginRuntimeRegistration {
+      return bundledPackageRegistration({
+        source: "bundled",
+        package: runtimePackage(version),
+      });
     }
     async function connected(runtime: ImZenXRuntime) {
       const deadline = Date.now() + 5000;
@@ -115,14 +123,80 @@ test(
         1,
       );
       process.kill(oldPid, 0);
+      const successorRegistration = registration("1.0.3");
+      const successor = await supervisor.stage(successorRegistration, hostSdk, {
+        replaceCurrent: true,
+      });
+      successor.publish();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(runtimes[3]!.status().state, "waiting-for-activation");
+      assert.equal(
+        (await readFile(receipt, "utf8")).trim().split("\n").length,
+        1,
+      );
       supervisor.releaseHostGeneration(lease);
-      await connected(runtimes[2]!);
+      await connected(runtimes[3]!);
       assert.throws(() => process.kill(oldPid, 0), { code: "ESRCH" });
       assert.equal(listeners.size, 1);
       assert.equal(
         (await readFile(receipt, "utf8")).trim().split("\n").length,
         2,
       );
+      // Re-enable the identical registered package before its old lease drains.
+      const retained = supervisor.captureHostGeneration(["imzenx_status"]);
+      await supervisor.stop("imzenx");
+      await supervisor.start(successorRegistration);
+      assert.equal(runtimes[4]!.status().state, "waiting-for-activation");
+      assert.equal(runtimes[3]!.status().state, "connected");
+      assert.equal(listeners.size, 1);
+      supervisor.releaseHostGeneration(retained);
+      await connected(runtimes[4]!);
+      assert.equal(runtimes[3]!.status().state, "stopped");
+      assert.equal(listeners.size, 1);
+      assert.equal(
+        (await readFile(receipt, "utf8")).trim().split("\n").length,
+        3,
+      );
+      await supervisor.stop("imzenx");
+      let durable: ZenXPluginCatalogState = {
+        disabled: [],
+        uninstalled: [],
+        packages: {},
+      };
+      let rejectSave = false;
+      const catalog = new ZenXPluginCatalog(
+        {
+          load: async () => structuredClone(durable),
+          save: async (next) => {
+            if (rejectSave) throw new Error("catalog save failed");
+            durable = structuredClone(next);
+          },
+        },
+        {
+          pluginRuntimeLifecycle: new CatalogPluginRuntimeLifecycle({
+            supervisor,
+            registrationFor: bundledPackageRegistration,
+          }),
+        },
+      );
+      await catalog.initialize();
+      await catalog.install(runtimePackage("1.0.4"), "bundled");
+      await connected(runtimes[5]!);
+      const duringSave = supervisor.captureHostGeneration(["imzenx_status"]);
+      rejectSave = true;
+      await assert.rejects(
+        catalog.setEnabled("imzenx", false),
+        /catalog save failed/,
+      );
+      assert.equal(catalog.pluginSnapshot().plugins[0]!.lifecycle, "enabled");
+      assert.equal(runtimes[5]!.status().state, "connected");
+      assert.equal(runtimes[6]!.status().state, "waiting-for-activation");
+      assert.equal(listeners.size, 1);
+      supervisor.releaseHostGeneration(duringSave);
+      await connected(runtimes[6]!);
+      assert.equal(runtimes[5]!.status().state, "stopped");
+      assert.equal(listeners.size, 1);
+      await catalog.close();
     } finally {
       await supervisor.close();
       await rm(root, { recursive: true, force: true });
@@ -130,3 +204,60 @@ test(
     assert.equal(listeners.size, 0);
   },
 );
+
+test("failed ancestor retirement cannot be bypassed by replacement or re-enable", async () => {
+  const supervisor = new PluginRuntimeSupervisor(new ToolEnvironment());
+  const states: string[] = [];
+  function registration(
+    version: string,
+    failure = false,
+  ): PluginRuntimeRegistration {
+    return {
+      identity: { pluginId: "fixture", packageVersion: version },
+      definitions: [
+        {
+          name: "fixture_status",
+          description: "status",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+      start: async () => {
+        const index = states.push("prepared") - 1;
+        let closed = false;
+        return {
+          identity: { pluginId: "fixture", packageVersion: version },
+          activate: (barrier) => {
+            void barrier.then(
+              () => {
+                if (!closed) states[index] = "active";
+              },
+              () => {
+                if (!closed) states[index] = "failed";
+              },
+            );
+          },
+          invoke: async () => ({ output: "", exitCode: 0 }),
+          close: async () => {
+            if (failure) throw new Error("consumer refused shutdown");
+            closed = true;
+            states[index] = "closed";
+          },
+        };
+      },
+    };
+  }
+  await supervisor.start(registration("1.0.0", true));
+  for (const version of ["1.0.1", "1.0.2"]) {
+    const next = await supervisor.stage(registration(version), undefined, {
+      replaceCurrent: true,
+    });
+    next.publish();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(states.at(-1), "failed");
+  }
+  await supervisor.stop("fixture");
+  await supervisor.start(registration("1.0.3"));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(states.at(-1), "failed");
+  await assert.rejects(supervisor.close(), /shutdown failed/);
+});

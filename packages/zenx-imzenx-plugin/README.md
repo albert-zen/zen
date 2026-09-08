@@ -31,8 +31,9 @@ No bot message is copied into a second transcript or Agent runtime.
    this Host, not from an independently configured server.
 
 Replacement preparation never connects to IM. After publication, activation waits
-for the previous consumer to finish; failed or rolled-back candidates do not
-consume messages. Disable → enable reloads configuration on the same runtime.
+for all outstanding predecessor consumers to finish; failed or rolled-back
+candidates do not consume messages. Each admitted Host generation captures an
+isolated runtime instance. Disable → enable reloads the persisted configuration.
 
 The page shows waiting for activation, unconfigured, waiting for ZAS, starting, connected or failed.
 Connected means the SDK Gateway started, not that a real bot delivery has been

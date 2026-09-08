@@ -88,6 +88,7 @@ export class PluginRuntimeSupervisor {
     }
   >();
   readonly #deferredRetirements = new Set<Promise<void>>();
+  readonly #retirementBarriers = new Map<string, Promise<void>>();
   readonly #deferredRetirementFailures: Error[] = [];
   #mutationTail: Promise<void> = Promise.resolve();
 
@@ -171,7 +172,7 @@ export class PluginRuntimeSupervisor {
           const previousRetired =
             previous !== undefined && previous.token !== token
               ? this.#scheduleRetirement(previous.bundle, "replacement commit")
-              : Promise.resolve();
+              : (this.#retirementBarriers.get(pluginId) ?? Promise.resolve());
           staged.bundle.activate(previousRetired);
         },
         rollback: async () => {
@@ -207,8 +208,10 @@ export class PluginRuntimeSupervisor {
     if (active === undefined) return;
     this.#active.delete(pluginId);
     active.unregisterBundle();
-    if (active.bundle.hasHostGenerationLease) {
+    if (active.bundle.hasHostGenerationLease || active.bundle.hasActivation) {
+      const leased = active.bundle.hasHostGenerationLease;
       this.#scheduleRetirement(active.bundle, "Catalog commit");
+      if (!leased) await active.bundle.retire();
       return;
     }
     await active.bundle.retire();
@@ -344,7 +347,21 @@ export class PluginRuntimeSupervisor {
     bundle: SupervisedPluginBundle,
     context: string,
   ): Promise<void> {
-    const completion = bundle.retire();
+    const pluginId = bundle.identity.id;
+    const previous = this.#retirementBarriers.get(pluginId);
+    const ownRetirement = bundle.retire();
+    const completion = Promise.all([previous, ownRetirement]).then(() => {});
+    if (bundle.hasActivation || previous !== undefined)
+      this.#retirementBarriers.set(pluginId, completion);
+    void completion.then(
+      () => {
+        if (this.#retirementBarriers.get(pluginId) === completion)
+          this.#retirementBarriers.delete(pluginId);
+      },
+      () => {
+        /* Keep a failed barrier: the consumer may still be alive. */
+      },
+    );
     let retirement!: Promise<void>;
     retirement = completion
       .catch((error: unknown) => {
@@ -385,6 +402,10 @@ class SupervisedPluginBundle implements ToolBundle {
     }));
     this.#toolNames = new Set(definitions.map((definition) => definition.name));
     this.#runtime = runtime;
+  }
+
+  get hasActivation(): boolean {
+    return this.#runtime.activate !== undefined;
   }
 
   activate(previousRetired: Promise<void>): void {
@@ -491,6 +512,7 @@ export interface BundledPluginModule {
 }
 
 export class BundledModulePluginRuntime implements PluginRuntime {
+  readonly activate?: (previousRetired: Promise<void>) => void;
   readonly identity: PluginRuntimeIdentity;
   readonly #module: BundledPluginModule;
   readonly #sdk: ZenXPluginHostSdkV1;
@@ -503,11 +525,9 @@ export class BundledModulePluginRuntime implements PluginRuntime {
   ) {
     this.identity = Object.freeze({ ...identity });
     this.#module = module;
+    if (module.activate !== undefined)
+      this.activate = (previousRetired) => module.activate!(previousRetired);
     this.#sdk = sdk ?? unavailableHostSdk(identity.pluginId);
-  }
-
-  activate(previousRetired: Promise<void>): void {
-    this.#module.activate?.(previousRetired);
   }
 
   async invoke(
@@ -1195,13 +1215,15 @@ export function bundledPackageRegistration(
     })),
     start: async (sdk) => {
       const hostSdk = sdk ?? unavailableHostSdk(manifest.id);
-      await registration.package.start?.(hostSdk);
+      const runtimePackage =
+        registration.package.createRuntime?.() ?? registration.package;
+      await runtimePackage.start?.(hostSdk);
       return new BundledModulePluginRuntime(
         { pluginId: manifest.id, packageVersion: manifest.version },
         {
           invoke: async (invocation, hostSdk) =>
             normalizePackageResult(
-              await registration.package.invoke(
+              await runtimePackage.invoke(
                 invocation.tool,
                 {
                   callId: invocation.context.callId,
@@ -1213,9 +1235,13 @@ export function bundledPackageRegistration(
                 hostSdk,
               ),
             ),
-          activate: (previousRetired) =>
-            registration.package.activate?.(previousRetired),
-          close: async () => await registration.package.close?.(),
+          ...(runtimePackage.activate === undefined
+            ? {}
+            : {
+                activate: (previousRetired: Promise<void>) =>
+                  runtimePackage.activate!(previousRetired),
+              }),
+          close: async () => await runtimePackage.close?.(),
         },
         hostSdk,
       );

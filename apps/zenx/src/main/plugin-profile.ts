@@ -370,7 +370,7 @@ export async function loadProfilePluginPackage(
   const module = (await import(
     `${pathToFileURL(runtimeEntry).href}?generation=${encodeURIComponent(path.basename(generationDirectory))}`
   )) as Readonly<Record<string, unknown>>;
-  return new ProfileTrustedPluginPackage(manifest, trustedLoader(module));
+  return new ProfileTrustedPluginPackage(manifest, () => trustedLoader(module));
 }
 
 async function prepareInstallSpec(
@@ -577,22 +577,26 @@ class ProfileTrustedPluginPackage implements ZenXCapabilityPackage {
   readonly manifest: ZenXPluginManifestV2;
   readonly storage?: ZenXCapabilityPackage["storage"];
   readonly #runtime: ZenXTrustedProfilePluginRuntime;
+  readonly activate?: (previousRetired: Promise<void>) => void;
+  readonly createRuntime?: ZenXCapabilityPackage["createRuntime"];
 
   constructor(
     manifest: ZenXPluginManifestV2,
-    runtime: ZenXTrustedProfilePluginRuntime,
+    create: () => ZenXTrustedProfilePluginRuntime,
   ) {
     this.manifest = manifest;
+    const runtime = create();
     this.#runtime = runtime;
+    if (runtime.activate !== undefined) {
+      this.activate = (previousRetired) => runtime.activate!(previousRetired);
+      this.createRuntime = () =>
+        new ProfileTrustedPluginPackage(manifest, create);
+    }
     if (runtime.storage !== undefined) this.storage = runtime.storage;
   }
 
   async start(hostSdk: ZenXPluginHostSdkV1): Promise<void> {
     await this.#runtime.start?.(hostSdk);
-  }
-
-  activate(previousRetired: Promise<void>): void {
-    this.#runtime.activate?.(previousRetired);
   }
 
   async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
