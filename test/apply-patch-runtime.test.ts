@@ -81,6 +81,64 @@ test("apply_patch preflights every exact context before changing any file", asyn
   });
 });
 
+test("apply_patch rejects an ambiguous modifying hunk without writing", async () => {
+  await withTempDirectory(async (cwd) => {
+    const filePath = path.join(cwd, "repeated.txt");
+    const original = "before\nsame\nmiddle\nunique\nsame\nafter\n";
+    await writeFile(filePath, original, "utf8");
+
+    const result = await execute(
+      cwd,
+      `*** Begin Patch
+*** Update File: repeated.txt
+@@
+-unique
++UNIQUE
+@@
+-same
++changed
+*** End Patch`,
+    );
+
+    assert.equal(result.exitCode, 1);
+    assert.match(result.output, /multiple matches.*expand the hunk context/iu);
+    assert.equal(await readFile(filePath, "utf8"), original);
+  });
+});
+
+test("apply_patch accepts expanded context and multiple distinct update blocks", async () => {
+  await withTempDirectory(async (cwd) => {
+    const filePath = path.join(cwd, "repeated.txt");
+    await writeFile(
+      filePath,
+      "before\nsame\nmiddle\nsame\nafter\nfinal\n",
+      "utf8",
+    );
+
+    const result = await execute(
+      cwd,
+      `*** Begin Patch
+*** Update File: repeated.txt
+@@
+ before
+-same
++first
+ middle
+@@
+ after
+-final
++last
+*** End Patch`,
+    );
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(
+      await readFile(filePath, "utf8"),
+      "before\nfirst\nmiddle\nsame\nafter\nlast\n",
+    );
+  });
+});
+
 test("apply_patch reports the committed prefix when a later I/O step fails", async () => {
   await withTempDirectory(async (cwd) => {
     const result = await execute(

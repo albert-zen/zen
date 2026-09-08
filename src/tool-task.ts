@@ -35,6 +35,7 @@ export interface ToolTaskOptions {
   toolOutputSpool?: ToolOutputSpool;
 }
 export const TOOL_TASK_CONTENT_TYPE = "application/vnd.zen.tool-task+json";
+export const MAX_TOOL_YIELD_TIME_MS = 180000;
 type Status =
   | "running"
   | "completed"
@@ -57,7 +58,11 @@ export class ToolTaskManager {
   }
   constructor(options: ToolTaskOptions = {}) {
     this.#options = {
-      yieldTimeMs: integer(options.yieldTimeMs ?? 10000, "yieldTimeMs", 60000),
+      yieldTimeMs: integer(
+        options.yieldTimeMs ?? 10000,
+        "yieldTimeMs",
+        MAX_TOOL_YIELD_TIME_MS,
+      ),
       timeoutMs: integer(options.timeoutMs ?? 600000, "timeoutMs", 86400000),
       maxRunningTasks: integer(
         options.maxRunningTasks ?? 8,
@@ -121,7 +126,7 @@ export class ToolTaskManager {
         policy?.yieldTimeMs ??
         this.#options.yieldTimeMs,
       "yield_time_ms",
-      60000,
+      MAX_TOOL_YIELD_TIME_MS,
     );
     const timeoutMs = integer(
       timing?.timeoutMs ??
@@ -153,10 +158,10 @@ export class ToolTaskManager {
     const releaseObservation = task.acquireObservation();
     try {
       task.start();
-      await task.observe(yieldMs, false, true);
+      await task.observe(yieldMs, true);
       if (invocation.threadId === undefined && !task.terminal) {
         task.cancel(false);
-        await task.observe(this.#options.shutdownWaitMs, false);
+        await task.observe(this.#options.shutdownWaitMs);
         // A missing thread must never create an inaccessible running operation.
         if (!task.terminal)
           throw new Error(
@@ -190,7 +195,7 @@ export class ToolTaskManager {
     const yieldMs = integer(
       invocation.arguments.yield_time_ms ?? this.#options.yieldTimeMs,
       "wait.yield_time_ms",
-      60000,
+      MAX_TOOL_YIELD_TIME_MS,
     );
     const terminate = invocation.arguments.terminate ?? false;
     if (typeof terminate !== "boolean")
@@ -209,7 +214,7 @@ export class ToolTaskManager {
     const abort = () => task.cancel(false);
     invocation.signal.addEventListener("abort", abort, { once: true });
     try {
-      await task.observe(yieldMs, !terminate, terminate);
+      await task.observe(yieldMs, terminate);
       const result = await task.drain(false);
       if (!task.yielded || finalResult(result)) await this.#consume(task);
       return result;
@@ -228,7 +233,7 @@ export class ToolTaskManager {
     const tasks = [...this.#tasks.values()];
     for (const task of tasks) task.cancel(false);
     await Promise.all(
-      tasks.map((task) => task.observe(this.#options.shutdownWaitMs, false)),
+      tasks.map((task) => task.observe(this.#options.shutdownWaitMs)),
     );
     for (const task of tasks) await task.shutdown();
     this.#tasks.clear();
@@ -388,15 +393,10 @@ class Task {
     );
     this.#notify();
   }
-  async observe(
-    ms: number,
-    onOutput: boolean,
-    cancelRequested = false,
-  ): Promise<void> {
+  async observe(ms: number, cancelRequested = false): Promise<void> {
     if (
       this.terminal ||
-      (cancelRequested && this.status === "cancellation_unconfirmed") ||
-      (onOutput && this.#window.hasOutput)
+      (cancelRequested && this.status === "cancellation_unconfirmed")
     )
       return;
     const previousStatus = this.status;
@@ -406,8 +406,7 @@ class Task {
         if (
           this.terminal ||
           (previousStatus !== "cancellation_unconfirmed" &&
-            this.status === "cancellation_unconfirmed") ||
-          (onOutput && this.#window.hasOutput)
+            this.status === "cancellation_unconfirmed")
         )
           done();
       };
@@ -569,12 +568,16 @@ export class ToolWaitRuntime implements ToolRuntime {
     this.specification = {
       name: this.name,
       description:
-        "Ordinary tools automatically return task_id when they exceed their yield time; no separate background mode is required. Use wait for incremental output or completion. terminate requests cancellation; receipts report confirmable or best_effort cancellation and resource_scope. Running bundle/runtime resources stay busy; independent tasks can coexist. Only cancelled/timed_out confirm cancellation. Tasks belong to this Host instance and do not resume after restart.",
+        "Ordinary tools automatically return task_id when they exceed their yield time; no separate background mode is required. wait returns when the task completes or yield_time_ms expires, with output produced since the previous receipt. Expiry does not stop the task; its execution deadline remains separate. terminate requests cancellation; receipts report confirmable or best_effort cancellation and resource_scope. Running bundle/runtime resources stay busy; independent tasks can coexist. Only cancelled/timed_out confirm cancellation. Tasks belong to this Host instance and do not resume after restart.",
       inputSchema: {
         type: "object",
         properties: {
           task_id: { type: "string" },
-          yield_time_ms: { type: "integer", minimum: 1, maximum: 60000 },
+          yield_time_ms: {
+            type: "integer",
+            minimum: 1,
+            maximum: MAX_TOOL_YIELD_TIME_MS,
+          },
           terminate: { type: "boolean" },
         },
         required: ["task_id"],

@@ -26,6 +26,7 @@ import { ProviderRegistry } from "../src/provider-registry.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { renderToolOutput, ToolOutputSpool } from "../src/tool-output-spool.js";
+import { DEFAULT_TOOL_OUTPUT_PREVIEW_BYTES } from "../src/tool-output-spool.js";
 import {
   ShellToolRuntime,
   type ToolInvocation,
@@ -57,7 +58,15 @@ test("oversized shell output becomes a bounded receipt with readable full output
     assert(result.output.includes("HEAD-"));
     assert(result.output.includes("-TAIL"));
     assert(!result.output.includes("-MIDDLE-"));
-    assert(Buffer.byteLength(result.output, "utf8") < 40 * 1024);
+    assert.equal(DEFAULT_TOOL_OUTPUT_PREVIEW_BYTES, 8 * 1024);
+    assert(Buffer.byteLength(result.output, "utf8") < 10 * 1024);
+    const receiptText = result.output;
+    const headPreview = receiptText
+      .split("--- head ---\n")[1]!
+      .split("\n--- tail ---")[0]!;
+    const tailPreview = receiptText.split("--- tail ---\n")[1]!;
+    assert.equal(Buffer.byteLength(headPreview, "utf8"), 4 * 1024);
+    assert.equal(Buffer.byteLength(tailPreview, "utf8"), 4 * 1024);
     const receipt = parseReceipt(result.output);
     const captured = await readFile(receipt.path);
     assert.equal(captured.toString("utf8"), expected);
@@ -143,7 +152,7 @@ test("a saturated running shell capture keeps its wait receipt model-visible", a
       name: "wait",
       arguments: {
         task_id: structured.task_id,
-        yield_time_ms: 500,
+        yield_time_ms: 1,
       },
       cwd: root,
       signal: new AbortController().signal,

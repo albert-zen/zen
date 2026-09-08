@@ -141,7 +141,7 @@ artifact 定位 Worker，覆盖 Node builtin、nested、`text`、abort 与 tempo
 同一个 exclusive `apply_patch` runtime；direct 与 `tools.apply_patch(...)` 共享 Tool Environment、
 approval、scheduler 和 canonical lifecycle。patch 使用普通 JSON function 的 `{ patch: string }`
 包装和 Codex-style supported subset（Begin/End Patch、Add/Update/Move/Delete、`@@` exact context、
-可选 End of File），不宣称实现完整宽松 parser；UTF-8 输入在全部内容精确预检后写回 LF。
+可选 End of File），不宣称实现完整宽松 parser；每个修改 hunk 只有一个精确候选时，UTF-8 输入才在全部内容预检后写回 LF，零候选或多个候选要求扩展上下文。
 I/O 阶段不是 durable transaction，失败必须报告已经落盘的前缀。
 
 目标插件生命周期只有 installed / enabled / uninstalled；bundled plugin 同样可卸载、以后重装，

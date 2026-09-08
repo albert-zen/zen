@@ -19,11 +19,11 @@
 - **Tool Presentation** — AgentRuntime 把同一个 Tool Environment 以 `direct`、`code` 或 `both` 形态投影给模型；它只改变模型调用入口，不拥有第二套工具、权限或会话语义。
 - **Code Runtime** — 每次调用在 fresh、空环境、有限 heap/time/output 且可硬终止的 Node Worker 中运行 erasable TypeScript，权限明确等同 builtin shell，并用同一个 Tool Environment 的 `tools.*` bindings 调用结构化工具。
 - **Nested Tool Invocation Port** — AgentRuntime 只向可信 builtin 组合工具提供的 turn-scoped capability，用同一 Tool Environment 和 canonical lifecycle 提交子调用，不序列化或下放给 plugin / external provider。
-- **Tool Output Spool** — Host 把超出模型 preview 上限的完整已捕获 text result 暂存到权限收窄的临时文件，并只把含 head/tail、大小、hash 和易失路径的 receipt canonicalize；临时副本不是 Thread authority。
+- **Tool Output Spool** — Host 把超出默认 8 KiB 模型 preview（4 KiB head 与 4 KiB tail）的完整已捕获 text result 暂存到权限收窄的临时文件，并只把含 head/tail、大小、hash 和易失路径的 receipt canonicalize；临时副本不是 Thread authority。
 - **Tool Execution Mode** — Tool Runtime 对执行 body 只声明 `parallel_safe` 或 `exclusive`；未声明与 builtin shell 一律按 `exclusive`，该分类不是权限或资源 scope。
-- **ToolTaskManager** — ToolEnvironment 统一拥有普通工具的 Host-local 执行、按 Thread 隔离的 task_id、增量输出与 wait；交回时间（默认 10 秒）和执行超时（默认 10 分钟）分开，快速结果原样返回，任务不参与 journal 重建。
+- **ToolTaskManager** — ToolEnvironment 统一拥有普通工具的 Host-local 执行、按 Thread 隔离的 task_id、增量输出与 wait；交回时间（默认 10 秒、最高 180 秒）和执行超时（默认 10 分钟）分开，快速结果原样返回，任务不参与 journal 重建。
 - **ToolTaskPolicy** — 具体工具只声明取消确认能力、资源作用域和可选 timingArguments 字段映射；默认未知取消保留 owner fence 与执行容量直到真实完成或 Host 关闭，shell 在进程组停止后确认取消，composite 保留原有嵌套调度权且不由任务管理器拆离。
-- **ToolWaitRuntime** — 内建且保留名称的 wait 仅观察或请求取消同 Thread 已获准任务，不重新授权、不占执行体容量；取消请求、无法确认取消和已停止是不同状态，Host 关闭有界清理临时资源；每个任务同时只有一个增量输出消费者，并发取消可返回不消费输出的状态，活动观察持有结果保留期。
+- **ToolWaitRuntime** — 内建且保留名称的 wait 仅观察或请求取消同 Thread 已获准任务，只在任务完成或本次 wait 到期时返回自上次领取后的增量输出，到期不停止底层执行；它不重新授权、不占执行体容量，取消请求、无法确认取消和已停止是不同状态，Host 关闭有界清理临时资源；每个任务同时只有一个增量输出消费者，并发取消可返回不消费输出的状态，活动观察持有结果保留期。
 - **ToolTaskBounds** — 同一 Environment 默认最多 8 个尚未确认结束的执行体、64 个含待领取结果的任务，已完成结果保留 5 分钟；交回不释放 prepared bundle lease 或资源 fence，完成/关闭才释放，达到容量时立即告知模型等待现有任务。
 - **Tool Execution Status** — AgentRuntime 为每条新 `tool_result` 记录 `completed`、`failed` 或 `declined` 的 provider-neutral canonical 事实，Tool Runtime 只返回结果内容和 exit code，不能决定审批语义。
 - **Tool Model Content** — trusted builtin 可以让 canonical `tool_result` 携带 provider-neutral `UserInput`，由既有 Attachment Store 在后续模型采样时投影为真实媒体内容，并随 ItemList 重放而不保存 payload 副本。
@@ -355,7 +355,8 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   bridge 以 Tool Bundle 原子发布多个 proxy runtimes，bundle 不按 invocation name 再分发。
 - Tool Presentation 支持 `direct`、`code` 与 `both`。`direct` 投影普通 structured
   tool schemas；`code` 只投影普通 JSON function `run_code({ code, description })`，并在
-  TypeScript SDK 中声明当前可用的 `tools.*` bindings；`both` 同时投影两者，作为目标
+  TypeScript SDK 中保留工具与参数说明并声明当前可用的 `tools.*` bindings；代码是支持
+  top-level await 与 `await import(...)` 的 async function body，不提供 `require`；`both` 同时投影两者，作为目标
   默认，使简单调用无需经过 JavaScript，而循环、分支、并发和中间结果过滤可以使用
   `run_code`。默认 `both` 的 composition 无法初始化 Code Runtime 时明确 warning 并退回
   `direct`；显式选择 `code` 时则启动失败，不得假装执行成功。
@@ -388,7 +389,7 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   return 和 console 不自动进入上下文。多次 `text` 按调用顺序连接，无输出时返回固定
   提示；非字符串值只接受 lossless JSON。
 - direct、nested 与 outer `run_code` 的 text result 共用 Tool Output Spool。默认模型
-  preview 只保留 16 KiB head 与 16 KiB tail；完整已捕获输出以 POSIX 0700 directory /
+  preview 只保留 4 KiB head 与 4 KiB tail；完整已捕获输出以 POSIX 0700 directory /
   0600 file 或 Windows current-user private temp/ACL 暂存，receipt 记录 captured bytes、SHA-256、绝对路径和 temporary lifetime，
   Agent 需要中段时必须主动再读。Provider 已截断或达到 64 MiB capture hard cap 时必须
   标记 `source_truncated: true`，不能声称 temp file 完整。捕获的原文不按秘密值替换、脱敏或改写；
@@ -424,7 +425,7 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   `apply_patch({ patch })` 提交 Codex-style supported subset，使用 Begin/End Patch 边界、
   Add/Update/Move/Delete、`@@` exact context 与可选 `*** End of File`；不宣称复制
   Codex 的完整宽松 parser。relative path 以 Thread cwd 解析，输入文件必须是 UTF-8，更新写回
-  LF；全部内容预检通过后才开始写盘。它与 shell/run_code 拥有相同机器权限并默认跟随 Node
+  LF；每个修改 hunk 必须有且只有一个精确匹配，零匹配或多匹配都要求扩展上下文，全部内容预检通过后才开始写盘。它与 shell/run_code 拥有相同机器权限并默认跟随 Node
   文件 API 的 symlink 语义；预检失败不产生文件修改，真正 I/O 失败可能留下已明确报告的提交
   前缀，不提供 durable filesystem transaction。
 - 显式用户取消或 Turn abort 仍是中断 Turn 的控制流；模型流、journal append、Runtime

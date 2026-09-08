@@ -1,4 +1,5 @@
 import {
+  MAX_TOOL_YIELD_TIME_MS,
   ToolTaskManager,
   ToolWaitRuntime,
   type ToolTaskOptions,
@@ -800,12 +801,16 @@ export class ShellToolRuntime implements ToolRuntime {
   readonly specification: ModelTool = {
     name: this.name,
     description:
-      "Run a shell command. Long operations return a task_id for wait. yield_time_ms controls how soon control returns; timeout_ms controls the execution deadline (default 10 minutes, maximum 24 hours).",
+      "Run a shell command. Long operations return a task_id for wait. yield_time_ms controls how long to wait before returning a task receipt (maximum 180 seconds); timeout_ms controls the separate execution deadline (default 10 minutes, maximum 24 hours).",
     inputSchema: {
       type: "object",
       properties: {
         command: { type: "string" },
-        yield_time_ms: { type: "integer", minimum: 1, maximum: 60000 },
+        yield_time_ms: {
+          type: "integer",
+          minimum: 1,
+          maximum: MAX_TOOL_YIELD_TIME_MS,
+        },
         timeout_ms: { type: "integer", minimum: 1, maximum: 86400000 },
       },
       required: ["command"],

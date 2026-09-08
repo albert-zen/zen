@@ -204,7 +204,7 @@ test("incremental output does not replay, and final model content remains availa
     assert.match(start.output, /one/);
     write("two");
     const next = await env.waitRuntime.execute(
-      invocation("wait", { task_id: data(start).task_id }),
+      invocation("wait", { task_id: data(start).task_id, yield_time_ms: 1 }),
     );
     assert.match(next.output, /two/);
     assert.doesNotMatch(next.output, /one/);
@@ -223,6 +223,75 @@ test("incremental output does not replay, and final model content remains availa
     );
   } finally {
     pending.resolve(done);
+    await env.close();
+  }
+});
+test("wait returns on completion or expiry instead of waking for new output", async () => {
+  const pending = deferred<typeof done>();
+  let write!: (text: string) => void;
+  const body = tool("progress", async (call) => {
+    write = call.taskContext!.onOutput;
+    await pending.promise;
+    return done;
+  });
+  const env = new ToolEnvironment({
+    runtimes: [body],
+    taskOptions: { yieldTimeMs: 1 },
+  });
+  try {
+    const start = await env.execute(env.prepare(invocation("progress")));
+    const waiting = env.waitRuntime.execute(
+      invocation("wait", {
+        task_id: data(start).task_id,
+        yield_time_ms: 30,
+      }),
+    );
+    write("new log");
+    const early = await Promise.race([
+      waiting.then(() => "returned"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 5)),
+    ]);
+    assert.equal(early, "pending");
+    const expired = await waiting;
+    assert.equal(data(expired).status, "running");
+    assert.match(expired.output, /new log/u);
+    pending.resolve(done);
+    const completed = await env.waitRuntime.execute(
+      invocation("wait", {
+        task_id: data(start).task_id,
+        yield_time_ms: 180000,
+      }),
+    );
+    assert.equal(data(completed).status, "completed");
+  } finally {
+    pending.resolve(done);
+    await env.close();
+  }
+});
+
+test("tool and wait yield controls accept at most 180 seconds", async () => {
+  const body = tool("fast", async () => done, {
+    timingArguments: { yieldTimeMs: "yield_time_ms" },
+  });
+  const env = new ToolEnvironment({ runtimes: [body] });
+  try {
+    const result = await env.execute(
+      env.prepare(invocation("fast", { yield_time_ms: 180000 })),
+    );
+    assert.equal(result.output, "done");
+    await assert.rejects(
+      env.execute(env.prepare(invocation("fast", { yield_time_ms: 180001 }))),
+      /1 to 180000/u,
+    );
+    assert.equal(
+      (
+        env.waitRuntime.specification.inputSchema as {
+          properties: { yield_time_ms: { maximum: number } };
+        }
+      ).properties.yield_time_ms.maximum,
+      180000,
+    );
+  } finally {
     await env.close();
   }
 });

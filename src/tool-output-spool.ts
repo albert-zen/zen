@@ -12,7 +12,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 
-export const DEFAULT_TOOL_OUTPUT_PREVIEW_BYTES = 32 * 1024;
+export const DEFAULT_TOOL_OUTPUT_PREVIEW_BYTES = 8 * 1024;
 export const DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES = 64 * 1024 * 1024;
 
 export interface ToolOutputSpoolOptions {

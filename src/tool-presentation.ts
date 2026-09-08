@@ -11,6 +11,7 @@ export interface ToolPresentationSnapshot {
 }
 
 const RUN_CODE_NAME = "run_code";
+export const COMPACT_CONTEXT_NAME = "compact_context";
 
 /** Build both model entry points from one immutable definition snapshot. */
 export function buildToolPresentation(
@@ -21,8 +22,26 @@ export function buildToolPresentation(
   const runCodeCount = snapshot.filter(
     (definition) => definition.name === RUN_CODE_NAME,
   ).length;
+  const compactContextTools = snapshot.filter(
+    (definition) => definition.name === COMPACT_CONTEXT_NAME,
+  );
+  if (
+    compactContextTools.length > 1 ||
+    compactContextTools.some(
+      (definition) =>
+        typeof definition.description !== "string" ||
+        definition.description.trim().length === 0 ||
+        !isRecord(definition.inputSchema),
+    )
+  ) {
+    throw new Error(
+      "Tool presentation accepts at most one valid compact_context definition",
+    );
+  }
   const ordinaryTools = snapshot.filter(
-    (definition) => definition.name !== RUN_CODE_NAME,
+    (definition) =>
+      definition.name !== RUN_CODE_NAME &&
+      definition.name !== COMPACT_CONTEXT_NAME,
   );
   if (mode !== "direct" && runCodeCount !== 1) {
     throw new Error(
@@ -32,10 +51,14 @@ export function buildToolPresentation(
 
   const modelTools =
     mode === "direct"
-      ? ordinaryTools
+      ? [...ordinaryTools, ...compactContextTools]
       : mode === "code"
-        ? [createRunCodeModelTool(ordinaryTools)]
-        : [...ordinaryTools, createRunCodeModelTool(ordinaryTools)];
+        ? [createRunCodeModelTool(ordinaryTools), ...compactContextTools]
+        : [
+            ...ordinaryTools,
+            ...compactContextTools,
+            createRunCodeModelTool(ordinaryTools),
+          ];
   return Object.freeze({
     modelTools: Object.freeze(
       modelTools.map((definition) => deepFreeze(definition)),
@@ -55,6 +78,7 @@ export function createRunCodeModelTool(
     name: RUN_CODE_NAME,
     description: [
       "Run shell-equivalent erasable TypeScript with Node.js authority.",
+      "Code is an async function body: top-level await and await import(...) are available; require is not provided.",
       "Call text(...) explicitly to return selected output. Only the tools declared below are available through tools.* for this model sample.",
       "",
       "Available tools TypeScript SDK:",
@@ -65,8 +89,15 @@ export function createRunCodeModelTool(
     inputSchema: {
       type: "object",
       properties: {
-        code: { type: "string" },
-        description: { type: "string", maxLength: 160 },
+        code: {
+          type: "string",
+          description: "The erasable TypeScript async function body to run.",
+        },
+        description: {
+          type: "string",
+          maxLength: 160,
+          description: "A concise description of what the code does.",
+        },
       },
       required: ["code", "description"],
       additionalProperties: false,
@@ -76,15 +107,19 @@ export function createRunCodeModelTool(
 
 export function generateToolSdk(tools: readonly ModelTool[]): string {
   const declarations = tools
-    .filter((tool) => tool.name !== RUN_CODE_NAME)
+    .filter(
+      (tool) =>
+        tool.name !== RUN_CODE_NAME && tool.name !== COMPACT_CONTEXT_NAME,
+    )
     .flatMap((tool) => {
       const declaration = `  ${typescriptProperty(tool.name)}(args: ${schemaType(tool.inputSchema)}): Promise<ToolResult>;`;
-      return isIdentifierName(tool.name)
-        ? [declaration]
-        : [
-            `  // Invoke as tools[${JSON.stringify(tool.name)}](...).`,
-            declaration,
-          ];
+      return [
+        ...docComment(tool.description, "  "),
+        ...(isIdentifierName(tool.name)
+          ? []
+          : [`  // Invoke as tools[${JSON.stringify(tool.name)}](...).`]),
+        declaration,
+      ];
     });
   return [
     "type ToolResult = {",
@@ -160,10 +195,13 @@ function objectSchemaType(
         )
       : [],
   );
-  const entries = Object.entries(properties).map(
-    ([name, propertySchema]) =>
-      `${typescriptProperty(name)}${required.has(name) ? "" : "?"}: ${schemaType(propertySchema, depth)};`,
-  );
+  const entries = Object.entries(properties).map(([name, propertySchema]) => {
+    const description =
+      isRecord(propertySchema) && typeof propertySchema.description === "string"
+        ? `${inlineDocComment(propertySchema.description)} `
+        : "";
+    return `${description}${typescriptProperty(name)}${required.has(name) ? "" : "?"}: ${schemaType(propertySchema, depth)};`;
+  });
   if (schema.additionalProperties === true) {
     entries.push("[key: string]: unknown;");
   } else if (isRecord(schema.additionalProperties)) {
@@ -172,6 +210,19 @@ function objectSchemaType(
     );
   }
   return entries.length === 0 ? "{ }" : `{ ${entries.join(" ")} }`;
+}
+
+function docComment(description: string, indent: string): string[] {
+  const lines = description.replace(/\*\//gu, "*\\/").split(/\r?\n/u);
+  return [
+    `${indent}/**`,
+    ...lines.map((line) => `${indent} * ${line}`),
+    `${indent} */`,
+  ];
+}
+
+function inlineDocComment(description: string): string {
+  return `/** ${description.replace(/\*\//gu, "*\\/").replace(/\r?\n/gu, " ")} */`;
 }
 
 function literalType(value: unknown): string {
