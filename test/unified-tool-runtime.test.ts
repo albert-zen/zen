@@ -143,6 +143,21 @@ test("interrupting the turn cancels a yielded nested task after its composite ca
     sampling = resolve;
   });
   let stopped = false;
+  const composite: CompositeToolRuntime = {
+    name: "run_code",
+    specification: {
+      name: "run_code",
+      description: "Composite fixture",
+      inputSchema: { type: "object" },
+    },
+    execute: async () => {
+      throw new Error("must execute composite");
+    },
+    executeComposite: async (
+      _invocation: import("../src/tool.js").ToolInvocation,
+      nested: import("../src/tool.js").NestedToolInvocationPort,
+    ) => await nested.invoke("slow", {}, new AbortController().signal),
+  };
   const environment = new ToolEnvironment({
     taskOptions: { yieldTimeMs: 1 },
     runtimes: [
@@ -165,21 +180,7 @@ test("interrupting the turn cancels a yielded nested task after its composite ca
         }),
         taskPolicy: { cancellation: "confirmed-on-settle" as const },
       },
-      {
-        name: "run_code",
-        specification: {
-          name: "run_code",
-          description: "Composite fixture",
-          inputSchema: { type: "object" },
-        },
-        execute: async () => {
-          throw new Error("must execute composite");
-        },
-        executeComposite: async (
-          _invocation: import("../src/tool.js").ToolInvocation,
-          nested: import("../src/tool.js").NestedToolInvocationPort,
-        ) => await nested.invoke("slow", {}, new AbortController().signal),
-      } satisfies CompositeToolRuntime,
+      composite,
     ],
   });
   let samples = 0;
