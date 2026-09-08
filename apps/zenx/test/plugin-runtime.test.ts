@@ -514,11 +514,11 @@ test("Catalog lifecycle transactionally registers and revokes the runtime provid
   await registry.install(runtimePackage, "bundled");
   assert.deepEqual(
     environment.definitions.map((definition) => definition.name),
-    ["fixture_echo"],
+    ["wait", "fixture_echo"],
   );
 
   await registry.setEnabled("fixture", false);
-  assert.deepEqual(environment.definitions, []);
+  assert.deepEqual(toolNames(environment), ["wait"]);
   await assert.rejects(
     supervisor.invoke("fixture", runtimeInvocation("fixture_echo", "disabled")),
     /not enabled/u,
@@ -534,7 +534,7 @@ test("Catalog lifecycle transactionally registers and revokes the runtime provid
     exactTrace,
   );
   await registry.uninstall("fixture");
-  assert.deepEqual(environment.definitions, []);
+  assert.deepEqual(toolNames(environment), ["wait"]);
   await assert.rejects(
     supervisor.invoke(
       "fixture",
@@ -568,7 +568,7 @@ test("Catalog lifecycle transactionally registers and revokes the runtime provid
     failedRegistry.install(pluginPackage(), "bundled"),
     /catalog persistence failed/u,
   );
-  assert.deepEqual(failedEnvironment.definitions, []);
+  assert.deepEqual(toolNames(failedEnvironment), ["wait"]);
 
   const collisionEnvironment = new ToolEnvironment({
     bundles: [
@@ -612,7 +612,7 @@ test("Catalog lifecycle transactionally registers and revokes the runtime provid
   assert.deepEqual(collisionRegistry.pluginSnapshot().plugins, []);
   assert.deepEqual(
     collisionEnvironment.definitions.map((definition) => definition.name),
-    ["fixture_echo"],
+    ["wait", "fixture_echo"],
   );
 
   failSave = false;
@@ -673,14 +673,14 @@ test("Catalog keeps a staged runtime unpublished until install persistence commi
   const installing = registry.install(pluginPackage(), "bundled");
   await saveStarted.promise;
   assert.equal(starts, 1);
-  assert.deepEqual(environment.definitions, []);
+  assert.deepEqual(toolNames(environment), ["wait"]);
   assert.throws(
     () => environment.prepare(invocation("fixture_echo", "too-early")),
     /Unsupported tool/u,
   );
   releaseSave.resolve();
   await installing;
-  assert.deepEqual(toolNames(environment), ["fixture_echo"]);
+  assert.deepEqual(toolNames(environment), ["wait", "fixture_echo"]);
 });
 
 test("failed install persistence never publishes its staged runtime", async () => {
@@ -724,11 +724,11 @@ test("failed install persistence never publishes its staged runtime", async () =
 
   const installing = registry.install(pluginPackage(), "bundled");
   await saveStarted.promise;
-  assert.deepEqual(environment.definitions, []);
+  assert.deepEqual(toolNames(environment), ["wait"]);
   releaseSave.resolve();
   await assert.rejects(installing, /catalog save failed/u);
   assert.equal(closes, 1);
-  assert.deepEqual(environment.definitions, []);
+  assert.deepEqual(toolNames(environment), ["wait"]);
   assert.deepEqual(registry.pluginSnapshot().plugins, []);
 });
 
@@ -762,11 +762,11 @@ test("disabled reinstall stays installed without staging or publishing a runtime
   await registry.reinstall("fixture");
   assert.equal(starts, 1);
   assert.equal(registry.pluginSnapshot().plugins[0]?.lifecycle, "installed");
-  assert.deepEqual(environment.definitions, []);
+  assert.deepEqual(toolNames(environment), ["wait"]);
   await registry.setEnabled("fixture", true);
   assert.equal(starts, 2);
   assert.equal(registry.pluginSnapshot().plugins[0]?.lifecycle, "enabled");
-  assert.deepEqual(toolNames(environment), ["fixture_echo"]);
+  assert.deepEqual(toolNames(environment), ["wait", "fixture_echo"]);
 });
 
 test("bundle conflict fails before Catalog commit and closes the staged runtime", async () => {
@@ -830,7 +830,7 @@ test("bundle conflict fails before Catalog commit and closes the staged runtime"
   assert.deepEqual(registry.pluginSnapshot().plugins, []);
   assert.deepEqual(
     environment.definitions.map((definition) => definition.name),
-    ["fixture_echo"],
+    ["wait", "fixture_echo"],
   );
 });
 
@@ -893,7 +893,7 @@ test("failed disable and uninstall close admission during save then restore the 
     assert.equal(registry.pluginSnapshot().plugins[0]?.lifecycle, "enabled");
     assert.deepEqual(
       environment.definitions.map((definition) => definition.name),
-      ["fixture_echo"],
+      ["wait", "fixture_echo"],
     );
     const restored = environment.prepare(
       invocation("fixture_echo", randomTestId()),
@@ -951,7 +951,7 @@ test("runtime close failure rolls back disable admission to an enabled provider"
   );
   assert.equal(starts, 2);
   assert.equal(registry.pluginSnapshot().plugins[0]?.lifecycle, "enabled");
-  assert.deepEqual(toolNames(environment), ["fixture_echo"]);
+  assert.deepEqual(toolNames(environment), ["wait", "fixture_echo"]);
   assert.deepEqual(
     await environment.execute(
       environment.prepare(invocation("fixture_echo", randomTestId())),
@@ -997,28 +997,28 @@ test("throwing Catalog listeners cannot fail lifecycle commits or block later li
     await registry.install(pluginPackage(), "bundled");
     assert.ok(observed.length > observedBefore);
     assert.equal(registry.pluginSnapshot().plugins[0]?.lifecycle, "enabled");
-    assert.deepEqual(toolNames(environment), ["fixture_echo"]);
+    assert.deepEqual(toolNames(environment), ["wait", "fixture_echo"]);
 
     await registry.setEnabled("fixture", false);
     assert.equal(registry.pluginSnapshot().plugins[0]?.lifecycle, "installed");
-    assert.deepEqual(environment.definitions, []);
+    assert.deepEqual(toolNames(environment), ["wait"]);
     observedBefore = observed.length;
     await registry.setEnabled("fixture", true);
     assert.ok(observed.length > observedBefore);
     assert.equal(registry.pluginSnapshot().plugins[0]?.lifecycle, "enabled");
-    assert.deepEqual(toolNames(environment), ["fixture_echo"]);
+    assert.deepEqual(toolNames(environment), ["wait", "fixture_echo"]);
 
     await registry.uninstall("fixture");
     assert.equal(
       registry.pluginSnapshot().plugins[0]?.lifecycle,
       "uninstalled",
     );
-    assert.deepEqual(environment.definitions, []);
+    assert.deepEqual(toolNames(environment), ["wait"]);
     observedBefore = observed.length;
     await registry.reinstall("fixture");
     assert.ok(observed.length > observedBefore);
     assert.equal(registry.pluginSnapshot().plugins[0]?.lifecycle, "enabled");
-    assert.deepEqual(toolNames(environment), ["fixture_echo"]);
+    assert.deepEqual(toolNames(environment), ["wait", "fixture_echo"]);
     assert.deepEqual(
       await environment.execute(
         environment.prepare(invocation("fixture_echo", randomTestId())),
@@ -1140,7 +1140,10 @@ async function definitionsDisappear(
   environment: ToolEnvironment,
 ): Promise<void> {
   for (let index = 0; index < 20; index += 1) {
-    if (environment.definitions.length === 0) return;
+    if (
+      environment.definitions.every((definition) => definition.name === "wait")
+    )
+      return;
     await Promise.resolve();
   }
   throw new Error("plugin provider remained visible");
