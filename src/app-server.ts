@@ -171,11 +171,18 @@ export interface ThreadArchivedUpdatedEvent {
   archived: boolean;
 }
 
+export interface ThreadStartedEvent {
+  type: "thread_started";
+  threadId: string;
+  thread: ThreadSnapshot;
+}
+
 export type AppServerEvent =
   | RuntimeEvent
   | ThreadSettingsUpdatedEvent
   | ThreadNameUpdatedEvent
-  | ThreadArchivedUpdatedEvent;
+  | ThreadArchivedUpdatedEvent
+  | ThreadStartedEvent;
 
 export interface UpdateThreadSettingsInput {
   selection?: ProviderSelectionInput;
@@ -298,7 +305,9 @@ export class ZenAppServer {
       }
       throw error;
     }
-    return await this.#snapshot(thread);
+    const snapshot = await this.#snapshot(thread);
+    this.#emit({ type: "thread_started", threadId, thread: snapshot });
+    return snapshot;
   }
 
   async listThreads(

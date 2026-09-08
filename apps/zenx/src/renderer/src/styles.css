@@ -5458,3 +5458,32 @@ select:focus-visible {
   font-size: 12px;
   line-height: 1.5;
 }
+
+.imzenx-page .page-card {
+  padding: 20px;
+  margin-bottom: 16px;
+  overflow-wrap: anywhere;
+}
+
+.imzenx-fields {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.imzenx-page summary {
+  cursor: pointer;
+  padding-block: 10px;
+}
+
+.imzenx-page details .form-grid {
+  margin-top: 12px;
+}
+
+.imzenx-page .page-actions button {
+  min-height: 44px;
+}
+
+.imzenx-page [role="alert"] {
+  color: var(--danger);
+}

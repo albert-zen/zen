@@ -27,6 +27,11 @@ const pluginSdkCli = path.join(
 export const ZENX_ROOMS_TARBALL = "zenx-rooms-plugin-1.0.0.tgz";
 export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
+    "@zenx/imzenx-plugin",
+    "zenx-imzenx-plugin",
+    "zenx-imzenx-plugin-1.0.0.tgz",
+  ),
+  plugin(
     "@zenx/browser-plugin",
     "zenx-browser-plugin",
     "zenx-browser-plugin-electron-1.0.0.tgz",

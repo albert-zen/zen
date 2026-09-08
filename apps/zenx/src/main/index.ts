@@ -1,3 +1,5 @@
+import { createImZenXProfileLoader } from "./imzenx-profile-loader.js";
+import { readZenXConnectionDescriptor } from "../protocol-client/connection-descriptor.js";
 import {
   app,
   BrowserWindow,
@@ -246,6 +248,17 @@ async function bootstrapZenX(): Promise<void> {
         ? undefined
         : join(__dirname, "../../../../node_modules/pnpm/bin/pnpm.cjs"),
       trustedProfileLoaders: {
+        imzenx: createImZenXProfileLoader({
+          dataDirectory: join(userDataDirectory, "plugin-data", "imzenx"),
+          isServerReady: () => appServerManager?.status.type === "ready",
+          onServerStatus: (listener) => {
+            if (appServerManager === undefined)
+              throw new Error("ZAS manager is not attached");
+            return appServerManager.onStatus(listener);
+          },
+          readConnection: () =>
+            readZenXConnectionDescriptor(connectionDescriptorFile),
+        }),
         [ZENX_ROOMS_CAPABILITY_ID]: createZenXRoomsProfileLoader(roomsService),
         browser: createDelegatingFirstPartyProfileLoader(() =>
           capabilityService!.browserProfilePackage(),

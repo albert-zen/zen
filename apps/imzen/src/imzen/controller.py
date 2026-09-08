@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -90,7 +91,9 @@ class ImZenController:
         application: ZenApplicationAdapter,
         client: AppServerClient,
         default_permission_mode: PermissionMode = "full-access",
+        subscription_commands: bool = False,
     ) -> None:
+        self._subscription_commands = subscription_commands
         self._application = application
         self._client = client
         self._default_permission_mode = default_permission_mode
@@ -108,7 +111,18 @@ class ImZenController:
             if command is None:
                 await self._ensure_thread(message, actions)
                 return None
-            if command.name == "new":
+            if self._subscription_commands and command.name == "subscribe":
+                translated = replace(
+                    message, content=(TextContent("/pick " + " ".join(command.arguments)),)
+                )
+                return await self._slash.handle(translated, actions)
+            if self._subscription_commands and command.name == "unsubscribe":
+                await self._clear_thread(message, actions)
+                text = (
+                    "Unsubscribed. Use /subscribe <thread> to reconnect; "
+                    "the next ordinary message starts a new Thread."
+                )
+            elif command.name == "new":
                 text = await self._clear_thread(message, actions)
             elif command.name == "permission":
                 text = await self._permission(message, command, actions)
@@ -120,6 +134,12 @@ class ImZenController:
                 text = await self._approval(message, command, actions)
             elif command.name in {"help", "start"}:
                 text = self._help()
+                if self._subscription_commands:
+                    text += (
+                        "\n\n/subscribe <thread> selects and subscribes this IM conversation. "
+                        "/unsubscribe stops its current subscription. "
+                        "Subscriptions survive plugin restarts; desktop replies arrive here."
+                    )
             else:
                 return await self._slash.handle(message, actions)
             return (self._presenter.response(message, text),)
