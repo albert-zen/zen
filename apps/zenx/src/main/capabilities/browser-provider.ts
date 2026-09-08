@@ -1149,7 +1149,7 @@ export const browserInspectScript = `(() => {
     return parts.join(" > ");
   };
   const elements = [...document.querySelectorAll("a[href],button,input,textarea,select,[role=button],[tabindex]")]
-    .filter(visible)
+    .filter((element) => visible(element) && (clickable(element) || typeable(element)))
     .slice(0, 80);
   return {
     visibleText: (document.body?.innerText ?? "").replace(/\\s+/g, " ").trim().slice(0, 8000),

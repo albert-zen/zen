@@ -7,6 +7,7 @@ import {
   ComputerZenXCapabilityPackage,
   MacForegroundInputDriver,
   runProcess,
+  selectComputerInspectionControls,
   type ComputerControlSelector,
   type ComputerInspection,
   type ComputerTarget,
@@ -361,3 +362,40 @@ function invocation(
     signal,
   };
 }
+
+test("computer observation budget preserves source order and prioritizes enabled actions", () => {
+  const controls = Array.from({ length: 40 }, (_, index) => ({
+    index,
+    enabled: index >= 30,
+    actions: index === 31 ? [] : ["AXPress"],
+  }));
+  const selected = selectComputerInspectionControls(
+    controls,
+    (control) => control.enabled && control.actions.length > 0,
+  );
+  assert.equal(selected.length, 32);
+  assert.deepEqual(
+    selected.map((control) => control.index),
+    [
+      ...Array.from({ length: 23 }, (_, index) => index),
+      30,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+    ],
+  );
+  assert.equal(controls.length, 40);
+  assert.deepEqual(
+    selectComputerInspectionControls(controls, () => true),
+    controls.slice(0, 32),
+  );
+  assert.deepEqual(
+    selectComputerInspectionControls(controls.slice(0, 3), () => true),
+    controls.slice(0, 3),
+  );
+});
