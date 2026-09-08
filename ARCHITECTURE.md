@@ -171,6 +171,7 @@
 - **ZenXThreadPinProjection** — ZenXHostProfile 按本机 threadId 顺序持久化 Sidebar Pin，
   renderer 只把仍存在的 active Thread 投影到独立 Pinned section；Pin 不同步、不进入
   canonical ItemList，也不改变 Runtime、调度或 Inbox 优先级。
+- **ZenXImagePresentation** — Renderer 将 Markdown 图片源与既有 tool modelContent 附件投影为缩略图和共享全窗口预览；本地 Markdown 图片经只读、格式/大小受限的 IPC 读取，工具原文、路径和 journal 不变，不导入新的持久化附件。
 - **ZenXSidebarExpansionPreference** — Renderer 在本机 app origin 按区域与 canonical Project key 保存折叠选择；父区关闭、页面切换与重启不重置子区选择，不进入 Core 或 Host restart。数字线程快捷键只按当前展开的可选择线程行顺序投影。
 - **ZenXSidebarOrderPreference** — ZenXHostProfile 按 canonical Project key 与 owning
   Project 分区的 threadId preference list 持久化本机 Sidebar 顺序；未知项按稳定投影追加、

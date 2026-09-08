@@ -5458,3 +5458,24 @@ select:focus-visible {
   font-size: 12px;
   line-height: 1.5;
 }
+
+.markdown-body .markdown-image {
+  display: inline-flex;
+  width: auto;
+  max-width: min(100%, 640px);
+  height: auto;
+  vertical-align: middle;
+}
+.markdown-image img {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+}
+
+.markdown-image img {
+  height: auto;
+}
+.trace-detail .message-images {
+  justify-content: flex-start;
+}

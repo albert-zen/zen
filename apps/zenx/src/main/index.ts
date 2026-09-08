@@ -63,6 +63,7 @@ import {
   importImageDrafts,
   importLocalImageDrafts,
   readAttachmentPayload,
+  readLocalImagePayload,
   type ZenXImageImport,
 } from "./image-attachments.js";
 import {
@@ -671,6 +672,11 @@ function installProtocolIpc(
       return await importImageDrafts(attachments, images);
     },
   );
+  ipcMain.handle(
+    ipcChannels.imageLocalRead,
+    async (_event, source: unknown, cwd: unknown) =>
+      await readLocalImagePayload(source, cwd),
+  );
   ipcMain.handle(ipcChannels.imageAttachmentsRead, async (_event, value) =>
     Uint8Array.from(await readAttachmentPayload(attachments, value)),
   );
@@ -820,6 +826,7 @@ function installFailedProtocolIpc(message: string): void {
     ipcChannels.imageAttachmentsPick,
     ipcChannels.imageAttachmentsImport,
     ipcChannels.imageAttachmentsRead,
+    ipcChannels.imageLocalRead,
     ipcChannels.threadAttachmentsRead,
     ipcChannels.threadUsageRead,
     ipcChannels.projectThreadStart,

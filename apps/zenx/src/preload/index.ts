@@ -127,6 +127,11 @@ contextBridge.exposeInMainWorld("zenx", {
       await ipcRenderer.invoke(ipcChannels.threadSummariesList, options),
   },
   imageAttachments: {
+    readLocal: async (
+      source: string,
+      cwd?: string,
+    ): Promise<{ bytes: Uint8Array; mediaType: string }> =>
+      await ipcRenderer.invoke(ipcChannels.imageLocalRead, source, cwd),
     pick: async (): Promise<ZenXImageDraft[]> =>
       await ipcRenderer.invoke(ipcChannels.imageAttachmentsPick),
     import: async (

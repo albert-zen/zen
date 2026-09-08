@@ -780,7 +780,9 @@ export function App() {
         if (method === "item/completed") {
           const event = params as ServerNotificationParams["item/completed"];
           if (
-            event.item.type === "userMessage" &&
+            (event.item.type === "userMessage" ||
+              (event.item.type === "commandExecution" &&
+                event.item.toolName === "view_image")) &&
             selectedThreadIdRef.current === event.threadId
           ) {
             void window.zenx.imageAttachments

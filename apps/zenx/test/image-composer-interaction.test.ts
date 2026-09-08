@@ -464,3 +464,97 @@ function emptyThread(): Thread {
     turns: [],
   };
 }
+
+test("Markdown data and local images share keyboard-dismissable full-window previews", async () => {
+  const { Markdown } = await import("../src/renderer/src/Markdown.js");
+  const { ThreadImagesContext } =
+    await import("../src/renderer/src/ImagePresentation.js");
+  await withDom(async (dom, root) => {
+    const reads: unknown[][] = [];
+    Object.assign(window, {
+      zenx: {
+        imageAttachments: {
+          readLocal: async (...args: unknown[]) => {
+            reads.push(args);
+            return { bytes: new Uint8Array([1, 2, 3]), mediaType: "image/png" };
+          },
+        },
+      },
+    });
+    const context = {
+      cwd: "/workspace",
+      attachments: {},
+      read: async () => new Uint8Array(),
+      open: () => {},
+    };
+    await act(async () =>
+      root.render(
+        createElement(
+          ThreadImagesContext.Provider,
+          { value: context },
+          createElement(Markdown, {
+            text: "![inline](data:image/png;base64,AA==)\n\n![local](./image.png)",
+          }),
+        ),
+      ),
+    );
+    assert.deepEqual(reads, [["./image.png", "/workspace"]]);
+    assert.equal(document.querySelectorAll(".markdown-image img").length, 2);
+    const trigger = required<HTMLButtonElement>(
+      '[aria-label="Preview inline"]',
+    );
+    await act(async () => trigger.click());
+    const dialog = required<HTMLElement>('[role="dialog"]');
+    assert.equal(dialog.parentElement, document.body);
+    assert.equal(
+      dialog.querySelector("img")?.getAttribute("src"),
+      "data:image/png;base64,AA==",
+    );
+    await act(async () => {
+      document.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+        }),
+      );
+    });
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(document.activeElement, trigger);
+    const local = required<HTMLButtonElement>('[aria-label="Preview local"]');
+    await act(async () => local.click());
+    assert.ok(document.querySelector('[role="dialog"] img'));
+    await act(async () =>
+      required<HTMLButtonElement>('[aria-label="Close image preview"]').click(),
+    );
+    assert.equal(document.activeElement, local);
+  });
+});
+
+test("Markdown missing local images show an explanation and plain paths stay text", async () => {
+  const { Markdown } = await import("../src/renderer/src/Markdown.js");
+  await withDom(async (_dom, root) => {
+    Object.assign(window, {
+      zenx: {
+        imageAttachments: {
+          readLocal: async () => {
+            throw new Error("missing");
+          },
+        },
+      },
+    });
+    await act(async () =>
+      root.render(
+        createElement(Markdown, {
+          text: "![missing](/tmp/missing.png)\n\n/tmp/plain.png",
+        }),
+      ),
+    );
+    assert.match(
+      required<HTMLElement>('[role="alert"]').textContent ?? "",
+      /Image unavailable: missing/,
+    );
+    assert.equal(document.querySelectorAll(".markdown-image").length, 1);
+    assert.match(document.body.textContent ?? "", /\/tmp\/plain.png/);
+    assert.equal(required<HTMLButtonElement>(".markdown-image").disabled, true);
+  });
+});
