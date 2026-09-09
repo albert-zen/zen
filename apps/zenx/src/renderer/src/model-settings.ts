@@ -159,6 +159,23 @@ export function canSendWithModel(
   );
 }
 
+export function hasValidReasoningSelection(
+  models: readonly ModelSummary[],
+  settings: Pick<SelectedThreadSettings, "model" | "reasoningEffort">,
+): boolean {
+  const model = models.find(
+    (candidate) => candidate.id === settings.model && !candidate.hidden,
+  );
+  if (model === undefined) return false;
+  if (model.supportedReasoningEfforts.length === 0) return true;
+  return (
+    settings.reasoningEffort !== null &&
+    model.supportedReasoningEfforts.some(
+      (candidate) => candidate.reasoningEffort === settings.reasoningEffort,
+    )
+  );
+}
+
 export function imageCapabilityMessage(
   providerProfiles: readonly ZenXProviderProfile[],
   settings: Omit<

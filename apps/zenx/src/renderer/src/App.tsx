@@ -11,6 +11,7 @@ import {
 } from "react";
 
 import type { AttachmentRef } from "../../../../../src/attachment.js";
+import type { ThreadSnapshot } from "../../../../../src/app-server.js";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
 import type {
@@ -37,7 +38,10 @@ import type {
   ServerNotificationParams,
   Thread,
 } from "../../protocol-client/index.js";
-import { decodeModelKey } from "../../../../../src/protocol/codex/model-key.js";
+import {
+  decodeModelKey,
+  encodeModelKey,
+} from "../../../../../src/protocol/codex/model-key.js";
 import {
   addApprovalRequest,
   markApprovalResponding,
@@ -66,6 +70,7 @@ import { DirectoryPicker } from "./DirectoryPicker.js";
 import {
   applySettingsMirror,
   canSendWithModel,
+  hasValidReasoningSelection,
   canChangeThreadModel,
   modelChangeRequest,
   permissionModeFromPolicy,
@@ -96,7 +101,12 @@ import {
   writeSidebarMode,
   type SidebarMode,
 } from "./thread-list.js";
-import { applyThreadViewNotification } from "./thread-view-state.js";
+import {
+  applyNativeThreadEvent,
+  applyThreadViewNotification,
+  markThreadViewAwaitingRecovery,
+  projectNativeRecovery,
+} from "./thread-view-state.js";
 import { ThreadView } from "./ThreadView.js";
 import { ZenXBrand } from "./ZenXBrand.js";
 
@@ -133,11 +143,14 @@ function replayThreadProjection(
   let projectedThread = thread;
   let projectedSettings = settings;
   for (const notification of notifications) {
-    projectedThread = applyThreadViewNotification(
-      projectedThread,
-      notification.method,
-      notification.params,
-    );
+    projectedThread =
+      notification.method === "zen/thread/event"
+        ? applyNativeThreadEvent(projectedThread, notification.params.event)
+        : applyThreadViewNotification(
+            projectedThread,
+            notification.method,
+            notification.params,
+          );
     if (notification.method === "thread/settings/updated") {
       const event =
         notification.params as ServerNotificationParams["thread/settings/updated"];
@@ -167,6 +180,7 @@ function retainsActiveTurnNotification(
   method: ServerNotificationMethod,
 ): boolean {
   return (
+    method === "zen/thread/event" ||
     method === "thread/queue/updated" ||
     method === "turn/started" ||
     method === "item/started" ||
@@ -177,6 +191,34 @@ function retainsActiveTurnNotification(
     method === "item/commandExecution/outputDelta" ||
     method === "item/completed"
   );
+}
+
+function nativeSettingsSnapshot(
+  snapshot: ThreadSnapshot,
+): import("../../protocol-client/types.js").ThreadSettingsSnapshot {
+  return {
+    model: encodeModelKey(snapshot),
+    modelProvider: snapshot.providerProfileId,
+    serviceTier: null,
+    cwd: snapshot.cwd,
+    instructionSources: [],
+    approvalPolicy:
+      snapshot.approvalPolicy === "never" ? "never" : "on-request",
+    approvalsReviewer: "user",
+    sandbox:
+      snapshot.sandbox === "danger-full-access"
+        ? { type: "dangerFullAccess" }
+        : snapshot.sandbox === "read-only"
+          ? { type: "readOnly" }
+          : {
+              type: "workspaceWrite",
+              writableRoots: [],
+              networkAccess: false,
+              excludeTmpdirEnvVar: false,
+              excludeSlashTmp: false,
+            },
+    reasoningEffort: snapshot.reasoningEffort,
+  };
 }
 
 function activeTurnNotificationTail(
@@ -599,7 +641,7 @@ export function App() {
     setThreadError(null);
     void loadComposerCatalog();
     try {
-      const result = await window.zenx.protocol.request("thread/resume", {
+      const result = await window.zenx.protocol.request("zen/thread/resume", {
         threadId,
       });
       if (selectionEpoch.current !== epoch) return;
@@ -612,8 +654,8 @@ export function App() {
       if (pending?.epoch === epoch && pending.threadId === threadId)
         pendingResumeProjectionRef.current = null;
       const projected = replayThreadProjection(
-        result.thread,
-        settingsFromSnapshot(result.thread.id, result),
+        projectNativeRecovery(result),
+        settingsFromSnapshot(threadId, nativeSettingsSnapshot(result.thread)),
         notifications,
       );
       threadProjectionCacheRef.current.set(threadId, projected);
@@ -745,12 +787,32 @@ export function App() {
         if (status.reconnected && selectedThreadIdRef.current !== null) {
           void resumeThread(selectedThreadIdRef.current, true);
         }
+      } else if (status.type === "reconnecting") {
+        pendingResumeProjectionRef.current = null;
+        const selectedId = selectedThreadIdRef.current;
+        if (selectedId !== null) {
+          const cached = threadProjectionCacheRef.current.get(selectedId);
+          if (cached !== undefined) {
+            const awaiting = {
+              ...cached,
+              thread: markThreadViewAwaitingRecovery(cached.thread),
+              activeTurnNotifications: [],
+            };
+            threadProjectionCacheRef.current.set(selectedId, awaiting);
+            setThreadDetail(awaiting.thread);
+          }
+        }
       }
     });
     const disposeNotifications = window.zenx.protocol.onNotification(
       (method, params) => {
         if (!active) return;
+        if (method === "model/catalog/updated") {
+          void loadModels();
+          return;
+        }
         if (
+          method === "zen/thread/event" ||
           method.startsWith("thread/") ||
           method.startsWith("turn/") ||
           method === "item/completed"
@@ -780,6 +842,34 @@ export function App() {
         ) {
           setThreadDetail(cached.thread);
           setSelectedSettings(cached.settings);
+        }
+        if (method === "zen/thread/event") {
+          const projected =
+            params as ServerNotificationParams["zen/thread/event"];
+          if (
+            projected.event.type === "item_completed" ||
+            projected.event.type === "turn_completed"
+          ) {
+            if (selectedThreadIdRef.current === projected.threadId)
+              refreshThreadUsage(projected.threadId);
+          }
+          if (
+            projected.event.type === "item_completed" &&
+            projected.event.item.type === "user_message" &&
+            selectedThreadIdRef.current === projected.threadId
+          ) {
+            void window.zenx.imageAttachments
+              .forThread(projected.threadId)
+              .then((attachments) => {
+                if (selectedThreadIdRef.current === projected.threadId)
+                  setThreadAttachments(attachments);
+              })
+              .catch((error: unknown) =>
+                setRequestError(
+                  `Thread images could not be loaded: ${describeError(error)}`,
+                ),
+              );
+          }
         }
         if (method === "item/completed" || method === "turn/completed") {
           const event = params as { threadId: string };
@@ -1158,6 +1248,12 @@ export function App() {
       setModelUpdateError("Choose an available model before sending.");
       return;
     }
+    if (!hasValidReasoningSelection(models, draftSettings)) {
+      setModelUpdateError(
+        "Choose an available reasoning effort before sending.",
+      );
+      return;
+    }
     const startedComposer = beginComposerSubmission(
       current.composer,
       intent,
@@ -1335,6 +1431,16 @@ export function App() {
           providerProfiles,
           selectedSettings,
         ) ?? "Choose an available model before sending.",
+      );
+      return;
+    }
+    if (
+      intent !== "steer" &&
+      selectedSettings !== null &&
+      !hasValidReasoningSelection(models, selectedSettings)
+    ) {
+      setModelUpdateError(
+        "Choose an available reasoning effort before sending.",
       );
       return;
     }

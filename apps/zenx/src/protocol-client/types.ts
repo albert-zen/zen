@@ -5,6 +5,10 @@ import type {
   CodexTurn,
 } from "../../../../src/protocol/codex/mapper.js";
 import type { AttachmentRef } from "../../../../src/attachment.js";
+import type {
+  NativeProjectedThreadEvent,
+  NativeThreadRecoverySnapshot,
+} from "../../../../src/protocol/native/recovery.js";
 
 export type Thread = CodexThread;
 export type Turn = CodexTurn;
@@ -124,6 +128,7 @@ export interface ClientRequestParams {
   "model/list": { cursor?: null };
   "thread/start": ThreadConfigurationParams;
   "thread/resume": { threadId: string } & ThreadConfigurationParams;
+  "zen/thread/resume": { threadId: string };
   "thread/read": { threadId: string; includeTurns?: boolean };
   "thread/list": {
     limit?: number;
@@ -179,6 +184,7 @@ export interface ClientRequestResults {
   "model/list": { data: ModelSummary[]; nextCursor: null };
   "thread/start": { thread: Thread } & ThreadSettingsSnapshot;
   "thread/resume": { thread: Thread } & ThreadSettingsSnapshot;
+  "zen/thread/resume": NativeThreadRecoverySnapshot;
   "thread/read": { thread: Thread };
   "thread/list": {
     data: Thread[];
@@ -204,6 +210,8 @@ export interface ClientRequestResults {
 export type ClientRequestMethod = keyof ClientRequestParams;
 
 export interface ServerNotificationParams {
+  "zen/thread/event": NativeProjectedThreadEvent;
+  "model/catalog/updated": { processEpoch: string; revision: number };
   "thread/started": { thread: Thread };
   "thread/name/updated": { threadId: string; threadName: string };
   "thread/archived": { threadId: string };
@@ -314,7 +322,11 @@ export type ConnectionStatus =
   | { type: "connecting" }
   | { type: "ready"; reconnected: boolean }
   | { type: "reconnecting"; attempt: number; delayMs: number }
-  | { type: "resubscribed"; threadId: string; thread: Thread }
+  | {
+      type: "resubscribed";
+      threadId: string;
+      recovery: NativeThreadRecoverySnapshot;
+    }
   | { type: "resubscribeFailed"; threadId: string; error: Error }
   | { type: "protocolError"; error: Error }
   | { type: "closed" };

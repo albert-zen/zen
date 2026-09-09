@@ -73,6 +73,7 @@ export class ZenXProtocolClient {
     (status: ConnectionStatus) => void | Promise<void>
   >();
   readonly #subscribedThreads = new Set<string>();
+  readonly #nativeSubscriptions = new Set<string>();
   #socket: WebSocket | undefined;
   #nextRequestId = 1;
   #connectionGeneration = 0;
@@ -334,6 +335,13 @@ export class ZenXProtocolClient {
     }
 
     if (isNotification(message)) {
+      const nativeThreadId = notificationThreadId(message.params);
+      if (
+        nativeThreadId !== null &&
+        this.#nativeSubscriptions.has(nativeThreadId) &&
+        isLegacyThreadProjectionMethod(message.method)
+      )
+        return;
       const handlers = this.#notificationHandlers.get(message.method);
       if (handlers === undefined) return;
       for (const handler of handlers) await handler(message.params);
@@ -409,11 +417,14 @@ export class ZenXProtocolClient {
   async #restoreSubscriptions(): Promise<void> {
     for (const threadId of this.#subscribedThreads) {
       try {
-        const result = await this.#rawRequest("thread/resume", { threadId });
+        const result = await this.#rawRequest("zen/thread/resume", {
+          threadId,
+        });
+        this.#nativeSubscriptions.add(threadId);
         this.#emitStatus({
           type: "resubscribed",
           threadId,
-          thread: result.thread,
+          recovery: result,
         });
       } catch (error) {
         if (this.#socket?.readyState !== WebSocket.OPEN) throw error;
@@ -443,10 +454,18 @@ export class ZenXProtocolClient {
       );
       return;
     }
+    if (method === "zen/thread/resume") {
+      const threadId = (params as ClientRequestParams["zen/thread/resume"])
+        .threadId;
+      this.#subscribedThreads.add(threadId);
+      this.#nativeSubscriptions.add(threadId);
+      return;
+    }
     if (method === "thread/unsubscribe") {
-      this.#subscribedThreads.delete(
-        (params as ClientRequestParams["thread/unsubscribe"]).threadId,
-      );
+      const threadId = (params as ClientRequestParams["thread/unsubscribe"])
+        .threadId;
+      this.#subscribedThreads.delete(threadId);
+      this.#nativeSubscriptions.delete(threadId);
     }
   }
 
@@ -460,6 +479,24 @@ export class ZenXProtocolClient {
       void Promise.resolve(handler(status)).catch(() => undefined);
     }
   }
+}
+
+function notificationThreadId(params: unknown): string | null {
+  if (typeof params !== "object" || params === null) return null;
+  const value = (params as { threadId?: unknown }).threadId;
+  return typeof value === "string" ? value : null;
+}
+
+function isLegacyThreadProjectionMethod(method: string): boolean {
+  return (
+    method === "turn/started" ||
+    method === "item/started" ||
+    method.startsWith("item/agentMessage/") ||
+    method.startsWith("item/reasoning/") ||
+    method === "item/commandExecution/outputDelta" ||
+    method === "item/completed" ||
+    method === "turn/completed"
+  );
 }
 
 export class ZenXProtocolError extends Error {

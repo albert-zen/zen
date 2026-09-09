@@ -6,6 +6,7 @@ export const clientRequestMethods = [
   "model/list",
   "thread/start",
   "thread/resume",
+  "zen/thread/resume",
   "thread/read",
   "thread/list",
   "thread/name/set",

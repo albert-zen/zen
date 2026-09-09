@@ -15,6 +15,7 @@ import {
   canSendWithModel,
   canChangeThreadModel,
   groupedModelOptions,
+  hasValidReasoningSelection,
   imageCapabilityMessage,
   imageCapabilityNotice,
   modelChangeRequest,
@@ -204,6 +205,42 @@ test("groups runnable visible models by Provider and lists only selected-model e
     model: alphaKey,
     effort: "low",
   });
+});
+
+test("requires an explicit valid effort only when the model exposes effort control", () => {
+  const controlled = model("controlled", {
+    isDefault: true,
+    supportedReasoningEfforts: efforts("low", "medium", "high"),
+    defaultReasoningEffort: "medium",
+  });
+  const uncontrolled = model("uncontrolled");
+  const selection = {
+    model: controlled.id,
+    reasoningEffort: null,
+  };
+
+  assert.equal(hasValidReasoningSelection([controlled], selection), false);
+  assert.equal(
+    hasValidReasoningSelection([controlled], {
+      ...selection,
+      reasoningEffort: "unsupported",
+    }),
+    false,
+  );
+  assert.equal(
+    hasValidReasoningSelection([controlled], {
+      ...selection,
+      reasoningEffort: "medium",
+    }),
+    true,
+  );
+  assert.equal(
+    hasValidReasoningSelection([uncontrolled], {
+      model: uncontrolled.id,
+      reasoningEffort: null,
+    }),
+    true,
+  );
 });
 
 function model(

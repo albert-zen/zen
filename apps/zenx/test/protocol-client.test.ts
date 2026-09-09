@@ -349,10 +349,13 @@ test("reconnects and restores subscriptions with thread/resume", async () => {
         status.type === "resubscribed" && status.threadId === started.thread.id,
     );
     assert(restored && restored.type === "resubscribed");
-    assert.equal(restored.thread.id, started.thread.id);
+    assert.equal(restored.recovery.thread.id, started.thread.id);
+    assert.equal(typeof restored.recovery.processEpoch, "string");
 
     const turnCompleted = deferred<void>();
-    client.onNotification("turn/completed", () => turnCompleted.resolve());
+    client.onNotification("zen/thread/event", (event) => {
+      if (event.event.type === "turn_completed") turnCompleted.resolve();
+    });
     await client.request("turn/start", {
       threadId: started.thread.id,
       input: [{ type: "text", text: "after reconnect" }],

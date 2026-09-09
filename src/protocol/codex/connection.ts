@@ -737,6 +737,7 @@ export class CodexConnection {
   }
 
   async #projectEvent(event: AppServerEvent): Promise<void> {
+    if (event.type === "model_catalog_updated") return;
     if (event.type === "thread_started") {
       this.#send({
         method: "thread/started",
@@ -1182,7 +1183,8 @@ export class CodexConnection {
       event.type === "thread_started" ||
       event.type === "thread_name_updated" ||
       event.type === "thread_settings_updated" ||
-      event.type === "thread_archived_updated"
+      event.type === "thread_archived_updated" ||
+      event.type === "model_catalog_updated"
     ) {
       console.warn(`Could not project ${event.type} notification`, error);
       return;
@@ -1232,6 +1234,7 @@ export class CodexConnection {
 }
 
 function eventThreadId(event: AppServerEvent): string {
+  if (event.type === "model_catalog_updated") return "";
   return event.type === "item_completed" ? event.item.threadId : event.threadId;
 }
 
@@ -1273,6 +1276,7 @@ function eventRepresentedInSnapshot(
     case "reasoning_content_delta":
       return snapshot.items.some((item) => item.id === event.itemId);
     case "token_usage":
+    case "model_catalog_updated":
       return true;
   }
 }
