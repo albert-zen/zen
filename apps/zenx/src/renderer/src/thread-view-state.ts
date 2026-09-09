@@ -194,7 +194,14 @@ export function applyNativeThreadEvent(
       event.item.type === "tool_call"
         ? projectNativeCommandStarted(event.item, thread.cwd)
         : projectNativeCompletedItem(event.item);
-    if (item === null || itemById(thread, item.id) !== undefined) return thread;
+    if (item === null) return thread;
+    // Replayed tool calls must not reset an already completed execution.
+    // Streamed messages and reasoning, however, must replace their placeholders.
+    if (
+      event.item.type === "tool_call" &&
+      itemById(thread, item.id) !== undefined
+    )
+      return thread;
     const turnId = "turnId" in event.item ? event.item.turnId : undefined;
     if (turnId === undefined) return thread;
     return applyThreadViewNotification(

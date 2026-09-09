@@ -6,6 +6,7 @@ import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import { threadHasActiveTurn } from "../src/renderer/src/thread-list.js";
 import {
   activeTurn,
+  applyNativeThreadEvent,
   applyThreadViewNotification,
   markThreadViewAwaitingRecovery,
   projectNativeRecovery,
@@ -446,4 +447,53 @@ test("reasoning follows its own lifecycle and terminal turns settle unfinished t
     (reasoningValue(value) as { status?: string }).status,
     "interrupted",
   );
+});
+
+test("native completion replaces live reasoning without duplicates", () => {
+  let current = thread([turn("turn-1", "inProgress")]);
+  current = applyNativeThreadEvent(current, {
+    type: "item_started",
+    threadId: current.id,
+    turnId: "turn-1",
+    itemId: "reasoning-1",
+    itemType: "reasoning",
+  });
+  const item = {
+    id: "reasoning-1",
+    threadId: current.id,
+    turnId: "turn-1",
+    createdAt: "2026-09-09T11:25:22Z",
+    type: "reasoning" as const,
+    reasoningContent: "finished",
+    contentVisibility: "public" as const,
+  };
+  current = applyNativeThreadEvent(current, { type: "item_completed", item });
+  current = applyNativeThreadEvent(current, { type: "item_completed", item });
+  assert.equal(current.turns[0]!.items.length, 1);
+  const completed = current.turns[0]!.items[0]!;
+  assert.equal(completed.type, "reasoning");
+  if (completed.type === "reasoning") {
+    assert.notEqual(completed.status, "inProgress");
+    assert.deepEqual(completed.content, ["finished"]);
+  }
+});
+
+test("replayed native tool call preserves its completed result", () => {
+  const current = thread([
+    turn("turn-1", "inProgress", [commandItem("tool-1", "completed", "done")]),
+  ]);
+  const next = applyNativeThreadEvent(current, {
+    type: "item_completed",
+    item: {
+      id: "tool-1",
+      threadId: current.id,
+      turnId: "turn-1",
+      createdAt: "2026-09-09T11:25:22Z",
+      type: "tool_call",
+      callId: "call-1",
+      name: "shell",
+      arguments: { command: "echo done" },
+    },
+  });
+  assert.deepEqual(next, current);
 });

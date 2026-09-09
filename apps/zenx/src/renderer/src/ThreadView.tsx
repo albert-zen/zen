@@ -606,6 +606,26 @@ export function ThreadView({
   );
 }
 
+function RunningTurnLabel({ startedAt }: { startedAt: number | null }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, []);
+  const seconds =
+    startedAt === null
+      ? null
+      : Math.max(0, Math.floor(now / 1_000 - startedAt));
+  return (
+    <div className="turn-running-label" role="status" aria-label="Working">
+      <span className="mini-spinner" aria-hidden="true" />
+      <span aria-hidden="true">
+        {seconds === null ? "Working" : `Working for ${seconds}s`}
+      </span>
+    </div>
+  );
+}
+
 function TurnBlock({
   turn,
   index,
@@ -670,10 +690,7 @@ function TurnBlock({
           <Icon name="chevron-down" size={14} />
         </button>
       ) : (
-        <div className="turn-running-label" aria-live="polite">
-          <span className="mini-spinner" aria-hidden="true" />
-          <span>Working</span>
-        </div>
+        <RunningTurnLabel startedAt={turn.startedAt} />
       )}
       {!complete || expanded ? (
         <div className="turn-history">

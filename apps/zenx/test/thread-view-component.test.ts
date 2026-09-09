@@ -1629,3 +1629,23 @@ test("tool image thumbnails are a display projection beside unchanged call and o
     assert.equal(JSON.stringify(value), original);
   });
 });
+
+test("running duration ticks from turn start and stops on completion", async (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 22_000 });
+  await withDom(async (root) => {
+    await renderInteractive(root, turnWithItems("inProgress", []));
+    assert.equal(
+      requiredElement(".turn-running-label").textContent,
+      "Working for 12s",
+    );
+    await act(async () => t.mock.timers.tick(2_000));
+    assert.equal(
+      requiredElement(".turn-running-label").textContent,
+      "Working for 14s",
+    );
+    await renderInteractive(root, turnWithItems("completed", [], 14_000));
+    assert.equal(document.querySelector(".turn-running-label"), null);
+    await act(async () => t.mock.timers.tick(2_000));
+    assert.match(requiredElement(".turn-toggle").textContent ?? "", /14s/u);
+  });
+});
