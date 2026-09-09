@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { ZenAppServer } from "../src/app-server.js";
 import {
@@ -853,13 +854,13 @@ test("declined outer run_code never starts a Worker", async () => {
   assert.equal(result.output, "User declined this tool call.");
 });
 
-test("wall containment aborts and settles a terminable nested child before outer result", async () => {
+test("wall containment aborts and settles a terminable nested child before outer result", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-run-code-child-"));
   const fixture = path.join(root, "fixture.cjs");
   const pidFile = path.join(root, "pid.txt");
   await writeFile(
     fixture,
-    `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`,
+    `setTimeout(() => { require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); }, 200); setInterval(() => {}, 1000);`,
     "utf8",
   );
   const command = `${JSON.stringify(process.execPath)} ${JSON.stringify(fixture)}`;
@@ -877,9 +878,31 @@ test("wall containment aborts and settles a terminable nested child before outer
   });
   try {
     const thread = await server.startThread({ cwd: root });
-    await (
-      await server.startTurn(thread.id, "contain child")
-    ).done;
+    // Control only the wall deadline. Real Worker/process startup may take
+    // longer than the 100 ms execution budget on a loaded runner.
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const turn = await server.startTurn(thread.id, "contain child");
+    let pid: number;
+    try {
+      const deadline = Date.now() + 10_000;
+      while (true) {
+        try {
+          pid = Number(await readFile(pidFile, "utf8"));
+          if (Number.isSafeInteger(pid) && pid > 0) break;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        assert(Date.now() < deadline, "nested child did not become ready");
+        await delay(10);
+      }
+      // Readiness is real; only expiry is advanced. The fixture deliberately
+      // takes longer than the old wall budget before publishing its PID.
+      process.kill(pid, 0);
+    } finally {
+      t.mock.timers.tick(100);
+      await turn.done;
+      t.mock.timers.reset();
+    }
     const snapshot = await server.readThread(thread.id);
     const lifecycle = snapshot.items.filter(
       (item) => item.type === "tool_call" || item.type === "tool_result",
@@ -891,7 +914,6 @@ test("wall containment aborts and settles a terminable nested child before outer
     const outerResult = lifecycle.at(-1);
     assert(outerResult?.type === "tool_result");
     assert.match(outerResult.output, /WALL_TIME_LIMIT/u);
-    const pid = Number(await readFile(pidFile, "utf8"));
     assert.throws(
       () => process.kill(pid, 0),
       (error: unknown) => {
