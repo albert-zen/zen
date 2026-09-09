@@ -157,20 +157,9 @@ export async function stagePluginPackage(options: {
         generationDirectory,
         options.allowBuilds,
       );
-      await runBundledPnpm({
-        cliPath: options.pnpmCliPath,
-        cwd: generationDirectory,
-        environment: options.pnpmEnvironment,
-        arguments: [
-          "install",
-          "--offline",
-          "--ignore-workspace",
-          "--store-dir",
-          paths.store,
-        ],
-        signal: options.signal,
-        abortGraceMs: options.pnpmAbortGraceMs,
-      });
+      // The add/update below materializes this staged generation from the
+      // copied lockfile. Installing the old dependency set first would require
+      // an App Resource tarball that an application upgrade may have removed.
     }
 
     const before = (await readProfilePackageJson(generationDirectory))
@@ -180,6 +169,21 @@ export async function stagePluginPackage(options: {
       options.source,
       generationDirectory,
     );
+    if (
+      options.expectedPackageName !== undefined &&
+      (options.source.mode === "bundled" || options.source.mode === "tarball")
+    ) {
+      // pnpm reads existing direct file specs even during add. Retire only the
+      // replaced dependency in staging before resolving its new tarball.
+      const stagedProfile = await readProfilePackageJson(generationDirectory);
+      const dependencies = { ...stagedProfile.dependencies };
+      delete dependencies[options.expectedPackageName];
+      await writeProfilePackageJson(
+        generationDirectory,
+        dependencies,
+        stagedProfile.pnpm?.allowBuilds ?? {},
+      );
+    }
     const pnpmArguments =
       options.source.mode === "npm" &&
       options.expectedPackageName !== undefined &&

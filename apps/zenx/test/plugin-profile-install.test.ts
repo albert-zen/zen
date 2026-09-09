@@ -206,6 +206,64 @@ test("Settings host installs one tarball through the committed profile and Agent
   }
 });
 
+test("a plugin upgrade succeeds after the previous App Resource tarball is removed", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-removed-upgrade-"),
+  );
+  const userData = path.join(directory, "user-data");
+  const first = await createTarballFixture(directory, {
+    id: "removed-upgrade",
+    packageName: "@zenx-test/removed-upgrade",
+    version: "1.0.0",
+  });
+  const second = await createTarballFixture(directory, {
+    id: "removed-upgrade",
+    packageName: "@zenx-test/removed-upgrade",
+    version: "1.0.1",
+  });
+  const sibling = await createTarballFixture(directory, {
+    id: "upgrade-sibling",
+    packageName: "@zenx-test/upgrade-sibling",
+    version: "1.0.0",
+  });
+  const service = profileService(userData, { pnpmCliPath: pnpmCli });
+  try {
+    await service.initialize();
+    await service.installPluginTarball(sibling);
+    await service.installPluginTarball(first);
+    const previousCatalog = await readCatalog(userData);
+    const previousPackagePath = path.join(
+      userData,
+      "plugin-profile",
+      "generations",
+      previousCatalog.profileGeneration,
+      "package.json",
+    );
+    const previousPackage = await readFile(previousPackagePath, "utf8");
+    await rm(first);
+    await service.updatePluginPackage("removed-upgrade", {
+      mode: "tarball",
+      packageSpec: second,
+    });
+    assert.equal(
+      service
+        .pluginSnapshot()
+        .plugins.find((plugin) => plugin.id === "removed-upgrade")?.version,
+      "1.0.1",
+    );
+    assert.equal(
+      service
+        .pluginSnapshot()
+        .plugins.find((plugin) => plugin.id === "upgrade-sibling")?.version,
+      "1.0.0",
+    );
+    assert.equal(await readFile(previousPackagePath, "utf8"), previousPackage);
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a second profile install rebuilds links inside the new generation", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-profile-generation-links-"),
