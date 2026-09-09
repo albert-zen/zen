@@ -137,7 +137,11 @@
   默认模型；`hidden` 只表示不在客户端选择器展示，已知模型 id 仍可由既有 Thread
   或显式请求使用。
 - **ModelCatalogPreset** — 宿主版本化维护的内建 catalog 数据层，只记录仓库已确认的
-  Provider/model metadata，并由手工配置覆盖、由 discovery 仅补充未知 capability 的 id。
+  Provider/model metadata；手工配置始终覆盖 discovery，OpenAI-compatible discovery 只补充
+  Unknown capability，而 OpenAI subscription 的官方目录替换非手工 preset metadata，失败时 preset 才作为兜底。
+- **OpenAI Subscription Model Cache** — ZenX Host 按 ChatGPT account id 保存官方 Codex
+  `/models` 的最近一次成功投影与 ETag；它只作为可替换的模型发现缓存，远端失败时依次退回
+  同账户缓存和内建 preset，不保存 credential，也不成为 Provider 或 Thread 权威状态。
 - **ProviderRegistry** — 宿主以稳定 `providerProfileId` 把每个注入的 ModelAdapter
   与其 ModelCatalog 绑定；canonical selection 是
   `providerProfileId / modelId / reasoningEffort` 的原子三元组，Thread 只记录生效选择而不持有 profile 或 credential；

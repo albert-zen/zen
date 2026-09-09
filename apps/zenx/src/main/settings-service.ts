@@ -7,10 +7,14 @@ import {
   type ProviderFetch,
   type ProviderTransport,
 } from "../../../../apps/cli/src/host.js";
+import { builtInModelCatalogPreset } from "../../../../apps/cli/src/model-presets.js";
 import { OpenAiSubscriptionAuthProfile } from "../../../../apps/cli/src/subscription-auth.js";
 import type { ModelAdapter } from "../../../../src/model.js";
 import { OpenAiCompatibleModel } from "../../../../src/model/openai-compatible.js";
-import { OpenAiSubscriptionModel } from "../../../../src/model/openai-subscription.js";
+import {
+  extractChatGptAccountId,
+  OpenAiSubscriptionModel,
+} from "../../../../src/model/openai-subscription.js";
 import type {
   ZenXHostConfig,
   HostConfigurationCandidate,
@@ -37,7 +41,10 @@ import {
 import { ZenXCredentialVault } from "./credential-vault.js";
 import {
   discoverOpenAiCompatibleModels,
+  discoverOpenAiSubscriptionModels,
   type DiscoveredModelCatalogEntry,
+  ModelDiscoveryHttpError,
+  OpenAiSubscriptionModelCache,
 } from "./model-discovery.js";
 import { resolveZenXHostConfig } from "./host-config.js";
 import {
@@ -77,6 +84,8 @@ interface CanonicalWorkspaceSnapshot {
 export interface ZenXProviderCatalogSnapshot {
   providerProfileId: string;
   models: ZenXModelCatalogEntry[];
+  source?: "remote" | "cache" | "fallback";
+  warning?: string;
 }
 
 export interface ZenXImageCapabilityProbeResult {
@@ -97,6 +106,14 @@ interface ProviderOperationSnapshot {
   readonly provider: OpenAiCompatibleProviderProfile;
   readonly model: ZenXModelCatalogEntry | undefined;
   readonly apiKey: string;
+  readonly providerFingerprint: string;
+}
+
+interface SubscriptionDiscoverySnapshot {
+  readonly provider: Extract<
+    ZenXProviderProfile,
+    { type: "openai-subscription" }
+  >;
   readonly providerFingerprint: string;
 }
 
@@ -232,6 +249,7 @@ export class ZenXSettingsService {
   readonly #profileStore: ZenXHostProfileStore;
   readonly #subscription: SubscriptionAuth;
   readonly #subscriptionFactory: (profilePath: string) => SubscriptionAuth;
+  readonly #subscriptionModelCache: OpenAiSubscriptionModelCache;
   readonly #vault: ZenXCredentialVault;
   readonly #projectPlatform: NodeJS.Platform;
   readonly #projectRealpath: ProjectRealpath | undefined;
@@ -257,6 +275,7 @@ export class ZenXSettingsService {
     profileStore?: ZenXHostProfileStore;
     subscription?: SubscriptionAuth;
     subscriptionFactory?: (profilePath: string) => SubscriptionAuth;
+    subscriptionModelCache?: OpenAiSubscriptionModelCache;
     projectPlatform?: NodeJS.Platform;
     projectRealpath?: ProjectRealpath;
     providerFetchFactory?: (
@@ -281,6 +300,14 @@ export class ZenXSettingsService {
     this.#subscriptionFactory =
       options.subscriptionFactory ??
       ((profilePath) => new OpenAiSubscriptionAuthProfile(profilePath));
+    this.#subscriptionModelCache =
+      options.subscriptionModelCache ??
+      new OpenAiSubscriptionModelCache(
+        path.join(
+          options.userDataDirectory,
+          "openai-subscription-models-cache.json",
+        ),
+      );
     this.#vault = options.vault;
     this.#projectRealpath = options.projectRealpath;
     this.#providerFetchFactory =
@@ -428,6 +455,14 @@ export class ZenXSettingsService {
       signal?: AbortSignal;
     } = {},
   ): Promise<ZenXProviderCatalogSnapshot> {
+    const subscriptionTarget =
+      await this.#captureSubscriptionDiscovery(providerProfileId);
+    if (subscriptionTarget !== undefined) {
+      return await this.#discoverSubscriptionModels(
+        subscriptionTarget,
+        options.signal,
+      );
+    }
     const target = await this.#captureProviderOperation(
       providerProfileId,
       "model discovery",
@@ -463,6 +498,146 @@ export class ZenXSettingsService {
       providerProfileId: target.provider.providerProfileId,
       models,
     };
+  }
+
+  async #discoverSubscriptionModels(
+    target: SubscriptionDiscoverySnapshot,
+    requestSignal: AbortSignal | undefined,
+  ): Promise<ZenXProviderCatalogSnapshot> {
+    const signal = requestSignal ?? new AbortController().signal;
+    const subscription = this.#subscriptionForProfile(
+      target.provider.providerProfileId,
+    );
+    const fallback = builtInModelCatalogPreset("openai-subscription").map(
+      (entry) => {
+        const normalized = structuredLegacyModelCatalog("openai-subscription", [
+          entry.id,
+        ])[0]!;
+        return normalized;
+      },
+    );
+    const merge = (
+      discovered: readonly DiscoveredModelCatalogEntry[],
+    ): ZenXModelCatalogEntry[] => {
+      const discoveredById = new Map(
+        discovered.map((entry) => [entry.id, entry]),
+      );
+      const configuredIds = new Set(
+        target.provider.models.map((entry) => entry.id),
+      );
+      return [
+        ...target.provider.models.map((entry) =>
+          replaceSubscriptionCatalogModel(entry, discoveredById.get(entry.id)),
+        ),
+        ...discovered.filter((entry) => !configuredIds.has(entry.id)),
+      ];
+    };
+    const fallbackSnapshot = async (
+      warning: string,
+      accountId?: string,
+    ): Promise<ZenXProviderCatalogSnapshot> => {
+      if (accountId !== undefined) {
+        const cached = await this.#subscriptionModelCache.load(accountId);
+        if (cached !== undefined) {
+          await this.#assertSubscriptionDiscoveryCurrent(target);
+          return {
+            providerProfileId: target.provider.providerProfileId,
+            models: merge(cached.models),
+            source: "cache",
+            warning,
+          };
+        }
+      }
+      await this.#assertSubscriptionDiscoveryCurrent(target);
+      return {
+        providerProfileId: target.provider.providerProfileId,
+        models: merge(fallback),
+        source: "fallback",
+        warning,
+      };
+    };
+    if (subscription.acquireAccessLease === undefined) {
+      const status = await subscription.status();
+      return await fallbackSnapshot(
+        "OpenAI subscription model discovery is unavailable; using the local catalog",
+        status.accountId,
+      );
+    }
+    let lease;
+    try {
+      lease = await subscription.acquireAccessLease(signal);
+    } catch (error) {
+      const status = await subscription.status();
+      return await fallbackSnapshot(
+        describeDiscoveryError(error),
+        status.accountId,
+      );
+    }
+    let accessToken = lease.accessToken;
+    let accountId = extractChatGptAccountId(accessToken);
+    let cached = await this.#subscriptionModelCache.load(accountId);
+    const fetch = this.#providerFetchFactory(undefined);
+    try {
+      let result;
+      try {
+        result = await discoverOpenAiSubscriptionModels({
+          accessToken,
+          etag: cached?.etag,
+          fetch,
+          signal,
+        });
+      } catch (error) {
+        if (
+          error instanceof ModelDiscoveryHttpError &&
+          error.status === 401 &&
+          subscription.renewAccessLease !== undefined
+        ) {
+          lease = await subscription.renewAccessLease(accessToken, signal);
+          accessToken = lease.accessToken;
+          accountId = extractChatGptAccountId(accessToken);
+          cached = await this.#subscriptionModelCache.load(accountId);
+          result = await discoverOpenAiSubscriptionModels({
+            accessToken,
+            etag: cached?.etag,
+            fetch,
+            signal,
+          });
+        } else {
+          throw error;
+        }
+      }
+      if (result.notModified) {
+        if (cached === undefined) {
+          throw new Error(
+            "OpenAI subscription model discovery returned not modified without a local cache",
+          );
+        }
+        await this.#assertSubscriptionDiscoveryCurrent(target);
+        return {
+          providerProfileId: target.provider.providerProfileId,
+          models: merge(cached.models),
+          source: "cache",
+        };
+      }
+      const catalog = {
+        accountId: result.accountId,
+        fetchedAt: Date.now(),
+        ...(result.etag === undefined ? {} : { etag: result.etag }),
+        models: result.models,
+      };
+      await this.#subscriptionModelCache.store(catalog).catch(() => undefined);
+      await this.#assertSubscriptionDiscoveryCurrent(target);
+      return {
+        providerProfileId: target.provider.providerProfileId,
+        models: merge(result.models),
+        source: "remote",
+      };
+    } catch (error) {
+      signal.throwIfAborted();
+      return await fallbackSnapshot(describeDiscoveryError(error), accountId);
+    } finally {
+      await fetch.close?.();
+    }
   }
 
   async probeProviderModelImage(
@@ -1161,6 +1336,52 @@ export class ZenXSettingsService {
     return this.#profile;
   }
 
+  async #captureSubscriptionDiscovery(
+    providerProfileId: string,
+  ): Promise<SubscriptionDiscoverySnapshot | undefined> {
+    return await this.#queueProfileOperation(async () => {
+      const provider = this.#requireProfile().providerProfiles.find(
+        (candidate) => candidate.providerProfileId === providerProfileId,
+      );
+      if (provider === undefined) {
+        throw new Error(
+          `Provider profile ${providerProfileId} is not configured`,
+        );
+      }
+      if (provider.type === "openai-compatible") return undefined;
+      if (provider.type !== "openai-subscription") {
+        throw new Error(
+          `Provider profile ${providerProfileId} does not support model discovery`,
+        );
+      }
+      const snapshot = deepFreeze(structuredClone(provider));
+      return Object.freeze({
+        provider: snapshot,
+        providerFingerprint: JSON.stringify(snapshot),
+      });
+    });
+  }
+
+  async #assertSubscriptionDiscoveryCurrent(
+    target: SubscriptionDiscoverySnapshot,
+  ): Promise<void> {
+    await this.#queueProfileOperation(async () => {
+      const current = this.#requireProfile().providerProfiles.find(
+        (candidate) =>
+          candidate.providerProfileId === target.provider.providerProfileId,
+      );
+      if (
+        current === undefined ||
+        current.type !== "openai-subscription" ||
+        JSON.stringify(current) !== target.providerFingerprint
+      ) {
+        throw new Error(
+          `Provider profile ${target.provider.providerProfileId} changed during model discovery; try again`,
+        );
+      }
+    });
+  }
+
   async #captureProviderOperation(
     providerProfileId: string,
     operation: "model discovery" | "image capability probe",
@@ -1437,6 +1658,20 @@ function enrichConfiguredModel(
     contextWindow: configured.contextWindow ?? discovered.contextWindow,
     source: discovered.source,
   };
+}
+
+function replaceSubscriptionCatalogModel(
+  configured: ZenXModelCatalogEntry,
+  discovered: DiscoveredModelCatalogEntry | undefined,
+): ZenXModelCatalogEntry {
+  if (discovered === undefined || configured.source === "manual") {
+    return configured;
+  }
+  return discovered;
+}
+
+function describeDiscoveryError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function normalizeCanonicalWorkspaces(
