@@ -1448,8 +1448,9 @@ function ProviderEditor({
             >
               <h4>Choose models to add</h4>
               <p className="settings-note">
-                Select the models you want. Existing models and their settings
-                stay unchanged.
+                {provider.type === "openai-subscription"
+                  ? "Choose additional models. Official metadata is updated in the draft; manual settings are preserved. Save provider to apply."
+                  : "Select the models you want. Existing models and their settings stay unchanged."}
               </p>
               <label className="field">
                 <span>Search available models</span>
