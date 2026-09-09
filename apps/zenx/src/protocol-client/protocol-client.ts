@@ -222,6 +222,9 @@ export class ZenXProtocolClient {
   }
 
   async #openAndInitialize(): Promise<void> {
+    // Native projection ownership belongs to one WebSocket generation. Until
+    // a resume succeeds on this socket, legacy events remain the live fallback.
+    this.#nativeSubscriptions.clear();
     const socket = new WebSocket(this.#url, {
       ...(this.#bearerToken === undefined
         ? {}

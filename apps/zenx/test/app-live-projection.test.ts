@@ -228,6 +228,84 @@ test("keeps an inactive Thread's streaming projection when returning to it", asy
   }
 });
 
+for (const recoveredEpoch of ["old-host", "new-host"] as const) {
+  test(`disconnect invalidates a background cache before ${recoveredEpoch === "old-host" ? "same-epoch" : "new-epoch"} recovery`, async () => {
+    let status: ((value: AppServerHostStatus) => void) | undefined;
+    const backgroundRecovery = deferred<ReturnType<typeof resumed>>();
+    const resumeCalls = new Map<string, number>();
+    const harness = await mountApp({
+      request: async (method, params) => {
+        if (method !== "zen/thread/resume")
+          throw new Error(`Unexpected protocol request: ${method}`);
+        const threadId = (params as { threadId: string }).threadId;
+        const call = (resumeCalls.get(threadId) ?? 0) + 1;
+        resumeCalls.set(threadId, call);
+        if (threadId === "thread-2" && call === 1) {
+          return nativeRecoveryForThread(
+            threadWithAgentMessage("thread-2", "Old partial", true),
+            { processEpoch: "old-host", watermark: 3 },
+          );
+        }
+        if (threadId === "thread-2") return await backgroundRecovery.promise;
+        return nativeRecoveryForThread(thread("thread-1"), {
+          processEpoch: recoveredEpoch,
+        });
+      },
+      onStatus: (listener) => {
+        status = listener;
+        return () => {
+          status = undefined;
+        };
+      },
+      threads: async (archived) =>
+        archived
+          ? []
+          : [
+              summary("thread-1", "Thread one"),
+              summary("thread-2", "Thread two"),
+            ],
+    });
+    try {
+      const row = (name: string) =>
+        Array.from(
+          document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+        ).find((candidate) => candidate.textContent?.includes(name));
+      await act(async () => row("Thread two")?.click());
+      await waitFor(() =>
+        (document.body.textContent ?? "").includes("Old partial"),
+      );
+      await act(async () => row("Thread one")?.click());
+      await waitFor(() => resumeCalls.get("thread-1") === 1);
+      assert.ok(status);
+      await act(async () => {
+        status?.({ type: "reconnecting", attempt: 1, delayMs: 0 });
+        status?.({ type: "ready", reconnected: true });
+        await Promise.resolve();
+      });
+      await waitFor(() => resumeCalls.get("thread-1") === 2);
+      await act(async () => row("Thread two")?.click());
+      await waitFor(() => resumeCalls.get("thread-2") === 2);
+      assert.match(document.body.textContent ?? "", /Loading conversation/u);
+      assert.doesNotMatch(document.body.textContent ?? "", /Old partial/u);
+
+      await act(async () => {
+        backgroundRecovery.resolve(
+          nativeRecoveryForThread(
+            threadWithAgentMessage("thread-2", "Completed while away", false),
+            { processEpoch: recoveredEpoch, watermark: 8 },
+          ),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      assert.match(document.body.textContent ?? "", /Completed while away/u);
+      assert.doesNotMatch(document.body.textContent ?? "", /Old partial/u);
+    } finally {
+      await harness.unmount();
+    }
+  });
+}
+
 test("failed ready approval snapshot drops stale cards and replays live requests", async () => {
   const nextSnapshot = deferred<ApprovalRequestEvent[]>();
   let snapshotCalls = 0;
@@ -333,6 +411,13 @@ test("a late resume response from the previous Host generation cannot replace th
     assert.ok(status);
     await act(async () => {
       status?.({ type: "reconnecting", attempt: 1, delayMs: 0 });
+      responses[0]!.resolve(resumed(threadWithMessage("stale generation")));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.doesNotMatch(document.body.textContent ?? "", /stale generation/u);
+
+    await act(async () => {
       status?.({ type: "ready", reconnected: true });
       await Promise.resolve();
     });
@@ -345,11 +430,6 @@ test("a late resume response from the previous Host generation cannot replace th
     });
     assert.match(document.body.textContent ?? "", /current generation/u);
 
-    await act(async () => {
-      responses[0]!.resolve(resumed(threadWithMessage("stale generation")));
-      await Promise.resolve();
-      await Promise.resolve();
-    });
     assert.match(document.body.textContent ?? "", /current generation/u);
     assert.doesNotMatch(document.body.textContent ?? "", /stale generation/u);
   } finally {
@@ -715,6 +795,34 @@ function streamingThread(): Thread {
             id: "streamed-item",
             type: "agentMessage",
             text: "Initial stream continues while away",
+            phase: "final_answer",
+            memoryCitation: null,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function threadWithAgentMessage(
+  threadId: string,
+  text: string,
+  active: boolean,
+): Thread {
+  return {
+    ...thread(threadId),
+    status: active ? { type: "active", activeFlags: [] } : { type: "idle" },
+    turns: [
+      {
+        ...runningTurn(),
+        status: active ? "inProgress" : "completed",
+        completedAt: active ? null : 20,
+        durationMs: active ? null : 10,
+        items: [
+          {
+            id: "background-agent",
+            type: "agentMessage",
+            text,
             phase: "final_answer",
             memoryCitation: null,
           },

@@ -367,6 +367,7 @@ export function App() {
   const threadUsageLoadEpoch = useRef(0);
   const threadSummaryLoadEpoch = useRef(0);
   const projectLoadEpoch = useRef(0);
+  const modelCatalogLoadEpoch = useRef(0);
   const projectsRef = useRef<ZenXProjectProjectionSnapshot>({
     projects: [],
     unavailableThreadIds: [],
@@ -790,10 +791,12 @@ export function App() {
   };
 
   const loadComposerCatalog = async () => {
+    const epoch = ++modelCatalogLoadEpoch.current;
     const [result, settings] = await Promise.allSettled([
       window.zenx.protocol.request("model/list", {}),
       window.zenx.settings.get(),
     ]);
+    if (modelCatalogLoadEpoch.current !== epoch) return;
     if (settings.status === "fulfilled")
       setProviderProfiles(settings.value.profile.providerProfiles);
     try {
@@ -813,25 +816,25 @@ export function App() {
   useEffect(() => {
     let active = true;
     const loadModels = async () => {
+      const epoch = ++modelCatalogLoadEpoch.current;
       const [result, settings] = await Promise.allSettled([
         window.zenx.protocol.request("model/list", {}),
         window.zenx.settings.get(),
       ]);
-      if (active && settings.status === "fulfilled")
+      if (!active || modelCatalogLoadEpoch.current !== epoch) return;
+      if (settings.status === "fulfilled")
         setProviderProfiles(settings.value.profile.providerProfiles);
       try {
         if (settings.status === "rejected") throw settings.reason;
         if (result.status === "rejected") throw result.reason;
         validateModelCatalog(result.value.data);
-        if (active) {
-          setModels(result.value.data);
-          setModelCatalogError(null);
-          setModelUpdateError((current) =>
-            current === MODEL_CATALOG_LOADING ? null : current,
-          );
-        }
+        setModels(result.value.data);
+        setModelCatalogError(null);
+        setModelUpdateError((current) =>
+          current === MODEL_CATALOG_LOADING ? null : current,
+        );
       } catch (error) {
-        if (active) setModelCatalogError(describeError(error));
+        setModelCatalogError(describeError(error));
       }
     };
     const replaceApprovalSnapshot = async () => {
@@ -871,17 +874,21 @@ export function App() {
           void resumeThread(selectedThreadIdRef.current, true);
         }
       } else if (status.type === "reconnecting") {
-        pendingResumeProjectionRef.current = null;
+        invalidateThreadSelection();
+        modelCatalogLoadEpoch.current += 1;
         const selectedId = selectedThreadIdRef.current;
+        const selectedCache =
+          selectedId === null
+            ? undefined
+            : threadProjectionCacheRef.current.get(selectedId);
+        threadProjectionCacheRef.current.clear();
         if (selectedId !== null) {
-          const cached = threadProjectionCacheRef.current.get(selectedId);
-          if (cached !== undefined) {
+          if (selectedCache !== undefined) {
             const awaiting = {
-              ...cached,
-              thread: markThreadViewAwaitingRecovery(cached.thread),
+              ...selectedCache,
+              thread: markThreadViewAwaitingRecovery(selectedCache.thread),
               activeTurnNotifications: [],
             };
-            threadProjectionCacheRef.current.set(selectedId, awaiting);
             setThreadDetail(awaiting.thread);
           }
         }

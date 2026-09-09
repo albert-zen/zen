@@ -367,6 +367,98 @@ test("reconnects and restores subscriptions with thread/resume", async () => {
   }
 });
 
+test("a failed native resubscribe keeps successor-socket legacy turn events", async () => {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve, reject) => {
+    server.once("listening", resolve);
+    server.once("error", reject);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("Expected a TCP WebSocket listener");
+  }
+  const sockets: WebSocket[] = [];
+  server.on("connection", (socket) => {
+    const generation = sockets.length;
+    sockets.push(socket);
+    socket.on("message", (data) => {
+      const message = JSON.parse(data.toString()) as {
+        id?: string | number;
+        method?: string;
+        params?: unknown;
+      };
+      if (
+        message.method === "initialize" ||
+        message.method === "zen/initialize"
+      ) {
+        socket.send(JSON.stringify({ id: message.id, result: {} }));
+      } else if (message.method === "zen/thread/resume") {
+        socket.send(
+          JSON.stringify(
+            generation === 0
+              ? { id: message.id, result: {} }
+              : {
+                  id: message.id,
+                  error: { code: -32000, message: "resume unavailable" },
+                },
+          ),
+        );
+      } else if (message.method === "turn/start") {
+        socket.send(JSON.stringify({ id: message.id, result: {} }));
+        socket.send(
+          JSON.stringify({
+            method: "turn/started",
+            params: {
+              threadId: "thread-1",
+              turn: {
+                id: "turn-after-failed-resume",
+                items: [],
+                itemsView: "full",
+                status: "inProgress",
+                error: null,
+                startedAt: 1,
+                completedAt: null,
+                durationMs: null,
+              },
+            },
+          }),
+        );
+      }
+    });
+  });
+  const client = await ZenXProtocolClient.connect(
+    clientOptions(
+      `ws://127.0.0.1:${String(address.port)}`,
+      "failed-native-resubscribe",
+      { reconnect: { maxAttempts: 10, minDelayMs: 5, maxDelayMs: 10 } },
+    ),
+  );
+  const turnStarted = deferred<void>();
+  client.onNotification("turn/started", () => turnStarted.resolve());
+  const reconnected = deferred<void>();
+  client.onStatus((status) => {
+    if (status.type === "ready" && status.reconnected) reconnected.resolve();
+  });
+  try {
+    await client.request("zen/thread/resume", { threadId: "thread-1" });
+    sockets[0]!.terminate();
+    await within(reconnected.promise);
+    await client.request("turn/start", {
+      threadId: "thread-1",
+      input: [{ type: "text", text: "after failed native resume" }],
+    });
+    await within(turnStarted.promise);
+  } finally {
+    client.close();
+    for (const socket of sockets) socket.terminate();
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) =>
+        error === undefined ? resolve() : reject(error),
+      ),
+    );
+  }
+});
+
 test("a delayed server-request handler never replies on a successor socket", async () => {
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await new Promise<void>((resolve, reject) => {
