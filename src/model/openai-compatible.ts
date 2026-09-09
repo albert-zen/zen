@@ -554,16 +554,35 @@ async function toChatUserContent(
       if (attachments === undefined) {
         throw modelError(
           "configuration",
-          "OpenAI-compatible attachment reader is required for image input",
+          "OpenAI-compatible attachment reader is required for media input",
         );
       }
-      const bytes = await attachments.read(part.attachment);
-      content.push({
-        type: "image_url",
-        image_url: {
-          url: `data:${part.attachment.mediaType};base64,${Buffer.from(bytes).toString("base64")}`,
-        },
-      });
+      const attachment = part.attachment;
+      const bytes = await attachments.read(attachment);
+      const data = Buffer.from(bytes).toString("base64");
+      if (part.type === "image") {
+        content.push({
+          type: "image_url",
+          image_url: {
+            url: `data:${part.attachment.mediaType};base64,${data}`,
+          },
+        });
+      } else {
+        const mediaType: string = attachment.mediaType;
+        if (!["audio/wav", "audio/mpeg"].includes(mediaType)) {
+          throw modelError(
+            "configuration",
+            "OpenAI-compatible audio input requires WAV or MP3",
+          );
+        }
+        content.push({
+          type: "input_audio",
+          input_audio: {
+            data,
+            format: mediaType === "audio/wav" ? "wav" : "mp3",
+          },
+        });
+      }
     }
   }
   return { role: "user", content };

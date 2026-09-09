@@ -63,11 +63,33 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
     request.signal.throwIfAborted();
     const tools = request.tools.map(toResponsesTool);
     const allowedToolNames = new Set(tools.map((tool) => tool.name));
+    const rawToolNames = new Set(
+      request.tools
+        .filter((tool) => tool.rawSource !== undefined)
+        .map((tool) => tool.name),
+    );
+    // History is canonical and may predate the current tool disclosure/mode.
+    const replayRawToolNames = new Set([...rawToolNames, "run_code"]);
+    const rawCallIds = new Set(
+      request.messages.flatMap((message) =>
+        message.role === "assistant" && "toolCalls" in message
+          ? message.toolCalls
+              .filter((call) => replayRawToolNames.has(call.name))
+              .map((call) => call.callId)
+          : [],
+      ),
+    );
     const sessionHint = promptCacheHint(request.sessionId);
     const input: Array<Record<string, unknown>> = [];
     for (const [index, message] of request.messages.entries()) {
       input.push(
-        ...(await toResponsesInput(message, index, this.#attachments)),
+        ...(await toResponsesInput(
+          message,
+          index,
+          this.#attachments,
+          replayRawToolNames,
+          rawCallIds,
+        )),
       );
     }
     const body = JSON.stringify({
@@ -118,6 +140,7 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       response.body,
       signal,
       allowedToolNames,
+      rawToolNames,
       accessToken,
     );
   }
@@ -174,16 +197,36 @@ function accessLeaseSignal(
   return signal;
 }
 
-interface ResponsesTool {
-  type: "function";
+type ResponsesTool = {
   name: string;
   description: string;
-  parameters: Record<string, unknown>;
-  strict: null;
-}
+} & (
+  | { type: "function"; parameters: Record<string, unknown>; strict: null }
+  | {
+      type: "custom";
+      format: { type: "grammar"; syntax: "lark"; definition: string };
+    }
+);
+
+// Provider grammar constrains the envelope; the runtime validates the pragma JSON.
+const sourceGrammar = String.raw`start: pragma_source | plain_source
+pragma_source: PRAGMA_LINE NEWLINE SOURCE
+plain_source: SOURCE
+PRAGMA_LINE: /[ \t]*\/\/ @exec:[^\r\n]*/
+NEWLINE: /\r?\n/
+SOURCE: /[\s\S]+/
+`;
 
 function toResponsesTool(tool: ModelTool): ResponsesTool {
   assertProviderToolName(tool.name);
+  if (tool.rawSource !== undefined) {
+    return {
+      type: "custom",
+      name: tool.name,
+      description: tool.description,
+      format: { type: "grammar", syntax: "lark", definition: sourceGrammar },
+    };
+  }
   return {
     type: "function",
     name: tool.name,
@@ -197,6 +240,8 @@ async function toResponsesInput(
   message: ModelMessage,
   index: number,
   attachments: Pick<AttachmentStore, "read"> | undefined,
+  rawToolNames: ReadonlySet<string>,
+  rawCallIds: ReadonlySet<string>,
 ): Promise<Array<Record<string, unknown>>> {
   if (message.role === "reasoning") {
     if (
@@ -224,6 +269,14 @@ async function toResponsesInput(
         if (part.type === "text") {
           content.push({ type: "input_text", text: part.text });
         } else {
+          const attachment = part.attachment;
+          if (part.type !== "image") {
+            content.push({
+              type: "input_text",
+              text: `Audio input is not supported by this Responses transport. Attachment: ${attachment.sha256} (${attachment.mediaType}, ${attachment.byteLength} bytes).`,
+            });
+            continue;
+          }
           if (attachments === undefined) {
             throw new Error(
               "OpenAI subscription attachment reader is required for image input",
@@ -249,7 +302,9 @@ async function toResponsesInput(
   if (message.role === "tool") {
     const input: Array<Record<string, unknown>> = [
       {
-        type: "function_call_output",
+        type: rawCallIds.has(message.callId)
+          ? "custom_tool_call_output"
+          : "function_call_output",
         call_id: providerCallId(message.callId),
         output: `Exit code: ${String(message.exitCode)}\n${message.text}`,
       },
@@ -260,6 +315,8 @@ async function toResponsesInput(
           { role: "user", content: message.modelContent },
           index,
           attachments,
+          rawToolNames,
+          rawCallIds,
         )),
       );
     }
@@ -273,12 +330,29 @@ async function toResponsesInput(
     }
     for (const call of message.toolCalls) {
       assertProviderToolName(call.name);
-      input.push({
-        type: "function_call",
-        call_id: providerCallId(call.callId),
-        name: call.name,
-        arguments: serializeArguments(call.arguments),
-      });
+      if (rawToolNames.has(call.name)) {
+        if (
+          typeof call.arguments.code !== "string" ||
+          Object.keys(call.arguments).some((key) => key !== "code")
+        ) {
+          throw new Error(
+            "OpenAI subscription raw source requires canonical {code} arguments",
+          );
+        }
+        input.push({
+          type: "custom_tool_call",
+          call_id: providerCallId(call.callId),
+          name: call.name,
+          input: call.arguments.code,
+        });
+      } else {
+        input.push({
+          type: "function_call",
+          call_id: providerCallId(call.callId),
+          name: call.name,
+          arguments: serializeArguments(call.arguments),
+        });
+      }
     }
     return input;
   }
@@ -323,12 +397,20 @@ type OutputSlot =
       itemId?: string;
       name: string;
       arguments: string;
+    }
+  | {
+      type: "custom_tool_call";
+      callId: string;
+      itemId?: string;
+      name: string;
+      input: string;
     };
 
 async function* parseResponsesStream(
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal,
   allowedToolNames: ReadonlySet<string>,
+  rawToolNames: ReadonlySet<string>,
   accessToken: string,
 ): AsyncIterable<ModelEvent> {
   const state: StreamState = {
@@ -432,6 +514,21 @@ async function* parseResponsesStream(
       continue;
     }
 
+    if (
+      type === "response.custom_tool_call_input.delta" ||
+      type === "response.custom_tool_call_input.done"
+    ) {
+      const slot = slotFor(state, event, "custom_tool_call");
+      const value = customInputField(
+        event,
+        type.endsWith(".delta") ? "delta" : "input",
+      );
+      if (slot !== undefined && value !== undefined) {
+        slot.input = type.endsWith(".delta") ? slot.input + value : value;
+      }
+      continue;
+    }
+
     if (type === "response.function_call_arguments.delta") {
       const slot = slotFor(state, event, "function_call");
       const delta = stringField(event, "delta");
@@ -454,7 +551,13 @@ async function* parseResponsesStream(
       const outputIndex = numberField(event, "output_index");
       const item = recordField(event, "item");
       if (outputIndex !== undefined && item !== undefined) {
-        yield* finishOutputItem(state, outputIndex, item, allowedToolNames);
+        yield* finishOutputItem(
+          state,
+          outputIndex,
+          item,
+          allowedToolNames,
+          rawToolNames,
+        );
       }
       continue;
     }
@@ -489,7 +592,13 @@ async function* parseResponsesStream(
       if (Array.isArray(output)) {
         for (const [outputIndex, item] of output.entries()) {
           if (isRecord(item)) {
-            yield* finishOutputItem(state, outputIndex, item, allowedToolNames);
+            yield* finishOutputItem(
+              state,
+              outputIndex,
+              item,
+              allowedToolNames,
+              rawToolNames,
+            );
           }
         }
       }
@@ -536,6 +645,7 @@ async function* finishOutputItem(
   outputIndex: number,
   item: Record<string, unknown>,
   allowedToolNames: ReadonlySet<string>,
+  rawToolNames: ReadonlySet<string>,
 ): AsyncIterable<ModelEvent> {
   if (state.finishedOutputIndexes.has(outputIndex)) {
     return;
@@ -614,12 +724,20 @@ async function* finishOutputItem(
         `OpenAI subscription model requested unavailable tool: ${toolName}`,
       );
     }
+    if ((slot.type === "custom_tool_call") !== rawToolNames.has(toolName)) {
+      throw new Error(
+        "OpenAI subscription model returned mismatched tool input format",
+      );
+    }
     state.emittedToolCalls.add(callId);
     yield {
       type: "tool_call",
       callId,
       name: toolName,
-      arguments: parseArguments(argumentsJson ?? slot.arguments),
+      arguments:
+        slot.type === "custom_tool_call"
+          ? { code: customInputField(item, "input") ?? slot.input }
+          : parseArguments(argumentsJson ?? slot.arguments),
     };
   }
 
@@ -643,6 +761,19 @@ function startReasoningEvent(
   };
 }
 
+function customInputField(
+  item: Record<string, unknown>,
+  field: string,
+): string | undefined {
+  const value = item[field];
+  if (value !== undefined && typeof value !== "string") {
+    throw new Error(
+      "OpenAI subscription model returned invalid custom tool input",
+    );
+  }
+  return value;
+}
+
 function outputSlot(item: Record<string, unknown>): OutputSlot | undefined {
   const type = stringField(item, "type");
   if (type === "reasoning") {
@@ -660,7 +791,7 @@ function outputSlot(item: Record<string, unknown>): OutputSlot | undefined {
   if (type === "message") {
     return { type, text: "" };
   }
-  if (type === "function_call") {
+  if (type === "function_call" || type === "custom_tool_call") {
     const callId = stringField(item, "call_id");
     const name = stringField(item, "name");
     if (callId === undefined || name === undefined) {
@@ -668,11 +799,12 @@ function outputSlot(item: Record<string, unknown>): OutputSlot | undefined {
     }
     const itemId = stringField(item, "id");
     return {
-      type,
       callId,
       ...(itemId === undefined ? {} : { itemId }),
       name,
-      arguments: stringField(item, "arguments") ?? "",
+      ...(type === "custom_tool_call"
+        ? { type, input: customInputField(item, "input") ?? "" }
+        : { type, arguments: stringField(item, "arguments") ?? "" }),
     };
   }
   return undefined;

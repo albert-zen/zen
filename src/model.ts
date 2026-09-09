@@ -73,6 +73,8 @@ export interface ModelRequest {
 }
 
 export interface ModelTool {
+  /** Optional source-language presentation; canonical arguments remain JSON. */
+  rawSource?: { language: "javascript"; argument: "code" };
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;

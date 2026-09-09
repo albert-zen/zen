@@ -98,7 +98,16 @@ test("presentation modes project one frozen ordinary-tool snapshot", () => {
   assert.match(codeDescription, /\n  malformed\(args: unknown\)/u);
   assert.doesNotMatch(codeDescription, /\n  run_code\(|\n  "run_code"\(/u);
 
+  assert.deepEqual(
+    code.codeTools,
+    ordinaryTools.map(({ name, description }) => ({ name, description })),
+  );
+  assert.deepEqual(code.codeTools, both.codeTools);
+  assert.deepEqual(code.codeTools, direct.codeTools);
+  assert.ok(Object.isFrozen(code.codeTools));
+  assert.ok(code.codeTools.every((tool) => Object.isFrozen(tool)));
   definitions[0]!.description = "mutated";
+  assert.equal(code.codeTools[0]?.description, "Run a command");
   assert.equal(direct.modelTools[0]?.description, "Run a command");
 });
 
@@ -118,9 +127,9 @@ test("SDK generation is deterministic and quotes illegal identifiers", () => {
   assert.match(sdk, /Run a command/u);
   assert.match(sdk, /Command to execute\./u);
   const runCode = createRunCodeModelTool(ordinaryTools);
-  assert.match(runCode.description, /async function body/u);
-  assert.match(runCode.description, /await import\(\.\.\.\)/u);
-  assert.match(runCode.description, /require is not provided/u);
+  assert.match(runCode.description, /JavaScript async module/u);
+  assert.match(runCode.description, /No Node.js, filesystem, network/u);
+  assert.match(runCode.description, /submitted code must be JavaScript/u);
 });
 
 test("code presentation requires the registered run_code execution capability", () => {
