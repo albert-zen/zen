@@ -88,7 +88,7 @@ export function createRunCodeModelTool(
     description: [
       "Run a fresh JavaScript async module with top-level await.",
       "Use pure JavaScript, not TypeScript syntax. No Node.js, filesystem, network, process, require, or package imports; use tools.* for external actions.",
-      "atob/btoa and TextEncoder/TextDecoder are available for in-memory byte conversion. import.meta is unavailable.",
+      "In-memory helpers: atob/btoa, TextEncoder/TextDecoder, URL/URLSearchParams, crypto.randomUUID(). import.meta is unavailable.",
       "Only the tools declared below are available through tools.*. Select output with text/image/audio; the last expression is not returned automatically.",
       'Optional first line: // @exec: {"yield_time_ms": 10000, "max_output_tokens": 1000, "timeout_ms": 600000}. Controls observation wait, preview budget, and execution deadline respectively.',
       "Awaited tools return their final result. A running outer program returns a task_id; use tools.wait with that task_id to observe new output or completion.",
