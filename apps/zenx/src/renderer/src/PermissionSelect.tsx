@@ -10,7 +10,7 @@ export const permissionLabels: Record<FilePermissionMode, string> = {
 const permissionDescriptions: Record<FilePermissionMode, string> = {
   "read-only": "Read files without changing them",
   "workspace-write": "Edit files inside this project",
-  "danger-full-access": "Edit files anywhere on this computer",
+  "danger-full-access": "Run tools and edit files without approval",
 };
 export function PermissionSelect({
   value,
@@ -154,9 +154,11 @@ export function PermissionSelect({
               ) : null}
             </button>
           ))}
-          <p className="composer-menu-note">
-            Other tool actions may still request approval.
-          </p>
+          {legacyApproval || value !== "danger-full-access" ? (
+            <p className="composer-menu-note">
+              Actions outside these limits require approval.
+            </p>
+          ) : null}
         </div>
       ) : null}
       {error ? (
