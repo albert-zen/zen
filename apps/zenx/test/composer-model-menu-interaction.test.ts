@@ -75,6 +75,10 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
     assert.equal(trigger.textContent?.trim(), "Alpha Text Medium");
     await act(async () => trigger.click());
     assert.equal(trigger.getAttribute("aria-expanded"), "true");
+    assert.match(
+      document.body.textContent ?? "",
+      /Changes apply to the next turn\./u,
+    );
     const tools = requiredElement<HTMLElement>(".composer-tools");
     const menu = requiredElement<HTMLElement>(".composer-selection-menu");
     installRect(tools, { left: 0, top: 100, width: 300, height: 40 });
