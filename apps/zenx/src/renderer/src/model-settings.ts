@@ -116,28 +116,26 @@ export function groupedModelOptions(
   models: readonly ModelSummary[],
   providerProfiles: readonly ZenXProviderProfile[],
 ): ProviderModelGroup[] {
-  const available = new Map(
-    models.filter((model) => !model.hidden).map((model) => [model.id, model]),
+  const profiles = new Map(
+    providerProfiles.map((profile) => [profile.providerProfileId, profile]),
   );
-  return providerProfiles.flatMap((provider) => {
-    const providerModels = provider.models.flatMap((model) => {
-      const key = encodeModelKey({
-        providerProfileId: provider.providerProfileId,
-        modelId: model.id,
-      });
-      const option = available.get(key);
-      return option === undefined ? [] : [option];
-    });
-    return providerModels.length === 0
-      ? []
-      : [
-          {
-            providerProfileId: provider.providerProfileId,
-            displayName: provider.displayName,
-            models: providerModels,
-          },
-        ];
-  });
+  const groups = new Map<string, ProviderModelGroup>();
+  for (const model of models) {
+    if (model.hidden) continue;
+    const { providerProfileId } = decodeModelKey(model.id);
+    let group = groups.get(providerProfileId);
+    if (group === undefined) {
+      group = {
+        providerProfileId,
+        displayName:
+          profiles.get(providerProfileId)?.displayName ?? providerProfileId,
+        models: [],
+      };
+      groups.set(providerProfileId, group);
+    }
+    group.models.push(model);
+  }
+  return [...groups.values()];
 }
 
 export function reasoningOptions(
@@ -182,6 +180,7 @@ export function imageCapabilityMessage(
     SelectedThreadSettings,
     "permissionMode" | "approvalPolicy"
   > | null,
+  publishedModels?: readonly ModelSummary[],
 ): string | null {
   if (settings === null) return "Choose a model before sending images.";
   let identity: ReturnType<typeof decodeModelKey>;
@@ -194,9 +193,17 @@ export function imageCapabilityMessage(
     (entry) => entry.providerProfileId === identity.providerProfileId,
   );
   const model = profile?.models.find((entry) => entry.id === identity.modelId);
-  const label = model?.displayName ?? identity.modelId;
-  if (model?.inputModalities === null || model === undefined) return null;
-  return model.inputModalities.includes("image")
+  const published = publishedModels?.find(
+    (entry) => entry.id === settings.model,
+  );
+  const label =
+    published?.displayName ?? model?.displayName ?? identity.modelId;
+  const modalities =
+    publishedModels === undefined
+      ? model?.inputModalities
+      : published?.inputModalities;
+  if (modalities == null) return null;
+  return modalities.includes("image")
     ? null
     : `“${label}” does not support image input. Remove the images or choose a model with image support.`;
 }
@@ -207,6 +214,7 @@ export function imageCapabilityNotice(
     SelectedThreadSettings,
     "permissionMode" | "approvalPolicy"
   > | null,
+  publishedModels?: readonly ModelSummary[],
 ): string | null {
   if (settings === null) return null;
   let identity: ReturnType<typeof decodeModelKey>;
@@ -218,8 +226,16 @@ export function imageCapabilityNotice(
   const model = providerProfiles
     .find((entry) => entry.providerProfileId === identity.providerProfileId)
     ?.models.find((entry) => entry.id === identity.modelId);
-  if (model !== undefined && model.inputModalities !== null) return null;
-  const label = model?.displayName ?? identity.modelId;
+  const published = publishedModels?.find(
+    (entry) => entry.id === settings.model,
+  );
+  const modalities =
+    publishedModels === undefined
+      ? model?.inputModalities
+      : published?.inputModalities;
+  if (modalities != null) return null;
+  const label =
+    published?.displayName ?? model?.displayName ?? identity.modelId;
   return `Image input capability for “${label}” is unknown. You can try sending now, test it in Models & providers, or set it manually.`;
 }
 
