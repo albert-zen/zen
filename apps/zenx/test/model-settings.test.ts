@@ -137,6 +137,22 @@ test("initializes from resume, mirrors only ZAS events, and allows next-turn cha
   assert.equal(canChangeThreadModel(active), true);
 });
 
+test("selected permissions follow resume and notifications independently of the list", () => {
+  const selected = settingsFromSnapshot("thread-1", {
+    ...settingsSnapshot("model-a"),
+    sandbox: { type: "readOnly" },
+    approvalPolicy: "on-request",
+  });
+  assert.equal(selected.permissionMode, "read-only");
+  const updated = applySettingsMirror(selected, "thread-1", {
+    ...updatedSettings("model-a"),
+    sandboxPolicy: { type: "dangerFullAccess" },
+    approvalPolicy: "never",
+  });
+  assert.equal(updated?.permissionMode, "danger-full-access");
+  assert.equal(updated?.approvalPolicy, "never");
+});
+
 test("groups runnable visible models by Provider and lists only selected-model efforts", () => {
   const alphaKey = key("provider-alpha", "shared");
   const betaKey = key("provider-beta", "shared");

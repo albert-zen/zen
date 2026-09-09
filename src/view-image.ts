@@ -12,6 +12,7 @@ import type {
 
 /** Builtin projection from an immutable stored image to the next model sample. */
 export class ViewImageToolRuntime implements ToolRuntime {
+  readonly enforcesSandbox = true;
   readonly name = "view_image";
   readonly requiredModelInputModalities = ["image"] as const;
   readonly specification: ModelTool = {

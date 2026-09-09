@@ -421,7 +421,7 @@ export function threadSettings(
     approvalPolicy:
       snapshot.approvalPolicy === "never" ? "never" : "on-request",
     approvalsReviewer: "user",
-    sandbox: { type: "dangerFullAccess" },
+    sandbox: projectSandbox(snapshot.sandbox),
     reasoningEffort: snapshot.reasoningEffort,
   };
 }
@@ -453,7 +453,7 @@ export function threadSettingsUpdated(
     model: encodeModelKey(snapshot),
     modelProvider: snapshot.providerProfileId,
     personality: null,
-    sandboxPolicy: { type: "dangerFullAccess" },
+    sandboxPolicy: projectSandbox(snapshot.sandbox),
     serviceTier: null,
     summary: null,
   };
@@ -509,4 +509,17 @@ function firstUserMessagePreview(items: readonly CanonicalItem[]): string {
 
 function seconds(timestamp: string): number {
   return Math.floor(new Date(timestamp).getTime() / 1000);
+}
+
+function projectSandbox(sandbox: ThreadSnapshot["sandbox"]) {
+  if (sandbox === "read-only") return { type: "readOnly" };
+  if (sandbox === "workspace-write")
+    return {
+      type: "workspaceWrite",
+      writableRoots: [],
+      networkAccess: true,
+      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: true,
+    };
+  return { type: "dangerFullAccess" };
 }

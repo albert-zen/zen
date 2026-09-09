@@ -454,7 +454,10 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
 
 ### 权限与 Host policy
 
-- 目标工具策略只有两档：默认 `full_access` 直接执行；可选 `ask_unknown` 由 Host
+- **File Permission Presets** — ZAS owns `read-only`, `workspace-write`, and default `danger-full-access`; changes append `thread_configuration_changed.permissions` and require an idle Thread with no running tool tasks. Both restricted presets use one-time approval for execution outside their file policy.
+- **File Sandbox** — builtin shell enforces file writes with macOS Seatbelt or Linux bwrap; builtin apply_patch checks all real destination paths before writing. Workspace Write grants cwd only, without a global temporary-directory grant. Unsupported platforms or missing launchers fail closed. Network access is unchanged; this is not hostile-code isolation for installed plugins or in-process builtins.
+- **Restricted Tool Admission** — only Host builtins implementing `enforcesSandbox` execute automatically in restricted modes. run_code, plugin tools and explicit shell escalation require approval for each call, ignoring remembered capability grants. Approved run_code children inherit this one execution's full file access.
+- 兼容的工具审批策略保留：默认 `full_access` 直接执行；可选 `ask_unknown` 由 Host
   按稳定 tool name 维护 `approvedTools` / `deniedTools`。未知工具只询问一次，允许后
   加入 approved，拒绝后加入 denied。
 - `run_code` 不 pre-approve，按稳定 tool name 与 shell 同样 admission；由于
@@ -466,7 +469,7 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   显式 pnpm `allowBuilds` 执行，未列入者保持 blocked，这一 package-manager policy
   不扩展成风险评分或新的权限语义。
 - 不引入 risk scoring、参数级 scope graph、权限矩阵、rules engine 或复杂 sandbox
-  产品框架；package 安装信任与 Host 的 `full_access` / `ask_unknown` 是现有的完整控制边界。
+  产品框架；package 安装信任、三档文件权限与工具 admission 是现有控制边界。
 
 ### 插件生命周期、UI 与 ZAS
 
@@ -778,7 +781,7 @@ claim，不得被称为 Codex extension 或因固定 CAS schema 缺失而删除�
   sandbox 限制工具实际上能做什么，approval 决定何时询问用户。当前只接受明确
   支持的 sandbox mode，其他 mode 返回 unsupported；审批不能冒充隔离，外部字段
   也不能反向要求 Zen 建立新的权限产品。MCP 相关方法在未实现时同样明确返回 unsupported。
-  当前唯一模式 `danger-full-access` **不是安全隔离**；shell 环境过滤只控制子进程继承的环境变量，
+  默认模式 `danger-full-access` **不是安全隔离**；shell 环境过滤只控制子进程继承的环境变量，
   不修改实际工具输出，也不能阻止已批准的命令主动读取本机可访问的文件。
 - **CAS 边界是目录不是包**：内部保持极小的 `Item` / `Thread` 类型，
   CAS-specific types、普通函数映射和兼容文档只放在 `src/protocol/codex/`；当前
@@ -808,7 +811,7 @@ claim，不得被称为 Codex extension 或因固定 CAS schema 缺失而删除�
 - **工具** — AgentRuntime 只依赖 Tool Environment；builtin `shell` / `apply_patch` 由 Zen 执行，
   plugin / external proxy runtimes 分别路由到拥有领域行为的 Plugin Runtime 或外部服务。
 - **审批** — 审批请求的呈现与应答（各接入端自行实现 UI）。
-- **接入端权限预设** — ZAS/Host 拥有默认 `full_access` 与可选 `ask_unknown`；
+- **接入端权限预设** — ZAS/Host 拥有三档文件权限（默认 Full Access）及兼容的 `ask_unknown`；
   CAS adapter 只把固定 shape 的 sandbox 与 approval 字段映射到该策略，接入端与
   CAS schema 都不能反向扩展新的 risk/scope 权限模型。
 

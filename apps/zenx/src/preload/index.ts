@@ -160,7 +160,7 @@ contextBridge.exposeInMainWorld("zenx", {
       await ipcRenderer.invoke(ipcChannels.projectsGet, options),
     startThread: async (
       workspace: string,
-      selection?: { model?: string; effort?: string },
+      selection?: import("../main/project-projection.js").ProjectThreadStartOptions,
     ): Promise<ClientRequestResults["thread/start"]> =>
       await ipcRenderer.invoke(
         ipcChannels.projectThreadStart,

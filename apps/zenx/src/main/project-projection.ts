@@ -26,12 +26,18 @@ export type ProjectRealpath = (candidate: string) => Promise<string>;
 export interface ProjectThreadStartOptions {
   model?: string;
   effort?: string;
+  sandbox?: import("../protocol-client/types.js").FilePermissionMode;
 }
 
 export async function startConfiguredProjectThread<T>(
   projection: ZenXProjectProjection,
   workspace: unknown,
-  start: (params: { cwd: string } & ProjectThreadStartOptions) => Promise<T>,
+  start: (
+    params: {
+      cwd: string;
+      approvalPolicy?: "on-request" | "never";
+    } & ProjectThreadStartOptions,
+  ) => Promise<T>,
   options: ProjectThreadStartOptions = {},
 ): Promise<T> {
   if (typeof workspace !== "string" || workspace.trim().length === 0) {
@@ -41,7 +47,16 @@ export async function startConfiguredProjectThread<T>(
   if (configuredWorkspace === null) {
     throw new Error("Project workspace is not configured");
   }
-  return await start({ cwd: configuredWorkspace, ...options });
+  return await start({
+    cwd: configuredWorkspace,
+    ...options,
+    ...(options.sandbox === undefined
+      ? {}
+      : {
+          approvalPolicy:
+            options.sandbox === "danger-full-access" ? "never" : "on-request",
+        }),
+  });
 }
 
 export interface ProjectPathIdentity {

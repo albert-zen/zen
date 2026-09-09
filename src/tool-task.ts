@@ -90,6 +90,12 @@ export class ToolTaskManager {
         : { toolOutputSpool: options.toolOutputSpool }),
     };
   }
+  hasActiveTasks(threadId: string): boolean {
+    return [...this.#tasks.values()].some(
+      (task) => task.threadId === threadId && !task.terminal,
+    );
+  }
+
   async run(
     runtime: ToolRuntime,
     invocation: ToolInvocation,

@@ -899,10 +899,9 @@ function readThreadSummaryListOptions(value: unknown): { archived?: boolean } {
     : {};
 }
 
-function readProjectThreadStartOptions(value: unknown): {
-  model?: string;
-  effort?: string;
-} {
+function readProjectThreadStartOptions(
+  value: unknown,
+): import("./project-projection.js").ProjectThreadStartOptions {
   if (value === undefined) return {};
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("Invalid Project Thread start options");
@@ -911,20 +910,29 @@ function readProjectThreadStartOptions(value: unknown): {
   if (
     entries.some(
       ([key, entry]) =>
-        (key !== "model" && key !== "effort") ||
+        (key !== "model" && key !== "effort" && key !== "sandbox") ||
         typeof entry !== "string" ||
         entry.trim().length === 0,
     )
   ) {
     throw new Error("Invalid Project Thread start options");
   }
-  const options = value as { model?: string; effort?: string };
+  const options =
+    value as import("./project-projection.js").ProjectThreadStartOptions;
+  if (
+    options.sandbox !== undefined &&
+    !["read-only", "workspace-write", "danger-full-access"].includes(
+      options.sandbox,
+    )
+  )
+    throw new Error("Invalid file permission mode");
   if (options.effort !== undefined && options.model === undefined) {
     throw new Error("Project Thread reasoning effort requires a model");
   }
   return {
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.effort === undefined ? {} : { effort: options.effort }),
+    ...(options.sandbox === undefined ? {} : { sandbox: options.sandbox }),
   };
 }
 

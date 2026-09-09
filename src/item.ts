@@ -93,8 +93,21 @@ export interface ProviderThreadConfigurationChangedItem extends ItemBase {
   };
 }
 
+export interface ThreadPermissionConfiguration {
+  sandbox: SandboxMode;
+  approvalPolicy: ApprovalPolicy;
+}
+export interface ThreadPermissionsChangedItem extends ItemBase {
+  type: "thread_configuration_changed";
+  permissions: {
+    from: ThreadPermissionConfiguration;
+    to: ThreadPermissionConfiguration;
+  };
+}
 export type ThreadConfigurationChangedItem =
-  LegacyThreadConfigurationChangedItem | ProviderThreadConfigurationChangedItem;
+  | LegacyThreadConfigurationChangedItem
+  | ProviderThreadConfigurationChangedItem
+  | ThreadPermissionsChangedItem;
 
 export interface TurnStartedItem extends ItemBase {
   type: "turn_started";
@@ -313,7 +326,8 @@ export type CanonicalItem =
   | ToolResultItem
   | FailureItem;
 
-export type SandboxMode = "danger-full-access";
+export type SandboxMode =
+  "read-only" | "workspace-write" | "danger-full-access";
 export type ApprovalPolicy = "always" | "never";
 export type ApprovalDecision =
   "accept" | "acceptForSession" | "decline" | "cancel";
@@ -401,7 +415,7 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       requireNonEmptyString(item.cwd, "thread_metadata.cwd");
       requireEnum(
         item.sandbox,
-        ["danger-full-access"],
+        ["read-only", "workspace-write", "danger-full-access"],
         "thread_metadata.sandbox",
       );
       requireEnum(
@@ -424,6 +438,25 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       break;
     case "thread_configuration_changed":
       requireNoTurnId(item);
+      if (hasOwn(item, "permissions")) {
+        if (hasOwn(item, "model") || hasOwn(item, "selection"))
+          throw new Error("Permission changes cannot include model selection");
+        const change = requireRecord(item.permissions, "permissions");
+        for (const key of ["from", "to"]) {
+          const value = requireRecord(change[key], `permissions.${key}`);
+          requireEnum(
+            value.sandbox,
+            ["read-only", "workspace-write", "danger-full-access"],
+            "permissions.sandbox",
+          );
+          requireEnum(
+            value.approvalPolicy,
+            ["always", "never"],
+            "permissions.approvalPolicy",
+          );
+        }
+        break;
+      }
       requireExactlyOneShape(
         item,
         ["model"],

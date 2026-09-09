@@ -252,7 +252,12 @@ export class CodexConnection {
         }
         const approvalPolicy = readApprovalPolicy(params.approvalPolicy);
         readApprovalsReviewer(params.approvalsReviewer);
-        if (sandbox !== undefined && sandbox !== "danger-full-access") {
+        if (
+          sandbox !== undefined &&
+          sandbox !== "danger-full-access" &&
+          sandbox !== "read-only" &&
+          sandbox !== "workspace-write"
+        ) {
           throw new InvalidParamsError(`Unsupported sandbox mode: ${sandbox}`);
         }
         const snapshot = await this.#appServer.startThread({
@@ -260,9 +265,7 @@ export class CodexConnection {
           ...(model === undefined
             ? {}
             : { selection: this.#selectionForWireModel(model, effort) }),
-          ...(sandbox === undefined
-            ? {}
-            : { sandbox: "danger-full-access" as const }),
+          ...(sandbox === undefined ? {} : { sandbox }),
           ...(approvalPolicy === undefined ? {} : { approvalPolicy }),
         });
         this.#subscribedThreads.add(snapshot.id);
@@ -371,6 +374,22 @@ export class CodexConnection {
             thread: projectThread(snapshot, { includeTurns: false }),
           },
         });
+        return;
+      }
+      case "thread/permissions/update": {
+        rejectUnsupportedValues(params, ["threadId", "sandbox"]);
+        const sandbox = params.sandbox;
+        if (
+          sandbox !== "read-only" &&
+          sandbox !== "workspace-write" &&
+          sandbox !== "danger-full-access"
+        )
+          throw new InvalidParamsError("Unknown file permission mode");
+        await this.#appServer.setThreadPermissions(
+          requiredString(params, "threadId"),
+          sandbox,
+        );
+        this.#send({ id: request.id, result: {} });
         return;
       }
       case "thread/settings/update": {
@@ -1028,7 +1047,10 @@ export class CodexConnection {
     // The command item must be visible before its approval request, matching Codex.
     await this.#eventChain;
     request.signal.throwIfAborted();
-    if (this.#acceptedCommandThreads.has(request.threadId)) {
+    if (
+      request.scope !== "once" &&
+      this.#acceptedCommandThreads.has(request.threadId)
+    ) {
       return "acceptForSession";
     }
     const requestId = `approval_${String(this.#nextServerRequest++)}`;
@@ -1046,6 +1068,9 @@ export class CodexConnection {
             environmentId: null,
             reason: null,
             command: request.command,
+            ...(request.scope === undefined
+              ? {}
+              : { approvalScope: request.scope }),
             ...(request.toolName === undefined
               ? {}
               : { toolName: request.toolName }),
@@ -1070,7 +1095,7 @@ export class CodexConnection {
     if (!isRecord(response) || !isApprovalDecision(response.decision)) {
       throw new Error("Client returned an invalid approval decision");
     }
-    if (response.decision === "acceptForSession") {
+    if (request.scope !== "once" && response.decision === "acceptForSession") {
       this.#acceptedCommandThreads.add(request.threadId);
     }
     return response.decision;
@@ -1473,20 +1498,43 @@ function readApprovalsReviewer(value: unknown): "user" | undefined {
   );
 }
 
-function readSandboxPolicy(value: unknown): "danger-full-access" | undefined {
-  if (value === undefined || value === null) {
-    return undefined;
+function readSandboxPolicy(
+  value: unknown,
+): ThreadSnapshot["sandbox"] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (isRecord(value)) {
+    if (
+      value.type === "dangerFullAccess" &&
+      Object.keys(value).every((key) => key === "type")
+    )
+      return "danger-full-access";
+    if (
+      value.type === "readOnly" &&
+      Object.keys(value).every((key) => key === "type")
+    )
+      return "read-only";
+    if (
+      value.type === "workspaceWrite" &&
+      Array.isArray(value.writableRoots) &&
+      value.writableRoots.length === 0 &&
+      value.networkAccess === true &&
+      value.excludeTmpdirEnvVar === true &&
+      value.excludeSlashTmp === true &&
+      Object.keys(value).every((key) =>
+        [
+          "type",
+          "writableRoots",
+          "networkAccess",
+          "excludeTmpdirEnvVar",
+          "excludeSlashTmp",
+        ].includes(key),
+      )
+    )
+      return "workspace-write";
   }
-  if (
-    !isRecord(value) ||
-    value.type !== "dangerFullAccess" ||
-    Object.keys(value).some((key) => key !== "type")
-  ) {
-    throw new InvalidParamsError(
-      "Unsupported sandbox policy; Zen currently supports dangerFullAccess only",
-    );
-  }
-  return "danger-full-access";
+  throw new InvalidParamsError(
+    "Unsupported sandbox policy; only the exact Zen file permission presets are supported",
+  );
 }
 
 async function readUserInput(
@@ -1592,7 +1640,12 @@ function validateMatchingThreadConfiguration(
   }
 
   const sandbox = optionalString(params.sandbox);
-  if (sandbox !== undefined && sandbox !== "danger-full-access") {
+  if (
+    sandbox !== undefined &&
+    sandbox !== "danger-full-access" &&
+    sandbox !== "read-only" &&
+    sandbox !== "workspace-write"
+  ) {
     throw new InvalidParamsError(`Unsupported sandbox mode: ${sandbox}`);
   }
   if (sandbox !== undefined && sandbox !== snapshot.sandbox) {

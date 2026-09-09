@@ -145,7 +145,12 @@ approval、scheduler 和 canonical lifecycle。patch 使用普通 JSON function 
 I/O 阶段不是 durable transaction，失败必须报告已经落盘的前缀。
 
 目标插件生命周期只有 installed / enabled / uninstalled；bundled plugin 同样可卸载、以后重装，
-卸载默认保留数据，删除数据是独立动作。目标权限只有默认 `full_access` 与可选 `ask_unknown`；后者
+卸载默认保留数据，删除数据是独立动作。ZenX 输入框支持 Read Only / Workspace Write / Full Access，
+默认 Full Access；新会话可预选，已有会话空闲且无运行工具时可切换，恢复后保留。
+前两档限制文件写入；不能文件隔离的 run_code 与插件调用逐次审批，shell 可显式请求单次越界批准。
+macOS 使用 Seatbelt，Linux 需要 bwrap；其他平台的限制模式 shell 明确失败，可逐次申请批准执行。
+Workspace Write 只开放当前项目，不开放全局临时目录，网络访问不受文件策略限制。
+兼容权限 `ask_unknown`
 由 Host 按稳定 tool name 维护 approved/denied 集合，不另设细粒度 package grant UX，也不增加风险引擎。
 通用 UI Host 已支持 sidebar、pages/subroutes、settings、panel、commands/menu 与 result renderer。
 第一方/第三方共用逻辑 UI SDK且第三方隔离运行。直接操作插件 UI 不创建 Turn，只有显式 Run Agent

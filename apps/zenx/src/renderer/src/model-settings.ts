@@ -16,6 +16,8 @@ export interface SelectedThreadSettings {
   model: string;
   modelProvider: string;
   reasoningEffort: string | null;
+  permissionMode: import("../../protocol-client/types.js").FilePermissionMode;
+  approvalPolicy: "on-request" | "never";
 }
 
 export type ModelOption = Omit<
@@ -48,6 +50,8 @@ export function settingsFromSnapshot(
     model: snapshot.model,
     modelProvider: snapshot.modelProvider,
     reasoningEffort: snapshot.reasoningEffort,
+    permissionMode: permissionModeFromPolicy(snapshot.sandbox),
+    approvalPolicy: snapshot.approvalPolicy,
   };
 }
 
@@ -62,6 +66,8 @@ export function applySettingsMirror(
         model: settings.model,
         modelProvider: settings.modelProvider,
         reasoningEffort: settings.effort,
+        permissionMode: permissionModeFromPolicy(settings.sandboxPolicy),
+        approvalPolicy: settings.approvalPolicy,
       }
     : current;
 }
@@ -155,7 +161,10 @@ export function canSendWithModel(
 
 export function imageCapabilityMessage(
   providerProfiles: readonly ZenXProviderProfile[],
-  settings: SelectedThreadSettings | null,
+  settings: Omit<
+    SelectedThreadSettings,
+    "permissionMode" | "approvalPolicy"
+  > | null,
 ): string | null {
   if (settings === null) return "Choose a model before sending images.";
   let identity: ReturnType<typeof decodeModelKey>;
@@ -177,7 +186,10 @@ export function imageCapabilityMessage(
 
 export function imageCapabilityNotice(
   providerProfiles: readonly ZenXProviderProfile[],
-  settings: SelectedThreadSettings | null,
+  settings: Omit<
+    SelectedThreadSettings,
+    "permissionMode" | "approvalPolicy"
+  > | null,
 ): string | null {
   if (settings === null) return null;
   let identity: ReturnType<typeof decodeModelKey>;
@@ -207,4 +219,14 @@ export function reasoningChangeRequest(
   effort: string,
 ): ClientRequestParams["thread/settings/update"] {
   return { threadId, model, effort };
+}
+
+export function permissionModeFromPolicy(
+  policy: ThreadSettingsSnapshot["sandbox"],
+): SelectedThreadSettings["permissionMode"] {
+  return policy.type === "readOnly"
+    ? "read-only"
+    : policy.type === "workspaceWrite"
+      ? "workspace-write"
+      : "danger-full-access";
 }

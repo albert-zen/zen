@@ -2523,7 +2523,7 @@ test("matches the pinned thread/unsubscribe response and rejects thread/subscrib
         error instanceof CodexClientError && error.code === -32602,
     );
     await assert.rejects(
-      client.request("thread/start", { sandbox: "workspace-write" }),
+      client.request("thread/start", { sandbox: "unsupported" }),
       (error: unknown) =>
         error instanceof CodexClientError && error.code === -32602,
     );

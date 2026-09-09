@@ -6,6 +6,8 @@ import {
   type ToolTaskPolicy,
 } from "./tool-task.js";
 import { spawn } from "node:child_process";
+import { sandboxCommand } from "./sandbox.js";
+import type { SandboxMode } from "./item.js";
 import { StringDecoder } from "node:string_decoder";
 
 import {
@@ -31,6 +33,7 @@ export interface ToolInvocation {
   cwd: string;
   signal: AbortSignal;
   threadId?: string;
+  sandbox?: SandboxMode;
   task?: { yieldTimeMs?: number; timeoutMs?: number };
   /** Host-owned streaming sink; bytes emitted here must not be repeated in final output. */
   taskContext?: { onOutput(text: string): void };
@@ -68,6 +71,8 @@ export interface ToolRuntime {
   readonly specification: ModelTool;
   /** Runtime body scheduling only; not permission or resource scope. */
   readonly executionMode?: ToolExecutionMode;
+  /** Host builtin enforces invocation.sandbox before producing file effects. */
+  readonly enforcesSandbox?: boolean;
   readonly taskPolicy?: ToolTaskPolicy;
   /** Known model modalities required before this tool body may execute. */
   readonly requiredModelInputModalities?: readonly string[];
@@ -230,6 +235,7 @@ export class ToolEnvironment {
     PreparedToolInvocation,
     PreparedRuntimeRegistration
   >();
+  readonly #unsandboxedAdmissions = new WeakSet<PreparedToolInvocation>();
   readonly #policyStore: ToolPolicyStore;
   readonly #pendingAdmissions = new Map<string, Promise<void>>();
 
@@ -444,7 +450,44 @@ export class ToolEnvironment {
     prepared: PreparedToolInvocation,
     options: ToolAdmissionOptions,
   ): Promise<ApprovalDecision> {
-    this.#requirePrepared(prepared);
+    const runtime = this.#requirePrepared(prepared).runtime;
+    const sandbox = prepared.invocation.sandbox ?? "danger-full-access";
+    if (sandbox !== "danger-full-access" && runtime !== this.waitRuntime) {
+      const escalation =
+        prepared.invocation.arguments.sandbox_permissions ===
+        "require_escalated";
+      if (
+        prepared.owner.kind === "builtin" &&
+        runtime.enforcesSandbox === true &&
+        !escalation
+      )
+        return "accept";
+      try {
+        if (
+          options.policy === "full_access" ||
+          options.requestApproval === undefined
+        ) {
+          throw new Error(
+            "This call needs one-time approval to run outside the file sandbox, but approvals are unavailable.",
+          );
+        }
+        const decision = await waitForToolAbort(
+          options.requestApproval({
+            ...options.approvalRequest,
+            scope: "once",
+            command: `[One-time full file access: ${sandbox}]\n${options.approvalRequest.command}`,
+          }),
+          prepared.invocation.signal,
+        );
+        if (decision === "accept" || decision === "acceptForSession")
+          this.#unsandboxedAdmissions.add(prepared);
+        else this.#releasePrepared(prepared);
+        return decision;
+      } catch (error) {
+        this.#releasePrepared(prepared);
+        throw error;
+      }
+    }
     if (
       this.#requirePrepared(prepared).runtime === this.waitRuntime ||
       options.policy === "full_access"
@@ -549,7 +592,10 @@ export class ToolEnvironment {
       // fixed control envelope against the tool's original JSON byte budget.
       if (runtime === this.waitRuntime)
         return await runtime.execute(prepared.invocation);
-      const execute = async (invocation: ToolInvocation) => {
+      const execute = async (original: ToolInvocation) => {
+        const invocation = this.#unsandboxedAdmissions.has(prepared)
+          ? { ...original, sandbox: "danger-full-access" as const }
+          : original;
         const result =
           nested !== undefined &&
           prepared.owner.kind === "builtin" &&
@@ -780,6 +826,7 @@ export interface ApprovalRequest {
   itemId: string;
   callId: string;
   command: string;
+  scope?: "once";
   toolName?: string;
   toolArguments?: Readonly<Record<string, unknown>>;
   cwd: string;
@@ -792,6 +839,7 @@ export type ApprovalHandler = (
 
 /** Concrete process execution only; the environment owns waiting and deadlines. */
 export class ShellToolRuntime implements ToolRuntime {
+  readonly enforcesSandbox = true;
   readonly name = "shell";
   readonly taskPolicy: ToolTaskPolicy = {
     resourceScope: "independent",
@@ -805,6 +853,12 @@ export class ShellToolRuntime implements ToolRuntime {
     inputSchema: {
       type: "object",
       properties: {
+        sandbox_permissions: {
+          type: "string",
+          enum: ["use_default", "require_escalated"],
+          description:
+            "Use require_escalated to request one-time approval for a command that needs file access outside the current policy.",
+        },
         command: { type: "string" },
         yield_time_ms: {
           type: "integer",
@@ -854,10 +908,16 @@ export class ShellToolRuntime implements ToolRuntime {
       if (capture !== undefined) capture.write(text);
       else invocation.taskContext?.onOutput(text);
     };
-    const child = spawn(command, {
+    const launch = await sandboxCommand(
+      invocation.sandbox ?? "danger-full-access",
+      invocation.cwd,
+      command,
+    );
+    const child = spawn(launch.file, launch.args, {
       cwd: invocation.cwd,
       env: this.#environment,
-      shell: true,
+      shell:
+        (invocation.sandbox ?? "danger-full-access") === "danger-full-access",
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
