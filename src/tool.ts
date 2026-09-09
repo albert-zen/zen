@@ -361,6 +361,9 @@ export class ToolEnvironment {
           `Tool runtime ${runtime.name} specification name must match exactly`,
         );
       }
+      if (executionModeFor(runtime) === "parallel_safe") {
+        definition.description = `[parallel_safe] ${definition.description}`;
+      }
       return { runtime, definition };
     });
     const localNames = new Set<string>();
@@ -683,7 +686,6 @@ export class ToolEnvironment {
 }
 
 function executionModeFor(runtime: ToolRuntime): ToolExecutionMode {
-  if (runtime.name === "shell") return "exclusive";
   return runtime.executionMode === "parallel_safe"
     ? "parallel_safe"
     : "exclusive";
@@ -862,6 +864,7 @@ export type ApprovalHandler = (
 export class ShellToolRuntime implements ToolRuntime {
   readonly enforcesSandbox = true;
   readonly name = "shell";
+  readonly executionMode = "parallel_safe";
   readonly taskPolicy: ToolTaskPolicy = {
     resourceScope: "independent",
     cancellation: "confirmed-on-settle",
@@ -870,7 +873,7 @@ export class ShellToolRuntime implements ToolRuntime {
   readonly specification: ModelTool = {
     name: this.name,
     description:
-      "Run a shell command. Long operations return a task_id for wait. yield_time_ms controls how long to wait before returning a task receipt (maximum 180 seconds); timeout_ms controls the separate execution deadline (default 10 minutes, maximum 24 hours).",
+      "Run a shell command. Independent commands can run concurrently; await commands sequentially when their effects depend on each other. Long operations return a task_id for wait. yield_time_ms controls how long to wait before returning a task receipt (maximum 180 seconds); timeout_ms controls the separate execution deadline (default 10 minutes, maximum 24 hours).",
     inputSchema: {
       type: "object",
       properties: {
