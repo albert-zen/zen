@@ -49,7 +49,7 @@ export class ZenXConfiguredTitleInference implements ThreadTitleInference {
       }
       return text;
     } finally {
-      configured.release();
+      await configured.release();
     }
   }
 }

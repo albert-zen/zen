@@ -84,17 +84,6 @@ export interface ZenXImageCapabilityProbeResult {
   model: ZenXModelCatalogEntry;
 }
 
-export class ZenXProviderDeletionCleanupError extends Error {
-  readonly committed = true;
-
-  constructor() {
-    super(
-      "Provider profile deletion was committed, but subscription credential cleanup failed",
-    );
-    this.name = "ZenXProviderDeletionCleanupError";
-  }
-}
-
 type OpenAiCompatibleProviderProfile = Extract<
   ZenXProviderProfile,
   { type: "openai-compatible" }
@@ -153,15 +142,15 @@ export class ZenXSettingsService {
   endMaintenance(): void {
     this.#maintenance = false;
   }
-  #beginAuxiliaryOperation(): () => void {
+  #beginAuxiliaryOperation(): () => Promise<void> {
     if (this.#maintenance) throw new Error("host_restarting");
     this.#auxiliaryOperations++;
     let released = false;
-    return () => {
+    return async () => {
       if (released) return;
       released = true;
       this.#auxiliaryOperations--;
-      void this.#cleanupRetiredCredentials();
+      await this.#cleanupRetiredCredentials();
     };
   }
   async #cleanupRetiredCredentials(): Promise<void> {
@@ -190,6 +179,7 @@ export class ZenXSettingsService {
         const current = await this.#configurationControl.current();
         if (current.revision === this.configurationRevision())
           this.#acceptConfiguration(current);
+        await this.#cleanupRetiredCredentials();
         return this.#configurationResult;
       }
       let current = await this.#configurationControl.current();
@@ -206,12 +196,12 @@ export class ZenXSettingsService {
       }
       if (current.revision === candidate.revision)
         this.#acceptConfiguration(current);
+      await this.#cleanupRetiredCredentials();
       return this.#configurationResult;
     });
   }
   #acceptConfiguration(current: SettingsConfigurationCurrent): void {
     this.#pendingConfiguration = undefined;
-    void this.#cleanupRetiredCredentials();
     this.#appliedProfile = this.#profile;
     this.#configurationResult = {
       status: current.pendingRestart.length ? "pending-restart" : "applied",
@@ -428,7 +418,7 @@ export class ZenXSettingsService {
     try {
       return await this.#discoverProviderModels(providerProfileId, options);
     } finally {
-      release();
+      await release();
     }
   }
   async #discoverProviderModels(
@@ -491,7 +481,7 @@ export class ZenXSettingsService {
         options,
       );
     } finally {
-      release();
+      await release();
     }
   }
   async #probeProviderModelImage(
@@ -590,7 +580,7 @@ export class ZenXSettingsService {
     try {
       return { ...(await this.#titleModel()), release };
     } catch (error) {
-      release();
+      await release();
       throw error;
     }
   }

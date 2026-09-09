@@ -3,7 +3,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { inspect } from "node:util";
 
 import { ZenXCredentialVault } from "../src/main/credential-vault.js";
 import {
@@ -11,11 +10,7 @@ import {
   type ZenXHostProfile,
   ZenXHostProfileStore,
 } from "../src/main/host-profile.js";
-import {
-  ZenXProviderDeletionCleanupError,
-  ZenXSettingsService,
-} from "../src/main/settings-service.js";
-import { deleteProviderProfileWithHostRestart } from "../src/main/provider-deletion.js";
+import { ZenXSettingsService } from "../src/main/settings-service.js";
 
 const encryption = {
   isEncryptionAvailable: () => true,
@@ -23,35 +18,16 @@ const encryption = {
   decryptString: (value: Buffer) => value.toString().replace(/^secure:/u, ""),
 };
 
-test("committed Provider deletion restarts Host before reporting cleanup failure", async () => {
+test("Provider deletion withdraws its catalog without revoking an in-flight subscription identity", async () => {
+  let logouts = 0;
   const fixture = await deletionFixture({
     logout: async () => {
-      throw new Error("cleanup failed at /secret/path with token-123");
+      logouts++;
     },
   });
-  let restarts = 0;
   try {
-    await assert.rejects(
-      deleteProviderProfileWithHostRestart(
-        fixture.service,
-        "subscription",
-        {},
-        async () => {
-          restarts += 1;
-        },
-      ),
-      (error: unknown) => {
-        const inspected = inspect(error, { depth: 5, showHidden: true });
-        return (
-          error instanceof ZenXProviderDeletionCleanupError &&
-          error.committed === true &&
-          !("cause" in error) &&
-          !inspected.includes("token-123") &&
-          !inspected.includes("/secret/path")
-        );
-      },
-    );
-    assert.equal(restarts, 1);
+    await fixture.service.deleteProviderProfile("subscription");
+    assert.equal(logouts, 0);
     assert.equal(
       (await fixture.service.publicSettings()).profile.providerProfiles.some(
         (provider) => provider.providerProfileId === "subscription",
@@ -63,40 +39,45 @@ test("committed Provider deletion restarts Host before reporting cleanup failure
   }
 });
 
-test("committed cleanup and Host restart failures preserve both causes", async () => {
+test("Provider deletion prepare failure preserves the catalog and credentials", async () => {
+  let logouts = 0;
   const fixture = await deletionFixture({
     logout: async () => {
-      throw new Error("cleanup rejected with credential secret-cleanup");
+      logouts++;
     },
   });
   try {
+    fixture.service.setConfigurationControl({
+      prepare: async () => {
+        throw new Error("prepare rejected");
+      },
+      publish: async () => {
+        throw new Error("unexpected publish");
+      },
+      discard: async () => {},
+      current: async () => ({
+        processEpoch: "epoch",
+        revision: 0,
+        pendingRestart: [],
+      }),
+    });
     await assert.rejects(
-      deleteProviderProfileWithHostRestart(
-        fixture.service,
-        "subscription",
-        {},
-        async () => {
-          throw new Error("restart rejected with secret-restart");
-        },
+      fixture.service.deleteProviderProfile("subscription"),
+      /prepare rejected/,
+    );
+    assert.equal(logouts, 0);
+    assert.equal(
+      (await fixture.service.publicSettings()).profile.providerProfiles.some(
+        (provider) => provider.providerProfileId === "subscription",
       ),
-      (error: unknown) =>
-        error instanceof AggregateError &&
-        /subscription cleanup and Host restart both failed/u.test(
-          error.message,
-        ) &&
-        !error.message.includes("secret-cleanup") &&
-        !error.message.includes("secret-restart") &&
-        error.errors.length === 2 &&
-        error.errors[0] instanceof ZenXProviderDeletionCleanupError &&
-        error.errors[1] instanceof Error &&
-        error.errors[1].message === "restart rejected with secret-restart",
+      true,
     );
   } finally {
     await fixture.close();
   }
 });
 
-test("pre-commit Provider deletion failure does not restart Host", async () => {
+test("pre-commit Provider deletion failure preserves profile and subscription identity", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-delete-precommit-"),
   );
@@ -122,22 +103,13 @@ test("pre-commit Provider deletion failure does not restart Host", async () => {
       status: async () => ({ authenticated: true, expired: false }),
     }),
   });
-  let restarts = 0;
   try {
     await service.initialize({});
     store.failNextWrite = true;
     await assert.rejects(
-      deleteProviderProfileWithHostRestart(
-        service,
-        "subscription",
-        {},
-        async () => {
-          restarts += 1;
-        },
-      ),
+      service.deleteProviderProfile("subscription"),
       /profile write rejected/u,
     );
-    assert.equal(restarts, 0);
     assert.equal(logoutCount, 0);
     assert.equal(
       (await service.publicSettings()).profile.providerProfiles.some(

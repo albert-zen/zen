@@ -187,8 +187,8 @@ test("auxiliary title lease prevents maintenance until released, and maintenance
   try {
     const title = await service.titleModel();
     assert.equal(service.tryBeginMaintenance(), false);
-    title.release();
-    title.release();
+    await title.release();
+    await title.release();
     assert.equal(service.tryBeginMaintenance(), true);
     await assert.rejects(service.titleModel(), /host_restarting/);
     service.endMaintenance();
