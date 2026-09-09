@@ -19,6 +19,7 @@ import {
   isAttachmentRef,
   type ZenXThreadAttachmentProjection,
 } from "./image-attachments.js";
+import type { HostActivitySnapshot } from "../../../../src/app-server.js";
 
 export type ZenXHostConfig = Omit<
   ZenHostOptions,
@@ -30,12 +31,27 @@ export type ZenXHostConfig = Omit<
   | "codeRuntimeOptions"
   | "onToolPresentationWarning"
 > & {
+  /** Durable configuration revision loaded by this process at startup. */
+  configurationRevision?: number;
   /** Serializable containment limits only; the child Host owns its exact Worker URL. */
   codeRuntimeOptions?: Omit<
     NonNullable<ZenHostOptions["codeRuntimeOptions"]>,
     "workerUrl"
   >;
 };
+
+export interface HostConfigurationCandidate {
+  processEpoch: string;
+  candidateToken: string;
+  revision: number;
+  pendingRestart: string[];
+}
+
+export interface HostConfigurationCurrent {
+  processEpoch: string;
+  revision: number;
+  pendingRestart: string[];
+}
 
 export type ZenXSingleProviderHostConfig = ZenXHostConfig &
   Required<Pick<ZenXHostConfig, "model" | "provider">>;
@@ -49,6 +65,26 @@ export type HostCommand =
       capabilities: ZenXCapabilityGenerationSnapshot;
     }
   | { type: "shutdown" }
+  | {
+      type: "configuration/prepare";
+      requestId: string;
+      candidateToken: string;
+      config: ZenXHostConfig;
+      revision: number;
+    }
+  | {
+      type: "configuration/publish";
+      requestId: string;
+      candidate: HostConfigurationCandidate;
+    }
+  | {
+      type: "configuration/discard";
+      requestId: string;
+      candidate: HostConfigurationCandidate;
+    }
+  | { type: "configuration/current"; requestId: string }
+  | { type: "maintenance/try-begin"; requestId: string }
+  | { type: "maintenance/end"; maintenanceToken: string }
   | {
       type: "thread-summary/list";
       requestId: string;
@@ -88,8 +124,37 @@ export interface CapabilityResultCommand {
 }
 
 export type HostEvent =
-  | { type: "ready"; url: string }
+  | { type: "ready"; url: string; processEpoch: string }
   | { type: "error"; message: string }
+  | {
+      type: "configuration/prepared";
+      requestId: string;
+      candidate?: HostConfigurationCandidate;
+      error?: string;
+    }
+  | {
+      type: "configuration/published";
+      requestId: string;
+      current?: HostConfigurationCurrent;
+      error?: string;
+    }
+  | {
+      type: "configuration/discarded";
+      requestId: string;
+      error?: string;
+    }
+  | {
+      type: "configuration/current";
+      requestId: string;
+      current?: HostConfigurationCurrent;
+      error?: string;
+    }
+  | {
+      type: "maintenance/result";
+      requestId: string;
+      accepted: boolean;
+      activity: HostActivitySnapshot;
+    }
   | {
       type: "thread-summary/result";
       requestId: string;
@@ -193,11 +258,33 @@ export function isHostCommand(value: unknown): value is HostCommand {
     capabilities?: unknown;
     invocationId?: unknown;
     generationToken?: unknown;
+    candidate?: unknown;
+    candidateToken?: unknown;
+    config?: unknown;
+    revision?: unknown;
+    maintenanceToken?: unknown;
   };
   const type = command.type;
   return (
     (type === "start" && isCapabilityHostSnapshot(command.capabilities)) ||
     type === "shutdown" ||
+    (type === "configuration/prepare" &&
+      typeof command.requestId === "string" &&
+      typeof command.candidateToken === "string" &&
+      isZenXHostConfig(command.config) &&
+      isConfigurationRevision(command.revision)) ||
+    (type === "configuration/publish" &&
+      typeof command.requestId === "string" &&
+      isHostConfigurationCandidate(command.candidate)) ||
+    (type === "configuration/discard" &&
+      typeof command.requestId === "string" &&
+      isHostConfigurationCandidate(command.candidate)) ||
+    (type === "configuration/current" &&
+      typeof command.requestId === "string") ||
+    (type === "maintenance/try-begin" &&
+      typeof command.requestId === "string") ||
+    (type === "maintenance/end" &&
+      typeof command.maintenanceToken === "string") ||
     (type === "capability/result" &&
       typeof command.invocationId === "string" &&
       typeof command.generationToken === "string") ||
@@ -264,6 +351,11 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
     threadId?: unknown;
     turnId?: unknown;
     items?: unknown;
+    processEpoch?: unknown;
+    candidate?: unknown;
+    current?: unknown;
+    accepted?: unknown;
+    activity?: unknown;
   };
   const hasSummaries = Object.prototype.hasOwnProperty.call(event, "summaries");
   const hasError = Object.prototype.hasOwnProperty.call(event, "error");
@@ -272,9 +364,35 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
     "attachments",
   );
   const hasUsage = Object.prototype.hasOwnProperty.call(event, "usage");
+  const hasCandidate = Object.prototype.hasOwnProperty.call(event, "candidate");
+  const hasCurrent = Object.prototype.hasOwnProperty.call(event, "current");
   return (
-    (event.type === "ready" && typeof event.url === "string") ||
+    (event.type === "ready" &&
+      typeof event.url === "string" &&
+      typeof event.processEpoch === "string") ||
     (event.type === "error" && typeof event.message === "string") ||
+    (event.type === "configuration/prepared" &&
+      typeof event.requestId === "string" &&
+      ((hasCandidate &&
+        !hasError &&
+        isHostConfigurationCandidate(event.candidate)) ||
+        (!hasCandidate && hasError && typeof event.error === "string"))) ||
+    (event.type === "configuration/published" &&
+      typeof event.requestId === "string" &&
+      ((hasCurrent && !hasError && isHostConfigurationCurrent(event.current)) ||
+        (!hasCurrent && hasError && typeof event.error === "string"))) ||
+    (event.type === "configuration/discarded" &&
+      typeof event.requestId === "string" &&
+      ((!hasError && event.error === undefined) ||
+        (hasError && typeof event.error === "string"))) ||
+    (event.type === "configuration/current" &&
+      typeof event.requestId === "string" &&
+      ((hasCurrent && !hasError && isHostConfigurationCurrent(event.current)) ||
+        (!hasCurrent && hasError && typeof event.error === "string"))) ||
+    (event.type === "maintenance/result" &&
+      typeof event.requestId === "string" &&
+      typeof event.accepted === "boolean" &&
+      isHostActivitySnapshot(event.activity)) ||
     (event.type === "capabilities/replaced" &&
       typeof event.requestId === "string" &&
       typeof event.generationToken === "string" &&
@@ -318,6 +436,72 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
       event.type === "capability/cancel") &&
       typeof event.invocationId === "string" &&
       typeof event.generationToken === "string")
+  );
+}
+
+function isZenXHostConfig(value: unknown): value is ZenXHostConfig {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isConfigurationRevision(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function isHostConfigurationCandidate(
+  value: unknown,
+): value is HostConfigurationCandidate {
+  return (
+    isHostConfigurationCurrent(value) &&
+    typeof (value as { candidateToken?: unknown }).candidateToken === "string"
+  );
+}
+
+function isHostConfigurationCurrent(
+  value: unknown,
+): value is HostConfigurationCurrent {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { processEpoch?: unknown }).processEpoch === "string" &&
+    isConfigurationRevision((value as { revision?: unknown }).revision) &&
+    Array.isArray((value as { pendingRestart?: unknown }).pendingRestart) &&
+    (value as { pendingRestart: unknown[] }).pendingRestart.every(
+      (domain) => typeof domain === "string",
+    )
+  );
+}
+
+function isHostActivitySnapshot(value: unknown): value is HostActivitySnapshot {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const activity = value as {
+    acceptingRootOperations?: unknown;
+    rootOperations?: unknown;
+    activeToolTasks?: unknown;
+  };
+  return (
+    typeof activity.acceptingRootOperations === "boolean" &&
+    Number.isSafeInteger(activity.activeToolTasks) &&
+    (activity.activeToolTasks as number) >= 0 &&
+    Array.isArray(activity.rootOperations) &&
+    activity.rootOperations.every(isHostOperation)
+  );
+}
+
+function isHostOperation(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const operation = value as { kind?: unknown; label?: unknown };
+  return (
+    (operation.kind === "turn" ||
+      operation.kind === "compaction" ||
+      operation.kind === "provider" ||
+      operation.kind === "tool" ||
+      operation.kind === "plugin" ||
+      operation.kind === "other") &&
+    (operation.label === undefined || typeof operation.label === "string")
   );
 }
 

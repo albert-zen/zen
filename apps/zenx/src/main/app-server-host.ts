@@ -33,6 +33,15 @@ let currentCapabilityGeneration: (() => string) | undefined;
 let closeToolComposition: ((reason?: string) => Promise<void>) | undefined;
 let shuttingDown = false;
 let toolOutputSpool: ToolOutputSpool | undefined;
+let maintenance:
+  | {
+      token: string;
+      result: Extract<
+        ReturnType<HostedZenAppServer["tryBeginMaintenance"]>,
+        { accepted: true }
+      >;
+    }
+  | undefined;
 
 process.on("message", (message: unknown) => {
   if (!isHostCommand(message)) return;
@@ -57,6 +66,131 @@ async function handleCommand(command: HostCommand): Promise<void> {
   }
   if (command.type === "shutdown") {
     await shutdown();
+    return;
+  }
+  if (command.type === "configuration/prepare") {
+    if (appServer === undefined) {
+      send({
+        type: "configuration/prepared",
+        requestId: command.requestId,
+        error: "Zen App Server is not ready",
+      });
+      return;
+    }
+    try {
+      send({
+        type: "configuration/prepared",
+        requestId: command.requestId,
+        candidate: await appServer.prepareConfiguration(
+          command.config,
+          command.revision,
+          command.candidateToken,
+        ),
+      });
+    } catch (error) {
+      send({
+        type: "configuration/prepared",
+        requestId: command.requestId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
+  if (command.type === "configuration/publish") {
+    if (appServer === undefined) {
+      send({
+        type: "configuration/published",
+        requestId: command.requestId,
+        error: "Zen App Server is not ready",
+      });
+      return;
+    }
+    try {
+      send({
+        type: "configuration/published",
+        requestId: command.requestId,
+        current: appServer.publishConfiguration(command.candidate),
+      });
+    } catch (error) {
+      send({
+        type: "configuration/published",
+        requestId: command.requestId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
+  if (command.type === "configuration/discard") {
+    if (appServer === undefined) {
+      send({
+        type: "configuration/discarded",
+        requestId: command.requestId,
+        error: "Zen App Server is not ready",
+      });
+      return;
+    }
+    try {
+      await appServer.discardConfiguration(command.candidate);
+      send({ type: "configuration/discarded", requestId: command.requestId });
+    } catch (error) {
+      send({
+        type: "configuration/discarded",
+        requestId: command.requestId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
+  if (command.type === "configuration/current") {
+    send(
+      appServer === undefined
+        ? {
+            type: "configuration/current",
+            requestId: command.requestId,
+            error: "Zen App Server is not ready",
+          }
+        : {
+            type: "configuration/current",
+            requestId: command.requestId,
+            current: appServer.currentConfiguration(),
+          },
+    );
+    return;
+  }
+  if (command.type === "maintenance/try-begin") {
+    if (appServer === undefined) {
+      send({
+        type: "maintenance/result",
+        requestId: command.requestId,
+        accepted: false,
+        activity: {
+          acceptingRootOperations: false,
+          rootOperations: [],
+          activeToolTasks: 0,
+        },
+      });
+      return;
+    }
+    const result =
+      maintenance?.token === command.requestId
+        ? maintenance.result
+        : appServer.tryBeginMaintenance();
+    if (result.accepted) {
+      maintenance = { token: command.requestId, result };
+    }
+    send({
+      type: "maintenance/result",
+      requestId: command.requestId,
+      accepted: result.accepted,
+      activity: result.activity,
+    });
+    return;
+  }
+  if (command.type === "maintenance/end") {
+    if (maintenance?.token === command.maintenanceToken) {
+      maintenance.result.end();
+      maintenance = undefined;
+    }
     return;
   }
   if (command.type === "capabilities/replace") {
@@ -263,7 +397,11 @@ async function handleCommand(command: HostCommand): Promise<void> {
     listen: command.listen ?? "ws://127.0.0.1:0",
     bearerToken: command.bearerToken,
   });
-  send({ type: "ready", url: server.url });
+  send({
+    type: "ready",
+    url: server.url,
+    processEpoch: appServer.processEpoch,
+  });
 }
 
 function codeRuntimeWorkerEntry(): URL {
@@ -289,6 +427,7 @@ async function shutdown(): Promise<void> {
   tools = undefined;
   replaceCapabilities = undefined;
   currentCapabilityGeneration = undefined;
+  maintenance = undefined;
   if (process.connected) process.disconnect();
   process.exit(process.exitCode ?? 0);
 }

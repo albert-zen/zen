@@ -191,6 +191,84 @@ test("hosts a real App Server and removes its private token on shutdown", async 
   }
 });
 
+test("publishes runtime configuration in place and reports restart-only domains honestly", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-config-host-"));
+  const initialConfig = {
+    cwd: process.cwd(),
+    dataDirectory: path.join(directory, "data-a"),
+    configurationRevision: 7,
+    model: "fake",
+    models: ["fake"],
+    approvalPolicy: "never" as const,
+    provider: { type: "fake" as const },
+  };
+  const manager = new AppServerManager({
+    entryPath: path.resolve("src/main/app-server-host.ts"),
+    tokenFile: path.join(directory, "runtime", "app-server.token"),
+    hostConfig: initialConfig,
+    execArgv: ["--import", "tsx"],
+    startupTimeoutMs: 10_000,
+  });
+  try {
+    await manager.start();
+    const processId = manager.processId;
+    const processEpoch = manager.processEpoch;
+    assert.deepEqual(await manager.currentConfiguration(), {
+      processEpoch,
+      revision: 7,
+      pendingRestart: [],
+    });
+
+    const nextConfig = {
+      ...initialConfig,
+      dataDirectory: path.join(directory, "data-b"),
+      configurationRevision: 8,
+      model: "fake-next",
+      models: ["fake", "fake-next"],
+    };
+    const candidate = await manager.prepareConfiguration(nextConfig, 8);
+    assert.equal(candidate.processEpoch, processEpoch);
+    assert.deepEqual(candidate.pendingRestart, ["dataDirectory"]);
+    const published = await manager.publishConfiguration(candidate);
+    assert.deepEqual(published, {
+      processEpoch,
+      revision: 8,
+      pendingRestart: ["dataDirectory"],
+    });
+    assert.deepEqual(await manager.publishConfiguration(candidate), published);
+    await assert.rejects(
+      manager.publishConfiguration({ ...candidate, revision: 9 }),
+      /candidate does not match/u,
+    );
+    assert.equal(manager.processId, processId);
+    const started = await manager.request("thread/start", {});
+    const summary = (await manager.listThreadSummaries()).find(
+      (entry) => entry.threadId === started.thread.id,
+    );
+    assert(summary !== undefined);
+    assert("currentMetadata" in summary);
+    assert("modelId" in summary.currentMetadata);
+    assert.equal(summary.currentMetadata.modelId, "fake-next");
+
+    const replacement = await manager.safeRestart(nextConfig);
+    assert.deepEqual(replacement, { status: "restarted" });
+    assert.notEqual(manager.processId, processId);
+    assert.notEqual(manager.processEpoch, processEpoch);
+    assert.deepEqual(await manager.currentConfiguration(), {
+      processEpoch: manager.processEpoch,
+      revision: 8,
+      pendingRestart: [],
+    });
+    await assert.rejects(
+      manager.publishConfiguration(candidate),
+      /another process epoch/u,
+    );
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("an external Codex-compatible client attaches through the public descriptor to the same Thread authority", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-external-"));
   const descriptorFile = path.join(directory, "runtime", "zas-connection.json");
