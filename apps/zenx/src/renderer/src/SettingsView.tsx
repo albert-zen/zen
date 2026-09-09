@@ -1373,19 +1373,26 @@ function ProviderEditor({
           <legend>Model catalog</legend>
           <div className="model-catalog-head">
             <p>
-              Model IDs are Provider-scoped. New and discovered models start in
-              text-only mode; configure or detect optional capabilities before
-              enabling them.
+              Model IDs are Provider-scoped. OpenAI subscription metadata comes
+              from the official Codex catalog; compatible Providers use their
+              standard model endpoint.
             </p>
-            {provider.type === "openai-compatible" && mode === "edit" ? (
+            {(provider.type === "openai-compatible" ||
+              provider.type === "openai-subscription") &&
+            mode === "edit" ? (
               <button
                 className="quiet-button"
                 type="button"
-                disabled={discovering || !hasApiKey}
+                disabled={
+                  discovering ||
+                  (provider.type === "openai-compatible" && !hasApiKey)
+                }
                 title={
-                  hasApiKey
-                    ? "Fetch model IDs from this Provider"
-                    : "Save an API key before discovery"
+                  provider.type === "openai-subscription"
+                    ? "Fetch the official Codex model catalog"
+                    : hasApiKey
+                      ? "Fetch model IDs from this Provider"
+                      : "Save an API key before discovery"
                 }
                 onClick={() => {
                   setDiscovering(true);
@@ -1397,6 +1404,14 @@ function ProviderEditor({
                       setAvailableModels(snapshot.models);
                       setSelectedAvailableModels([]);
                       setModelSearch("");
+                      setCatalogStatus(
+                        snapshot.warning ??
+                          (snapshot.source === "cache"
+                            ? "Official catalog is unchanged; using the local cache."
+                            : snapshot.source === "remote"
+                              ? "Loaded the latest official model catalog."
+                              : null),
+                      );
                     })
                     .catch((reason: unknown) =>
                       setValidationError(describeError(reason)),
