@@ -2406,9 +2406,6 @@ select:focus-visible {
   font-size: 11px;
   text-transform: capitalize;
 }
-.permission-control:disabled {
-  opacity: 1;
-}
 .composer-actions {
   gap: 5px;
 }
@@ -5004,9 +5001,6 @@ select:focus-visible {
   .composer-model-trigger {
     max-width: 120px;
   }
-  .permission-control span {
-    display: none;
-  }
   .page-scroll {
     padding: 20px 14px 34px;
   }
@@ -5190,12 +5184,6 @@ select:focus-visible {
   }
   .appearance-preview-accent {
     padding-inline: 8px;
-  }
-  .permission-control {
-    display: inline-flex;
-  }
-  .permission-control select {
-    max-width: 100px;
   }
   .composer-model-trigger {
     max-width: 92px;
@@ -5985,21 +5973,25 @@ select:focus-visible {
   position: relative;
   min-width: 0;
 }
-.permission-control select {
-  color: inherit;
-  font: inherit;
-  border: 0;
-  background: transparent;
-  max-width: 140px;
-  cursor: pointer;
+.permission-trigger {
+  max-width: none;
+  flex-shrink: 0;
 }
-.permission-control select:focus-visible {
-  outline: none;
-  filter: brightness(1.15);
+.permission-trigger > svg {
+  flex-shrink: 0;
 }
-.permission-control select:disabled {
-  cursor: default;
-  opacity: 0.55;
+.permission-menu {
+  left: auto;
+  right: 0;
+  width: min(268px, calc(100vw - 32px));
+}
+.permission-menu [aria-checked="true"] {
+  color: var(--text-accent);
+  background: var(--accent-soft);
+}
+.permission-menu button small {
+  white-space: normal;
+  line-height: 1.4;
 }
 .permission-error {
   position: absolute;

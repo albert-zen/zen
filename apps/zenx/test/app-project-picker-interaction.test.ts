@@ -409,14 +409,16 @@ test("New thread sends its selected model, reasoning and file permissions to Pro
     const composer = await waitFor(() =>
       document.querySelector<HTMLTextAreaElement>("#thread-composer"),
     );
-    const permission = document.querySelector<HTMLSelectElement>(
+    const permission = document.querySelector<HTMLButtonElement>(
       '[aria-label="File permissions"]',
     )!;
-    assert.equal(permission.value, "danger-full-access");
-    await act(async () => {
-      permission.value = "read-only";
-      permission.dispatchEvent(new window.Event("change", { bubbles: true }));
-    });
+    assert.equal(permission.textContent, "Full access");
+    await invokeButtonClick(permission);
+    await invokeButtonClick(
+      document.querySelector<HTMLButtonElement>(
+        '[role="menuitemradio"][data-permission="read-only"]',
+      )!,
+    );
     await setTextareaValue(composer, "Use the selected model");
     await invokeButtonClick(
       await waitFor(() =>
@@ -2553,11 +2555,11 @@ test("current permissions follow notifications even when the Thread list fails",
       document.querySelector<HTMLButtonElement>(".thread-row")?.click(),
     );
     const select = await waitFor(() =>
-      document.querySelector<HTMLSelectElement>(
+      document.querySelector<HTMLButtonElement>(
         '[aria-label="File permissions"]',
       ),
     );
-    assert.equal(select.value, "read-only");
+    assert.equal(select.textContent, "Read only");
     failList = true;
     await act(async () =>
       notify?.("thread/settings/updated", {
@@ -2580,7 +2582,7 @@ test("current permissions follow notifications even when the Thread list fails",
         },
       }),
     );
-    await waitFor(() => select.value === "danger-full-access");
+    await waitFor(() => select.textContent === "Full access");
     assert.equal(select.disabled, false);
     assert.match(document.body.textContent ?? "", /list unavailable/);
   } finally {
