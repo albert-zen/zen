@@ -1,3 +1,4 @@
+import { deduplicateMediaContent } from "./model-content.js";
 import {
   contentFromUserMessage,
   textFromUserInput,
@@ -343,8 +344,13 @@ function withoutNestedToolLifecycle(
   for (const item of items) {
     if (item.type !== "tool_result" || item.modelContent === undefined)
       continue;
-    const parent = nestedCalls.get(`${item.turnId}\0${item.callId}`);
+    let parent = nestedCalls.get(`${item.turnId}\0${item.callId}`);
     if (parent === undefined) continue;
+    const ancestors = new Set<string>();
+    while (nestedCalls.has(parent) && !ancestors.has(parent)) {
+      ancestors.add(parent);
+      parent = nestedCalls.get(parent)!;
+    }
     modelContentByParent.set(parent, [
       ...(modelContentByParent.get(parent) ?? []),
       ...item.modelContent,
@@ -368,7 +374,10 @@ function withoutNestedToolLifecycle(
         ? item
         : {
             ...item,
-            modelContent: [...(item.modelContent ?? []), ...nestedContent],
+            modelContent: deduplicateMediaContent([
+              ...(item.modelContent ?? []),
+              ...nestedContent,
+            ]),
           },
     );
   }

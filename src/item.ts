@@ -1,4 +1,5 @@
 import {
+  MAX_AUDIO_BYTES,
   MAX_IMAGE_BYTES,
   MAX_IMAGE_DIMENSION,
   MAX_IMAGE_PIXELS,
@@ -160,7 +161,13 @@ export interface ImageUserInputPart {
   attachment: AttachmentRef;
 }
 
-export type UserInputPart = TextUserInputPart | ImageUserInputPart;
+export interface AudioUserInputPart {
+  type: "audio";
+  attachment: AttachmentRef;
+}
+
+export type UserInputPart =
+  TextUserInputPart | ImageUserInputPart | AudioUserInputPart;
 export type UserInput = readonly UserInputPart[];
 
 interface UserMessageItemBase extends ItemBase {
@@ -353,7 +360,7 @@ export function normalizeUserInput(input: string | UserInput): UserInput {
     if (part.type === "text") {
       if (part.text.length === 0) throw new Error("Text input cannot be empty");
     } else if (part.attachment.type !== "attachment") {
-      throw new Error("Image input must contain an AttachmentRef");
+      throw new Error("Media input must contain an AttachmentRef");
     }
   }
   return structuredClone(normalized);
@@ -380,7 +387,9 @@ export function previewFromUserInput(input: UserInput): string {
     ? text
     : input.some((part) => part.type === "image")
       ? "[Image]"
-      : "";
+      : input.some((part) => part.type === "audio")
+        ? "[Audio]"
+        : "";
 }
 
 export function previewFromUserMessage(item: UserMessageItem): string {
@@ -397,7 +406,7 @@ export function sameUserInput(left: UserInput, right: UserInput): boolean {
         return candidate.type === "text" && part.text === candidate.text;
       }
       return (
-        candidate.type === "image" &&
+        candidate.type !== "text" &&
         part.attachment.sha256 === candidate.attachment.sha256 &&
         part.attachment.mediaType === candidate.attachment.mediaType &&
         part.attachment.byteLength === candidate.attachment.byteLength &&
@@ -806,10 +815,11 @@ export function validateUserInput(value: unknown, name: string): void {
     const part = requireRecord(rawPart, `${name}[${String(index)}]`);
     if (part.type === "text") {
       requireNonEmptyString(part.text, `${name}[${String(index)}].text`);
-    } else if (part.type === "image") {
+    } else if (part.type === "image" || part.type === "audio") {
       validateAttachmentRef(
         part.attachment,
         `${name}[${String(index)}].attachment`,
+        part.type,
       );
     } else {
       throw new Error(`${name}[${String(index)}] has an unsupported type`);
@@ -817,7 +827,11 @@ export function validateUserInput(value: unknown, name: string): void {
   }
 }
 
-function validateAttachmentRef(value: unknown, name: string): void {
+function validateAttachmentRef(
+  value: unknown,
+  name: string,
+  kind: "image" | "audio",
+): void {
   const ref = requireRecord(value, name);
   requireEnum(ref.type, ["attachment"], `${name}.type`);
   const sha256 = requireNonEmptyString(ref.sha256, `${name}.sha256`);
@@ -825,15 +839,23 @@ function validateAttachmentRef(value: unknown, name: string): void {
     throw new Error(`${name}.sha256 is invalid`);
   requireEnum(
     ref.mediaType,
-    ["image/png", "image/jpeg", "image/gif", "image/webp"],
+    kind === "image"
+      ? ["image/png", "image/jpeg", "image/gif", "image/webp"]
+      : ["audio/wav", "audio/mpeg"],
     `${name}.mediaType`,
   );
   requireSafeInteger(ref.byteLength, `${name}.byteLength`);
   if (
     (ref.byteLength as number) <= 0 ||
-    (ref.byteLength as number) > MAX_IMAGE_BYTES
+    (ref.byteLength as number) >
+      (kind === "image" ? MAX_IMAGE_BYTES : MAX_AUDIO_BYTES)
   ) {
     throw new Error(`${name}.byteLength is outside the supported range`);
+  }
+  if (kind === "audio") {
+    if (ref.width !== undefined || ref.height !== undefined)
+      throw new Error(`${name} audio must not have image dimensions`);
+    return;
   }
   for (const dimension of ["width", "height"] as const) {
     requireSafeInteger(ref[dimension], `${name}.${dimension}`);

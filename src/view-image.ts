@@ -14,11 +14,10 @@ import type {
 export class ViewImageToolRuntime implements ToolRuntime {
   readonly enforcesSandbox = true;
   readonly name = "view_image";
-  readonly requiredModelInputModalities = ["image"] as const;
   readonly specification: ModelTool = {
     name: this.name,
     description:
-      "View an image from a local file path or an AttachmentRef already referenced by the current thread.",
+      "Read an image from a local file path or an AttachmentRef already referenced by the current thread. Models without image input receive a textual receipt and reference.",
     inputSchema: {
       type: "object",
       properties: {
@@ -132,6 +131,7 @@ function requireAttachmentRef(value: unknown): AttachmentRef {
     ref.type !== "attachment" ||
     typeof ref.sha256 !== "string" ||
     typeof ref.mediaType !== "string" ||
+    !ref.mediaType.startsWith("image/") ||
     typeof ref.byteLength !== "number" ||
     typeof ref.width !== "number" ||
     typeof ref.height !== "number"

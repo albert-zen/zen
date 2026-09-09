@@ -187,9 +187,9 @@ test("view_image accepts only current-thread AttachmentRefs and replays model co
   }
 });
 
-test("view_image gates known text-only models while Unknown capability still executes", async () => {
+test("view_image executes for text-only and unknown models without capability admission failure", async () => {
   for (const [inputModalities, expectedExecutions] of [
-    [["text"] as const, 0],
+    [["text"] as const, 1],
     [null, 1],
   ] as const) {
     const journal = new InMemoryThreadJournal();
@@ -235,10 +235,10 @@ test("view_image gates known text-only models while Unknown capability still exe
       (item) => item.type === "tool_result",
     );
     assert(result?.type === "tool_result");
-    if (inputModalities !== null) {
-      assert.match(result.output, /does not support image input/u);
-      assert.equal(result.exitCode, 1);
-    }
+    // This ref is deliberately not in this thread: admission succeeds and
+    // the tool still enforces attachment authorization.
+    assert.match(result.output, /not referenced by the current thread/u);
+    assert.equal(result.exitCode, 1);
   }
 });
 
