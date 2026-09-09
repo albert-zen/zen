@@ -290,7 +290,14 @@ export function SettingsView({
                     Uninstall keeps plugin data until you explicitly delete it.
                   </p>
                 </header>
-                <PluginSettings onFeedback={setStatus} />
+                <PluginSettings
+                  onFeedback={(message) => {
+                    if (feedbackScope.current.version !== feedbackVersion)
+                      return;
+                    setError(null);
+                    setStatus(message);
+                  }}
+                />
                 {pluginSnapshot === null ? null : (
                   <PluginSettingsSurfaces snapshot={pluginSnapshot} />
                 )}

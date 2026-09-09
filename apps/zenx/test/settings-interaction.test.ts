@@ -1965,3 +1965,71 @@ test("subscription discovery refreshes existing model metadata in the saved draf
     await unmount(harness);
   }
 });
+
+for (const completeAfterNavigation of [false, true]) {
+  test(`Plugin feedback coordinates parent errors; departed completion=${completeAfterNavigation}`, async () => {
+    const harness = await mountSettings("models", {
+      save: async () => {
+        throw new Error("model save failed");
+      },
+    });
+    try {
+      const control = labeledSelect("Default model")!;
+      await changeControl(control, control.options[1]!.value);
+      await click(exactButtonRequired("Apply"));
+      const empty = {
+        plugins: [],
+        bundles: [],
+        surfaces: [],
+        sidebar: [],
+        pages: [],
+        subroutes: [],
+        settings: [],
+        panels: [],
+        commands: [],
+        menus: [],
+        resultRenderers: [],
+      };
+      const result = {
+        canceled: false,
+        snapshot: empty,
+        capabilityRefresh: { status: "applied" },
+      };
+      let finish!: (value: typeof result) => void;
+      Object.assign(window.zenx, {
+        marketplace: { get: async () => ({ entries: [] }) },
+        plugins: {
+          get: async () => empty,
+          onChange: () => () => {},
+          selectTarball: () =>
+            completeAfterNavigation
+              ? new Promise((resolve) => {
+                  finish = resolve;
+                })
+              : Promise.resolve(result),
+        },
+      });
+      await click(exactButtonRequired("Plugins"));
+      await click(exactButtonRequired("Install from source…"));
+      await click(exactButtonRequired("Choose tarball…"));
+      if (completeAfterNavigation) {
+        await click(exactButtonRequired("Models & provider"));
+        await click(exactButtonRequired("Apply"));
+        await act(async () => finish(result));
+        assert.match(
+          document.querySelector('[role="alert"]')?.textContent ?? "",
+          /model save failed/,
+        );
+        assert.equal(document.querySelector(".settings-toast"), null);
+      } else {
+        assert.match(
+          document.querySelector(".settings-toast")?.textContent ?? "",
+          /installed and enabled/,
+        );
+        assert.equal(document.querySelector('[role="alert"]'), null);
+      }
+    } finally {
+      await unmount(harness);
+    }
+  });
+}
