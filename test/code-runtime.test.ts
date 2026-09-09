@@ -878,11 +878,20 @@ test("wall containment aborts and settles a terminable nested child before outer
   });
   try {
     const thread = await server.startThread({ cwd: root });
-    // Control only the wall deadline. Real Worker/process startup may take
+    // Hold the parent clock during startup. Real Worker/process startup may take
     // longer than the 100 ms execution budget on a loaded runner.
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const turn = await server.startTurn(thread.id, "contain child");
-    let pid: number;
+    let pid: number | undefined;
+    let settled = false;
+    void turn.done.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
     try {
       const deadline = Date.now() + 10_000;
       while (true) {
@@ -899,9 +908,27 @@ test("wall containment aborts and settles a terminable nested child before outer
       // takes longer than the old wall budget before publishing its PID.
       process.kill(pid, 0);
     } finally {
-      t.mock.timers.tick(100);
-      await turn.done;
-      t.mock.timers.reset();
+      try {
+        t.mock.timers.tick(100);
+        // Cancellation also uses parent timers. Keep them advancing while
+        // real IPC/process exit runs, and fail within a real-time bound.
+        const deadline = Date.now() + 10_000;
+        while (!settled) {
+          assert(Date.now() < deadline, "timed-out Turn did not settle");
+          await delay(10);
+          t.mock.timers.tick(10);
+        }
+        await turn.done;
+      } finally {
+        t.mock.timers.reset();
+        if (!settled && pid !== undefined) {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+          }
+        }
+      }
     }
     const snapshot = await server.readThread(thread.id);
     const lifecycle = snapshot.items.filter(
@@ -914,8 +941,10 @@ test("wall containment aborts and settles a terminable nested child before outer
     const outerResult = lifecycle.at(-1);
     assert(outerResult?.type === "tool_result");
     assert.match(outerResult.output, /WALL_TIME_LIMIT/u);
+    assert(pid !== undefined);
+    const childPid = pid;
     assert.throws(
-      () => process.kill(pid, 0),
+      () => process.kill(childPid, 0),
       (error: unknown) => {
         return (
           error instanceof Error &&
