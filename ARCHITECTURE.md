@@ -406,7 +406,8 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
 - AgentRuntime 仍独占 journal append；`run_code` 只能通过 Nested Tool Invocation Port
   请求子调用，Plugin / External Tool Runtime 无法取得该 port。`ToolCallItem` 只增加
   可选 `parentCallId`：root lineage 与 submission order 分别沿 parent chain 和 Item 顺序
-  推导，不重复保存；nested lifecycle 不编入后续模型 messages，但 compaction retention
+  推导，不重复保存；nested lifecycle 不编入后续模型 messages，但未确认取消的子任务回执和已捕获输出
+  必须提升到父结果的模型投影，让模型取得可继续 wait 的句柄。compaction retention
   必须保持完整的 outer/child closure。
 - `run_code` 用 text/image/audio 显式选择输出，exit 提前正常结束，yield_control 请求提前观察；
   view_image 本身仍是明确的查看请求，nested modelContent 继续提升并去重，不要求再次 image。

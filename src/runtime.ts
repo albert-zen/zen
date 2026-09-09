@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { codeExecutionOptions } from "./code-options.js";
 import { codeStateFromItems, validateCodeStateWrite } from "./code-state.js";
-import { projectModelMessages } from "./model-content.js";
+import {
+  AttachmentNotReferencedError,
+  projectModelMessages,
+} from "./model-content.js";
 import { TOOL_TASK_CONTENT_TYPE } from "./tool-task.js";
 
 import type {
@@ -1152,10 +1155,15 @@ export class AgentRuntime {
             throw new Error(
               "Code media output requires the Host attachment store",
             );
-          // Guest outcomes deliberately precede FIFO canonical commits. Media
-          // references gain thread authorization only once those commits land.
-          await scheduler.drain(parent.callId);
-          return await this.#resolveCodeMedia(media, options.thread.items);
+          try {
+            return await this.#resolveCodeMedia(media, options.thread.items);
+          } catch (error) {
+            if (!(error instanceof AttachmentNotReferencedError)) throw error;
+            // Only a not-yet-authorized ref needs the FIFO commit barrier.
+            // Inline bytes and already committed refs can stream immediately.
+            await scheduler.drain(parent.callId);
+            return await this.#resolveCodeMedia(media, options.thread.items);
+          }
         },
       },
       invoke: async (

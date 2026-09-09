@@ -18,6 +18,8 @@ export interface CodeMediaOutput {
   value: unknown;
 }
 
+export class AttachmentNotReferencedError extends Error {}
+
 /** Host injection: callers supply the current thread's canonical Items at conversion time. */
 export function createMediaOutputConverter(attachments: AttachmentStore) {
   return async (
@@ -58,7 +60,7 @@ export async function resolveCodeMedia(
     if (
       !referencedAttachments(items).some((allowed) => sameRef(allowed, ref))
     ) {
-      throw new Error(
+      throw new AttachmentNotReferencedError(
         `Attachment ${ref.sha256} is not referenced by the current thread`,
       );
     }

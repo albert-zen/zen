@@ -1,4 +1,5 @@
 import { deduplicateMediaContent } from "./model-content.js";
+import { TOOL_TASK_CONTENT_TYPE } from "./tool-task.js";
 import {
   contentFromUserMessage,
   textFromUserInput,
@@ -360,10 +361,32 @@ function withoutNestedToolLifecycle(
   }
   const modelContentByParent = new Map<string, UserInput>();
   for (const item of items) {
-    if (item.type !== "tool_result" || item.modelContent === undefined)
-      continue;
+    if (item.type !== "tool_result") continue;
     let parent = nestedCalls.get(`${item.turnId}\0${item.callId}`);
     if (parent === undefined) continue;
+    let content = item.modelContent ?? [];
+    const state = item.structuredContent;
+    if (
+      item.contentType === TOOL_TASK_CONTENT_TYPE &&
+      state !== null &&
+      typeof state === "object" &&
+      !Array.isArray(state) &&
+      "status" in state &&
+      ["running", "cancel_requested", "cancellation_unconfirmed"].includes(
+        String(state.status),
+      )
+    ) {
+      // A cancelled program cannot explicitly forward a still-live child's
+      // receipt. Keep its output and wait handle visible to the next sample.
+      content = [
+        ...content,
+        {
+          type: "text",
+          text: `Nested tool ${item.callId} remains observable:\n${item.output}`,
+        },
+      ];
+    }
+    if (content.length === 0) continue;
     const ancestors = new Set<string>();
     while (nestedCalls.has(parent) && !ancestors.has(parent)) {
       ancestors.add(parent);
@@ -371,7 +394,7 @@ function withoutNestedToolLifecycle(
     }
     modelContentByParent.set(parent, [
       ...(modelContentByParent.get(parent) ?? []),
-      ...item.modelContent.filter(
+      ...content.filter(
         (part) =>
           part.type === "text" ||
           !explicitMedia.has(

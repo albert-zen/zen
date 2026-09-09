@@ -532,6 +532,12 @@ test("Runtime records unconfirmed cancellation for abort-ignoring children befor
     assert.equal(childResult?.type, "tool_result");
     if (childResult.exitCode === 0) {
       assert.match(childResult.output, /cancellation_unconfirmed/);
+      const taskId = (childResult.structuredContent as { task_id: string })
+        .task_id;
+      assert.equal(typeof taskId, "string");
+      assert(
+        JSON.stringify(compileModelMessages(snapshot.items)).includes(taskId),
+      );
     } else {
       assert.equal(childResult.exitCode, 130);
     }
@@ -731,8 +737,14 @@ test("unawaited children are aborted and canonically abandoned before the outer 
     );
     assert.equal(childResults.length, 1);
     assert.equal(childResults[0]?.type, "tool_result");
-    assert.equal(childResults[0].exitCode, 125);
-    assert.match(childResults[0].output, /without awaiting/u);
+    if (childResults[0].contentType === "application/vnd.zen.tool-task+json") {
+      assert.equal(childResults[0].exitCode, 0);
+      assert.match(childResults[0].output, /cancellation_unconfirmed/u);
+      assert.match(childResults[0].output, /task_id:/u);
+    } else {
+      assert.equal(childResults[0].exitCode, 125);
+      assert.match(childResults[0].output, /without awaiting/u);
+    }
     const outerResultIndex = lifecycle.findIndex(
       (item) => item.type === "tool_result" && item.callId.startsWith("outer-"),
     );
