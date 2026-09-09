@@ -91,9 +91,8 @@ try {
   );
   assert.equal(selected?.providerId, "user-browser-cdp");
   assert.equal(selection.manifest.provider.id, "user-browser-cdp");
-  assert.equal(typeof backend.observeLive, "function");
+  assert.equal(typeof backend.observeTab, "function");
   const liveEvents: BrowserLiveObservationEvent[] = [];
-  const stopLive = backend.observeLive!((event) => liveEvents.push(event));
   const tabs = await retry(async () => {
     try {
       const current = await backend.listTabs("windows-smoke");
@@ -107,6 +106,11 @@ try {
   });
   const account = tabs.find((tab) => tab.url.includes("/account"));
   assert.ok(account, "Expected the already-running authenticated account tab");
+  const stopLive = backend.observeTab!(
+    "windows-smoke",
+    account.tabId,
+    (event) => liveEvents.push(event),
+  );
   const inspection = await retryDocumentInspection(() =>
     backend.inspect("windows-smoke", account.tabId),
   );

@@ -16,6 +16,7 @@ import {
   type ComputerKey,
   type ComputerTarget,
   MAX_COMPUTER_INSPECTION_CONTROLS,
+  selectComputerInspectionControls,
   type ZenXComputerBackend,
 } from "./computer-provider.js";
 import type { ZenXPluginManifestV2 } from "./types.js";
@@ -336,9 +337,13 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     const window = await this.#resolveWindow(target, signal);
     const inspectedWindow = await this.#inspectWindow(window, signal);
     const flattened = flattenElements(inspectedWindow.elements ?? []);
-    const controls = flattened
-      .filter((element) => usableSelector(element.selector))
-      .slice(0, MAX_COMPUTER_INSPECTION_CONTROLS);
+    const controls = selectComputerInspectionControls(
+      flattened.filter((element) => usableSelector(element.selector)),
+      (element) =>
+        element.isEnabled !== false &&
+        element.isOffscreen !== true &&
+        winAppFingerprint(element).actions.length > 0,
+    );
     const fingerprints = controls.map(winAppFingerprint);
     const observation = this.#observations.observe(
       computerTargetKey(target),

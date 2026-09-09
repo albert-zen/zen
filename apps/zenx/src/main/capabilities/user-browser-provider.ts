@@ -274,15 +274,13 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
   #backendCloseQueued = false;
   #closing = false;
   #nextSessionIncarnation = 1;
-  readonly #liveObservers = new Set<BrowserLiveObservationListener>();
-  #liveTarget?: { targetId: string; owner: UserBrowserAttachmentOwner };
-  #liveStop?: () => Promise<void>;
-  #liveGeneration = 0;
-  #liveStatus: BrowserLiveObservationEvent = {
-    type: "status",
-    status: "idle",
-    message: "Waiting for the Agent to use a browser tab.",
-  };
+  readonly #liveSubscriptions = new Set<{
+    sessionId: string;
+    tabId: string;
+    stop: () => void;
+    listener: BrowserLiveObservationListener;
+  }>();
+  #liveQueue: Promise<void> = Promise.resolve();
 
   constructor(
     client: UserBrowserCdpClient,
@@ -294,32 +292,74 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     );
   }
 
-  observeLive(listener: BrowserLiveObservationListener): () => void {
-    if (
-      this.#backendCloseQueued ||
-      this.#closing ||
-      this.#client.observeScreencast === undefined
-    ) {
+  observeTab(
+    sessionId: string,
+    tabId: string,
+    listener: BrowserLiveObservationListener,
+  ): () => void {
+    const { session } = this.#sessionTab(sessionId, tabId);
+    const observe = this.#client.observeScreencast;
+    if (this.#backendCloseQueued || this.#closing || observe === undefined) {
       listener({
         type: "status",
         status: "unavailable",
         message: "Live observation is unavailable for this Browser provider.",
       });
-      return () => undefined;
+      return () => {};
     }
-    this.#liveObservers.add(listener);
-    listener(this.#liveStatus);
-    if (this.#liveObservers.size === 1 && this.#liveTarget !== undefined) {
-      this.#replaceLiveScreencast();
+    for (const prior of [...this.#liveSubscriptions]) {
+      prior.listener({
+        type: "status",
+        status: "unavailable",
+        message: "Live observation moved to another Browser panel.",
+      });
+      prior.stop();
     }
     let active = true;
-    return () => {
-      if (!active) return;
-      active = false;
-      this.#liveObservers.delete(listener);
-      if (this.#liveObservers.size === 0)
-        void this.#stopLiveScreencast().catch(() => undefined);
+    let stop: (() => Promise<void>) | undefined;
+    const entry = {
+      sessionId,
+      tabId,
+      listener,
+      stop: () => {
+        active = false;
+        this.#liveSubscriptions.delete(entry);
+        this.#liveQueue = this.#liveQueue
+          .then(async () => {
+            await stop?.();
+          })
+          .catch(() => undefined);
+      },
     };
+    this.#liveSubscriptions.add(entry);
+    listener({
+      type: "status",
+      status: "connecting",
+      message: "Connecting to this thread's browser page...",
+    });
+    this.#liveQueue = this.#liveQueue.then(async () => {
+      if (!active) return;
+      try {
+        const dispose = await observe.call(
+          this.#client,
+          tabId,
+          this.#attachmentOwner(session),
+          (event) => {
+            if (active) listener(event);
+          },
+        );
+        if (!active) await dispose();
+        else stop = dispose;
+      } catch {
+        if (active)
+          listener({
+            type: "status",
+            status: "failed",
+            message: "The live browser view could not be connected.",
+          });
+      }
+    });
+    return entry.stop;
   }
 
   async listTabs(
@@ -535,7 +575,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       }
     });
     const result = await raceAbort(operation, signal);
-    this.#selectLiveTarget(session, result.tabId);
+
     return result;
   }
 
@@ -585,7 +625,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     });
     try {
       const result = await raceAbort(operation, signal);
-      this.#selectLiveTarget(session, tabId);
+
       return result;
     } catch (error) {
       if (
@@ -748,7 +788,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       };
     });
     const result = await raceAbort(operation, signal);
-    this.#selectLiveTarget(session, tabId);
+
     return result;
   }
 
@@ -868,15 +908,8 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       true,
     );
     await operation;
-    if (this.#liveTarget?.targetId === tabId) {
-      this.#liveTarget = undefined;
-      await this.#stopLiveScreencast();
-      this.#emitLive({
-        type: "status",
-        status: "idle",
-        message: "Waiting for the Agent to use a browser tab.",
-      });
-    }
+    for (const live of [...this.#liveSubscriptions])
+      if (live.sessionId === sessionId && live.tabId === tabId) live.stop();
     await this.#artifacts.clearScope(`${sessionId}/${tabId}`);
   }
 
@@ -962,15 +995,8 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       })
       .catch(() => undefined);
     const count = await closing;
-    if (this.#liveTarget?.owner.logicalSessionId === sessionId) {
-      this.#liveTarget = undefined;
-      await this.#stopLiveScreencast();
-      this.#emitLive({
-        type: "status",
-        status: "idle",
-        message: "Waiting for the Agent to use a browser tab.",
-      });
-    }
+    for (const live of [...this.#liveSubscriptions])
+      if (live.sessionId === sessionId) live.stop();
     return count;
   }
 
@@ -985,13 +1011,8 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         requestedSessionClosures,
       );
       this.#closing = true;
-      await this.#stopLiveScreencast();
-      this.#emitLive({
-        type: "status",
-        status: "unavailable",
-        message: "The Browser provider is no longer available.",
-      });
-      this.#liveObservers.clear();
+      for (const live of [...this.#liveSubscriptions]) live.stop();
+      await this.#liveQueue;
       let closeFailure: unknown;
       try {
         await this.#client.close();
@@ -1083,7 +1104,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     });
     try {
       const result = await raceAbort(operation, signal);
-      this.#selectLiveTarget(session, tabId);
+
       return result;
     } catch (error) {
       if (error instanceof UserBrowserDocumentChangedBeforeDispatchError) {
@@ -1106,81 +1127,6 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       }
       throw error;
     }
-  }
-
-  #selectLiveTarget(session: UserBrowserSession, targetId: string): void {
-    this.#liveTarget = {
-      targetId,
-      owner: this.#attachmentOwner(session),
-    };
-    if (this.#liveObservers.size > 0) this.#replaceLiveScreencast();
-  }
-
-  #replaceLiveScreencast(): void {
-    const observe = this.#client.observeScreencast;
-    const target = this.#liveTarget;
-    if (
-      observe === undefined ||
-      target === undefined ||
-      this.#liveObservers.size === 0
-    )
-      return;
-    const generation = ++this.#liveGeneration;
-    const previousStop = this.#liveStop;
-    this.#liveStop = undefined;
-    this.#emitLive({
-      type: "status",
-      status: "connecting",
-      message: "Connecting to the Agent's browser tab…",
-    });
-    void (async () => {
-      await previousStop?.();
-      if (generation !== this.#liveGeneration || this.#liveObservers.size === 0)
-        return;
-      const stop = await observe.call(
-        this.#client,
-        target.targetId,
-        target.owner,
-        (event) => {
-          if (generation === this.#liveGeneration) this.#emitLive(event);
-        },
-      );
-      if (
-        generation !== this.#liveGeneration ||
-        this.#liveObservers.size === 0
-      ) {
-        await stop();
-        return;
-      }
-      this.#liveStop = stop;
-    })().catch(() => {
-      if (generation !== this.#liveGeneration) return;
-      this.#emitLive({
-        type: "status",
-        status: "failed",
-        message: "The live browser view could not be connected.",
-      });
-    });
-  }
-
-  async #stopLiveScreencast(): Promise<void> {
-    this.#liveGeneration += 1;
-    const stop = this.#liveStop;
-    this.#liveStop = undefined;
-    await stop?.();
-  }
-
-  #emitLive(event: BrowserLiveObservationEvent): void {
-    if (event.type === "status") this.#liveStatus = event;
-    for (const observer of [...this.#liveObservers]) {
-      try {
-        observer(event);
-      } catch {
-        this.#liveObservers.delete(observer);
-      }
-    }
-    if (this.#liveObservers.size === 0)
-      void this.#stopLiveScreencast().catch(() => undefined);
   }
 
   #startOperation<T>(

@@ -148,6 +148,7 @@ export type HostEvent =
       generationToken: string;
       invocation: {
         callId: string;
+        threadId?: string;
         name: string;
         arguments: Record<string, unknown>;
         cwd: string;

@@ -102,6 +102,23 @@ export type ComputerKey =
 
 export const MAX_COMPUTER_INSPECTION_CONTROLS = 32;
 
+/** Preserve source order, reserving the bounded result for usable actions first. */
+export function selectComputerInspectionControls<T>(
+  controls: readonly T[],
+  actionable: (control: T) => boolean,
+): T[] {
+  if (controls.length <= MAX_COMPUTER_INSPECTION_CONTROLS) return [...controls];
+  const flags = controls.map(actionable);
+  const selected = new Set<number>();
+  for (const priority of [true, false]) {
+    for (let index = 0; index < controls.length; index += 1) {
+      if (selected.size === MAX_COMPUTER_INSPECTION_CONTROLS) break;
+      if (flags[index] === priority) selected.add(index);
+    }
+  }
+  return controls.filter((_, index) => selected.has(index));
+}
+
 export const computerCapabilityManifest: ZenXPluginManifestV2 = {
   schemaVersion: 2,
   id: "computer",
@@ -499,9 +516,10 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
       operation: "inspect",
       target,
     })) as MacInspectionResult;
-    const boundedControls = result.controls.slice(
-      0,
-      MAX_COMPUTER_INSPECTION_CONTROLS,
+    const boundedControls = selectComputerInspectionControls(
+      result.controls,
+      (control) =>
+        control.enabled && canonicalComputerActions(control.actions).length > 0,
     );
     const observation = this.#observations.observe(
       computerTargetKey(target),

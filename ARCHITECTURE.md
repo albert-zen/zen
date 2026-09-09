@@ -216,6 +216,7 @@
   从准备到实际进程 spawn 的每个边界都重验当前 consent，已撤销的 signal 绝不启动全局输入 helper。
 - **ZenXCapabilityObservation** — ZenX provider 用短时、目标域绑定的 opaque ID 连接 observe→act，执行前按语义指纹
   重验且在导航、关闭、新观察或动作后失效；它是产品侧瞬时状态，不进入 Zen Core 或 durable journal。
+  Browser 在候选截断前排除无动作节点；Computer 各后端共用有界选择，优先保留可用语义动作，再以剩余名额保留文字上下文，返回仍按原观察顺序。
 - **ZenXUserBrowserAttachmentEpoch** — ZenX user-browser provider 用实际 CDP sessionId、target、逻辑 session owner 与
   attach attempt/incarnation 关联一次瞬时 attachment ownership，并在移除任何映射前把无法证明闭合的生命周期证据
   单调提升为有界 session taint；target 只在发布点原子授予一个逻辑 session/incarnation，且每次操作与清理都重验该
@@ -232,9 +233,10 @@
   Playwright、Peekaboo、WinApp 或适用平台的 bundled fallback；版本、权限与可用性只属于 host 配置和瞬时诊断，不进入 Zen Core。
 - **ZenXBrowserScreenshotArtifactStore** — ZenX provider 为一次最新 Browser observation 写入有界、短时、可清理的 PNG
   artifact，并把 observation identity 与 artifact metadata 一起投影；文件是外部瞬时观测，不进入 Zen Core 或 durable journal。
-- **ZenXBrowserLiveObservation** — ZenX user-browser provider 把 Agent 当前实际操作的同一 CDP target 作为
+- **ZenXBrowserLiveObservation** — ZenX user-browser provider 把当前线程面板选择的同一 CDP target 作为
   observer-scoped、只读、host-local 的有界 latest-frame/status 投影交给当前 renderer；它逐帧 ack、在无观察者、页面隐藏、
   target/document/provider 生命周期变化时停止，且不进入 plugin storage、Core、ItemList、ZAS protocol、磁盘或历史。
+- **ZenXBrowserThreadObservation** — Browser 插件沿可信工具上下文接收 threadId，在 Host 内将每线程的逻辑 session 隔离为独立 provider session，并把目标集合、最近观察截图和定向实时订阅投影到线程右栏；这些瞬时资源随 provider 退役失效，不从模型参数或当前选中线程推断归属，不增加会话历史权威。
 - **ZenXCapabilityTransientReset** — ZenX 主进程在 App Server/settings restart、provider replacement 或 close 时
   单调使 provider-owned artifacts 失效并重建可重建 backend；它不改写 canonical ItemList、Catalog lifecycle
   或 durable plugin data，也不成为第二个 runtime/coordinator。

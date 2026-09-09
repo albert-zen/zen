@@ -518,7 +518,13 @@ class ProfileProcessPluginPackage implements ZenXCapabilityPackage {
       invocationId: invocation.callId,
       tool: toolName,
       arguments: invocation.arguments,
-      context: { callId: invocation.callId, cwd: invocation.cwd },
+      context: {
+        callId: invocation.callId,
+        cwd: invocation.cwd,
+        ...(invocation.threadId === undefined
+          ? {}
+          : { threadId: invocation.threadId }),
+      },
       signal: invocation.signal,
     });
   }
@@ -561,7 +567,13 @@ class ProfileHttpPluginPackage implements ZenXCapabilityPackage {
       invocationId: invocation.callId,
       tool: toolName,
       arguments: invocation.arguments,
-      context: { callId: invocation.callId, cwd: invocation.cwd },
+      context: {
+        callId: invocation.callId,
+        cwd: invocation.cwd,
+        ...(invocation.threadId === undefined
+          ? {}
+          : { threadId: invocation.threadId }),
+      },
       signal: invocation.signal,
     });
   }
@@ -604,6 +616,9 @@ class ProfileTrustedPluginPackage implements ZenXCapabilityPackage {
       callId: invocation.callId,
       arguments: invocation.arguments,
       cwd: invocation.cwd,
+      ...(invocation.threadId === undefined
+        ? {}
+        : { threadId: invocation.threadId }),
       signal: invocation.signal,
     });
   }

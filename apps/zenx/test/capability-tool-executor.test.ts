@@ -45,6 +45,7 @@ test("real ZenX host composition preserves builtin and capability bundle identit
   });
   const capability = toolEnvironment.prepare({
     callId: "capability-call",
+    threadId: "thread-browser-owner",
     name: "fixture_inspect",
     arguments: { target: "one" },
     cwd: process.cwd(),
@@ -66,6 +67,7 @@ test("real ZenX host composition preserves builtin and capability bundle identit
   const request = events.find((event) => event.type === "capability/invoke");
   assert.equal(request?.type, "capability/invoke");
   if (request?.type !== "capability/invoke") throw new Error("missing request");
+  assert.equal(request.invocation.threadId, "thread-browser-owner");
   capabilityBundle.handleResult({
     type: "capability/result",
     invocationId: request.invocationId,

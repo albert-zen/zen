@@ -1,55 +1,90 @@
 import type {
-  BrowserLiveObservationEvent,
-  BrowserLiveObservationListener,
-} from "./capabilities/browser-provider.js";
-
+  BrowserThreadRequest,
+  BrowserThreadEvent,
+  BrowserThreadListener,
+} from "./capabilities/browser-thread-observation.js";
 export interface BrowserLiveObservationSource {
-  observeBrowserLive(listener: BrowserLiveObservationListener): () => void;
+  observeBrowserLive(
+    request: BrowserThreadRequest,
+    listener: BrowserThreadListener,
+  ): () => void;
 }
-
+export interface BrowserObservationEnvelope {
+  subscriptionId: string;
+  event: BrowserThreadEvent;
+}
 export interface BrowserLiveObservationRenderer {
   isDestroyed(): boolean;
-  send(channel: string, event: BrowserLiveObservationEvent): void;
+  send(channel: string, envelope: BrowserObservationEnvelope): void;
   on(event: "destroyed", listener: () => void): unknown;
   removeListener(event: "destroyed", listener: () => void): unknown;
 }
-
 export class BrowserLiveObservationIpcBridge {
   readonly #source: BrowserLiveObservationSource;
   readonly #eventChannel: string;
   readonly #subscriptions = new Map<
     BrowserLiveObservationRenderer,
-    { stop: () => void; destroyed: () => void }
+    { id: string; stop: () => void; destroyed: () => void }
   >();
-
   constructor(source: BrowserLiveObservationSource, eventChannel: string) {
     this.#source = source;
     this.#eventChannel = eventChannel;
   }
-
-  subscribe(renderer: BrowserLiveObservationRenderer): void {
+  subscribe(
+    renderer: BrowserLiveObservationRenderer,
+    subscriptionId: string,
+    request: BrowserThreadRequest,
+  ): void {
+    if (
+      typeof subscriptionId !== "string" ||
+      subscriptionId.length > 80 ||
+      !subscriptionId ||
+      !request ||
+      typeof request.threadId !== "string" ||
+      !request.threadId ||
+      request.threadId.length > 512 ||
+      typeof request.frames !== "boolean" ||
+      (request.targetId !== undefined &&
+        (typeof request.targetId !== "string" || request.targetId.length > 80))
+    )
+      throw new Error("Invalid Browser observation request");
     this.unsubscribe(renderer);
-    const destroyed = () => this.unsubscribe(renderer);
-    renderer.on("destroyed", destroyed);
+    const subscription = {
+      id: subscriptionId,
+      stop: () => {},
+      destroyed: () => this.unsubscribe(renderer),
+    };
+    this.#subscriptions.set(renderer, subscription);
+    renderer.on("destroyed", subscription.destroyed);
     try {
-      const stop = this.#source.observeBrowserLive((event) => {
-        if (!renderer.isDestroyed()) renderer.send(this.#eventChannel, event);
+      const stop = this.#source.observeBrowserLive(request, (event) => {
+        if (
+          this.#subscriptions.get(renderer) === subscription &&
+          !renderer.isDestroyed()
+        )
+          renderer.send(this.#eventChannel, { subscriptionId, event });
       });
-      this.#subscriptions.set(renderer, { stop, destroyed });
+      subscription.stop = stop;
+      if (this.#subscriptions.get(renderer) !== subscription) stop();
     } catch (error) {
-      renderer.removeListener("destroyed", destroyed);
+      this.unsubscribe(renderer, subscriptionId);
       throw error;
     }
   }
-
-  unsubscribe(renderer: BrowserLiveObservationRenderer): void {
+  unsubscribe(
+    renderer: BrowserLiveObservationRenderer,
+    subscriptionId?: string,
+  ): void {
     const subscription = this.#subscriptions.get(renderer);
-    if (subscription === undefined) return;
+    if (
+      !subscription ||
+      (subscriptionId !== undefined && subscriptionId !== subscription.id)
+    )
+      return;
     this.#subscriptions.delete(renderer);
     renderer.removeListener("destroyed", subscription.destroyed);
     subscription.stop();
   }
-
   close(): void {
     for (const renderer of [...this.#subscriptions.keys()])
       this.unsubscribe(renderer);

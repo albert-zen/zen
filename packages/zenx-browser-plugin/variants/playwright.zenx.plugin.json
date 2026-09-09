@@ -1,6 +1,6 @@
 {
   "id": "browser",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A cross-platform isolated Playwright CLI browser session with bounded ARIA inspection and native auto-waiting actions.",
   "provider": {
     "id": "playwright-cli",
@@ -290,14 +290,6 @@
         "surfaceId": "browser-page"
       }
     ],
-    "sidebar": [
-      {
-        "id": "browser",
-        "label": "Browser",
-        "icon": "layers",
-        "pageId": "browser",
-        "order": 5
-      }
-    ]
+    "sidebar": []
   }
 }

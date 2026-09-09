@@ -109,6 +109,9 @@ export class ZenXHostToolBundle implements ToolBundle {
           name: invocation.name,
           arguments: invocation.arguments,
           cwd: invocation.cwd,
+          ...(invocation.threadId === undefined
+            ? {}
+            : { threadId: invocation.threadId }),
         },
       });
     });

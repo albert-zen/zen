@@ -13,6 +13,7 @@ import type {
 import {
   COMPUTER_ACTION_PRESS,
   COMPUTER_ACTION_SET_VALUE,
+  selectComputerInspectionControls,
   type ComputerControlAction,
 } from "./computer-provider.js";
 import {
@@ -21,7 +22,6 @@ import {
 } from "./external-provider.js";
 
 const PEEKABOO_TIMEOUT_MS = 25_000;
-const MAX_PEEKABOO_CONTROLS = 32;
 
 interface PeekabooElement {
   id: string;
@@ -87,7 +87,10 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
     const elements = requiredArray(data, "ui_elements", "see.data").map(
       requirePeekabooElement,
     );
-    const selected = elements.slice(0, MAX_PEEKABOO_CONTROLS);
+    const selected = selectComputerInspectionControls(
+      elements,
+      (element) => peekabooElementActions(element).length > 0,
+    );
     const observationId = randomUUID();
     const targets = new Map<string, PeekabooObservedTarget>();
     const controls = selected.map((element) => {
@@ -485,7 +488,10 @@ function targetSummary(
 function peekabooElementActions(
   element: PeekabooElement,
 ): ComputerControlAction[] {
-  const editable = /text|search|combo/iu.test(element.role);
+  const editable =
+    /^(?:AX)?(?:TextField|SecureTextField|TextArea|SearchField|ComboBox)$/iu.test(
+      element.role,
+    );
   const actions: ComputerControlAction[] = [];
   if (element.is_actionable) actions.push(COMPUTER_ACTION_PRESS);
   if (editable) actions.push(COMPUTER_ACTION_SET_VALUE);

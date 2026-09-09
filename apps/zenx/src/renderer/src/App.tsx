@@ -1,3 +1,4 @@
+import { BrowserThreadPanel } from "./browser-thread-panel.js";
 import {
   useCallback,
   useEffect,
@@ -281,6 +282,9 @@ export function App() {
   }, [page]);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [browserPanels, setBrowserPanels] = useState<Record<string, boolean>>(
+    {},
+  );
   const editingProjectFocusWorkspace = useRef<string | null>(null);
   const [editingProject, setEditingProject] = useState<{
     workspace: string;
@@ -1638,6 +1642,20 @@ export function App() {
           <ConversationTitleBar
             onOpenSidebar={() => setSidebarOpen(true)}
             onOpenWorkspace={() => setWorkspaceOpen(true)}
+            browserEnabled={
+              pluginSnapshot?.plugins.some(
+                (plugin) =>
+                  plugin.id === "browser" && plugin.enabled && plugin.available,
+              ) ?? false
+            }
+            browserOpen={browserPanels[selectedSummary.threadId] === true}
+            onToggleBrowser={() =>
+              setBrowserPanels((current) => ({
+                ...current,
+                [selectedSummary.threadId]:
+                  current[selectedSummary.threadId] !== true,
+              }))
+            }
             onRename={renameSelectedThread}
             onRetryTitle={retrySelectedTitle}
             selectedSummary={selectedSummary}
@@ -1949,6 +1967,32 @@ export function App() {
             threadLoading={threadLoading}
           />
         )}
+        {page === "agent" &&
+        newThreadDraft === null &&
+        threadDetail !== null &&
+        selectedThreadId === threadDetail.id &&
+        pluginSnapshot?.plugins.some(
+          (plugin) =>
+            plugin.id === "browser" && plugin.enabled && plugin.available,
+        ) ? (
+          <BrowserThreadPanel
+            key={threadDetail.id}
+            threadId={threadDetail.id}
+            title={
+              selectedSummary === null
+                ? "Current thread"
+                : threadTitle(selectedSummary)
+            }
+            open={browserPanels[threadDetail.id]}
+            onOpenChange={(open) =>
+              setBrowserPanels((current) => ({
+                ...current,
+                [threadDetail.id]: open,
+              }))
+            }
+            providerRevision={pluginSnapshot}
+          />
+        ) : null}
       </main>
 
       {workspaceOpen && threadDetail !== null ? (
@@ -2070,6 +2114,9 @@ function WindowTitleBar({
 }
 
 function ConversationTitleBar({
+  browserEnabled,
+  browserOpen,
+  onToggleBrowser,
   onOpenSidebar,
   onOpenWorkspace,
   onRename,
@@ -2078,6 +2125,9 @@ function ConversationTitleBar({
   threadDetail,
   titleProjection,
 }: {
+  browserEnabled: boolean;
+  browserOpen: boolean;
+  onToggleBrowser(): void;
   onOpenSidebar(): void;
   onOpenWorkspace(): void;
   onRename(title: string): Promise<void>;
@@ -2113,6 +2163,22 @@ function ConversationTitleBar({
         </div>
       </div>
       <div className="top-actions">
+        {browserEnabled ? (
+          <button
+            id="thread-browser-toggle"
+            className="icon-button"
+            type="button"
+            aria-label={
+              browserOpen ? "Close browser panel" : "Open browser panel"
+            }
+            title="Browser"
+            aria-expanded={browserOpen}
+            disabled={threadDetail === null}
+            onClick={onToggleBrowser}
+          >
+            <Icon name="layers" />
+          </button>
+        ) : null}
         <button
           className="icon-button"
           type="button"

@@ -1192,12 +1192,18 @@ function installCapabilityIpc(
     capabilities,
     ipcChannels.browserLiveEvent,
   );
-  ipcMain.handle(ipcChannels.browserLiveSubscribe, (event) => {
-    browserLive.subscribe(event.sender);
-  });
-  ipcMain.handle(ipcChannels.browserLiveUnsubscribe, (event) => {
-    browserLive.unsubscribe(event.sender);
-  });
+  ipcMain.handle(
+    ipcChannels.browserLiveSubscribe,
+    (event, subscriptionId, request) => {
+      browserLive.subscribe(event.sender, subscriptionId, request);
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.browserLiveUnsubscribe,
+    (event, subscriptionId) => {
+      browserLive.unsubscribe(event.sender, subscriptionId);
+    },
+  );
   ipcMain.handle(ipcChannels.marketplaceGet, async () => {
     const builtIns = capabilities.marketplaceBuiltIns();
     try {

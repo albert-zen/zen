@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { JSDOM } from "jsdom";
 
 import {
   assertBrowserTabCapacity,
   BrowserZenXCapabilityPackage,
+  browserInspectScript,
+  browserActionScript,
   browserCapabilityManifest,
   browserPartitionName,
   MAX_BROWSER_TABS_GLOBAL,
@@ -216,7 +219,7 @@ test("browser advertises a cross-platform dedicated background-safe provider", (
   );
 });
 
-test("browser contributes its trusted observer-only product page", () => {
+test("browser keeps its legacy route without global sidebar navigation", () => {
   assert.deepEqual(browserCapabilityManifest.ui, {
     bundles: [
       {
@@ -243,15 +246,7 @@ test("browser contributes its trusted observer-only product page", () => {
         surfaceId: "browser-page",
       },
     ],
-    sidebar: [
-      {
-        id: "browser",
-        label: "Browser",
-        icon: "layers",
-        pageId: "browser",
-        order: 5,
-      },
-    ],
+    sidebar: [],
   });
 });
 
@@ -356,3 +351,45 @@ function invocation(arguments_: Record<string, unknown>) {
     signal: new AbortController().signal,
   };
 }
+
+test("DOM inspection keeps an actionable button after 80 disabled controls", () => {
+  const dom = new JSDOM(
+    `<style>* { opacity: 1 }</style>${"<button disabled>Disabled</button>".repeat(80)}<button>Run</button>`,
+    { runScripts: "outside-only" },
+  );
+  try {
+    dom.window.HTMLElement.prototype.getBoundingClientRect = () => ({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      width: 100,
+      height: 20,
+      right: 100,
+      bottom: 20,
+      toJSON() {
+        return {};
+      },
+    });
+    const inspection = dom.window.eval(browserInspectScript) as {
+      targets: BrowserTargetFingerprint[];
+    };
+    const button = inspection.targets.find(({ name }) => name === "Run");
+    assert.ok(button, "disabled controls must not exhaust the target budget");
+    assert.equal(inspection.targets.length, 1);
+    let clicked = false;
+    dom.window.document
+      .querySelector("button:not([disabled])")!
+      .addEventListener("click", () => {
+        clicked = true;
+      });
+    assert.equal(
+      (dom.window.eval(browserActionScript(button, "click")) as { ok: boolean })
+        .ok,
+      true,
+    );
+    assert.equal(clicked, true);
+  } finally {
+    dom.window.close();
+  }
+});

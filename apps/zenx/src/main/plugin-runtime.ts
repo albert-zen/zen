@@ -40,7 +40,7 @@ export interface PluginRuntimeInvocation {
   invocationId: string;
   tool: string;
   arguments: Record<string, unknown>;
-  context: { callId: string; cwd: string };
+  context: { callId: string; cwd: string; threadId?: string };
   signal: AbortSignal;
 }
 
@@ -312,7 +312,13 @@ export class PluginRuntimeSupervisor {
       invocationId: invocation.callId,
       tool: invocation.name,
       arguments: invocation.arguments,
-      context: { callId: invocation.callId, cwd: invocation.cwd },
+      context: {
+        callId: invocation.callId,
+        cwd: invocation.cwd,
+        ...(invocation.threadId === undefined
+          ? {}
+          : { threadId: invocation.threadId }),
+      },
       signal: invocation.signal,
     });
   }
@@ -425,7 +431,13 @@ class SupervisedPluginBundle implements ToolBundle {
       invocationId: invocation.callId,
       tool: invocation.name,
       arguments: invocation.arguments,
-      context: { callId: invocation.callId, cwd: invocation.cwd },
+      context: {
+        callId: invocation.callId,
+        cwd: invocation.cwd,
+        ...(invocation.threadId === undefined
+          ? {}
+          : { threadId: invocation.threadId }),
+      },
       signal: invocation.signal,
     });
   }
@@ -1230,6 +1242,9 @@ export function bundledPackageRegistration(
                   name: invocation.tool,
                   arguments: invocation.arguments,
                   cwd: invocation.context.cwd,
+                  ...(invocation.context.threadId === undefined
+                    ? {}
+                    : { threadId: invocation.context.threadId }),
                   signal: invocation.signal,
                 },
                 hostSdk,

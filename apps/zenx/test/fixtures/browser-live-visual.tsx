@@ -1,91 +1,146 @@
-import React from "react";
+import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
-
-import type { BrowserLiveObservationEvent } from "../../src/main/capabilities/browser-provider.js";
-import { BrowserPage } from "../../src/renderer/src/bundled-browser-ui.js";
-import { Icon } from "../../src/renderer/src/icons.js";
+import type {
+  BrowserThreadEvent,
+  BrowserThreadRequest,
+} from "../../src/main/capabilities/browser-thread-observation.js";
+import { BrowserThreadPanel } from "../../src/renderer/src/browser-thread-panel.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
 
-const appearance = new URLSearchParams(location.search).get("appearance");
-const frameDelay = Number(
-  new URLSearchParams(location.search).get("frameDelay") ?? "0",
-);
 document.documentElement.dataset.appearance =
-  appearance === "light" ? "light" : "dark";
-
+  new URLSearchParams(location.search).get("appearance") ?? "dark";
+const subscriptions: Array<{
+  request: BrowserThreadRequest;
+  listener: (event: BrowserThreadEvent) => void;
+  active: boolean;
+}> = [];
+let frames: Record<string, string> = {};
+function publish(subscription: (typeof subscriptions)[number]) {
+  const { request, listener } = subscription;
+  const targets = [1, 2].map((index) => ({
+    id: `${request.threadId}-${index}`,
+    sessionId: "work",
+    tabId: `tab-${index}`,
+    title: `${request.threadId} page ${index}`,
+    url: `https://${request.threadId}.example/${index}`,
+    loading: false,
+    mode: "snapshot" as const,
+  }));
+  listener({
+    type: "targets",
+    targets,
+    selectedId: request.targetId ?? targets[0]!.id,
+  });
+  listener({
+    type: "status",
+    status: "idle",
+    message: "Waiting for the Agent screenshot.",
+  });
+  if (request.frames && frames[request.threadId])
+    listener({
+      type: "snapshot",
+      data: frames[request.threadId]!,
+      mimeType: "image/png",
+      capturedAt: new Date().toISOString(),
+      width: 1280,
+      height: 720,
+    });
+}
 Object.defineProperty(window, "zenx", {
   value: {
     browserObservation: {
-      subscribe(listener: (event: BrowserLiveObservationEvent) => void) {
-        let active = true;
-        listener({
-          type: "status",
-          status: "connecting",
-          message: "Connecting to the Agent's browser tab…",
-        });
-        const image =
-          appearance === "light"
-            ? "/docs/assets/appearance/zenx-light-thread.jpg"
-            : "/docs/assets/appearance/zenx-dark-thread.jpg";
-        window.setTimeout(
-          () => {
-            void fetch(image)
-              .then(async (response) => await response.blob())
-              .then((blob) => {
-                const reader = new FileReader();
-                reader.addEventListener("load", () => {
-                  if (!active || typeof reader.result !== "string") return;
-                  listener({
-                    type: "status",
-                    status: "live",
-                    message: "Watching the Agent's browser tab live.",
-                  });
-                  listener({
-                    type: "frame",
-                    frame: {
-                      sequence: 1,
-                      mimeType: "image/jpeg",
-                      data: reader.result.split(",")[1] ?? "",
-                      width: 1600,
-                      height: 1000,
-                    },
-                  });
-                });
-                reader.readAsDataURL(blob);
-              });
-          },
-          Number.isFinite(frameDelay) ? Math.max(0, frameDelay) : 0,
-        );
+      subscribe(
+        request: BrowserThreadRequest,
+        listener: (event: BrowserThreadEvent) => void,
+      ) {
+        const subscription = { request, listener, active: true };
+        subscriptions.push(subscription);
+        publish(subscription);
         return () => {
-          active = false;
+          subscription.active = false;
         };
       },
     },
   },
 });
-
+Object.assign(window, {
+  browserFixture: {
+    subscriptions,
+    setFrames(value: Record<string, string>) {
+      frames = value;
+      subscriptions.filter((item) => item.active).forEach(publish);
+    },
+  },
+});
 function Harness() {
+  const [thread, setThread] = useState("Thread-A");
+  const [opened, setOpened] = useState<Record<string, boolean>>({});
   return (
-    <main className="product-page plugin-product-page">
-      <header className="page-header">
-        <div className="page-title">
-          <button className="icon-button mobile-menu" aria-label="Open sidebar">
-            <Icon name="tree" />
-          </button>
-          <div>
-            <h1>Browser</h1>
-            <p>Provided by browser</p>
-          </div>
-        </div>
+    <div
+      style={{
+        height: "100vh",
+        display: "grid",
+        gridTemplateRows: "52px minmax(0,1fr)",
+      }}
+    >
+      <header
+        className="page-header"
+        style={{ display: "flex", gap: 16, padding: "0 20px" }}
+      >
+        <strong>Browser thread panel verification</strong>
+        <button
+          onClick={() =>
+            setThread(thread === "Thread-A" ? "Thread-B" : "Thread-A")
+          }
+        >
+          Switch thread
+        </button>
+        <button
+          id="thread-browser-toggle"
+          onClick={() =>
+            setOpened((value) => ({ ...value, [thread]: !value[thread] }))
+          }
+        >
+          Toggle Browser
+        </button>
+        <span>{thread}</span>
       </header>
-      <div className="page-scroll plugin-page-scroll">
-        <section className="plugin-primary-surface">
-          <BrowserPage />
+      <main className="workspace" style={{ gridColumn: 1 }}>
+        <section className="agent-surface">
+          <div
+            style={{
+              padding: 28,
+              display: "flex",
+              flexDirection: "column",
+              gap: 24,
+            }}
+          >
+            <h2>Check two independent browser pages</h2>
+            <p>
+              The Browser panel belongs to this thread. Keep a draft while
+              changing pages or viewing the browser.
+            </p>
+            <textarea
+              aria-label="Message draft"
+              placeholder="Write a message…"
+              style={{ marginTop: "auto", width: "100%", minHeight: 120 }}
+              defaultValue="Draft stays here"
+            />
+          </div>
         </section>
-      </div>
-    </main>
+        <BrowserThreadPanel
+          key={thread}
+          threadId={thread}
+          title={thread}
+          open={opened[thread]}
+          onOpenChange={(open) =>
+            setOpened((value) => ({ ...value, [thread]: open }))
+          }
+          providerRevision="fixture"
+        />
+      </main>
+    </div>
   );
 }
-
 createRoot(document.getElementById("root")!).render(<Harness />);

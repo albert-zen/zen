@@ -85,16 +85,16 @@ test("attached document acquisition enables Runtime before reading the frame tre
 test("live observation acks every screencast frame and publishes only the bounded latest frame", async () => {
   const cdp = await createFakeCdpServer();
   const connection = await connectUserBrowserCdp(cdp.endpoint);
-  const backend = connection.backend as ZenXBrowserBackend & {
-    observeLive?(listener: (event: unknown) => void): () => void;
-  };
+  const backend = connection.backend;
   try {
-    assert.equal(typeof backend.observeLive, "function");
+    assert.equal(typeof backend.observeTab, "function");
     const events: unknown[] = [];
-    const unsubscribe = backend.observeLive!((event) => events.push(event));
 
     await backend.listTabs("work");
     await backend.inspect("work", "target-1");
+    let unsubscribe = backend.observeTab!("work", "target-1", (event) =>
+      events.push(event),
+    );
     await waitUntil(() => cdp.count("Page.startScreencast") === 1);
 
     for (let frame = 1; frame <= 64; frame += 1)
@@ -126,14 +126,14 @@ test("live observation acks every screencast frame and publishes only the bounde
 test("live observation fences document changes and becomes unavailable on exact detach", async () => {
   const cdp = await createFakeCdpServer();
   const connection = await connectUserBrowserCdp(cdp.endpoint);
-  const backend = connection.backend as ZenXBrowserBackend & {
-    observeLive?(listener: (event: unknown) => void): () => void;
-  };
+  const backend = connection.backend;
   try {
     const events: unknown[] = [];
-    const unsubscribe = backend.observeLive!((event) => events.push(event));
     await backend.listTabs("work");
     await backend.inspect("work", "target-1");
+    let unsubscribe = backend.observeTab!("work", "target-1", (event) =>
+      events.push(event),
+    );
     await waitUntil(() => cdp.count("Page.startScreencast") === 1);
 
     cdp.emitMainDocumentChange();
@@ -184,14 +184,14 @@ test("live observation fences document changes and becomes unavailable on exact 
 test("live observation acks and rejects oversized frames then recovers on the next Agent operation", async () => {
   const cdp = await createFakeCdpServer();
   const connection = await connectUserBrowserCdp(cdp.endpoint);
-  const backend = connection.backend as ZenXBrowserBackend & {
-    observeLive?(listener: (event: unknown) => void): () => void;
-  };
+  const backend = connection.backend;
   try {
     const events: unknown[] = [];
-    const unsubscribe = backend.observeLive!((event) => events.push(event));
     await backend.listTabs("work");
     await backend.inspect("work", "target-1");
+    let unsubscribe = backend.observeTab!("work", "target-1", (event) =>
+      events.push(event),
+    );
     await waitUntil(() => cdp.count("Page.startScreencast") === 1);
 
     cdp.emitRawScreencastFrame(
@@ -224,6 +224,10 @@ test("live observation acks and rejects oversized frames then recovers on the ne
     );
 
     await backend.inspect("work", "target-1");
+    unsubscribe();
+    unsubscribe = backend.observeTab!("work", "target-1", (event) =>
+      events.push(event),
+    );
     await waitUntil(() => cdp.count("Page.startScreencast") === 2);
     assert.equal(statuses().at(-1), "live");
     cdp.emitScreencastFrame("recovered", 2);
