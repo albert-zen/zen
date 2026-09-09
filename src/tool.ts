@@ -41,7 +41,11 @@ export interface ToolInvocation {
     waitForCompletion?: boolean;
   };
   /** Host-owned streaming sink; bytes emitted here must not be repeated in final output. */
-  taskContext?: { onOutput(text: string): void; requestYield?(): void };
+  taskContext?: {
+    onOutput(text: string): void;
+    onModelContent?(content: UserInput): void;
+    requestYield?(): void;
+  };
 }
 
 export interface ToolExecutionResult {

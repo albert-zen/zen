@@ -376,3 +376,70 @@ test("WAV and MP3 use the same immutable file store and reject corrupt, oversize
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("media explicitly emitted on wait is not also lifted into the original run_code receipt", async () => {
+  const attachment = await new InMemoryAttachmentStore().importBytes(png1x1());
+  const modelContent = [{ type: "image" as const, attachment }];
+  const items: CanonicalItem[] = [
+    {
+      ...base,
+      id: "p",
+      type: "tool_call",
+      callId: "program",
+      name: "run_code",
+      arguments: { code: "" },
+    },
+    {
+      ...base,
+      id: "p-r",
+      type: "tool_result",
+      callId: "program",
+      output: "running",
+      exitCode: 0,
+    },
+    {
+      ...base,
+      id: "c",
+      type: "tool_call",
+      callId: "child",
+      parentCallId: "program",
+      name: "view_image",
+      arguments: {},
+    },
+    {
+      ...base,
+      id: "c-r",
+      type: "tool_result",
+      callId: "child",
+      output: "image",
+      exitCode: 0,
+      modelContent,
+    },
+    {
+      ...base,
+      id: "w",
+      type: "tool_call",
+      callId: "wait",
+      name: "wait",
+      arguments: { task_id: "task" },
+    },
+    {
+      ...base,
+      id: "w-r",
+      type: "tool_result",
+      callId: "wait",
+      output: "completed",
+      exitCode: 0,
+      modelContent,
+    },
+  ];
+  const before = structuredClone(items);
+  const messages = compileModelMessages(items);
+  assert.equal(
+    messages
+      .flatMap((m) => (m.role === "tool" ? (m.modelContent ?? []) : []))
+      .filter((p) => p.type === "image").length,
+    1,
+  );
+  assert.deepEqual(items, before);
+});

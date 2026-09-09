@@ -30,7 +30,7 @@ export interface CodeRuntimeLimits {
 const DEFAULT_LIMITS: CodeRuntimeLimits = {
   maxOldGenerationSizeMb: 128,
   maxStackSizeMb: 4,
-  maxTextBytes: 256 * 1024,
+  maxTextBytes: 64 * 1024 * 1024,
   maxToolCalls: 64,
   maxStateValueBytes: 256 * 1024,
   maxStateBytes: 2 * 1024 * 1024,
@@ -58,6 +58,7 @@ export interface CodeExecutionOptions {
   tools?: readonly { name: string; description: string }[];
   storedValues?: Record<string, JsonValue>;
   onOutput?: (text: string) => void;
+  onMedia?: (media: CodeMediaDescriptor) => Promise<void>;
   onStore?: (key: string, value: JsonValue) => Promise<void>;
   onYield?: () => void;
 }
@@ -289,14 +290,31 @@ export class CodeRuntime {
               return;
             }
             result.media.push({ type: message.kind, value: message.value });
+            hostOperations = hostOperations.then(async () => {
+              try {
+                await options.onMedia?.({
+                  type: message.kind,
+                  value: message.value,
+                });
+              } catch (error) {
+                controller.abort(
+                  new CodeRuntimeError(
+                    "MEDIA_COMMIT_FAILED",
+                    describeError(error),
+                  ),
+                );
+              }
+            });
             return;
           }
           if (message.type === "yield") {
-            try {
-              options.onYield?.();
-            } catch (error) {
-              controller.abort(error);
-            }
+            hostOperations = hostOperations.then(() => {
+              try {
+                options.onYield?.();
+              } catch (error) {
+                controller.abort(error);
+              }
+            });
             return;
           }
           if (message.type === "store") {
@@ -530,6 +548,11 @@ export class CodeRuntime {
         };
       });
     } catch (error) {
+      await worker.terminate().catch(() => undefined);
+      await Promise.all([
+        hostOperations,
+        settleNestedOperations(nestedOperations),
+      ]);
       const failure =
         error instanceof CodeRuntimeError
           ? error
@@ -591,11 +614,27 @@ export class RunCodeToolRuntime implements CompositeToolRuntime {
     const taskContext = invocation.taskContext;
     let result: CodeExecutionResult;
     let failure: unknown;
+    const streamedMedia: UserInput[number][] = [];
+    const streamMedia =
+      context !== undefined && taskContext?.onModelContent !== undefined;
     try {
       result = await this.#runtime.execute({
         code,
         signal: invocation.signal,
         nested,
+        ...(streamMedia
+          ? {
+              onMedia: async (media: CodeMediaDescriptor) => {
+                try {
+                  const content = await context.resolveMedia([media]);
+                  streamedMedia.push(...content);
+                  taskContext.onModelContent!(content);
+                } catch (error) {
+                  failure ??= error;
+                }
+              },
+            }
+          : {}),
         ...(context === undefined
           ? {}
           : {
@@ -623,8 +662,14 @@ export class RunCodeToolRuntime implements CompositeToolRuntime {
               outputTruncated: false,
             };
     }
-    let modelContent: UserInput | undefined;
-    if (context?.resolveMedia !== undefined && result.media.length > 0) {
+    let modelContent: UserInput | undefined = streamMedia
+      ? streamedMedia
+      : undefined;
+    if (
+      !streamMedia &&
+      context?.resolveMedia !== undefined &&
+      result.media.length > 0
+    ) {
       const resolved: UserInput[number][] = [];
       for (const media of result.media) {
         try {
@@ -665,7 +710,7 @@ export class RunCodeToolRuntime implements CompositeToolRuntime {
       sourceTruncated: result.outputTruncated,
       contentType: "application/json",
       structuredContent,
-      ...(modelContent === undefined ? {} : { modelContent }),
+      ...(streamMedia || modelContent === undefined ? {} : { modelContent }),
     };
   }
 }

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { UserInput } from "./item.js";
 import {
   type ToolOutputSpool,
   DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES,
@@ -273,6 +274,7 @@ class Task {
   readonly #controller = new AbortController();
   readonly #listeners = new Set<() => void>();
   #window: ToolOutputWindow;
+  #modelContent: UserInput[number][] = [];
   #result: ToolExecutionResult | undefined;
   #error: unknown;
   #settled = false;
@@ -375,6 +377,11 @@ class Task {
         ...this.#invocation,
         signal: this.#controller.signal,
         taskContext: {
+          onModelContent: (content) => {
+            if (this.#closed) return;
+            this.#modelContent.push(...structuredClone(content));
+            this.#notify();
+          },
           requestYield: () => {
             this.#yieldRequested = true;
             this.#notify();
@@ -459,9 +466,27 @@ class Task {
       const status = this.status;
       this.#yieldRequested = false;
       const terminal = this.terminal;
-      if (quiet && this.#error !== undefined && !this.#window.hasOutput)
+      if (
+        quiet &&
+        this.#error !== undefined &&
+        !this.#window.hasOutput &&
+        this.#modelContent.length === 0
+      )
         throw this.#error;
-      const result = terminal ? this.#result : undefined;
+      const pendingContent = this.#modelContent;
+      this.#modelContent = [];
+      const originalResult = terminal ? this.#result : undefined;
+      const modelContent = [
+        ...pendingContent,
+        ...(originalResult?.modelContent ?? []),
+      ];
+      const result =
+        originalResult === undefined
+          ? undefined
+          : {
+              ...originalResult,
+              ...(modelContent.length === 0 ? {} : { modelContent }),
+            };
       const window = this.#window;
       this.#window = this.#newWindow();
       if (quiet && result !== undefined && !window.hasOutput) {
@@ -494,7 +519,7 @@ class Task {
         );
       }
       this.yielded = true;
-      return this.#receipt(status, capture, result);
+      return this.#receipt(status, capture, result, modelContent);
     } finally {
       release();
     }
@@ -506,6 +531,7 @@ class Task {
     status: Status,
     capture: Awaited<ReturnType<ToolOutputWindow["finish"]>>,
     result?: ToolExecutionResult,
+    modelContent = result?.modelContent,
   ): ToolExecutionResult {
     const terminal = ["completed", "failed", "timed_out", "cancelled"].includes(
       status,
@@ -548,9 +574,9 @@ class Task {
             ? {}
             : { result_content_type: result.contentType }),
         },
-        ...(result?.modelContent === undefined
+        ...(modelContent === undefined || modelContent.length === 0
           ? {}
-          : { modelContent: result.modelContent }),
+          : { modelContent }),
         ...(result?.sourceTruncated === undefined
           ? {}
           : { sourceTruncated: result.sourceTruncated }),

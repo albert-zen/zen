@@ -342,6 +342,22 @@ function withoutNestedToolLifecycle(
     }
   }
   if (nestedCalls.size === 0) return items;
+  // A yielded program can explicitly emit a child's media on a later wait.
+  // Do not also lift that same media back into its original parent receipt.
+  const explicitMedia = new Set<string>();
+  for (const item of items) {
+    if (
+      item.type !== "tool_result" ||
+      nestedCalls.has(`${item.turnId}\0${item.callId}`)
+    )
+      continue;
+    for (const part of item.modelContent ?? []) {
+      if (part.type !== "text")
+        explicitMedia.add(
+          `${item.turnId}\0${part.type}\0${part.attachment.sha256}`,
+        );
+    }
+  }
   const modelContentByParent = new Map<string, UserInput>();
   for (const item of items) {
     if (item.type !== "tool_result" || item.modelContent === undefined)
@@ -355,7 +371,13 @@ function withoutNestedToolLifecycle(
     }
     modelContentByParent.set(parent, [
       ...(modelContentByParent.get(parent) ?? []),
-      ...item.modelContent,
+      ...item.modelContent.filter(
+        (part) =>
+          part.type === "text" ||
+          !explicitMedia.has(
+            `${item.turnId}\0${part.type}\0${part.attachment.sha256}`,
+          ),
+      ),
     ]);
   }
   const projected: CanonicalItem[] = [];
