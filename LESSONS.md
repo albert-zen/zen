@@ -24,8 +24,8 @@
 - risk scoring、参数级 scope graph、permission rules engine 或复杂 sandbox 产品矩阵；
   用户已要求 Read Only / Workspace Write / Full Access 三档文件权限及切换，默认 Full Access。
   原有只做两档工具审批的阶段限制不再覆盖文件权限，兼容 `ask_unknown` 仍保留。
-- 把首版 `run_code` 宣传或实现成可运行 hostile code 的安全沙箱；它与 builtin shell
-  权限等同，Worker 的空环境、heap/time/output 限制和 termination 只负责运行 containment
+- 把 `run_code` 的受限语言能力宣传成可运行 hostile code 的完整安全沙箱；Worker/context
+  与资源限制负责工具编排边界和运行 containment
 - 按配置的秘密值替换或脱敏工具实际输出；head/tail 与临时文件是上下文节约策略，
   必须保留已捕获原文，不能借该策略改写真实内容
 - 把超长 tool output 临时文件变成 durable artifact store 或第二份会话权威；canonical
@@ -64,9 +64,8 @@
 
 ## 工程判断的教训
 
-- **运行 containment 不能冒充产品安全需求。** `run_code` 与 shell 权限等同时，fresh
-  Worker、资源上限和终止只解决失控执行；没有 hostile-code 隔离或逐操作企业审计需求时，
-  不应为了更强威胁模型改用受限 VM、封死文件/网络，或强迫所有机器操作再经过一层工具审批。
+- **语言能力与安全承诺分开。** run_code 为贴近模型熟悉的编排合同而不提供 Node/fs/network，
+  所有机器操作经同一 Tool Environment；这不自动构成敌意代码安全隔离承诺，也不需要第二套审批系统。
 - **阶段性实施顺序不能固化为长期非目标。** 在调用面尚未闭合时暂缓并发是合理顺序，
   但出现一次模型决策组合多个独立工具的真实需求后，应重审原前提，只保留有界、可取消、
   可从 canonical Items 重建等长期约束，不能继续用旧阶段限制产品能力。
