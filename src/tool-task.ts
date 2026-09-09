@@ -151,19 +151,30 @@ export class ToolTaskManager {
       "timeout_ms",
       86400000,
     );
-    const task = new Task(runtime, invocation, execute, {
-      ...this.#options,
-      timeoutMs,
-      onRelease: () => {
-        if (
-          options.resourceKey !== undefined &&
-          this.#resources.get(options.resourceKey) === task
-        )
-          this.#resources.delete(options.resourceKey);
-        options.release?.();
+    // Observe the task's own signal so parent abort, terminate and deadline
+    // cancellation all bound the guest wait without changing normal awaits.
+    let executionSignal!: AbortSignal;
+    const task = new Task(
+      runtime,
+      invocation,
+      (call) => {
+        executionSignal = call.signal;
+        return execute(call);
       },
-      onExpire: () => this.#tasks.delete(task.id),
-    });
+      {
+        ...this.#options,
+        timeoutMs,
+        onRelease: () => {
+          if (
+            options.resourceKey !== undefined &&
+            this.#resources.get(options.resourceKey) === task
+          )
+            this.#resources.delete(options.resourceKey);
+          options.release?.();
+        },
+        onExpire: () => this.#tasks.delete(task.id),
+      },
+    );
     this.#tasks.set(task.id, task);
     if (options.resourceKey !== undefined)
       this.#resources.set(options.resourceKey, task);
@@ -171,8 +182,25 @@ export class ToolTaskManager {
     const releaseObservation = task.acquireObservation();
     try {
       task.start();
-      if (invocation.task?.waitForCompletion) await task.completion;
-      else await task.observe(yieldMs, true);
+      if (invocation.task?.waitForCompletion) {
+        await new Promise<void>((resolve) => {
+          let timer: NodeJS.Timeout | undefined;
+          const done = () => {
+            executionSignal.removeEventListener("abort", abort);
+            if (timer !== undefined) clearTimeout(timer);
+            resolve();
+          };
+          const abort = () => {
+            timer ??= setTimeout(
+              done,
+              Math.min(300, this.#options.shutdownWaitMs),
+            );
+          };
+          executionSignal.addEventListener("abort", abort, { once: true });
+          if (executionSignal.aborted) abort();
+          void task.completion.then(done);
+        });
+      } else await task.observe(yieldMs, true);
       if (invocation.threadId === undefined && !task.terminal) {
         task.cancel(false);
         await task.observe(this.#options.shutdownWaitMs);

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { codeExecutionOptions } from "./code-options.js";
 import { codeStateFromItems, validateCodeStateWrite } from "./code-state.js";
 import { projectModelMessages } from "./model-content.js";
+import { TOOL_TASK_CONTENT_TYPE } from "./tool-task.js";
 
 import type {
   AgenticContextCompactionItem,
@@ -1042,10 +1043,9 @@ export class AgentRuntime {
             ),
             options.configuration.inputModalities,
           );
-          const result =
-            execution.admission === "inherited"
-              ? await waitForAbortGracefully(operation, execution.signal)
-              : await operation;
+          // The task manager bounds cancellation and owns the partial-output
+          // receipt. Racing it here would discard its live wait handle.
+          const result = await operation;
           outcome = {
             result,
             ...(execution.signal.aborted
@@ -1080,7 +1080,10 @@ export class AgentRuntime {
           };
         }
 
-        if (execution.signal.reason instanceof UnawaitedNestedToolCallError) {
+        if (
+          execution.signal.reason instanceof UnawaitedNestedToolCallError &&
+          outcome.result.contentType !== TOOL_TASK_CONTENT_TYPE
+        ) {
           outcome = {
             result: {
               output:
@@ -1149,6 +1152,9 @@ export class AgentRuntime {
             throw new Error(
               "Code media output requires the Host attachment store",
             );
+          // Guest outcomes deliberately precede FIFO canonical commits. Media
+          // references gain thread authorization only once those commits land.
+          await scheduler.drain(parent.callId);
           return await this.#resolveCodeMedia(media, options.thread.items);
         },
       },
@@ -1529,42 +1535,6 @@ async function waitForAbort<T>(
     if (signal.aborted) {
       abort();
     }
-    void operation.then(
-      (value) => {
-        cleanup();
-        resolve(value);
-      },
-      (error: unknown) => {
-        cleanup();
-        reject(error);
-      },
-    );
-  });
-}
-
-async function waitForAbortGracefully<T>(
-  operation: Promise<T>,
-  signal: AbortSignal,
-  graceMs = 300,
-): Promise<T> {
-  return await new Promise<T>((resolve, reject) => {
-    let timer: NodeJS.Timeout | undefined;
-    const abort = (): void => {
-      if (timer !== undefined) return;
-      timer = setTimeout(() => {
-        cleanup();
-        reject(
-          signal.reason ??
-            new DOMException("The operation was aborted", "AbortError"),
-        );
-      }, graceMs);
-    };
-    const cleanup = (): void => {
-      signal.removeEventListener("abort", abort);
-      if (timer !== undefined) clearTimeout(timer);
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    if (signal.aborted) abort();
     void operation.then(
       (value) => {
         cleanup();
