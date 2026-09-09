@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { JSDOM } from "jsdom";
-import { act, createElement } from "react";
+import * as React from "react";
 import { createRoot } from "react-dom/client";
 
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
@@ -16,6 +16,10 @@ import type {
   Thread,
 } from "../src/protocol-client/index.js";
 import { App } from "../src/renderer/src/App.js";
+import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
+import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
+const { act, createElement } = React;
+Object.assign(globalThis, { React });
 
 test("ignores an older Thread summary response after a newer refresh", async () => {
   const dom = new JSDOM(
@@ -172,16 +176,9 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
       request: async (method: string, params?: unknown) => {
         if (method === "model/list")
           return { data: [wireModel("fake")], nextCursor: null };
-        if (method === "thread/resume") {
+        if (method === "zen/thread/resume") {
           const threadId = (params as { threadId: string }).threadId;
-          return {
-            thread: resumedThread(threadId),
-            sandbox: { type: "dangerFullAccess" },
-            approvalPolicy: "never",
-            model: "fake",
-            modelProvider: "fake",
-            reasoningEffort: "medium",
-          };
+          return nativeRecoveryForThread(resumedThread(threadId));
         }
         throw new Error(`Unexpected protocol request: ${method}`);
       },
@@ -450,8 +447,9 @@ function failedTurn(
 }
 
 function wireModel(id: string) {
+  const wireId = encodeModelKey({ providerProfileId: "fake", modelId: id });
   return {
-    id,
+    id: wireId,
     model: id,
     upgrade: null,
     upgradeInfo: null,

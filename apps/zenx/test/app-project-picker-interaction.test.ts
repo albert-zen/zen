@@ -13,6 +13,7 @@ import type { ZenXImageDraft } from "../src/main/image-attachments.js";
 import type { ZenXProjectProjectionSnapshot } from "../src/main/project-projection.js";
 import type { ModelSummary, Thread } from "../src/protocol-client/index.js";
 import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
+import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 const {
@@ -564,7 +565,7 @@ test("New thread replaces a pending Thread resume with the local draft", async (
   };
   const harness = await mountApp(projects, {
     request: async (method) => {
-      if (method === "thread/resume") return await resumeResponse.promise;
+      if (method === "zen/thread/resume") return await resumeResponse.promise;
       throw new Error(`Unexpected protocol request: ${method}`);
     },
     startProjectThread: async (workspace) => {
@@ -913,7 +914,7 @@ test("selecting an existing Thread discards stale recovery", async () => {
       threads: async (archived) => (archived ? [] : [existing]),
       startProjectThread: async () => create.promise,
       request: async (method) => {
-        if (method === "thread/resume") return resumed(liveThread());
+        if (method === "zen/thread/resume") return resumed(liveThread());
         throw new Error(`Unexpected protocol request: ${method}`);
       },
     },
@@ -1714,7 +1715,7 @@ test("same-event-loop duplicate Send owns one title stage and turn request", asy
       return await titleResponse.promise;
     },
     request: async (method, params) => {
-      if (method === "thread/resume") return resumed(liveThread());
+      if (method === "zen/thread/resume") return resumed(liveThread());
       if (method === "turn/start") {
         turnStartRequests.push(params);
         return {};
@@ -1740,10 +1741,6 @@ test("same-event-loop duplicate Send owns one title stage and turn request", asy
 });
 
 test("deleted Provider history stays readable and requires an explicit model switch before Send", async () => {
-  const oldModel = encodeModelKey({
-    providerProfileId: "deleted-provider",
-    modelId: "old-model",
-  });
   const replacement = encodeModelKey({
     providerProfileId: "fake",
     modelId: "gpt-5.6-luna",
@@ -1753,13 +1750,12 @@ test("deleted Provider history stays readable and requires an explicit model swi
   const harness = await mountThreadApp({
     models: [wireModel(replacement, true, "Replacement model")],
     request: async (method, params) => {
-      if (method === "thread/resume")
-        return {
-          ...resumed(liveThread()),
-          model: oldModel,
+      if (method === "zen/thread/resume")
+        return nativeRecoveryForThread(liveThread(), {
+          model: "old-model",
           modelProvider: "deleted-provider",
           reasoningEffort: "medium",
-        };
+        });
       if (method === "turn/start") {
         turnRequests.push(params);
         return {};
@@ -1811,7 +1807,7 @@ test("Composer keyboard and form routes do not duplicate one submit event", asyn
   const turnStartRequests: unknown[] = [];
   const harness = await mountThreadApp({
     request: async (method, params) => {
-      if (method === "thread/resume") return resumed(liveThread());
+      if (method === "zen/thread/resume") return resumed(liveThread());
       if (method === "turn/start") {
         turnStartRequests.push(params);
         return {};
@@ -1857,7 +1853,7 @@ test("running queue, soft steer and hard steer each own one pending admission", 
     const harness = await mountThreadApp({
       composerSendMode: mode,
       request: async (requestedMethod) => {
-        if (requestedMethod === "thread/resume")
+        if (requestedMethod === "zen/thread/resume")
           return resumed(runningThread());
         if (requestedMethod === method) {
           calls += 1;
@@ -1892,7 +1888,7 @@ test("failed Send preserves its draft and stable id for a deliberate retry", asy
   }> = [];
   const harness = await mountThreadApp({
     request: async (method, params) => {
-      if (method === "thread/resume") return resumed(liveThread());
+      if (method === "zen/thread/resume") return resumed(liveThread());
       if (method === "turn/start") {
         turnStartRequests.push(
           (params ?? {}) as { clientUserMessageId?: string },
@@ -1934,7 +1930,10 @@ test("failed Send preserves its draft and stable id for a deliberate retry", asy
 
 test("host recovery refreshes the selected Thread without clearing draft or local navigation", async () => {
   let statusListener: ((status: AppServerHostStatus) => void) | undefined;
+  let notificationListener:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
   let resumeCalls = 0;
+  const reconnected = deferred<ReturnType<typeof nativeRecoveryForThread>>();
   const harness = await mountThreadApp({
     onStatus: (listener) => {
       statusListener = listener;
@@ -1942,10 +1941,20 @@ test("host recovery refreshes the selected Thread without clearing draft or loca
         statusListener = undefined;
       };
     },
+    onNotification: (listener) => {
+      notificationListener = listener;
+      return () => {
+        notificationListener = undefined;
+      };
+    },
     request: async (method) => {
-      if (method === "thread/resume") {
+      if (method === "zen/thread/resume") {
         resumeCalls += 1;
-        return resumed(liveThread());
+        return resumeCalls === 1
+          ? nativeRecoveryForThread(liveThread(), {
+              processEpoch: "old-host",
+            })
+          : await reconnected.promise;
       }
       throw new Error(`Unexpected protocol request: ${method}`);
     },
@@ -1965,6 +1974,7 @@ test("host recovery refreshes the selected Thread without clearing draft or loca
       ),
     );
     assert.ok(statusListener);
+    assert.ok(notificationListener);
 
     await act(async () => {
       statusListener?.({ type: "reconnecting", attempt: 1, delayMs: 10 });
@@ -1973,6 +1983,36 @@ test("host recovery refreshes the selected Thread without clearing draft or loca
       await Promise.resolve();
     });
     await waitFor(() => resumeCalls === 2);
+    await act(async () => {
+      notificationListener?.("zen/thread/event", {
+        processEpoch: "new-host",
+        threadId: "thread-1",
+        watermark: 1,
+        event: {
+          type: "item_completed",
+          item: {
+            id: "new-host-message",
+            type: "agent_message",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            createdAt: new Date(20_000).toISOString(),
+            text: "Arrived after the recovery snapshot",
+          },
+        },
+      });
+      reconnected.resolve(
+        nativeRecoveryForThread(runningThread(), {
+          processEpoch: "new-host",
+          watermark: 0,
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.match(
+      document.body.textContent ?? "",
+      /Arrived after the recovery snapshot/u,
+    );
     assert.ok(
       document.querySelector<HTMLButtonElement>(
         '[aria-label="Close workspace"]',
@@ -2024,7 +2064,7 @@ test("conversation header omits usage while Composer owns context indicator and 
         },
       }),
       request: async (method) => {
-        if (method === "thread/resume")
+        if (method === "zen/thread/resume")
           return started(liveThread(), "/work/zen");
         throw new Error(`Unexpected protocol request: ${method}`);
       },
@@ -2114,7 +2154,7 @@ test("Sidebar archive clears the selected Chat and opens its Settings restore en
     },
     {
       request: async (method) => {
-        if (method === "thread/resume")
+        if (method === "zen/thread/resume")
           return {
             thread: liveThread(),
             model: "fake",
@@ -2185,7 +2225,7 @@ test("selected Sidebar archive fences Send until a failed response restores Chat
     },
     {
       request: async (method) => {
-        if (method === "thread/resume")
+        if (method === "zen/thread/resume")
           return {
             thread: liveThread(),
             model: "fake",
@@ -2276,7 +2316,7 @@ test("selected archive fences a submission already staging its title", async () 
     {
       observeTitle: async () => await titleResponse.promise,
       request: async (method) => {
-        if (method === "thread/resume")
+        if (method === "zen/thread/resume")
           return {
             thread: liveThread(),
             model: "fake",
@@ -2370,7 +2410,7 @@ test("duplicate selected archive shares one pending fence owner", async () => {
     },
     {
       request: async (method) => {
-        if (method === "thread/resume")
+        if (method === "zen/thread/resume")
           return {
             thread: liveThread(),
             model: "fake",
@@ -2541,12 +2581,11 @@ test("current permissions follow notifications even when the Thread list fails",
       return () => undefined;
     },
     request: async (method) => {
-      if (method === "thread/resume")
-        return {
-          ...started(liveThread(), "/work/zen"),
-          sandbox: { type: "readOnly" },
+      if (method === "zen/thread/resume")
+        return nativeRecoveryForThread(liveThread(), {
+          sandbox: "read-only",
           approvalPolicy: "on-request",
-        };
+        });
       throw new Error(`Unexpected ${method}`);
     },
   });
@@ -2655,16 +2694,32 @@ async function mountApp(
           };
         if (options.request !== undefined) {
           const result = await options.request(method, params);
-          // Navigation fixtures may override only model/turn fields; supply the
-          // remaining fields of a real resume response from the common fixture.
+          // Keep older scenario setup concise while exposing the native resume
+          // contract at the preload boundary.
           if (
-            method === "thread/resume" &&
+            method === "zen/thread/resume" &&
             typeof result === "object" &&
             result !== null &&
-            "thread" in result
+            "thread" in result &&
+            !("processEpoch" in result)
           ) {
             const thread = result.thread as Thread;
-            return { ...started(thread, thread.cwd ?? "/work/zen"), ...result };
+            const overrides = result as {
+              model?: string;
+              modelProvider?: string;
+              reasoningEffort?: string | null;
+            };
+            return nativeRecoveryForThread(thread, {
+              ...(overrides.model === undefined
+                ? {}
+                : { model: overrides.model }),
+              ...(overrides.modelProvider === undefined
+                ? {}
+                : { modelProvider: overrides.modelProvider }),
+              ...(overrides.reasoningEffort === undefined
+                ? {}
+                : { reasoningEffort: overrides.reasoningEffort }),
+            });
           }
           return result;
         }
@@ -2823,8 +2878,11 @@ function catalogModel(id: string) {
 }
 
 function wireModel(id: string, isDefault = false, displayName = id) {
+  const wireId = id.startsWith("zen-model-v1:")
+    ? id
+    : encodeModelKey({ providerProfileId: "fake", modelId: id });
   return {
-    id,
+    id: wireId,
     model: id,
     upgrade: null,
     upgradeInfo: null,
@@ -2924,12 +2982,14 @@ function runningThread(): Thread {
 }
 
 function resumed(thread: Thread) {
-  return { thread, model: "fake", modelProvider: "fake" };
+  return nativeRecoveryForThread(thread);
 }
 
 function started(thread: Thread, cwd: string) {
   return {
-    ...resumed({ ...thread, cwd }),
+    thread: { ...thread, cwd },
+    model: encodeModelKey({ providerProfileId: "fake", modelId: "fake" }),
+    modelProvider: "fake",
     approvalPolicy: "never" as const,
     approvalsReviewer: "user" as const,
     cwd,
@@ -3155,7 +3215,7 @@ test("Settings and thread navigation are mutually exclusive, including return to
         summary(false, "thread-2", "Thread two"),
       ],
       request: async (method, params) => {
-        if (method === "thread/resume")
+        if (method === "zen/thread/resume")
           return resumed({
             ...liveThread(),
             id: (params as { threadId: string }).threadId,

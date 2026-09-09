@@ -1,6 +1,7 @@
 import { BrowserThreadPanel } from "./browser-thread-panel.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
 import {
+  default as React,
   useCallback,
   useEffect,
   useId,
@@ -133,16 +134,38 @@ interface ThreadProjectionCacheEntry {
   thread: Thread;
   settings: SelectedThreadSettings;
   activeTurnNotifications: BufferedProtocolNotification[];
+  processEpoch: string | null;
+  watermark: number;
 }
 
 function replayThreadProjection(
   thread: Thread,
   settings: SelectedThreadSettings,
   notifications: readonly BufferedProtocolNotification[],
+  recovery: { processEpoch: string | null; watermark: number } | null = null,
 ): ThreadProjectionCacheEntry {
   let projectedThread = thread;
   let projectedSettings = settings;
+  let processEpoch = recovery?.processEpoch ?? null;
+  let watermark = recovery?.watermark ?? 0;
+  const replayed: BufferedProtocolNotification[] = [];
   for (const notification of notifications) {
+    if (notification.method === "zen/thread/event") {
+      const event = notification.params;
+      if (
+        (processEpoch !== null && event.processEpoch !== processEpoch) ||
+        event.watermark <= watermark
+      )
+        continue;
+      processEpoch = event.processEpoch;
+      watermark = event.watermark;
+    } else if (
+      processEpoch !== null &&
+      isLegacyTurnProjectionNotification(notification.method)
+    ) {
+      continue;
+    }
+    replayed.push(notification);
     projectedThread =
       notification.method === "zen/thread/event"
         ? applyNativeThreadEvent(projectedThread, notification.params.event)
@@ -165,7 +188,9 @@ function replayThreadProjection(
   return {
     thread: projectedThread,
     settings: projectedSettings,
-    activeTurnNotifications: activeTurnNotificationTail(notifications),
+    activeTurnNotifications: activeTurnNotificationTail(replayed),
+    processEpoch,
+    watermark,
   };
 }
 
@@ -182,7 +207,24 @@ function retainsActiveTurnNotification(
   return (
     method === "zen/thread/event" ||
     method === "thread/queue/updated" ||
+    method === "thread/settings/updated" ||
     method === "turn/started" ||
+    method === "item/started" ||
+    method === "item/agentMessage/delta" ||
+    method === "item/reasoning/summaryPartAdded" ||
+    method === "item/reasoning/summaryTextDelta" ||
+    method === "item/reasoning/textDelta" ||
+    method === "item/commandExecution/outputDelta" ||
+    method === "item/completed"
+  );
+}
+
+function isLegacyTurnProjectionNotification(
+  method: ServerNotificationMethod,
+): boolean {
+  return (
+    method === "turn/started" ||
+    method === "turn/completed" ||
     method === "item/started" ||
     method === "item/agentMessage/delta" ||
     method === "item/reasoning/summaryPartAdded" ||
@@ -226,9 +268,27 @@ function activeTurnNotificationTail(
 ): BufferedProtocolNotification[] {
   const tail: BufferedProtocolNotification[] = [];
   for (const notification of notifications) {
-    if (notification.method === "turn/completed") {
-      tail.length = 0;
+    if (
+      notification.method === "turn/completed" ||
+      (notification.method === "zen/thread/event" &&
+        notification.params.event.type === "turn_completed")
+    ) {
+      const independent = tail.filter(
+        (entry) =>
+          entry.method === "thread/queue/updated" ||
+          entry.method === "thread/settings/updated",
+      );
+      tail.splice(0, tail.length, ...independent);
     } else if (retainsActiveTurnNotification(notification.method)) {
+      if (
+        notification.method === "thread/queue/updated" ||
+        notification.method === "thread/settings/updated"
+      ) {
+        const previous = tail.findIndex(
+          (entry) => entry.method === notification.method,
+        );
+        if (previous !== -1) tail.splice(previous, 1);
+      }
       tail.push(notification);
     }
   }
@@ -243,9 +303,29 @@ function updateThreadProjectionCache(
   if (threadId === null) return undefined;
   const current = cache.get(threadId);
   if (current === undefined) return undefined;
-  const updated = replayThreadProjection(current.thread, current.settings, [
-    notification,
-  ]);
+  if (
+    notification.method === "zen/thread/event" &&
+    (notification.params.processEpoch !== current.processEpoch ||
+      notification.params.watermark <= current.watermark)
+  )
+    return current;
+  if (
+    current.processEpoch !== null &&
+    isLegacyTurnProjectionNotification(notification.method)
+  )
+    return current;
+  const updated = replayThreadProjection(
+    current.thread,
+    current.settings,
+    [notification],
+    {
+      processEpoch: current.processEpoch,
+      watermark:
+        notification.method === "zen/thread/event"
+          ? notification.params.watermark - 1
+          : current.watermark,
+    },
+  );
   const activeTurnNotifications = activeTurnNotificationTail([
     ...current.activeTurnNotifications,
     notification,
@@ -621,8 +701,7 @@ export function App() {
     discardRecoverableDraft();
     const epoch = ++selectionEpoch.current;
     const cached = threadProjectionCacheRef.current.get(threadId);
-    pendingResumeProjectionRef.current =
-      cached === undefined ? { epoch, threadId, notifications: [] } : null;
+    pendingResumeProjectionRef.current = { epoch, threadId, notifications: [] };
     confirmNewThreadDraft(null);
     const usageEpoch = ++threadUsageLoadEpoch.current;
     selectedThreadIdRef.current = threadId;
@@ -657,6 +736,10 @@ export function App() {
         projectNativeRecovery(result),
         settingsFromSnapshot(threadId, nativeSettingsSnapshot(result.thread)),
         notifications,
+        {
+          processEpoch: result.processEpoch,
+          watermark: result.watermark,
+        },
       );
       threadProjectionCacheRef.current.set(threadId, projected);
       setThreadDetail(projected.thread);
@@ -1234,6 +1317,7 @@ export function App() {
       const capabilityError = imageCapabilityMessage(
         providerProfiles,
         draftSettings,
+        models,
       );
       if (capabilityError !== null) {
         setModelUpdateError(capabilityError);
@@ -1286,6 +1370,8 @@ export function App() {
         thread: result.thread,
         settings: settingsFromSnapshot(createdThreadId, result),
         activeTurnNotifications: [],
+        processEpoch: null,
+        watermark: 0,
       };
       threadProjectionCacheRef.current.set(createdThreadId, createdProjection);
       setOptimisticSummary(optimisticThreadSummary(result, submission.text));
@@ -1410,6 +1496,7 @@ export function App() {
       const capabilityError = imageCapabilityMessage(
         providerProfiles,
         selectedSettings,
+        models,
       );
       if (capabilityError !== null) {
         setModelUpdateError(capabilityError);
@@ -2561,10 +2648,12 @@ function AgentSurface({
           imageCapabilityError={imageCapabilityMessage(
             providerProfiles,
             draftSettings,
+            models,
           )}
           imageCapabilityNotice={imageCapabilityNotice(
             providerProfiles,
             draftSettings,
+            models,
           )}
           modelDisabled={
             newThreadDraft.composer.submission?.status === "pending"
@@ -2607,10 +2696,12 @@ function AgentSurface({
             imageCapabilityError={imageCapabilityMessage(
               providerProfiles,
               selectedSettings,
+              models,
             )}
             imageCapabilityNotice={imageCapabilityNotice(
               providerProfiles,
               selectedSettings,
+              models,
             )}
             modelDisabled={!canChangeThreadModel(threadDetail)}
             modelError={

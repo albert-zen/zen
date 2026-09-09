@@ -7,16 +7,16 @@ import type {
 } from "../../protocol-client/index.js";
 import type { AppServerEvent } from "../../../../../src/app-server.js";
 import type { NativeThreadRecoverySnapshot } from "../../../../../src/protocol/native/recovery.js";
-import {
-  projectCommandStarted,
-  projectCompletedItem,
-  projectThread,
-} from "../../../../../src/protocol/codex/mapper.js";
+import type {
+  CanonicalItem,
+  ToolCallItem,
+  ToolResultItem,
+} from "../../../../../src/item.js";
 
 export function projectNativeRecovery(
   recovery: NativeThreadRecoverySnapshot,
 ): Thread {
-  let thread = projectThread(recovery.thread, { includeTurns: true });
+  let thread = projectNativeThread(recovery.thread);
   const canonicalItemIds = new Set(
     recovery.thread.items.map((item) => item.id),
   );
@@ -73,7 +73,7 @@ export function applyNativeThreadEvent(
   if (event.type === "model_catalog_updated") return thread;
   if (event.type === "thread_started") {
     return event.threadId === thread.id
-      ? projectThread(event.thread, { includeTurns: true })
+      ? projectNativeThread(event.thread)
       : thread;
   }
   if (event.type === "thread_name_updated") {
@@ -192,8 +192,8 @@ export function applyNativeThreadEvent(
     }
     const item =
       event.item.type === "tool_call"
-        ? projectCommandStarted(event.item, thread.cwd)
-        : projectCompletedItem(event.item);
+        ? projectNativeCommandStarted(event.item, thread.cwd)
+        : projectNativeCompletedItem(event.item);
     if (item === null || itemById(thread, item.id) !== undefined) return thread;
     const turnId = "turnId" in event.item ? event.item.turnId : undefined;
     if (turnId === undefined) return thread;
@@ -464,4 +464,260 @@ function updateCommandResult(
       ),
     })),
   };
+}
+
+function projectNativeThread(
+  snapshot: NativeThreadRecoverySnapshot["thread"],
+): Thread {
+  const metadata = snapshot.items.find(
+    (item) => item.type === "thread_metadata",
+  );
+  if (metadata === undefined) throw new Error("Thread has no metadata item");
+  const firstMessage = snapshot.items.find(
+    (item) => item.type === "user_message",
+  );
+  const createdAt = seconds(metadata.createdAt);
+  const deliveredClientIds = new Set(
+    snapshot.items.flatMap((item) =>
+      item.type === "user_message" && item.clientId !== undefined
+        ? [item.clientId]
+        : [],
+    ),
+  );
+  return {
+    id: snapshot.id,
+    sessionId: snapshot.id,
+    forkedFromId: null,
+    parentThreadId: null,
+    preview: firstMessage === undefined ? "" : userMessagePreview(firstMessage),
+    ephemeral: false,
+    isPinned: false,
+    modelProvider: snapshot.providerProfileId,
+    createdAt,
+    updatedAt: seconds(snapshot.items.at(-1)?.createdAt ?? metadata.createdAt),
+    recencyAt: null,
+    status: snapshot.turns.some((turn) => turn.status === "inProgress")
+      ? { type: "active", activeFlags: [] }
+      : { type: "idle" },
+    path: null,
+    cwd: snapshot.cwd,
+    cliVersion: "zen/0.1.0",
+    source: "appServer",
+    threadSource: null,
+    agentNickname: null,
+    agentRole: null,
+    gitInfo: null,
+    name: snapshot.name ?? null,
+    queuedMessages: snapshot.items.flatMap((item) =>
+      item.type === "user_message_queued" &&
+      !deliveredClientIds.has(item.clientId)
+        ? [
+            {
+              id: item.id,
+              clientId: item.clientId,
+              text: userInputText(item.input),
+              imageCount: item.input.filter((part) => part.type === "image")
+                .length,
+            },
+          ]
+        : [],
+    ),
+    turns: snapshot.turns.map((turn) => {
+      const started = turn.items.find((item) => item.type === "turn_started");
+      const terminal = [...turn.items]
+        .reverse()
+        .find(
+          (item) =>
+            item.type === "turn_completed" || item.type === "turn_aborted",
+        );
+      const failure = [...turn.items]
+        .reverse()
+        .find((item) => item.type === "failure");
+      const startedAt =
+        started === undefined ? null : seconds(started.createdAt);
+      const completedAt =
+        terminal === undefined ? null : seconds(terminal.createdAt);
+      return {
+        id: turn.id,
+        items: projectNativeItems(turn.items, snapshot.cwd),
+        itemsView: "full",
+        status: turn.status,
+        error:
+          failure?.type === "failure"
+            ? {
+                message: failure.message,
+                codexErrorInfo: null,
+                additionalDetails: null,
+              }
+            : null,
+        startedAt,
+        completedAt,
+        durationMs:
+          startedAt === null || completedAt === null
+            ? null
+            : Math.max(0, (completedAt - startedAt) * 1_000),
+      };
+    }),
+  };
+}
+
+function projectNativeItems(
+  items: readonly CanonicalItem[],
+  cwd: string,
+): ThreadItem[] {
+  const projected: ThreadItem[] = [];
+  const calls = new Map<string, { call: ToolCallItem; index: number }>();
+  for (const item of items) {
+    if (item.type === "tool_call") {
+      calls.set(item.callId, { call: item, index: projected.length });
+      projected.push(projectNativeCommandStarted(item, cwd));
+      continue;
+    }
+    if (item.type === "tool_result") {
+      const pending = calls.get(item.callId);
+      if (pending !== undefined) {
+        projected[pending.index] = projectNativeCommandCompleted(
+          pending.call,
+          item,
+          cwd,
+        );
+      }
+      continue;
+    }
+    const result = projectNativeCompletedItem(item);
+    if (result !== null) projected.push(result);
+  }
+  return projected;
+}
+
+function projectNativeCompletedItem(item: CanonicalItem): ThreadItem | null {
+  if (item.type === "user_message") {
+    return {
+      type: "userMessage",
+      id: item.id,
+      clientId: item.clientId ?? null,
+      content: [
+        { type: "text", text: userMessageText(item), text_elements: [] },
+      ],
+      ...(item.deliveryAfter === undefined
+        ? {}
+        : { deliveryAfter: item.deliveryAfter }),
+    };
+  }
+  if (item.type === "agent_message") {
+    return {
+      type: "agentMessage",
+      id: item.id,
+      text: item.text,
+      phase: "final_answer",
+      memoryCitation: null,
+    };
+  }
+  if (item.type === "reasoning") {
+    return {
+      type: "reasoning",
+      id: item.id,
+      ...(item.incomplete === true ? { status: "interrupted" as const } : {}),
+      summary: item.summary === undefined ? [] : [item.summary],
+      content:
+        item.contentVisibility === "public" ? [item.reasoningContent] : [],
+    };
+  }
+  return item.type === "tool_call"
+    ? projectNativeCommandStarted(item, "")
+    : null;
+}
+
+function projectNativeCommandStarted(
+  call: ToolCallItem,
+  cwd: string,
+): Extract<ThreadItem, { type: "commandExecution" }> {
+  return {
+    type: "commandExecution",
+    id: call.id,
+    pluginId: null,
+    scriptPath: null,
+    command:
+      call.name === "shell" && typeof call.arguments.command === "string"
+        ? call.arguments.command
+        : call.name === "run_code" && typeof call.arguments.code === "string"
+          ? call.arguments.code
+          : `${call.name} ${JSON.stringify(call.arguments)}`,
+    cwd,
+    processId: null,
+    source: "agent",
+    status: "inProgress",
+    commandActions: [],
+    aggregatedOutput: null,
+    exitCode: null,
+    durationMs: null,
+    toolName: call.name,
+    toolArguments: structuredClone(call.arguments),
+    callId: call.callId,
+    ...(call.modelResponseId === undefined
+      ? {}
+      : { modelResponseId: call.modelResponseId }),
+    ...(call.parentCallId === undefined
+      ? {}
+      : { parentCallId: call.parentCallId }),
+  };
+}
+
+function projectNativeCommandCompleted(
+  call: ToolCallItem,
+  result: ToolResultItem,
+  cwd: string,
+): Extract<ThreadItem, { type: "commandExecution" }> {
+  return {
+    ...projectNativeCommandStarted(call, cwd),
+    status: nativeCommandExecutionStatus(result),
+    aggregatedOutput: result.output,
+    exitCode: result.exitCode,
+    ...(result.contentType === undefined
+      ? {}
+      : {
+          contentType: result.contentType,
+          structuredContent: structuredClone(result.structuredContent),
+        }),
+  };
+}
+
+function nativeCommandExecutionStatus(
+  result: ToolResultItem,
+): "completed" | "failed" | "declined" {
+  if (result.executionStatus !== undefined) return result.executionStatus;
+  if (
+    (result.exitCode === 126 &&
+      result.output === "User declined this tool call.") ||
+    (result.exitCode === 130 &&
+      result.output === "User cancelled this tool call.")
+  )
+    return "declined";
+  return result.exitCode === 0 ? "completed" : "failed";
+}
+
+function userInputText(
+  input: readonly ({ type: "text"; text: string } | { type: "image" })[],
+): string {
+  return input
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join("\n");
+}
+
+function userMessageText(
+  item: Extract<CanonicalItem, { type: "user_message" }>,
+): string {
+  return item.text ?? userInputText(item.content);
+}
+
+function userMessagePreview(
+  item: Extract<CanonicalItem, { type: "user_message" }>,
+): string {
+  const text = userMessageText(item);
+  if (text.length > 0) return text;
+  return item.content?.some((part) => part.type === "image") ? "[Image]" : "";
+}
+
+function seconds(timestamp: string): number {
+  return Math.floor(new Date(timestamp).getTime() / 1_000);
 }
