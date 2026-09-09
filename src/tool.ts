@@ -361,6 +361,9 @@ export class ToolEnvironment {
           `Tool runtime ${runtime.name} specification name must match exactly`,
         );
       }
+      if (executionModeFor(runtime) === "parallel_safe") {
+        definition.description = `[parallel_safe] ${definition.description}`;
+      }
       return { runtime, definition };
     });
     const localNames = new Set<string>();

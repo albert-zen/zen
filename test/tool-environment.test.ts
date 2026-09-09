@@ -250,7 +250,10 @@ test("a prepared invocation keeps its exact runtime after bundle removal", async
   );
   assert.equal(preparedLeases, 1);
   assert.deepEqual(environment.definitions, [
-    environment.waitRuntime.specification,
+    {
+      ...environment.waitRuntime.specification,
+      description: `[parallel_safe] ${environment.waitRuntime.specification.description}`,
+    },
   ]);
   assert.deepEqual(await environment.execute(prepared), {
     output: "fixture result",

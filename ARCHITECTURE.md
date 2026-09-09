@@ -452,6 +452,8 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   canonical result commit 保持模型提交顺序，只有标记为 `parallel_safe` 的 runtime
   execution body 可以并发；`exclusive` 在前后形成 barrier。并发上限由 Host 配置，
   未声明模式时 fail-closed 为 `exclusive`。
+  Tool Environment 从同一 runtime 执行声明为可并发工具自动附加 `[parallel_safe]` 说明标记，
+  模型工具、生成 SDK 与 ALL_TOOLS 复用此说明；未标记默认独占，不新增 schema 或插件注册配置。
   builtin shell 支持直接及 nested Promise.all 并发；有数据依赖或写同一文件的命令由程序显式顺序 await。
 - 每条 canonical `tool_call` 必须恰好结算一条 canonical `tool_result`。prepare、
   Host admission、runtime execution 或 result normalization 的局部失败以简洁错误和

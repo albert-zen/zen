@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ModelTool } from "../src/model.js";
+import { ShellToolRuntime, ToolEnvironment } from "../src/tool.js";
+import { testToolRuntime } from "./tool-fixtures.js";
 import {
   buildToolPresentation,
   COMPACT_CONTEXT_NAME,
@@ -46,6 +48,46 @@ const ordinaryTools: ModelTool[] = [
     inputSchema: { type: "definitely-not-json-schema" },
   },
 ];
+
+test("runtime concurrency declarations reach both SDK and discovery descriptions", () => {
+  const parallel = testToolRuntime({
+    name: "read_rows",
+    description: "Read rows.",
+    executionMode: "parallel_safe",
+    execute: async () => ({ output: "", exitCode: 0 }),
+  });
+  const exclusive = testToolRuntime({
+    name: "edit_rows",
+    description: "Edit rows.",
+    execute: async () => ({ output: "", exitCode: 0 }),
+  });
+  const environment = new ToolEnvironment({
+    runtimes: [new ShellToolRuntime(), parallel, exclusive],
+  });
+  const snapshot = buildToolPresentation(
+    [...environment.definitions, createRunCodeModelTool([])],
+    "both",
+  );
+  for (const name of ["shell", "read_rows"]) {
+    assert.match(
+      snapshot.codeTools.find((tool) => tool.name === name)!.description,
+      /^\[parallel_safe\]/,
+    );
+    assert.match(
+      snapshot.modelTools.find((tool) => tool.name === name)!.description,
+      /^\[parallel_safe\]/,
+    );
+  }
+  assert.equal(
+    snapshot.codeTools.find((tool) => tool.name === "edit_rows")!.description,
+    "Edit rows.",
+  );
+  assert.match(
+    snapshot.modelTools.find((tool) => tool.name === "run_code")!.description,
+    /\[parallel_safe\] Read rows\./,
+  );
+  assert.equal(parallel.specification.description, "Read rows.");
+});
 
 test("presentation modes project one frozen ordinary-tool snapshot", () => {
   const definitions = structuredClone([
