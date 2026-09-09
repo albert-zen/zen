@@ -12,7 +12,7 @@ import {
 } from "react";
 
 import type { AttachmentRef } from "../../../../../src/attachment.js";
-import type { ThreadSnapshot } from "../../../../../src/app-server.js";
+import type { EffectiveThreadConfiguration } from "../../../../../src/thread.js";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
 import type {
@@ -174,6 +174,16 @@ function replayThreadProjection(
             notification.method,
             notification.params,
           );
+    if (
+      notification.method === "zen/thread/event" &&
+      notification.params.event.type === "thread_settings_updated" &&
+      notification.params.event.threadId === projectedSettings.threadId
+    ) {
+      projectedSettings = settingsFromSnapshot(
+        projectedSettings.threadId,
+        nativeSettingsSnapshot(notification.params.event.settings),
+      );
+    }
     if (notification.method === "thread/settings/updated") {
       const event =
         notification.params as ServerNotificationParams["thread/settings/updated"];
@@ -236,7 +246,7 @@ function isLegacyTurnProjectionNotification(
 }
 
 function nativeSettingsSnapshot(
-  snapshot: ThreadSnapshot,
+  snapshot: EffectiveThreadConfiguration,
 ): import("../../protocol-client/types.js").ThreadSettingsSnapshot {
   return {
     model: encodeModelKey(snapshot),

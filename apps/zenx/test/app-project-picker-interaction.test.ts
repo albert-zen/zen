@@ -2552,6 +2552,90 @@ test("serializes cross-row Pin mutations against the latest confirmed order", as
   }
 });
 
+test("existing Thread reasoning selection follows native settings events", async () => {
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  const projects = oneProject();
+  projects.projects[0]!.threadIds = ["thread-1"];
+  const model = wireModel("fake", true);
+  model.supportedReasoningEfforts.push({
+    reasoningEffort: "high",
+    description: "high",
+  });
+  const recovery = nativeRecoveryForThread(liveThread(), {
+    reasoningEffort: null,
+  });
+  const harness = await mountApp(projects, {
+    models: [model],
+    threads: async (archived) => (archived ? [] : [summary(false)]),
+    onNotification: (listener) => {
+      notify = listener;
+      return () => undefined;
+    },
+    request: async (method, params) => {
+      if (method === "zen/thread/resume") return recovery;
+      if (method === "thread/settings/update") {
+        assert.deepEqual(params, {
+          threadId: "thread-1",
+          model: model.id,
+          effort: "high",
+        });
+        notify?.("zen/thread/event", {
+          processEpoch: recovery.processEpoch,
+          threadId: "thread-1",
+          watermark: 1,
+          event: {
+            type: "thread_settings_updated",
+            threadId: "thread-1",
+            settings: { ...recovery.thread, reasoningEffort: "high" },
+          },
+        });
+        return {};
+      }
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    const row = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".thread-row"),
+    );
+    await invokeButtonClick(row);
+    await waitFor(() => document.querySelector("#thread-composer"));
+    const trigger = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".composer-model-trigger"),
+    );
+    await invokeButtonClick(trigger);
+    const reasoning = await waitFor(() =>
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      ).find((button) => button.textContent?.startsWith("Reasoning")),
+    );
+    await invokeButtonClick(reasoning);
+    const high = await waitFor(() =>
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+      ).find((button) => button.textContent === "High"),
+    );
+    await invokeButtonClick(high);
+    assert.match(trigger.textContent ?? "", /High/u);
+    await invokeButtonClick(trigger);
+    await invokeButtonClick(
+      await waitFor(() =>
+        Array.from(
+          document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+        ).find((button) => button.textContent?.startsWith("Reasoning")),
+      ),
+    );
+    assert.equal(
+      document.querySelector('[role="menuitemradio"][aria-checked="true"]')
+        ?.textContent,
+      "High",
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("current permissions follow notifications even when the Thread list fails", async () => {
   let notify:
     Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
