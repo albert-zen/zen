@@ -5994,8 +5994,8 @@ select:focus-visible {
   cursor: pointer;
 }
 .permission-control select:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 3px;
+  outline: none;
+  filter: brightness(1.15);
 }
 .permission-control select:disabled {
   cursor: default;

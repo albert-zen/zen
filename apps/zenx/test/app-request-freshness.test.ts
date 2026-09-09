@@ -176,6 +176,8 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
           const threadId = (params as { threadId: string }).threadId;
           return {
             thread: resumedThread(threadId),
+            sandbox: { type: "dangerFullAccess" },
+            approvalPolicy: "never",
             model: "fake",
             modelProvider: "fake",
             reasoningEffort: "medium",
