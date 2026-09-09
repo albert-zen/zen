@@ -208,7 +208,10 @@ try {
   const detached = await backend.closeSession("windows-smoke");
   await retry(async () =>
     liveEvents.some(
-      (event) => event.type === "status" && event.status === "idle",
+      (event) =>
+        event.type === "status" &&
+        event.status === "unavailable" &&
+        event.message === "The observed browser tab is no longer attached.",
     )
       ? true
       : undefined,
