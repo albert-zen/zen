@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { UserInput } from "./item.js";
+import { validateUserInput, type UserInput } from "./item.js";
 import {
   type ToolOutputSpool,
   DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES,
@@ -379,6 +379,7 @@ class Task {
         taskContext: {
           onModelContent: (content) => {
             if (this.#closed) return;
+            validateUserInput(content, "$modelContent");
             this.#modelContent.push(...structuredClone(content));
             this.#notify();
           },
