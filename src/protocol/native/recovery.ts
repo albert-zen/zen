@@ -29,6 +29,9 @@ export type NativeProjectionEvent =
 interface ThreadProjectionState {
   watermark: number;
   events: NativeProjectedThreadEvent[];
+  readonly inFlightResumes: Map<symbol, number>;
+  pendingCompactionBoundary: number | undefined;
+  compacting: boolean;
 }
 
 /**
@@ -64,22 +67,33 @@ export class NativeRecoveryProjection {
      * consumers reconcile them by stable Item/Turn ids. Capturing the state
      * after readThread resolves is the single native resume boundary.
      */
-    const thread = await this.#appServer.readThread(threadId);
-    const state = this.#threads.get(threadId) ?? {
-      watermark: 0,
-      events: [],
-    };
-    const events = structuredClone(state.events);
-    state.events = state.events.filter(
-      (projected) => !eventRepresentedInSnapshot(projected.event, thread),
-    );
-    return {
-      processEpoch: this.processEpoch,
-      threadId,
-      watermark: state.watermark,
-      thread,
-      events,
-    };
+    const state = this.#state(threadId);
+    const resume = Symbol("native-resume");
+    const boundary = state.watermark;
+    state.inFlightResumes.set(resume, boundary);
+    try {
+      const thread = await this.#appServer.readThread(threadId);
+      const watermark = state.watermark;
+      const events = structuredClone(
+        state.events.filter(
+          (projected) =>
+            projected.watermark > boundary ||
+            !eventRepresentedInSnapshot(projected.event, thread),
+        ),
+      );
+      state.inFlightResumes.delete(resume);
+      this.#prune(state, thread, watermark);
+      return {
+        processEpoch: this.processEpoch,
+        threadId,
+        watermark,
+        thread,
+        events,
+      };
+    } catch (error) {
+      state.inFlightResumes.delete(resume);
+      throw error;
+    }
   }
 
   close(): void {
@@ -99,10 +113,7 @@ export class NativeRecoveryProjection {
       return;
     }
     const threadId = eventThreadId(event);
-    const state = this.#threads.get(threadId) ?? {
-      watermark: 0,
-      events: [],
-    };
+    const state = this.#state(threadId);
     const projected: NativeProjectedThreadEvent = {
       processEpoch: this.processEpoch,
       threadId,
@@ -111,10 +122,110 @@ export class NativeRecoveryProjection {
     };
     state.watermark = projected.watermark;
     state.events.push(projected);
-    this.#threads.set(threadId, state);
     for (const listener of this.#listeners) {
       listener({ type: "thread_event", event: projected });
     }
+    if (eventEstablishesCanonicalBoundary(event)) {
+      this.#scheduleCompaction(threadId, state, projected.watermark);
+    }
+  }
+
+  #state(threadId: string): ThreadProjectionState {
+    let state = this.#threads.get(threadId);
+    if (state === undefined) {
+      state = {
+        watermark: 0,
+        events: [],
+        inFlightResumes: new Map(),
+        pendingCompactionBoundary: undefined,
+        compacting: false,
+      };
+      this.#threads.set(threadId, state);
+    }
+    return state;
+  }
+
+  #scheduleCompaction(
+    threadId: string,
+    state: ThreadProjectionState,
+    boundary: number,
+  ): void {
+    state.pendingCompactionBoundary = Math.max(
+      state.pendingCompactionBoundary ?? 0,
+      boundary,
+    );
+    if (state.compacting) return;
+    state.compacting = true;
+    void this.#compact(threadId, state);
+  }
+
+  async #compact(
+    threadId: string,
+    state: ThreadProjectionState,
+  ): Promise<void> {
+    try {
+      while (state.pendingCompactionBoundary !== undefined) {
+        const boundary = state.pendingCompactionBoundary;
+        state.pendingCompactionBoundary = undefined;
+        try {
+          const thread = await this.#appServer.readThread(threadId);
+          if (this.#threads.get(threadId) !== state) return;
+          this.#prune(state, thread, boundary);
+        } catch {
+          // A later canonical event or resume retries pruning. Keeping the
+          // transient tail is safer than losing an unreconciled projection.
+        }
+      }
+    } finally {
+      state.compacting = false;
+      if (
+        this.#threads.get(threadId) === state &&
+        state.pendingCompactionBoundary !== undefined
+      ) {
+        this.#scheduleCompaction(
+          threadId,
+          state,
+          state.pendingCompactionBoundary,
+        );
+      }
+    }
+  }
+
+  #prune(
+    state: ThreadProjectionState,
+    thread: ThreadSnapshot,
+    boundary: number,
+  ): void {
+    let oldestResumeBoundary = Number.POSITIVE_INFINITY;
+    for (const resumeBoundary of state.inFlightResumes.values()) {
+      oldestResumeBoundary = Math.min(oldestResumeBoundary, resumeBoundary);
+    }
+    state.events = state.events.filter(
+      (projected) =>
+        projected.watermark > boundary ||
+        projected.watermark > oldestResumeBoundary ||
+        !eventRepresentedInSnapshot(projected.event, thread),
+    );
+  }
+}
+
+function eventEstablishesCanonicalBoundary(event: AppServerEvent): boolean {
+  switch (event.type) {
+    case "thread_started":
+    case "thread_archived_updated":
+    case "thread_name_updated":
+    case "thread_settings_updated":
+    case "turn_started":
+    case "item_completed":
+    case "turn_completed":
+      return true;
+    case "item_started":
+    case "item_delta":
+    case "reasoning_summary_delta":
+    case "reasoning_content_delta":
+    case "token_usage":
+    case "model_catalog_updated":
+      return false;
   }
 }
 

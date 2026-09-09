@@ -45,6 +45,101 @@ test("native recovery returns one epoch, a thread watermark, and projected activ
   }
 });
 
+test("native resume omits completed deltas accumulated without an earlier resume", async () => {
+  const host = createHostedAppServer({
+    cwd: process.cwd(),
+    dataDirectory: "/tmp/unused-native-recovery-compaction",
+    model: "fake",
+    models: ["fake"],
+    approvalPolicy: "never",
+    provider: { type: "fake" },
+    journal: new InMemoryThreadJournal(),
+  });
+  const recovery = new NativeRecoveryProjection(host, {
+    processEpoch: "epoch-compaction",
+  });
+  try {
+    const thread = await host.startThread();
+    for (let turn = 0; turn < 4; turn += 1) {
+      await (
+        await host.startTurn(thread.id, `completed ${String(turn)}`)
+      ).done;
+    }
+
+    const resumed = await recovery.resume(thread.id);
+
+    assert.equal(resumed.thread.turns.length, 4);
+    assert(resumed.thread.turns.every((turn) => turn.status === "completed"));
+    assert.deepEqual(resumed.events, []);
+    assert(resumed.watermark > 0);
+  } finally {
+    recovery.close();
+    await host.closeProviderTransport();
+  }
+});
+
+test("native resume retains a completed message that overlaps its older snapshot", async () => {
+  const host = createHostedAppServer({
+    cwd: process.cwd(),
+    dataDirectory: "/tmp/unused-native-recovery-overlap",
+    model: "fake",
+    models: ["fake"],
+    approvalPolicy: "never",
+    provider: { type: "fake" },
+    journal: new InMemoryThreadJournal(),
+  });
+  const recovery = new NativeRecoveryProjection(host, {
+    processEpoch: "epoch-overlap",
+  });
+  const thread = await host.startThread();
+  const originalReadThread = host.readThread.bind(host);
+  const readCaptured = deferred<void>();
+  const releaseRead = deferred<void>();
+  host.readThread = async (threadId) => {
+    const snapshot = await originalReadThread(threadId);
+    readCaptured.resolve();
+    await releaseRead.promise;
+    return snapshot;
+  };
+  try {
+    const pendingResume = recovery.resume(thread.id);
+    await readCaptured.promise;
+    const handle = await host.startTurn(thread.id, "overlapping completion");
+    await handle.done;
+    releaseRead.resolve();
+    const resumed = await pendingResume;
+
+    assert.equal(resumed.thread.turns.length, 0);
+    const completedMessage = resumed.events.find(
+      ({ event }) =>
+        event.type === "item_completed" && event.item.type === "agent_message",
+    );
+    assert(completedMessage !== undefined);
+    assert.equal(completedMessage.event.type, "item_completed");
+    assert.equal(completedMessage.event.item.type, "agent_message");
+    assert(completedMessage.event.item.text.length > 0);
+    assert(resumed.events.some(({ event }) => event.type === "turn_completed"));
+    assert.deepEqual(
+      resumed.events.map(({ watermark }) => watermark),
+      [...resumed.events.map(({ watermark }) => watermark)].sort(
+        (left, right) => left - right,
+      ),
+    );
+    assert(
+      resumed.events.every(
+        ({ processEpoch, watermark }) =>
+          processEpoch === resumed.processEpoch &&
+          watermark <= resumed.watermark,
+      ),
+    );
+  } finally {
+    host.readThread = originalReadThread;
+    releaseRead.resolve();
+    recovery.close();
+    await host.closeProviderTransport();
+  }
+});
+
 test("native resume replies before replaying only events newer than its watermark", async () => {
   const host = createHostedAppServer({
     cwd: process.cwd(),
@@ -139,3 +234,14 @@ test("native recovery starts a new watermark namespace for a new process epoch",
     await host.closeProviderTransport();
   }
 });
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value?: T): void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
