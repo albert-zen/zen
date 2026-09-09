@@ -807,3 +807,142 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+test("subscription discovery rejects old account results after account switch or logout", async () => {
+  for (const responseKind of ["remote", "cache", "offline"] as const) {
+    for (const nextAccount of ["account-b", undefined]) {
+      const directory = await mkdtemp(
+        path.join(os.tmpdir(), "zenx-catalog-account-"),
+      );
+      try {
+        const profileStore = new ZenXHostProfileStore(
+          path.join(directory, "profile.json"),
+        );
+        await profileStore.write(subscriptionProfile());
+        let account: string | undefined = "account-a";
+        const entered = deferred<void>();
+        const reply = deferred<Response>();
+        const cache = new OpenAiSubscriptionModelCache(
+          path.join(directory, "models-cache.json"),
+        );
+        await cache.store({
+          accountId: "account-a",
+          fetchedAt: Date.now(),
+          etag: '"a"',
+          models: [],
+        });
+        const service = new ZenXSettingsService({
+          userDataDirectory: directory,
+          zenDataDirectory: path.join(directory, "zen"),
+          profileStore,
+          vault: new ZenXCredentialVault(
+            path.join(directory, "vault"),
+            encryption,
+          ),
+          subscriptionModelCache: cache,
+          subscription: {
+            ...inactiveSubscription,
+            status: async () => ({
+              authenticated: account !== undefined,
+              expired: false,
+              accountId: account,
+            }),
+            acquireAccessLease: async () => ({
+              accessToken: subscriptionToken("account-a"),
+            }),
+          },
+          providerFetchFactory: () =>
+            Object.assign(
+              async () => {
+                entered.resolve();
+                return await reply.promise;
+              },
+              { close: async () => undefined },
+            ),
+        });
+        await service.initialize({});
+        const result = service.discoverProviderModels("openai-codex");
+        await entered.promise;
+        account = nextAccount;
+        if (responseKind === "offline") reply.reject(new Error("offline"));
+        else
+          reply.resolve(
+            responseKind === "cache"
+              ? new Response(null, { status: 304 })
+              : Response.json({ models: [] }),
+          );
+        await assert.rejects(result, /account.*changed/i);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
+  }
+});
+
+test("subscription discovery renews rejected tokens and honors same-account ETag cache", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-catalog-renew-"),
+  );
+  try {
+    const profileStore = new ZenXHostProfileStore(
+      path.join(directory, "profile.json"),
+    );
+    await profileStore.write(subscriptionProfile());
+    const cache = new OpenAiSubscriptionModelCache(
+      path.join(directory, "catalog.json"),
+    );
+    await cache.store({
+      accountId: "account-a",
+      fetchedAt: Date.now(),
+      etag: '"cached-a"',
+      models: [],
+    });
+    const first = subscriptionToken("account-a");
+    const renewed = first.replace(".signature", ".renewed");
+    let calls = 0;
+    let renewals = 0;
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      profileStore,
+      vault: new ZenXCredentialVault(path.join(directory, "vault"), encryption),
+      subscriptionModelCache: cache,
+      subscription: {
+        ...inactiveSubscription,
+        status: async () => ({
+          authenticated: true,
+          expired: false,
+          accountId: "account-a",
+        }),
+        acquireAccessLease: async () => ({ accessToken: first }),
+        renewAccessLease: async (rejected) => {
+          assert.equal(rejected, first);
+          renewals++;
+          return { accessToken: renewed };
+        },
+      },
+      providerFetchFactory: () =>
+        Object.assign(
+          async (_input: string | URL | Request, init?: RequestInit) => {
+            const headers = new Headers(init?.headers);
+            assert.equal(headers.get("if-none-match"), '"cached-a"');
+            assert.equal(
+              headers.get("authorization"),
+              `Bearer ${calls === 0 ? first : renewed}`,
+            );
+            calls++;
+            return new Response(null, { status: calls === 1 ? 401 : 304 });
+          },
+          { close: async () => undefined },
+        ),
+    });
+    await service.initialize({});
+    const snapshot = await service.discoverProviderModels("openai-codex");
+    assert.equal(snapshot.source, "cache");
+    assert.equal(snapshot.warning, undefined);
+    assert.equal(calls, 2);
+    assert.equal(renewals, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

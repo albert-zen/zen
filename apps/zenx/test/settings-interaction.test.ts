@@ -1770,3 +1770,46 @@ test("manual reasoning fills real defaults, preserves custom values across modes
     await unmount(harness);
   }
 });
+
+test("subscription discovery refreshes existing model metadata in the saved draft and preserves manual overrides", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.providerProfiles[0] = {
+    providerProfileId: "profile-alpha",
+    type: "openai-subscription",
+    displayName: "Alpha",
+    models: [
+      model("shared-model"),
+      { ...model("alpha-only"), source: "manual" },
+    ],
+  };
+  const official = {
+    ...model("shared-model"),
+    contextWindow: 300_000,
+    source: "discovered" as const,
+  };
+  let edited: ZenXProviderProfile | undefined;
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    discoverProvider: async () => ({
+      providerProfileId: "profile-alpha",
+      source: "remote",
+      models: [official, { ...official, id: "alpha-only" }],
+    }),
+    editProvider: async (_id, provider) => {
+      edited = provider;
+      return initial;
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Get available models"));
+    await click(exactButtonRequired("Save provider"));
+    assert.equal(edited?.models[0]?.contextWindow, 300_000);
+    assert.equal(edited?.models[0]?.source, "discovered");
+    assert.equal(edited?.models[1]?.contextWindow, 32_768);
+    assert.equal(edited?.models[1]?.source, "manual");
+  } finally {
+    await unmount(harness);
+  }
+});

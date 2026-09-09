@@ -1402,6 +1402,19 @@ function ProviderEditor({
                     .discoverProvider(provider.providerProfileId)
                     .then((snapshot) => {
                       setAvailableModels(snapshot.models);
+                      if (provider.type === "openai-subscription") {
+                        setModels((current) =>
+                          current.map((model) => {
+                            if (model.source === "manual") return model;
+                            const discovered = snapshot.models.find(
+                              (entry) => entry.id === model.id,
+                            );
+                            return discovered === undefined
+                              ? model
+                              : { ...discovered };
+                          }),
+                        );
+                      }
                       setSelectedAvailableModels([]);
                       setModelSearch("");
                       setCatalogStatus(
@@ -1409,7 +1422,7 @@ function ProviderEditor({
                           (snapshot.source === "cache"
                             ? "Official catalog is unchanged; using the local cache."
                             : snapshot.source === "remote"
-                              ? "Loaded the latest official model catalog."
+                              ? "Official metadata updated in the draft. Save provider to apply."
                               : null),
                       );
                     })

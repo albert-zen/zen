@@ -460,7 +460,7 @@ function readCachedSubscriptionCatalog(
         ]),
         defaultReasoningEffort: candidate.defaultReasoningEffort,
         inputModalities: Object.freeze([...candidate.inputModalities]),
-        contextWindow: candidate.contextWindow,
+        contextWindow: readPositiveInteger(candidate.contextWindow),
       }),
     );
   }

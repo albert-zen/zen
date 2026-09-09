@@ -536,10 +536,13 @@ export class ZenXSettingsService {
       warning: string,
       accountId?: string,
     ): Promise<ZenXProviderCatalogSnapshot> => {
+      signal.throwIfAborted();
       if (accountId !== undefined) {
+        await assertAccountCurrent(accountId);
         const cached = await this.#subscriptionModelCache.load(accountId);
         if (cached !== undefined) {
           await this.#assertSubscriptionDiscoveryCurrent(target);
+          await assertAccountCurrent(accountId);
           return {
             providerProfileId: target.provider.providerProfileId,
             models: merge(cached.models),
@@ -549,12 +552,25 @@ export class ZenXSettingsService {
         }
       }
       await this.#assertSubscriptionDiscoveryCurrent(target);
+      if (accountId !== undefined) await assertAccountCurrent(accountId);
       return {
         providerProfileId: target.provider.providerProfileId,
         models: merge(fallback),
         source: "fallback",
         warning,
       };
+    };
+    const assertAccountCurrent = async (
+      expectedAccountId: string,
+    ): Promise<void> => {
+      signal.throwIfAborted();
+      const current = await subscription.status();
+      signal.throwIfAborted();
+      if (!current.authenticated || current.accountId !== expectedAccountId) {
+        throw new Error(
+          "OpenAI subscription account changed during model discovery; try again",
+        );
+      }
     };
     if (subscription.acquireAccessLease === undefined) {
       const status = await subscription.status();
@@ -567,6 +583,7 @@ export class ZenXSettingsService {
     try {
       lease = await subscription.acquireAccessLease(signal);
     } catch (error) {
+      signal.throwIfAborted();
       const status = await subscription.status();
       return await fallbackSnapshot(
         describeDiscoveryError(error),
@@ -574,7 +591,7 @@ export class ZenXSettingsService {
       );
     }
     let accessToken = lease.accessToken;
-    let accountId = extractChatGptAccountId(accessToken);
+    const accountId = extractChatGptAccountId(accessToken);
     let cached = await this.#subscriptionModelCache.load(accountId);
     const fetch = this.#providerFetchFactory(undefined);
     try {
@@ -594,7 +611,12 @@ export class ZenXSettingsService {
         ) {
           lease = await subscription.renewAccessLease(accessToken, signal);
           accessToken = lease.accessToken;
-          accountId = extractChatGptAccountId(accessToken);
+          if (extractChatGptAccountId(accessToken) !== accountId) {
+            throw new Error(
+              "OpenAI subscription account changed during model discovery; try again",
+            );
+          }
+          await assertAccountCurrent(accountId);
           cached = await this.#subscriptionModelCache.load(accountId);
           result = await discoverOpenAiSubscriptionModels({
             accessToken,
@@ -613,6 +635,7 @@ export class ZenXSettingsService {
           );
         }
         await this.#assertSubscriptionDiscoveryCurrent(target);
+        await assertAccountCurrent(accountId);
         return {
           providerProfileId: target.provider.providerProfileId,
           models: merge(cached.models),
@@ -625,8 +648,10 @@ export class ZenXSettingsService {
         ...(result.etag === undefined ? {} : { etag: result.etag }),
         models: result.models,
       };
+      await assertAccountCurrent(accountId);
       await this.#subscriptionModelCache.store(catalog).catch(() => undefined);
       await this.#assertSubscriptionDiscoveryCurrent(target);
+      await assertAccountCurrent(accountId);
       return {
         providerProfileId: target.provider.providerProfileId,
         models: merge(result.models),
