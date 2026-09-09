@@ -212,6 +212,9 @@ export class CodeRuntime {
 
     let toolCalls = 0;
     const nestedOperations = new Set<Promise<void>>();
+    let nestedSettlement: Promise<void> | undefined;
+    const settleChildren = () =>
+      (nestedSettlement ??= settleNestedOperations(nestedOperations));
     const nestedRequests = new Map<string, NestedRequest>();
     const rejectedRequestIds = new Set<string>();
     let finalMessage:
@@ -236,10 +239,7 @@ export class CodeRuntime {
           abandonRequests(nestedRequests, controller.signal.reason);
           void worker.terminate();
           void (async () => {
-            await Promise.all([
-              settleNestedOperations(nestedOperations),
-              hostOperations,
-            ]);
+            await Promise.all([settleChildren(), hostOperations]);
             finish(() => reject(controller.signal.reason));
           })();
         };
@@ -519,10 +519,7 @@ export class CodeRuntime {
         });
 
         const settleAfterNested = async (): Promise<void> => {
-          await Promise.all([
-            settleNestedOperations(nestedOperations),
-            hostOperations,
-          ]);
+          await Promise.all([settleChildren(), hostOperations]);
           const message = finalMessage;
           if (message === undefined || settled || controller.signal.aborted)
             return;
@@ -549,10 +546,7 @@ export class CodeRuntime {
       });
     } catch (error) {
       await worker.terminate().catch(() => undefined);
-      await Promise.all([
-        hostOperations,
-        settleNestedOperations(nestedOperations),
-      ]);
+      await Promise.all([hostOperations, settleChildren()]);
       const failure =
         error instanceof CodeRuntimeError
           ? error
