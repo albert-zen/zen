@@ -284,7 +284,7 @@ test("settings publish across multiple tool rounds: old connection and null effo
             specification: {
               name: "ping",
               description: "Return a test response",
-              parameters: {
+              inputSchema: {
                 type: "object",
                 properties: {},
                 additionalProperties: false,

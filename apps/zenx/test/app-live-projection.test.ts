@@ -62,12 +62,6 @@ test("resume commits canonical state before auxiliary reads and replays catch-up
           type: "turn_started",
           threadId: "thread-1",
           turnId: "turn-1",
-          selection: {
-            providerProfileId: "fake",
-            modelId: "fake",
-            reasoningEffort: "medium",
-          },
-          createdAt: new Date(10_000).toISOString(),
         }),
       );
       notify?.(
@@ -171,12 +165,6 @@ test("keeps an inactive Thread's streaming projection when returning to it", asy
           type: "turn_started",
           threadId: "thread-1",
           turnId: "turn-1",
-          selection: {
-            providerProfileId: "fake",
-            modelId: "fake",
-            reasoningEffort: "medium",
-          },
-          createdAt: new Date(10_000).toISOString(),
         }),
       );
       notify?.(

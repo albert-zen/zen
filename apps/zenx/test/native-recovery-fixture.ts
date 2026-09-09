@@ -16,9 +16,11 @@ export function nativeRecoveryForThread(
 ): NativeThreadRecoverySnapshot {
   const providerProfileId = options.modelProvider ?? thread.modelProvider;
   const modelId = options.model ?? "fake";
-  const reasoningEffort = options.reasoningEffort ?? "medium";
+  const reasoningEffort =
+    options.reasoningEffort === undefined ? "medium" : options.reasoningEffort;
   const sandbox = options.sandbox ?? "danger-full-access";
-  const approvalPolicy = options.approvalPolicy ?? "never";
+  const approvalPolicy =
+    options.approvalPolicy === "on-request" ? "always" : "never";
   const createdAt = new Date(
     Math.max(1, thread.createdAt) * 1_000,
   ).toISOString();
