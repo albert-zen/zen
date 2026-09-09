@@ -251,6 +251,7 @@ export class ZenXProtocolClient {
       capabilities: null,
     });
     this.#send({ method: "initialized" });
+    await this.#rawRequest("zen/initialize", {});
   }
 
   async #rawRequest<M extends ClientRequestMethod>(

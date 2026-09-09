@@ -6,6 +6,7 @@ import {
 } from "./recovery.js";
 import {
   NATIVE_MODEL_CATALOG_UPDATED_METHOD,
+  NATIVE_INITIALIZE_METHOD,
   NATIVE_THREAD_EVENT_METHOD,
   NATIVE_THREAD_RESUME_METHOD,
 } from "./wire.js";
@@ -17,6 +18,7 @@ export class NativeConnection {
   readonly #barriers = new Map<string, NativeProjectedThreadEvent[]>();
   readonly #unsubscribe: () => void;
   #closed = false;
+  #nativeSession = false;
 
   constructor(options: {
     projection: NativeRecoveryProjection;
@@ -27,6 +29,7 @@ export class NativeConnection {
     this.#unsubscribe = this.#projection.subscribe((projected) => {
       if (this.#closed) return;
       if (projected.type === "model_catalog_updated") {
+        if (!this.#nativeSession) return;
         this.#send({
           method: NATIVE_MODEL_CATALOG_UPDATED_METHOD,
           params: {
@@ -50,6 +53,14 @@ export class NativeConnection {
 
   async receive(message: JsonRpcMessage): Promise<void> {
     if (this.#closed || !isRequest(message)) return;
+    if (message.method === NATIVE_INITIALIZE_METHOD) {
+      this.#nativeSession = true;
+      this.#send({
+        id: message.id,
+        result: { processEpoch: this.#projection.processEpoch },
+      });
+      return;
+    }
     if (message.method !== NATIVE_THREAD_RESUME_METHOD) {
       this.#send({
         id: message.id,
@@ -68,6 +79,7 @@ export class NativeConnection {
       return;
     }
     const threadId = message.params.threadId;
+    this.#nativeSession = true;
     if (this.#barriers.has(threadId)) {
       this.#send({
         id: message.id,

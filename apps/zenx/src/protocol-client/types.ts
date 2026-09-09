@@ -123,6 +123,7 @@ export type UserInputPart =
 
 export interface ClientRequestParams {
   initialize: InitializeParams;
+  "zen/initialize": Record<string, never>;
   "account/read": Record<string, never>;
   "skills/list": { cwds: string[] };
   "model/list": { cursor?: null };
@@ -177,6 +178,7 @@ export interface ClientRequestParams {
 
 export interface ClientRequestResults {
   initialize: InitializeResult;
+  "zen/initialize": { processEpoch: string };
   "account/read": { account: null; requiresOpenaiAuth: false };
   "skills/list": {
     data: Array<{ cwd: string; skills: unknown[]; errors: unknown[] }>;

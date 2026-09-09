@@ -1,6 +1,7 @@
 import type { ClientRequestMethod } from "./types.js";
 
 export const clientRequestMethods = [
+  "zen/initialize",
   "account/read",
   "skills/list",
   "model/list",

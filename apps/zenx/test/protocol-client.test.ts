@@ -390,7 +390,10 @@ test("a delayed server-request handler never replies on a successor socket", asy
         method?: string;
       };
       messages[index]!.push(message);
-      if (message.method === "initialize") {
+      if (
+        message.method === "initialize" ||
+        message.method === "zen/initialize"
+      ) {
         socket.send(JSON.stringify({ id: message.id, result: {} }));
       }
     });
