@@ -61,14 +61,6 @@ export interface CodeExecutionOptions {
   onStore?: (key: string, value: JsonValue) => Promise<void>;
   onYield?: () => void;
 }
-// Structural seam permits the engine slice to compile before the owner's port change.
-interface CodeContext {
-  tools: readonly { name: string; description: string }[];
-  storedValues: Record<string, JsonValue>;
-  store(key: string, value: JsonValue): Promise<void>;
-  resolveMedia?(media: readonly CodeMediaDescriptor[]): Promise<UserInput>;
-}
-
 export class CodeRuntimeError extends Error {
   result?: CodeExecutionResult;
   readonly code: string;
@@ -595,14 +587,8 @@ export class RunCodeToolRuntime implements CompositeToolRuntime {
         exitCode: 1,
       };
     }
-    const context = (
-      nested as NestedToolInvocationPort & { codeContext?: CodeContext }
-    ).codeContext;
-    const taskContext = invocation.taskContext as
-      | (NonNullable<ToolInvocation["taskContext"]> & {
-          requestYield?: () => void;
-        })
-      | undefined;
+    const context = nested.codeContext;
+    const taskContext = invocation.taskContext;
     let result: CodeExecutionResult;
     let failure: unknown;
     try {
@@ -639,11 +625,15 @@ export class RunCodeToolRuntime implements CompositeToolRuntime {
     }
     let modelContent: UserInput | undefined;
     if (context?.resolveMedia !== undefined && result.media.length > 0) {
-      try {
-        modelContent = await context.resolveMedia(result.media);
-      } catch (error) {
-        failure ??= error;
+      const resolved: UserInput[number][] = [];
+      for (const media of result.media) {
+        try {
+          resolved.push(...(await context.resolveMedia([media])));
+        } catch (error) {
+          failure ??= error;
+        }
       }
+      modelContent = resolved;
     }
     const structuredContent: Record<string, JsonValue> = {
       media:

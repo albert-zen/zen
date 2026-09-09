@@ -214,7 +214,7 @@ test("explicit media and text survive program failure; text-only request does no
           callId: "image-program",
           name: "run_code",
           arguments: {
-            code: `text("evidence-before-failure"); image(${JSON.stringify(data)}); throw new Error("expected-failure");`,
+            code: `text("evidence-before-failure"); image("invalid-media"); image(${JSON.stringify(data)}); throw new Error("expected-failure");`,
           },
         };
         return;
