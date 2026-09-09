@@ -1,37 +1,76 @@
-import { stripTypeScriptTypes } from "node:module";
 import { statSync } from "node:fs";
 import { MessageChannel, type MessagePort, Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 
 import {
   UnawaitedNestedToolCallError,
+  MAX_STRUCTURED_TOOL_RESULT_BYTES,
   type CompositeToolRuntime,
   type NestedToolObservation,
   type NestedToolInvocationPort,
   type ToolExecutionResult,
   type ToolInvocation,
 } from "./tool.js";
+import type { JsonValue, UserInput } from "./item.js";
 import { createRunCodeModelTool } from "./tool-presentation.js";
 
 export interface CodeRuntimeLimits {
-  wallTimeMs: number;
+  wallTimeMs?: number;
   maxOldGenerationSizeMb: number;
   maxStackSizeMb: number;
   maxTextBytes: number;
   maxToolCalls: number;
+  maxStateValueBytes: number;
+  maxStateBytes: number;
+  maxStateKeys: number;
+  maxStateWrites: number;
+  maxMediaBytes: number;
 }
 
 const DEFAULT_LIMITS: CodeRuntimeLimits = {
-  wallTimeMs: 30_000,
   maxOldGenerationSizeMb: 128,
   maxStackSizeMb: 4,
   maxTextBytes: 256 * 1024,
   maxToolCalls: 64,
+  maxStateValueBytes: 256 * 1024,
+  maxStateBytes: 2 * 1024 * 1024,
+  maxStateKeys: 128,
+  maxStateWrites: 1024,
+  maxMediaBytes: 4 * 1024 * 1024,
 };
 
 const NESTED_ABORT_SETTLEMENT_GRACE_MS = 350;
 
+export interface CodeMediaDescriptor {
+  type: "image" | "audio";
+  value: JsonValue;
+}
+export interface CodeExecutionResult {
+  text: string;
+  stateWrites: Record<string, JsonValue>;
+  media: CodeMediaDescriptor[];
+  outputTruncated: boolean;
+}
+export interface CodeExecutionOptions {
+  code: string;
+  signal: AbortSignal;
+  nested: NestedToolInvocationPort;
+  tools?: readonly { name: string; description: string }[];
+  storedValues?: Record<string, JsonValue>;
+  onOutput?: (text: string) => void;
+  onStore?: (key: string, value: JsonValue) => Promise<void>;
+  onYield?: () => void;
+}
+// Structural seam permits the engine slice to compile before the owner's port change.
+interface CodeContext {
+  tools: readonly { name: string; description: string }[];
+  storedValues: Record<string, JsonValue>;
+  store(key: string, value: JsonValue): Promise<void>;
+  resolveMedia?(media: readonly CodeMediaDescriptor[]): Promise<UserInput>;
+}
+
 export class CodeRuntimeError extends Error {
+  result?: CodeExecutionResult;
   readonly code: string;
 
   constructor(code: string, message: string, options: ErrorOptions = {}) {
@@ -47,9 +86,28 @@ export class CodeRuntime {
 
   constructor(options: Partial<CodeRuntimeLimits> & { workerUrl?: URL } = {}) {
     this.#limits = {
-      wallTimeMs: positiveInteger(
-        options.wallTimeMs,
-        DEFAULT_LIMITS.wallTimeMs,
+      ...(options.wallTimeMs === undefined
+        ? {}
+        : { wallTimeMs: positiveInteger(options.wallTimeMs, 1) }),
+      maxStateValueBytes: positiveInteger(
+        options.maxStateValueBytes,
+        DEFAULT_LIMITS.maxStateValueBytes,
+      ),
+      maxStateWrites: positiveInteger(
+        options.maxStateWrites,
+        DEFAULT_LIMITS.maxStateWrites,
+      ),
+      maxStateKeys: positiveInteger(
+        options.maxStateKeys,
+        DEFAULT_LIMITS.maxStateKeys,
+      ),
+      maxStateBytes: positiveInteger(
+        options.maxStateBytes,
+        DEFAULT_LIMITS.maxStateBytes,
+      ),
+      maxMediaBytes: positiveInteger(
+        options.maxMediaBytes,
+        DEFAULT_LIMITS.maxMediaBytes,
       ),
       maxOldGenerationSizeMb: positiveInteger(
         options.maxOldGenerationSizeMb,
@@ -75,9 +133,6 @@ export class CodeRuntime {
   /** Fail before Host startup succeeds when its exact Worker entry is unusable. */
   assertReady(): void {
     try {
-      if (typeof stripTypeScriptTypes !== "function") {
-        throw new Error("Node TypeScript stripping is unavailable");
-      }
       const workerPath = fileURLToPath(this.#workerUrl);
       if (!statSync(workerPath).isFile()) {
         throw new Error("entry is not a regular file");
@@ -91,52 +146,58 @@ export class CodeRuntime {
     }
   }
 
-  async execute(options: {
-    code: string;
-    signal: AbortSignal;
-    nested: NestedToolInvocationPort;
-  }): Promise<string> {
+  async execute(options: CodeExecutionOptions): Promise<CodeExecutionResult> {
     options.signal.throwIfAborted();
-    let stripped: string;
-    try {
-      stripped = stripGuestBody(options.code);
-    } catch (error) {
-      throw new CodeRuntimeError(
-        "TYPESCRIPT_STRIP_FAILED",
-        describeError(error),
-        {
-          cause: error,
-        },
-      );
-    }
+    const result: CodeExecutionResult = {
+      text: "",
+      stateWrites: {},
+      media: [],
+      outputTruncated: false,
+    };
+    let hostOperations = Promise.resolve();
+    let hostFailure = false;
+    let textBytes = 0;
+    let mediaBytes = 0;
+    let stateWrites = 0;
+    const storedValues = new Map(Object.entries(options.storedValues ?? {}));
 
     const controller = new AbortController();
     const forwardAbort = (): void => controller.abort(options.signal.reason);
     options.signal.addEventListener("abort", forwardAbort, { once: true });
-    const timeout = setTimeout(
-      () =>
-        controller.abort(
-          new CodeRuntimeError(
-            "WALL_TIME_LIMIT",
-            `Code execution exceeded ${String(this.#limits.wallTimeMs)} ms`,
-          ),
-        ),
-      this.#limits.wallTimeMs,
-    );
+    const timeout =
+      this.#limits.wallTimeMs === undefined
+        ? undefined
+        : setTimeout(
+            () =>
+              controller.abort(
+                new CodeRuntimeError(
+                  "WALL_TIME_LIMIT",
+                  `Code execution exceeded ${String(this.#limits.wallTimeMs)} ms`,
+                ),
+              ),
+            this.#limits.wallTimeMs,
+          );
 
     const channel = new MessageChannel();
     let worker: Worker;
     try {
       worker = new Worker(this.#workerUrl, {
         workerData: {
-          code: stripped,
+          code: options.code,
+          tools: options.tools ?? [],
+          storedValues: options.storedValues ?? {},
+          maxStateValueBytes: this.#limits.maxStateValueBytes,
+          maxStateBytes: this.#limits.maxStateBytes,
+          maxStateKeys: this.#limits.maxStateKeys,
+          maxStateWrites: this.#limits.maxStateWrites,
+          maxMediaBytes: this.#limits.maxMediaBytes,
           maxTextBytes: this.#limits.maxTextBytes,
           port: channel.port2,
         },
         transferList: [channel.port2],
         env: {},
         argv: [],
-        execArgv: [],
+        execArgv: ["--experimental-vm-modules"],
         stdout: true,
         stderr: true,
         resourceLimits: {
@@ -161,7 +222,7 @@ export class CodeRuntime {
     const nestedRequests = new Map<string, NestedRequest>();
     const rejectedRequestIds = new Set<string>();
     let finalMessage:
-      | { type: "completed"; text: string; unawaitedRequestIds: string[] }
+      | { type: "completed"; unawaitedRequestIds: string[] }
       | {
           type: "failed";
           code: string;
@@ -171,7 +232,7 @@ export class CodeRuntime {
       | undefined;
 
     try {
-      return await new Promise<string>((resolve, reject) => {
+      return await new Promise<CodeExecutionResult>((resolve, reject) => {
         let settled = false;
         const finish = (operation: () => void): void => {
           if (settled) return;
@@ -182,7 +243,10 @@ export class CodeRuntime {
           abandonRequests(nestedRequests, controller.signal.reason);
           void worker.terminate();
           void (async () => {
-            await settleNestedOperations(nestedOperations);
+            await Promise.all([
+              settleNestedOperations(nestedOperations),
+              hostOperations,
+            ]);
             finish(() => reject(controller.signal.reason));
           })();
         };
@@ -204,6 +268,96 @@ export class CodeRuntime {
                 ),
               ),
             );
+            return;
+          }
+          if (settled || controller.signal.aborted) return;
+          if (message.type === "text") {
+            const available = this.#limits.maxTextBytes - textBytes;
+            const delta = utf8Prefix(message.delta, available);
+            textBytes += Buffer.byteLength(delta);
+            result.text += delta;
+            result.outputTruncated ||=
+              message.truncated || delta !== message.delta;
+            try {
+              if (delta) options.onOutput?.(delta);
+            } catch (error) {
+              controller.abort(error);
+            }
+            return;
+          }
+          if (message.type === "media") {
+            mediaBytes += Buffer.byteLength(JSON.stringify(message.value));
+            if (mediaBytes > this.#limits.maxMediaBytes) {
+              controller.abort(
+                new CodeRuntimeError(
+                  "MEDIA_OUTPUT_LIMIT",
+                  "Media descriptors exceed byte limit",
+                ),
+              );
+              return;
+            }
+            result.media.push({ type: message.kind, value: message.value });
+            return;
+          }
+          if (message.type === "yield") {
+            try {
+              options.onYield?.();
+            } catch (error) {
+              controller.abort(error);
+            }
+            return;
+          }
+          if (message.type === "store") {
+            if (++stateWrites > this.#limits.maxStateWrites) {
+              controller.abort(
+                new CodeRuntimeError(
+                  "STATE_WRITE_LIMIT",
+                  "Stored state exceeds write limit",
+                ),
+              );
+              return;
+            }
+            const { key, value } = message;
+            storedValues.set(key, value);
+            if (
+              key.length < 1 ||
+              key.length > 160 ||
+              Buffer.byteLength(JSON.stringify(value)) >
+                this.#limits.maxStateValueBytes ||
+              storedValues.size > this.#limits.maxStateKeys ||
+              Buffer.byteLength(
+                JSON.stringify(Object.fromEntries(storedValues)),
+              ) > this.#limits.maxStateBytes
+            ) {
+              controller.abort(
+                new CodeRuntimeError(
+                  "STATE_LIMIT",
+                  "Stored state exceeds key or byte limit",
+                ),
+              );
+              return;
+            }
+            hostOperations = hostOperations.then(async () => {
+              if (hostFailure) return;
+              try {
+                await options.onStore?.(key, value);
+                Object.defineProperty(result.stateWrites, key, {
+                  value,
+                  enumerable: true,
+                  configurable: true,
+                  writable: true,
+                });
+              } catch (error) {
+                hostFailure = true;
+                controller.abort(
+                  new CodeRuntimeError(
+                    "STATE_COMMIT_FAILED",
+                    describeError(error),
+                    { cause: error },
+                  ),
+                );
+              }
+            });
             return;
           }
           if (message.type === "tool_call") {
@@ -355,9 +509,13 @@ export class CodeRuntime {
         });
 
         const settleAfterNested = async (): Promise<void> => {
-          await settleNestedOperations(nestedOperations);
+          await Promise.all([
+            settleNestedOperations(nestedOperations),
+            hostOperations,
+          ]);
           const message = finalMessage;
-          if (message === undefined || settled) return;
+          if (message === undefined || settled || controller.signal.aborted)
+            return;
           await worker.terminate();
           if (message.unawaitedRequestIds.length > 0) {
             finish(() =>
@@ -376,26 +534,20 @@ export class CodeRuntime {
             );
             return;
           }
-          if (
-            Buffer.byteLength(message.text, "utf8") > this.#limits.maxTextBytes
-          ) {
-            finish(() =>
-              reject(
-                new CodeRuntimeError(
-                  "TEXT_OUTPUT_LIMIT",
-                  `Explicit text exceeded ${String(this.#limits.maxTextBytes)} bytes`,
-                ),
-              ),
-            );
-            return;
-          }
-          finish(() =>
-            resolve(
-              message.text.length === 0 ? EMPTY_CODE_OUTPUT : message.text,
-            ),
-          );
+          finish(() => resolve(result));
         };
       });
+    } catch (error) {
+      const failure =
+        error instanceof CodeRuntimeError
+          ? error
+          : new CodeRuntimeError(
+              options.signal.aborted ? "ABORTED" : "EXECUTION_FAILED",
+              describeError(error),
+              { cause: error },
+            );
+      failure.result = result;
+      throw failure;
     } finally {
       clearTimeout(timeout);
       options.signal.removeEventListener("abort", forwardAbort);
@@ -429,49 +581,99 @@ export class RunCodeToolRuntime implements CompositeToolRuntime {
   ): Promise<ToolExecutionResult> {
     const keys = Object.keys(invocation.arguments);
     const code = invocation.arguments.code;
-    const description = invocation.arguments.description;
     if (
       typeof code !== "string" ||
       code.length === 0 ||
-      typeof description !== "string" ||
-      description.length === 0 ||
-      description.length > 160 ||
-      keys.some((key) => key !== "code" && key !== "description")
+      keys.some((key) => key !== "code")
     ) {
       return {
-        output:
-          "run_code requires exactly non-empty string code and a 1-160 character description",
+        output: "run_code requires exactly a non-empty string code",
         exitCode: 1,
       };
     }
+    const context = (
+      nested as NestedToolInvocationPort & { codeContext?: CodeContext }
+    ).codeContext;
+    const taskContext = invocation.taskContext as
+      | (NonNullable<ToolInvocation["taskContext"]> & {
+          requestYield?: () => void;
+        })
+      | undefined;
+    let result: CodeExecutionResult;
+    let failure: unknown;
     try {
-      return {
-        output: await this.#runtime.execute({
-          code,
-          signal: invocation.signal,
-          nested,
-        }),
-        exitCode: 0,
-      };
+      result = await this.#runtime.execute({
+        code,
+        signal: invocation.signal,
+        nested,
+        ...(context === undefined
+          ? {}
+          : {
+              tools: context.tools,
+              storedValues: context.storedValues,
+              onStore: (key: string, value: JsonValue) =>
+                context.store(key, value),
+            }),
+        ...(taskContext === undefined
+          ? {}
+          : { onOutput: (text: string) => taskContext.onOutput(text) }),
+        ...(taskContext?.requestYield === undefined
+          ? {}
+          : { onYield: () => taskContext.requestYield!() }),
+      });
     } catch (error) {
-      if (invocation.signal.aborted) throw error;
-      const codeValue =
-        error instanceof CodeRuntimeError ? error.code : "EXECUTION_FAILED";
-      return {
-        output: `run_code failed [${codeValue}]: ${describeError(error)}`,
-        exitCode: 1,
-      };
+      failure = error;
+      result =
+        error instanceof CodeRuntimeError && error.result !== undefined
+          ? error.result
+          : {
+              text: "",
+              stateWrites: {},
+              media: [],
+              outputTruncated: false,
+            };
     }
+    let modelContent: UserInput | undefined;
+    if (context?.resolveMedia !== undefined && result.media.length > 0) {
+      try {
+        modelContent = await context.resolveMedia(result.media);
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+    const structuredContent: Record<string, JsonValue> = {
+      media:
+        modelContent === undefined
+          ? result.media.map(({ type, value }) => ({ type, value }))
+          : (JSON.parse(JSON.stringify(modelContent)) as JsonValue),
+      outputTruncated: result.outputTruncated,
+    };
+    if (
+      Buffer.byteLength(JSON.stringify(structuredContent)) >
+      MAX_STRUCTURED_TOOL_RESULT_BYTES
+    ) {
+      structuredContent.media = [];
+      structuredContent.mediaDescriptorsOmitted = true;
+      failure ??= new Error(
+        "Unresolved media descriptors exceed the structured result limit; a Host media resolver is required",
+      );
+    }
+    const diagnostic =
+      failure === undefined
+        ? ""
+        : `run_code failed [${failure instanceof CodeRuntimeError ? failure.code : "EXECUTION_FAILED"}]: ${describeError(failure)}`;
+    const prefix = taskContext === undefined ? result.text : "";
+    return {
+      output:
+        prefix + (diagnostic ? (result.text ? "\n" : "") + diagnostic : "") ||
+        (result.text ? "" : EMPTY_CODE_OUTPUT),
+      exitCode: failure === undefined ? 0 : invocation.signal.aborted ? 130 : 1,
+      sourceTruncated: result.outputTruncated,
+      contentType: "application/json",
+      structuredContent,
+      ...(modelContent === undefined ? {} : { modelContent }),
+    };
   }
-}
-
-function stripGuestBody(code: string): string {
-  const prefix = "async function __zen_guest__() {\n";
-  const suffix = "\n}";
-  const stripped = stripTypeScriptTypes(`${prefix}${code}${suffix}`, {
-    mode: "strip",
-  });
-  return stripped.slice(prefix.length, -suffix.length);
 }
 
 function post(port: MessagePort, message: unknown): void {
@@ -479,6 +681,10 @@ function post(port: MessagePort, message: unknown): void {
 }
 
 type WorkerBridgeMessage =
+  | { type: "text"; delta: string; truncated: boolean }
+  | { type: "media"; kind: "image" | "audio"; value: JsonValue }
+  | { type: "store"; key: string; value: JsonValue }
+  | { type: "yield" }
   | {
       type: "tool_call";
       requestId: string;
@@ -486,7 +692,7 @@ type WorkerBridgeMessage =
       arguments: Record<string, unknown>;
     }
   | { type: "tool_observed"; requestId: string }
-  | { type: "completed"; text: string; unawaitedRequestIds: string[] }
+  | { type: "completed"; unawaitedRequestIds: string[] }
   | {
       type: "failed";
       code: string;
@@ -511,6 +717,33 @@ function decodeWorkerMessage(encoded: unknown): WorkerBridgeMessage {
     throw new Error("Worker message must be JSON text");
   const value = JSON.parse(encoded) as unknown;
   const message = requireRecord(value, "Worker message");
+  if (
+    message.type === "text" &&
+    typeof message.delta === "string" &&
+    typeof message.truncated === "boolean"
+  )
+    return { type: "text", delta: message.delta, truncated: message.truncated };
+  if (
+    message.type === "media" &&
+    (message.kind === "image" || message.kind === "audio") &&
+    message.value !== undefined
+  )
+    return {
+      type: "media",
+      kind: message.kind,
+      value: message.value as JsonValue,
+    };
+  if (
+    message.type === "store" &&
+    typeof message.key === "string" &&
+    message.value !== undefined
+  )
+    return {
+      type: "store",
+      key: message.key,
+      value: message.value as JsonValue,
+    };
+  if (message.type === "yield") return { type: "yield" };
   if (message.type === "tool_call") {
     return {
       type: "tool_call",
@@ -527,7 +760,6 @@ function decodeWorkerMessage(encoded: unknown): WorkerBridgeMessage {
   }
   if (message.type === "completed") {
     if (
-      typeof message.text !== "string" ||
       !Array.isArray(message.unawaitedRequestIds) ||
       !message.unawaitedRequestIds.every(
         (requestId) => typeof requestId === "string",
@@ -537,7 +769,6 @@ function decodeWorkerMessage(encoded: unknown): WorkerBridgeMessage {
     }
     return {
       type: "completed",
-      text: message.text,
       unawaitedRequestIds: message.unawaitedRequestIds,
     };
   }
@@ -636,4 +867,17 @@ function isWorkerOutOfMemory(error: Error): boolean {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function utf8Prefix(text: string, maxBytes: number): string {
+  if (Buffer.byteLength(text) <= maxBytes) return text;
+  let prefix = "",
+    bytes = 0;
+  for (const char of text) {
+    const size = Buffer.byteLength(char);
+    if (bytes + size > maxBytes) break;
+    prefix += char;
+    bytes += size;
+  }
+  return prefix;
 }

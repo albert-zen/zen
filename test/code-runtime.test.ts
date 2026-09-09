@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -88,7 +87,10 @@ async function executeCode(
   nested: NestedToolInvocationPort = noNestedTools,
   signal: AbortSignal = new AbortController().signal,
 ): Promise<string> {
-  return await new CodeRuntime(options).execute({ code, nested, signal });
+  return (
+    (await new CodeRuntime(options).execute({ code, nested, signal })).text ||
+    EMPTY_CODE_OUTPUT
+  );
 }
 
 function testDeferred<T>(): {
@@ -130,7 +132,7 @@ function oneRunCodeModel(code: string): ModelAdapter {
           type: "tool_call",
           callId: `outer-${String(sample)}`,
           name: "run_code",
-          arguments: { code, description: "test code" },
+          arguments: { code },
         };
       } else {
         yield { type: "text_delta", delta: "done" };
@@ -139,27 +141,15 @@ function oneRunCodeModel(code: string): ModelAdapter {
   };
 }
 
-test("public runtime seam executes TypeScript, Node authority, nested shell, and explicit text", async () => {
+test("public runtime seam executes isolated JavaScript, nested shell, and explicit text", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-run-code-tracer-"));
-  const file = path.join(root, "value.txt");
-  await writeFile(file, "filesystem-value", "utf8");
-  const network = createServer((_request, response) =>
-    response.end("loopback-value"),
-  );
-  await new Promise<void>((resolve) => network.listen(0, "127.0.0.1", resolve));
-  const address = network.address();
-  assert(address && typeof address === "object");
-
   const requests: ModelRequest[] = [];
   const code = `
-    const fs = await import("node:fs/promises");
-    const fromFile: string = await fs.readFile(${JSON.stringify(file)}, "utf8");
-    const response = await fetch("http://127.0.0.1:${String(address.port)}");
+    const processType = typeof process;
+    const fetchType = typeof fetch;
     const child = await tools.shell({ command: ${JSON.stringify(`${process.execPath} -e "process.stdout.write('child-value')"`)} });
-    console.log("not-model-visible");
-    process.stdout.write("also-not-model-visible");
-    text({ fromFile, fromNetwork: await response.text(), child: child.output });
-    return "return-is-not-output";
+    text({ processType, fetchType, child: child.output });
+    7;
   `;
   let sample = 0;
   const model: ModelAdapter = {
@@ -172,7 +162,7 @@ test("public runtime seam executes TypeScript, Node authority, nested shell, and
           type: "tool_call",
           callId: "outer-call",
           name: "run_code",
-          arguments: { code, description: "exercise the tracer" },
+          arguments: { code },
         };
       } else {
         yield { type: "text_delta", delta: "done" };
@@ -235,8 +225,8 @@ test("public runtime seam executes TypeScript, Node authority, nested shell, and
     );
     assert(outerResult && outerResult.type === "tool_result");
     assert.deepEqual(JSON.parse(outerResult.output), {
-      fromFile: "filesystem-value",
-      fromNetwork: "loopback-value",
+      processType: "undefined",
+      fetchType: "undefined",
       child: "child-value",
     });
     assert.deepEqual(
@@ -262,11 +252,7 @@ test("public runtime seam executes TypeScript, Node authority, nested shell, and
       ),
       false,
     );
-    assert.equal(await readFile(file, "utf8"), "filesystem-value");
   } finally {
-    await new Promise<void>((resolve, reject) =>
-      network.close((error) => (error ? reject(error) : resolve())),
-    );
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -303,7 +289,6 @@ test("a run_code Worker cannot guess a tool omitted from its frozen sample", asy
           name: "run_code",
           arguments: {
             code: `const result = await tools.hidden_tool({}); text(result);`,
-            description: "guess a hidden tool",
           },
         };
         yield {
@@ -423,24 +408,16 @@ test("direct calls use the sample name set even when the live registry changes",
   assert.match(result.output, /not available in this model sample/u);
 });
 
-test("only explicit lossless JSON text is visible", async () => {
+test("only explicit text is visible and nonstrings use JSON serialization", async () => {
   assert.equal(
-    await executeCode(
-      `console.log("hidden"); process.stderr.write("hidden"); return 7;`,
-    ),
+    await executeCode(`console.log("hidden"); 7;`),
     EMPTY_CODE_OUTPUT,
   );
   assert.equal(
     await executeCode(`text("first"); text({ value: 2 }); text([true, null]);`),
     'first\n{"value":2}\n[true,null]',
   );
-  await assert.rejects(
-    executeCode(`text(undefined);`),
-    (error: unknown) =>
-      error instanceof CodeRuntimeError &&
-      error.code === "EXECUTION_FAILED" &&
-      /not JSON-compatible/u.test(error.message),
-  );
+  assert.equal(await executeCode(`text(undefined);`), EMPTY_CODE_OUTPUT);
   assert.equal(
     await executeCode(`globalThis.__zen_run_marker = "set"; text("first");`),
     "first",
@@ -449,31 +426,26 @@ test("only explicit lossless JSON text is visible", async () => {
     await executeCode(`text(globalThis.__zen_run_marker ?? "fresh");`),
     "fresh",
   );
-  await assert.rejects(
-    executeCode(`text({ value: Number.NaN });`),
-    (error: unknown) =>
-      error instanceof CodeRuntimeError &&
-      error.code === "EXECUTION_FAILED" &&
-      /not lossless JSON/u.test(error.message),
+  assert.equal(
+    await executeCode(`text({ value: Number.NaN });`),
+    '{"value":null}',
   );
 });
 
-test("reports TypeScript strip errors, wall limits, output limits, and abort", async () => {
+test("rejects TypeScript, enforces wall limits, truncates output, and aborts", async () => {
   await assert.rejects(
     executeCode(`enum Direction { Up }`),
     (error: unknown) =>
-      error instanceof CodeRuntimeError &&
-      error.code === "TYPESCRIPT_STRIP_FAILED",
+      error instanceof CodeRuntimeError && error.code === "EXECUTION_FAILED",
   );
   await assert.rejects(
     executeCode(`while (true) {}`, { wallTimeMs: 40 }),
     (error: unknown) =>
       error instanceof CodeRuntimeError && error.code === "WALL_TIME_LIMIT",
   );
-  await assert.rejects(
-    executeCode(`text("12345");`, { maxTextBytes: 4 }),
-    (error: unknown) =>
-      error instanceof CodeRuntimeError && error.code === "TEXT_OUTPUT_LIMIT",
+  assert.equal(
+    await executeCode(`text("12345");`, { maxTextBytes: 4 }),
+    "1234",
   );
 
   const controller = new AbortController();
@@ -484,8 +456,10 @@ test("reports TypeScript strip errors, wall limits, output limits, and abort", a
     controller.signal,
   );
   controller.abort(new DOMException("test abort", "AbortError"));
-  await assert.rejects(running, (error: unknown) =>
-    error instanceof DOMException ? error.name === "AbortError" : false,
+  await assert.rejects(
+    running,
+    (error: unknown) =>
+      error instanceof CodeRuntimeError && error.code === "ABORTED",
   );
 });
 
@@ -568,13 +542,10 @@ test("Runtime records unconfirmed cancellation for abort-ignoring children befor
   }
 });
 
-test("guest observes an actually empty argv through global and direct process imports", async () => {
-  assert.equal(
-    await executeCode(`
-      const imported = await import("node:process");
-      text({ global: process.argv, named: imported.argv, default: imported.default.argv });
-    `),
-    '{"global":[],"named":[],"default":[]}',
+test("guest cannot import Node process", async () => {
+  await assert.rejects(
+    executeCode(`await import("node:process");`),
+    /Imports are unavailable/,
   );
 });
 
