@@ -413,7 +413,9 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   view_image 本身仍是明确的查看请求，nested modelContent 继续提升并去重，不要求再次 image。
   text 逐步送到 Host 捕获，异常/超时/取消均保留已捕获部分。输出预算只限制预览，完整捕获沿 spool 上限。
 - guest 提供 atob/btoa 与 TextEncoder/TextDecoder 纯内存编解码；接口、返回值和异常属于 guest realm，
-  原生编解码通过闭包中的 primitive-only bridge 执行，不暴露 Host 构造器或 I/O。import.meta 明确报错。
+  原生编解码通过闭包中的桥接执行，数据为 primitive；字节使用紧凑字符串，避免展开成 JSON 数字数组。
+  每个 decoder 的原生回调仅保存在 guest 私有字段中，随实例一起回收，不进入宿主强引用注册表；
+  不向用户代码返回 Host 函数、构造器或 I/O。import.meta 明确报错。
   工具失败和未知名称以非零 exitCode 返回，序列化或 bridge 错误仍可能抛出；不承诺 never throws。
 - store 的 key 为 1–160 字符，JSON 单值最多 256 KiB、线程最多 128 keys/2 MiB；Host 串行
   校验并由 AgentRuntime 追加 code_state（父 callId、key、value）。程序完成前等待已发起写入提交，

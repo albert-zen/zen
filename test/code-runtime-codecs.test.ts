@@ -11,6 +11,29 @@ const execute = async (code: string) =>
     })
   ).text;
 
+test("8 MiB byte conversion stays within the default worker heap", async () => {
+  assert.equal(
+    await execute(`
+    const bytes = new Uint8Array(8 * 1024 * 1024);
+    const decoded = new TextDecoder().decode(bytes);
+    text(decoded.length);
+    text(new TextEncoder().encode(decoded).length);
+    text(new TextEncoder().encodeInto(decoded, bytes).written);
+  `),
+    "8388608\n8388608\n8388608",
+  );
+});
+
+test("discarded decoders do not accumulate native state for the whole program", async () => {
+  assert.equal(
+    await execute(`
+    for (let i = 0; i < 1000000; i++) new TextDecoder();
+    text('done');
+  `),
+    "done",
+  );
+});
+
 test("native base64 codecs handle binary strings, whitespace and invalid inputs", async () => {
   assert.deepEqual(
     JSON.parse(

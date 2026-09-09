@@ -17,13 +17,47 @@ interface WorkerInput {
 const input = workerData as WorkerInput;
 const port = input.port;
 const timers = new Map<number, NodeJS.Timeout>();
-// Decoder state is transient and dies with this execution's worker.
-const decoders = new Map<number, TextDecoder>();
-let decoderSequence = 0;
 const encoder = new TextEncoder();
-// Only primitives cross into the context. Host bridge functions are captured by
-// context-owned closures during bootstrap, never installed on the guest global.
+// Host callbacks are retained only in bootstrap closures or guest private fields,
+// never returned to user code. Their payloads and results are primitive values.
 // In particular, imports must reject with a *context-owned* Error, not a Node Error.
+type DecoderBridge = (input?: string, stream?: boolean) => string;
+// A small JSON header plus an unescaped body avoids numeric-array and JSON-escape
+// amplification for large binary strings. The first newline frames the header.
+function codecPacket(body: string, metadata: object = {}): string {
+  return `${JSON.stringify(metadata)}\n${body}`;
+}
+function codecFailure(error: unknown): string {
+  return codecPacket("", {
+    error: { name: (error as Error).name, message: (error as Error).message },
+  });
+}
+function createDecoderBridge(configuration: string): DecoderBridge {
+  try {
+    const { label, options } = JSON.parse(configuration);
+    const decoder = new TextDecoder(label, options);
+    // No registry retains this closure. Its native decoder becomes collectible
+    // together with the guest instance, including abandoned streaming decoders.
+    return (input, stream = false) => {
+      try {
+        return input === undefined
+          ? codecPacket("", {
+              encoding: decoder.encoding,
+              fatal: decoder.fatal,
+              ignoreBOM: decoder.ignoreBOM,
+            })
+          : codecPacket(
+              decoder.decode(Buffer.from(input, "latin1"), { stream }),
+            );
+      } catch (error) {
+        return codecFailure(error);
+      }
+    };
+  } catch (error) {
+    const failure = codecFailure(error);
+    return () => failure;
+  }
+}
 const context = createContext(Object.create(null), {
   codeGeneration: { strings: false, wasm: false },
 });
@@ -34,7 +68,7 @@ interface GuestControl {
   error(message: string): Error;
 }
 const bootstrap = new Script(String.raw`
-((bridge, codecBridge, configuration) => {
+((bridge, codecBridge, createDecoderBridge, configuration) => {
   const { Object, Array, Number, String, JSON, Reflect, Map, Set, Promise, Error, TypeError, RangeError, Math, Uint8Array, ArrayBuffer, DataView } = globalThis;
   // A guest toJSON on an intrinsic prototype must not rewrite bridge envelopes.
   Object.freeze(Object.prototype);
@@ -42,29 +76,31 @@ const bootstrap = new Script(String.raw`
   const parse = JSON.parse;
   const stringify = JSON.stringify;
   const config = parse(configuration);
-  // The synchronous codec bridge accepts/returns only primitive JSON strings.
+  // Codec callbacks accept/return primitives, never host objects or errors.
   // Recreate results and failures here so no host constructor reaches the guest.
-  const codec = (operation, args) => {
-    const result = parse(codecBridge(stringify({ operation, args })));
+  const unpackCodec = packet => {
+    const end = packet.indexOf('\n');
+    const result = parse(packet.slice(0, end));
     if (result.error) {
       const Constructor = result.error.name === 'TypeError' ? TypeError : result.error.name === 'RangeError' ? RangeError : Error;
       const error = new Constructor(result.error.message);
       error.name = result.error.name;
       throw error;
     }
-    return result.value;
+    return { metadata: result, value: packet.slice(end + 1) };
   };
+  const codec = (operation, value, capacity) => unpackCodec(codecBridge(operation, value, capacity));
   const toString = value => {
     if (typeof value === 'symbol') throw new TypeError('Cannot convert a Symbol value to a string');
     return String(value);
   };
   const atob = function(value) {
     if (arguments.length === 0) throw new TypeError('atob requires an argument');
-    return codec('atob', [toString(value)]);
+    return codec('atob', toString(value)).value;
   };
   const btoa = function(value) {
     if (arguments.length === 0) throw new TypeError('btoa requires an argument');
-    return codec('btoa', [toString(value)]);
+    return codec('btoa', toString(value)).value;
   };
   const apply = Reflect.apply;
   const getter = (prototype, key) => Object.getOwnPropertyDescriptor(prototype, key).get;
@@ -78,7 +114,8 @@ const bootstrap = new Script(String.raw`
   const viewLength = getter(DataView.prototype, 'byteLength');
   const bufferLength = getter(ArrayBuffer.prototype, 'byteLength');
   const isView = ArrayBuffer.isView;
-  const setBytes = Uint8Array.prototype.set;
+  const fromCharCode = String.fromCharCode;
+  const charCodeAt = String.prototype.charCodeAt;
   const rawBytes = input => {
     if (input === undefined) return new Uint8Array(0);
     if (isView(input)) {
@@ -97,28 +134,37 @@ const bootstrap = new Script(String.raw`
     }
     return new Uint8Array(input, 0, apply(bufferLength, input, []));
   };
-  const byteList = input => {
+  const byteString = input => {
     const bytes = rawBytes(input);
     const length = apply(typedLength, bytes, []);
-    const result = [];
-    for (let i = 0; i < length; i++) result[i] = bytes[i];
-    return result;
+    const buffer = apply(typedBuffer, bytes, []);
+    const start = apply(typedOffset, bytes, []);
+    const chunks = [];
+    for (let offset = 0; offset < length; offset += 8192) {
+      const chunk = new Uint8Array(buffer, start + offset, Math.min(8192, length - offset));
+      chunks.push(apply(fromCharCode, undefined, chunk));
+    }
+    return chunks.join('');
+  };
+  const writeBytes = (value, destination = new Uint8Array(value.length)) => {
+    for (let i = 0; i < value.length; i++) destination[i] = apply(charCodeAt, value, [i]);
+    return destination;
   };
   class TextEncoder {
     #brand = true;
     get encoding() { void this.#brand; return 'utf-8'; }
     encode(input = '') {
       void this.#brand;
-      return new Uint8Array(codec('encode', [toString(input)]));
+      return writeBytes(codec('encode', toString(input)).value);
     }
     encodeInto(source, destination) {
       void this.#brand;
       source = toString(source);
       if (apply(typedTag, destination, []) !== 'Uint8Array') throw new TypeError('encodeInto destination must be a Uint8Array');
       const bytes = rawBytes(destination);
-      const result = codec('encodeInto', [source, apply(typedLength, bytes, [])]);
-      apply(setBytes, bytes, [result.bytes]);
-      return { read: result.read, written: result.written };
+      const result = codec('encodeInto', source, apply(typedLength, bytes, []));
+      writeBytes(result.value, bytes);
+      return result.metadata;
     }
   }
   const dictionary = value => {
@@ -126,15 +172,15 @@ const bootstrap = new Script(String.raw`
     return value;
   };
   class TextDecoder {
-    #id;
+    #decode;
     #encoding;
     #fatal;
     #ignoreBOM;
     constructor(label = 'utf-8', options = undefined) {
       label = toString(label);
       dictionary(options);
-      const result = codec('decoder', [label, { fatal: !!options?.fatal, ignoreBOM: !!options?.ignoreBOM }]);
-      this.#id = result.id;
+      this.#decode = createDecoderBridge(stringify({ label, options: { fatal: !!options?.fatal, ignoreBOM: !!options?.ignoreBOM } }));
+      const result = unpackCodec(this.#decode()).metadata;
       this.#encoding = result.encoding;
       this.#fatal = result.fatal;
       this.#ignoreBOM = result.ignoreBOM;
@@ -143,10 +189,10 @@ const bootstrap = new Script(String.raw`
     get fatal() { return this.#fatal; }
     get ignoreBOM() { return this.#ignoreBOM; }
     decode(input = undefined, options = undefined) {
-      const id = this.#id;
-      const bytes = byteList(input);
+      const decode = this.#decode;
+      const bytes = byteString(input);
       dictionary(options);
-      return codec('decode', [id, bytes, !!options?.stream]);
+      return unpackCodec(decode(bytes, !!options?.stream)).value;
     }
   }
   const pending = new Map();
@@ -343,7 +389,8 @@ const bootstrap = new Script(String.raw`
 })
 `).runInContext(context) as (
   bridge: (message: string) => string | undefined,
-  codecBridge: (message: string) => string,
+  codecBridge: (operation: string, value: string, capacity?: number) => string,
+  decoderFactory: (configuration: string) => DecoderBridge,
   configuration: string,
 ) => GuestControl;
 
@@ -375,64 +422,35 @@ try {
         return "Host bridge failed";
       }
     },
-    (encoded) => {
+    (operation, input, capacity = 0) => {
       try {
-        if (typeof encoded !== "string")
+        if (typeof input !== "string")
           throw new TypeError("Invalid codec request");
-        const { operation, args } = JSON.parse(encoded);
-        let value: unknown;
         switch (operation) {
           case "atob":
-            value = atob(args[0]);
-            break;
+            return codecPacket(atob(input));
           case "btoa":
-            value = btoa(args[0]);
-            break;
+            return codecPacket(btoa(input));
           case "encode":
-            value = Array.from(encoder.encode(args[0]));
-            break;
+            return codecPacket(
+              Buffer.from(encoder.encode(input)).toString("latin1"),
+            );
           case "encodeInto": {
-            const bytes = new Uint8Array(args[1]);
-            const result = encoder.encodeInto(args[0], bytes);
-            value = {
-              ...result,
-              bytes: Array.from(bytes.subarray(0, result.written)),
-            };
-            break;
-          }
-          case "decoder": {
-            const decoder = new TextDecoder(args[0], args[1]);
-            const id = ++decoderSequence;
-            decoders.set(id, decoder);
-            value = {
-              id,
-              encoding: decoder.encoding,
-              fatal: decoder.fatal,
-              ignoreBOM: decoder.ignoreBOM,
-            };
-            break;
-          }
-          case "decode": {
-            const decoder = decoders.get(args[0]);
-            if (!decoder) throw new TypeError("Invalid decoder");
-            value = decoder.decode(new Uint8Array(args[1]), {
-              stream: args[2],
-            });
-            break;
+            const bytes = new Uint8Array(Math.min(capacity, input.length * 3));
+            const result = encoder.encodeInto(input, bytes);
+            return codecPacket(
+              Buffer.from(bytes.buffer, 0, result.written).toString("latin1"),
+              result,
+            );
           }
           default:
             throw new TypeError("Unknown codec operation");
         }
-        return JSON.stringify({ value });
       } catch (error) {
-        return JSON.stringify({
-          error: {
-            name: (error as Error).name,
-            message: (error as Error).message,
-          },
-        });
+        return codecFailure(error);
       }
     },
+    createDecoderBridge,
     JSON.stringify({
       maxTextBytes: input.maxTextBytes,
       maxStateValueBytes: input.maxStateValueBytes,
