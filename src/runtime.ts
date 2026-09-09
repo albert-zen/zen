@@ -65,6 +65,10 @@ export interface RuntimeConfiguration {
   agenticContextCompaction?: {
     contextWindow: number;
   };
+  /** Turn-scoped execution limit captured at Host admission. */
+  maxToolRounds?: number;
+  /** Turn-scoped tool body concurrency captured at Host admission. */
+  maxConcurrentToolBodies?: number;
 }
 
 export interface PreparedModelSample {
@@ -148,6 +152,12 @@ export type ToolDefinitionProjection = (
 
 export const DEFAULT_MAX_CONCURRENT_TOOL_BODIES = 8;
 
+function assertPositiveExecutionLimit(value: number, label: string): void {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`${label} must be a positive safe integer`);
+  }
+}
+
 export class AgentRuntime {
   readonly #tools: ToolEnvironment;
   readonly #id: () => string;
@@ -199,9 +209,25 @@ export class AgentRuntime {
     return this.#tools.taskManager.hasActiveTasks(threadId);
   }
 
+  get activeToolTaskCount(): number {
+    return this.#tools.taskManager.activeTaskCount;
+  }
+
   async runTurn(options: RunTurnOptions): Promise<void> {
     const turnId = options.turnId ?? this.#id();
-    const scheduler = new TurnToolScheduler(this.#maxConcurrentToolBodies);
+    const maxConcurrentToolBodies =
+      options.configuration.maxConcurrentToolBodies ??
+      this.#maxConcurrentToolBodies;
+    assertPositiveExecutionLimit(
+      maxConcurrentToolBodies,
+      "Maximum concurrent tool bodies",
+    );
+    const maxToolRounds =
+      options.configuration.maxToolRounds ?? this.#maxToolRounds;
+    if (maxToolRounds !== undefined) {
+      assertPositiveExecutionLimit(maxToolRounds, "Maximum tool rounds");
+    }
+    const scheduler = new TurnToolScheduler(maxConcurrentToolBodies);
     const started: TurnStartedItem = {
       id: this.#id(),
       threadId: options.thread.id,
@@ -260,9 +286,9 @@ export class AgentRuntime {
           });
           return;
         }
-        if (this.#maxToolRounds !== undefined && round >= this.#maxToolRounds) {
+        if (maxToolRounds !== undefined && round >= maxToolRounds) {
           throw new Error(
-            `Model exceeded ${String(this.#maxToolRounds)} tool rounds`,
+            `Model exceeded ${String(maxToolRounds)} tool rounds`,
           );
         }
 

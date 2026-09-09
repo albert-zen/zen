@@ -54,7 +54,10 @@ import { estimateModelMessageInputTokens } from "./model-usage.js";
 import {
   ProviderRegistryError,
   type ProviderModel,
+  type ProviderProfile,
   type ProviderRegistry,
+  type ProviderRegistrySnapshot,
+  type ProviderSelectionLease,
   type ResolvedProviderSelection,
   type ProviderSelection,
   type ProviderSelectionInput,
@@ -177,12 +180,62 @@ export interface ThreadStartedEvent {
   thread: ThreadSnapshot;
 }
 
+export interface ModelCatalogUpdatedEvent {
+  type: "model_catalog_updated";
+  revision: number;
+}
+
 export type AppServerEvent =
   | RuntimeEvent
   | ThreadSettingsUpdatedEvent
   | ThreadNameUpdatedEvent
   | ThreadArchivedUpdatedEvent
-  | ThreadStartedEvent;
+  | ThreadStartedEvent
+  | ModelCatalogUpdatedEvent;
+
+export type HostOperationKind =
+  "turn" | "compaction" | "provider" | "tool" | "plugin" | "other";
+
+export interface HostOperationLease {
+  release(): void;
+}
+
+export interface HostActivitySnapshot {
+  acceptingRootOperations: boolean;
+  rootOperations: readonly {
+    kind: HostOperationKind;
+    label?: string;
+  }[];
+  activeToolTasks: number;
+}
+
+export type MaintenanceAdmission =
+  | { accepted: false; activity: HostActivitySnapshot }
+  | {
+      accepted: true;
+      activity: HostActivitySnapshot;
+      end(): void;
+    };
+
+export interface RuntimeConfigurationSnapshot {
+  readonly revision: number;
+  readonly providerSnapshot: ProviderRegistrySnapshot;
+  readonly defaults: Readonly<AppServerDefaults>;
+  readonly contextCompaction: ResolvedContextCompactionConfig;
+  readonly maxToolRounds?: number;
+  readonly maxConcurrentToolBodies?: number;
+}
+
+export interface RuntimeConfigurationUpdate {
+  revision: number;
+  providerProfiles: readonly ProviderProfile[];
+  defaults: AppServerDefaults;
+  contextCompaction?: ContextCompactionConfig;
+  maxToolRounds?: number;
+  maxConcurrentToolBodies?: number;
+}
+
+export interface PreparedRuntimeConfiguration extends RuntimeConfigurationSnapshot {}
 
 export interface UpdateThreadSettingsInput {
   selection?: ProviderSelectionInput;
@@ -202,8 +255,13 @@ export class ZenAppServer {
   readonly #providerRegistry: ProviderRegistry;
   readonly #threadMetadata: ThreadMetadataStore;
   readonly #threadSummaryProjection: ThreadSummaryProjection;
-  readonly #defaults: AppServerDefaults;
-  readonly #contextCompaction: ResolvedContextCompactionConfig;
+  #runtimeConfiguration: RuntimeConfigurationSnapshot;
+  readonly #preparedRuntimeConfigurations = new WeakSet<object>();
+  readonly #rootOperations = new Set<{
+    kind: HostOperationKind;
+    label?: string;
+  }>();
+  #acceptingRootOperations = true;
   readonly #id: () => string;
   readonly #now: () => string;
   readonly #threads = new Map<string, Thread>();
@@ -246,16 +304,21 @@ export class ZenAppServer {
     this.#threadMetadata = options.threadMetadata;
     this.#threadSummaryProjection =
       options.threadSummaryProjection ?? new InMemoryThreadSummaryProjection();
-    this.#defaults = {
+    const defaults = Object.freeze({
       ...options.defaults,
       cwd: path.resolve(options.defaults.cwd),
-    };
-    this.#contextCompaction = normalizeContextCompactionConfig(
-      options.contextCompaction,
-    );
+    });
+    this.#runtimeConfiguration = Object.freeze({
+      revision: this.#providerRegistry.currentSnapshot().revision,
+      providerSnapshot: this.#providerRegistry.currentSnapshot(),
+      defaults,
+      contextCompaction: normalizeContextCompactionConfig(
+        options.contextCompaction,
+      ),
+    });
     this.#id = options.idFactory ?? randomUUID;
     this.#now = options.now ?? (() => new Date().toISOString());
-    this.#requireSelection(this.#defaults);
+    this.#requireSelection(defaults);
   }
 
   subscribe(listener: (event: AppServerEvent) => void): () => void {
@@ -265,12 +328,143 @@ export class ZenAppServer {
     };
   }
 
+  prepareRuntimeConfiguration(
+    update: RuntimeConfigurationUpdate,
+  ): PreparedRuntimeConfiguration {
+    assertRuntimeRevision(update.revision);
+    assertOptionalExecutionLimit(update.maxToolRounds, "Maximum tool rounds");
+    assertOptionalExecutionLimit(
+      update.maxConcurrentToolBodies,
+      "Maximum concurrent tool bodies",
+    );
+    const defaults = Object.freeze({
+      ...update.defaults,
+      cwd: path.resolve(update.defaults.cwd),
+    });
+    const contextCompaction = normalizeContextCompactionConfig(
+      update.contextCompaction,
+    );
+    const providerSnapshot = this.#providerRegistry.prepareSnapshot(
+      update.providerProfiles,
+      update.revision,
+    );
+    try {
+      providerSnapshot.resolve(defaults);
+    } catch (error) {
+      void this.#providerRegistry
+        .discardSnapshot(providerSnapshot)
+        .catch((discardError) =>
+          console.warn(
+            "Could not discard invalid Provider snapshot",
+            discardError,
+          ),
+        );
+      throw error;
+    }
+    const prepared = Object.freeze({
+      revision: update.revision,
+      providerSnapshot,
+      defaults,
+      contextCompaction,
+      ...(update.maxToolRounds === undefined
+        ? {}
+        : { maxToolRounds: update.maxToolRounds }),
+      ...(update.maxConcurrentToolBodies === undefined
+        ? {}
+        : { maxConcurrentToolBodies: update.maxConcurrentToolBodies }),
+    });
+    this.#preparedRuntimeConfigurations.add(prepared);
+    return prepared;
+  }
+
+  publishRuntimeConfiguration(prepared: PreparedRuntimeConfiguration): void {
+    if (!this.#preparedRuntimeConfigurations.delete(prepared)) {
+      throw new Error(
+        "Runtime configuration was not prepared by this App Server",
+      );
+    }
+    this.#providerRegistry.publishSnapshot(prepared.providerSnapshot);
+    this.#runtimeConfiguration = prepared;
+    this.#emit({
+      type: "model_catalog_updated",
+      revision: prepared.revision,
+    });
+  }
+
+  async discardRuntimeConfiguration(
+    prepared: PreparedRuntimeConfiguration,
+  ): Promise<void> {
+    if (!this.#preparedRuntimeConfigurations.delete(prepared)) {
+      throw new Error(
+        "Runtime configuration was not prepared by this App Server",
+      );
+    }
+    await this.#providerRegistry.discardSnapshot(prepared.providerSnapshot);
+  }
+
+  currentRuntimeConfiguration(): RuntimeConfigurationSnapshot {
+    return this.#runtimeConfiguration;
+  }
+
+  async closeRuntimeConfiguration(): Promise<void> {
+    this.#acceptingRootOperations = false;
+    await this.#providerRegistry.close();
+  }
+
+  beginHostOperation(
+    kind: HostOperationKind,
+    label?: string,
+  ): HostOperationLease {
+    if (!this.#acceptingRootOperations) {
+      throw new AppServerError(
+        "host_restarting",
+        "The Zen host is restarting and is not accepting new work",
+      );
+    }
+    return this.#reserveRootOperation(kind, label);
+  }
+
+  activitySnapshot(): HostActivitySnapshot {
+    return Object.freeze({
+      acceptingRootOperations: this.#acceptingRootOperations,
+      rootOperations: Object.freeze(
+        [...this.#rootOperations].map((operation) =>
+          Object.freeze({ ...operation }),
+        ),
+      ),
+      activeToolTasks: this.#runtime.activeToolTaskCount,
+    });
+  }
+
+  tryBeginMaintenance(): MaintenanceAdmission {
+    const activity = this.activitySnapshot();
+    if (
+      !this.#acceptingRootOperations ||
+      activity.rootOperations.length > 0 ||
+      activity.activeToolTasks > 0
+    ) {
+      return { accepted: false, activity };
+    }
+    this.#acceptingRootOperations = false;
+    let ended = false;
+    return {
+      accepted: true,
+      activity: this.activitySnapshot(),
+      end: () => {
+        if (ended) return;
+        ended = true;
+        this.#acceptingRootOperations = true;
+      },
+    };
+  }
+
   listModels(): readonly ListedProviderModel[] {
     return this.#providerRegistry.listModels().map((entry) => ({
       ...entry,
       isDefault:
-        entry.providerProfileId === this.#defaults.providerProfileId &&
-        entry.model.id === this.#defaults.modelId,
+        entry.providerProfileId ===
+          this.#runtimeConfiguration.defaults.providerProfileId &&
+        entry.model.id === this.#runtimeConfiguration.defaults.modelId,
     }));
   }
 
@@ -282,36 +476,42 @@ export class ZenAppServer {
   }
 
   async startThread(input: StartThreadInput = {}): Promise<ThreadSnapshot> {
-    const threadId = this.#id();
-    const thread = new Thread(threadId);
-    const selection = this.#selectionFromInput(this.#defaults, input);
-    this.#requireSelection(selection);
-    const metadata: ThreadMetadataItem = {
-      id: this.#id(),
-      threadId,
-      createdAt: this.#now(),
-      type: "thread_metadata",
-      cwd: path.resolve(input.cwd ?? this.#defaults.cwd),
-      ...selection,
-      sandbox: input.sandbox ?? this.#defaults.sandbox,
-      approvalPolicy:
-        input.approvalPolicy ??
-        ((input.sandbox ?? this.#defaults.sandbox) === "danger-full-access"
-          ? this.#defaults.approvalPolicy
-          : "always"),
-    };
-    this.#threads.set(threadId, thread);
+    const admission = this.beginHostOperation("turn", "thread/start");
     try {
-      await this.#commit(thread, metadata);
-    } catch (error) {
-      if (this.#threads.get(threadId) === thread) {
-        this.#threads.delete(threadId);
+      const threadId = this.#id();
+      const thread = new Thread(threadId);
+      const defaults = this.#runtimeConfiguration.defaults;
+      const selection = this.#selectionFromInput(defaults, input);
+      this.#requireSelection(selection);
+      const metadata: ThreadMetadataItem = {
+        id: this.#id(),
+        threadId,
+        createdAt: this.#now(),
+        type: "thread_metadata",
+        cwd: path.resolve(input.cwd ?? defaults.cwd),
+        ...selection,
+        sandbox: input.sandbox ?? defaults.sandbox,
+        approvalPolicy:
+          input.approvalPolicy ??
+          ((input.sandbox ?? defaults.sandbox) === "danger-full-access"
+            ? defaults.approvalPolicy
+            : "always"),
+      };
+      this.#threads.set(threadId, thread);
+      try {
+        await this.#commit(thread, metadata);
+      } catch (error) {
+        if (this.#threads.get(threadId) === thread) {
+          this.#threads.delete(threadId);
+        }
+        throw error;
       }
-      throw error;
+      const snapshot = await this.#snapshot(thread);
+      this.#emit({ type: "thread_started", threadId, thread: snapshot });
+      return snapshot;
+    } finally {
+      admission.release();
     }
-    const snapshot = await this.#snapshot(thread);
-    this.#emit({ type: "thread_started", threadId, thread: snapshot });
-    return snapshot;
   }
 
   async listThreads(
@@ -629,14 +829,24 @@ export class ZenAppServer {
       }
 
       const configuration = thread.effectiveConfiguration();
-      const resolved = this.#requireSelection(configuration);
-      const item = await this.#appendContextCompaction({
-        thread,
-        boundary,
-        selection: resolved,
-        signal,
-      });
-      return { compactionItemId: item.id };
+      const admitted = this.#admitProviderOperation(
+        "compaction",
+        `thread:${threadId}`,
+        configuration,
+      );
+      try {
+        const item = await this.#appendContextCompaction({
+          thread,
+          boundary,
+          selection: admitted.provider,
+          contextCompaction: admitted.configuration.contextCompaction,
+          signal,
+        });
+        return { compactionItemId: item.id };
+      } finally {
+        admitted.provider.release();
+        admitted.operation.release();
+      }
     });
   }
 
@@ -718,16 +928,29 @@ export class ZenAppServer {
         });
       }
       const configuration = thread.effectiveConfiguration();
-      const resolved = this.#requireSelection(configuration);
       const turnId = internal.turnId ?? this.#id();
       const controller = new AbortController();
-      await this.#compactBeforeTurnIfNeeded({
-        thread,
-        turnId,
-        input,
-        resolved,
-        signal: controller.signal,
-      });
+      const admitted = this.#admitProviderOperation(
+        "turn",
+        `thread:${threadId}`,
+        configuration,
+      );
+      const resolved = admitted.provider;
+      try {
+        await this.#validateInput(input, resolved.model.inputModalities);
+        await this.#compactBeforeTurnIfNeeded({
+          thread,
+          turnId,
+          input,
+          resolved,
+          contextCompaction: admitted.configuration.contextCompaction,
+          signal: controller.signal,
+        });
+      } catch (error) {
+        resolved.release();
+        admitted.operation.release();
+        throw error;
+      }
       const ready = deferred<void>();
       let highestInputTokens: number | undefined;
       let executionSucceeded = false;
@@ -751,7 +974,7 @@ export class ZenAppServer {
                   sandbox: configuration.sandbox,
                   approvalPolicy: configuration.approvalPolicy,
                   inputModalities: resolved.model.inputModalities,
-                  ...(this.#contextCompaction.agenticEnabled &&
+                  ...(admitted.configuration.contextCompaction.agenticEnabled &&
                   resolved.model.contextWindow !== null
                     ? {
                         agenticContextCompaction: {
@@ -759,6 +982,18 @@ export class ZenAppServer {
                         },
                       }
                     : {}),
+                  ...(admitted.configuration.maxToolRounds === undefined
+                    ? {}
+                    : {
+                        maxToolRounds: admitted.configuration.maxToolRounds,
+                      }),
+                  ...(admitted.configuration.maxConcurrentToolBodies ===
+                  undefined
+                    ? {}
+                    : {
+                        maxConcurrentToolBodies:
+                          admitted.configuration.maxConcurrentToolBodies,
+                      }),
                 },
                 modelAdapter: resolved.adapter,
                 signal: controller.signal,
@@ -803,6 +1038,8 @@ export class ZenAppServer {
                     modelResponseId,
                     {
                       resolved,
+                      contextCompaction:
+                        admitted.configuration.contextCompaction,
                       highestInputTokens: () => highestInputTokens,
                       signal: controller.signal,
                     },
@@ -840,6 +1077,8 @@ export class ZenAppServer {
               ready.reject(normalized);
               reject(normalized);
             } finally {
+              resolved.release();
+              admitted.operation.release();
               const active = this.#activeTurns.get(threadId);
               if (active?.turnId === turnId) {
                 this.#activeTurns.delete(threadId);
@@ -1186,6 +1425,7 @@ export class ZenAppServer {
     modelResponseId: string,
     automaticCompaction: {
       resolved: ResolvedProviderSelection;
+      contextCompaction: ResolvedContextCompactionConfig;
       highestInputTokens: () => number | undefined;
       signal: AbortSignal;
     },
@@ -1240,6 +1480,7 @@ export class ZenAppServer {
     thread: Thread;
     completed: TurnCompletedItem;
     resolved: ResolvedProviderSelection;
+    contextCompaction: ResolvedContextCompactionConfig;
     highestInputTokens: () => number | undefined;
     signal: AbortSignal;
   }): Promise<void> {
@@ -1251,7 +1492,7 @@ export class ZenAppServer {
       inputTokens <
         automaticCompactionThreshold(
           contextWindow,
-          this.#contextCompaction.triggerPercent,
+          options.contextCompaction.triggerPercent,
         )
     ) {
       return;
@@ -1287,6 +1528,7 @@ export class ZenAppServer {
         thread: options.thread,
         boundary,
         selection: options.resolved,
+        contextCompaction: options.contextCompaction,
         signal: options.signal,
       });
     } catch (error) {
@@ -1305,6 +1547,7 @@ export class ZenAppServer {
     turnId: string;
     input: UserInput;
     resolved: ResolvedProviderSelection;
+    contextCompaction: ResolvedContextCompactionConfig;
     signal: AbortSignal;
   }): Promise<void> {
     const contextWindow = options.resolved.model.contextWindow;
@@ -1334,7 +1577,7 @@ export class ZenAppServer {
       ) <
       contextCompactionTokenBudget(
         contextWindow,
-        this.#contextCompaction.triggerPercent,
+        options.contextCompaction.triggerPercent,
       )
     ) {
       return;
@@ -1357,6 +1600,7 @@ export class ZenAppServer {
       thread: options.thread,
       boundary,
       selection: options.resolved,
+      contextCompaction: options.contextCompaction,
       signal: options.signal,
     });
   }
@@ -1365,6 +1609,7 @@ export class ZenAppServer {
     thread: Thread;
     boundary: NonNullable<ReturnType<typeof latestEligibleCompactionBoundary>>;
     selection: ResolvedProviderSelection;
+    contextCompaction: ResolvedContextCompactionConfig;
     signal: AbortSignal;
   }): Promise<ContextCompactionItem> {
     const sourceMessages = compileModelMessages(
@@ -1376,7 +1621,7 @@ export class ZenAppServer {
       model: options.selection.selection.modelId,
       reasoningEffort: options.selection.selection.reasoningEffort,
       messages: sourceMessages,
-      summaryInstruction: this.#contextCompaction.summaryInstruction,
+      summaryInstruction: options.contextCompaction.summaryInstruction,
       inputTokenBudget: options.selection.model.contextWindow,
       signal: options.signal,
     });
@@ -1389,7 +1634,7 @@ export class ZenAppServer {
     }
     const targetTokenBudget = contextCompactionTokenBudget(
       contextWindow,
-      this.#contextCompaction.targetPercent,
+      options.contextCompaction.targetPercent,
     );
     const summaryTokens = estimateModelMessageInputTokens([
       {
@@ -1411,7 +1656,7 @@ export class ZenAppServer {
           estimateModelMessageInputTokens(
             compileModelMessages(retainedItems, options.selection.selection),
           ),
-        retention: this.#contextCompaction.retention,
+        retention: options.contextCompaction.retention,
       });
     } catch (error) {
       throw new AppServerError(
@@ -1789,6 +2034,57 @@ export class ZenAppServer {
     return await this.#snapshot(thread);
   }
 
+  #admitProviderOperation(
+    kind: "turn" | "compaction",
+    label: string,
+    selection: ProviderSelectionInput,
+  ): {
+    configuration: RuntimeConfigurationSnapshot;
+    provider: ProviderSelectionLease;
+    operation: HostOperationLease;
+  } {
+    if (!this.#acceptingRootOperations) {
+      throw new AppServerError(
+        "host_restarting",
+        "The Zen host is restarting and is not accepting new work",
+      );
+    }
+    const configuration = this.#runtimeConfiguration;
+    let provider: ProviderSelectionLease;
+    try {
+      provider = this.#providerRegistry.acquire(selection);
+    } catch (error) {
+      if (error instanceof ProviderRegistryError) {
+        throw new AppServerError(error.code, error.message);
+      }
+      throw error;
+    }
+    return {
+      configuration,
+      provider,
+      operation: this.#reserveRootOperation(kind, label),
+    };
+  }
+
+  #reserveRootOperation(
+    kind: HostOperationKind,
+    label?: string,
+  ): HostOperationLease {
+    const operation = Object.freeze({
+      kind,
+      ...(label === undefined ? {} : { label }),
+    });
+    this.#rootOperations.add(operation);
+    let released = false;
+    return Object.freeze({
+      release: () => {
+        if (released) return;
+        released = true;
+        this.#rootOperations.delete(operation);
+      },
+    });
+  }
+
   #requireSelection(
     selection: ProviderSelectionInput,
     fallbackReasoningEffort?: string | null,
@@ -1895,6 +2191,23 @@ export class ZenAppServer {
         );
       }
     }
+  }
+}
+
+function assertRuntimeRevision(revision: number): void {
+  if (!Number.isSafeInteger(revision) || revision < 0) {
+    throw new Error(
+      "Runtime configuration revision must be a non-negative integer",
+    );
+  }
+}
+
+function assertOptionalExecutionLimit(
+  value: number | undefined,
+  label: string,
+): void {
+  if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) {
+    throw new Error(`${label} must be a positive safe integer`);
   }
 }
 

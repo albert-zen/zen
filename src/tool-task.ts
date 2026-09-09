@@ -96,6 +96,10 @@ export class ToolTaskManager {
     );
   }
 
+  get activeTaskCount(): number {
+    return [...this.#tasks.values()].filter((task) => !task.terminal).length;
+  }
+
   async run(
     runtime: ToolRuntime,
     invocation: ToolInvocation,

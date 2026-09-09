@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import type { AttachmentRef, AttachmentStore } from "../src/attachment.js";
 import { ZenAppServer } from "../src/app-server.js";
 import { InMemoryThreadJournal } from "../src/journal.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
@@ -825,6 +826,21 @@ function catalog(): StaticModelCatalog {
   ]);
 }
 
+function catalogWithModalities(
+  inputModalities: readonly ("text" | "image")[],
+): StaticModelCatalog {
+  return new StaticModelCatalog([
+    {
+      id: "shared-model",
+      isDefault: true,
+      supportedReasoningEfforts: ["low", "high"],
+      defaultReasoningEffort: "low",
+      inputModalities,
+      contextWindow: 32_768,
+    },
+  ]);
+}
+
 function duplicateModelRegistry(
   adapterA: ModelAdapter,
   adapterB: ModelAdapter,
@@ -866,6 +882,562 @@ function recordingAdapter(
     },
   };
 }
+
+test("publishes immutable snapshots while acquired executions retain retired resources", async () => {
+  const oldRequests: ModelRequest[] = [];
+  const newRequests: ModelRequest[] = [];
+  const oldClosed = deferred<void>();
+  let oldCloseCalls = 0;
+  const oldAdapter = recordingAdapter("old", oldRequests);
+  const registry = new ProviderRegistry(
+    [
+      {
+        providerProfileId: "profile-a",
+        adapter: oldAdapter,
+        modelCatalog: catalog(),
+        close() {
+          oldCloseCalls += 1;
+          oldClosed.resolve();
+        },
+      },
+    ],
+    { revision: 1 },
+  );
+  const acquired = registry.acquire(selection("profile-a", "low"));
+  const prepared = registry.prepareSnapshot(
+    [
+      {
+        providerProfileId: "profile-a",
+        adapter: recordingAdapter("new", newRequests),
+        modelCatalog: catalog(),
+      },
+    ],
+    2,
+  );
+
+  registry.publishSnapshot(prepared);
+
+  assert.equal(registry.currentSnapshot().revision, 2);
+  assert.equal(acquired.revision, 1);
+  assert.equal(acquired.adapter, oldAdapter);
+  assert.equal(oldCloseCalls, 0);
+  acquired.release();
+  acquired.release();
+  await oldClosed.promise;
+  assert.equal(oldCloseCalls, 1);
+});
+
+test("discarding a prepared snapshot closes only candidate resources", async () => {
+  const currentAdapter = recordingAdapter("current", []);
+  let currentCloseCalls = 0;
+  let candidateCloseCalls = 0;
+  const registry = new ProviderRegistry([
+    {
+      providerProfileId: "profile-a",
+      adapter: currentAdapter,
+      modelCatalog: catalog(),
+      close() {
+        currentCloseCalls += 1;
+      },
+    },
+  ]);
+  const prepared = registry.prepareSnapshot(
+    [
+      {
+        providerProfileId: "profile-a",
+        adapter: currentAdapter,
+        modelCatalog: catalog(),
+        close() {
+          currentCloseCalls += 1;
+        },
+      },
+      {
+        providerProfileId: "profile-b",
+        adapter: recordingAdapter("candidate", []),
+        modelCatalog: catalog(),
+        close() {
+          candidateCloseCalls += 1;
+        },
+      },
+    ],
+    1,
+  );
+
+  await registry.discardSnapshot(prepared);
+
+  assert.equal(currentCloseCalls, 0);
+  assert.equal(candidateCloseCalls, 1);
+  assert.equal(registry.currentSnapshot().revision, 0);
+});
+
+test("closing the registry waits for acquired resources and is idempotent", async () => {
+  const oldClosed = deferred<void>();
+  let oldCloseCalls = 0;
+  let currentCloseCalls = 0;
+  const registry = new ProviderRegistry([
+    {
+      providerProfileId: "profile-a",
+      adapter: recordingAdapter("adapter", []),
+      modelCatalog: catalog(),
+      close() {
+        oldCloseCalls += 1;
+        oldClosed.resolve();
+      },
+    },
+  ]);
+  const lease = registry.acquire(selection("profile-a", "low"));
+  registry.publishSnapshot(
+    registry.prepareSnapshot(
+      [
+        {
+          providerProfileId: "profile-a",
+          adapter: recordingAdapter("current", []),
+          modelCatalog: catalog(),
+          close() {
+            currentCloseCalls += 1;
+          },
+        },
+      ],
+      1,
+    ),
+  );
+  const closing = registry.close();
+  assert.equal(closing, registry.close());
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(oldCloseCalls, 0);
+  assert.equal(currentCloseCalls, 1);
+  assert.throws(
+    () => registry.acquire(selection("profile-a", "low")),
+    /registry is closed/u,
+  );
+  lease.release();
+  await closing;
+  await oldClosed.promise;
+  assert.equal(oldCloseCalls, 1);
+});
+
+test("an explicit null reasoning selection never silently gains a new default", () => {
+  const registry = new ProviderRegistry([
+    {
+      providerProfileId: "profile-a",
+      adapter: recordingAdapter("adapter", []),
+      modelCatalog: catalog(),
+    },
+  ]);
+
+  assert.throws(
+    () => registry.resolve(selection("profile-a", null)),
+    hasZenCode("reasoning_effort_unavailable"),
+  );
+  assert.equal(
+    registry.resolve({
+      providerProfileId: "profile-a",
+      modelId: "shared-model",
+    }).selection.reasoningEffort,
+    "low",
+  );
+});
+
+test("a Turn pins one published runtime snapshot through retirement", async () => {
+  const oldStarted = deferred<void>();
+  const finishOld = deferred<void>();
+  const oldClosed = deferred<void>();
+  const oldRequests: ModelRequest[] = [];
+  const newRequests: ModelRequest[] = [];
+  const oldAdapter: ModelAdapter = {
+    provider: "old",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      oldRequests.push(request);
+      oldStarted.resolve();
+      await finishOld.promise;
+      yield { type: "text_delta", delta: "old complete" };
+    },
+  };
+  const registry = new ProviderRegistry(
+    [
+      {
+        providerProfileId: "profile-a",
+        adapter: oldAdapter,
+        modelCatalog: catalog(),
+        close: () => oldClosed.resolve(),
+      },
+    ],
+    { revision: 1 },
+  );
+  const server = createRegistryServer({ registry });
+  const thread = await server.startThread();
+  const turnPromise = server.startTurn(thread.id, "use old snapshot");
+  await oldStarted.promise;
+  const events: unknown[] = [];
+  const unsubscribe = server.subscribe((event) => events.push(event));
+  const prepared = server.prepareRuntimeConfiguration({
+    revision: 2,
+    providerProfiles: [
+      {
+        providerProfileId: "profile-a",
+        adapter: recordingAdapter("new", newRequests),
+        modelCatalog: catalog(),
+      },
+    ],
+    defaults: {
+      cwd: process.cwd(),
+      ...selection("profile-a", "low"),
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    },
+    contextCompaction: { triggerPercent: 70, targetPercent: 40 },
+    maxToolRounds: 3,
+    maxConcurrentToolBodies: 2,
+  });
+
+  server.publishRuntimeConfiguration(prepared);
+
+  assert.equal(server.currentRuntimeConfiguration().revision, 2);
+  assert.equal(
+    server.currentRuntimeConfiguration().contextCompaction.triggerPercent,
+    70,
+  );
+  assert.equal(server.currentRuntimeConfiguration().maxToolRounds, 3);
+  assert.equal(server.currentRuntimeConfiguration().maxConcurrentToolBodies, 2);
+  assert.deepEqual(events, [{ type: "model_catalog_updated", revision: 2 }]);
+  assert.equal(server.activitySnapshot().rootOperations[0]?.kind, "turn");
+  finishOld.resolve();
+  const turn = await turnPromise;
+  await turn.done;
+  await oldClosed.promise;
+  await (
+    await server.startTurn(thread.id, "use new snapshot")
+  ).done;
+  unsubscribe();
+
+  assert.equal(oldRequests.length, 1);
+  assert.equal(newRequests.length, 1);
+  assert.equal(server.activitySnapshot().rootOperations.length, 0);
+});
+
+test("safe maintenance atomically refuses activity or closes root admission", async () => {
+  const server = createRegistryServer({
+    registry: new ProviderRegistry([
+      {
+        providerProfileId: "profile-a",
+        adapter: recordingAdapter("adapter", []),
+        modelCatalog: catalog(),
+      },
+    ]),
+  });
+  const operation = server.beginHostOperation("provider", "title inference");
+  const busy = server.tryBeginMaintenance();
+  assert.equal(busy.accepted, false);
+  assert.deepEqual(busy.activity.rootOperations, [
+    { kind: "provider", label: "title inference" },
+  ]);
+  operation.release();
+
+  const maintenance = server.tryBeginMaintenance();
+  assert.equal(maintenance.accepted, true);
+  assert.equal(maintenance.activity.acceptingRootOperations, false);
+  await assert.rejects(server.startThread(), hasZenCode("host_restarting"));
+  assert.throws(
+    () => server.beginHostOperation("plugin"),
+    hasZenCode("host_restarting"),
+  );
+  if (maintenance.accepted) maintenance.end();
+  const thread = await server.startThread();
+  assert.equal(thread.turns.length, 0);
+});
+
+test("an existing explicit null selection is rejected after a capability publish", async () => {
+  const noEffortCatalog = new StaticModelCatalog([
+    {
+      id: "shared-model",
+      isDefault: true,
+      supportedReasoningEfforts: [],
+      defaultReasoningEffort: null,
+      contextWindow: 32_768,
+    },
+  ]);
+  const server = createRegistryServer({
+    registry: new ProviderRegistry([
+      {
+        providerProfileId: "profile-a",
+        adapter: recordingAdapter("old", []),
+        modelCatalog: noEffortCatalog,
+      },
+    ]),
+    defaultSelection: selection("profile-a", null),
+  });
+  const thread = await server.startThread();
+  const prepared = server.prepareRuntimeConfiguration({
+    revision: 1,
+    providerProfiles: [
+      {
+        providerProfileId: "profile-a",
+        adapter: recordingAdapter("new", []),
+        modelCatalog: catalog(),
+      },
+    ],
+    defaults: {
+      cwd: process.cwd(),
+      ...selection("profile-a", "low"),
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    },
+  });
+  server.publishRuntimeConfiguration(prepared);
+
+  await assert.rejects(
+    server.startTurn(thread.id, "must choose effort"),
+    hasZenCode("reasoning_effort_unavailable"),
+  );
+  assert.equal((await server.readThread(thread.id)).turns.length, 0);
+});
+
+test("execution limits are pinned at final Turn admission", async () => {
+  const firstSampleStarted = deferred<void>();
+  const continueFirstSample = deferred<void>();
+  let oldSamples = 0;
+  let newSamples = 0;
+  const adapter: ModelAdapter = {
+    provider: "limits",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      const latestUser = request.messages.findLast(
+        (message) => message.role === "user",
+      );
+      const isOld =
+        latestUser !== undefined &&
+        (("text" in latestUser && latestUser.text === "old limit") ||
+          ("content" in latestUser &&
+            latestUser.content.some(
+              (part) => part.type === "text" && part.text === "old limit",
+            )));
+      if (isOld) {
+        oldSamples += 1;
+        if (oldSamples === 1) {
+          firstSampleStarted.resolve();
+          await continueFirstSample.promise;
+        }
+        if (oldSamples <= 2) {
+          yield {
+            type: "tool_call",
+            callId: `old-${String(oldSamples)}`,
+            name: "shell",
+            arguments: { command: "printf old" },
+          };
+          return;
+        }
+        yield { type: "text_delta", delta: "old completed" };
+        return;
+      }
+      newSamples += 1;
+      yield {
+        type: "tool_call",
+        callId: `new-${String(newSamples)}`,
+        name: "shell",
+        arguments: { command: "printf new" },
+      };
+    },
+  };
+  const server = createRegistryServer({
+    registry: new ProviderRegistry([
+      {
+        providerProfileId: "profile-a",
+        adapter,
+        modelCatalog: catalog(),
+      },
+    ]),
+  });
+  const thread = await server.startThread();
+  const oldTurnPromise = server.startTurn(thread.id, "old limit");
+  await firstSampleStarted.promise;
+  server.publishRuntimeConfiguration(
+    server.prepareRuntimeConfiguration({
+      revision: 1,
+      providerProfiles: [
+        {
+          providerProfileId: "profile-a",
+          adapter,
+          modelCatalog: catalog(),
+        },
+      ],
+      defaults: {
+        cwd: process.cwd(),
+        ...selection("profile-a", "low"),
+        sandbox: "danger-full-access",
+        approvalPolicy: "never",
+      },
+      maxToolRounds: 1,
+    }),
+  );
+  continueFirstSample.resolve();
+  await (
+    await oldTurnPromise
+  ).done;
+
+  const next = await server.startTurn(thread.id, "new limit");
+  await next.done;
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(snapshot.turns.at(-1)?.status, "failed");
+  assert(
+    snapshot.items.some(
+      (item) =>
+        item.type === "failure" &&
+        item.message.includes("exceeded 1 tool rounds"),
+    ),
+  );
+  assert.equal(oldSamples, 3);
+  assert.equal(newSamples, 2);
+});
+
+test("manual compaction holds its admitted Provider through publication", async () => {
+  const summaryStarted = deferred<void>();
+  const finishSummary = deferred<void>();
+  const oldClosed = deferred<void>();
+  let requests = 0;
+  let closeCalls = 0;
+  const oldAdapter: ModelAdapter = {
+    provider: "old-compaction",
+    async *stream(): AsyncIterable<ModelEvent> {
+      requests += 1;
+      if (requests === 1) {
+        yield { type: "text_delta", delta: "initial answer" };
+        return;
+      }
+      summaryStarted.resolve();
+      await finishSummary.promise;
+      yield { type: "text_delta", delta: "summary" };
+    },
+  };
+  const server = createRegistryServer({
+    registry: new ProviderRegistry([
+      {
+        providerProfileId: "profile-a",
+        adapter: oldAdapter,
+        modelCatalog: catalog(),
+        close() {
+          closeCalls += 1;
+          oldClosed.resolve();
+        },
+      },
+    ]),
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "history")
+  ).done;
+  const compacting = server.compactThread(thread.id);
+  await summaryStarted.promise;
+  server.publishRuntimeConfiguration(
+    server.prepareRuntimeConfiguration({
+      revision: 1,
+      providerProfiles: [
+        {
+          providerProfileId: "profile-a",
+          adapter: recordingAdapter("new-compaction", []),
+          modelCatalog: catalog(),
+        },
+      ],
+      defaults: {
+        cwd: process.cwd(),
+        ...selection("profile-a", "low"),
+        sandbox: "danger-full-access",
+        approvalPolicy: "never",
+      },
+    }),
+  );
+
+  assert.equal(closeCalls, 0);
+  assert.equal(server.activitySnapshot().rootOperations[0]?.kind, "compaction");
+  finishSummary.resolve();
+  await compacting;
+  await oldClosed.promise;
+  assert.equal(closeCalls, 1);
+  assert.equal(server.activitySnapshot().rootOperations.length, 0);
+});
+
+test("final Turn admission revalidates input against the published snapshot", async () => {
+  const firstReadStarted = deferred<void>();
+  const finishFirstRead = deferred<void>();
+  let reads = 0;
+  const ref: AttachmentRef = {
+    type: "attachment",
+    sha256: "a".repeat(64),
+    mediaType: "image/png",
+    byteLength: 1,
+    width: 1,
+    height: 1,
+  };
+  const attachments: AttachmentStore = {
+    async importBytes() {
+      return ref;
+    },
+    async importLocalImage() {
+      return ref;
+    },
+    async read() {
+      reads += 1;
+      if (reads === 1) {
+        firstReadStarted.resolve();
+        await finishFirstRead.promise;
+      }
+      return new Uint8Array([1]);
+    },
+  };
+  const adapter = recordingAdapter("images", []);
+  const registry = new ProviderRegistry([
+    {
+      providerProfileId: "profile-a",
+      adapter,
+      modelCatalog: catalogWithModalities(["text", "image"]),
+    },
+  ]);
+  const server = new ZenAppServer({
+    journal: new InMemoryThreadJournal(),
+    attachments,
+    runtime: new AgentRuntime({
+      toolEnvironment: new ToolEnvironment({
+        runtimes: [new ShellToolRuntime()],
+      }),
+    }),
+    providerRegistry: registry,
+    threadMetadata: new InMemoryThreadMetadataStore(),
+    defaults: {
+      cwd: process.cwd(),
+      ...selection("profile-a", "low"),
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    },
+  });
+  const thread = await server.startThread();
+  const starting = server.startTurn(thread.id, [
+    { type: "text", text: "inspect image" },
+    { type: "image", attachment: ref },
+  ]);
+  await firstReadStarted.promise;
+  server.publishRuntimeConfiguration(
+    server.prepareRuntimeConfiguration({
+      revision: 1,
+      providerProfiles: [
+        {
+          providerProfileId: "profile-a",
+          adapter,
+          modelCatalog: catalogWithModalities(["text"]),
+        },
+      ],
+      defaults: {
+        cwd: process.cwd(),
+        ...selection("profile-a", "low"),
+        sandbox: "danger-full-access",
+        approvalPolicy: "never",
+      },
+    }),
+  );
+  finishFirstRead.resolve();
+
+  await assert.rejects(starting, hasZenCode("image_input_unsupported"));
+  assert.equal(reads, 1);
+  assert.equal((await server.readThread(thread.id)).turns.length, 0);
+});
 
 function createRegistryServer(options: {
   registry: ProviderRegistry;
