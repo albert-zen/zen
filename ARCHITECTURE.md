@@ -2,6 +2,9 @@
 
 ## 核心概念
 
+- **Host 配置快照** — Host 将已准备的 Provider 目录、默认选择与执行参数作为一致的瞬时快照发布，新根执行只从当前快照取得依赖，配置文件仍是唯一持久配置权威。
+- **Provider 执行依赖持有** — 一次 Turn 或 Host 辅助模型请求对 adapter、模型元数据及 transport 的瞬时引用在真正执行结束后释放，退役资源待最后一个引用结束后关闭，不进入 journal。
+
 五个概念，各一句话。新抽象必须先在这里获得自己的一句话。
 
 `NewThreadDraft` 是 Renderer 中非持久的临时编辑 UI，在通过 App Server 正常创建前不拥有任何 Thread 或 session 权威。
@@ -57,7 +60,7 @@
 - **Plugin UI SDK** — 第一方 bundled 插件和隔离运行的第三方插件共享的逻辑 UI contribution API；信任和进程隔离不同，不产生两套产品语义。
 - **Tool Result Renderer** — 按 namespaced content type 渲染既有 `ToolResultItem` 可选 structured content 的插件 UI contribution；renderer 缺失时必须回退 text/JSON，且不得改写历史 Item。
 - **ZenX ZAS Endpoint** — ZenX Host 拥有的稳定、带认证、可供其他应用连接的 Zen App Server endpoint；当前原生 surface 与 CAS mapped surface 共用它，但不创建第二个 AppServer authority，也不要求 OS daemon。
-- **ZenX Resume Projection Buffer** — renderer 在一次 Thread selection epoch 内只短时缓存 resume 响应到 React commit 之间到达的协议事件，并在 canonical snapshot 提交时按序重放；它不持久化，也不成为第二份 Thread 状态。
+- **ZenX Resume Projection Buffer** — renderer 只重放当前连接、同一 Host processEpoch 且晚于原生 resume snapshot watermark 的事件；Host 快照同时包含 canonical 历史与尚未 canonicalize 的活动显示投影，瞬时序号与显示尾部不进入 journal，也不决定会话执行或终态。
 - **ZenX Approval UI Identity** — ZenX main 为每个 connection generation 的瞬时 approval 分配 opaque UI id，并把应答绑定到发起请求的 exact client/socket 与 wire id；stop 或 reconnect 会取消并清空旧 generation，renderer ready snapshot 只镜像当前 pending 集合。
 - **AttachmentStore** — ZAS 管理的不可变、SHA-256 内容寻址 payload store；
   canonical Item 只保存 provider-neutral `AttachmentRef`，Store 与 ItemList 合起来才足以重放输入，
@@ -132,7 +135,7 @@
 - **ProviderRegistry** — 宿主以稳定 `providerProfileId` 把每个注入的 ModelAdapter
   与其 ModelCatalog 绑定；canonical selection 是
   `providerProfileId / modelId / reasoningEffort` 的原子三元组，Thread 只记录生效选择而不持有 profile 或 credential；
-  输入省略 effort 时，目标支持当前 effort 就保留，否则使用目标 model 的默认 effort。
+  明确切换选择时省略 effort，目标支持当前 effort 就保留，否则使用目标 model 的默认 effort；已有 canonical selection 的 null 是明确值，不因新增能力而静默采用新默认。
 - **IMZen App Server Read Projection** — 产品 client 把 ZAS 的有界原生列表页投影为 SDK 所需排序/搜索，并以无配置的 `thread/resume` 建立当前 socket 的 snapshot + live 订阅；它不激活桌面、不改变 Thread，IM 目的地仍只由 SDK routes 授权。
 - **IMZenX Plugin** — 第一方 npm package 在 ZenX Host 生命周期内组合 IMZen 与固定 IM Agent SDK；Host 在 Catalog 发布后通过可选 activate 钩子交付所有尚未退出前代 runtime 的传递退出屏障；后台插件以 package createRuntime 工厂为每代捕获独立的 invoke/close 实例，停用恢复不会改写尚未退出的旧代对象；后台消费者等待前代退出才连接；准备阶段不连接 IM。Host 注入唯一 ZAS descriptor，Plugin SDK 存储连接配置，SDK SQLite 只持久化频道绑定、订阅投影和去重，不产生第二份 Thread 或 transcript；ZAS 在 canonical metadata 提交后广播 Thread 创建通知，使桌面发现 IM 新建会话；discovery 广播本身不订阅 transcript，ZenX Host 为自动命名主动取得无配置的 snapshot + live 订阅，不改变窗口选中的 Thread，并从 canonical 首条有意义输入交给既有命名 coordinator。
 - **IMZenController** — IMZen 通过 IM Agent SDK typed actions，以及 SDK 明确保留
@@ -876,3 +879,11 @@ Context pressure estimation includes tool `modelContent` as the additional user 
 模型请求在适配器共享的 request admission 边界最多尝试 4 次：临时连接错误及 HTTP 408/429/500/502/503/504 采用可取消、带抖动的指数退避，遵守 Retry-After，累计退避不超过 120 秒。成功响应开始后不重放流、Turn 或工具；耗尽后由原有 failure 路径告知用户，不引入 durable 重试状态。
 
 ZenX 的 reasoning 状态仅是展示投影：item/started 开始转圈，item/completed 移除运行态，canonical incomplete 显示 Interrupted；Turn 终止时尚未闭合的展示行收束为 Interrupted。兼容投影允许携带可选状态元数据，旧 CAS/已完成记录缺省不显示状态；不新增运行时对象或推断工具与推理的先后生命周期。
+
+## 运行时配置发布
+
+AppServer 的 Host 根操作接纳门在线性化边界排序新执行与维护，活动概览包括 Turn、压缩、辅助操作及 ToolTaskManager 尚未确认结束的执行体；忙时拒绝维护，空闲进入维护后向新根操作返回 host_restarting。
+
+SettingsService 串行校验配置草稿与 baseRevision，经 Host prepare 后原子保存 revision，再通过私有认证控制通道 publish；无有效变化不创建 transport。凭证写入新引用后才提交配置引用，不能先覆盖正在使用的秘密槽。保存后回执未知显示“已保存，应用未确认”，通过 processEpoch/revision 查询或显式重试同一 revision，暂停后续提交而不重启 Host。进程级配置默认下次启动生效；安全重启必须在根操作接纳边界原子检查并拒绝忙状态，不安排后台自动重启。
+
+Provider 删除、能力更新与连接替换只改变后续执行目录。AppServer 在接纳时固定 selection、目录条目、adapter 与本轮压缩和执行限制，保留至包括压缩在内的真实 finally；全局默认不改写已有 canonical selection。工具权限仍沿既有授权边界更新。

@@ -104,6 +104,7 @@ export function SettingsView({
     try {
       normalizeContextCompactionConfig(draft.contextCompaction);
       const value = await window.zenx.settings.save({
+        baseRevision: draft.revision ?? 0,
         onboardingComplete: true,
         computerForegroundControlEnabled:
           draft.computerForegroundControlEnabled === true,
@@ -118,7 +119,7 @@ export function SettingsView({
       });
       setSettings(value);
       setDraft(value.profile);
-      setStatus("Changes applied");
+      setStatus(configurationSaveMessage(value));
     } catch (reason) {
       setError(describeError(reason));
     } finally {
@@ -305,10 +306,78 @@ export function SettingsView({
                 threads={archivedThreads}
               />
             ) : null}
+            {settings.configuration?.status === "unconfirmed" ? (
+              <div className="settings-note" role="status">
+                <p>{configurationSaveMessage(settings)}</p>
+                <button
+                  type="button"
+                  className="quiet-button"
+                  disabled={busy !== null}
+                  onClick={() => {
+                    setBusy("configuration-check");
+                    void window.zenx.settings
+                      .reconcile(false)
+                      .then((value) => {
+                        setSettings(value);
+                        setStatus(configurationSaveMessage(value));
+                      })
+                      .catch((reason) => setError(describeError(reason)))
+                      .finally(() => setBusy(null));
+                  }}
+                >
+                  Check application status
+                </button>
+                <button
+                  type="button"
+                  className="quiet-button"
+                  disabled={busy !== null}
+                  onClick={() => {
+                    setBusy("configuration-retry");
+                    void window.zenx.settings
+                      .reconcile(true)
+                      .then((value) => {
+                        setSettings(value);
+                        setStatus(configurationSaveMessage(value));
+                      })
+                      .catch((reason) => setError(describeError(reason)))
+                      .finally(() => setBusy(null));
+                  }}
+                >
+                  Retry applying saved settings
+                </button>
+              </div>
+            ) : null}
+            {settings.configuration?.pendingRestart.length ? (
+              <div className="settings-note">
+                <p>{configurationSaveMessage(settings)}</p>
+                <button
+                  type="button"
+                  className="quiet-button"
+                  disabled={busy !== null}
+                  onClick={() => {
+                    setBusy("safe-restart");
+                    void window.zenx.settings
+                      .safeRestart()
+                      .then((value) => {
+                        setSettings(value);
+                        setDraft(value.profile);
+                        setStatus(configurationSaveMessage(value));
+                      })
+                      .catch((reason) => setError(describeError(reason)))
+                      .finally(() => setBusy(null));
+                  }}
+                >
+                  Safe restart
+                </button>
+              </div>
+            ) : null}
             {tab === "models" || tab === "general" || tab === "compaction" ? (
               <SettingsApplyBar
                 busy={busy === "save"}
-                disabled={compactionError !== null}
+                disabled={
+                  compactionError !== null ||
+                  settings.configuration?.status === "unconfirmed"
+                }
                 dirty={hostDirty}
                 requiresRestart={!sendModeOnly}
                 onApply={() => void save()}
@@ -353,7 +422,7 @@ export function SettingsApplyBar({
         <span>
           {dirty
             ? requiresRestart
-              ? "Apply these changes when you are ready. ZenX will restart the local host."
+              ? "Apply these changes. Running turns keep their current configuration."
               : "Apply this sending preference without interrupting the running turn."
             : "Your settings are up to date."}
         </span>
@@ -366,8 +435,8 @@ export function SettingsApplyBar({
       >
         {requiresRestart
           ? busy
-            ? "Applying & restarting…"
-            : "Apply & restart"
+            ? "Applying…"
+            : "Apply"
           : busy
             ? "Applying…"
             : "Apply"}
@@ -620,6 +689,7 @@ function ModelsPanel({
   const [editor, setEditor] = useState<{
     mode: "add" | "edit";
     provider: ZenXProviderProfile;
+    baseRevision: number;
   } | null>(null);
   const [deletingProviderId, setDeletingProviderId] = useState<string | null>(
     null,
@@ -644,7 +714,7 @@ function ModelsPanel({
         : value.profile.titleModel,
     });
     setError(null);
-    setStatus(message);
+    setStatus(configurationSaveMessage(value));
   };
 
   const runMutation = async (
@@ -663,12 +733,15 @@ function ModelsPanel({
       const originalError = describeError(reason);
       try {
         const authoritative = await window.zenx.settings.get();
-        if (committed(authoritative)) {
+        if (
+          authoritative.configuration &&
+          (authoritative.profile.revision ?? 0) >
+            (settings.profile.revision ?? 0) &&
+          committed(authoritative)
+        ) {
           setSettings(authoritative);
           setDraft(authoritative.profile);
-          setStatus(
-            `${message.replace(/ · local host restarted$/u, "")} · saved, but finalization failed`,
-          );
+          setStatus(configurationSaveMessage(authoritative));
           setError(
             `Settings were saved, but finalization failed: ${originalError}`,
           );
@@ -713,7 +786,11 @@ function ModelsPanel({
             };
     setShowAddChoices(false);
     setDeletingProviderId(null);
-    setEditor({ mode: "add", provider });
+    setEditor({
+      mode: "add",
+      provider,
+      baseRevision: settings.profile.revision ?? 0,
+    });
     setError(null);
     setStatus(null);
   };
@@ -722,6 +799,7 @@ function ModelsPanel({
     setShowAddChoices(false);
     setDeletingProviderId(null);
     setEditor({
+      baseRevision: settings.profile.revision ?? 0,
       mode: "add",
       provider: {
         providerProfileId: preset.providerProfileId,
@@ -909,17 +987,20 @@ function ModelsPanel({
             onSubmit={async (provider, apiKey, replacements) => {
               const success = await runMutation(
                 editor.mode === "add" ? "provider-add" : "provider-edit",
-                editor.mode === "add"
-                  ? "Provider added · local host restarted"
-                  : "Provider saved · local host restarted",
+                editor.mode === "add" ? "Provider added" : "Provider saved",
                 async () =>
                   editor.mode === "add"
-                    ? await window.zenx.settings.addProvider(provider, apiKey)
+                    ? await window.zenx.settings.addProvider(
+                        provider,
+                        apiKey,
+                        editor.baseRevision,
+                      )
                     : await window.zenx.settings.editProvider(
                         editor.provider.providerProfileId,
                         provider,
                         {
                           ...replacements,
+                          baseRevision: editor.baseRevision,
                           ...(apiKey === undefined ? {} : { apiKey }),
                         },
                       ),
@@ -956,7 +1037,11 @@ function ModelsPanel({
                 setStatus(null);
               }}
               onEdit={() => {
-                setEditor({ mode: "edit", provider });
+                setEditor({
+                  mode: "edit",
+                  provider,
+                  baseRevision: settings.profile.revision ?? 0,
+                });
                 setDeletingProviderId(null);
                 setShowAddChoices(false);
                 setError(null);
@@ -976,11 +1061,14 @@ function ModelsPanel({
             onDelete={async (replacements) => {
               const success = await runMutation(
                 "provider-delete",
-                "Provider deleted · local host restarted",
+                "Provider deleted",
                 async () =>
                   await window.zenx.settings.deleteProvider(
                     deletingProvider.providerProfileId,
-                    replacements,
+                    {
+                      ...replacements,
+                      baseRevision: settings.profile.revision ?? 0,
+                    },
                   ),
                 (authoritative) => {
                   const deleted = authoritative.profile.providerProfiles.some(
@@ -1545,8 +1633,8 @@ function ProviderEditor({
           <button className="primary-button" type="submit" disabled={busy}>
             {busy
               ? mode === "add"
-                ? "Adding & restarting…"
-                : "Saving & restarting…"
+                ? "Adding…"
+                : "Saving…"
               : mode === "add"
                 ? "Add provider"
                 : "Save provider"}
@@ -1571,6 +1659,10 @@ function ModelCapabilityEditor({
   probing?: boolean;
 }) {
   const [configuringReasoning, setConfiguringReasoning] = useState(false);
+  const savedReasoning = useRef<Pick<
+    ZenXModelCatalogEntry,
+    "supportedReasoningEfforts" | "defaultReasoningEffort"
+  > | null>(null);
   const manual = (
     update: Partial<ZenXModelCatalogEntry>,
   ): ZenXModelCatalogEntry => ({ ...model, ...update, source: "manual" });
@@ -1602,30 +1694,45 @@ function ModelCapabilityEditor({
             value={reasoningMode}
             onChange={(event) => {
               const mode = event.target.value;
+              if (model.supportedReasoningEfforts?.length)
+                savedReasoning.current = {
+                  supportedReasoningEfforts: model.supportedReasoningEfforts,
+                  defaultReasoningEffort: model.defaultReasoningEffort,
+                };
               setConfiguringReasoning(mode === "configured");
               onChange(
                 manual(
                   mode === "unknown"
                     ? {
+                        reasoningConfiguration: undefined,
                         supportedReasoningEfforts: null,
                         defaultReasoningEffort: null,
                       }
                     : mode === "text-only"
                       ? {
+                          reasoningConfiguration: undefined,
                           supportedReasoningEfforts: [],
                           defaultReasoningEffort: null,
                         }
                       : {
-                          supportedReasoningEfforts:
-                            model.supportedReasoningEfforts ?? [],
+                          reasoningConfiguration: "manual",
+                          supportedReasoningEfforts: savedReasoning.current
+                            ?.supportedReasoningEfforts ?? [
+                            "low",
+                            "medium",
+                            "high",
+                          ],
+                          defaultReasoningEffort:
+                            savedReasoning.current?.defaultReasoningEffort ??
+                            "medium",
                         },
                 ),
               );
             }}
           >
             <option value="unknown">Unknown</option>
-            <option value="text-only">Text only (no reasoning control)</option>
-            <option value="configured">Configured</option>
+            <option value="text-only">No reasoning strength control</option>
+            <option value="configured">Manual configuration</option>
           </select>
         </label>
         {onProbe === undefined ? null : (
@@ -1647,24 +1754,42 @@ function ModelCapabilityEditor({
               onChange={(value) =>
                 onChange(
                   manual({
+                    reasoningConfiguration: "manual",
                     supportedReasoningEfforts: commaSeparatedValues(value),
                   }),
                 )
               }
             />
-            <Field
-              label={`Model ${index + 1} default reasoning effort`}
-              placeholder="None"
-              value={model.defaultReasoningEffort ?? ""}
-              onChange={(value) =>
-                onChange(
-                  manual({
-                    defaultReasoningEffort:
-                      value.trim().length === 0 ? null : value,
-                  }),
-                )
-              }
-            />
+            <label className="field">
+              <span>{`Model ${index + 1} default reasoning effort`}</span>
+              <select
+                aria-label={`Model ${index + 1} default reasoning effort`}
+                value={model.defaultReasoningEffort ?? ""}
+                onChange={(event) =>
+                  onChange(
+                    manual({
+                      defaultReasoningEffort: event.target.value || null,
+                    }),
+                  )
+                }
+              >
+                <option value="">Choose a default</option>
+                {(model.supportedReasoningEfforts ?? []).map((effort) => (
+                  <option key={effort} value={effort}>
+                    {effort}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {!model.supportedReasoningEfforts?.length ||
+            !model.supportedReasoningEfforts.includes(
+              model.defaultReasoningEffort ?? "",
+            ) ? (
+              <p className="settings-error" role="alert">
+                Enter at least one supported effort and choose its default
+                before applying.
+              </p>
+            ) : null}
           </>
         ) : null}
         <label className="field">
@@ -1839,7 +1964,7 @@ function DeleteProviderPanel({
             );
           }}
         >
-          {busy ? "Deleting & restarting…" : "Delete provider"}
+          {busy ? "Deleting…" : "Delete provider"}
         </button>
       </div>
     </section>
@@ -1927,6 +2052,17 @@ function validateProviderEditor(
   ) {
     return "Model IDs must be unique within this Provider profile";
   }
+  if (
+    provider.models.some(
+      (model) =>
+        model.reasoningConfiguration === "manual" &&
+        (!model.supportedReasoningEfforts?.length ||
+          !model.supportedReasoningEfforts.includes(
+            model.defaultReasoningEffort ?? "",
+          )),
+    )
+  )
+    return "Manual reasoning configuration requires supported efforts and a valid default";
   const missingContext = provider.models.find(
     (model) =>
       model.contextWindow === null ||
@@ -2280,8 +2416,8 @@ function GeneralPanel({
         </div>
         <p className="settings-note">
           Off by default. Browser automation and background-safe Computer tools
-          do not need this permission. Apply and restart to change which tools
-          agents can use.
+          do not need this permission. Apply to change which tools agents can
+          use.
         </p>
       </div>
       <div className="page-card settings-card">
@@ -2413,9 +2549,9 @@ function GeneralPanel({
           <div>
             <strong>Zen App Server</strong>
             <span>
-              Changes to runtime defaults restart the local host. The sending
-              preference applies without a restart. Existing Thread settings
-              remain authoritative.
+              Runtime defaults apply to new turns. Running turns keep their
+              admitted configuration. Existing Thread settings remain
+              authoritative.
             </span>
           </div>
           <span className="status-good">Local</span>
@@ -2564,7 +2700,7 @@ function modelCapabilitySummary(model: ZenXModelCatalogEntry): string {
     model.supportedReasoningEfforts === null
       ? "reasoning unknown"
       : model.supportedReasoningEfforts.length === 0
-        ? "text only · reasoning not configured"
+        ? "no reasoning strength control"
         : model.supportedReasoningEfforts.join(" / ");
   const modalities =
     model.inputModalities === null
@@ -2634,4 +2770,19 @@ function ManualCode() {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function configurationSaveMessage(value: PublicHostSettings): string {
+  const result = value.configuration;
+  if (!result) return "Settings saved";
+  switch (result.status) {
+    case "unchanged":
+      return "No changes";
+    case "applied":
+      return "Changes applied · running turns keep their current configuration";
+    case "pending-restart":
+      return `Saved · ${result.pendingRestart.join(", ")} takes effect next launch`;
+    case "unconfirmed":
+      return "Saved · application not yet confirmed. Check application status before saving more changes.";
+  }
 }

@@ -113,6 +113,8 @@ declare global {
         ): Promise<ClientRequestResults["thread/start"]>;
       };
       settings: {
+        safeRestart(): Promise<PublicHostSettings>;
+        reconcile(retry: boolean): Promise<PublicHostSettings>;
         get(): Promise<PublicHostSettings>;
         save(
           settings: ZenXSettingsUpdate,
@@ -121,6 +123,7 @@ declare global {
         addProvider(
           provider: ZenXProviderProfile,
           apiKey?: string,
+          baseRevision?: number,
         ): Promise<PublicHostSettings>;
         editProvider(
           providerProfileId: string,

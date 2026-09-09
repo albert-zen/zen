@@ -1,5 +1,6 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   createProviderFetch,
@@ -12,12 +13,15 @@ import { OpenAiCompatibleModel } from "../../../../src/model/openai-compatible.j
 import { OpenAiSubscriptionModel } from "../../../../src/model/openai-subscription.js";
 import type {
   ZenXHostConfig,
+  HostConfigurationCandidate,
+  HostConfigurationCurrent,
   ZenXSingleProviderHostConfig,
 } from "./host-messages.js";
 import {
   applyBuiltInModelCatalogPresets,
   hostConfigFromProfile,
   type PublicHostSettings,
+  type ConfigurationSaveResult,
   type ZenXHostProfile,
   type ZenXModelCatalogEntry,
   type ZenXProviderDeleteReplacements,
@@ -107,7 +111,132 @@ interface ProviderOperationSnapshot {
   readonly providerFingerprint: string;
 }
 
+type SettingsConfigurationCandidate = HostConfigurationCandidate;
+type SettingsConfigurationCurrent = HostConfigurationCurrent;
+export interface SettingsConfigurationControl {
+  prepare(
+    config: ZenXHostConfig,
+    revision: number,
+  ): Promise<SettingsConfigurationCandidate>;
+  publish(
+    candidate: SettingsConfigurationCandidate,
+  ): Promise<SettingsConfigurationCurrent>;
+  discard(candidate: SettingsConfigurationCandidate): Promise<void>;
+  current(): Promise<SettingsConfigurationCurrent>;
+}
 export class ZenXSettingsService {
+  #configurationControl: SettingsConfigurationControl | undefined;
+  #configurationResult: ConfigurationSaveResult | undefined;
+  #pendingConfiguration: SettingsConfigurationCandidate | undefined;
+  #appliedProfile: ZenXHostProfile | undefined;
+  #auxiliaryOperations = 0;
+  #profileInFlight = 0;
+  #maintenance = false;
+  #retiredCredentials = new Set<string>();
+  configurationRevision(): number {
+    return this.#requireProfile().revision ?? 0;
+  }
+  activeConfigurationOperations(): number {
+    return this.#auxiliaryOperations;
+  }
+  tryBeginMaintenance(): boolean {
+    if (
+      this.#maintenance ||
+      this.#auxiliaryOperations > 0 ||
+      this.#profileInFlight > 0 ||
+      this.#pendingConfiguration
+    )
+      return false;
+    this.#maintenance = true;
+    return true;
+  }
+  endMaintenance(): void {
+    this.#maintenance = false;
+  }
+  #beginAuxiliaryOperation(): () => void {
+    if (this.#maintenance) throw new Error("host_restarting");
+    this.#auxiliaryOperations++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.#auxiliaryOperations--;
+      void this.#cleanupRetiredCredentials();
+    };
+  }
+  async #cleanupRetiredCredentials(): Promise<void> {
+    if (this.#auxiliaryOperations || this.#pendingConfiguration) return;
+    for (const reference of this.#retiredCredentials) {
+      try {
+        await this.#vault.clearApiKey(reference);
+        this.#retiredCredentials.delete(reference);
+      } catch (error) {
+        console.error("Retired credential cleanup failed", error);
+      }
+    }
+  }
+
+  setConfigurationControl(control: SettingsConfigurationControl): void {
+    this.#configurationControl = control;
+    this.#appliedProfile = this.#requireProfile();
+  }
+  async reconcileConfiguration(
+    retry = false,
+  ): Promise<ConfigurationSaveResult | undefined> {
+    return this.#queueProfileOperation(async () => {
+      const candidate = this.#pendingConfiguration;
+      if (!this.#configurationControl) return this.#configurationResult;
+      if (!candidate) {
+        const current = await this.#configurationControl.current();
+        if (current.revision === this.configurationRevision())
+          this.#acceptConfiguration(current);
+        return this.#configurationResult;
+      }
+      let current = await this.#configurationControl.current();
+      if (current.revision !== candidate.revision && retry) {
+        const prepared =
+          current.processEpoch === candidate.processEpoch
+            ? candidate
+            : await this.#configurationControl.prepare(
+                await this.#hostConfigForProfile(this.#requireProfile()),
+                candidate.revision,
+              );
+        this.#pendingConfiguration = prepared;
+        current = await this.#configurationControl.publish(prepared);
+      }
+      if (current.revision === candidate.revision)
+        this.#acceptConfiguration(current);
+      return this.#configurationResult;
+    });
+  }
+  #acceptConfiguration(current: SettingsConfigurationCurrent): void {
+    this.#pendingConfiguration = undefined;
+    void this.#cleanupRetiredCredentials();
+    this.#appliedProfile = this.#profile;
+    this.#configurationResult = {
+      status: current.pendingRestart.length ? "pending-restart" : "applied",
+      revision: current.revision,
+      processEpoch: current.processEpoch,
+      pendingRestart: current.pendingRestart,
+    };
+  }
+  #assertBaseRevision(baseRevision: number | undefined): void {
+    if (this.#pendingConfiguration)
+      throw new Error(
+        "Configuration application is unconfirmed; check or retry its application before saving again",
+      );
+    if (
+      baseRevision !== undefined &&
+      baseRevision !== (this.#requireProfile().revision ?? 0)
+    )
+      throw new Error(
+        "Configuration conflict: another window saved changes. Your draft was preserved; reload before applying it",
+      );
+  }
+  #credentialReference(id: string, profile = this.#requireProfile()): string {
+    return profile.credentialReferences?.[id] ?? id;
+  }
+
   readonly #dataDirectory: string;
   readonly #profilePath: string;
   readonly #profileStore: ZenXHostProfileStore;
@@ -216,15 +345,25 @@ export class ZenXSettingsService {
       .map((candidate) => candidate.providerProfileId);
     const apiKeyPresence = await Promise.all(
       compatibleIds.map(
-        async (id) => [id, await this.#vault.hasApiKey(id)] as const,
+        async (id) =>
+          [
+            id,
+            await this.#vault.hasApiKey(this.#credentialReference(id, profile)),
+          ] as const,
       ),
     );
     const subscriptionProviderProfileId =
       this.#configuredSubscriptionProfileId(profile);
     return {
-      profile,
+      ...(this.#configurationResult
+        ? { configuration: this.#configurationResult }
+        : {}),
+      profile: structuredClone(profile),
       hasApiKey: await this.#vault.hasApiKey(
-        profile.defaultModel.providerProfileId,
+        this.#credentialReference(
+          profile.defaultModel.providerProfileId,
+          profile,
+        ),
       ),
       apiKeyProviderProfileIds: apiKeyPresence.flatMap(([id, present]) =>
         present ? [id] : [],
@@ -241,27 +380,58 @@ export class ZenXSettingsService {
 
   async hostConfig(): Promise<ZenXHostConfig> {
     await this.#profileOperations;
-    const profile = this.#requireProfile();
+    return this.#hostConfigForProfile(this.#requireProfile());
+  }
+
+  async #hostConfigForProfile(
+    profile: ZenXHostProfile,
+  ): Promise<ZenXHostConfig> {
     const apiKeyProfileIds = profile.providerProfiles
       .filter((candidate) => candidate.type === "openai-compatible")
       .map((candidate) => candidate.providerProfileId);
-    return hostConfigFromProfile(profile, {
-      dataDirectory: this.#dataDirectory,
-      subscriptionProfilePath: this.#profilePath,
-      subscriptionProfilePaths: Object.fromEntries(
-        profile.providerProfiles
-          .filter((candidate) => candidate.type === "openai-subscription")
-          .map((candidate) => [
-            candidate.providerProfileId,
-            this.#subscriptionProfilePath(candidate.providerProfileId),
-          ]),
-      ),
-      fallbackWorkspace: this.#dataDirectory,
-      apiKeys: await this.#vault.readApiKeys(apiKeyProfileIds),
-    });
+    return {
+      configurationRevision: profile.revision ?? 0,
+      ...hostConfigFromProfile(profile, {
+        dataDirectory: this.#dataDirectory,
+        subscriptionProfilePath: this.#profilePath,
+        subscriptionProfilePaths: Object.fromEntries(
+          profile.providerProfiles
+            .filter((candidate) => candidate.type === "openai-subscription")
+            .map((candidate) => [
+              candidate.providerProfileId,
+              this.#subscriptionProfilePath(candidate.providerProfileId),
+            ]),
+        ),
+        fallbackWorkspace: this.#dataDirectory,
+        apiKeys: Object.fromEntries(
+          await Promise.all(
+            apiKeyProfileIds.map(async (id) => [
+              id,
+              await this.#vault.readApiKey(
+                this.#credentialReference(id, profile),
+              ),
+            ]),
+          ),
+        ),
+      }),
+    };
   }
 
   async discoverProviderModels(
+    providerProfileId: string,
+    options: {
+      resolveTransport?: ProviderOperationTransportResolver;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<ZenXProviderCatalogSnapshot> {
+    const release = this.#beginAuxiliaryOperation();
+    try {
+      return await this.#discoverProviderModels(providerProfileId, options);
+    } finally {
+      release();
+    }
+  }
+  async #discoverProviderModels(
     providerProfileId: string,
     options: {
       resolveTransport?: ProviderOperationTransportResolver;
@@ -306,6 +476,25 @@ export class ZenXSettingsService {
   }
 
   async probeProviderModelImage(
+    providerProfileId: string,
+    modelId: string,
+    options: {
+      resolveTransport?: ProviderOperationTransportResolver;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<ZenXImageCapabilityProbeResult> {
+    const release = this.#beginAuxiliaryOperation();
+    try {
+      return await this.#probeProviderModelImage(
+        providerProfileId,
+        modelId,
+        options,
+      );
+    } finally {
+      release();
+    }
+  }
+  async #probeProviderModelImage(
     providerProfileId: string,
     modelId: string,
     options: {
@@ -389,20 +578,29 @@ export class ZenXSettingsService {
   }
 
   configuredTitleModel(): string {
-    return this.#requireProfile().titleModel.modelId;
+    return (this.#appliedProfile ?? this.#requireProfile()).titleModel.modelId;
   }
 
   computerForegroundControlEnabled(): boolean {
     return this.#requireProfile().computerForegroundControlEnabled === true;
   }
 
-  async titleModel(): Promise<{
+  async titleModel() {
+    const release = this.#beginAuxiliaryOperation();
+    try {
+      return { ...(await this.#titleModel()), release };
+    } catch (error) {
+      release();
+      throw error;
+    }
+  }
+  async #titleModel(): Promise<{
     adapter: ModelAdapter | null;
     model: string;
     reasoningEffort: string | null;
   }> {
     await this.#profileOperations;
-    const profile = this.#requireProfile();
+    const profile = this.#appliedProfile ?? this.#requireProfile();
     const titleReference = profile.titleModel;
     const provider = profile.providerProfiles.find(
       (candidate) =>
@@ -450,7 +648,9 @@ export class ZenXSettingsService {
         reasoningEffort,
       };
     }
-    const apiKey = await this.#vault.readApiKey(provider.providerProfileId);
+    const apiKey = await this.#vault.readApiKey(
+      this.#credentialReference(provider.providerProfileId, profile),
+    );
     if (apiKey === undefined)
       throw new Error(
         `Title model Provider profile ${provider.providerProfileId} has no API key`,
@@ -471,6 +671,7 @@ export class ZenXSettingsService {
 
   async save(settings: ZenXSettingsUpdate, apiKey?: string): Promise<void> {
     await this.#queueProfileOperation(async () => {
+      this.#assertBaseRevision(settings.baseRevision);
       const current = this.#requireProfile();
       const validated = (
         await this.#stableWorkspaceSnapshot(
@@ -502,7 +703,9 @@ export class ZenXSettingsService {
           apiKey.length > 0;
         if (
           !suppliedForProvider &&
-          !(await this.#vault.hasApiKey(provider.providerProfileId))
+          !(await this.#vault.hasApiKey(
+            this.#credentialReference(provider.providerProfileId),
+          ))
         ) {
           throw new Error(
             `Provider profile ${provider.providerProfileId} has no API key`,
@@ -531,8 +734,10 @@ export class ZenXSettingsService {
   async addProviderProfile(
     provider: ZenXProviderProfile,
     apiKey?: string,
+    baseRevision?: number,
   ): Promise<void> {
     await this.#queueProfileOperation(async () => {
+      this.#assertBaseRevision(baseRevision);
       const current = this.#requireProfile();
       const next = validateHostProfile({
         ...current,
@@ -568,6 +773,7 @@ export class ZenXSettingsService {
     options: ZenXProviderEditOptions = {},
   ): Promise<void> {
     await this.#queueProfileOperation(async () => {
+      this.#assertBaseRevision(options.baseRevision);
       const current = this.#requireProfile();
       const index = current.providerProfiles.findIndex(
         (candidate) => candidate.providerProfileId === providerProfileId,
@@ -591,7 +797,9 @@ export class ZenXSettingsService {
       if (
         provider.type === "openai-compatible" &&
         (options.apiKey === undefined || options.apiKey.length === 0) &&
-        !(await this.#vault.hasApiKey(providerProfileId))
+        !(await this.#vault.hasApiKey(
+          this.#credentialReference(providerProfileId),
+        ))
       ) {
         throw new Error(`Provider profile ${providerProfileId} has no API key`);
       }
@@ -610,6 +818,7 @@ export class ZenXSettingsService {
     replacements: ZenXProviderDeleteReplacements = {},
   ): Promise<void> {
     await this.#queueProfileOperation(async () => {
+      this.#assertBaseRevision(replacements.baseRevision);
       const current = this.#requireProfile();
       if (
         !current.providerProfiles.some(
@@ -620,9 +829,6 @@ export class ZenXSettingsService {
           `Provider profile ${providerProfileId} is not configured`,
         );
       }
-      const deletedProvider = current.providerProfiles.find(
-        (candidate) => candidate.providerProfileId === providerProfileId,
-      )!;
       const defaultReferenced =
         current.defaultModel.providerProfileId === providerProfileId;
       const titleReferenced =
@@ -647,13 +853,8 @@ export class ZenXSettingsService {
       });
       await this.#persistProfile(next, undefined, [providerProfileId]);
       this.#profile = next;
-      if (deletedProvider.type === "openai-subscription") {
-        try {
-          await this.#subscriptionForProfile(providerProfileId).logout();
-        } catch {
-          throw new ZenXProviderDeletionCleanupError();
-        }
-      }
+      // Removing a catalog entry must not revoke an in-flight OAuth identity.
+      // Explicit sign-out remains the separate credential revocation action.
     });
   }
 
@@ -682,7 +883,7 @@ export class ZenXSettingsService {
         },
         this.#projectPlatform,
       );
-      await this.#profileStore.write(next);
+      await this.#persistProfile(next);
       this.#profile = next;
       return isFirst;
     });
@@ -747,7 +948,7 @@ export class ZenXSettingsService {
         },
         this.#projectPlatform,
       );
-      await this.#profileStore.write(next);
+      await this.#persistProfile(next);
       this.#profile = next;
       return isDefault && target.key !== oldKey;
     });
@@ -778,7 +979,7 @@ export class ZenXSettingsService {
         },
         this.#projectPlatform,
       );
-      await this.#profileStore.write(next);
+      await this.#persistProfile(next);
       this.#profile = next;
       return defaultRemoved;
     });
@@ -803,7 +1004,7 @@ export class ZenXSettingsService {
         { ...current, workspace: selected },
         this.#projectPlatform,
       );
-      await this.#profileStore.write(next);
+      await this.#persistProfile(next);
       this.#profile = next;
       return true;
     });
@@ -831,7 +1032,7 @@ export class ZenXSettingsService {
         },
         this.#projectPlatform,
       );
-      await this.#profileStore.write(next);
+      await this.#persistProfile(next);
       this.#profile = next;
     });
   }
@@ -850,7 +1051,7 @@ export class ZenXSettingsService {
         )
       )
         return;
-      await this.#profileStore.write(next);
+      await this.#persistProfile(next);
       this.#profile = next;
     });
   }
@@ -867,7 +1068,7 @@ export class ZenXSettingsService {
         JSON.stringify(current.sidebarOrder)
       )
         return;
-      await this.#profileStore.write(next);
+      await this.#persistProfile(next);
       this.#profile = next;
     });
   }
@@ -1001,7 +1202,9 @@ export class ZenXSettingsService {
           `Model ${modelId} is not configured for Provider profile ${providerProfileId}`,
         );
       }
-      const apiKey = await this.#vault.readApiKey(providerProfileId);
+      const apiKey = await this.#vault.readApiKey(
+        this.#credentialReference(providerProfileId),
+      );
       if (apiKey === undefined) {
         throw new Error(`Provider profile ${providerProfileId} has no API key`);
       }
@@ -1033,7 +1236,7 @@ export class ZenXSettingsService {
         candidate.providerProfileId === target.provider.providerProfileId,
     );
     const apiKey = await this.#vault.readApiKey(
-      target.provider.providerProfileId,
+      this.#credentialReference(target.provider.providerProfileId),
     );
     if (
       current === undefined ||
@@ -1048,7 +1251,15 @@ export class ZenXSettingsService {
   }
 
   #queueProfileOperation<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.#profileOperations.then(operation);
+    const result = this.#profileOperations.then(async () => {
+      if (this.#maintenance) throw new Error("host_restarting");
+      this.#profileInFlight++;
+      try {
+        return await operation();
+      } finally {
+        this.#profileInFlight--;
+      }
+    });
     this.#profileOperations = result.then(
       () => undefined,
       () => undefined,
@@ -1094,50 +1305,111 @@ export class ZenXSettingsService {
     credential?: { providerProfileId: string; apiKey: string },
     clearCredentialProfileIds: readonly string[] = [],
   ): Promise<void> {
-    const affectedProfileIds = [
-      ...new Set([
-        ...clearCredentialProfileIds,
-        ...(credential === undefined ? [] : [credential.providerProfileId]),
-      ]),
-    ];
-    const previousApiKeys = new Map<string, string | undefined>();
-    for (const providerProfileId of affectedProfileIds) {
-      previousApiKeys.set(
-        providerProfileId,
-        await this.#vault.readApiKey(providerProfileId),
+    const previous = this.#profile;
+    if (this.#pendingConfiguration)
+      throw new Error(
+        "Configuration application is unconfirmed; check or retry before saving again",
       );
+    const oldKey = credential
+      ? await this.#vault.readApiKey(
+          this.#credentialReference(
+            credential.providerProfileId,
+            previous ?? profile,
+          ),
+        )
+      : undefined;
+    const keyChanged = credential !== undefined && credential.apiKey !== oldKey;
+    if (previous && !keyChanged && isDeepStrictEqual(profile, previous)) {
+      this.#configurationResult = {
+        status: "unchanged",
+        revision: previous.revision ?? 0,
+        pendingRestart: this.#configurationResult?.pendingRestart ?? [],
+      };
+      return;
     }
+    const revision = (previous?.revision ?? 0) + 1;
+    profile.revision = revision;
+    profile.credentialReferences = { ...previous?.credentialReferences };
+    for (const id of clearCredentialProfileIds)
+      delete profile.credentialReferences[id];
+    const newReference = keyChanged
+      ? oldKey === undefined
+        ? credential!.providerProfileId
+        : `credential-${randomUUID()}`
+      : undefined;
+    if (newReference && credential)
+      profile.credentialReferences[credential.providerProfileId] = newReference;
+    let candidate: SettingsConfigurationCandidate | undefined;
     try {
-      for (const providerProfileId of clearCredentialProfileIds) {
-        await this.#vault.clearApiKey(providerProfileId);
-      }
-      if (credential !== undefined) {
-        await this.#vault.writeApiKey(
-          credential.providerProfileId,
-          credential.apiKey,
+      if (newReference && credential)
+        await this.#vault.writeApiKey(newReference, credential.apiKey);
+      if (this.#configurationControl)
+        candidate = await this.#configurationControl.prepare(
+          await this.#hostConfigForProfile(profile),
+          revision,
         );
-      }
       await this.#profileStore.write(profile);
-    } catch (persistenceError) {
-      const compensationErrors: unknown[] = [];
-      for (const providerProfileId of affectedProfileIds) {
+    } catch (error) {
+      const cleanupErrors: unknown[] = [];
+      if (candidate)
+        await this.#configurationControl
+          ?.discard(candidate)
+          .catch((reason) => cleanupErrors.push(reason));
+      if (newReference)
+        await this.#vault
+          .clearApiKey(newReference)
+          .catch((reason) => cleanupErrors.push(reason));
+      if (cleanupErrors.length)
+        throw new AggregateError(
+          [error, ...cleanupErrors],
+          "Settings were not saved; unused candidate cleanup failed. Previous configuration and credentials are unchanged",
+        );
+      throw error;
+    }
+    this.#profile = profile;
+    if (candidate && this.#configurationControl) {
+      this.#pendingConfiguration = candidate;
+      this.#configurationResult = {
+        status: "unconfirmed",
+        revision,
+        processEpoch: candidate.processEpoch,
+        pendingRestart: candidate.pendingRestart,
+      };
+      try {
+        const current = await this.#configurationControl.publish(candidate);
+        if (
+          current.processEpoch === candidate.processEpoch &&
+          current.revision === revision
+        )
+          this.#acceptConfiguration(current);
+      } catch {
         try {
-          const previousApiKey = previousApiKeys.get(providerProfileId);
-          if (previousApiKey === undefined)
-            await this.#vault.clearApiKey(providerProfileId);
-          else await this.#vault.writeApiKey(providerProfileId, previousApiKey);
-        } catch (compensationError) {
-          compensationErrors.push(compensationError);
+          const current = await this.#configurationControl.current();
+          if (current.revision === revision) this.#acceptConfiguration(current);
+        } catch {
+          /* A lost acknowledgement is not proof of failure. */
         }
       }
-      if (compensationErrors.length > 0) {
-        throw new AggregateError(
-          [persistenceError, ...compensationErrors],
-          "ZenX settings were partially saved: persistence failed and the previous credential state could not be restored",
-        );
-      }
-      throw persistenceError;
+    } else {
+      this.#appliedProfile = profile;
+      this.#configurationResult = {
+        status: "pending-restart",
+        revision,
+        pendingRestart: ["host"],
+      };
     }
+    for (const id of clearCredentialProfileIds)
+      this.#retiredCredentials.add(
+        this.#credentialReference(id, previous ?? profile),
+      );
+    if (keyChanged && credential && oldKey !== undefined)
+      this.#retiredCredentials.add(
+        this.#credentialReference(
+          credential.providerProfileId,
+          previous ?? profile,
+        ),
+      );
+    await this.#cleanupRetiredCredentials();
   }
 }
 

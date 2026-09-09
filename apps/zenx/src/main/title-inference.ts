@@ -14,39 +14,43 @@ export class ZenXConfiguredTitleInference implements ThreadTitleInference {
     signal: AbortSignal,
   ): Promise<string> {
     const configured = await this.#settings.titleModel();
-    if (configured.model !== model)
-      throw new Error("Configured title model changed; retry explicitly");
-    if (configured.adapter === null) {
-      // Keep the local demo faithful to the asynchronous product lifecycle.
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, 1_500);
-        signal.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            reject(signal.reason);
+    try {
+      if (configured.model !== model)
+        throw new Error("Configured title model changed; retry explicitly");
+      if (configured.adapter === null) {
+        // Keep the local demo faithful to the asynchronous product lifecycle.
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 1_500);
+          signal.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              reject(signal.reason);
+            },
+            { once: true },
+          );
+        });
+        return localSemanticTitle(input);
+      }
+      let text = "";
+      for await (const event of configured.adapter.stream({
+        model,
+        reasoningEffort: configured.reasoningEffort,
+        messages: [
+          {
+            role: "user",
+            text: `Create a concise title of at most 64 characters in the same language as this request. Return only the title.\n\nRequest:\n${input}`,
           },
-          { once: true },
-        );
-      });
-      return localSemanticTitle(input);
+        ],
+        tools: [],
+        signal,
+      })) {
+        if (event.type === "text_delta") text += event.delta;
+      }
+      return text;
+    } finally {
+      configured.release();
     }
-    let text = "";
-    for await (const event of configured.adapter.stream({
-      model,
-      reasoningEffort: configured.reasoningEffort,
-      messages: [
-        {
-          role: "user",
-          text: `Create a concise title of at most 64 characters in the same language as this request. Return only the title.\n\nRequest:\n${input}`,
-        },
-      ],
-      tools: [],
-      signal,
-    })) {
-      if (event.type === "text_delta") text += event.delta;
-    }
-    return text;
   }
 }
 

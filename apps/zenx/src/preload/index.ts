@@ -169,6 +169,10 @@ contextBridge.exposeInMainWorld("zenx", {
       ),
   },
   settings: {
+    safeRestart: async (): Promise<PublicHostSettings> =>
+      ipcRenderer.invoke(ipcChannels.settingsSafeRestart),
+    reconcile: async (retry: boolean): Promise<PublicHostSettings> =>
+      ipcRenderer.invoke(ipcChannels.settingsReconcile, retry),
     get: async (): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.settingsGet),
     save: async (
@@ -179,8 +183,14 @@ contextBridge.exposeInMainWorld("zenx", {
     addProvider: async (
       provider: ZenXProviderProfile,
       apiKey?: string,
+      baseRevision?: number,
     ): Promise<PublicHostSettings> =>
-      await ipcRenderer.invoke(ipcChannels.providerAdd, provider, apiKey),
+      await ipcRenderer.invoke(
+        ipcChannels.providerAdd,
+        provider,
+        apiKey,
+        baseRevision,
+      ),
     editProvider: async (
       providerProfileId: string,
       provider: ZenXProviderProfile,

@@ -116,6 +116,16 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       }
     | undefined;
   #serviceMutationTail: Promise<void> = Promise.resolve();
+  #serviceMutationCount = 0;
+  #maintenance = false;
+  tryBeginMaintenance(): boolean {
+    if (this.#maintenance || this.#serviceMutationCount > 0) return false;
+    this.#maintenance = true;
+    return true;
+  }
+  endMaintenance(): void {
+    this.#maintenance = false;
+  }
 
   constructor(options: {
     userDataDirectory: string;
@@ -1420,7 +1430,11 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   }
 
   async #serializeServiceMutation<T>(mutation: () => Promise<T>): Promise<T> {
-    const result = this.#serviceMutationTail.then(mutation);
+    if (this.#maintenance) throw new Error("host_restarting");
+    this.#serviceMutationCount++;
+    const result = this.#serviceMutationTail.then(mutation).finally(() => {
+      this.#serviceMutationCount--;
+    });
     this.#serviceMutationTail = result.then(
       () => undefined,
       () => undefined,

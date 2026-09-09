@@ -34,7 +34,9 @@ export type ZenXProviderProfile = ZenXProviderConnection & {
   models: ZenXModelCatalogEntry[];
 };
 
-export type ZenXModelCatalogEntry = Omit<ModelCatalogEntry, "isDefault">;
+export type ZenXModelCatalogEntry = Omit<ModelCatalogEntry, "isDefault"> & {
+  reasoningConfiguration?: "manual";
+};
 
 export interface ZenXModelReference {
   providerProfileId: string;
@@ -49,6 +51,8 @@ export interface ZenXSidebarOrder {
 
 export interface ZenXHostProfile {
   version: 3;
+  revision?: number;
+  credentialReferences?: Record<string, string>;
   onboardingComplete: boolean;
   /** Missing in an older v3 profile means the high-impact tools stay off. */
   computerForegroundControlEnabled?: boolean;
@@ -83,9 +87,10 @@ export type ZenXSettingsUpdate = Pick<
   | "composerSendMode"
   | "maxToolRounds"
   | "contextCompaction"
->;
+> & { baseRevision?: number };
 
 export interface ZenXProviderEditOptions {
+  baseRevision?: number;
   defaultModel?: ZenXModelReference;
   titleModel?: ZenXModelReference;
   apiKey?: string;
@@ -96,7 +101,15 @@ export type ZenXProviderDeleteReplacements = Omit<
   "apiKey"
 >;
 
+export interface ConfigurationSaveResult {
+  status: "unchanged" | "applied" | "pending-restart" | "unconfirmed";
+  revision: number;
+  processEpoch?: string;
+  pendingRestart: string[];
+}
+
 export interface PublicHostSettings {
+  configuration?: ConfigurationSaveResult;
   profile: ZenXHostProfile;
   /** Credential presence for the profile referenced by defaultModel. */
   hasApiKey: boolean;
@@ -306,6 +319,16 @@ export function validateHostProfile(
   );
   return {
     version: 3,
+    ...(value.revision === undefined
+      ? {}
+      : { revision: configurationRevision(value.revision) }),
+    ...(value.credentialReferences === undefined
+      ? {}
+      : {
+          credentialReferences: credentialReferences(
+            value.credentialReferences,
+          ),
+        }),
     onboardingComplete: value.onboardingComplete === true,
     computerForegroundControlEnabled:
       value.computerForegroundControlEnabled === true,
@@ -582,6 +605,21 @@ function hostProviderFromProfile(
 
 function validateProviderProfile(value: unknown): ZenXProviderProfile {
   if (!isRecord(value)) throw new Error("ZenX Provider profile is invalid");
+  if (Array.isArray(value.models))
+    for (const model of value.models) {
+      if (
+        isRecord(model) &&
+        model.reasoningConfiguration === "manual" &&
+        (!Array.isArray(model.supportedReasoningEfforts) ||
+          model.supportedReasoningEfforts.length === 0 ||
+          !model.supportedReasoningEfforts.includes(
+            model.defaultReasoningEffort,
+          ))
+      )
+        throw new Error(
+          "Manual reasoning configuration requires supported efforts and a valid default",
+        );
+    }
   return {
     ...validateProviderConnection(value),
     providerProfileId: providerProfileIdentifier(value.providerProfileId),
@@ -1041,5 +1079,20 @@ function normalizeProjectNames(
       );
       return displayPath === undefined ? [] : [[displayPath, label]];
     }),
+  );
+}
+
+function configurationRevision(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+    throw new Error("Invalid configuration revision");
+  return value;
+}
+function credentialReferences(value: unknown): Record<string, string> {
+  if (!isRecord(value)) throw new Error("Invalid credential references");
+  return Object.fromEntries(
+    Object.entries(value).map(([id, ref]) => [
+      providerProfileIdentifier(id),
+      providerProfileIdentifier(ref),
+    ]),
   );
 }

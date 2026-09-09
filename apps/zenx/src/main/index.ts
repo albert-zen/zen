@@ -93,7 +93,6 @@ import { ZenXPluginDevControlServer } from "./plugin-dev-control.js";
 import { createDelegatingFirstPartyProfileLoader } from "./first-party-profile-loader.js";
 import { installZenXBundledPluginsAtStartup } from "./bundled-plugin-startup.js";
 import { BrowserLiveObservationIpcBridge } from "./browser-live-observation-ipc.js";
-import { deleteProviderProfileWithHostRestart } from "./provider-deletion.js";
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
@@ -402,15 +401,73 @@ async function bootstrapZenX(): Promise<void> {
     }
   }
   bootstrapFence.throwIfCancelled();
+  const attachConfigurationControl = async () => {
+    if (!appServerManager || appServerManager.status.type !== "ready") return;
+    settingsService!.setConfigurationControl({
+      prepare: async (config, revision) =>
+        appServerManager!.prepareConfiguration(
+          await withZenXProviderTransports(config, async (url) =>
+            session.defaultSession.resolveProxy(url),
+          ),
+          revision,
+        ),
+      publish: async (candidate) =>
+        appServerManager!.publishConfiguration(candidate),
+      discard: async (candidate) =>
+        appServerManager!.discardConfiguration(candidate),
+      current: async () => appServerManager!.currentConfiguration(),
+    });
+    await settingsService!.reconcileConfiguration();
+  };
+  await attachConfigurationControl();
+  ipcMain.handle(ipcChannels.settingsSafeRestart, async () => {
+    const manager = appServerManager;
+    if (!manager || manager.status.type !== "ready")
+      throw new Error("Host is not ready");
+    const config = await withZenXProviderTransports(
+      await settingsService!.hostConfig(),
+      async (url) => session.defaultSession.resolveProxy(url),
+    );
+    if (!settingsService!.tryBeginMaintenance())
+      throw new Error(
+        "Cannot safely restart while configuration or auxiliary model work is active",
+      );
+    let capabilityGate = false;
+    try {
+      if (
+        config.configurationRevision !==
+        settingsService!.configurationRevision()
+      )
+        throw new Error(
+          "Settings changed while preparing restart; retry explicitly",
+        );
+      capabilityGate = capabilityService?.tryBeginMaintenance() ?? true;
+      if (!capabilityGate)
+        throw new Error(
+          "Cannot safely restart while plugin changes are active",
+        );
+      const result = await manager.safeRestart(config);
+      if (result.status === "busy")
+        throw new Error(
+          `Cannot safely restart: ${result.activity.rootOperations.length} active root operations and ${result.activity.activeToolTasks} unfinished tools`,
+        );
+    } finally {
+      if (capabilityGate) capabilityService?.endMaintenance();
+      settingsService!.endMaintenance();
+    }
+    await settingsService!.reconcileConfiguration();
+    return settingsService!.publicSettings();
+  });
   installSettingsIpc(
     settingsService,
     directoryBrowser,
     async () => {
+      if (appServerManager?.status.type === "ready") return;
       const hostConfig = await withZenXProviderTransports(
         await settingsService!.hostConfig(),
-        async (url) => await session.defaultSession.resolveProxy(url),
+        async (url) => session.defaultSession.resolveProxy(url),
       );
-      if (appServerManager === undefined) {
+      if (!appServerManager) {
         appServerManager = new AppServerManager({
           entryPath,
           tokenFile,
@@ -422,69 +479,8 @@ async function bootstrapZenX(): Promise<void> {
         });
         await selfControlPort.attach(appServerManager);
         await appServerManager.start();
-        await startPluginDevControl(
-          userDataDirectory,
-          capabilityService!,
-          appServerManager,
-        );
-      } else {
-        await selfControlPort.attach(appServerManager);
-        const restartErrors: Error[] = [];
-        let hostStopped = false;
-        try {
-          await appServerManager.stop({
-            preserveConnectionAuthority: true,
-          });
-          hostStopped = true;
-        } catch (error) {
-          restartErrors.push(normalizeTitleOwnershipFailure(error));
-        }
-        try {
-          await titleCoordinator?.stop();
-        } catch (error) {
-          restartErrors.push(normalizeTitleOwnershipFailure(error));
-        }
-        let capabilitiesReset = false;
-        let hostRestarted = false;
-        if (hostStopped) {
-          try {
-            await capabilityService?.resetTransient();
-            capabilitiesReset = true;
-          } catch (error) {
-            restartErrors.push(normalizeTitleOwnershipFailure(error));
-          }
-        }
-        if (hostStopped && capabilitiesReset) {
-          try {
-            await appServerManager.restart(hostConfig);
-            hostRestarted = true;
-            await startPluginDevControl(
-              userDataDirectory,
-              capabilityService!,
-              appServerManager,
-            );
-          } catch (error) {
-            restartErrors.push(normalizeTitleOwnershipFailure(error));
-          }
-        }
-        try {
-          await titleCoordinator?.restart();
-        } catch (error) {
-          restartErrors.push(normalizeTitleOwnershipFailure(error));
-        }
-        if (hostStopped && !hostRestarted) {
-          try {
-            await appServerManager.stop();
-          } catch (error) {
-            restartErrors.push(normalizeTitleOwnershipFailure(error));
-          }
-        }
-        if (restartErrors.length > 0)
-          throw new AggregateError(
-            restartErrors,
-            "Could not fully restart ZenX",
-          );
-      }
+      } else await appServerManager.restart(hostConfig);
+      await attachConfigurationControl();
     },
     async () => await syncProjectProjection(settingsService!),
   );
@@ -939,9 +935,17 @@ function readProjectThreadStartOptions(
 function installSettingsIpc(
   settings: ZenXSettingsService,
   directoryBrowser: ZenXDirectoryBrowser,
-  restartHost: () => Promise<void>,
+  startHostIfNeeded: () => Promise<void>,
   refreshProjects: () => Promise<void>,
 ): void {
+  ipcMain.handle(
+    ipcChannels.settingsReconcile,
+    async (_event, retry: unknown) => {
+      if (typeof retry !== "boolean") throw new Error("Invalid retry");
+      await settings.reconcileConfiguration(retry);
+      return settings.publicSettings();
+    },
+  );
   ipcMain.handle(
     ipcChannels.settingsGet,
     async () => await settings.publicSettings(),
@@ -966,7 +970,7 @@ function installSettingsIpc(
         nextWorkspace,
       );
       await refreshProjects();
-      if (requiresRestart) await restartHost();
+      if (requiresRestart) await startHostIfNeeded();
       return await settings.publicSettings();
     },
   );
@@ -976,7 +980,7 @@ function installSettingsIpc(
       if (typeof workspace !== "string") throw new Error("Invalid workspace");
       const requiresRestart = await settings.addWorkspace(workspace);
       await refreshProjects();
-      if (requiresRestart) await restartHost();
+      if (requiresRestart) await startHostIfNeeded();
       return await settings.publicSettings();
     },
   );
@@ -986,7 +990,7 @@ function installSettingsIpc(
       if (typeof workspace !== "string") throw new Error("Invalid workspace");
       const requiresRestart = await settings.removeWorkspace(workspace);
       await refreshProjects();
-      if (requiresRestart) await restartHost();
+      if (requiresRestart) await startHostIfNeeded();
       return await settings.publicSettings();
     },
   );
@@ -996,7 +1000,7 @@ function installSettingsIpc(
       if (typeof workspace !== "string") throw new Error("Invalid workspace");
       const requiresRestart = await settings.setDefaultWorkspace(workspace);
       await refreshProjects();
-      if (requiresRestart) await restartHost();
+      if (requiresRestart) await startHostIfNeeded();
       return await settings.publicSettings();
     },
   );
@@ -1043,6 +1047,7 @@ function installSettingsIpc(
       if (apiKey !== undefined && typeof apiKey !== "string") {
         throw new Error("Invalid API key");
       }
+      requireConfigurationRevision(update.baseRevision);
       const before = (await settings.publicSettings()).profile;
       await settings.save(update, apiKey);
       const after = (await settings.publicSettings()).profile;
@@ -1061,18 +1066,24 @@ function installSettingsIpc(
         await appServerManager?.refreshCapabilitiesAfterCommit();
       }
       await refreshProjects();
-      await restartHost();
+      await startHostIfNeeded();
       return await settings.publicSettings();
     },
   );
   ipcMain.handle(
     ipcChannels.providerAdd,
-    async (_event, provider: ZenXProviderProfile, apiKey?: unknown) => {
+    async (
+      _event,
+      provider: ZenXProviderProfile,
+      apiKey?: unknown,
+      baseRevision?: number,
+    ) => {
       if (apiKey !== undefined && typeof apiKey !== "string") {
         throw new Error("Invalid API key");
       }
-      await settings.addProviderProfile(provider, apiKey);
-      await restartHost();
+      requireConfigurationRevision(baseRevision);
+      await settings.addProviderProfile(provider, apiKey, baseRevision);
+      await startHostIfNeeded();
       return await settings.publicSettings();
     },
   );
@@ -1090,8 +1101,9 @@ function installSettingsIpc(
       if (options?.apiKey !== undefined && typeof options.apiKey !== "string") {
         throw new Error("Invalid API key");
       }
+      requireConfigurationRevision(options?.baseRevision);
       await settings.editProviderProfile(providerProfileId, provider, options);
-      await restartHost();
+      await startHostIfNeeded();
       return await settings.publicSettings();
     },
   );
@@ -1105,12 +1117,12 @@ function installSettingsIpc(
       if (typeof providerProfileId !== "string") {
         throw new Error("Invalid Provider profile id");
       }
-      return await deleteProviderProfileWithHostRestart(
-        settings,
+      requireConfigurationRevision(replacements?.baseRevision);
+      await settings.deleteProviderProfile(
         providerProfileId,
         replacements ?? {},
-        restartHost,
       );
+      return await settings.publicSettings();
     },
   );
   ipcMain.handle(
@@ -1390,4 +1402,11 @@ function isApprovalDecision(value: unknown): value is ApprovalDecision {
     value === "decline" ||
     value === "cancel"
   );
+}
+
+function requireConfigurationRevision(value: unknown): void {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+    throw new Error(
+      "Configuration revision is required; reload settings before applying changes",
+    );
 }

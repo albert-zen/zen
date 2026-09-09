@@ -17,6 +17,8 @@ export const ipcChannels = {
   projectsGet: "zenx:projects:get",
   projectThreadStart: "zenx:projects:thread-start",
   settingsGet: "zenx:settings:get",
+  settingsSafeRestart: "zenx:settings:safe-restart",
+  settingsReconcile: "zenx:settings:reconcile",
   settingsSave: "zenx:settings:save",
   providerAdd: "zenx:settings:provider-add",
   providerEdit: "zenx:settings:provider-edit",

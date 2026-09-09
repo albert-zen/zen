@@ -601,7 +601,7 @@ test("restores the previous credential when profile persistence fails", async ()
   }
 });
 
-test("reports an explicit partial save when credential compensation fails", async () => {
+test("keeps the original credential even when unused candidate cleanup fails", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-credential-compensation-failure-"),
   );
@@ -625,7 +625,7 @@ test("reports an explicit partial save when credential compensation fails", asyn
       service.save(compatibleProfile("second"), "second-key"),
       (error: unknown) =>
         error instanceof AggregateError &&
-        /partially saved/u.test(error.message) &&
+        /not saved; unused candidate cleanup failed/u.test(error.message) &&
         error.errors.length === 2,
     );
 
@@ -1043,7 +1043,7 @@ test("routes subscription account operations by its configured opaque profile id
     assert.equal(loginCount, 1);
     assert.equal(logoutCount, 1);
     await service.deleteProviderProfile(subscriptionProfileId);
-    assert.equal(logoutCount, 2);
+    assert.equal(logoutCount, 1); // Catalog removal must not revoke an active OAuth identity.
     assert.ok(
       factoryPaths.every((value) =>
         value.includes("openai-subscription-auth."),
