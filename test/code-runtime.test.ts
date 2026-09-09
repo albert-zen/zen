@@ -518,7 +518,9 @@ test("Runtime records unconfirmed cancellation for abort-ignoring children befor
   ]);
   const environment = new ToolEnvironment({
     bundles: [bundle],
-    runtimes: [new RunCodeToolRuntime(new CodeRuntime({ wallTimeMs: 50 }))],
+    // Allow worker startup and both child admissions on loaded CI runners.
+    // This test checks cancellation evidence, not the minimum wall-time budget.
+    runtimes: [new RunCodeToolRuntime(new CodeRuntime({ wallTimeMs: 500 }))],
   });
   const server = runtimeServer({
     model: oneRunCodeModel(`
@@ -533,7 +535,7 @@ test("Runtime records unconfirmed cancellation for abort-ignoring children befor
   await Promise.race([
     (await server.startTurn(thread.id, "never provider")).done,
     new Promise<never>((_resolve, reject) =>
-      setTimeout(() => reject(new Error("Turn remained pending")), 500),
+      setTimeout(() => reject(new Error("Turn remained pending")), 5_000),
     ),
   ]);
   const snapshot = await server.readThread(thread.id);
