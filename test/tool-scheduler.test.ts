@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { ZenAppServer } from "../src/app-server.js";
@@ -263,7 +266,7 @@ test("exclusive calls form FIFO barriers around parallel-safe bodies", async () 
   await within(turn.done, "the barrier Turn");
 });
 
-test("builtin shell and undeclared runtimes stay exclusive", async () => {
+test("undeclared runtimes retain exclusive barriers around builtin shell", async () => {
   const starts: string[] = [];
   const firstStarted = deferred<void>();
   const secondStarted = deferred<void>();
@@ -315,6 +318,101 @@ test("builtin shell and undeclared runtimes stay exclusive", async () => {
   );
   releaseSecond.resolve();
   await within(turn.done, "the fail-closed Turn");
+});
+
+test("real shell processes overlap through direct calls and run_code Promise.all", async (t) => {
+  for (const nested of [false, true]) {
+    await t.test(nested ? "nested" : "direct", async () => {
+      const directory = await mkdtemp(join(tmpdir(), "zen-shell-overlap-"));
+      try {
+        const ready = [1, 2, 3].map((id) => join(directory, String(id)));
+        const calls = ready.map((path, index) => ({
+          callId: `shell-${index}`,
+          name: "shell",
+          arguments: {
+            command: `touch '${path}'; n=0; until ${ready.map((file) => `[ -f '${file}' ]`).join(" && ")}; do n=$((n+1)); if [ "$n" -ge 100 ]; then echo 'peers did not start'; exit 1; fi; sleep 0.02; done; printf r${index + 1}`,
+            yield_time_ms: 180_000,
+          },
+        }));
+        const server = runtimeServer({
+          model: batchModel(
+            nested
+              ? [
+                  {
+                    callId: "outer",
+                    name: "run_code",
+                    arguments: {
+                      code: `// @exec: {"yield_time_ms": 180000}\nconst values = await Promise.all(${JSON.stringify(calls.map((call) => call.arguments))}.map(args => tools.shell(args))); text(values.map(value => [value.exitCode, value.output]));`,
+                    },
+                  },
+                ]
+              : calls,
+          ),
+          runtimes: [new ShellToolRuntime(), new RunCodeToolRuntime()],
+          maxConcurrentToolBodies: 3,
+        });
+        const thread = await server.startThread();
+        const turn = await server.startTurn(thread.id, "overlapping shells");
+        await turn.done;
+        const snapshot = await server.readThread(thread.id);
+        const results = toolResults(snapshot.items);
+        assert.deepEqual(
+          results.slice(0, 3).map(({ exitCode, output }) => [exitCode, output]),
+          [
+            [0, "r1"],
+            [0, "r2"],
+            [0, "r3"],
+          ],
+        );
+        if (nested)
+          assert.equal(results.at(-1)?.output, '[[0,"r1"],[0,"r2"],[0,"r3"]]');
+        assertEveryToolCallHasOneResult(snapshot.items);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("nested tool failures are values while serialization failures throw", async () => {
+  const server = runtimeServer({
+    model: batchModel([
+      {
+        callId: "outer",
+        name: "run_code",
+        arguments: {
+          code: `
+        const invalid = await tools.shell({});
+        const unknown = await tools.shel({command: 'echo unused'});
+        const cyclic = {}; cyclic.self = cyclic;
+        let serialization;
+        try { await tools.shell(cyclic); } catch (error) { serialization = error.message; }
+        text({invalid, unknown, serialization});
+      `,
+        },
+      },
+    ]),
+    runtimes: [new ShellToolRuntime(), new RunCodeToolRuntime()],
+  });
+  const thread = await server.startThread();
+  const turn = await server.startTurn(thread.id, "errors");
+  await turn.done;
+  const snapshot = await server.readThread(thread.id);
+  const outer = toolResults(snapshot.items).find(
+    (result) => result.callId === "outer",
+  );
+  assert(outer);
+  assert.equal(outer.exitCode, 0);
+  const result = JSON.parse(outer.output);
+  assert.notEqual(result.invalid.exitCode, 0);
+  assert.match(
+    result.invalid.output,
+    /shell.command must be a non-empty string/,
+  );
+  assert.notEqual(result.unknown.exitCode, 0);
+  assert.match(result.unknown.output, /Unsupported tool: shel/);
+  assert.match(result.serialization, /lossless JSON/);
+  assertEveryToolCallHasOneResult(snapshot.items);
 });
 
 test("the default body cap is eight and a configured cap must be positive", async () => {

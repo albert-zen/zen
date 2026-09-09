@@ -17,7 +17,11 @@ interface WorkerInput {
 const input = workerData as WorkerInput;
 const port = input.port;
 const timers = new Map<number, NodeJS.Timeout>();
-// Only primitives cross into the context. The sole host function is captured by
+// Decoder state is transient and dies with this execution's worker.
+const decoders = new Map<number, TextDecoder>();
+let decoderSequence = 0;
+const encoder = new TextEncoder();
+// Only primitives cross into the context. Host bridge functions are captured by
 // context-owned closures during bootstrap, never installed on the guest global.
 // In particular, imports must reject with a *context-owned* Error, not a Node Error.
 const context = createContext(Object.create(null), {
@@ -30,14 +34,121 @@ interface GuestControl {
   error(message: string): Error;
 }
 const bootstrap = new Script(String.raw`
-((bridge, configuration) => {
-  const { Object, Array, Number, String, JSON, Reflect, Map, Set, Promise, Error, Math } = globalThis;
+((bridge, codecBridge, configuration) => {
+  const { Object, Array, Number, String, JSON, Reflect, Map, Set, Promise, Error, TypeError, RangeError, Math, Uint8Array, ArrayBuffer, DataView } = globalThis;
   // A guest toJSON on an intrinsic prototype must not rewrite bridge envelopes.
   Object.freeze(Object.prototype);
   Object.freeze(Array.prototype);
   const parse = JSON.parse;
   const stringify = JSON.stringify;
   const config = parse(configuration);
+  // The synchronous codec bridge accepts/returns only primitive JSON strings.
+  // Recreate results and failures here so no host constructor reaches the guest.
+  const codec = (operation, args) => {
+    const result = parse(codecBridge(stringify({ operation, args })));
+    if (result.error) {
+      const Constructor = result.error.name === 'TypeError' ? TypeError : result.error.name === 'RangeError' ? RangeError : Error;
+      const error = new Constructor(result.error.message);
+      error.name = result.error.name;
+      throw error;
+    }
+    return result.value;
+  };
+  const toString = value => {
+    if (typeof value === 'symbol') throw new TypeError('Cannot convert a Symbol value to a string');
+    return String(value);
+  };
+  const atob = function(value) {
+    if (arguments.length === 0) throw new TypeError('atob requires an argument');
+    return codec('atob', [toString(value)]);
+  };
+  const btoa = function(value) {
+    if (arguments.length === 0) throw new TypeError('btoa requires an argument');
+    return codec('btoa', [toString(value)]);
+  };
+  const apply = Reflect.apply;
+  const getter = (prototype, key) => Object.getOwnPropertyDescriptor(prototype, key).get;
+  const typedPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+  const typedBuffer = getter(typedPrototype, 'buffer');
+  const typedOffset = getter(typedPrototype, 'byteOffset');
+  const typedLength = getter(typedPrototype, 'byteLength');
+  const typedTag = getter(typedPrototype, Symbol.toStringTag);
+  const viewBuffer = getter(DataView.prototype, 'buffer');
+  const viewOffset = getter(DataView.prototype, 'byteOffset');
+  const viewLength = getter(DataView.prototype, 'byteLength');
+  const bufferLength = getter(ArrayBuffer.prototype, 'byteLength');
+  const isView = ArrayBuffer.isView;
+  const setBytes = Uint8Array.prototype.set;
+  const rawBytes = input => {
+    if (input === undefined) return new Uint8Array(0);
+    if (isView(input)) {
+      // Intrinsic getters ignore spoofed buffer/offset/length properties.
+      let buffer, offset, length;
+      if (apply(typedTag, input, []) !== undefined) {
+        buffer = apply(typedBuffer, input, []);
+        offset = apply(typedOffset, input, []);
+        length = apply(typedLength, input, []);
+      } else {
+        buffer = apply(viewBuffer, input, []);
+        offset = apply(viewOffset, input, []);
+        length = apply(viewLength, input, []);
+      }
+      return new Uint8Array(buffer, offset, length);
+    }
+    return new Uint8Array(input, 0, apply(bufferLength, input, []));
+  };
+  const byteList = input => {
+    const bytes = rawBytes(input);
+    const length = apply(typedLength, bytes, []);
+    const result = [];
+    for (let i = 0; i < length; i++) result[i] = bytes[i];
+    return result;
+  };
+  class TextEncoder {
+    #brand = true;
+    get encoding() { void this.#brand; return 'utf-8'; }
+    encode(input = '') {
+      void this.#brand;
+      return new Uint8Array(codec('encode', [toString(input)]));
+    }
+    encodeInto(source, destination) {
+      void this.#brand;
+      source = toString(source);
+      if (apply(typedTag, destination, []) !== 'Uint8Array') throw new TypeError('encodeInto destination must be a Uint8Array');
+      const bytes = rawBytes(destination);
+      const result = codec('encodeInto', [source, apply(typedLength, bytes, [])]);
+      apply(setBytes, bytes, [result.bytes]);
+      return { read: result.read, written: result.written };
+    }
+  }
+  const dictionary = value => {
+    if (value !== undefined && value !== null && typeof value !== 'object' && typeof value !== 'function') throw new TypeError('Options must be an object');
+    return value;
+  };
+  class TextDecoder {
+    #id;
+    #encoding;
+    #fatal;
+    #ignoreBOM;
+    constructor(label = 'utf-8', options = undefined) {
+      label = toString(label);
+      dictionary(options);
+      const result = codec('decoder', [label, { fatal: !!options?.fatal, ignoreBOM: !!options?.ignoreBOM }]);
+      this.#id = result.id;
+      this.#encoding = result.encoding;
+      this.#fatal = result.fatal;
+      this.#ignoreBOM = result.ignoreBOM;
+    }
+    get encoding() { return this.#encoding; }
+    get fatal() { return this.#fatal; }
+    get ignoreBOM() { return this.#ignoreBOM; }
+    decode(input = undefined, options = undefined) {
+      const id = this.#id;
+      const bytes = byteList(input);
+      dictionary(options);
+      return codec('decode', [id, bytes, !!options?.stream]);
+    }
+  }
   const pending = new Map();
   const requests = new Map();
   const timers = new Map();
@@ -187,7 +298,7 @@ const bootstrap = new Script(String.raw`
     finished = true;
   };
   Object.assign(globalThis, {
-    tools, text, store, load,
+    tools, text, store, load, atob, btoa, TextEncoder, TextDecoder,
     image: value => media('image', value),
     audio: value => media('audio', value),
     ALL_TOOLS: Object.freeze(config.tools.map(tool => Object.freeze(tool))),
@@ -232,6 +343,7 @@ const bootstrap = new Script(String.raw`
 })
 `).runInContext(context) as (
   bridge: (message: string) => string | undefined,
+  codecBridge: (message: string) => string,
   configuration: string,
 ) => GuestControl;
 
@@ -263,6 +375,64 @@ try {
         return "Host bridge failed";
       }
     },
+    (encoded) => {
+      try {
+        if (typeof encoded !== "string")
+          throw new TypeError("Invalid codec request");
+        const { operation, args } = JSON.parse(encoded);
+        let value: unknown;
+        switch (operation) {
+          case "atob":
+            value = atob(args[0]);
+            break;
+          case "btoa":
+            value = btoa(args[0]);
+            break;
+          case "encode":
+            value = Array.from(encoder.encode(args[0]));
+            break;
+          case "encodeInto": {
+            const bytes = new Uint8Array(args[1]);
+            const result = encoder.encodeInto(args[0], bytes);
+            value = {
+              ...result,
+              bytes: Array.from(bytes.subarray(0, result.written)),
+            };
+            break;
+          }
+          case "decoder": {
+            const decoder = new TextDecoder(args[0], args[1]);
+            const id = ++decoderSequence;
+            decoders.set(id, decoder);
+            value = {
+              id,
+              encoding: decoder.encoding,
+              fatal: decoder.fatal,
+              ignoreBOM: decoder.ignoreBOM,
+            };
+            break;
+          }
+          case "decode": {
+            const decoder = decoders.get(args[0]);
+            if (!decoder) throw new TypeError("Invalid decoder");
+            value = decoder.decode(new Uint8Array(args[1]), {
+              stream: args[2],
+            });
+            break;
+          }
+          default:
+            throw new TypeError("Unknown codec operation");
+        }
+        return JSON.stringify({ value });
+      } catch (error) {
+        return JSON.stringify({
+          error: {
+            name: (error as Error).name,
+            message: (error as Error).message,
+          },
+        });
+      }
+    },
     JSON.stringify({
       maxTextBytes: input.maxTextBytes,
       maxStateValueBytes: input.maxStateValueBytes,
@@ -280,6 +450,11 @@ try {
   const module = new SourceTextModule(input.code, {
     context,
     identifier: "run_code",
+    initializeImportMeta: () => {
+      throw guest.error(
+        "import.meta is unavailable in run_code; use tools instead",
+      );
+    },
     importModuleDynamically: () => {
       throw guest.error(
         "Imports are unavailable in run_code; use tools instead",

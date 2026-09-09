@@ -88,9 +88,12 @@ export function createRunCodeModelTool(
     description: [
       "Run a fresh JavaScript async module with top-level await.",
       "Use pure JavaScript, not TypeScript syntax. No Node.js, filesystem, network, process, require, or package imports; use tools.* for external actions.",
+      "atob/btoa and TextEncoder/TextDecoder are available for in-memory byte conversion. import.meta is unavailable.",
       "Call text/image/audio explicitly to return selected output. Only the tools declared below are available through tools.* for this model sample.",
       'Optional first line: // @exec: {"yield_time_ms": 10000, "max_output_tokens": 1000}. These control observation wait and output budget, not execution timeout.',
       "Awaited tools return their final result. A running outer program returns a task_id; use tools.wait with that task_id to observe new output or completion.",
+      "Promise.all runs independent parallel-safe tools, including shell, concurrently within the host limit. Exclusive tools still serialize. Await dependent operations sequentially.",
+      "Tool failures, invalid parameters, and unknown tool names return a nonzero exitCode: check it before using output. Argument serialization, bridge, or program errors can throw or reject; tools.* is not a never-throws API.",
       "Use await yield_control() to yield current output while the program continues. Unawaited promises are discarded when the module finishes.",
       "image/audio accept base64 data URIs, MCP content blocks, or current-thread attachment refs. Use tools.view_image for local image paths; its images are returned automatically. Unsupported model modalities become text references.",
       "store/load retain bounded JSON values within this thread: keys 1–160 characters, 256 KiB per value, 128 keys/2 MiB total. Ordinary variables are fresh each run; missing keys return undefined. Writes already committed survive later program failure.",

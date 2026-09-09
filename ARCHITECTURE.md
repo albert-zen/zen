@@ -29,9 +29,9 @@
 - **Code Media Converter** — 将程序显式 image/audio 数据或当前线程已授权附件引用转换到同一个 AttachmentStore 与模型内容通路，不自行读取路径或网络。
 - **Nested Tool Invocation Port** — AgentRuntime 只向可信 builtin 组合工具提供的 turn-scoped capability，用同一 Tool Environment 和 canonical lifecycle 提交子调用，不序列化或下放给 plugin / external provider。
 - **Tool Output Spool** — Host 把超出默认 8 KiB 模型 preview（4 KiB head 与 4 KiB tail）的完整已捕获 text result 暂存到权限收窄的临时文件，并只把含 head/tail、大小、hash 和易失路径的 receipt canonicalize；临时副本不是 Thread authority。
-- **Tool Execution Mode** — Tool Runtime 对执行 body 只声明 `parallel_safe` 或 `exclusive`；未声明与 builtin shell 一律按 `exclusive`，该分类不是权限或资源 scope。
+- **Tool Execution Mode** — Tool Runtime 对执行 body 只声明 `parallel_safe` 或 `exclusive`；未声明按 `exclusive`，builtin shell 的独立进程声明 `parallel_safe`，该分类不是权限或资源 scope。
 - **ToolTaskManager** — ToolEnvironment 统一拥有普通工具的 Host-local 执行、按 Thread 隔离的 task_id、增量输出与 wait；交回时间（默认 10 秒、最高 180 秒）和执行超时（默认 10 分钟）分开，快速结果原样返回，任务不参与 journal 重建。
-- **ToolTaskPolicy** — 具体工具只声明取消确认能力、资源作用域和可选 timingArguments 字段映射；默认未知取消保留 owner fence 与执行容量直到真实完成或 Host 关闭，shell 在进程组停止后确认取消，composite 保留原有嵌套调度权且不由任务管理器拆离。
+- **ToolTaskPolicy** — 具体工具只声明取消确认能力、资源作用域和可选 timingArguments 字段映射；默认未知取消保留 owner fence 与执行容量直到真实完成或 Host 关闭，shell 在进程组停止后确认取消，composite 由同一任务管理器持有并协调嵌套调用，本身不占子工具容量。
 - **ToolWaitRuntime** — 内建且保留名称的 wait 仅观察或请求取消同 Thread 已获准任务，只在任务完成或本次 wait 到期时返回自上次领取后的增量输出，到期不停止底层执行；它不重新授权、不占执行体容量，取消请求、无法确认取消和已停止是不同状态，Host 关闭有界清理临时资源；每个任务同时只有一个增量输出消费者，并发取消可返回不消费输出的状态，活动观察持有结果保留期。
 - **ToolTaskBounds** — 同一 Environment 默认最多 8 个尚未确认结束的执行体、64 个含待领取结果的任务，已完成结果保留 5 分钟；交回不释放 prepared bundle lease 或资源 fence，完成/关闭才释放，达到容量时立即告知模型等待现有任务。
 - **Tool Execution Status** — AgentRuntime 为每条新 `tool_result` 记录 `completed`、`failed` 或 `declined` 的 provider-neutral canonical 事实，Tool Runtime 只返回结果内容和 exit code，不能决定审批语义。
@@ -412,6 +412,9 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
 - `run_code` 用 text/image/audio 显式选择输出，exit 提前正常结束，yield_control 请求提前观察；
   view_image 本身仍是明确的查看请求，nested modelContent 继续提升并去重，不要求再次 image。
   text 逐步送到 Host 捕获，异常/超时/取消均保留已捕获部分。输出预算只限制预览，完整捕获沿 spool 上限。
+- guest 提供 atob/btoa 与 TextEncoder/TextDecoder 纯内存编解码；接口、返回值和异常属于 guest realm，
+  原生编解码通过闭包中的 primitive-only bridge 执行，不暴露 Host 构造器或 I/O。import.meta 明确报错。
+  工具失败和未知名称以非零 exitCode 返回，序列化或 bridge 错误仍可能抛出；不承诺 never throws。
 - store 的 key 为 1–160 字符，JSON 单值最多 256 KiB、线程最多 128 keys/2 MiB；Host 串行
   校验并由 AgentRuntime 追加 code_state（父 callId、key、value）。程序完成前等待已发起写入提交，
   已提交写入不随后续程序失败回滚。load 使用执行开始时的已提交快照加本程序写入，普通 globals 每次 fresh。
@@ -447,6 +450,7 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   canonical result commit 保持模型提交顺序，只有标记为 `parallel_safe` 的 runtime
   execution body 可以并发；`exclusive` 在前后形成 barrier。并发上限由 Host 配置，
   未声明模式时 fail-closed 为 `exclusive`。
+  builtin shell 支持直接及 nested Promise.all 并发；有数据依赖或写同一文件的命令由程序显式顺序 await。
 - 每条 canonical `tool_call` 必须恰好结算一条 canonical `tool_result`。prepare、
   Host admission、runtime execution 或 result normalization 的局部失败以简洁错误和
   非零 exit code 形成该结果，继续执行同一模型响应中后续调用并进入下一次模型采样；
