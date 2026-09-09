@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { validateUserInput, type UserInput } from "./item.js";
 import {
   type ToolOutputSpool,
   DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES,
@@ -113,8 +114,10 @@ export class ToolTaskManager {
         `Tool task limit reached (${this.#options.maxTasks}); wait for or cancel an existing task`,
       );
     if (
-      [...this.#tasks.values()].filter((task) => !task.terminal).length >=
-      this.#options.maxRunningTasks
+      !("executeComposite" in runtime) &&
+      [...this.#tasks.values()].filter(
+        (task) => !task.terminal && !task.coordinator,
+      ).length >= this.#options.maxRunningTasks
     )
       throw new Error(
         "Tool execution capacity is busy; wait for or cancel an existing task",
@@ -148,19 +151,30 @@ export class ToolTaskManager {
       "timeout_ms",
       86400000,
     );
-    const task = new Task(runtime, invocation, execute, {
-      ...this.#options,
-      timeoutMs,
-      onRelease: () => {
-        if (
-          options.resourceKey !== undefined &&
-          this.#resources.get(options.resourceKey) === task
-        )
-          this.#resources.delete(options.resourceKey);
-        options.release?.();
+    // Observe the task's own signal so parent abort, terminate and deadline
+    // cancellation all bound the guest wait without changing normal awaits.
+    let executionSignal!: AbortSignal;
+    const task = new Task(
+      runtime,
+      invocation,
+      (call) => {
+        executionSignal = call.signal;
+        return execute(call);
       },
-      onExpire: () => this.#tasks.delete(task.id),
-    });
+      {
+        ...this.#options,
+        timeoutMs,
+        onRelease: () => {
+          if (
+            options.resourceKey !== undefined &&
+            this.#resources.get(options.resourceKey) === task
+          )
+            this.#resources.delete(options.resourceKey);
+          options.release?.();
+        },
+        onExpire: () => this.#tasks.delete(task.id),
+      },
+    );
     this.#tasks.set(task.id, task);
     if (options.resourceKey !== undefined)
       this.#resources.set(options.resourceKey, task);
@@ -168,7 +182,25 @@ export class ToolTaskManager {
     const releaseObservation = task.acquireObservation();
     try {
       task.start();
-      await task.observe(yieldMs, true);
+      if (invocation.task?.waitForCompletion) {
+        await new Promise<void>((resolve) => {
+          let timer: NodeJS.Timeout | undefined;
+          const done = () => {
+            executionSignal.removeEventListener("abort", abort);
+            if (timer !== undefined) clearTimeout(timer);
+            resolve();
+          };
+          const abort = () => {
+            timer ??= setTimeout(
+              done,
+              Math.min(300, this.#options.shutdownWaitMs),
+            );
+          };
+          executionSignal.addEventListener("abort", abort, { once: true });
+          if (executionSignal.aborted) abort();
+          void task.completion.then(done);
+        });
+      } else await task.observe(yieldMs, true);
       if (invocation.threadId === undefined && !task.terminal) {
         task.cancel(false);
         await task.observe(this.#options.shutdownWaitMs);
@@ -252,6 +284,9 @@ export class ToolTaskManager {
 }
 
 class Task {
+  readonly completion: Promise<void>;
+  #complete!: () => void;
+  #yieldRequested = false;
   readonly id = randomUUID();
   readonly threadId: string | undefined;
   readonly #runtime: ToolRuntime;
@@ -267,6 +302,7 @@ class Task {
   readonly #controller = new AbortController();
   readonly #listeners = new Set<() => void>();
   #window: ToolOutputWindow;
+  #modelContent: UserInput[number][] = [];
   #result: ToolExecutionResult | undefined;
   #error: unknown;
   #settled = false;
@@ -296,6 +332,12 @@ class Task {
     this.#options = options;
     this.threadId = invocation.threadId;
     this.#window = this.#newWindow();
+    this.completion = new Promise((resolve) => {
+      this.#complete = resolve;
+    });
+  }
+  get coordinator() {
+    return "executeComposite" in this.#runtime;
   }
   get observed() {
     return this.#observed;
@@ -363,6 +405,16 @@ class Task {
         ...this.#invocation,
         signal: this.#controller.signal,
         taskContext: {
+          onModelContent: (content) => {
+            if (this.#closed) return;
+            validateUserInput(content, "$modelContent");
+            this.#modelContent.push(...structuredClone(content));
+            this.#notify();
+          },
+          requestYield: () => {
+            this.#yieldRequested = true;
+            this.#notify();
+          },
           onOutput: (text) => {
             if (this.#closed) return;
             this.#window.write(text);
@@ -388,6 +440,7 @@ class Task {
           this.#retainCompleted();
         }
         this.#notify();
+        this.#complete();
       });
     if (this.#invocation.signal.aborted) this.cancel(false);
   }
@@ -406,6 +459,7 @@ class Task {
   async observe(ms: number, cancelRequested = false): Promise<void> {
     if (
       this.terminal ||
+      this.#yieldRequested ||
       (cancelRequested && this.status === "cancellation_unconfirmed")
     )
       return;
@@ -415,6 +469,7 @@ class Task {
       const changed = () => {
         if (
           this.terminal ||
+          this.#yieldRequested ||
           (previousStatus !== "cancellation_unconfirmed" &&
             this.status === "cancellation_unconfirmed")
         )
@@ -438,10 +493,29 @@ class Task {
     await previous;
     try {
       const status = this.status;
+      this.#yieldRequested = false;
       const terminal = this.terminal;
-      if (quiet && this.#error !== undefined && !this.#window.hasOutput)
+      if (
+        quiet &&
+        this.#error !== undefined &&
+        !this.#window.hasOutput &&
+        this.#modelContent.length === 0
+      )
         throw this.#error;
-      const result = terminal ? this.#result : undefined;
+      const pendingContent = this.#modelContent;
+      this.#modelContent = [];
+      const originalResult = terminal ? this.#result : undefined;
+      const modelContent = [
+        ...pendingContent,
+        ...(originalResult?.modelContent ?? []),
+      ];
+      const result =
+        originalResult === undefined
+          ? undefined
+          : {
+              ...originalResult,
+              ...(modelContent.length === 0 ? {} : { modelContent }),
+            };
       const window = this.#window;
       this.#window = this.#newWindow();
       if (quiet && result !== undefined && !window.hasOutput) {
@@ -474,7 +548,7 @@ class Task {
         );
       }
       this.yielded = true;
-      return this.#receipt(status, capture, result);
+      return this.#receipt(status, capture, result, modelContent);
     } finally {
       release();
     }
@@ -486,6 +560,7 @@ class Task {
     status: Status,
     capture: Awaited<ReturnType<ToolOutputWindow["finish"]>>,
     result?: ToolExecutionResult,
+    modelContent = result?.modelContent,
   ): ToolExecutionResult {
     const terminal = ["completed", "failed", "timed_out", "cancelled"].includes(
       status,
@@ -528,9 +603,9 @@ class Task {
             ? {}
             : { result_content_type: result.contentType }),
         },
-        ...(result?.modelContent === undefined
+        ...(modelContent === undefined || modelContent.length === 0
           ? {}
-          : { modelContent: result.modelContent }),
+          : { modelContent }),
         ...(result?.sourceTruncated === undefined
           ? {}
           : { sourceTruncated: result.sourceTruncated }),
@@ -561,6 +636,7 @@ class Task {
     return new ToolOutputWindow(
       this.#options.maxOutputBytes,
       this.#options.toolOutputSpool,
+      this.#invocation.task?.previewBytes,
     );
   }
   #notify() {
@@ -578,7 +654,7 @@ export class ToolWaitRuntime implements ToolRuntime {
     this.specification = {
       name: this.name,
       description:
-        "Ordinary tools automatically return task_id when they exceed their yield time; no separate background mode is required. wait returns when the task completes or yield_time_ms expires, with output produced since the previous receipt. Expiry does not stop the task; its execution deadline remains separate. terminate requests cancellation; receipts report confirmable or best_effort cancellation and resource_scope. Running bundle/runtime resources stay busy; independent tasks can coexist. Only cancelled/timed_out confirm cancellation. Tasks belong to this Host instance and do not resume after restart.",
+        "Tools, including run_code programs, automatically return task_id when they exceed their yield time; no separate background mode is required. wait returns when the task completes or yield_time_ms expires, with output produced since the previous receipt. Expiry does not stop the task; its execution deadline remains separate. Program-side await tools.* waits for the actual result. terminate requests cancellation; receipts report confirmable or best_effort cancellation and resource_scope. Running bundle/runtime resources stay busy; independent tasks can coexist. Only cancelled/timed_out confirm cancellation. Tasks belong to this Host instance and do not resume after restart.",
       inputSchema: {
         type: "object",
         properties: {

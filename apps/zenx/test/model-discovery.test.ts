@@ -74,7 +74,7 @@ test("GET /models uses explicit rich modalities and exact catalog enrichment wit
       }),
   });
   assert.deepEqual(models[0]?.inputModalities, ["text", "image"]);
-  assert.deepEqual(models[1]?.inputModalities, []);
+  assert.deepEqual(models[1]?.inputModalities, ["audio"]);
   assert.equal(Object.isFrozen(models[1]?.inputModalities), true);
   assert.equal(models[1]?.source, "preset");
   assert.deepEqual(models[2]?.inputModalities, ["text"]);

@@ -23,8 +23,7 @@ Provider 账户和 workspace 配置由宿主持有，不进入 Thread。
 
 ## 快速验证
 
-需要 Node.js 22.13.0+、Python 3.13+ 与 `uv`。该 Node 下限来自
-`run_code` 的 builtin erasable TypeScript stripping 合同：
+需要 Node.js 22.13.0+、Python 3.13+ 与 `uv`：
 
 ```sh
 npm install
@@ -75,10 +74,12 @@ CLI 与 App Server 默认使用 Full Access：`sandbox=danger-full-access` 且
 `--approval always`。Full Access 没有安全隔离，只应在受信任的本机和接入端使用。
 
 CLI 与本地 App Server 默认以 `--tool-presentation both` 同时向模型提供普通
-structured tools 和 `run_code({ code, description })`；也可显式选择 `direct` 或
-`code`。`run_code` 每次在 fresh Node Worker 中执行 erasable TypeScript，可通过同一
-Tool Environment 的 `tools.*` 调用普通工具，只有显式 `text(...)` 成为外层结果。它与
-shell 权限等同，不是不可信代码沙箱。显式 `code` 无法初始化 Worker 时 Host 启动失败；
+structured tools 和 `run_code`；也可显式选择 `direct` 或 `code`。Responses 使用原始 JavaScript
+输入，JSON 工具协议使用 `{ code }`。每次执行 fresh JavaScript module，支持顶层 await，
+不提供 Node、文件、网络或包导入；通过同一 Tool Environment 的 `tools.*` 使用线程目录和工具权限。
+`text/image/audio` 选择输出，`store/load` 保存线程内有界 JSON，完整程序通过统一 `wait` 继续观察。
+异常保留已捕获输出，大文本由临时文件承接；历史媒体按当前模型能力投影，原始 Item 保留。
+受限语言能力不构成不可信代码安全沙箱。显式 `code` 无法初始化 Worker 时 Host 启动失败；
 默认 `both` 则明确 warning 并只发布 direct tools。审批按稳定 `run_code` tool name 记忆，
 同时展示完整 code。`apply_patch({ patch })` 使用 Codex-style subset：Begin/End Patch、
 Add/Update/Move/Delete、`@@` exact context 和可选 End of File；它不宣称支持 Codex 的完整宽松

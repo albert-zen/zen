@@ -4,6 +4,11 @@ export type ToolPresentation = "direct" | "code" | "both";
 
 export interface ToolPresentationSnapshot {
   readonly modelTools: readonly ModelTool[];
+  /** Frozen metadata from this exact disclosed sample for ALL_TOOLS. */
+  readonly codeTools: readonly {
+    readonly name: string;
+    readonly description: string;
+  }[];
   /** Names a model response may submit directly for this sample. */
   readonly modelToolNames: ReadonlySet<string>;
   /** Names the run_code Worker may invoke for this sample. */
@@ -60,6 +65,9 @@ export function buildToolPresentation(
             createRunCodeModelTool(ordinaryTools),
           ];
   return Object.freeze({
+    codeTools: Object.freeze(
+      generateToolCatalog(ordinaryTools).map((tool) => Object.freeze(tool)),
+    ),
     modelTools: Object.freeze(
       modelTools.map((definition) => deepFreeze(definition)),
     ),
@@ -76,12 +84,18 @@ export function createRunCodeModelTool(
   const sdk = generateToolSdk(ordinaryTools);
   return {
     name: RUN_CODE_NAME,
+    rawSource: { language: "javascript", argument: "code" },
     description: [
-      "Run shell-equivalent erasable TypeScript with Node.js authority.",
-      "Code is an async function body: top-level await and await import(...) are available; require is not provided.",
-      "Call text(...) explicitly to return selected output. Only the tools declared below are available through tools.* for this model sample.",
-      "",
-      "Available tools TypeScript SDK:",
+      "Run a fresh JavaScript async module with top-level await.",
+      "Use pure JavaScript, not TypeScript syntax. No Node.js, filesystem, network, process, require, or package imports; use tools.* for external actions.",
+      "Call text/image/audio explicitly to return selected output. Only the tools declared below are available through tools.* for this model sample.",
+      'Optional first line: // @exec: {"yield_time_ms": 10000, "max_output_tokens": 1000}. These control observation wait and output budget, not execution timeout.',
+      "Awaited tools return their final result. A running outer program returns a task_id; use tools.wait with that task_id to observe new output or completion.",
+      "Use await yield_control() to yield current output while the program continues. Unawaited promises are discarded when the module finishes.",
+      "image/audio accept base64 data URIs, MCP content blocks, or current-thread attachment refs. Use tools.view_image for local image paths; its images are returned automatically. Unsupported model modalities become text references.",
+      "store/load retain bounded JSON values within this thread: keys 1–160 characters, 256 KiB per value, 128 keys/2 MiB total. Ordinary variables are fresh each run; missing keys return undefined. Writes already committed survive later program failure.",
+      "ALL_TOOLS contains name/description metadata from the same disclosed tool catalog as tools.*.",
+      "Available tool signatures (TypeScript reference notation only; submitted code must be JavaScript):",
       "```ts",
       sdk,
       "```",
@@ -91,18 +105,26 @@ export function createRunCodeModelTool(
       properties: {
         code: {
           type: "string",
-          description: "The erasable TypeScript async function body to run.",
-        },
-        description: {
-          type: "string",
-          maxLength: 160,
-          description: "A concise description of what the code does.",
+          description:
+            "The JavaScript async module source, optionally beginning with // @exec: JSON.",
         },
       },
-      required: ["code", "description"],
+      required: ["code"],
       additionalProperties: false,
     },
   };
+}
+
+/** Metadata for the same disclosed definitions used by the tool SDK. */
+export function generateToolCatalog(
+  tools: readonly ModelTool[],
+): Array<{ name: string; description: string }> {
+  return tools
+    .filter(
+      (tool) =>
+        tool.name !== RUN_CODE_NAME && tool.name !== COMPACT_CONTEXT_NAME,
+    )
+    .map(({ name, description }) => ({ name, description }));
 }
 
 export function generateToolSdk(tools: readonly ModelTool[]): string {
@@ -135,6 +157,13 @@ export function generateToolSdk(tools: readonly ModelTool[]): string {
     "",
     "/** Append one intentionally selected value to the outer model-visible result. */",
     "declare function text(value: unknown): void;",
+    "declare function image(value: unknown): void;",
+    "declare function audio(value: unknown): void;",
+    "declare function exit(): never;",
+    "declare function store(key: string, value: unknown): void;",
+    "declare function load(key: string): unknown;",
+    "declare function yield_control(): Promise<void>;",
+    "declare const ALL_TOOLS: ReadonlyArray<{ name: string; description: string }>;",
   ].join("\n");
 }
 

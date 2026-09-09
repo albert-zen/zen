@@ -22,7 +22,7 @@ import { createRunCodeModelTool } from "../src/tool-presentation.js";
 const accountId = "acct_zen_test";
 const secretAccessToken = jwt(accountId);
 
-test("subscription transports run_code as a normal function with stable ids and arguments", async () => {
+test("subscription transports run_code as raw source with stable ids and arguments", async () => {
   let body: Record<string, unknown> = {};
   const adapter = new OpenAiSubscriptionModel({
     acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
@@ -33,27 +33,27 @@ test("subscription transports run_code as a normal function with stable ids and 
           type: "response.output_item.added",
           output_index: 0,
           item: {
-            type: "function_call",
-            id: "fc_code",
+            type: "custom_tool_call",
+            id: "ctc_code",
             call_id: "call_code",
             name: "run_code",
-            arguments: "",
+            input: "",
           },
         },
         {
-          type: "response.function_call_arguments.done",
+          type: "response.custom_tool_call_input.done",
           output_index: 0,
-          arguments: '{"code":"text(2)","description":"two"}',
+          input: "text(2)",
         },
         {
           type: "response.output_item.done",
           output_index: 0,
           item: {
-            type: "function_call",
-            id: "fc_code",
+            type: "custom_tool_call",
+            id: "ctc_code",
             call_id: "call_code",
             name: "run_code",
-            arguments: '{"code":"text(2)","description":"two"}',
+            input: "text(2)",
           },
         },
         {
@@ -69,19 +69,17 @@ test("subscription transports run_code as a normal function with stable ids and 
   assert.deepEqual(events, [
     {
       type: "tool_call",
-      callId: "call_code|fc_code",
+      callId: "call_code|ctc_code",
       name: "run_code",
-      arguments: { code: "text(2)", description: "two" },
+      arguments: { code: "text(2)" },
     },
     { type: "usage", inputTokens: 0, outputTokens: 0 },
   ]);
-  assert.deepEqual((body.tools as Array<Record<string, unknown>>)[0], {
-    type: "function",
-    name: "run_code",
-    description: runCode.description,
-    parameters: runCode.inputSchema,
-    strict: null,
-  });
+  const offered = (body.tools as Array<Record<string, unknown>>)[0]!;
+  assert.equal(offered.type, "custom");
+  assert.equal(offered.name, "run_code");
+  assert.equal(offered.description, runCode.description);
+  assert.equal((offered.format as Record<string, unknown>).syntax, "lark");
 });
 
 test("maps AttachmentRef input to a Responses image part", async () => {

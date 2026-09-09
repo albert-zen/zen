@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 
+export const MAX_AUDIO_BYTES = 20 * 1024 * 1024;
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_IMAGE_DIMENSION = 16_384;
 export const MAX_IMAGE_PIXELS = 40_000_000;
@@ -16,7 +17,7 @@ const CRC32_TABLE = Uint32Array.from({ length: 256 }, (_, value) => {
 export type ImageMediaType =
   "image/png" | "image/jpeg" | "image/gif" | "image/webp";
 
-export interface AttachmentRef {
+export interface ImageAttachmentRef {
   type: "attachment";
   sha256: string;
   mediaType: ImageMediaType;
@@ -24,6 +25,17 @@ export interface AttachmentRef {
   width: number;
   height: number;
 }
+
+export type AudioMediaType = "audio/wav" | "audio/mpeg";
+export interface AudioAttachmentRef {
+  type: "attachment";
+  sha256: string;
+  mediaType: AudioMediaType;
+  byteLength: number;
+  width?: never;
+  height?: never;
+}
+export type AttachmentRef = ImageAttachmentRef | AudioAttachmentRef;
 
 export interface AttachmentStore {
   importBytes(
@@ -57,7 +69,7 @@ export class InMemoryAttachmentStore implements AttachmentStore {
     bytes: Uint8Array,
     declaredMediaType?: string,
   ): Promise<AttachmentRef> {
-    const ref = inspectImage(bytes, declaredMediaType);
+    const ref = inspectAttachment(bytes, declaredMediaType);
     const existing = this.#payloads.get(ref.sha256);
     if (existing === undefined) {
       this.#payloads.set(ref.sha256, Uint8Array.from(bytes));
@@ -68,7 +80,9 @@ export class InMemoryAttachmentStore implements AttachmentStore {
   }
 
   async importLocalImage(filename: string): Promise<AttachmentRef> {
-    return await this.importBytes(await readLocalImage(filename));
+    const bytes = await readLocalImage(filename);
+    inspectImage(bytes);
+    return await this.importBytes(bytes);
   }
 
   async read(ref: AttachmentRef): Promise<Uint8Array> {
@@ -96,7 +110,7 @@ export class FileAttachmentStore implements AttachmentStore {
     bytes: Uint8Array,
     declaredMediaType?: string,
   ): Promise<AttachmentRef> {
-    const ref = inspectImage(bytes, declaredMediaType);
+    const ref = inspectAttachment(bytes, declaredMediaType);
     const hashRoot = path.join(this.#directory, "sha256");
     const finalDirectory = path.join(hashRoot, ref.sha256);
     const finalPath = path.join(finalDirectory, "payload");
@@ -146,7 +160,9 @@ export class FileAttachmentStore implements AttachmentStore {
   }
 
   async importLocalImage(filename: string): Promise<AttachmentRef> {
-    return await this.importBytes(await readLocalImage(filename));
+    const bytes = await readLocalImage(filename);
+    inspectImage(bytes);
+    return await this.importBytes(bytes);
   }
 
   async read(ref: AttachmentRef): Promise<Uint8Array> {
@@ -170,7 +186,7 @@ export class FileAttachmentStore implements AttachmentStore {
   }
 }
 
-export function decodeImageDataUri(value: string): {
+export function decodeMediaDataUri(value: string): {
   bytes: Uint8Array;
   mediaType: string;
 } {
@@ -178,7 +194,7 @@ export function decodeImageDataUri(value: string): {
   if (match === null) {
     throw new AttachmentStoreError(
       "attachment_invalid",
-      "Image input must be a base64 data URI",
+      "Media input must be a base64 data URI",
     );
   }
   const mediaType = match[1]!;
@@ -192,10 +208,160 @@ export function decodeImageDataUri(value: string): {
   ) {
     throw new AttachmentStoreError(
       "attachment_invalid",
-      "Image data URI contains invalid base64",
+      "Media data URI contains invalid base64",
     );
   }
   return { bytes, mediaType };
+}
+
+export function decodeImageDataUri(value: string): {
+  bytes: Uint8Array;
+  mediaType: string;
+} {
+  const decoded = decodeMediaDataUri(value);
+  if (!decoded.mediaType.startsWith("image/"))
+    throw new AttachmentStoreError(
+      "attachment_invalid",
+      "Expected an image data URI",
+    );
+  return decoded;
+}
+
+function inspectAttachment(
+  bytes: Uint8Array,
+  declaredMediaType?: string,
+): AttachmentRef {
+  const isWav = ascii(bytes, 0, 4) === "RIFF" && ascii(bytes, 8, 4) === "WAVE";
+  const isMp3 =
+    ascii(bytes, 0, 3) === "ID3" ||
+    (bytes[0] === 0xff && ((bytes[1] ?? 0) & 0xe0) === 0xe0);
+  if (!isWav && !isMp3 && !declaredMediaType?.startsWith("audio/"))
+    return inspectImage(bytes, declaredMediaType);
+  if (bytes.byteLength > MAX_AUDIO_BYTES)
+    throw new AttachmentStoreError(
+      "attachment_too_large",
+      `Audio exceeds the ${String(MAX_AUDIO_BYTES)} byte limit`,
+    );
+  const mediaType = isWav ? "audio/wav" : "audio/mpeg";
+  if (
+    declaredMediaType !== undefined &&
+    declaredMediaType.toLowerCase() !== mediaType
+  ) {
+    throw new AttachmentStoreError(
+      "attachment_mime_mismatch",
+      `Declared audio MIME ${declaredMediaType} does not match ${mediaType}`,
+    );
+  }
+  if (isWav ? !validWav(bytes) : !isMp3 || !validMp3(bytes)) {
+    throw new AttachmentStoreError(
+      "attachment_invalid",
+      "Audio payload is corrupt or uses an unsupported format (PCM WAV or MPEG Layer III required)",
+    );
+  }
+  return {
+    type: "attachment",
+    sha256: sha256(bytes),
+    mediaType,
+    byteLength: bytes.byteLength,
+  };
+}
+
+// Validate bounded container/frame structure; no decoding or transcoding occurs.
+function validWav(bytes: Uint8Array): boolean {
+  if (bytes.length < 44 || uint32le(bytes, 4) + 8 !== bytes.length)
+    return false;
+  let offset = 12;
+  let blockAlign = 0;
+  let dataLength = 0;
+  while (offset + 8 <= bytes.length) {
+    const tag = ascii(bytes, offset, 4);
+    const size = uint32le(bytes, offset + 4);
+    const end = offset + 8 + size;
+    if (end > bytes.length) return false;
+    if (tag === "fmt ") {
+      if (blockAlign !== 0 || size < 16 || uint16le(bytes, offset + 8) !== 1)
+        return false;
+      const channels = uint16le(bytes, offset + 10);
+      const sampleRate = uint32le(bytes, offset + 12);
+      const bits = uint16le(bytes, offset + 22);
+      blockAlign = uint16le(bytes, offset + 20);
+      if (
+        channels < 1 ||
+        channels > 32 ||
+        sampleRate === 0 ||
+        sampleRate > 384000 ||
+        ![8, 16, 24, 32].includes(bits) ||
+        blockAlign !== (channels * bits) / 8 ||
+        uint32le(bytes, offset + 16) !== sampleRate * blockAlign
+      )
+        return false;
+    }
+    if (tag === "data") {
+      if (dataLength !== 0 || size === 0) return false;
+      dataLength = size;
+    }
+    offset = end + (size % 2);
+  }
+  return (
+    offset === bytes.length &&
+    blockAlign > 0 &&
+    dataLength > 0 &&
+    dataLength % blockAlign === 0
+  );
+}
+
+function validMp3(bytes: Uint8Array): boolean {
+  let offset = 0;
+  if (ascii(bytes, 0, 3) === "ID3") {
+    if (
+      bytes.length < 10 ||
+      ![2, 3, 4].includes(bytes[3]!) ||
+      bytes.subarray(6, 10).some((byte) => byte > 127)
+    )
+      return false;
+    const size = bytes
+      .subarray(6, 10)
+      .reduce((value, byte) => value * 128 + byte, 0);
+    offset = 10 + size + (bytes[3] === 4 && (bytes[5]! & 0x10) !== 0 ? 10 : 0);
+  }
+  let frames = 0;
+  while (offset + 4 <= bytes.length) {
+    if (bytes.length - offset === 128 && ascii(bytes, offset, 3) === "TAG") {
+      offset = bytes.length;
+      break;
+    }
+    const a = bytes[offset + 1]!;
+    const b = bytes[offset + 2]!;
+    const version = (a >> 3) & 3;
+    const rateIndex = (b >> 2) & 3;
+    const bitrateIndex = b >> 4;
+    if (
+      bytes[offset] !== 0xff ||
+      (a & 0xe0) !== 0xe0 ||
+      version === 1 ||
+      ((a >> 1) & 3) !== 1 ||
+      rateIndex === 3 ||
+      bitrateIndex === 0 ||
+      bitrateIndex === 15
+    )
+      return false;
+    const rates =
+      version === 3
+        ? [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
+        : [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
+    const sampleRate =
+      [44100, 48000, 32000][rateIndex]! /
+      (version === 3 ? 1 : version === 2 ? 2 : 4);
+    const size =
+      Math.floor(
+        ((version === 3 ? 144000 : 72000) * rates[bitrateIndex]!) / sampleRate,
+      ) +
+      ((b >> 1) & 1);
+    if (size < 4 || offset + size > bytes.length) return false;
+    offset += size;
+    frames += 1;
+  }
+  return frames > 0 && offset === bytes.length;
 }
 
 async function readLocalImage(filename: string): Promise<Uint8Array> {
@@ -218,7 +384,7 @@ async function readLocalImage(filename: string): Promise<Uint8Array> {
 function inspectImage(
   bytes: Uint8Array,
   declaredMediaType?: string,
-): AttachmentRef {
+): ImageAttachmentRef {
   if (bytes.byteLength > MAX_IMAGE_BYTES) throw tooLargeError();
   const image = imageMetadata(bytes);
   if (
@@ -560,7 +726,7 @@ function assertStoredBytes(bytes: Uint8Array, ref: AttachmentRef): void {
       `Attachment ${ref.sha256} does not match its immutable reference`,
     );
   }
-  const inspected = inspectImage(bytes, ref.mediaType);
+  const inspected = inspectAttachment(bytes, ref.mediaType);
   if (inspected.width !== ref.width || inspected.height !== ref.height) {
     throw new AttachmentStoreError(
       "attachment_corrupt",
@@ -569,23 +735,33 @@ function assertStoredBytes(bytes: Uint8Array, ref: AttachmentRef): void {
   }
 }
 
-function validateAttachmentRef(ref: AttachmentRef): void {
+export function validateAttachmentRef(ref: AttachmentRef): void {
   if (
     ref.type !== "attachment" ||
     !/^[a-f0-9]{64}$/u.test(ref.sha256) ||
-    !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(
-      ref.mediaType,
-    ) ||
+    ![
+      "image/png",
+      "image/jpeg",
+      "image/gif",
+      "image/webp",
+      "audio/wav",
+      "audio/mpeg",
+    ].includes(ref.mediaType) ||
     !Number.isSafeInteger(ref.byteLength) ||
     ref.byteLength <= 0 ||
-    ref.byteLength > MAX_IMAGE_BYTES ||
-    !Number.isSafeInteger(ref.width) ||
-    !Number.isSafeInteger(ref.height) ||
-    ref.width <= 0 ||
-    ref.height <= 0 ||
-    ref.width > MAX_IMAGE_DIMENSION ||
-    ref.height > MAX_IMAGE_DIMENSION ||
-    ref.width * ref.height > MAX_IMAGE_PIXELS
+    ref.byteLength >
+      (ref.mediaType.startsWith("audio/")
+        ? MAX_AUDIO_BYTES
+        : MAX_IMAGE_BYTES) ||
+    (ref.mediaType.startsWith("audio/")
+      ? ref.width !== undefined || ref.height !== undefined
+      : !Number.isSafeInteger(ref.width) ||
+        !Number.isSafeInteger(ref.height) ||
+        (ref.width ?? 0) <= 0 ||
+        (ref.height ?? 0) <= 0 ||
+        (ref.width ?? 0) > MAX_IMAGE_DIMENSION ||
+        (ref.height ?? 0) > MAX_IMAGE_DIMENSION ||
+        (ref.width ?? 0) * (ref.height ?? 0) > MAX_IMAGE_PIXELS)
   ) {
     throw new AttachmentStoreError(
       "attachment_corrupt",

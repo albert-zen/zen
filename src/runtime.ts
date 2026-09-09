@@ -1,4 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { codeExecutionOptions } from "./code-options.js";
+import { codeStateFromItems, validateCodeStateWrite } from "./code-state.js";
+import {
+  AttachmentNotReferencedError,
+  projectModelMessages,
+} from "./model-content.js";
+import { TOOL_TASK_CONTENT_TYPE } from "./tool-task.js";
 
 import type {
   AgenticContextCompactionItem,
@@ -6,6 +13,7 @@ import type {
   ApprovalDecision,
   ApprovalPolicy,
   CanonicalItem,
+  JsonValue,
   FailureItem,
   ModelUsageItem,
   ReasoningItem,
@@ -167,6 +175,13 @@ export class AgentRuntime {
   readonly #toolPresentation: ToolPresentation | undefined;
   readonly #toolOutputSpool: ToolOutputSpool | undefined;
   readonly #maxConcurrentToolBodies: number;
+  readonly #codeStateTails = new Map<string, Promise<void>>();
+  readonly #resolveCodeMedia:
+    | ((
+        media: readonly { type: "image" | "audio"; value: JsonValue }[],
+        items: readonly CanonicalItem[],
+      ) => Promise<UserInput>)
+    | undefined;
 
   constructor(options: {
     toolEnvironment: ToolEnvironment;
@@ -177,8 +192,13 @@ export class AgentRuntime {
     toolPresentation?: ToolPresentation;
     toolOutputSpool?: ToolOutputSpool;
     maxConcurrentToolBodies?: number;
+    resolveCodeMedia?: (
+      media: readonly { type: "image" | "audio"; value: JsonValue }[],
+      items: readonly CanonicalItem[],
+    ) => Promise<UserInput>;
   }) {
     this.#tools = options.toolEnvironment;
+    this.#resolveCodeMedia = options.resolveCodeMedia;
     this.#id = options.idFactory ?? randomUUID;
     this.#now = options.now ?? (() => new Date().toISOString());
     if (
@@ -482,7 +502,10 @@ export class AgentRuntime {
       for await (const event of options.modelAdapter.stream({
         model: options.configuration.model,
         reasoningEffort: options.configuration.reasoningEffort,
-        messages,
+        messages: projectModelMessages(
+          messages,
+          options.configuration.inputModalities,
+        ),
         tools: presentation.modelTools.map((definition) =>
           structuredClone(definition),
         ),
@@ -684,6 +707,7 @@ export class AgentRuntime {
           signal: options.signal,
           allowedToolNames: presentation.modelToolNames,
           nestedToolNames: presentation.nestedToolNames,
+          codeTools: presentation.codeTools,
         },
         scheduler,
         undefined,
@@ -907,6 +931,14 @@ export class AgentRuntime {
         name: toolCall.name,
         arguments: toolCall.arguments,
         cwd: options.configuration.cwd,
+        task: {
+          ...(toolCall.name === "run_code"
+            ? codeExecutionOptions(toolCall.arguments.code)
+            : {}),
+          ...(toolCall.parentCallId === undefined
+            ? {}
+            : { waitForCompletion: true }),
+        },
         sandbox:
           execution.admission === "inherited"
             ? "danger-full-access"
@@ -1010,13 +1042,13 @@ export class AgentRuntime {
               execution.signal,
               scheduler,
               execution.nestedToolNames,
+              execution.codeTools,
             ),
             options.configuration.inputModalities,
           );
-          const result =
-            execution.admission === "inherited"
-              ? await waitForAbortGracefully(operation, execution.signal)
-              : await operation;
+          // The task manager bounds cancellation and owns the partial-output
+          // receipt. Racing it here would discard its live wait handle.
+          const result = await operation;
           outcome = {
             result,
             ...(execution.signal.aborted
@@ -1051,7 +1083,10 @@ export class AgentRuntime {
           };
         }
 
-        if (execution.signal.reason instanceof UnawaitedNestedToolCallError) {
+        if (
+          execution.signal.reason instanceof UnawaitedNestedToolCallError &&
+          outcome.result.contentType !== TOOL_TASK_CONTENT_TYPE
+        ) {
           outcome = {
             result: {
               output:
@@ -1059,12 +1094,6 @@ export class AgentRuntime {
               exitCode: 125,
             },
           };
-        }
-        if (
-          toolCall.parentCallId === undefined &&
-          toolCall.name === "run_code"
-        ) {
-          await scheduler.drain(toolCall.callId);
         }
         return outcome;
       },
@@ -1078,8 +1107,65 @@ export class AgentRuntime {
     inheritedSignal: AbortSignal,
     scheduler: TurnToolScheduler,
     allowedToolNames: ReadonlySet<string>,
+    codeTools: readonly { name: string; description: string }[],
   ) {
     return {
+      drain: () => scheduler.drain(parent.callId),
+      codeContext: {
+        tools: codeTools,
+        storedValues: codeStateFromItems(options.thread.items),
+        store: async (key: string, value: JsonValue): Promise<void> => {
+          const previous =
+            this.#codeStateTails.get(options.thread.id) ?? Promise.resolve();
+          const write = previous.then(async () => {
+            inheritedSignal.throwIfAborted();
+            validateCodeStateWrite(
+              codeStateFromItems(options.thread.items),
+              key,
+              value,
+            );
+            await this.#completeItem(
+              {
+                id: this.#id(),
+                type: "code_state",
+                threadId: options.thread.id,
+                turnId,
+                callId: parent.callId,
+                createdAt: this.#now(),
+                key,
+                value: structuredClone(value),
+              },
+              options,
+            );
+          });
+          const tail = write.catch(() => undefined);
+          this.#codeStateTails.set(options.thread.id, tail);
+          try {
+            await write;
+          } finally {
+            if (this.#codeStateTails.get(options.thread.id) === tail)
+              this.#codeStateTails.delete(options.thread.id);
+          }
+        },
+        resolveMedia: async (
+          media: readonly { type: "image" | "audio"; value: JsonValue }[],
+        ): Promise<UserInput> => {
+          if (media.length === 0) return [];
+          if (this.#resolveCodeMedia === undefined)
+            throw new Error(
+              "Code media output requires the Host attachment store",
+            );
+          try {
+            return await this.#resolveCodeMedia(media, options.thread.items);
+          } catch (error) {
+            if (!(error instanceof AttachmentNotReferencedError)) throw error;
+            // Only a not-yet-authorized ref needs the FIFO commit barrier.
+            // Inline bytes and already committed refs can stream immediately.
+            await scheduler.drain(parent.callId);
+            return await this.#resolveCodeMedia(media, options.thread.items);
+          }
+        },
+      },
       invoke: async (
         name: string,
         arguments_: Record<string, unknown>,
@@ -1108,6 +1194,7 @@ export class AgentRuntime {
             signal,
             allowedToolNames,
             nestedToolNames: allowedToolNames,
+            codeTools,
           },
           scheduler,
           observation,
@@ -1190,6 +1277,7 @@ interface ScheduledToolCapability {
   signal: AbortSignal;
   allowedToolNames: ReadonlySet<string>;
   nestedToolNames: ReadonlySet<string>;
+  codeTools: readonly { name: string; description: string }[];
 }
 
 interface ScheduledToolOutcome {
@@ -1455,42 +1543,6 @@ async function waitForAbort<T>(
     if (signal.aborted) {
       abort();
     }
-    void operation.then(
-      (value) => {
-        cleanup();
-        resolve(value);
-      },
-      (error: unknown) => {
-        cleanup();
-        reject(error);
-      },
-    );
-  });
-}
-
-async function waitForAbortGracefully<T>(
-  operation: Promise<T>,
-  signal: AbortSignal,
-  graceMs = 300,
-): Promise<T> {
-  return await new Promise<T>((resolve, reject) => {
-    let timer: NodeJS.Timeout | undefined;
-    const abort = (): void => {
-      if (timer !== undefined) return;
-      timer = setTimeout(() => {
-        cleanup();
-        reject(
-          signal.reason ??
-            new DOMException("The operation was aborted", "AbortError"),
-        );
-      }, graceMs);
-    };
-    const cleanup = (): void => {
-      signal.removeEventListener("abort", abort);
-      if (timer !== undefined) clearTimeout(timer);
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    if (signal.aborted) abort();
     void operation.then(
       (value) => {
         cleanup();

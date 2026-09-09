@@ -43,7 +43,7 @@ test("ZenX source Host runs the CLI programmatic tool contract", async () => {
       input: [
         {
           type: "text",
-          text: '!tool run_code {"code":"const value: number = 40 + 2; const nested = await tools.shell({ command: \\"printf child\\" }); text(`${value}:${nested.output}`);","description":"host composition tracer"}',
+          text: '!tool run_code {"code":"const value = 40 + 2; const nested = await tools.shell({ command: \\"printf child\\" }); text(`${value}:${nested.output}`);"}',
         },
       ],
     });
@@ -68,7 +68,7 @@ test("ZenX source Host runs the CLI programmatic tool contract", async () => {
         ["shell", commands[0]?.callId, "completed"],
       ],
     );
-    assert.equal(commands[0]?.command.includes("const value: number"), true);
+    assert.equal(commands[0]?.command.includes("const value"), true);
     assert.equal(commands[0]?.aggregatedOutput, "42:child");
 
     const patchThread = await manager.request("thread/start", {

@@ -34,9 +34,18 @@ export interface ToolInvocation {
   signal: AbortSignal;
   threadId?: string;
   sandbox?: SandboxMode;
-  task?: { yieldTimeMs?: number; timeoutMs?: number };
+  task?: {
+    yieldTimeMs?: number;
+    timeoutMs?: number;
+    previewBytes?: number;
+    waitForCompletion?: boolean;
+  };
   /** Host-owned streaming sink; bytes emitted here must not be repeated in final output. */
-  taskContext?: { onOutput(text: string): void };
+  taskContext?: {
+    onOutput(text: string): void;
+    onModelContent?(content: UserInput): void;
+    requestYield?(): void;
+  };
 }
 
 export interface ToolExecutionResult {
@@ -95,6 +104,15 @@ export interface ToolBundle {
 }
 
 export interface NestedToolInvocationPort {
+  drain?(): Promise<void>;
+  codeContext?: {
+    tools: readonly { name: string; description: string }[];
+    storedValues: Record<string, JsonValue>;
+    store(key: string, value: JsonValue): Promise<void>;
+    resolveMedia(
+      media: readonly { type: "image" | "audio"; value: JsonValue }[],
+    ): Promise<UserInput>;
+  };
   invoke(
     name: string,
     arguments_: Record<string, unknown>,
@@ -602,16 +620,19 @@ export class ToolEnvironment {
           isCompositeToolRuntime(runtime)
             ? await runtime.executeComposite(invocation, nested)
             : await runtime.execute(invocation);
+        await nested?.drain?.();
         try {
           return normalizeToolExecutionResult(result, prepared.owner);
         } catch (error) {
           throw new ToolResultNormalizationError(error);
         }
       };
-      if (runtime instanceof ToolWaitRuntime || isCompositeToolRuntime(runtime))
+      if (runtime instanceof ToolWaitRuntime)
         return await execute(prepared.invocation);
       const scope =
-        runtime.taskPolicy?.resourceScope ??
+        (isCompositeToolRuntime(runtime)
+          ? "independent"
+          : runtime.taskPolicy?.resourceScope) ??
         (runtime.executionMode === "parallel_safe" ? "independent" : "bundle");
       const key =
         scope === "independent"
@@ -992,9 +1013,19 @@ export class ToolOutputWindow {
   #truncated = false;
   hasOutput = false;
 
-  constructor(maxOutputBytes: number, spool: ToolOutputSpool | undefined) {
-    this.#maxOutputBytes = maxOutputBytes;
-    this.#capture = spool?.beginCapture({ maxCaptureBytes: maxOutputBytes });
+  constructor(
+    maxOutputBytes: number,
+    spool: ToolOutputSpool | undefined,
+    previewBytes?: number,
+  ) {
+    this.#maxOutputBytes =
+      spool === undefined && previewBytes !== undefined
+        ? Math.min(maxOutputBytes, previewBytes)
+        : maxOutputBytes;
+    this.#capture = spool?.beginCapture({
+      maxCaptureBytes: maxOutputBytes,
+      ...(previewBytes === undefined ? {} : { previewBytes }),
+    });
   }
 
   write(text: string): void {

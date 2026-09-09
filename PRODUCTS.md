@@ -131,12 +131,13 @@ Context compaction 设置页另提供默认关闭的 Agentic compaction 实验�
 关闭开关只停止未来披露，不撤销已经保存的上下文切换事实。
 
 CLI 与 ZenX 现在通过同一个 Host composition 默认发布 `both` Tool Presentation；Host-owned
-配置可显式切换 `direct | code | both`，不进入 Item。`run_code` 使用 fresh、可取消的 Node
-Worker 执行与 shell 权限等同的 erasable TypeScript，并通过同一 Tool Environment 形成
-canonical outer/child tool lifecycle。显式 `code` 初始化失败会阻止 Host 启动，默认 `both`
+配置可显式切换 `direct | code | both`，不进入 Item。`run_code` 使用 fresh、可取消的 JavaScript module，
+机器操作通过现有 tools 完成，完整程序共用 ToolTaskManager/wait，并形成 canonical outer/child
+tool lifecycle。Responses 使用原始 JS custom tool，其余协议采用 `{ code }`；显式 text/image/audio、
+线程 JSON store/load 和失败输出保留复用 Core 的输出与 Item 通路。显式 `code` 初始化失败会阻止 Host 启动，默认 `both`
 则明确 warning 后退回 direct。ZenX approval 展示完整 code 并按稳定 `run_code` capability
 说明记忆单位，Transcript 只按 canonical parent lineage 投影层级。portable smoke 从实际
-artifact 定位 Worker，覆盖 Node builtin、nested、`text`、abort 与 temporary output spool；
+artifact 定位 Worker，覆盖 guest 无 Node、nested、`text`、abort 与 temporary output spool；
 切回 `direct` 不删除 runtime 或改写历史，旧 trace 仍可重放。CLI 与 ZenX composition 还注册
 同一个 exclusive `apply_patch` runtime；direct 与 `tools.apply_patch(...)` 共享 Tool Environment、
 approval、scheduler 和 canonical lifecycle。patch 使用普通 JSON function 的 `{ patch: string }`

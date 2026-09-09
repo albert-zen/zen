@@ -23,7 +23,10 @@
 - **Codex App Server Adapter** — `src/protocol/codex/` 把 ZAS 原生 surface 中可表达的部分映射为固定 codex-cli 0.146.0 shape；兼容只属于已验收的具体客户端调用面，不反向定义 ZAS。
 - **Tool Environment** — AgentRuntime 面向的混合工具执行环境，统一解析、投影、Host policy、取消、路由与结果回写，但不要求 Zen 自己实现每个工具的领域行为。
 - **Tool Presentation** — AgentRuntime 把同一个 Tool Environment 以 `direct`、`code` 或 `both` 形态投影给模型；它只改变模型调用入口，不拥有第二套工具、权限或会话语义。
-- **Code Runtime** — 每次调用在 fresh、空环境、有限 heap/time/output 且可硬终止的 Node Worker 中运行 erasable TypeScript，权限明确等同 builtin shell，并用同一个 Tool Environment 的 `tools.*` bindings 调用结构化工具。
+- **Code Runtime** — 每次调用在可硬终止的 Worker 内用独立 JavaScript module context 编排同一个 Tool Environment 的工具；guest 无 Node、文件、网络或模块加载能力，执行生命期由统一工具任务管理器持有。
+- **Code State** — 线程内有界 JSON 数据从 append-only `code_state` Items 重建，`store/load` 只提供显式写入和当前程序的快照读取，不保存函数、执行栈或另一份会话权威。
+- **Model Content Projection** — 根据本次模型的输入能力投影历史与当前媒体内容，只改变 ModelRequest，不改写 canonical Items 或附件。
+- **Code Media Converter** — 将程序显式 image/audio 数据或当前线程已授权附件引用转换到同一个 AttachmentStore 与模型内容通路，不自行读取路径或网络。
 - **Nested Tool Invocation Port** — AgentRuntime 只向可信 builtin 组合工具提供的 turn-scoped capability，用同一 Tool Environment 和 canonical lifecycle 提交子调用，不序列化或下放给 plugin / external provider。
 - **Tool Output Spool** — Host 把超出默认 8 KiB 模型 preview（4 KiB head 与 4 KiB tail）的完整已捕获 text result 暂存到权限收窄的临时文件，并只把含 head/tail、大小、hash 和易失路径的 receipt canonicalize；临时副本不是 Thread authority。
 - **Tool Execution Mode** — Tool Runtime 对执行 body 只声明 `parallel_safe` 或 `exclusive`；未声明与 builtin shell 一律按 `exclusive`，该分类不是权限或资源 scope。
@@ -371,29 +374,31 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   prepare、Host policy、调度、取消、归一化与回写路径。需要共享生命周期的插件或跨进程
   bridge 以 Tool Bundle 原子发布多个 proxy runtimes，bundle 不按 invocation name 再分发。
 - Tool Presentation 支持 `direct`、`code` 与 `both`。`direct` 投影普通 structured
-  tool schemas；`code` 投影普通 JSON function `run_code({ code, description })` 与显式启用的
-  顶层 Runtime control，并在
-  TypeScript SDK 中保留工具与参数说明并声明当前可用的 `tools.*` bindings；代码是支持
-  top-level await 与 `await import(...)` 的 async function body，不提供 `require`；`both` 同时投影两者，作为目标
+  tool schemas；`code` 投影 `run_code` 与显式启用的顶层 Runtime control。ModelTool 的
+  rawSource 元数据声明 JavaScript 源码到 canonical `{code}` 参数的映射；支持 custom tool
+  的 Provider 接受原始代码，JSON Provider 使用同一参数入口，wire grammar 留在 adapter。
+  SDK 的 TypeScript 声明只是参数参考；实际 guest 是支持 top-level await 的 JavaScript
+  module，不提供 Node 或 import 加载。`both` 同时投影两者，作为目标
   默认，使简单调用无需经过 JavaScript，而循环、分支、并发和中间结果过滤可以使用
   `run_code`。默认 `both` 的 composition 无法初始化 Code Runtime 时明确 warning 并退回
   `direct`；显式选择 `code` 时则启动失败，不得假装执行成功。
 - 每次模型采样捕获该次实际投影的 stable tool-name set；模型返回的 direct calls 与
   该次 `run_code` 的 bindings 都只能调用该集合，不能靠猜测名字越过 plugin discovery，
-  后续披露从下一次采样生效。
+  后续披露从下一次采样生效。SDK 与 ALL_TOOLS 元数据从这份同源快照生成，不建立第二 registry。
 - `run_code` 是与 builtin `shell` 同级的 Host-authority tool：完整程序和外层结果构成
-  canonical 审计单位，Node `fs` / process / network 等直接机器动作不逐 syscall 建立
-  Item；通过 `tools.*` 调用的 browser、plugin、external 或 shell 仍逐次经过同一个
+  canonical 审计单位；guest 的机器操作全部通过 `tools.*` 调用的 browser、plugin、external 或 shell，逐次经过同一个
   Tool Environment 的参数验证、路由、取消、结果归一化与 nested canonical lifecycle。
   builtin `shell` 在 `direct` / `both` 中可直接调用，在 `code` / `both` 中也可作为
-  `tools.shell(...)` 调用。Node `fetch` / HTTP 和 curl 保证通用网络 reachability，Web
+  `tools.shell(...)` 调用。文件路径和进程环境由下层工具使用线程 cwd 解析；curl 等工具提供网络访问，Web
   search 仍是不同领域语义，不能在没有搜索服务或索引时伪造。
-- Code Runtime 首版每次调用新建 Node Worker；Host 先用 Node builtin type stripping
-  处理 erasable TypeScript，Worker 使用空 environment、无继承 `execArgv`、V8 heap/
-  stack 与 wall-time/output/call-count 限制、显式 `text(...)` capture 和 hard termination；
-  异步 `tools.*` 以 plain JSON MessagePort/Promise bridge 回到 AgentRuntime。该 Worker
-  的 resource limits 与 termination 是运行控制而非安全沙箱，不保证限制外部分配、
-  回滚已发生的机器副作用或收拢程序自行 detached 的子进程。
+- Code Runtime 每次创建 Worker 并使用独立 module context，仅暴露 context 内构造的 helpers，
+  通过 JSON bridge 返回工具请求、数据写入和输出；限制 heap/stack/output/call count，统一
+  任务管理器负责执行 deadline、yield 和取消。宿主实现使用 Node 不意味着 guest 拥有 Node。
+  这定义受支持的语言能力，不把 VM 声称为可执行敌意代码的完整安全沙箱；不回滚工具副作用。
+- 普通工具和代码程序都由 ToolTaskManager 持有，模型观察时间到返回 running/task_id，
+  同一 wait 读取增量输出。程序内部 await 子工具等待真实终态结果，不收到中间 running 回执。
+  协调程序不占子工具的运行容量或资源锁。yield 后原父调用、能力快照和调度作用域由任务持有，
+  后续子结果仍按原 lineage 提交；所属 Turn 的中断传播到任务及子调用，不重放执行栈。
 - `run_code` 内部每次 nested tool call/result 都必须从 append-only ItemList 推导，并
   关联外层调用；模型上下文可以只接收程序显式返回的汇总结果，但 durable history
   不能省略中间调用。nested tool 失败明确返回程序，由程序或后续模型调用决定是否
@@ -401,11 +406,18 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
 - AgentRuntime 仍独占 journal append；`run_code` 只能通过 Nested Tool Invocation Port
   请求子调用，Plugin / External Tool Runtime 无法取得该 port。`ToolCallItem` 只增加
   可选 `parentCallId`：root lineage 与 submission order 分别沿 parent chain 和 Item 顺序
-  推导，不重复保存；nested lifecycle 不编入后续模型 messages，但 compaction retention
+  推导，不重复保存；nested lifecycle 不编入后续模型 messages，但未确认取消的子任务回执和已捕获输出
+  必须提升到父结果的模型投影，让模型取得可继续 wait 的句柄。compaction retention
   必须保持完整的 outer/child closure。
-- `run_code` 只有显式 `text(value)` 形成 outer model-visible output；nested result、函数
-  return 和 console 不自动进入上下文。多次 `text` 按调用顺序连接，无输出时返回固定
-  提示；非字符串值只接受 lossless JSON。
+- `run_code` 用 text/image/audio 显式选择输出，exit 提前正常结束，yield_control 请求提前观察；
+  view_image 本身仍是明确的查看请求，nested modelContent 继续提升并去重，不要求再次 image。
+  text 逐步送到 Host 捕获，异常/超时/取消均保留已捕获部分。输出预算只限制预览，完整捕获沿 spool 上限。
+- store 的 key 为 1–160 字符，JSON 单值最多 256 KiB、线程最多 128 keys/2 MiB；Host 串行
+  校验并由 AgentRuntime 追加 code_state（父 callId、key、value）。程序完成前等待已发起写入提交，
+  已提交写入不随后续程序失败回滚。load 使用执行开始时的已提交快照加本程序写入，普通 globals 每次 fresh。
+  状态从完整 Items 重建，不依赖压缩后的模型消息；code_state 不直接送进模型上下文。
+- 图片和 WAV/MP3 音频复用内容寻址 AttachmentStore；每次请求按模型能力投递原生媒体或文本引用，
+  未知能力按文本处理，Provider 不支持的 wire 模态进一步降级。canonical 内容保持原样。
 - direct、nested 与 outer `run_code` 的 text result 共用 Tool Output Spool。默认模型
   preview 只保留 4 KiB head 与 4 KiB tail；完整已捕获输出以 POSIX 0700 directory /
   0600 file 或 Windows current-user private temp/ACL 暂存，receipt 记录 captured bytes、SHA-256、绝对路径和 temporary lifetime，

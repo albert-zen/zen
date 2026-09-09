@@ -1,5 +1,6 @@
 import { createModelDiagnosticWriter } from "./model-diagnostics.js";
 import { randomUUID } from "node:crypto";
+import { createMediaOutputConverter } from "../../../src/model-content.js";
 import { isDeepStrictEqual } from "node:util";
 import path from "node:path";
 import { fetch as undiciFetch, ProxyAgent } from "undici";
@@ -244,6 +245,7 @@ export function createHostedAppServer(
     journal,
     attachments,
     runtime: new AgentRuntime({
+      resolveCodeMedia: createMediaOutputConverter(attachments),
       toolEnvironment,
       toolPresentation: codeRuntime.presentation,
       ...(options.toolDefinitionProjection === undefined
