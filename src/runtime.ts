@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { codeExecutionOptions } from "./code-options.js";
+import { codeStateFromItems, validateCodeStateWrite } from "./code-state.js";
 
 import type {
   AgenticContextCompactionItem,
@@ -6,6 +8,7 @@ import type {
   ApprovalDecision,
   ApprovalPolicy,
   CanonicalItem,
+  JsonValue,
   FailureItem,
   ModelUsageItem,
   ReasoningItem,
@@ -167,6 +170,8 @@ export class AgentRuntime {
   readonly #toolPresentation: ToolPresentation | undefined;
   readonly #toolOutputSpool: ToolOutputSpool | undefined;
   readonly #maxConcurrentToolBodies: number;
+  readonly #codeStateTails = new Map<string, Promise<void>>();
+  readonly #resolveCodeMedia: ((media: readonly {type:"image"|"audio";value:JsonValue}[], items: readonly CanonicalItem[]) => Promise<UserInput>) | undefined;
 
   constructor(options: {
     toolEnvironment: ToolEnvironment;
@@ -177,8 +182,10 @@ export class AgentRuntime {
     toolPresentation?: ToolPresentation;
     toolOutputSpool?: ToolOutputSpool;
     maxConcurrentToolBodies?: number;
+    resolveCodeMedia?: (media: readonly {type:"image"|"audio";value:JsonValue}[], items: readonly CanonicalItem[]) => Promise<UserInput>;
   }) {
     this.#tools = options.toolEnvironment;
+    this.#resolveCodeMedia = options.resolveCodeMedia;
     this.#id = options.idFactory ?? randomUUID;
     this.#now = options.now ?? (() => new Date().toISOString());
     if (
@@ -684,6 +691,7 @@ export class AgentRuntime {
           signal: options.signal,
           allowedToolNames: presentation.modelToolNames,
           nestedToolNames: presentation.nestedToolNames,
+          codeTools: presentation.codeTools,
         },
         scheduler,
         undefined,
@@ -907,6 +915,10 @@ export class AgentRuntime {
         name: toolCall.name,
         arguments: toolCall.arguments,
         cwd: options.configuration.cwd,
+        task: {
+          ...(toolCall.name === "run_code" ? codeExecutionOptions(toolCall.arguments.code) : {}),
+          ...(toolCall.parentCallId === undefined ? {} : {waitForCompletion:true}),
+        },
         sandbox:
           execution.admission === "inherited"
             ? "danger-full-access"
@@ -1010,6 +1022,7 @@ export class AgentRuntime {
               execution.signal,
               scheduler,
               execution.nestedToolNames,
+              execution.codeTools,
             ),
             options.configuration.inputModalities,
           );
@@ -1060,12 +1073,6 @@ export class AgentRuntime {
             },
           };
         }
-        if (
-          toolCall.parentCallId === undefined &&
-          toolCall.name === "run_code"
-        ) {
-          await scheduler.drain(toolCall.callId);
-        }
         return outcome;
       },
     };
@@ -1078,8 +1085,34 @@ export class AgentRuntime {
     inheritedSignal: AbortSignal,
     scheduler: TurnToolScheduler,
     allowedToolNames: ReadonlySet<string>,
+    codeTools: readonly {name:string;description:string}[],
   ) {
     return {
+      codeContext: {
+        tools: codeTools,
+        storedValues: codeStateFromItems(options.thread.items),
+        store: async (key: string, value: JsonValue): Promise<void> => {
+          const previous = this.#codeStateTails.get(options.thread.id) ?? Promise.resolve();
+          const write = previous.then(async () => {
+            inheritedSignal.throwIfAborted();
+            validateCodeStateWrite(codeStateFromItems(options.thread.items), key, value);
+            await this.#completeItem({
+              id: this.#id(), type:"code_state", threadId:options.thread.id,
+              turnId, callId:parent.callId, createdAt:this.#now(), key, value:structuredClone(value),
+            }, options);
+          });
+          const tail = write.catch(() => undefined);
+          this.#codeStateTails.set(options.thread.id, tail);
+          try { await write; } finally {
+            if (this.#codeStateTails.get(options.thread.id) === tail) this.#codeStateTails.delete(options.thread.id);
+          }
+        },
+        resolveMedia: async (media: readonly {type:"image"|"audio";value:JsonValue}[]): Promise<UserInput> => {
+          if (media.length === 0) return [];
+          if (this.#resolveCodeMedia === undefined) throw new Error("Code media output requires the Host attachment store");
+          return await this.#resolveCodeMedia(media, options.thread.items);
+        },
+      },
       invoke: async (
         name: string,
         arguments_: Record<string, unknown>,
@@ -1108,10 +1141,11 @@ export class AgentRuntime {
             signal,
             allowedToolNames,
             nestedToolNames: allowedToolNames,
+            codeTools,
           },
           scheduler,
           observation,
-        ).result;
+        ).committed;
       },
     };
   }
@@ -1190,6 +1224,7 @@ interface ScheduledToolCapability {
   signal: AbortSignal;
   allowedToolNames: ReadonlySet<string>;
   nestedToolNames: ReadonlySet<string>;
+  codeTools: readonly {name:string;description:string}[];
 }
 
 interface ScheduledToolOutcome {

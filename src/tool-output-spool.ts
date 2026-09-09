@@ -83,13 +83,14 @@ export class ToolOutputSpool {
   beginCapture(
     options: {
       maxCaptureBytes?: number;
+      previewBytes?: number;
     } = {},
   ): ToolOutputCapture {
     if (this.#closed) throw new Error("Tool output spool is closed");
     const capture = new ToolOutputCapture({
       ready: this.#ready,
       filePath: path.join(this.#instanceDirectory, `${randomUUID()}.txt`),
-      previewBytes: this.#previewBytes,
+      previewBytes: options.previewBytes === undefined ? this.#previewBytes : Math.min(positiveInteger(options.previewBytes, "previewBytes"), this.#maxCaptureBytes),
       maxCaptureBytes:
         options.maxCaptureBytes === undefined
           ? this.#maxCaptureBytes

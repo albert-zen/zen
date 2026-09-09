@@ -20,6 +20,7 @@ export type ItemType =
   | "reasoning"
   | "tool_call"
   | "tool_result"
+  | "code_state"
   | "failure";
 
 const CANONICAL_ITEM_TYPES = {
@@ -37,6 +38,7 @@ const CANONICAL_ITEM_TYPES = {
   reasoning: true,
   tool_call: true,
   tool_result: true,
+  code_state: true,
   failure: true,
 } as const satisfies Record<ItemType, true>;
 
@@ -309,7 +311,16 @@ export interface QueuedUserMessageItem extends ItemBase {
   input: UserInput;
 }
 
+export interface CodeStateItem extends ItemBase {
+  type: "code_state";
+  turnId: string;
+  callId: string;
+  key: string;
+  value: JsonValue;
+}
+
 export type CanonicalItem =
+  | CodeStateItem
   | QueuedUserMessageItem
   | ThreadMetadataItem
   | ThreadConfigurationChangedItem
@@ -687,6 +698,12 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       }
       break;
     }
+    case "code_state":
+      requireTurnId(item, type);
+      requireNonEmptyString(item.callId, `${type}.callId`);
+      requireNonEmptyString(item.key, `${type}.key`);
+      validateJsonValue(item.value, `${type}.value`);
+      break;
     case "failure":
       requireTurnId(item, type);
       requireNonEmptyString(item.code, `${type}.code`);

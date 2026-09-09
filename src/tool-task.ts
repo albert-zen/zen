@@ -113,7 +113,8 @@ export class ToolTaskManager {
         `Tool task limit reached (${this.#options.maxTasks}); wait for or cancel an existing task`,
       );
     if (
-      [...this.#tasks.values()].filter((task) => !task.terminal).length >=
+      !("executeComposite" in runtime) &&
+      [...this.#tasks.values()].filter((task) => !task.terminal && !task.coordinator).length >=
       this.#options.maxRunningTasks
     )
       throw new Error(
@@ -168,7 +169,8 @@ export class ToolTaskManager {
     const releaseObservation = task.acquireObservation();
     try {
       task.start();
-      await task.observe(yieldMs, true);
+      if (invocation.task?.waitForCompletion) await task.completion;
+      else await task.observe(yieldMs, true);
       if (invocation.threadId === undefined && !task.terminal) {
         task.cancel(false);
         await task.observe(this.#options.shutdownWaitMs);
@@ -252,6 +254,9 @@ export class ToolTaskManager {
 }
 
 class Task {
+  readonly completion: Promise<void>;
+  #complete!: () => void;
+  #yieldRequested = false;
   readonly id = randomUUID();
   readonly threadId: string | undefined;
   readonly #runtime: ToolRuntime;
@@ -296,7 +301,9 @@ class Task {
     this.#options = options;
     this.threadId = invocation.threadId;
     this.#window = this.#newWindow();
+    this.completion = new Promise((resolve) => { this.#complete = resolve; });
   }
+  get coordinator() { return "executeComposite" in this.#runtime; }
   get observed() {
     return this.#observed;
   }
@@ -363,6 +370,10 @@ class Task {
         ...this.#invocation,
         signal: this.#controller.signal,
         taskContext: {
+          requestYield: () => {
+            this.#yieldRequested = true;
+            this.#notify();
+          },
           onOutput: (text) => {
             if (this.#closed) return;
             this.#window.write(text);
@@ -388,6 +399,7 @@ class Task {
           this.#retainCompleted();
         }
         this.#notify();
+        this.#complete();
       });
     if (this.#invocation.signal.aborted) this.cancel(false);
   }
@@ -405,7 +417,7 @@ class Task {
   }
   async observe(ms: number, cancelRequested = false): Promise<void> {
     if (
-      this.terminal ||
+      this.terminal || this.#yieldRequested ||
       (cancelRequested && this.status === "cancellation_unconfirmed")
     )
       return;
@@ -414,7 +426,7 @@ class Task {
       const timer = setTimeout(done, ms);
       const changed = () => {
         if (
-          this.terminal ||
+          this.terminal || this.#yieldRequested ||
           (previousStatus !== "cancellation_unconfirmed" &&
             this.status === "cancellation_unconfirmed")
         )
@@ -438,6 +450,7 @@ class Task {
     await previous;
     try {
       const status = this.status;
+      this.#yieldRequested = false;
       const terminal = this.terminal;
       if (quiet && this.#error !== undefined && !this.#window.hasOutput)
         throw this.#error;
@@ -561,6 +574,7 @@ class Task {
     return new ToolOutputWindow(
       this.#options.maxOutputBytes,
       this.#options.toolOutputSpool,
+      this.#invocation.task?.previewBytes,
     );
   }
   #notify() {
