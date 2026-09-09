@@ -142,6 +142,8 @@
 - **OpenAI Subscription Model Cache** — ZenX Host 按 ChatGPT account id 保存官方 Codex
   `/models` 的最近一次成功投影与 ETag；它只作为可替换的模型发现缓存，远端失败时依次退回
   同账户缓存和内建 preset，不保存 credential，也不成为 Provider 或 Thread 权威状态。
+  目录 API 必需的 client_version 独立于 CAS adapter 版本维护；缓存与 ETag 仅在
+  目录兼容版本一致时复用，升级版本后重新获取，且无需安装 Codex。
 - **ProviderRegistry** — 宿主以稳定 `providerProfileId` 把每个注入的 ModelAdapter
   与其 ModelCatalog 绑定；canonical selection 是
   `providerProfileId / modelId / reasoningEffort` 的原子三元组，Thread 只记录生效选择而不持有 profile 或 credential；

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -942,6 +942,51 @@ test("subscription discovery renews rejected tokens and honors same-account ETag
     assert.equal(snapshot.warning, undefined);
     assert.equal(calls, 2);
     assert.equal(renewals, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("subscription discovery defaults to its own current catalog compatibility version", async () => {
+  let requested = "";
+  await discoverOpenAiSubscriptionModels({
+    accessToken: subscriptionToken("catalog-version"),
+    fetch: async (url) => {
+      requested = String(url);
+      return Response.json({ models: [] });
+    },
+  });
+  assert.equal(
+    new URL(requested).searchParams.get("client_version"),
+    "0.153.4",
+  );
+});
+
+test("subscription cache rejects ETags from another catalog compatibility version", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-catalog-version-"),
+  );
+  try {
+    const file = path.join(directory, "cache.json");
+    const cache = new OpenAiSubscriptionModelCache(file);
+    const entry = {
+      accountId: "account",
+      fetchedAt: Date.now(),
+      etag: '"catalog"',
+      models: [],
+    };
+    await cache.store(entry);
+    assert.deepEqual(await cache.load("account"), entry);
+    const stored = JSON.parse(await readFile(file, "utf8"));
+    assert.equal(stored.catalogClientVersion, "0.153.4");
+    await writeFile(
+      file,
+      JSON.stringify({ ...stored, catalogClientVersion: "0.146.0" }),
+    );
+    assert.equal(await cache.load("account"), undefined);
+    delete stored.catalogClientVersion;
+    await writeFile(file, JSON.stringify(stored));
+    assert.equal(await cache.load("account"), undefined);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

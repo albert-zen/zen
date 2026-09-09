@@ -14,9 +14,9 @@ const MAX_MODEL_ID_LENGTH = 512;
 const TEXT_ONLY_INPUT: readonly ModelInputModality[] = Object.freeze(["text"]);
 const DEFAULT_SUBSCRIPTION_MODELS_ENDPOINT =
   "https://chatgpt.com/backend-api/codex/models";
-// Zen's Codex compatibility boundary is pinned to this client generation.
-// The backend uses this query to withhold metadata requiring newer semantics.
-const DEFAULT_CLIENT_VERSION = "0.146.0";
+// Required by the subscription catalog API; maintained independently of the CAS
+// adapter pin. No locally installed Codex client is required for discovery.
+const SUBSCRIPTION_CATALOG_CLIENT_VERSION = "0.153.4";
 
 export type DiscoveredModelCatalogEntry = Required<
   Pick<
@@ -93,7 +93,7 @@ export class OpenAiSubscriptionModelCache {
     try {
       await writeFile(
         temporary,
-        `${JSON.stringify({ version: 1, ...value })}\n`,
+        `${JSON.stringify({ ...value, version: 1, catalogClientVersion: SUBSCRIPTION_CATALOG_CLIENT_VERSION })}\n`,
         {
           encoding: "utf8",
           mode: 0o600,
@@ -122,7 +122,7 @@ export async function discoverOpenAiSubscriptionModels(options: {
   );
   endpoint.searchParams.set(
     "client_version",
-    options.clientVersion ?? DEFAULT_CLIENT_VERSION,
+    options.clientVersion ?? SUBSCRIPTION_CATALOG_CLIENT_VERSION,
   );
   const accountId = extractChatGptAccountId(options.accessToken);
   const headers = new Headers({
@@ -403,6 +403,7 @@ function readCachedSubscriptionCatalog(
   if (
     !isRecord(value) ||
     value.version !== 1 ||
+    value.catalogClientVersion !== SUBSCRIPTION_CATALOG_CLIENT_VERSION ||
     value.accountId !== accountId ||
     typeof value.fetchedAt !== "number" ||
     !Number.isSafeInteger(value.fetchedAt) ||
