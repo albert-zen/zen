@@ -295,7 +295,8 @@
   `userMessage` 完成通知处幂等补观察跨客户端首条输入，失败只记录 warning 且不影响 Turn。
 - **ZenXTriggerLifecycleGeneration** — Trigger 服务把定时器、瞬态完成证据、唤醒 admission
   与取消句柄绑定到一次可退休的进程内代数；迟到异步结果只能观察其创建代数，不能修改新代数或
-  重新占用已释放的唤醒名额。
+  重新占用已释放的唤醒名额。定时器按已提交的规则与执行时间增量同步，未变化的注册保持不动；
+  定时命中在持久化 mutation 内重新核对执行时间，拒绝更新前已排队的旧 occurrence。
 - **ZenXTriggerProgramRunner** — ZenX 外层以一次性、有界的本地子进程执行 Trigger predicate/action，
   通过稳定 invocation id、显式 stdin/stdout JSON、cwd/env、超时、取消与平台化进程树终止把结果归约为
   Trigger 历史中的明确 outcome；它不是 sandbox、队列、重试器或第二个 Runtime。

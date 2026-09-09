@@ -376,6 +376,11 @@ mentions, and named signal conditions. A hit persists an auditable occurrence
 with a stable client message ID, then starts a normal App Server Turn. Failures
 remain visible and are never silently retried.
 
+Timer registrations follow successfully saved definitions. Updating an unrelated
+Trigger leaves existing timers in place; a failed cancel or delete leaves the
+original timer scheduled. Changing a timer's due date invalidates callbacks from
+its previous schedule, including callbacks already waiting for a save to finish.
+
 The bundled `zenx-triggers` and `zenx-rooms` v2 Plugin Packages expose their
 own namespaced ordinary tools for Trigger
 list/create/update/cancel/delete and Room list/create/rename/delete/member/post
