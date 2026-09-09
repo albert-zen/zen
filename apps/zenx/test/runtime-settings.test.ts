@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { ZenXSettingsService } from "../src/main/settings-service.js";
 import { ZenXCredentialVault } from "../src/main/credential-vault.js";
+import { ToolEnvironment } from "../../../src/tool.js";
 
 async function fixture() {
   const directory = await mkdtemp(
@@ -198,7 +199,7 @@ test("auxiliary title lease prevents maintenance until released, and maintenance
   }
 });
 
-test("settings publish to the running Host: old null-effort turn completes, next turn requires an explicit new effort", async () => {
+test("settings publish across multiple tool rounds: old connection and null effort finish, next turn uses the new identity and explicit effort", async () => {
   const { createHostedAppServer } = await import("../../cli/src/host.js");
   const { service, close } = await fixture();
   const originalFetch = globalThis.fetch;
@@ -211,11 +212,40 @@ test("settings publish to the running Host: old null-effort turn completes, next
     started = resolve;
   });
   const requests: Record<string, unknown>[] = [];
+  const identities: Array<{ url: string; authorization: string | null }> = [];
+  let toolCalls = 0;
   globalThis.fetch = async (_input, init) => {
     requests.push(JSON.parse(String(init?.body)));
+    identities.push({
+      url: String(_input),
+      authorization: new Headers(init?.headers).get("authorization"),
+    });
     if (requests.length === 1) {
       started();
       await firstGate;
+    }
+    if (requests.length <= 2) {
+      const chunk = {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: `call-${requests.length}`,
+                  type: "function",
+                  function: { name: "ping", arguments: "{}" },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      };
+      return new Response(
+        `data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      );
     }
     return new Response(
       'data: {"choices":[{"delta":{"content":"done"},"finish_reason":null}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
@@ -243,8 +273,31 @@ test("settings publish to the running Host: old null-effort turn completes, next
       ...(await service.publicSettings()).profile,
       defaultModel: { providerProfileId: "test", modelId: model.id },
       titleModel: { providerProfileId: "test", modelId: model.id },
+      toolPresentation: "direct",
     });
-    host = createHostedAppServer(await service.hostConfig());
+    host = createHostedAppServer({
+      ...(await service.hostConfig()),
+      toolEnvironment: new ToolEnvironment({
+        runtimes: [
+          {
+            name: "ping",
+            specification: {
+              name: "ping",
+              description: "Return a test response",
+              parameters: {
+                type: "object",
+                properties: {},
+                additionalProperties: false,
+              },
+            },
+            execute: async () => {
+              toolCalls++;
+              return { output: "pong", exitCode: 0 };
+            },
+          },
+        ],
+      }),
+    });
     const currentHost = host;
     service.setConfigurationControl({
       prepare: async (config, revision) =>
@@ -261,6 +314,7 @@ test("settings publish to the running Host: old null-effort turn completes, next
       "test",
       {
         ...provider,
+        baseUrl: "https://new.example.test/v1",
         models: [
           {
             ...model,
@@ -269,7 +323,7 @@ test("settings publish to the running Host: old null-effort turn completes, next
           },
         ],
       },
-      { baseRevision: service.configurationRevision() },
+      { baseRevision: service.configurationRevision(), apiKey: "updated-key" },
     );
     assert.equal(
       (await service.publicSettings()).configuration?.status,
@@ -279,7 +333,18 @@ test("settings publish to the running Host: old null-effort turn completes, next
     assert.equal(host.tryBeginMaintenance().accepted, false);
     releaseFirst();
     await running.done;
-    assert.equal(requests[0]!.reasoning_effort, undefined);
+    assert.equal(toolCalls, 2);
+    assert.deepEqual(
+      requests.map((request) => request.reasoning_effort),
+      [undefined, undefined, undefined],
+    );
+    assert(
+      identities.every(
+        (identity) =>
+          identity.url.startsWith("https://example.test/v1/") &&
+          identity.authorization === "Bearer test-key",
+      ),
+    );
     await assert.rejects(
       host.startTurn(thread.id, "requires choice"),
       /explicit supported reasoning effort/,
@@ -294,7 +359,9 @@ test("settings publish to the running Host: old null-effort turn completes, next
     await (
       await host.startTurn(thread.id, "next")
     ).done;
-    assert.equal(requests[1]!.reasoning_effort, "high");
+    assert.equal(requests[3]!.reasoning_effort, "high");
+    assert(identities[3]!.url.startsWith("https://new.example.test/v1/"));
+    assert.equal(identities[3]!.authorization, "Bearer updated-key");
     assert.deepEqual(
       (await host.readThread(thread.id)).turns.map(
         (turn) => turn.selection?.reasoningEffort,
