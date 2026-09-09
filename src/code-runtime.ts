@@ -561,6 +561,10 @@ export const EMPTY_CODE_OUTPUT = "Code completed without explicit text output.";
 
 export class RunCodeToolRuntime implements CompositeToolRuntime {
   readonly name = "run_code";
+  readonly taskPolicy = {
+    resourceScope: "independent",
+    cancellation: "confirmed-on-settle",
+  } as const;
   readonly specification = createRunCodeModelTool([]);
 
   readonly #runtime: CodeRuntime;

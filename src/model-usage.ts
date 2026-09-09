@@ -245,11 +245,13 @@ function estimateUserInput(content: UserInput): number {
         total,
         part.type === "text"
           ? Math.ceil(part.text.length / 4)
-          : part.type === "audio"
+          : part.type === "audio" ||
+              part.attachment.width === undefined ||
+              part.attachment.height === undefined
             ? 256 + Math.ceil(part.attachment.byteLength / 32)
-          : // Reserve one token per 32px patch plus image overhead. Provider resize/detail
-            // rules differ; counting dimensions avoids treating a large image as a tiny ref.
-            256 +
+            : // Reserve one token per 32px patch plus image overhead. Provider resize/detail
+              // rules differ; counting dimensions avoids treating a large image as a tiny ref.
+              256 +
               Math.ceil(part.attachment.width / 32) *
                 Math.ceil(part.attachment.height / 32),
       ),

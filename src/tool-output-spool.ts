@@ -90,7 +90,13 @@ export class ToolOutputSpool {
     const capture = new ToolOutputCapture({
       ready: this.#ready,
       filePath: path.join(this.#instanceDirectory, `${randomUUID()}.txt`),
-      previewBytes: options.previewBytes === undefined ? this.#previewBytes : Math.min(positiveInteger(options.previewBytes, "previewBytes"), this.#maxCaptureBytes),
+      previewBytes:
+        options.previewBytes === undefined
+          ? this.#previewBytes
+          : Math.min(
+              positiveInteger(options.previewBytes, "previewBytes"),
+              this.#maxCaptureBytes,
+            ),
       maxCaptureBytes:
         options.maxCaptureBytes === undefined
           ? this.#maxCaptureBytes

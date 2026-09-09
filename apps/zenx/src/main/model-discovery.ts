@@ -105,7 +105,7 @@ export async function discoverOpenAiCompatibleModels(options: {
 
 function readInputModalities(
   value: Record<string, unknown>,
-): readonly ("text" | "image")[] | null {
+): readonly ("text" | "image" | "audio")[] | null {
   const architecture = isRecord(value.architecture)
     ? value.architecture
     : undefined;
@@ -122,9 +122,9 @@ function readInputModalities(
     Array.isArray(candidate) &&
     candidate.every((entry) => typeof entry === "string")
   ) {
-    const supported = ["text", "image"].filter((entry) =>
+    const supported = ["text", "image", "audio"].filter((entry) =>
       candidate.includes(entry),
-    ) as Array<"text" | "image">;
+    ) as Array<"text" | "image" | "audio">;
     return Object.freeze(supported);
   }
   const image = capabilities?.image_input ?? capabilities?.vision;

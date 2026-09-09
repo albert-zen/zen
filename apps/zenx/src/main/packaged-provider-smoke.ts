@@ -219,7 +219,7 @@ async function runPackagedProgrammaticToolSmoke(): Promise<{
     await (
       await host.startTurn(
         completed.id,
-        '!tool run_code {"code":"const nodePath = await import(\\"node:path\\"); const nested = await tools.packaged_smoke_nested({}); text({ builtin: nodePath.basename(\\"/smoke/builtin\\"), nestedBytes: nested.output.length });","description":"packaged programmatic smoke"}',
+        '!tool run_code {"code":"const nested = await tools.packaged_smoke_nested({}); text({ builtin: typeof process, nestedBytes: nested.output.length });"}',
       )
     ).done;
     const completedSnapshot = await host.readThread(completed.id);
@@ -249,13 +249,13 @@ async function runPackagedProgrammaticToolSmoke(): Promise<{
     assert.equal((await readFile(receiptPath, "utf8")).length, 4096);
     assert.equal(
       results.at(-1)?.output,
-      '{"builtin":"builtin","nestedBytes":4096}',
+      '{"builtin":"undefined","nestedBytes":4096}',
     );
 
     const aborted = await host.startThread();
     const running = await host.startTurn(
       aborted.id,
-      '!tool run_code {"code":"for (;;) {}","description":"packaged abort smoke"}',
+      '!tool run_code {"code":"for (;;) {}"}',
     );
     await new Promise((resolve) => setTimeout(resolve, 50));
     await host.interruptTurn(aborted.id, running.id);

@@ -407,7 +407,6 @@ test("nested Promise.all shares the cap while outer run_code holds no child slot
         callId: "outer",
         name: "run_code",
         arguments: {
-          description: "nested cap",
           code: `
             const values = await Promise.all([
               tools.child({ sequence: 1 }),
@@ -528,7 +527,6 @@ test("both presentation freezes direct and nested capabilities through scheduler
           callId: "outer",
           name: "run_code",
           arguments: {
-            description: "exercise frozen nested scheduling",
             code: `
               const values = await Promise.all([
                 tools.visible_child({ sequence: 1 }),
@@ -666,7 +664,6 @@ test("nested body results reach guest promises before ordered canonical commit",
         callId: "outer",
         name: "run_code",
         arguments: {
-          description: "guest result before commit",
           code: `
             const first = Promise.resolve(tools.child({ label: "first" }));
             const second = Promise.resolve(tools.child({ label: "second" }));
@@ -987,7 +984,6 @@ test("sibling run_code calls are serial composite barriers", async () => {
         callId: "outer-first",
         name: "run_code",
         arguments: {
-          description: "first composite",
           code: `await tools.child({ label: "first" });`,
         },
       },
@@ -995,7 +991,6 @@ test("sibling run_code calls are serial composite barriers", async () => {
         callId: "outer-second",
         name: "run_code",
         arguments: {
-          description: "second composite",
           code: `await tools.child({ label: "second" });`,
         },
       },

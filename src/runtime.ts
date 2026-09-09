@@ -172,7 +172,12 @@ export class AgentRuntime {
   readonly #toolOutputSpool: ToolOutputSpool | undefined;
   readonly #maxConcurrentToolBodies: number;
   readonly #codeStateTails = new Map<string, Promise<void>>();
-  readonly #resolveCodeMedia: ((media: readonly {type:"image"|"audio";value:JsonValue}[], items: readonly CanonicalItem[]) => Promise<UserInput>) | undefined;
+  readonly #resolveCodeMedia:
+    | ((
+        media: readonly { type: "image" | "audio"; value: JsonValue }[],
+        items: readonly CanonicalItem[],
+      ) => Promise<UserInput>)
+    | undefined;
 
   constructor(options: {
     toolEnvironment: ToolEnvironment;
@@ -183,7 +188,10 @@ export class AgentRuntime {
     toolPresentation?: ToolPresentation;
     toolOutputSpool?: ToolOutputSpool;
     maxConcurrentToolBodies?: number;
-    resolveCodeMedia?: (media: readonly {type:"image"|"audio";value:JsonValue}[], items: readonly CanonicalItem[]) => Promise<UserInput>;
+    resolveCodeMedia?: (
+      media: readonly { type: "image" | "audio"; value: JsonValue }[],
+      items: readonly CanonicalItem[],
+    ) => Promise<UserInput>;
   }) {
     this.#tools = options.toolEnvironment;
     this.#resolveCodeMedia = options.resolveCodeMedia;
@@ -490,7 +498,10 @@ export class AgentRuntime {
       for await (const event of options.modelAdapter.stream({
         model: options.configuration.model,
         reasoningEffort: options.configuration.reasoningEffort,
-        messages: projectModelMessages(messages, options.configuration.inputModalities),
+        messages: projectModelMessages(
+          messages,
+          options.configuration.inputModalities,
+        ),
         tools: presentation.modelTools.map((definition) =>
           structuredClone(definition),
         ),
@@ -917,8 +928,12 @@ export class AgentRuntime {
         arguments: toolCall.arguments,
         cwd: options.configuration.cwd,
         task: {
-          ...(toolCall.name === "run_code" ? codeExecutionOptions(toolCall.arguments.code) : {}),
-          ...(toolCall.parentCallId === undefined ? {} : {waitForCompletion:true}),
+          ...(toolCall.name === "run_code"
+            ? codeExecutionOptions(toolCall.arguments.code)
+            : {}),
+          ...(toolCall.parentCallId === undefined
+            ? {}
+            : { waitForCompletion: true }),
         },
         sandbox:
           execution.admission === "inherited"
@@ -1086,31 +1101,54 @@ export class AgentRuntime {
     inheritedSignal: AbortSignal,
     scheduler: TurnToolScheduler,
     allowedToolNames: ReadonlySet<string>,
-    codeTools: readonly {name:string;description:string}[],
+    codeTools: readonly { name: string; description: string }[],
   ) {
     return {
+      drain: () => scheduler.drain(parent.callId),
       codeContext: {
         tools: codeTools,
         storedValues: codeStateFromItems(options.thread.items),
         store: async (key: string, value: JsonValue): Promise<void> => {
-          const previous = this.#codeStateTails.get(options.thread.id) ?? Promise.resolve();
+          const previous =
+            this.#codeStateTails.get(options.thread.id) ?? Promise.resolve();
           const write = previous.then(async () => {
             inheritedSignal.throwIfAborted();
-            validateCodeStateWrite(codeStateFromItems(options.thread.items), key, value);
-            await this.#completeItem({
-              id: this.#id(), type:"code_state", threadId:options.thread.id,
-              turnId, callId:parent.callId, createdAt:this.#now(), key, value:structuredClone(value),
-            }, options);
+            validateCodeStateWrite(
+              codeStateFromItems(options.thread.items),
+              key,
+              value,
+            );
+            await this.#completeItem(
+              {
+                id: this.#id(),
+                type: "code_state",
+                threadId: options.thread.id,
+                turnId,
+                callId: parent.callId,
+                createdAt: this.#now(),
+                key,
+                value: structuredClone(value),
+              },
+              options,
+            );
           });
           const tail = write.catch(() => undefined);
           this.#codeStateTails.set(options.thread.id, tail);
-          try { await write; } finally {
-            if (this.#codeStateTails.get(options.thread.id) === tail) this.#codeStateTails.delete(options.thread.id);
+          try {
+            await write;
+          } finally {
+            if (this.#codeStateTails.get(options.thread.id) === tail)
+              this.#codeStateTails.delete(options.thread.id);
           }
         },
-        resolveMedia: async (media: readonly {type:"image"|"audio";value:JsonValue}[]): Promise<UserInput> => {
+        resolveMedia: async (
+          media: readonly { type: "image" | "audio"; value: JsonValue }[],
+        ): Promise<UserInput> => {
           if (media.length === 0) return [];
-          if (this.#resolveCodeMedia === undefined) throw new Error("Code media output requires the Host attachment store");
+          if (this.#resolveCodeMedia === undefined)
+            throw new Error(
+              "Code media output requires the Host attachment store",
+            );
           return await this.#resolveCodeMedia(media, options.thread.items);
         },
       },
@@ -1146,7 +1184,7 @@ export class AgentRuntime {
           },
           scheduler,
           observation,
-        ).committed;
+        ).result;
       },
     };
   }
@@ -1225,7 +1263,7 @@ interface ScheduledToolCapability {
   signal: AbortSignal;
   allowedToolNames: ReadonlySet<string>;
   nestedToolNames: ReadonlySet<string>;
-  codeTools: readonly {name:string;description:string}[];
+  codeTools: readonly { name: string; description: string }[];
 }
 
 interface ScheduledToolOutcome {

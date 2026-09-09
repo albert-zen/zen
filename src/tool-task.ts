@@ -114,8 +114,9 @@ export class ToolTaskManager {
       );
     if (
       !("executeComposite" in runtime) &&
-      [...this.#tasks.values()].filter((task) => !task.terminal && !task.coordinator).length >=
-      this.#options.maxRunningTasks
+      [...this.#tasks.values()].filter(
+        (task) => !task.terminal && !task.coordinator,
+      ).length >= this.#options.maxRunningTasks
     )
       throw new Error(
         "Tool execution capacity is busy; wait for or cancel an existing task",
@@ -301,9 +302,13 @@ class Task {
     this.#options = options;
     this.threadId = invocation.threadId;
     this.#window = this.#newWindow();
-    this.completion = new Promise((resolve) => { this.#complete = resolve; });
+    this.completion = new Promise((resolve) => {
+      this.#complete = resolve;
+    });
   }
-  get coordinator() { return "executeComposite" in this.#runtime; }
+  get coordinator() {
+    return "executeComposite" in this.#runtime;
+  }
   get observed() {
     return this.#observed;
   }
@@ -417,7 +422,8 @@ class Task {
   }
   async observe(ms: number, cancelRequested = false): Promise<void> {
     if (
-      this.terminal || this.#yieldRequested ||
+      this.terminal ||
+      this.#yieldRequested ||
       (cancelRequested && this.status === "cancellation_unconfirmed")
     )
       return;
@@ -426,7 +432,8 @@ class Task {
       const timer = setTimeout(done, ms);
       const changed = () => {
         if (
-          this.terminal || this.#yieldRequested ||
+          this.terminal ||
+          this.#yieldRequested ||
           (previousStatus !== "cancellation_unconfirmed" &&
             this.status === "cancellation_unconfirmed")
         )
@@ -592,7 +599,7 @@ export class ToolWaitRuntime implements ToolRuntime {
     this.specification = {
       name: this.name,
       description:
-        "Ordinary tools automatically return task_id when they exceed their yield time; no separate background mode is required. wait returns when the task completes or yield_time_ms expires, with output produced since the previous receipt. Expiry does not stop the task; its execution deadline remains separate. terminate requests cancellation; receipts report confirmable or best_effort cancellation and resource_scope. Running bundle/runtime resources stay busy; independent tasks can coexist. Only cancelled/timed_out confirm cancellation. Tasks belong to this Host instance and do not resume after restart.",
+        "Tools, including run_code programs, automatically return task_id when they exceed their yield time; no separate background mode is required. wait returns when the task completes or yield_time_ms expires, with output produced since the previous receipt. Expiry does not stop the task; its execution deadline remains separate. Program-side await tools.* waits for the actual result. terminate requests cancellation; receipts report confirmable or best_effort cancellation and resource_scope. Running bundle/runtime resources stay busy; independent tasks can coexist. Only cancelled/timed_out confirm cancellation. Tasks belong to this Host instance and do not resume after restart.",
       inputSchema: {
         type: "object",
         properties: {

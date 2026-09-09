@@ -72,9 +72,23 @@ export class Thread {
       validateModelUsage(item);
     }
     if (item.type === "code_state") {
-      if (!this.#items.some((parent) => parent.type === "tool_call" && parent.name === "run_code" && parent.callId === item.callId && parent.turnId === item.turnId))
-        throw new Error("Code state requires an earlier run_code call in this Turn");
-      validateCodeStateWrite(codeStateFromItems(this.#items), item.key, item.value);
+      if (
+        !this.#items.some(
+          (parent) =>
+            parent.type === "tool_call" &&
+            parent.name === "run_code" &&
+            parent.callId === item.callId &&
+            parent.turnId === item.turnId,
+        )
+      )
+        throw new Error(
+          "Code state requires an earlier run_code call in this Turn",
+        );
+      validateCodeStateWrite(
+        codeStateFromItems(this.#items),
+        item.key,
+        item.value,
+      );
     }
     if (item.type === "tool_call" && item.parentCallId !== undefined) {
       if (

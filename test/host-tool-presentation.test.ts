@@ -37,7 +37,6 @@ test("the default Host exposes one apply_patch runtime through direct and code p
         code.id,
         `!tool run_code ${JSON.stringify({
           code: `const result = await tools.apply_patch(${JSON.stringify({ patch: codePatch })}); text(result.output);`,
-          description: "edit through nested tools",
         })}`,
       )
     ).done;
@@ -116,7 +115,7 @@ test("the default Host composition publishes run_code and canonical child lineag
     await (
       await host.startTurn(
         thread.id,
-        '!tool run_code {"code":"const value: number = 40 + 2; const nested = await tools.shell({ command: \\\"printf child\\\" }); text(`${value}:${nested.output}`);","description":"host composition tracer"}',
+        '!tool run_code {"code":"const value = 40 + 2; const nested = await tools.shell({ command: \\\"printf child\\\" }); text(`${value}:${nested.output}`);"}',
       )
     ).done;
 
@@ -170,10 +169,7 @@ test("Host mode failure is strict for code and warning-backed for both", async (
       assert.match(warnings[0]!, /falling back to direct tools/u);
       const thread = await fallback.startThread();
       await (
-        await fallback.startTurn(
-          thread.id,
-          '!tool run_code {"code":"text(1)","description":"unavailable"}',
-        )
+        await fallback.startTurn(thread.id, '!tool run_code {"code":"text(1)"}')
       ).done;
       const snapshot = await fallback.readThread(thread.id);
       assert.equal(
@@ -227,7 +223,7 @@ test("direct, code, and both publish only their configured model entry points", 
         await (
           await host.startTurn(
             code.id,
-            '!tool run_code {"code":"text(\\"code\\")","description":"mode probe"}',
+            '!tool run_code {"code":"text(\\"code\\")"}',
           )
         ).done;
         const codeSnapshot = await host.readThread(code.id);
@@ -264,7 +260,7 @@ test("switching to direct keeps canonical run_code history replayable", async ()
     await (
       await both.startTurn(
         thread.id,
-        '!tool run_code {"code":"const child = await tools.shell({ command: \\"printf replay\\" }); text(child.output);","description":"rollback history"}',
+        '!tool run_code {"code":"const child = await tools.shell({ command: \\"printf replay\\" }); text(child.output);"}',
       )
     ).done;
   } finally {

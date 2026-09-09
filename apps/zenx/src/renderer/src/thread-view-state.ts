@@ -697,7 +697,9 @@ function nativeCommandExecutionStatus(
 }
 
 function userInputText(
-  input: readonly ({ type: "text"; text: string } | { type: "image" })[],
+  input: readonly (
+    { type: "text"; text: string } | { type: "image" | "audio" }
+  )[],
 ): string {
   return input
     .flatMap((part) => (part.type === "text" ? [part.text] : []))
@@ -715,7 +717,11 @@ function userMessagePreview(
 ): string {
   const text = userMessageText(item);
   if (text.length > 0) return text;
-  return item.content?.some((part) => part.type === "image") ? "[Image]" : "";
+  return item.content?.some((part) => part.type === "image")
+    ? "[Image]"
+    : item.content?.some((part) => part.type === "audio")
+      ? "[Audio]"
+      : "";
 }
 
 function seconds(timestamp: string): number {
