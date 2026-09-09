@@ -73,7 +73,16 @@ export function SettingsView({
   const [draft, setDraft] = useState<ZenXHostProfile | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
+  const [status, setStatusState] = useState<{ message: string } | null>(null);
+  const feedbackScope = useRef({ tab, version: 0 });
+  if (feedbackScope.current.tab !== tab) {
+    feedbackScope.current = { tab, version: feedbackScope.current.version + 1 };
+  }
+  const feedbackVersion = feedbackScope.current.version;
+  const setStatus = (message: string | null) => {
+    if (feedbackScope.current.version !== feedbackVersion) return;
+    setStatusState(message === null ? null : { message });
+  };
   const [manualCode, setManualCode] = useState(false);
   const navRef = useRef<HTMLElement>(null);
 
@@ -95,6 +104,14 @@ export function SettingsView({
       dispose();
     };
   }, []);
+
+  useEffect(() => {
+    if (status === null) return;
+    const timer = setTimeout(() => setStatusState(null), 4000);
+    return () => clearTimeout(timer);
+  }, [status]);
+
+  useEffect(() => setStatusState(null), [tab]);
 
   const save = async () => {
     if (draft === null) return;
@@ -119,7 +136,7 @@ export function SettingsView({
       });
       setSettings(value);
       setDraft(value.profile);
-      setStatus(configurationSaveMessage(value));
+      setStatus(configurationSaveToast(value));
     } catch (reason) {
       setError(describeError(reason));
     } finally {
@@ -262,7 +279,6 @@ export function SettingsView({
                 setError={setError}
                 setSettings={setSettings}
                 setStatus={setStatus}
-                status={status}
               />
             ) : null}
             {tab === "plugins" ? (
@@ -274,7 +290,7 @@ export function SettingsView({
                     Uninstall keeps plugin data until you explicitly delete it.
                   </p>
                 </header>
-                <PluginSettings />
+                <PluginSettings onFeedback={setStatus} />
                 {pluginSnapshot === null ? null : (
                   <PluginSettingsSurfaces snapshot={pluginSnapshot} />
                 )}
@@ -315,11 +331,13 @@ export function SettingsView({
                   disabled={busy !== null}
                   onClick={() => {
                     setBusy("configuration-check");
+                    setError(null);
+                    setStatus(null);
                     void window.zenx.settings
                       .reconcile(false)
                       .then((value) => {
                         setSettings(value);
-                        setStatus(configurationSaveMessage(value));
+                        setStatus(configurationSaveToast(value));
                       })
                       .catch((reason) => setError(describeError(reason)))
                       .finally(() => setBusy(null));
@@ -333,11 +351,13 @@ export function SettingsView({
                   disabled={busy !== null}
                   onClick={() => {
                     setBusy("configuration-retry");
+                    setError(null);
+                    setStatus(null);
                     void window.zenx.settings
                       .reconcile(true)
                       .then((value) => {
                         setSettings(value);
-                        setStatus(configurationSaveMessage(value));
+                        setStatus(configurationSaveToast(value));
                       })
                       .catch((reason) => setError(describeError(reason)))
                       .finally(() => setBusy(null));
@@ -348,20 +368,25 @@ export function SettingsView({
               </div>
             ) : null}
             {settings.configuration?.pendingRestart.length ? (
-              <div className="settings-note">
-                <p>{configurationSaveMessage(settings)}</p>
+              <div className="settings-note" role="status">
+                <p>
+                  Saved · {settings.configuration.pendingRestart.join(", ")}{" "}
+                  takes effect next launch
+                </p>
                 <button
                   type="button"
                   className="quiet-button"
                   disabled={busy !== null}
                   onClick={() => {
                     setBusy("safe-restart");
+                    setError(null);
+                    setStatus(null);
                     void window.zenx.settings
                       .safeRestart()
                       .then((value) => {
                         setSettings(value);
                         setDraft(value.profile);
-                        setStatus(configurationSaveMessage(value));
+                        setStatus(configurationSaveToast(value));
                       })
                       .catch((reason) => setError(describeError(reason)))
                       .finally(() => setBusy(null));
@@ -389,14 +414,21 @@ export function SettingsView({
                 {error}
               </div>
             ) : null}
-            {status && tab !== "models" ? (
-              <div className="settings-success" role="status">
-                <Icon name="check" />
-                {status}
-              </div>
-            ) : null}
           </div>
         </div>
+      </div>
+      <div
+        className="settings-toast-region"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {status && !error ? (
+          <div className="settings-toast">
+            <Icon name="check" />
+            <span>{status.message}</span>
+          </div>
+        ) : null}
       </div>
     </section>
   );
@@ -672,7 +704,6 @@ function ModelsPanel({
   setError,
   setSettings,
   setStatus,
-  status,
 }: {
   busy: string | null;
   draft: ZenXHostProfile;
@@ -683,7 +714,6 @@ function ModelsPanel({
   setError(value: string | null): void;
   setSettings(value: PublicHostSettings): void;
   setStatus(value: string | null): void;
-  status: string | null;
 }) {
   const [showAddChoices, setShowAddChoices] = useState(false);
   const [editor, setEditor] = useState<{
@@ -714,7 +744,7 @@ function ModelsPanel({
         : value.profile.titleModel,
     });
     setError(null);
-    setStatus(configurationSaveMessage(value));
+    setStatus(configurationSaveToast(value));
   };
 
   const runMutation = async (
@@ -741,7 +771,7 @@ function ModelsPanel({
         ) {
           setSettings(authoritative);
           setDraft(authoritative.profile);
-          setStatus(configurationSaveMessage(authoritative));
+          setStatus(configurationSaveToast(authoritative));
           setError(
             `Settings were saved, but finalization failed: ${originalError}`,
           );
@@ -829,12 +859,6 @@ function ModelsPanel({
         <div className="settings-error" role="alert">
           <Icon name="warning" />
           {error}
-        </div>
-      )}
-      {status === null ? null : (
-        <div className="settings-success" role="status">
-          <Icon name="check" />
-          {status}
         </div>
       )}
       <div className="page-card settings-card model-routing-card">
@@ -2814,4 +2838,11 @@ export function configurationSaveMessage(value: PublicHostSettings): string {
     case "unconfirmed":
       return "Saved · application not yet confirmed. Check application status before saving more changes.";
   }
+}
+
+// Actionable configuration states already have persistent notices and controls.
+function configurationSaveToast(value: PublicHostSettings): string | null {
+  if (value.configuration && value.configuration.status !== "applied")
+    return null;
+  return "Settings saved";
 }

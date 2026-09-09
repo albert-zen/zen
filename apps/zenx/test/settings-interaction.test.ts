@@ -164,6 +164,154 @@ test("Settings saves global model routing by Provider profile identity", async (
   }
 });
 
+test("Save feedback is transient, does not move focus, and clears on navigation", async (t) => {
+  const harness = await mountSettings("models");
+  try {
+    await waitFor(() => exactButton("Apply"));
+    const control = labeledSelect("Default model");
+    assert.ok(control);
+    await changeControl(control, control.options[1]!.value);
+    const apply = exactButtonRequired("Apply");
+    apply.focus();
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    await click(apply);
+    assert.equal(
+      document.querySelector(".settings-toast")?.textContent,
+      "Settings saved",
+    );
+    assert.equal(document.querySelector(".settings-success"), null);
+    assert.equal(document.activeElement, apply);
+    await act(async () => t.mock.timers.tick(4000));
+    assert.equal(document.querySelector(".settings-toast"), null);
+    await changeControl(control, control.options[0]!.value);
+    await click(apply);
+    assert.ok(document.querySelector(".settings-toast"));
+    await click(exactButtonRequired("General"));
+    assert.equal(document.querySelector(".settings-toast"), null);
+  } finally {
+    t.mock.timers.reset();
+    await unmount(harness);
+  }
+});
+
+for (const status of ["unchanged", "pending-restart", "unconfirmed"] as const) {
+  test(`Save ${status} does not show a success toast`, async () => {
+    const harness = await mountSettings("models", {
+      save: async (profile) => ({
+        ...settings,
+        profile: { ...settings.profile, ...profile },
+        configuration: {
+          status,
+          revision: 1,
+          pendingRestart: status === "pending-restart" ? ["maxToolRounds"] : [],
+        },
+      }),
+    });
+    try {
+      await waitFor(() => exactButton("Apply"));
+      const control = labeledSelect("Default model");
+      assert.ok(control);
+      await changeControl(control, control.options[1]!.value);
+      await click(exactButtonRequired("Apply"));
+      assert.equal(document.querySelector(".settings-toast"), null);
+      assert.equal(document.querySelector(".settings-success"), null);
+      if (status === "pending-restart") assert.ok(exactButton("Safe restart"));
+      if (status === "unconfirmed")
+        assert.ok(exactButton("Check application status"));
+      if (status === "unchanged")
+        assert.doesNotMatch(document.body.textContent ?? "", /No changes/u);
+    } finally {
+      await unmount(harness);
+    }
+  });
+}
+
+test("A save completed after leaving its section does not show a stale toast", async () => {
+  let finish!: (value: PublicHostSettings) => void;
+  const harness = await mountSettings("models", {
+    save: () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  });
+  try {
+    const control = labeledSelect("Default model")!;
+    await changeControl(control, control.options[1]!.value);
+    await click(exactButtonRequired("Apply"));
+    await click(exactButtonRequired("General"));
+    await click(exactButtonRequired("Models & provider"));
+    await act(async () => finish(settings));
+    assert.equal(document.querySelector(".settings-toast"), null);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Repeated successful saves restart the toast lifetime", async (t) => {
+  const harness = await mountSettings("models");
+  try {
+    const control = labeledSelect("Default model")!;
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    await changeControl(control, control.options[1]!.value);
+    await click(exactButtonRequired("Apply"));
+    await act(async () => t.mock.timers.tick(3000));
+    await changeControl(control, control.options[0]!.value);
+    await click(exactButtonRequired("Apply"));
+    await act(async () => t.mock.timers.tick(1000));
+    assert.ok(document.querySelector(".settings-toast"));
+    await act(async () => t.mock.timers.tick(3000));
+    assert.equal(document.querySelector(".settings-toast"), null);
+  } finally {
+    t.mock.timers.reset();
+    await unmount(harness);
+  }
+});
+
+for (const action of [
+  "Check application status",
+  "Retry applying saved settings",
+  "Safe restart",
+]) {
+  test(`${action} clears an earlier error after success`, async () => {
+    let attempts = 0;
+    const reconcile = async () => {
+      if (++attempts === 1) throw new Error("Temporary apply failure");
+      return {
+        ...settings,
+        configuration: {
+          status: "applied" as const,
+          revision: 1,
+          pendingRestart: [],
+        },
+      };
+    };
+    const harness = await mountSettings("models", {
+      initialSettings: {
+        ...settings,
+        configuration: {
+          status: action === "Safe restart" ? "pending-restart" : "unconfirmed",
+          revision: 1,
+          pendingRestart: action === "Safe restart" ? ["maxToolRounds"] : [],
+        },
+      },
+      reconcile,
+      safeRestart: reconcile,
+    });
+    try {
+      await click(exactButtonRequired(action));
+      assert.match(
+        document.querySelector('[role="alert"]')?.textContent ?? "",
+        /Temporary apply failure/u,
+      );
+      await click(exactButtonRequired(action));
+      assert.equal(document.querySelector('[role="alert"]'), null);
+      assert.ok(document.querySelector(".settings-toast"));
+    } finally {
+      await unmount(harness);
+    }
+  });
+}
+
 test("Models lists every profile and keeps duplicate model IDs distinguishable and keyboard reachable", async () => {
   const harness = await mountSettings("models", {
     initialSettings: multiProviderSettings,
@@ -1256,6 +1404,8 @@ async function mountSettings(
   initialTab: SettingsTab,
   options: {
     initialSettings?: PublicHostSettings;
+    reconcile?(): Promise<PublicHostSettings>;
+    safeRestart?(): Promise<PublicHostSettings>;
     get?(): Promise<PublicHostSettings>;
     save?(
       profile: ZenXSettingsUpdate,
@@ -1316,6 +1466,8 @@ async function mountSettings(
   const zenx = {
     settings: {
       get: options.get ?? (async () => initialSettings),
+      reconcile: options.reconcile,
+      safeRestart: options.safeRestart,
       save:
         options.save ??
         (async (profile: ZenXSettingsUpdate) => ({
