@@ -487,3 +487,22 @@ async function waitForFile(filename: string): Promise<void> {
   }
   throw new Error(`file was not created: ${filename}`);
 }
+
+test("retaining small raw output preserves the inline presentation and supplies readback", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-spool-retain-"));
+  const spool = new ToolOutputSpool({ rootDirectory: root });
+  try {
+    const capture = spool.beginCapture();
+    capture.write("short compiler diagnostic\n");
+    const result = await capture.finish({ retainFile: true });
+    assert(result.path);
+    assert.equal(
+      await readFile(result.path, "utf8"),
+      "short compiler diagnostic\n",
+    );
+    assert.equal(renderToolOutput(result), "short compiler diagnostic\n");
+  } finally {
+    await spool.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -267,7 +267,7 @@ export class ToolOutputCapture {
       sourceTruncated: this.#sourceTruncated || this.#fileUnavailable,
       head: decodeHead(Buffer.concat(this.#head), this.#headLimit),
       tail: decodeTail(Buffer.concat(this.#tail), this.#tailLimit),
-      ...(requiresReceipt
+      ...(oversized || this.#sourceTruncated || this.#fileUnavailable
         ? {}
         : { output: Buffer.concat(this.#small).toString("utf8") }),
     };
