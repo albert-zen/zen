@@ -1209,16 +1209,19 @@ export class AgentRuntime {
     options: RunTurnOptions,
   ): Promise<void> {
     const { result } = outcome;
+    const originalCapture = capturedToolOutput(result);
     const capture =
-      capturedToolOutput(result) ??
-      (this.#toolOutputSpool === undefined
-        ? undefined
-        : await this.#toolOutputSpool.captureText(
-            result.output,
-            result.sourceTruncated === undefined
-              ? {}
-              : { sourceTruncated: result.sourceTruncated },
-          ));
+      this.#toolOutputSpool !== undefined &&
+      (originalCapture === undefined || originalCapture.unspooled)
+        ? await this.#toolOutputSpool.captureText(
+            originalCapture?.output ?? originalCapture?.head ?? result.output,
+            {
+              sourceTruncated:
+                originalCapture?.sourceTruncated === true ||
+                result.sourceTruncated === true,
+            },
+          )
+        : originalCapture;
     const resultItem: ToolResultItem = {
       id: this.#id(),
       threadId: options.thread.id,

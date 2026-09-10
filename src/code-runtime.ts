@@ -3,8 +3,7 @@ import { MessageChannel, type MessagePort, Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 
 import {
-  capturedToolOutput,
-  toolOutputSuffix,
+  attachToolOutputCapture,
   UnawaitedNestedToolCallError,
   MAX_STRUCTURED_TOOL_RESULT_BYTES,
   type CompositeToolRuntime,
@@ -13,7 +12,7 @@ import {
   type ToolExecutionResult,
   type ToolInvocation,
 } from "./tool.js";
-import { renderToolOutput } from "./tool-output-spool.js";
+import { programToolResult } from "./code-runtime-output.js";
 import type { JsonValue, UserInput } from "./item.js";
 import { createRunCodeModelTool } from "./tool-presentation.js";
 
@@ -420,20 +419,10 @@ export class CodeRuntime {
                   request.controller.signal,
                   request.observation.promise,
                 );
-                const capture = capturedToolOutput(result);
                 post(channel.port1, {
                   type: "tool_result",
                   requestId,
-                  // Symbol capture metadata cannot cross the JSON bridge.
-                  // Materialize the same receipt used by canonical tool results.
-                  result: {
-                    ...result,
-                    output:
-                      (capture === undefined
-                        ? result.output
-                        : renderToolOutput(capture)) +
-                      (toolOutputSuffix(result) ?? ""),
-                  },
+                  result: await programToolResult(result),
                 });
               } catch (error) {
                 post(channel.port1, {
@@ -709,16 +698,23 @@ export class RunCodeToolRuntime implements CompositeToolRuntime {
         ? ""
         : `run_code failed [${failure instanceof CodeRuntimeError ? failure.code : "EXECUTION_FAILED"}]: ${describeError(failure)}`;
     const prefix = taskContext === undefined ? result.text : "";
-    return {
-      output:
-        prefix + (diagnostic ? (result.text ? "\n" : "") + diagnostic : "") ||
-        (result.text ? "" : EMPTY_CODE_OUTPUT),
-      exitCode: failure === undefined ? 0 : invocation.signal.aborted ? 130 : 1,
-      sourceTruncated: result.outputTruncated,
-      contentType: "application/json",
-      structuredContent,
-      ...(streamMedia || modelContent === undefined ? {} : { modelContent }),
-    };
+    return attachToolOutputCapture(
+      {
+        output: prefix,
+        exitCode:
+          failure === undefined ? 0 : invocation.signal.aborted ? 130 : 1,
+        sourceTruncated: result.outputTruncated,
+        contentType: "application/json",
+        structuredContent,
+        ...(streamMedia || modelContent === undefined ? {} : { modelContent }),
+      },
+      undefined,
+      diagnostic
+        ? (result.text ? "\n" : "") + diagnostic
+        : result.text
+          ? ""
+          : EMPTY_CODE_OUTPUT,
+    );
   }
 }
 

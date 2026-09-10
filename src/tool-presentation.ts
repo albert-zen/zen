@@ -93,6 +93,7 @@ export function createRunCodeModelTool(
       'Optional first line: // @exec: {"yield_time_ms": 10000, "max_output_tokens": 1000, "timeout_ms": 600000}. Controls observation wait, preview budget, and execution deadline respectively.',
       "Awaited tools return their final result. A running outer program returns a task_id; use tools.wait with that task_id to observe new output or completion.",
       "Tools marked [parallel_safe] can overlap in Promise.all within the host limit; unmarked tools serialize. Await dependent operations sequentially.",
+      "output is complete raw text (up to 1 MiB), otherwise null. outputInfo provides status/file reference; diagnostic carries control messages. Model previews have an independent budget.",
       "Check exitCode before using tool output: tool failures, invalid parameters and unknown names return nonzero codes. Serialization and bridge errors can throw.",
       "Await every tool call; unfinished or unobserved calls fail the program. await yield_control() yields output while execution continues. Timers alone do not keep a finished program alive.",
       'image/audio accept base64 data URIs, MCP blocks (e.g. image({type:"image", mimeType:"image/png", data:"<base64>"})), or current-thread attachment refs. Local paths use tools.view_image; its images return automatically. Unsupported modalities become text references.',
@@ -148,7 +149,9 @@ export function generateToolSdk(tools: readonly ModelTool[]): string {
     });
   return [
     "type ToolResult = {",
-    "  output: string;",
+    "  output: string | null;",
+    '  outputInfo: { complete: boolean; capturedBytes: number; sourceTruncated: boolean; reason?: "program_limit" | "source_truncated" | "unavailable"; fullOutput?: { path: string; sha256: string; lifetime: "host_instance" } };',
+    "  diagnostic?: string;",
     "  exitCode: number;",
     "  contentType?: string;",
     "  structuredContent?: unknown;",

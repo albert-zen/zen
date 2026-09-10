@@ -23,6 +23,8 @@ export interface ToolOutputSpoolOptions {
 
 /** Non-canonical metadata consumed by AgentRuntime before it appends an Item. */
 export interface ToolOutputCaptureMetadata {
+  /** Raw in-memory capture has not yet applied the model spool budget. */
+  readonly unspooled?: true;
   readonly capturedBytes: number;
   readonly sha256: string;
   readonly path?: string;
@@ -347,7 +349,7 @@ export function renderToolOutput(capture: ToolOutputCaptureMetadata): string {
   ].join("\n");
 }
 
-function utf8Prefix(value: Buffer, limit: number): Buffer {
+export function utf8Prefix(value: Buffer, limit: number): Buffer {
   let end = Math.min(value.length, limit);
   while (end > Math.max(0, Math.min(value.length, limit) - 4)) {
     const candidate = value.subarray(0, end);
