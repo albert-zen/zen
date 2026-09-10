@@ -47,11 +47,11 @@ test("fixture SDK queries Projects, isolates namespaces, migrates sequentially o
       };
     },
   };
-  const thread = await appServer.startThread({ cwd: "/workspace" });
+  const thread = await appServer.startThread({ cwd: root });
   const projects = async () => [
     {
       key: "project",
-      workspace: "/workspace",
+      workspace: root,
       configured: true,
       isDefault: true,
       threadIds: [thread.id],
