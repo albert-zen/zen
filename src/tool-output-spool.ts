@@ -80,6 +80,9 @@ export class ToolOutputSpool {
       throw new Error("Tool output preview cannot exceed its capture limit");
     }
     this.#ready = this.#initialize();
+    // Initialization may fail before the first capture attaches its handler.
+    // Keep the rejection available to captures without an unhandled-rejection gap.
+    void this.#ready.catch(() => undefined);
   }
 
   beginCapture(

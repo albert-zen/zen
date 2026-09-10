@@ -1,7 +1,5 @@
-import {
-  loadWorkspaceInstructions,
-  type WorkspaceInstructionFile,
-} from "./workspace-instructions.js";
+import { loadWorkspaceInstructions } from "./workspace-instructions.js";
+import type { WorkspaceInstructionFile } from "./item.js";
 import { pendingQueuedMessages } from "./input-queue.js";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -1679,13 +1677,26 @@ export class ZenAppServer {
         `Context compaction summary exceeds the ${String(targetTokenBudget)} token target`,
       );
     }
+    const instructionSnapshot = options.thread.items.find(
+      (item) =>
+        item.type === "turn_started" &&
+        item.workspaceInstructions !== undefined,
+    );
     let boundedBoundary: ReturnType<typeof boundedCompactionBoundary>;
     try {
       boundedBoundary = boundedCompactionBoundary(options.thread.items, {
         retainedTokenBudget: targetTokenBudget - summaryTokens,
         estimateRetainedTokens: (retainedItems) =>
           estimateModelMessageInputTokens(
-            compileModelMessages(retainedItems, options.selection.selection),
+            compileModelMessages(
+              instructionSnapshot !== undefined &&
+                !retainedItems.some(
+                  (item) => item.id === instructionSnapshot.id,
+                )
+                ? [instructionSnapshot, ...retainedItems]
+                : retainedItems,
+              options.selection.selection,
+            ),
           ),
         retention: options.contextCompaction.retention,
       });

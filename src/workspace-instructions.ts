@@ -3,12 +3,10 @@ import { promisify } from "node:util";
 import { open, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
-export interface WorkspaceInstructionFile {
-  path: string;
-  text: string;
-}
-
-export const MAX_WORKSPACE_INSTRUCTION_BYTES = 128 * 1024;
+import {
+  MAX_WORKSPACE_INSTRUCTION_BYTES,
+  type WorkspaceInstructionFile,
+} from "./item.js";
 
 const run = promisify(execFile);
 

@@ -1,4 +1,4 @@
-import type { WorkspaceInstructionFile } from "./workspace-instructions.js";
+import type { WorkspaceInstructionFile } from "./item.js";
 import { randomUUID } from "node:crypto";
 import { codeExecutionOptions } from "./code-options.js";
 import { codeStateFromItems, validateCodeStateWrite } from "./code-state.js";

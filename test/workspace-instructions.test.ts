@@ -31,6 +31,8 @@ test("reads only the containing repository root, not ancestors or cwd-local file
   }
 });
 
+import type { ContextCompactionConfig } from "../src/context-compaction.js";
+import { decodeCanonicalItem } from "../src/item.js";
 import { ZenAppServer } from "../src/app-server.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { ToolEnvironment } from "../src/tool.js";
@@ -49,6 +51,7 @@ function createServer(
   cwd: string,
   journal: JsonlThreadJournal,
   requests: ModelMessage[][],
+  contextCompaction: ContextCompactionConfig = {},
 ) {
   const adapter: ModelAdapter = {
     provider: "instructions-test",
@@ -59,6 +62,7 @@ function createServer(
   };
   return new ZenAppServer({
     journal,
+    contextCompaction,
     runtime: new AgentRuntime({
       toolEnvironment: new ToolEnvironment({ runtimes: [] }),
     }),
@@ -238,4 +242,49 @@ test("invalid and oversized rules fail first-input admission without starting a 
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("compaction counts fixed instructions even when their source Turn is not retained", async () => {
+  const root = await realpath(
+    await mkdtemp(path.join(tmpdir(), "zen-instructions-budget-")),
+  );
+  try {
+    await run("git", ["init", root]);
+    await writeFile(path.join(root, "AGENTS.md"), "rule ".repeat(1000));
+    const journal = new JsonlThreadJournal(path.join(root, "journal"));
+    const server = createServer(root, journal, [], { targetPercent: 1 });
+    const thread = await server.startThread();
+    await (
+      await server.startTurn(thread.id, "hello")
+    ).done;
+    await assert.rejects(
+      server.compactThread(thread.id),
+      /compaction retained Items exceed/u,
+    );
+    assert.equal(
+      (await server.readThread(thread.id)).items.some(
+        (item) => item.type === "context_compaction",
+      ),
+      false,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("canonical restore rejects snapshots exceeding the original-text budget", () => {
+  assert.throws(
+    () =>
+      decodeCanonicalItem({
+        id: "start",
+        threadId: "thread",
+        turnId: "turn",
+        createdAt: "2026-09-10T00:00:00Z",
+        type: "turn_started",
+        workspaceInstructions: [
+          { path: "/repo/AGENTS.md", text: "x".repeat(128 * 1024 + 1) },
+        ],
+      }),
+    /workspace instruction budget/u,
+  );
 });

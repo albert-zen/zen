@@ -1,4 +1,3 @@
-import type { WorkspaceInstructionFile } from "./workspace-instructions.js";
 import {
   MAX_AUDIO_BYTES,
   MAX_IMAGE_BYTES,
@@ -6,6 +5,14 @@ import {
   MAX_IMAGE_PIXELS,
   type AttachmentRef,
 } from "./attachment.js";
+
+/** Original UTF-8 text budget for the fixed repository instruction snapshot. */
+export const MAX_WORKSPACE_INSTRUCTION_BYTES = 128 * 1024;
+
+export interface WorkspaceInstructionFile {
+  path: string;
+  text: string;
+}
 
 export type ItemType =
   | "thread_metadata"
@@ -598,11 +605,18 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
             "turn_started.workspaceInstructions must be an array",
           );
         }
+        let instructionBytes = 0;
         for (const entry of item.workspaceInstructions) {
           const file = requireRecord(entry, "workspace instruction file");
           requireNonEmptyString(file.path, "workspace instruction path");
           if (typeof file.text !== "string") {
             throw new Error("workspace instruction text must be a string");
+          }
+          instructionBytes += Buffer.byteLength(file.text, "utf8");
+          if (instructionBytes > MAX_WORKSPACE_INSTRUCTION_BYTES) {
+            throw new Error(
+              "Snapshot exceeds the workspace instruction budget",
+            );
           }
         }
       }
