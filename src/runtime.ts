@@ -956,6 +956,8 @@ export class AgentRuntime {
         name: toolCall.name,
         arguments: toolCall.arguments,
         cwd: options.configuration.cwd,
+        outputAudience:
+          toolCall.parentCallId === undefined ? "model" : "program",
         task: {
           ...(toolCall.name === "run_code"
             ? codeExecutionOptions(toolCall.arguments.code)

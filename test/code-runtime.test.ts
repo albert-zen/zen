@@ -1109,3 +1109,85 @@ test("parentCallId accepts only an existing run_code parent", () => {
     );
   }
 });
+
+test("experimental shell presentation reduces direct model input while run_code retains parseable shell results", async () => {
+  const { ToolOutputSpool } = await import("../src/tool-output-spool.js");
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-rtk-code-"));
+  const direct = path.join(root, "direct.cjs");
+  const program = path.join(root, "program.cjs");
+  await writeFile(
+    direct,
+    "process.stdout.write('DIRECT_RAW_MARKER\\n'.repeat(1000));",
+  );
+  await writeFile(
+    program,
+    "process.stdout.write(JSON.stringify({answer:42}));process.exitCode=7;",
+  );
+  const spool = new ToolOutputSpool({
+    rootDirectory: path.join(root, "spool"),
+  });
+  let filters = 0;
+  const tools = new ToolEnvironment({
+    toolOutputSpool: spool,
+    runtimes: [
+      new ShellToolRuntime({
+        toolOutputSpool: spool,
+        experimentalOutputFilter: {
+          id: "fixture/v1",
+          maxInputBytes: 1024 * 1024,
+          matches: () => true,
+          filter: async () => {
+            filters++;
+            return "COMPACT_OK";
+          },
+        },
+      }),
+      new RunCodeToolRuntime(new CodeRuntime()),
+    ],
+  });
+  const requests: ModelRequest[] = [];
+  const model: ModelAdapter = {
+    provider: "rtk-compat",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(structuredClone(request));
+      if (requests.length === 1)
+        yield {
+          type: "tool_call",
+          callId: "direct-filter",
+          name: "shell",
+          arguments: { command: `"${process.execPath}" "${direct}"` },
+        };
+      else if (requests.length === 2)
+        yield {
+          type: "tool_call",
+          callId: "compat-code",
+          name: "run_code",
+          arguments: {
+            code: `const result = await tools.shell({command: ${JSON.stringify(`"${process.execPath}" "${program}"`)}}); text({answer: JSON.parse(result.output).answer, exit: result.exitCode});`,
+          },
+        };
+      else yield { type: "text_delta", delta: "done" };
+    },
+  };
+  try {
+    const server = runtimeServer({ model, tools });
+    const thread = await server.startThread({ cwd: root });
+    await (
+      await server.startTurn(thread.id, "check compatibility")
+    ).done;
+    const snapshot = await server.readThread(thread.id);
+    const result = snapshot.items.find(
+      (item) => item.type === "tool_result" && item.callId === "compat-code",
+    );
+    assert(result?.type === "tool_result");
+    assert.equal(result.exitCode, 0, result.output);
+    assert.deepEqual(JSON.parse(result.output), { answer: 42, exit: 7 });
+    assert.equal(filters, 1);
+    assert.match(JSON.stringify(requests[1]), /COMPACT_OK/);
+    assert.doesNotMatch(JSON.stringify(requests[1]), /DIRECT_RAW_MARKER/);
+  } finally {
+    await tools.close();
+    await spool.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

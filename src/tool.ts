@@ -6,7 +6,7 @@ import {
   type ToolTaskPolicy,
 } from "./tool-task.js";
 import { createHash } from "node:crypto";
-import { open } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { sandboxCommand } from "./sandbox.js";
 import type { SandboxMode } from "./item.js";
@@ -21,10 +21,12 @@ import {
 import type { ModelTool } from "./model.js";
 import {
   DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES,
+  renderToolOutput,
   utf8Prefix,
   type ToolOutputCaptureMetadata,
   type ToolOutputSpool,
 } from "./tool-output-spool.js";
+import type { ShellOutputFilter } from "./shell-output-filter.js";
 
 const TOOL_OUTPUT_CAPTURE = Symbol("tool-output-capture");
 const TOOL_OUTPUT_SUFFIX = Symbol("tool-output-suffix");
@@ -37,6 +39,8 @@ export interface ToolInvocation {
   signal: AbortSignal;
   threadId?: string;
   sandbox?: SandboxMode;
+  /** Programmatic consumers must receive the existing unfiltered contract. */
+  outputAudience?: "model" | "program";
   task?: {
     yieldTimeMs?: number;
     timeoutMs?: number;
@@ -902,6 +906,7 @@ export class ShellToolRuntime implements ToolRuntime {
   readonly #terminationGraceMs: number;
   readonly #maxOutputBytes: number;
   readonly #spool: ToolOutputSpool | undefined;
+  readonly #outputFilter: ShellOutputFilter | undefined;
   constructor(
     options: {
       environment?: Readonly<NodeJS.ProcessEnv>;
@@ -909,6 +914,7 @@ export class ShellToolRuntime implements ToolRuntime {
       terminationGraceMs?: number;
       maxOutputBytes?: number;
       toolOutputSpool?: ToolOutputSpool;
+      experimentalOutputFilter?: ShellOutputFilter;
     } = {},
   ) {
     this.#environment = Object.freeze(
@@ -921,25 +927,39 @@ export class ShellToolRuntime implements ToolRuntime {
     this.#maxOutputBytes =
       options.maxOutputBytes ?? DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES;
     this.#spool = options.toolOutputSpool;
+    this.#outputFilter = options.experimentalOutputFilter;
   }
   async execute(invocation: ToolInvocation): Promise<ToolExecutionResult> {
     invocation.signal.throwIfAborted();
     const command = invocation.arguments.command;
     if (typeof command !== "string" || command.trim().length === 0)
       throw new Error("shell.command must be a non-empty string");
-    const capture =
-      invocation.taskContext === undefined
-        ? new ToolOutputWindow(this.#maxOutputBytes, this.#spool)
-        : undefined;
-    const write = (text: string) => {
-      if (capture !== undefined) capture.write(text);
-      else invocation.taskContext?.onOutput(text);
-    };
     const launch = await sandboxCommand(
       invocation.sandbox ?? "danger-full-access",
       invocation.cwd,
       command,
     );
+    const filter =
+      invocation.outputAudience === "model" &&
+      this.#spool !== undefined &&
+      this.#outputFilter?.matches(command)
+        ? this.#outputFilter
+        : undefined;
+    const rawCapture =
+      filter === undefined
+        ? undefined
+        : this.#spool!.beginCapture({ maxCaptureBytes: this.#maxOutputBytes });
+    const capture =
+      rawCapture !== undefined
+        ? undefined
+        : invocation.taskContext === undefined
+          ? new ToolOutputWindow(this.#maxOutputBytes, this.#spool)
+          : undefined;
+    const write = (text: string) => {
+      if (rawCapture !== undefined) rawCapture.write(text);
+      else if (capture !== undefined) capture.write(text);
+      else invocation.taskContext?.onOutput(text);
+    };
     const child = spawn(launch.file, launch.args, {
       cwd: invocation.cwd,
       env: this.#environment,
@@ -1002,6 +1022,63 @@ export class ShellToolRuntime implements ToolRuntime {
       invocation.signal.addEventListener("abort", abort, { once: true });
       if (invocation.signal.aborted) abort();
     });
+    if (rawCapture !== undefined && filter !== undefined) {
+      const raw = await rawCapture.finish({ retainFile: true });
+      let output = renderToolOutput(raw);
+      let status = "raw";
+      let reason =
+        "cancelled, truncated, unavailable, or over filter input limit";
+      if (
+        !invocation.signal.aborted &&
+        !raw.sourceTruncated &&
+        raw.path !== undefined &&
+        raw.capturedBytes <= filter.maxInputBytes
+      ) {
+        try {
+          const filtered = await filter.filter(
+            await readFile(raw.path, "utf8"),
+            invocation.signal,
+          );
+          const receipt = `\n[filtered output: ${filter.id}]\nraw_output: ${raw.path}\nraw_bytes: ${raw.capturedBytes}\nraw_sha256: ${raw.sha256}\nlifetime: ${raw.lifetime}\nsource_truncated: false`;
+          if (Buffer.byteLength(filtered + receipt) < raw.capturedBytes) {
+            output = filtered + receipt;
+            status = "filtered";
+            reason = "";
+          } else reason = "filtered output plus receipt is not smaller";
+        } catch (error) {
+          reason = String(error).slice(0, 512);
+        }
+      }
+      const structuredContent = {
+        outputPresentation: {
+          filter: filter.id,
+          status,
+          reason,
+          raw: {
+            path: raw.path ?? null,
+            bytes: raw.capturedBytes,
+            sha256: raw.sha256,
+            lifetime: raw.lifetime,
+            sourceTruncated: raw.sourceTruncated,
+          },
+        },
+      };
+      if (invocation.taskContext !== undefined) {
+        invocation.taskContext.onOutput(output);
+        return {
+          output: "",
+          exitCode,
+          contentType: "application/vnd.zen.shell-output-presentation+json",
+          structuredContent,
+        };
+      }
+      return {
+        output,
+        exitCode,
+        contentType: "application/vnd.zen.shell-output-presentation+json",
+        structuredContent,
+      };
+    }
     if (capture === undefined) return { output: "", exitCode };
     const output = await capture.finish();
     return attachToolOutputCapture(

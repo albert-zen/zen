@@ -2,6 +2,8 @@
 
 ## 核心概念
 
+- **实验 Shell 输出展示** — 默认关闭的 Host 执行依赖仅在直接模型调用中对已保存在有界原始 spool 的输出做固定版本 RTK 过滤，过滤事实与原文回读凭据随既有工具结果写入 ItemList，程序化嵌套调用保持原始返回语义。
+
 - **Host 配置快照** — Host 将已准备的 Provider 目录、默认选择与执行参数作为一致的瞬时快照发布，新根执行只从当前快照取得依赖，配置文件仍是唯一持久配置权威。
 - **Provider 执行依赖持有** — 一次 Turn 或 Host 辅助模型请求对 adapter、模型元数据及 transport 的瞬时引用在真正执行结束后释放，退役资源待最后一个引用结束后关闭，不进入 journal。
 - **Host 配置候选** — prepare 产生绑定 processEpoch 与 revision 的瞬时候选，publish/discard 幂等且进程退出即丢弃；候选不成为持久配置权威。
