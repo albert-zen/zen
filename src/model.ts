@@ -1,3 +1,4 @@
+import type { WorkspaceInstructionFile } from "./item.js";
 import { deduplicateMediaContent } from "./model-content.js";
 import { TOOL_TASK_CONTENT_TYPE } from "./tool-task.js";
 import {
@@ -126,26 +127,37 @@ export interface ModelAdapter {
 export function compileModelMessages(
   items: readonly CanonicalItem[],
   targetSelection?: CanonicalProviderSelection,
+  workspaceInstructions?: readonly WorkspaceInstructionFile[],
 ): ModelMessage[] {
-  const snapshot = items.find(
+  const snapshot = items.findLast(
     (item) =>
-      item.type === "turn_started" && item.workspaceInstructions !== undefined,
+      (item.type === "turn_started" || item.type === "context_compaction") &&
+      item.workspaceInstructions !== undefined,
   );
   const files =
-    snapshot?.type === "turn_started"
+    workspaceInstructions ??
+    (snapshot?.type === "turn_started" ||
+    snapshot?.type === "context_compaction"
       ? snapshot.workspaceInstructions
-      : undefined;
-  const messages = compileConversationMessages(items, targetSelection);
-  if (files === undefined || files.length === 0) return messages;
+      : undefined);
+  return [
+    ...compileWorkspaceInstructionMessages(files),
+    ...compileConversationMessages(items, targetSelection),
+  ];
+}
+
+export function compileWorkspaceInstructionMessages(
+  files: readonly WorkspaceInstructionFile[] | undefined,
+): ModelMessage[] {
+  if (files === undefined || files.length === 0) return [];
   return [
     {
       role: "user",
       text: [
-        "Repository instructions captured when this Thread received its first message. These apply within the repository identified by the source path; direct user requests take precedence. This snapshot is fixed for this Thread. Read any additional local instructions yourself when needed.",
+        "Repository instructions loaded at the first message or after the latest context compaction. Direct user requests take precedence. Source paths identify the files read.",
         ...files.map((file) => `AGENTS.md source: ${file.path}\n${file.text}`),
       ].join("\n\n"),
     },
-    ...messages,
   ];
 }
 

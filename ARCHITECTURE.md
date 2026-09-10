@@ -19,7 +19,7 @@
 - **Turn** — 一次交换：从一条用户输入开始、到 agent 完成响应为止追加的那段连续 Item。
 - **AgentRuntime** — Zen 拥有的 provider-neutral agent loop：从 ItemList 编译上下文 → 调用模型 → 通过 Tool Environment 执行工具，并把 canonical `tool_call` / `tool_result` 在内的一切事实追加为 Item。
 - **AppServer** — 按 threadId 把请求路由到 Thread、驱动 AgentRuntime、向订阅者广播 item 事件的唯一服务入口。
-- **Repository instruction snapshot** — 新Thread metadata标记repo-root-on-first-message策略，ZAS仅在其首条消息首次Turn admission定位绑定cwd所属Git仓库并读取仓库根AGENTS.md，将路径与原文作为首个turn_started.workspaceInstructions持久化；后续Turn、恢复和压缩从同一ItemList快照投影，不再读盘、不重复累积，不给旧Thread补注入。子目录cwd仍只取repo根，不读repo外祖先、不扫描子目录；非repo或无根文件视为空快照。总原文预算128KiB，真实读取错误或超限明确拒绝，指令保持用户级上下文且不改写用户消息。
+- **Repository instructions** — ZAS在新Thread首条消息及每次上下文压缩（手动、自动、agentic）提交时读取绑定cwd所属Git仓库根AGENTS.md，路径和原文分别保存在turn_started与context_compaction Item中；模型投影仅使用最近一次读取，恢复与普通Turn不读盘。压缩摘要生成后重新读取并与压缩结果一起提交，失败明确返回、不提交半次压缩；删除文件追加空规则，旧规则只留历史。只定位repo根，不叠加祖先或扫描子目录；总原文128KiB、模型预算含最新规则。
 - **IM command-name resolution**：IMZen 在产品与 SDK common 命令的完整名称表上消费 IM Agent SDK 的纯 resolver（固定源码薄 vendor 与 MIT notice），显式启用唯一前缀；精确名称/别名优先，歧义零分派，只改命令 token，参数与消息内容保留。
 - **ZAS Native Protocol** — Zen 自己定义的 App Server 调用与事件语义，由 canonical 生命周期、Host policy 和产品需求向外投影，不受兼容 adapter 可表达能力裁剪。
 - **Codex App Server Adapter** — `src/protocol/codex/` 把 ZAS 原生 surface 中可表达的部分映射为固定 codex-cli 0.146.0 shape；兼容只属于已验收的具体客户端调用面，不反向定义 ZAS。

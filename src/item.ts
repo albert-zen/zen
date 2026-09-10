@@ -288,6 +288,8 @@ export interface FailureItem extends ItemBase {
 }
 
 interface ContextCompactionItemBase extends ItemBase {
+  /** Rules reread when this compaction was committed; [] clears prior rules. */
+  workspaceInstructions?: WorkspaceInstructionFile[];
   type: "context_compaction";
   coveredThroughItemId: string;
   summary: string;
@@ -440,6 +442,26 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
     throw new Error(`Unknown canonical Item type: ${rawType}`);
   }
   const type = rawType as ItemType;
+
+  if (type === "turn_started" || type === "context_compaction") {
+    if (item.workspaceInstructions !== undefined) {
+      if (!Array.isArray(item.workspaceInstructions)) {
+        throw new Error("workspaceInstructions must be an array");
+      }
+      let instructionBytes = 0;
+      for (const entry of item.workspaceInstructions) {
+        const file = requireRecord(entry, "workspace instruction file");
+        requireNonEmptyString(file.path, "workspace instruction path");
+        if (typeof file.text !== "string") {
+          throw new Error("workspace instruction text must be a string");
+        }
+        instructionBytes += Buffer.byteLength(file.text, "utf8");
+        if (instructionBytes > MAX_WORKSPACE_INSTRUCTION_BYTES) {
+          throw new Error("Snapshot exceeds the workspace instruction budget");
+        }
+      }
+    }
+  }
 
   switch (type) {
     case "thread_metadata":
@@ -599,27 +621,6 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
     }
     case "turn_started":
       requireTurnId(item, type);
-      if (item.workspaceInstructions !== undefined) {
-        if (!Array.isArray(item.workspaceInstructions)) {
-          throw new Error(
-            "turn_started.workspaceInstructions must be an array",
-          );
-        }
-        let instructionBytes = 0;
-        for (const entry of item.workspaceInstructions) {
-          const file = requireRecord(entry, "workspace instruction file");
-          requireNonEmptyString(file.path, "workspace instruction path");
-          if (typeof file.text !== "string") {
-            throw new Error("workspace instruction text must be a string");
-          }
-          instructionBytes += Buffer.byteLength(file.text, "utf8");
-          if (instructionBytes > MAX_WORKSPACE_INSTRUCTION_BYTES) {
-            throw new Error(
-              "Snapshot exceeds the workspace instruction budget",
-            );
-          }
-        }
-      }
       if (item.selection !== undefined) {
         validateSelection(
           requireRecord(item.selection, "turn_started.selection"),

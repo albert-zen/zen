@@ -1021,6 +1021,8 @@ export class ZenAppServer {
                       }),
                 },
                 modelAdapter: resolved.adapter,
+                reloadWorkspaceInstructions: () =>
+                  loadWorkspaceInstructions(configuration.cwd),
                 signal: controller.signal,
                 commit: async (item) => {
                   await this.#withThreadMutation(threadId, async () => {
@@ -1677,11 +1679,10 @@ export class ZenAppServer {
         `Context compaction summary exceeds the ${String(targetTokenBudget)} token target`,
       );
     }
-    const instructionSnapshot = options.thread.items.find(
-      (item) =>
-        item.type === "turn_started" &&
-        item.workspaceInstructions !== undefined,
+    const workspaceInstructions = await loadWorkspaceInstructions(
+      options.thread.effectiveConfiguration().cwd,
     );
+    options.signal.throwIfAborted();
     let boundedBoundary: ReturnType<typeof boundedCompactionBoundary>;
     try {
       boundedBoundary = boundedCompactionBoundary(options.thread.items, {
@@ -1689,13 +1690,9 @@ export class ZenAppServer {
         estimateRetainedTokens: (retainedItems) =>
           estimateModelMessageInputTokens(
             compileModelMessages(
-              instructionSnapshot !== undefined &&
-                !retainedItems.some(
-                  (item) => item.id === instructionSnapshot.id,
-                )
-                ? [instructionSnapshot, ...retainedItems]
-                : retainedItems,
+              retainedItems,
               options.selection.selection,
+              workspaceInstructions,
             ),
           ),
         retention: options.contextCompaction.retention,
@@ -1718,6 +1715,7 @@ export class ZenAppServer {
       createdAt: this.#now(),
       type: "context_compaction",
       provenance: "provider_generated",
+      workspaceInstructions,
       coveredThroughItemId: options.boundary.item.id,
       summary: summary.text,
       retainedItemIds: boundedBoundary.retainedItemIds,

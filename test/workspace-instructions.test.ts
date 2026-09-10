@@ -52,8 +52,9 @@ function createServer(
   journal: JsonlThreadJournal,
   requests: ModelMessage[][],
   contextCompaction: ContextCompactionConfig = {},
+  modelOverride?: ModelAdapter,
 ) {
-  const adapter: ModelAdapter = {
+  const adapter: ModelAdapter = modelOverride ?? {
     provider: "instructions-test",
     async *stream(request): AsyncIterable<ModelEvent> {
       requests.push(structuredClone(request.messages));
@@ -87,7 +88,7 @@ function createServer(
   });
 }
 
-test("captures root rules at first input and reuses the journal snapshot through edits, restart and compaction", async () => {
+test("captures root rules at first input and refreshes only after compaction", async () => {
   const root = await realpath(
     await mkdtemp(path.join(tmpdir(), "zen-instructions-runtime-")),
   );
@@ -137,11 +138,8 @@ test("captures root rules at first input and reuses the journal snapshot through
       await restarted.startTurn(thread.id, "after compaction")
     ).done;
     const final = requests.at(-1)!;
-    assert.deepEqual(final[0], first[0]);
-    assert.equal(
-      JSON.stringify(final).split("ROOT_CAPTURED_ON_FIRST_INPUT").length - 1,
-      1,
-    );
+    assert.match(JSON.stringify(final[0]), /NEW_RULES_FOR_NEW_THREADS/u);
+    assert.doesNotMatch(JSON.stringify(final), /ROOT_CAPTURED_ON_FIRST_INPUT/u);
     const items = (await restarted.readThread(thread.id)).items;
     assert.equal(
       items.filter(
@@ -165,7 +163,7 @@ test("captures root rules at first input and reuses the journal snapshot through
   }
 });
 
-test("empty first snapshots and historical threads never acquire later rules", async () => {
+test("ordinary Turns do not reload empty snapshots or historical threads", async () => {
   const root = await realpath(
     await mkdtemp(path.join(tmpdir(), "zen-instructions-empty-")),
   );
@@ -244,19 +242,20 @@ test("invalid and oversized rules fail first-input admission without starting a 
   }
 });
 
-test("compaction counts fixed instructions even when their source Turn is not retained", async () => {
+test("compaction budgets the newly read rules, even without retained history", async () => {
   const root = await realpath(
     await mkdtemp(path.join(tmpdir(), "zen-instructions-budget-")),
   );
   try {
     await run("git", ["init", root]);
-    await writeFile(path.join(root, "AGENTS.md"), "rule ".repeat(1000));
+    await writeFile(path.join(root, "AGENTS.md"), "small initial rules");
     const journal = new JsonlThreadJournal(path.join(root, "journal"));
     const server = createServer(root, journal, [], { targetPercent: 1 });
     const thread = await server.startThread();
     await (
       await server.startTurn(thread.id, "hello")
     ).done;
+    await writeFile(path.join(root, "AGENTS.md"), "rule ".repeat(1000));
     await assert.rejects(
       server.compactThread(thread.id),
       /compaction retained Items exceed/u,
@@ -287,4 +286,169 @@ test("canonical restore rejects snapshots exceeding the original-text budget", (
       }),
     /workspace instruction budget/u,
   );
+});
+
+test("failed reload preserves context; deletion commits empty rules and survives restart", async () => {
+  const root = await realpath(
+    await mkdtemp(path.join(tmpdir(), "zen-refresh-deleted-")),
+  );
+  try {
+    await run("git", ["init", root]);
+    const filename = path.join(root, "AGENTS.md");
+    await writeFile(filename, "ORIGINAL_RULE");
+    const journal = new JsonlThreadJournal(path.join(root, "journal"));
+    const requests: ModelMessage[][] = [];
+    const server = createServer(root, journal, requests);
+    const thread = await server.startThread();
+    await (
+      await server.startTurn(thread.id, "first")
+    ).done;
+    await writeFile(filename, Buffer.from([0xff]));
+    await assert.rejects(
+      server.compactThread(thread.id),
+      /Cannot read workspace instructions/u,
+    );
+    let items = (await server.readThread(thread.id)).items;
+    assert.equal(
+      items.some((item) => item.type === "context_compaction"),
+      false,
+    );
+    assert.match(JSON.stringify(compileModelMessages(items)), /ORIGINAL_RULE/u);
+    await rm(filename);
+    await server.compactThread(thread.id);
+    items = (await server.readThread(thread.id)).items;
+    const compact = items.findLast(
+      (item) => item.type === "context_compaction",
+    );
+    assert.deepEqual(compact?.workspaceInstructions, []);
+    assert.throws(
+      () =>
+        decodeCanonicalItem({
+          ...compact,
+          workspaceInstructions: [
+            { path: filename, text: "x".repeat(128 * 1024 + 1) },
+          ],
+        }),
+      /workspace instruction budget/u,
+    );
+    const restarted = createServer(root, journal, requests);
+    await writeFile(filename, "ONLY_AFTER_NEXT_COMPACTION");
+    await (
+      await restarted.startTurn(thread.id, "after restart")
+    ).done;
+    assert.doesNotMatch(
+      JSON.stringify(requests.at(-1)),
+      /ORIGINAL_RULE|ONLY_AFTER_NEXT_COMPACTION/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("agentic compaction refreshes rules before the next sample and clears deleted rules", async () => {
+  const root = await realpath(
+    await mkdtemp(path.join(tmpdir(), "zen-refresh-agentic-")),
+  );
+  try {
+    await run("git", ["init", root]);
+    const filename = path.join(root, "AGENTS.md");
+    await writeFile(filename, "BEFORE_AGENTIC");
+    const journal = new JsonlThreadJournal(path.join(root, "journal"));
+    let samples = 0;
+    const adapter: ModelAdapter = {
+      provider: "instructions-test",
+      async *stream(request): AsyncIterable<ModelEvent> {
+        samples++;
+        const content = JSON.stringify(request.messages);
+        if (samples === 1) {
+          assert.match(content, /BEFORE_AGENTIC/u);
+          await writeFile(filename, "AFTER_AGENTIC");
+        } else if (samples === 2) {
+          assert.match(content, /AFTER_AGENTIC/u);
+          assert.doesNotMatch(content, /BEFORE_AGENTIC/u);
+          await rm(filename);
+        } else {
+          assert.doesNotMatch(content, /BEFORE_AGENTIC|AFTER_AGENTIC/u);
+          yield { type: "text_delta", delta: "done" };
+          return;
+        }
+        yield {
+          type: "tool_call",
+          name: "compact_context",
+          callId: `compact-${samples}`,
+          arguments: { text: "continue the task" },
+        };
+      },
+    };
+    const server = createServer(
+      root,
+      journal,
+      [],
+      { agenticEnabled: true },
+      adapter,
+    );
+    const thread = await server.startThread();
+    await (
+      await server.startTurn(thread.id, "perform task")
+    ).done;
+    assert.equal(samples, 3);
+    const items = (await server.readThread(thread.id)).items;
+    assert.deepEqual(
+      items
+        .filter((item) => item.type === "context_compaction")
+        .map((item) => item.workspaceInstructions?.map((file) => file.text)),
+      [["AFTER_AGENTIC"], []],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("automatic compaction rereads rules after generating its summary", async () => {
+  const root = await realpath(
+    await mkdtemp(path.join(tmpdir(), "zen-refresh-auto-")),
+  );
+  try {
+    await run("git", ["init", root]);
+    const filename = path.join(root, "AGENTS.md");
+    await writeFile(filename, "AUTO_ORIGINAL");
+    const journal = new JsonlThreadJournal(path.join(root, "journal"));
+    let samples = 0;
+    const adapter: ModelAdapter = {
+      provider: "instructions-test",
+      async *stream(): AsyncIterable<ModelEvent> {
+        samples++;
+        if (samples === 2) await writeFile(filename, "AUTO_AFTER_SUMMARY");
+        yield {
+          type: "text_delta",
+          delta: samples === 2 ? "summary" : "answer",
+        };
+        if (samples === 1)
+          yield { type: "usage", inputTokens: 30000, outputTokens: 1 };
+      },
+    };
+    const server = createServer(root, journal, [], {}, adapter);
+    const thread = await server.startThread();
+    await (
+      await server.startTurn(thread.id, "first")
+    ).done;
+    const items = (await server.readThread(thread.id)).items;
+    assert.equal(samples, 2);
+    assert.deepEqual(
+      items
+        .findLast((item) => item.type === "context_compaction")
+        ?.workspaceInstructions?.map((file) => file.text),
+      ["AUTO_AFTER_SUMMARY"],
+    );
+    assert.match(
+      JSON.stringify(compileModelMessages(items)),
+      /AUTO_AFTER_SUMMARY/u,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(compileModelMessages(items)),
+      /AUTO_ORIGINAL/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

@@ -36,6 +36,7 @@ import {
 import { ThreadJournalAppendOutcomeUnknownError } from "./journal.js";
 import {
   compileModelMessages,
+  compileWorkspaceInstructionMessages,
   type ModelAdapter,
   type ModelMessage,
   type ModelTool,
@@ -136,6 +137,7 @@ export type RuntimeEvent =
 export interface RunTurnOptions {
   thread: Thread;
   workspaceInstructions?: WorkspaceInstructionFile[];
+  reloadWorkspaceInstructions?: () => Promise<WorkspaceInstructionFile[]>;
   turnId?: string;
   input: UserInput;
   clientId?: string;
@@ -890,8 +892,26 @@ export class AgentRuntime {
       run: async (): Promise<ScheduledToolOutcome> => {
         try {
           options.signal.throwIfAborted();
-          await options.commit(compaction);
-          options.emit({ type: "item_completed", item: compaction });
+          const workspaceInstructions =
+            await options.reloadWorkspaceInstructions?.();
+          const refreshed =
+            workspaceInstructions === undefined
+              ? compaction
+              : { ...compaction, workspaceInstructions };
+          const instructionTokens = estimateModelMessageInputTokens(
+            compileWorkspaceInstructionMessages(workspaceInstructions),
+          );
+          if (
+            projectedTokens + instructionTokens >
+            configuration.contextWindow
+          ) {
+            throw new Error(
+              "Compacted context and repository instructions exceed the selected model context window",
+            );
+          }
+          options.signal.throwIfAborted();
+          await options.commit(refreshed);
+          options.emit({ type: "item_completed", item: refreshed });
           options.agenticCompactionCommitted?.();
           return {
             result: {
