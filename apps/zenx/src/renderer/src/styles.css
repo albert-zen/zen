@@ -1457,6 +1457,7 @@ select:focus-visible {
 }
 .user-row {
   position: relative;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -1464,7 +1465,8 @@ select:focus-visible {
   padding-left: 18%;
 }
 .user-bubble {
-  max-width: 700px;
+  min-width: 0;
+  max-width: min(700px, 100%);
   padding: 12px 15px;
   border: 1px solid var(--color-border);
   border-radius: 15px 15px 5px 15px;
@@ -4623,6 +4625,10 @@ select:focus-visible {
   text-align: center;
 }
 
+.markdown-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .markdown-body p {
   margin: 0 0 12px;
   white-space: pre-wrap;
@@ -4686,7 +4692,8 @@ select:focus-visible {
   margin: 0;
   overflow-x: auto;
   padding: 12px 14px;
-  white-space: pre-wrap;
+  white-space: pre;
+  overflow-wrap: normal;
 }
 .markdown-code code {
   padding: 0;
