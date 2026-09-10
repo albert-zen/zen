@@ -1149,6 +1149,7 @@ function inlineToolOutputCapture(
 ): ToolOutputCaptureMetadata {
   const bytes = Buffer.from(output);
   return {
+    unspooled: true,
     capturedBytes: bytes.length,
     sha256: createHash("sha256").update(bytes).digest("hex"),
     lifetime: "host_instance",

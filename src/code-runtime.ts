@@ -3,6 +3,7 @@ import { MessageChannel, type MessagePort, Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 
 import {
+  attachToolOutputCapture,
   UnawaitedNestedToolCallError,
   MAX_STRUCTURED_TOOL_RESULT_BYTES,
   type CompositeToolRuntime,
@@ -697,16 +698,23 @@ export class RunCodeToolRuntime implements CompositeToolRuntime {
         ? ""
         : `run_code failed [${failure instanceof CodeRuntimeError ? failure.code : "EXECUTION_FAILED"}]: ${describeError(failure)}`;
     const prefix = taskContext === undefined ? result.text : "";
-    return {
-      output:
-        prefix + (diagnostic ? (result.text ? "\n" : "") + diagnostic : "") ||
-        (result.text ? "" : EMPTY_CODE_OUTPUT),
-      exitCode: failure === undefined ? 0 : invocation.signal.aborted ? 130 : 1,
-      sourceTruncated: result.outputTruncated,
-      contentType: "application/json",
-      structuredContent,
-      ...(streamMedia || modelContent === undefined ? {} : { modelContent }),
-    };
+    return attachToolOutputCapture(
+      {
+        output: prefix,
+        exitCode:
+          failure === undefined ? 0 : invocation.signal.aborted ? 130 : 1,
+        sourceTruncated: result.outputTruncated,
+        contentType: "application/json",
+        structuredContent,
+        ...(streamMedia || modelContent === undefined ? {} : { modelContent }),
+      },
+      undefined,
+      diagnostic
+        ? (result.text ? "\n" : "") + diagnostic
+        : result.text
+          ? ""
+          : EMPTY_CODE_OUTPUT,
+    );
   }
 }
 

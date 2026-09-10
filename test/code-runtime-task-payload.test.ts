@@ -11,7 +11,7 @@ import {
   type ToolRuntime,
 } from "../src/tool.js";
 import { ToolOutputSpool } from "../src/tool-output-spool.js";
-import { CodeRuntime } from "../src/code-runtime.js";
+import { CodeRuntime, RunCodeToolRuntime } from "../src/code-runtime.js";
 const invocation = (
   cwd: string,
   name: string,
@@ -156,9 +156,56 @@ test("progress and a captured final result combine raw bytes without rendering r
     await spool.close();
     await rm(cwd, { recursive: true, force: true });
   });
+  const direct = await env.execute(
+    env.prepare({
+      ...invocation(cwd, "sample"),
+      task: { waitForCompletion: true },
+    }),
+  );
+  assert.match(direct.output, /control diagnostic$/);
   const [r] = await guest(env, cwd, `text(await tools.sample({}));`);
   assert.equal(r.output, "progress\n" + payload);
   assert.equal(r.diagnostic, "\ncontrol diagnostic");
   assert.equal(r.outputInfo.complete, true);
   assert.equal(r.exitCode, 7);
 });
+
+for (const spooled of [false, true])
+  test(`failed run_code wait preserves only emitted text (spool=${spooled})`, async (t) => {
+    const cwd = await mkdtemp(join(tmpdir(), "zen-code-failed-"));
+    const spool = spooled
+      ? new ToolOutputSpool({ rootDirectory: cwd })
+      : undefined;
+    const env = new ToolEnvironment({
+      runtimes: [new RunCodeToolRuntime()],
+      ...(spool === undefined ? {} : { toolOutputSpool: spool }),
+      taskOptions: { yieldTimeMs: 1 },
+    });
+    t.after(async () => {
+      await env.close();
+      await spool?.close();
+      await rm(cwd, { recursive: true, force: true });
+    });
+    const first = await env.execute(
+      env.prepare(
+        invocation(cwd, "run_code", {
+          code: 'text("RAW"); throw new Error("QA_CODE_FAILURE");',
+        }),
+      ),
+      {
+        invoke: async () => {
+          throw new Error("Unexpected child tool call");
+        },
+      },
+    );
+    const id = (first.structuredContent as { task_id: string }).task_id;
+    const [r] = await guest(
+      env,
+      cwd,
+      `text(await tools.wait({task_id:${JSON.stringify(id)},yield_time_ms:1000}));`,
+    );
+    assert.equal(r.output, "RAW");
+    assert.equal(r.outputInfo.capturedBytes, 3);
+    assert.match(r.diagnostic, /QA_CODE_FAILURE/);
+    assert.equal(r.exitCode, 1);
+  });

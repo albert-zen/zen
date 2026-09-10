@@ -78,7 +78,9 @@ test("shell rejects whitespace but permits comment-only commands", async () => {
     });
   for (const command of ["", "   ", "\n"])
     await assert.rejects(invoke(command), /must be a non-empty string/);
-  assert.deepEqual(await invoke("# comment"), { output: "", exitCode: 0 });
+  const comment = await invoke("# comment");
+  assert.equal(comment.output, "");
+  assert.equal(comment.exitCode, 0);
 });
 
 test("program limits and unavailable captures are explicit without overwriting tool content", async (t) => {

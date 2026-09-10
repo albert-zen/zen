@@ -380,7 +380,8 @@ test("legacy unscoped quick shell execution keeps exact output", async () => {
       cwd: process.cwd(),
       signal: new AbortController().signal,
     });
-    assert.deepEqual(result, { output: "exact", exitCode: 0 });
+    assert.equal(result.output, "exact");
+    assert.equal(result.exitCode, 0);
   } finally {
     await shell.close();
   }

@@ -23,6 +23,8 @@ export interface ToolOutputSpoolOptions {
 
 /** Non-canonical metadata consumed by AgentRuntime before it appends an Item. */
 export interface ToolOutputCaptureMetadata {
+  /** Raw in-memory capture has not yet applied the model spool budget. */
+  readonly unspooled?: true;
   readonly capturedBytes: number;
   readonly sha256: string;
   readonly path?: string;

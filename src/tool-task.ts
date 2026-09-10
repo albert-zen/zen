@@ -543,6 +543,7 @@ class Task {
         return attachToolOutputCapture(
           { ...result, output: capture.output },
           capture.metadata,
+          toolOutputSuffix(result) ?? "",
         );
       }
       this.yielded = true;
