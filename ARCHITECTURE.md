@@ -928,3 +928,5 @@ AppServer 的 Host 根操作接纳门在线性化边界排序新执行与维护�
 SettingsService 串行校验配置草稿与 baseRevision，经 Host prepare 后原子保存 revision，再通过私有认证控制通道 publish；无有效变化不创建 transport。凭证写入新引用后才提交配置引用，不能先覆盖正在使用的秘密槽。保存后回执未知显示“已保存，应用未确认”，通过 processEpoch/revision 查询或显式重试同一 revision，暂停后续提交而不重启 Host。进程级配置默认下次启动生效；安全重启必须在根操作接纳边界原子检查并拒绝忙状态，不安排后台自动重启。
 
 Provider 删除、能力更新与连接替换只改变后续执行目录。AppServer 在接纳时固定 selection、目录条目、adapter 与本轮压缩和执行限制，保留至包括压缩在内的真实 finally；全局默认不改写已有 canonical selection。工具权限仍沿既有授权边界更新。
+
+源码模式的 ZenX Host 通过仅开发期的 Worker 入口注册 tsx 模块解析，再加载同一 Code Runtime Worker；打包模式继续使用编译后的 Worker，不继承 Host 的任意 execArgv。

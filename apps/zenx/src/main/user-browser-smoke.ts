@@ -62,9 +62,16 @@ try {
       "--remote-debugging-port=0",
       "--no-first-run",
       "--no-default-browser-check",
+      "--enable-logging=stderr",
       `http://127.0.0.1:${String(port)}/seed`,
     ],
     { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
+  );
+  console.log(
+    JSON.stringify({
+      fixtureExecutable: executable,
+      fixtureProfile: directory,
+    }),
   );
   browserObservation = observeSmokeChild(browser);
   const debuggingPort = await readDevToolsPort(

@@ -406,7 +406,7 @@ async function handleCommand(command: HostCommand): Promise<void> {
 
 function codeRuntimeWorkerEntry(): URL {
   return import.meta.url.endsWith(".ts")
-    ? new URL("../../../../src/code-runtime-worker.ts", import.meta.url)
+    ? new URL("./source-code-runtime-worker.mjs", import.meta.url)
     : new URL("./code-runtime-worker.js", import.meta.url);
 }
 

@@ -172,6 +172,18 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Install a pinned headed Chromium fixture
+        shell: pwsh
+        run: |
+          $fixtureDirectory = Join-Path $env:RUNNER_TEMP "zenx-browser-fixture"
+          npm install --prefix $fixtureDirectory --no-package-lock --no-audit --no-fund playwright@1.63.0
+          if ($LASTEXITCODE -ne 0) { throw "Could not install the pinned browser fixture" }
+          node (Join-Path $fixtureDirectory "node_modules/playwright/cli.js") install chromium
+          if ($LASTEXITCODE -ne 0) { throw "Could not download the pinned Chromium build" }
+          $env:ZENX_CI_PLAYWRIGHT = Join-Path $fixtureDirectory "node_modules/playwright"
+          $browserExecutable = node -e "process.stdout.write(require(process.env.ZENX_CI_PLAYWRIGHT).chromium.executablePath())"
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $browserExecutable)) { throw "Chromium executable is missing" }
+          "ZENX_USER_BROWSER_EXECUTABLE=$browserExecutable" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - run: npm --workspace apps/zenx run smoke:windows-user-browser
 
   zenx-playwright-provider-smoke:
