@@ -21,6 +21,8 @@ export interface ComposerSubmission {
 }
 
 export interface ComposerState {
+  /** Transient command feedback; never a message or durable execution state. */
+  compaction?: { status: "pending" | "succeeded" | "failed"; message: string };
   draft: ComposerDraft;
   submission: ComposerSubmission | null;
 }
@@ -49,7 +51,11 @@ export function editComposer(
     text !== state.submission.draftAtSubmit.text
       ? null
       : state.submission;
-  return { draft: { ...state.draft, text }, submission };
+  return {
+    ...clearCompactionFeedback(state),
+    draft: { ...state.draft, text },
+    submission,
+  };
 }
 
 export function addComposerImages(
@@ -58,6 +64,7 @@ export function addComposerImages(
 ): ComposerState {
   if (images.length === 0) return state;
   return {
+    ...clearCompactionFeedback(state),
     draft: { ...state.draft, images: [...state.draft.images, ...images] },
     submission: state.submission?.status === "failed" ? null : state.submission,
   };
@@ -70,6 +77,7 @@ export function removeComposerImage(
   const images = state.draft.images.filter((image) => image.id !== imageId);
   if (images.length === state.draft.images.length) return state;
   return {
+    ...clearCompactionFeedback(state),
     draft: { ...state.draft, images },
     submission: state.submission?.status === "failed" ? null : state.submission,
   };
@@ -85,7 +93,11 @@ export function beginComposerSubmission(
   expectedTurnId: string | null,
   createId: () => string,
 ): ComposerState {
-  if (state.submission?.status === "pending") return state;
+  if (
+    state.submission?.status === "pending" ||
+    state.compaction?.status === "pending"
+  )
+    return state;
   const text = state.draft.text.trim();
   if (!composerDraftHasContent(state.draft)) return state;
   const retry =
@@ -156,4 +168,11 @@ function matchingSubmission(
   return state.submission?.clientUserMessageId === clientUserMessageId
     ? state.submission
     : null;
+}
+
+function clearCompactionFeedback(state: ComposerState): ComposerState {
+  if (state.compaction === undefined || state.compaction.status === "pending")
+    return state;
+  const { compaction: _feedback, ...rest } = state;
+  return rest;
 }

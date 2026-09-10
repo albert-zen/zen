@@ -148,6 +148,7 @@ export interface ClientRequestParams {
     model: string;
     effort?: string;
   };
+  "thread/compact": { threadId: string };
   "thread/unsubscribe": { threadId: string };
   "turn/start": {
     threadId: string;
@@ -198,6 +199,7 @@ export interface ClientRequestResults {
   "thread/unarchive": { thread: Thread };
   "thread/permissions/update": Record<string, never>;
   "thread/settings/update": Record<string, never>;
+  "thread/compact": { compactionItemId: string };
   "thread/unsubscribe": {
     status: "unsubscribed" | "notSubscribed";
   };

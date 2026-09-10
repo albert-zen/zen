@@ -134,14 +134,34 @@ const values: ThreadItem[] = [
     status: "interrupted",
   },
 ];
-document.documentElement.dataset.appearance =
-  new URLSearchParams(location.search).get("theme") ?? "light";
+const params = new URLSearchParams(location.search);
+const compactStatus = params.get("compact");
+const composer = emptyComposerState();
+if (
+  compactStatus === "pending" ||
+  compactStatus === "succeeded" ||
+  compactStatus === "failed"
+) {
+  composer.draft.text = compactStatus === "succeeded" ? "" : "/compact";
+  composer.compaction = {
+    status: compactStatus,
+    message:
+      compactStatus === "pending"
+        ? "Compacting context…"
+        : compactStatus === "succeeded"
+          ? "Context compacted."
+          : "Wait for the current reply to finish before compacting context.",
+  };
+}
+document.documentElement.dataset.appearance = params.get("theme") ?? "light";
 createRoot(document.getElementById("root")!).render(
   <div className="agent-surface" style={{ gridTemplateRows: "minmax(0, 1fr)" }}>
     <ThreadView
       approvals={[]}
-      composer={emptyComposerState()}
-      thread={thread([turnWithItems("inProgress", values)])}
+      composer={composer}
+      thread={thread([
+        turnWithItems(compactStatus ? "completed" : "inProgress", values),
+      ])}
       onDraftChange={() => {}}
       onInterrupt={async () => {}}
       onRespondToApproval={async () => {}}

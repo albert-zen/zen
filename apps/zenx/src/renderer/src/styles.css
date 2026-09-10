@@ -6079,3 +6079,14 @@ select:focus-visible {
 .rtk-settings-card .plugin-switch {
   flex-shrink: 0;
 }
+
+.composer-command-status {
+  margin: 0;
+  padding: 0 14px 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.composer-command-status.is-error {
+  color: var(--danger);
+}
