@@ -202,10 +202,10 @@ Plugin Host 注入本实例 ZAS 发现入口；Python Gateway 跟随 Host 服务
 生命周期连接或停止，配置由 Plugin SDK namespace 保存，频道 credential 留在私有文件。
 侧栏配置页提供 Python / 频道配置路径、默认 cwd、连接状态及显式重新连接。
 
-每个 IM Conversation 通过 `/subscribe <Thread>`（也可 `/pick`）选择并订阅一个 ZenX Thread；
+每个 IM Conversation 通过 `/threads` 查看标题与序号，再用 `/pick <序号>` 选择并接收该 ZenX Thread 的回复；
 多个 Conversation 可订阅同一 Thread。桌面发起的 Agent 回复投递到订阅频道；IM 用户消息和
 Agent 回复通过同一 ZAS canonical Item 投影到桌面。订阅不改变桌面选择。
-`/unsubscribe` 清除当前绑定，下一条普通消息创建新 Thread。SDK SQLite 保存绑定、路由、
+`/new` 清除当前绑定，下一条普通消息创建新 Thread；旧 `/subscribe` 与 `/unsubscribe` 分别保留为选择和清除入口。序号对应本频道最近展示的列表，重启后须重新 `/threads`。SDK SQLite 保存绑定、路由、
 checkpoint 与去重；没有第二份 Thread / transcript 或插件恢复队列。插件重启可恢复绑定和
 SDK 的有界 catch-up；平台原生机器人推送限制仍适用。部署需安装 pinned SDK 的 Python 3.13+
 及频道凭证，真实平台投递需单独联调，不能以本地 FakeChannel 互操作测试替代。

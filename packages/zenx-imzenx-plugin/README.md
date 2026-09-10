@@ -43,13 +43,15 @@ native API delivery limits. After a failure, fix the configuration and use
 
 ## Subscribe and continue
 
-- `/threads` lists existing ZenX Threads; `/subscribe <number|id|query>` (or
-  `/pick`) selects and subscribes the current IM conversation.
+- `/threads` lists existing ZenX Threads by title and number; `/pick <number>`
+  selects a Thread and receives its replies in the current IM conversation.
+  Numbers refer to this conversation's last displayed list; after restarting,
+  run `/threads` again before using a number. Refreshing replaces that list.
 - One conversation selects one Thread. Several conversations can subscribe to
   the same Thread; each receives its own projection of subsequent Agent output.
-- `/unsubscribe` clears that conversation's binding and stops delivery for the
-  old Thread. Its next ordinary input creates a new Thread. `/new` has the same
-  binding-clearing behavior.
+- `/new` clears that conversation's binding and stops delivery for the old
+  Thread. Its next ordinary input creates a new Thread. The old `/subscribe`
+  and `/unsubscribe` commands retain their select/clear behavior as aliases.
 - Ordinary IM input creates a Thread when none is selected, or continues the
   selected Thread. Open that Thread in ZenX to see canonical user messages and
   streamed Agent responses. Subscription never changes the desktop's selection.

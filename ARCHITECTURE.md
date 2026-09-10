@@ -154,6 +154,8 @@
   的 App Server native Thread profile seam，组合 `/model`、`/permission` 与审批
   快捷命令的产品 UX；`/model` 是当前 typed contracts 外的 Zen native operation，
   Controller 仍不拥有 Thread、Turn、binding 或调度语义。
+  IMZenX 的 Slash presenter 和固定版本 SlashController 展示子类仅将列表与选择确认
+  投影为标题和列表序号，沿用 SDK 的每频道列表快照、选择和 ObserveThread 路径。
 - **ImZenContentTransformer** — 在 SDK I1 强类型位置把已暂存的通用文件投影为
   Zen 可读 manifest，并保留图片的 typed content；它不改变消息身份、binding、
   continuation 或 correlation。

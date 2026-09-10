@@ -82,6 +82,50 @@ class ImZenContentTransformer:
         return adapt_inbound_content(message)
 
 
+class ImZenXSlashPresenter(MarkdownSlashPresenter):
+    """Render the SDK's numbered navigation views without internal identifiers."""
+
+    def threads(self, threads) -> str:
+        if not threads:
+            return "No threads found."
+        lines = ["## Threads", ""]
+        lines.extend(
+            f"{index}. **{thread.title or 'Untitled'}** — {thread.status.value}"
+            for index, thread in enumerate(threads, start=1)
+        )
+        lines.extend(
+            ["", "Use `/pick <number>` from this list to select and receive replies here."]
+        )
+        return "\n".join(lines)
+
+
+class ImZenXSlashController(SlashController):
+    """Keep pinned SDK selection and observation; customize only its success text."""
+
+    async def _select_thread(self, message, command, actions, context) -> str:
+        selector = " ".join(command.arguments)
+        if selector.isdigit():
+            view = self._thread_views.get(message.conversation_ref)
+            if view is None:
+                raise ValueError("Use /threads first, then /pick <number> from the displayed list.")
+            if not 1 <= int(selector) <= len(view):
+                raise ValueError("Invalid thread number. Use /threads to refresh the list.")
+        await super()._select_thread(message, command, actions, context)
+        binding = await actions.get_binding(message.conversation_ref)
+        selected = next(
+            (
+                thread
+                for thread in self._thread_views.get(message.conversation_ref, ())
+                if binding is not None and thread.ref == binding.thread_ref
+            ),
+            None,
+        )
+        title = selected.title if selected is not None and selected.title else "Untitled"
+        return (
+            f"Selected thread **{title}**. Its replies will arrive here, including desktop replies."
+        )
+
+
 class ImZenController:
     """Compose IMZen-only commands and presets over SDK typed operations."""
 
@@ -98,8 +142,12 @@ class ImZenController:
         self._client = client
         self._default_permission_mode = default_permission_mode
         self._permission_by_conversation: dict[ConversationRef, PermissionMode] = {}
-        self._slash = SlashController()
-        self._presenter = MarkdownSlashPresenter()
+        self._presenter = (
+            ImZenXSlashPresenter() if subscription_commands else MarkdownSlashPresenter()
+        )
+        self._slash = (
+            ImZenXSlashController(self._presenter) if subscription_commands else SlashController()
+        )
 
     async def handle(
         self,
@@ -119,8 +167,8 @@ class ImZenController:
             if self._subscription_commands and command.name == "unsubscribe":
                 await self._clear_thread(message, actions)
                 text = (
-                    "Unsubscribed. Use /subscribe <thread> to reconnect; "
-                    "the next ordinary message starts a new Thread."
+                    "Selection cleared. Use /threads and /pick; "
+                    "the next message starts a new thread."
                 )
             elif command.name == "new":
                 text = await self._clear_thread(message, actions)
@@ -136,9 +184,10 @@ class ImZenController:
                 text = self._help()
                 if self._subscription_commands:
                     text += (
-                        "\n\n/subscribe <thread> selects and subscribes this IM conversation. "
-                        "/unsubscribe stops its current subscription. "
-                        "Subscriptions survive plugin restarts; desktop replies arrive here."
+                        "\n\nUse /threads then /pick <number> to select and receive replies here, "
+                        "including replies started on desktop. "
+                        "The selection survives plugin restarts. "
+                        "/new clears this selection; the next message starts a new thread."
                     )
             else:
                 return await self._slash.handle(message, actions)
@@ -319,8 +368,8 @@ class ImZenController:
             "## Zen thread\n"
             f"- Status: **{thread.status.value}**\n"
             f"- Preview: {preview}\n"
-            f"- ID: `{thread.ref.native_thread_id}`\n"
-            f"- Workspace: `{workspace}`"
+            + ("" if self._subscription_commands else f"- ID: `{thread.ref.native_thread_id}`\n")
+            + f"- Workspace: `{workspace}`"
         )
 
     async def _approval(

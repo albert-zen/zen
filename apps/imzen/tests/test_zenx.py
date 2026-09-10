@@ -133,3 +133,72 @@ def test_macos_ipv6_host_exclusion_preserves_proxy_routing(monkeypatch):
     # The actual pinned HTTPX constructor failed before any QQ request.
     with httpx.Client():
         pass
+
+
+@pytest.mark.asyncio
+async def test_navigation_uses_titles_and_pick_is_the_subscription(tmp_path: Path):
+    client = FakeAppServer()
+    await client.start_thread(cwd=str(tmp_path))
+    client.threads["thread-1"]["name"] = "Desktop work"
+    gateway, state, channel = compose_zenx(tmp_path, client)
+    await gateway.start()
+    try:
+        for index, command in enumerate(("/threads", "/pick 1", "/status", "/help")):
+            await channel.emit_message(inbound(f"nav-{index}", command))
+        rendered = "\n".join(sent_texts(channel))
+        assert "Desktop work" in rendered
+        assert "thread-1" not in rendered
+        assert "/subscribe" not in rendered
+        assert "select and receive" in rendered
+        await client.emit_agent_message(
+            "thread-1", "desktop-picked", "Picked reply", item_id="picked"
+        )
+        await wait_text(channel, "Picked reply")
+        await channel.emit_message(inbound("new", "/new"))
+        await client.emit_agent_message(
+            "thread-1", "desktop-cleared", "Cleared reply", item_id="cleared"
+        )
+        await asyncio.sleep(0.03)
+        assert not any("Cleared reply" in text for text in sent_texts(channel))
+        assert client.started_threads == [{"cwd": str(tmp_path)}]
+    finally:
+        await gateway.stop()
+        await state.close()
+
+
+@pytest.mark.asyncio
+async def test_pick_numbers_follow_each_conversations_last_list(tmp_path: Path):
+    client = FakeAppServer()
+    for _ in range(2):
+        await client.start_thread(cwd=str(tmp_path))
+    client.threads["thread-1"]["name"] = "First"
+    client.threads["thread-2"]["name"] = "Second"
+    client.threads = dict(reversed(list(client.threads.items())))
+    gateway, state, channel = compose_zenx(tmp_path, client)
+    await gateway.start()
+    try:
+        await channel.emit_message(inbound("stale", "/pick 1", conversation_id="a"))
+        assert any("Use /threads first" in t for t in sent_texts(channel))
+        await channel.emit_message(inbound("list-a", "/threads", conversation_id="a"))
+        # Change server ordering after A saw its list. A's number must stay stable.
+        client.threads = dict(reversed(list(client.threads.items())))
+        await channel.emit_message(inbound("list-b", "/threads", conversation_id="b"))
+        await channel.emit_message(inbound("pick-a", "/pick 1", conversation_id="a"))
+        await channel.emit_message(inbound("pick-b", "/pick 1", conversation_id="b"))
+        await channel.emit_message(inbound("input-a", "A input", conversation_id="a"))
+        await channel.emit_message(inbound("input-b", "B input", conversation_id="b"))
+        assert [(t[0], t[1]) for t in client.started_turns] == [
+            ("thread-2", "A input"),
+            ("thread-1", "B input"),
+        ]
+        await channel.emit_message(inbound("refresh-a", "/threads", conversation_id="a"))
+        await channel.emit_message(inbound("refresh-pick-a", "/pick 1", conversation_id="a"))
+        await channel.emit_message(inbound("bad-pick", "/pick 99", conversation_id="a"))
+        assert any("Invalid thread number" in t for t in sent_texts(channel))
+        await channel.emit_message(
+            inbound("input-refreshed", "Refreshed input", conversation_id="a")
+        )
+        assert client.started_turns[-1][:2] == ("thread-1", "Refreshed input")
+    finally:
+        await gateway.stop()
+        await state.close()
