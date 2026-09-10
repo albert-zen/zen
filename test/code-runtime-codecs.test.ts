@@ -179,7 +179,7 @@ test("codec functions, instances, byte arrays and failures cannot expose host co
     }
     text([typeof process, typeof require, typeof Buffer, typeof fetch, typeof URL, typeof Blob, typeof crypto]);
   `),
-    '["undefined","undefined","undefined","undefined","undefined","undefined","undefined"]',
+    '["undefined","undefined","undefined","undefined","function","undefined","object"]',
   );
 });
 

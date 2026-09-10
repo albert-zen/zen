@@ -423,6 +423,11 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   每个 decoder 的原生回调仅保存在 guest 私有字段中，随实例一起回收，不进入宿主强引用注册表；
   不向用户代码返回 Host 函数、构造器或 I/O。import.meta 明确报错。
   工具失败和未知名称以非零 exitCode 返回，序列化或 bridge 错误仍可能抛出；不承诺 never throws。
+- guest 同样提供 URL、URLSearchParams 与 crypto.randomUUID；URL 解析和参数操作复用原生实现，
+  guest 私有回调持有实例及关联 searchParams，不建立宿主强引用注册表，不暴露 Node、网络或其他 crypto API。
+- 代码诊断从异常栈提取用户模块的行列号及最多 160 字符的单行片段，不输出内部栈。
+  V8 模块编译失败且未提供位置时，Acorn 仅辅助定位；静态导入拒绝同样定位声明。
+  执行接受性仍由 V8 决定，无法确定位置时保留原消息，不猜测位置或新增 journal 状态。
 - store 的 key 为 1–160 字符，JSON 单值最多 256 KiB、线程最多 128 keys/2 MiB；Host 串行
   校验并由 AgentRuntime 追加 code_state（父 callId、key、value）。程序完成前等待已发起写入提交，
   已提交写入不随后续程序失败回滚。load 使用执行开始时的已提交快照加本程序写入，普通 globals 每次 fresh。

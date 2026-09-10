@@ -1,5 +1,11 @@
 import { createContext, Script, SourceTextModule } from "node:vm";
 import { type MessagePort, workerData } from "node:worker_threads";
+import { installCodeWebGlobals } from "./code-runtime-web.js";
+import {
+  formatCodeDiagnostic,
+  formatCodeImportDiagnostic,
+  formatCodeSyntaxDiagnostic,
+} from "./code-runtime-diagnostics.js";
 
 interface WorkerInput {
   code: string;
@@ -68,7 +74,7 @@ interface GuestControl {
   error(message: string): Error;
 }
 const bootstrap = new Script(String.raw`
-((bridge, codecBridge, createDecoderBridge, configuration) => {
+((bridge, codecBridge, createDecoderBridge, diagnose, configuration) => {
   const { Object, Array, Number, String, JSON, Reflect, Map, Set, Promise, Error, TypeError, RangeError, Math, Uint8Array, ArrayBuffer, DataView } = globalThis;
   // A guest toJSON on an intrinsic prototype must not rewrite bridge envelopes.
   Object.freeze(Object.prototype);
@@ -76,6 +82,12 @@ const bootstrap = new Script(String.raw`
   const parse = JSON.parse;
   const stringify = JSON.stringify;
   const config = parse(configuration);
+  const describeFailure = error => {
+    let message = 'JavaScript execution failed', stack = '';
+    try { message = String(error?.message ?? error); } catch {}
+    try { if (typeof error?.stack === 'string') stack = error.stack; } catch {}
+    return diagnose(message, stack);
+  };
   // Codec callbacks accept/return primitives, never host objects or errors.
   // Recreate results and failures here so no host constructor reaches the guest.
   const unpackCodec = packet => {
@@ -370,8 +382,8 @@ const bootstrap = new Script(String.raw`
         timers.delete(message.id);
         if (callback) {
           try {
-            Promise.resolve(callback()).catch(error => fail(String(error?.message ?? error)));
-          } catch (error) { if (error !== exitSignal) fail(String(error?.message ?? error)); }
+            Promise.resolve(callback()).catch(error => fail(describeFailure(error)));
+          } catch (error) { if (error !== exitSignal) fail(describeFailure(error)); }
         }
         return;
       }
@@ -391,10 +403,12 @@ const bootstrap = new Script(String.raw`
   bridge: (message: string) => string | undefined,
   codecBridge: (operation: string, value: string, capacity?: number) => string,
   decoderFactory: (configuration: string) => DecoderBridge,
+  diagnose: (message: string, stack: string) => string,
   configuration: string,
 ) => GuestControl;
 
 let guest: GuestControl;
+let compiling = true;
 try {
   guest = bootstrap(
     (encoded) => {
@@ -451,6 +465,7 @@ try {
       }
     },
     createDecoderBridge,
+    (message, stack) => formatCodeDiagnostic(input.code, message, stack),
     JSON.stringify({
       maxTextBytes: input.maxTextBytes,
       maxStateValueBytes: input.maxStateValueBytes,
@@ -462,6 +477,7 @@ try {
       storedValues: input.storedValues,
     }),
   );
+  installCodeWebGlobals(context);
   port.on("message", (encoded: unknown) => {
     if (typeof encoded === "string") guest.receive(encoded);
   });
@@ -479,8 +495,15 @@ try {
       );
     },
   });
-  await module.link(() => {
-    throw new Error("Imports are unavailable in run_code; use tools instead");
+  compiling = false;
+  await module.link((specifier) => {
+    throw new Error(
+      formatCodeImportDiagnostic(
+        input.code,
+        specifier,
+        "Imports are unavailable in run_code; use tools instead",
+      ),
+    );
   });
   await module.evaluate();
   guest.finish();
@@ -490,6 +513,16 @@ try {
     message = String((error as { message?: unknown })?.message ?? error);
   } catch {
     /* Guest error formatting may itself throw. */
+  }
+  if (compiling) message = formatCodeSyntaxDiagnostic(input.code, message);
+  else {
+    try {
+      const stack = (error as { stack?: unknown })?.stack;
+      if (typeof stack === "string")
+        message = formatCodeDiagnostic(input.code, message, stack);
+    } catch {
+      /* Preserve the message when a guest stack getter throws. */
+    }
   }
   if (guest!) guest.fail(message);
   else

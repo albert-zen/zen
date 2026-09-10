@@ -332,7 +332,7 @@ test("wrapper streams once and resolves partial media after execution failure", 
       cwd: "/tmp",
       signal: new AbortController().signal,
       arguments: {
-        code: `text('partial'); image('descriptor'); throw new Error('broken');`,
+        code: `text('partial');\nimage('descriptor');\nthrow new Error('broken');`,
       },
       taskContext: { onOutput: (value) => deltas.push(value) },
     },
@@ -341,6 +341,7 @@ test("wrapper streams once and resolves partial media after execution failure", 
   assert.deepEqual(deltas, ["partial"]);
   assert.equal(result.exitCode, 1);
   assert.equal(result.output.includes("partial"), false);
+  assert.match(result.output, /run_code:3:7/);
   assert.deepEqual(result.modelContent, [
     { type: "text", text: "media fallback" },
   ]);
