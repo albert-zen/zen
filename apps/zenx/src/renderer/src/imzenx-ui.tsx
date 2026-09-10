@@ -284,7 +284,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
           <Icon name="compose" size={18} />
           <p>
             直接发消息，即可新建会话。
-            <span>已有会话？先查看列表，再订阅。</span>
+            <span>已有会话？先查看列表，再选择。</span>
           </p>
         </div>
         <dl className="imzenx-commands">
@@ -297,16 +297,16 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
           <div>
             <dt>
               <code>
-                /subscribe <span>编号或 ID</span>
+                /pick <span>列表序号</span>
               </code>
             </dt>
-            <dd>关联会话，双端接着聊</dd>
+            <dd>选择会话并接收回复</dd>
           </div>
           <div>
             <dt>
-              <code>/unsubscribe</code>
+              <code>/new</code>
             </dt>
-            <dd>取消当前订阅</dd>
+            <dd>清除选择，下条消息新建会话</dd>
           </div>
         </dl>
       </section>

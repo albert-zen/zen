@@ -122,7 +122,7 @@ export class ImZenXRuntime {
       ...(this.#error === undefined ? {} : { error: this.#error }),
       configuration: this.#config ?? null,
       subscriptions:
-        "One selected Thread per IM conversation. /subscribe <id> or /pick selects it; /unsubscribe removes it. Bindings survive restart.",
+        "One selected Thread per IM conversation. Use /threads then /pick <number> to select and receive replies; /new clears selection. Bindings survive restart; list again before using a number.",
     };
   }
 

@@ -11,7 +11,7 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "IMZenX connects explicitly configured IM channels to this ZenX Host. Use status to inspect it. Configure only with user-supplied private channel configuration and a Python executable with the pinned SDK. In IM, /threads and /subscribe <thread> select and persist one shared Thread per conversation; /unsubscribe clears it. Desktop replies on a subscribed Thread are delivered to IM. Never put bot credentials in tool arguments.",
+  "mainDocument": "IMZenX connects explicitly configured IM channels to this ZenX Host. Use status to inspect it. Configure only with user-supplied private channel configuration and a Python executable with the pinned SDK. In IM, /threads lists titles and numbers; /pick <number> selects one shared Thread and receives its replies in this conversation. Numbers refer to this conversation's last displayed list; refresh replaces it and after restart run /threads again. /new clears selection; the next ordinary message starts a new Thread. /subscribe and /unsubscribe remain select/clear aliases. Desktop replies on a subscribed Thread are delivered to IM. Never put bot credentials in tool arguments.",
   "storageVersion": 1,
   "provider": {
     "id": "imzenx-sdk",

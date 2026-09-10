@@ -172,8 +172,10 @@ or claimed as completed by the repository test suite.
 
 IMZenX packages this same Python source and pinned dependency inside its
 first-party npm tarball. `create_gateway(..., persistent_subscriptions=True)`
-uses SDK SQLite bindings and projection repositories and enables `/subscribe`
-and `/unsubscribe`; standalone IMZen keeps its existing in-memory binding behavior.
+uses SDK SQLite bindings and projection repositories. `/threads` followed by
+`/pick <number>` selects a Thread and receives its replies; `/new` clears selection.
+Legacy `/subscribe` and `/unsubscribe` remain aliases. Standalone IMZen keeps its
+existing in-memory binding behavior.
 The product App Server client drains at most 1,000 native Thread summaries for
 SDK-requested updated-time sorting and search. It uses plain `thread/resume`
 for snapshot-plus-live socket observation because ZAS `thread/read` alone does
