@@ -1787,6 +1787,7 @@ select:focus-visible {
   color: var(--danger);
 }
 .trace-detail {
+  min-width: 0;
   margin: 0 6px 3px 23px;
   padding: 7px 9px;
   overflow-wrap: anywhere;
