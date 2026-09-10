@@ -347,7 +347,7 @@ export function renderToolOutput(capture: ToolOutputCaptureMetadata): string {
   ].join("\n");
 }
 
-function utf8Prefix(value: Buffer, limit: number): Buffer {
+export function utf8Prefix(value: Buffer, limit: number): Buffer {
   let end = Math.min(value.length, limit);
   while (end > Math.max(0, Math.min(value.length, limit) - 4)) {
     const candidate = value.subarray(0, end);

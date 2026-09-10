@@ -3,7 +3,6 @@ import { validateUserInput, type UserInput } from "./item.js";
 import {
   type ToolOutputSpool,
   DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES,
-  renderToolOutput,
 } from "./tool-output-spool.js";
 import {
   attachToolOutputCapture,
@@ -522,24 +521,23 @@ class Task {
         await window.discard();
         return result;
       }
+      let sourceTruncated = result?.sourceTruncated ?? false;
       if (result !== undefined) {
         const originalCapture = capturedToolOutput(result);
-        window.write(
-          (originalCapture === undefined
-            ? result.output
-            : renderToolOutput(originalCapture)) +
-            (toolOutputSuffix(result) ?? ""),
-        );
+        if (originalCapture === undefined) window.write(result.output);
+        else
+          sourceTruncated =
+            (await window.appendCapture(originalCapture)) || sourceTruncated;
       }
+      let diagnostic = "";
       if (this.#error !== undefined && !this.#diagnosticReported) {
         this.#diagnosticReported = true;
-        window.write(
+        diagnostic =
           this.#error instanceof Error
             ? this.#error.message
-            : String(this.#error),
-        );
+            : String(this.#error);
       }
-      const capture = await window.finish(result?.sourceTruncated ?? false);
+      const capture = await window.finish(sourceTruncated);
       if (quiet && result !== undefined && !window.hasOutput) return result;
       if (quiet && result !== undefined) {
         return attachToolOutputCapture(
@@ -548,19 +546,26 @@ class Task {
         );
       }
       this.yielded = true;
-      return this.#receipt(status, capture, result, modelContent);
+      return this.#receipt(status, capture, result, modelContent, diagnostic);
     } finally {
       release();
     }
   }
   snapshot(output: string): ToolExecutionResult {
-    return this.#receipt(this.status, { output });
+    return this.#receipt(
+      this.status,
+      { output: "" },
+      undefined,
+      undefined,
+      output,
+    );
   }
   #receipt(
     status: Status,
     capture: Awaited<ReturnType<ToolOutputWindow["finish"]>>,
     result?: ToolExecutionResult,
     modelContent = result?.modelContent,
+    diagnostic = "",
   ): ToolExecutionResult {
     const terminal = ["completed", "failed", "timed_out", "cancelled"].includes(
       status,
@@ -611,7 +616,9 @@ class Task {
           : { sourceTruncated: result.sourceTruncated }),
       },
       capture.metadata,
-      control,
+      diagnostic +
+        (result === undefined ? "" : (toolOutputSuffix(result) ?? "")) +
+        control,
     );
   }
 

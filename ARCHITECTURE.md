@@ -435,6 +435,7 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
 - 图片和 WAV/MP3 音频复用内容寻址 AttachmentStore；每次请求按模型能力投递原生媒体或文本引用，
   未知能力按文本处理，Provider 不支持的 wire 模态进一步降级。canonical 内容保持原样。
 - `programToolResult` 是 nested JSON bridge 的程序数据投影：完整原文最多 1 MiB，与模型预览预算分开；大 capture 从宿主 spool 有界读回并核对长度/hash。超过程序上限、源截断或读回失败时 output=null，独立 outputInfo 提供原因、捕获字节数与可用文件引用，绝不注入回执或半截原文。控制后缀进入 diagnostic，structuredContent 不变。模型投影继续使用既有 receipt。
+- 无 spool 的窗口也携带机器可读原文/截断元数据，控制后缀及快照诊断始终独立保存。任务窗口合并已有 capture 时有界读取原始字节并核对完整性，不能把模型 receipt 再作为原文捕获。
 - direct、nested 与 outer `run_code` 的 text result 共用 Tool Output Spool。默认模型
   preview 只保留 4 KiB head 与 4 KiB tail；完整已捕获输出以 POSIX 0700 directory /
   0600 file 或 Windows current-user private temp/ACL 暂存，receipt 记录 captured bytes、SHA-256、绝对路径和 temporary lifetime，

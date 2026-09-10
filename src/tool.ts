@@ -5,6 +5,8 @@ import {
   type ToolTaskOptions,
   type ToolTaskPolicy,
 } from "./tool-task.js";
+import { createHash } from "node:crypto";
+import { open } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { sandboxCommand } from "./sandbox.js";
 import type { SandboxMode } from "./item.js";
@@ -19,6 +21,7 @@ import {
 import type { ModelTool } from "./model.js";
 import {
   DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES,
+  utf8Prefix,
   type ToolOutputCaptureMetadata,
   type ToolOutputSpool,
 } from "./tool-output-spool.js";
@@ -1058,11 +1061,65 @@ export class ToolOutputWindow {
       const metadata = await this.#capture.finish({ sourceTruncated });
       return { output: metadata.output ?? "", metadata };
     }
+    const bytes = utf8Prefix(Buffer.concat(this.#chunks), this.#bytes);
+    const text = bytes.toString("utf8");
     return {
-      output: `${Buffer.concat(this.#chunks).toString("utf8")}${
-        this.#truncated || sourceTruncated ? "\n[output truncated by Zen]" : ""
-      }`,
+      output:
+        text +
+        (this.#truncated || sourceTruncated
+          ? "\n[output truncated by Zen]"
+          : ""),
+      metadata: inlineToolOutputCapture(
+        text,
+        this.#truncated || sourceTruncated,
+      ),
     };
+  }
+
+  /** Append original capture bytes, never its model-facing receipt. */
+  async appendCapture(capture: ToolOutputCaptureMetadata): Promise<boolean> {
+    if (capture.output !== undefined) {
+      this.write(capture.output);
+      return capture.sourceTruncated;
+    }
+    if (capture.path === undefined) {
+      this.write(capture.head);
+      return true;
+    }
+    try {
+      const file = await open(capture.path, "r");
+      try {
+        const hash = createHash("sha256");
+        const decoder = new StringDecoder("utf8");
+        const buffer = Buffer.alloc(64 * 1024);
+        let offset = 0;
+        while (offset < capture.capturedBytes) {
+          const { bytesRead } = await file.read(
+            buffer,
+            0,
+            Math.min(buffer.length, capture.capturedBytes - offset),
+            offset,
+          );
+          if (bytesRead === 0) break;
+          const chunk = buffer.subarray(0, bytesRead);
+          hash.update(chunk);
+          this.write(decoder.write(chunk));
+          offset += bytesRead;
+        }
+        this.write(decoder.end());
+        const extra = await file.read(buffer, 0, 1, offset);
+        return (
+          capture.sourceTruncated ||
+          offset !== capture.capturedBytes ||
+          extra.bytesRead !== 0 ||
+          hash.digest("hex") !== capture.sha256
+        );
+      } finally {
+        await file.close();
+      }
+    } catch {
+      return true;
+    }
   }
 
   async discard(): Promise<void> {
@@ -1077,11 +1134,28 @@ export function attachToolOutputCapture(
 ): ToolExecutionResult {
   return {
     ...result,
-    output: metadata === undefined ? result.output + suffix : result.output,
-    ...(metadata === undefined ? {} : { [TOOL_OUTPUT_CAPTURE]: metadata }),
-    ...(metadata === undefined || suffix.length === 0
-      ? {}
-      : { [TOOL_OUTPUT_SUFFIX]: suffix }),
+    output: result.output + suffix,
+    [TOOL_OUTPUT_CAPTURE]:
+      metadata ??
+      capturedToolOutput(result) ??
+      inlineToolOutputCapture(result.output, result.sourceTruncated ?? false),
+    ...(suffix.length === 0 ? {} : { [TOOL_OUTPUT_SUFFIX]: suffix }),
+  };
+}
+
+function inlineToolOutputCapture(
+  output: string,
+  sourceTruncated: boolean,
+): ToolOutputCaptureMetadata {
+  const bytes = Buffer.from(output);
+  return {
+    capturedBytes: bytes.length,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    lifetime: "host_instance",
+    sourceTruncated,
+    head: output,
+    tail: "",
+    ...(sourceTruncated ? {} : { output }),
   };
 }
 
