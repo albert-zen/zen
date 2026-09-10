@@ -35,10 +35,19 @@ export async function prepareRtkResource({
   if (platform !== "darwin" || arch !== "arm64") return false;
   const destination = path.join(resourcesDirectory, "rtk");
   const binary = path.join(destination, "rtk");
+  let cached = false;
   try {
-    if (hash(await readFile(binary)) === RTK_BINARY_SHA256) return true;
+    cached = hash(await readFile(binary)) === RTK_BINARY_SHA256;
   } catch {
     /* Missing build resource; fetch the pinned release below. */
+  }
+  if (cached) {
+    await chmod(binary, 0o755);
+    await copyFile(
+      fileURLToPath(new URL("../resources/rtk-NOTICE.txt", import.meta.url)),
+      path.join(destination, "NOTICE.txt"),
+    );
+    return true;
   }
   await mkdir(resourcesDirectory, { recursive: true });
   const scratch = await mkdtemp(path.join(resourcesDirectory, ".rtk-build-"));
