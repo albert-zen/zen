@@ -97,7 +97,7 @@ export function createRunCodeModelTool(
       "Await every tool call; unfinished or unobserved calls fail the program. await yield_control() yields output while execution continues. Timers alone do not keep a finished program alive.",
       'image/audio accept base64 data URIs, MCP blocks (e.g. image({type:"image", mimeType:"image/png", data:"<base64>"})), or current-thread attachment refs. Local paths use tools.view_image; its images return automatically. Unsupported modalities become text references.',
       "store/load retain bounded JSON values within this thread: keys 1–160 characters, 256 KiB per value, 128 keys/2 MiB total. Ordinary variables are fresh each run; missing keys return undefined. Writes already committed survive later program failure.",
-      "ALL_TOOLS contains name/description metadata from the same disclosed tool catalog as tools.*.",
+      "Use ALL_TOOLS (name/description) to check tool availability; the tools Proxy also returns functions for unknown names.",
       "Available tool signatures (TypeScript reference notation only; submitted code must be JavaScript):",
       "```ts",
       sdk,

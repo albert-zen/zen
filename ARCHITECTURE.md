@@ -434,6 +434,7 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   状态从完整 Items 重建，不依赖压缩后的模型消息；code_state 不直接送进模型上下文。
 - 图片和 WAV/MP3 音频复用内容寻址 AttachmentStore；每次请求按模型能力投递原生媒体或文本引用，
   未知能力按文本处理，Provider 不支持的 wire 模态进一步降级。canonical 内容保持原样。
+- nested 结果进入程序的 JSON bridge 前须将宿主 capture 元数据渲染为同一 spool receipt，并保留诊断后缀；不能只序列化空的 output 字段。
 - direct、nested 与 outer `run_code` 的 text result 共用 Tool Output Spool。默认模型
   preview 只保留 4 KiB head 与 4 KiB tail；完整已捕获输出以 POSIX 0700 directory /
   0600 file 或 Windows current-user private temp/ACL 暂存，receipt 记录 captured bytes、SHA-256、绝对路径和 temporary lifetime，
