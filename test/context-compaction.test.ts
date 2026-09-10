@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import os from "node:os";
 
 import { AppServerError, ZenAppServer } from "../src/app-server.js";
 import {
@@ -2174,7 +2175,7 @@ function createServer(options: {
     ]),
     threadMetadata: new InMemoryThreadMetadataStore(),
     defaults: {
-      cwd: process.cwd(),
+      cwd: os.tmpdir(),
       providerProfileId: options.model.provider,
       modelId: modelCatalog.defaultModel().id,
       reasoningEffort:

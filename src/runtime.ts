@@ -1,3 +1,4 @@
+import type { WorkspaceInstructionFile } from "./workspace-instructions.js";
 import { randomUUID } from "node:crypto";
 import { codeExecutionOptions } from "./code-options.js";
 import { codeStateFromItems, validateCodeStateWrite } from "./code-state.js";
@@ -134,6 +135,7 @@ export type RuntimeEvent =
 
 export interface RunTurnOptions {
   thread: Thread;
+  workspaceInstructions?: WorkspaceInstructionFile[];
   turnId?: string;
   input: UserInput;
   clientId?: string;
@@ -254,6 +256,9 @@ export class AgentRuntime {
       turnId,
       createdAt: this.#now(),
       type: "turn_started",
+      ...(options.workspaceInstructions === undefined
+        ? {}
+        : { workspaceInstructions: options.workspaceInstructions }),
       selection: {
         providerProfileId: options.configuration.providerProfileId,
         modelId: options.configuration.model,

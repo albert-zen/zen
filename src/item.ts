@@ -1,3 +1,4 @@
+import type { WorkspaceInstructionFile } from "./workspace-instructions.js";
 import {
   MAX_AUDIO_BYTES,
   MAX_IMAGE_BYTES,
@@ -54,6 +55,8 @@ export interface ItemBase {
 interface ThreadMetadataItemBase extends ItemBase {
   type: "thread_metadata";
   cwd: string;
+  /** Only new Threads opt in; existing journals are never retroactively loaded. */
+  workspaceInstructionPolicy?: "repo-root-on-first-message";
   sandbox: SandboxMode;
   approvalPolicy: ApprovalPolicy;
 }
@@ -115,6 +118,8 @@ export type ThreadConfigurationChangedItem =
 export interface TurnStartedItem extends ItemBase {
   type: "turn_started";
   turnId: string;
+  /** First-message repository snapshot; absent on later and historical Turns. */
+  workspaceInstructions?: WorkspaceInstructionFile[];
   /** Frozen provider selection used by this Turn; absent on legacy Items. */
   selection?: CanonicalProviderSelection;
 }
@@ -433,6 +438,13 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
     case "thread_metadata":
       requireNoTurnId(item);
       requireNonEmptyString(item.cwd, "thread_metadata.cwd");
+      if (item.workspaceInstructionPolicy !== undefined) {
+        requireEnum(
+          item.workspaceInstructionPolicy,
+          ["repo-root-on-first-message"],
+          "thread_metadata.workspaceInstructionPolicy",
+        );
+      }
       requireEnum(
         item.sandbox,
         ["read-only", "workspace-write", "danger-full-access"],
@@ -580,6 +592,20 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
     }
     case "turn_started":
       requireTurnId(item, type);
+      if (item.workspaceInstructions !== undefined) {
+        if (!Array.isArray(item.workspaceInstructions)) {
+          throw new Error(
+            "turn_started.workspaceInstructions must be an array",
+          );
+        }
+        for (const entry of item.workspaceInstructions) {
+          const file = requireRecord(entry, "workspace instruction file");
+          requireNonEmptyString(file.path, "workspace instruction path");
+          if (typeof file.text !== "string") {
+            throw new Error("workspace instruction text must be a string");
+          }
+        }
+      }
       if (item.selection !== undefined) {
         validateSelection(
           requireRecord(item.selection, "turn_started.selection"),

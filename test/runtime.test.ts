@@ -101,7 +101,7 @@ function createServer(
       ? {}
       : { threadSummaryProjection: options.threadSummaryProjection }),
     defaults: {
-      cwd: process.cwd(),
+      cwd: os.tmpdir(),
       providerProfileId: model.provider,
       modelId: modelCatalog.defaultModel().id,
       reasoningEffort:

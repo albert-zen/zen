@@ -1,3 +1,7 @@
+import {
+  loadWorkspaceInstructions,
+  type WorkspaceInstructionFile,
+} from "./workspace-instructions.js";
 import { pendingQueuedMessages } from "./input-queue.js";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -488,6 +492,7 @@ export class ZenAppServer {
         threadId,
         createdAt: this.#now(),
         type: "thread_metadata",
+        workspaceInstructionPolicy: "repo-root-on-first-message",
         cwd: path.resolve(input.cwd ?? defaults.cwd),
         ...selection,
         sandbox: input.sandbox ?? defaults.sandbox,
@@ -936,9 +941,28 @@ export class ZenAppServer {
         configuration,
       );
       const resolved = admitted.provider;
+      let workspaceInstructions: WorkspaceInstructionFile[] | undefined;
       try {
+        const metadata = thread.items.find(
+          (item) => item.type === "thread_metadata",
+        );
+        if (
+          metadata?.workspaceInstructionPolicy ===
+            "repo-root-on-first-message" &&
+          !thread.items.some(
+            (item) =>
+              item.type === "turn_started" || item.type === "user_message",
+          )
+        ) {
+          workspaceInstructions = await loadWorkspaceInstructions(
+            configuration.cwd,
+          );
+        }
         await this.#validateInput(input, resolved.model.inputModalities);
         await this.#compactBeforeTurnIfNeeded({
+          ...(workspaceInstructions === undefined
+            ? {}
+            : { workspaceInstructions }),
           thread,
           turnId,
           input,
@@ -960,6 +984,9 @@ export class ZenAppServer {
           void (async () => {
             try {
               await this.#runtime.runTurn({
+                ...(workspaceInstructions === undefined
+                  ? {}
+                  : { workspaceInstructions }),
                 thread,
                 turnId,
                 input,
@@ -1543,6 +1570,7 @@ export class ZenAppServer {
   }
 
   async #compactBeforeTurnIfNeeded(options: {
+    workspaceInstructions?: WorkspaceInstructionFile[];
     thread: Thread;
     turnId: string;
     input: UserInput;
@@ -1555,6 +1583,9 @@ export class ZenAppServer {
     const previewItems: CanonicalItem[] = [
       ...options.thread.items,
       {
+        ...(options.workspaceInstructions === undefined
+          ? {}
+          : { workspaceInstructions: options.workspaceInstructions }),
         id: `${options.turnId}:context-preview-started`,
         threadId: options.thread.id,
         turnId: options.turnId,

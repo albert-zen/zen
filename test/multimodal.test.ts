@@ -798,7 +798,7 @@ function createServer(options: {
     ]),
     threadMetadata: new InMemoryThreadMetadataStore(),
     defaults: {
-      cwd: options.cwd ?? process.cwd(),
+      cwd: options.cwd ?? os.tmpdir(),
       providerProfileId: model.provider,
       modelId: "image-model",
       reasoningEffort: "medium",

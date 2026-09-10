@@ -127,6 +127,32 @@ export function compileModelMessages(
   items: readonly CanonicalItem[],
   targetSelection?: CanonicalProviderSelection,
 ): ModelMessage[] {
+  const snapshot = items.find(
+    (item) =>
+      item.type === "turn_started" && item.workspaceInstructions !== undefined,
+  );
+  const files =
+    snapshot?.type === "turn_started"
+      ? snapshot.workspaceInstructions
+      : undefined;
+  const messages = compileConversationMessages(items, targetSelection);
+  if (files === undefined || files.length === 0) return messages;
+  return [
+    {
+      role: "user",
+      text: [
+        "Repository instructions captured when this Thread received its first message. These apply within the repository identified by the source path; direct user requests take precedence. This snapshot is fixed for this Thread. Read any additional local instructions yourself when needed.",
+        ...files.map((file) => `AGENTS.md source: ${file.path}\n${file.text}`),
+      ].join("\n\n"),
+    },
+    ...messages,
+  ];
+}
+
+function compileConversationMessages(
+  items: readonly CanonicalItem[],
+  targetSelection?: CanonicalProviderSelection,
+): ModelMessage[] {
   const turnSelections = new Map<string, CanonicalProviderSelection>();
   for (const item of items) {
     if (item.type === "turn_started" && item.selection !== undefined) {
