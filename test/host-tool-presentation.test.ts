@@ -304,3 +304,41 @@ test("switching to direct keeps canonical run_code history replayable", async ()
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("RTK configuration changes wait for the next Host launch and reverting clears pending restart", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-rtk-restart-"));
+  const base = {
+    cwd: directory,
+    dataDirectory: directory,
+    model: "fake",
+    models: ["fake"],
+    approvalPolicy: "never" as const,
+    provider: { type: "fake" as const },
+    toolPresentation: "direct" as const,
+  };
+  const host = createHostedAppServer(base);
+  try {
+    const candidate = await host.prepareConfiguration(
+      {
+        ...base,
+        experimentalRtk: {
+          executable: path.join(directory, "rtk"),
+          sha256:
+            "8f79804b15fdedec85cf1f7a33b8a1c28350ef46f5595c5da932a8a64db03951",
+        },
+      },
+      1,
+    );
+    assert.deepEqual(candidate.pendingRestart, ["experimentalRtk"]);
+    const current = await host.publishConfiguration(candidate);
+    assert.deepEqual(current.pendingRestart, ["experimentalRtk"]);
+    const revert = await host.prepareConfiguration(base, 2);
+    assert.deepEqual(
+      (await host.publishConfiguration(revert)).pendingRestart,
+      [],
+    );
+  } finally {
+    await host.closeHostResources();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

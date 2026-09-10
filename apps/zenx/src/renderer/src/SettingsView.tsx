@@ -1,3 +1,4 @@
+import { RtkSettingsCard } from "./RtkSettingsCard.js";
 import { useEffect, useRef, useState } from "react";
 import { normalizeContextCompactionConfig } from "../../../../../src/context-compaction.js";
 import { ContextCompactionPanel } from "./ContextCompactionPanel.js";
@@ -130,13 +131,19 @@ export function SettingsView({
         titleModel: draft.titleModel,
         approvalPolicy: draft.approvalPolicy,
         toolPresentation: draft.toolPresentation ?? "both",
+        experimentalRtkEnabled: draft.experimentalRtkEnabled === true,
         composerSendMode: draft.composerSendMode ?? "queue",
         maxToolRounds: draft.maxToolRounds,
         contextCompaction: draft.contextCompaction,
       });
       setSettings(value);
       setDraft(value.profile);
-      setStatus(configurationSaveToast(value));
+      setStatus(
+        draft.experimentalRtkEnabled !==
+          settings?.profile.experimentalRtkEnabled
+          ? null
+          : configurationSaveToast(value),
+      );
     } catch (reason) {
       setError(describeError(reason));
     } finally {
@@ -305,7 +312,17 @@ export function SettingsView({
             ) : null}
             {tab === "appearance" ? <AppearancePanel /> : null}
             {tab === "general" ? (
-              <GeneralPanel draft={draft} setDraft={setDraft} />
+              <>
+                <GeneralPanel draft={draft} setDraft={setDraft} />
+                <RtkSettingsCard
+                  draft={draft}
+                  settings={settings}
+                  busy={busy !== null}
+                  onChange={(experimentalRtkEnabled) =>
+                    setDraft({ ...draft, experimentalRtkEnabled })
+                  }
+                />
+              </>
             ) : null}
             {tab === "compaction" ? (
               <ContextCompactionPanel
@@ -377,7 +394,14 @@ export function SettingsView({
             {settings.configuration?.pendingRestart.length ? (
               <div className="settings-note" role="status">
                 <p>
-                  Saved · {settings.configuration.pendingRestart.join(", ")}{" "}
+                  Saved ·{" "}
+                  {settings.configuration.pendingRestart
+                    .map((domain) =>
+                      domain === "experimentalRtk"
+                        ? "Compact shell output"
+                        : domain,
+                    )
+                    .join(", ")}{" "}
                   takes effect next launch
                 </p>
                 <button
@@ -393,7 +417,13 @@ export function SettingsView({
                       .then((value) => {
                         setSettings(value);
                         setDraft(value.profile);
-                        setStatus(configurationSaveToast(value));
+                        setStatus(
+                          settings.configuration?.pendingRestart.includes(
+                            "experimentalRtk",
+                          )
+                            ? null
+                            : configurationSaveToast(value),
+                        );
                       })
                       .catch((reason) => setError(describeError(reason)))
                       .finally(() => setBusy(null));

@@ -1,3 +1,4 @@
+import { RtkShellOutputFilter } from "../../../src/shell-output-filter.js";
 import { createModelDiagnosticWriter } from "./model-diagnostics.js";
 import { randomUUID } from "node:crypto";
 import { createMediaOutputConverter } from "../../../src/model-content.js";
@@ -105,6 +106,8 @@ export interface ZenHostOptions {
   maxToolRounds?: number;
   /** Host-owned model-facing tool entry points; defaults to both. */
   toolPresentation?: ToolPresentation;
+  /** Application-owned pinned resource; changes take effect at next Host launch. */
+  experimentalRtk?: { executable: string; sha256: string };
   /** Host-owned containment limits and exact packaged Worker entry. */
   codeRuntimeOptions?: Partial<CodeRuntimeLimits> & { workerUrl?: URL };
   /** Host-owned tool body limit shared by direct and nested calls. */
@@ -213,6 +216,13 @@ export function createHostedAppServer(
       ? new ShellToolRuntime({
           blockedEnvironmentVariables: options.secretEnvironmentVariables ?? [],
           toolOutputSpool,
+          ...(options.experimentalRtk === undefined
+            ? {}
+            : {
+                experimentalOutputFilter: new RtkShellOutputFilter(
+                  options.experimentalRtk,
+                ),
+              }),
         })
       : undefined;
   const toolEnvironment =
@@ -763,6 +773,7 @@ const RESTART_CONFIGURATION_DOMAINS = [
   "dataDirectory",
   "secretEnvironmentVariables",
   "toolPresentation",
+  "experimentalRtk",
   "codeRuntimeOptions",
   "toolOutputSpoolOptions",
 ] as const;

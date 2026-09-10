@@ -371,6 +371,7 @@ async function handleCommand(command: HostCommand): Promise<void> {
   toolOutputSpool = new ToolOutputSpool(command.config.toolOutputSpoolOptions);
   const toolComposition = createZenXHostToolEnvironment({
     capabilities: command.capabilities,
+    experimentalRtk: command.config.experimentalRtk,
     blockedEnvironmentVariables: command.config.secretEnvironmentVariables,
     send,
     toolOutputSpool,

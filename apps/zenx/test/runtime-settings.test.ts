@@ -402,3 +402,22 @@ test("plugin maintenance includes queued mutations and blocks new mutations at t
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("unavailable RTK enablement fails before persistence while ordinary settings remain usable", async () => {
+  const { service, close } = await fixture();
+  try {
+    const initial = await service.publicSettings();
+    assert.equal(initial.rtk?.available, false);
+    assert.equal(initial.profile.experimentalRtkEnabled, false);
+    await assert.rejects(
+      service.save({ ...initial.profile, experimentalRtkEnabled: true }),
+      /RTK|Apple silicon/,
+    );
+    assert.deepEqual((await service.publicSettings()).profile, initial.profile);
+    assert.equal((await service.hostConfig()).experimentalRtk, undefined);
+    await service.save({ ...initial.profile, maxToolRounds: 3 });
+    assert.equal((await service.publicSettings()).profile.maxToolRounds, 3);
+  } finally {
+    await close();
+  }
+});

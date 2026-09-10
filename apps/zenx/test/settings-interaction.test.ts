@@ -2033,3 +2033,91 @@ for (const completeAfterNavigation of [false, true]) {
     }
   });
 }
+
+test("RTK toggle saves a draft, reports pending restart, and preserves it after restart rejection", async () => {
+  const initialSettings = { ...settings, rtk: { available: true } };
+  const saves: ZenXSettingsUpdate[] = [];
+  const harness = await mountSettings("general", {
+    initialSettings,
+    save: async (update) => {
+      saves.push(update);
+      return {
+        ...initialSettings,
+        profile: { ...initialSettings.profile, ...update },
+        configuration: {
+          status: "pending-restart",
+          revision: 1,
+          pendingRestart: ["experimentalRtk"],
+        },
+      };
+    },
+    safeRestart: async () => {
+      throw new Error("Tasks are still running");
+    },
+  });
+  try {
+    await waitFor(() =>
+      document.querySelector('[aria-label="Compact shell output with RTK"]'),
+    );
+    const toggle = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Compact shell output with RTK"]',
+    )!;
+    assert.equal(toggle.getAttribute("aria-checked"), "false");
+    await click(toggle);
+    assert.equal(saves.length, 0);
+    assert.match(
+      document.getElementById("rtk-state")!.textContent!,
+      /Unsaved change/,
+    );
+    await click(exactButtonRequired("Apply"));
+    assert.equal(saves[0]?.experimentalRtkEnabled, true);
+    assert.match(
+      document.getElementById("rtk-state")!.textContent!,
+      /Restart required/,
+    );
+    await click(exactButtonRequired("Safe restart"));
+    assert.match(document.body.textContent!, /Tasks are still running/);
+    assert.equal(toggle.getAttribute("aria-checked"), "true");
+    assert.match(
+      document.getElementById("rtk-state")!.textContent!,
+      /Restart required/,
+    );
+    assert.equal(document.querySelector(".settings-toast"), null);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("unavailable RTK cannot be enabled and its saved preference can still be disabled", async () => {
+  for (const enabled of [false, true]) {
+    const harness = await mountSettings("general", {
+      initialSettings: {
+        ...settings,
+        profile: { ...settings.profile, experimentalRtkEnabled: enabled },
+        rtk: {
+          available: false,
+          reason: "Available on Apple silicon Macs only.",
+        },
+      },
+    });
+    try {
+      await waitFor(() =>
+        document.querySelector('[aria-label="Compact shell output with RTK"]'),
+      );
+      const toggle = document.querySelector<HTMLButtonElement>(
+        '[aria-label="Compact shell output with RTK"]',
+      )!;
+      assert.equal(toggle.disabled, !enabled);
+      assert.match(
+        document.getElementById("rtk-state")!.textContent!,
+        /Apple silicon/,
+      );
+      if (enabled) {
+        await click(toggle);
+        assert.equal(toggle.getAttribute("aria-checked"), "false");
+      }
+    } finally {
+      await unmount(harness);
+    }
+  }
+});

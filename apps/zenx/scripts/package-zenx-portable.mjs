@@ -1,3 +1,4 @@
+import { prepareRtkResource } from "./prepare-rtk.mjs";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
@@ -49,6 +50,9 @@ async function packageZenX(arguments_) {
         ).stdout,
       );
       await packZenXFirstPartyPlugins({ outputDirectory: resources });
+      const hasRtk = await prepareRtkResource({
+        resourcesDirectory: resources,
+      });
       const zenxPackage = JSON.parse(
         await readFile(path.join(zenx, "package.json"), "utf8"),
       );
@@ -77,6 +81,12 @@ async function packageZenX(arguments_) {
           : { icon: applicationIconForPlatform(process.platform, target) }),
         afterCopy: [
           async ({ buildPath }) => {
+            if (hasRtk)
+              await cp(
+                path.join(resources, "rtk"),
+                path.join(path.dirname(buildPath), "rtk"),
+                { recursive: true },
+              );
             await copyPackagedProviderResources({
               buildPath,
               sourceDirectory: path.join(resources, "providers"),

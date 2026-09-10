@@ -1,3 +1,5 @@
+import { inspectRtkResource, rtkExecutable } from "./rtk-resource.js";
+import { RTK_EXPERIMENT_SHA256 } from "../../../../src/shell-output-filter.js";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -244,6 +246,7 @@ export class ZenXSettingsService {
     return profile.credentialReferences?.[id] ?? id;
   }
 
+  readonly #rtkResourcesDirectory: string | undefined;
   readonly #dataDirectory: string;
   readonly #profilePath: string;
   readonly #profileStore: ZenXHostProfileStore;
@@ -269,6 +272,7 @@ export class ZenXSettingsService {
     | undefined;
 
   constructor(options: {
+    rtkResourcesDirectory?: string;
     userDataDirectory: string;
     zenDataDirectory: string;
     vault: ZenXCredentialVault;
@@ -282,6 +286,7 @@ export class ZenXSettingsService {
       transport: ProviderTransport | undefined,
     ) => ProviderFetch;
   }) {
+    this.#rtkResourcesDirectory = options.rtkResourcesDirectory;
     this.#dataDirectory = options.zenDataDirectory;
     this.#profilePath = path.join(
       options.userDataDirectory,
@@ -375,6 +380,7 @@ export class ZenXSettingsService {
       ...(this.#configurationResult
         ? { configuration: this.#configurationResult }
         : {}),
+      rtk: await inspectRtkResource(this.#rtkResourcesDirectory),
       profile: structuredClone(profile),
       hasApiKey: await this.#vault.hasApiKey(
         this.#credentialReference(
@@ -406,7 +412,19 @@ export class ZenXSettingsService {
     const apiKeyProfileIds = profile.providerProfiles
       .filter((candidate) => candidate.type === "openai-compatible")
       .map((candidate) => candidate.providerProfileId);
+    const rtk =
+      profile.experimentalRtkEnabled === true
+        ? await inspectRtkResource(this.#rtkResourcesDirectory)
+        : undefined;
     return {
+      ...(rtk?.available && this.#rtkResourcesDirectory !== undefined
+        ? {
+            experimentalRtk: {
+              executable: rtkExecutable(this.#rtkResourcesDirectory),
+              sha256: RTK_EXPERIMENT_SHA256,
+            },
+          }
+        : {}),
       configurationRevision: profile.revision ?? 0,
       ...hostConfigFromProfile(profile, {
         dataDirectory: this.#dataDirectory,
@@ -863,6 +881,13 @@ export class ZenXSettingsService {
     await this.#queueProfileOperation(async () => {
       this.#assertBaseRevision(settings.baseRevision);
       const current = this.#requireProfile();
+      if (
+        settings.experimentalRtkEnabled === true &&
+        current.experimentalRtkEnabled !== true
+      ) {
+        const rtk = await inspectRtkResource(this.#rtkResourcesDirectory);
+        if (!rtk.available) throw new Error(rtk.reason ?? "RTK is unavailable");
+      }
       const validated = (
         await this.#stableWorkspaceSnapshot(
           validateHostProfile({
@@ -875,6 +900,10 @@ export class ZenXSettingsService {
             titleModel: settings.titleModel,
             approvalPolicy: settings.approvalPolicy,
             toolPresentation: settings.toolPresentation ?? "both",
+            experimentalRtkEnabled:
+              settings.experimentalRtkEnabled ??
+              current.experimentalRtkEnabled ??
+              false,
             composerSendMode:
               settings.composerSendMode ?? current.composerSendMode ?? "queue",
             maxToolRounds: settings.maxToolRounds,

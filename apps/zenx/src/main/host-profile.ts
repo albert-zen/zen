@@ -66,6 +66,8 @@ export interface ZenXHostProfile {
   approvalPolicy: "always" | "never";
   /** Missing in an older v3 profile means the product default, both. */
   toolPresentation?: ToolPresentation;
+  /** Process-level opt-in; old profiles keep RTK disabled. */
+  experimentalRtkEnabled?: boolean;
   composerSendMode?: "queue" | "soft" | "hard";
   /** Omitted means tool rounds are unlimited. */
   maxToolRounds?: number;
@@ -84,6 +86,7 @@ export type ZenXSettingsUpdate = Pick<
   | "titleModel"
   | "approvalPolicy"
   | "toolPresentation"
+  | "experimentalRtkEnabled"
   | "composerSendMode"
   | "maxToolRounds"
   | "contextCompaction"
@@ -110,6 +113,7 @@ export interface ConfigurationSaveResult {
 
 export interface PublicHostSettings {
   configuration?: ConfigurationSaveResult;
+  rtk?: { available: boolean; reason?: string };
   profile: ZenXHostProfile;
   /** Credential presence for the profile referenced by defaultModel. */
   hasApiKey: boolean;
@@ -290,6 +294,11 @@ export function validateHostProfile(
   }
   const maxToolRounds = optionalMaximumToolRounds(value.maxToolRounds);
   const toolPresentation = validateToolPresentation(value.toolPresentation);
+  if (
+    value.experimentalRtkEnabled !== undefined &&
+    typeof value.experimentalRtkEnabled !== "boolean"
+  )
+    throw new Error("RTK enablement must be a boolean");
   const composerSendMode = value.composerSendMode ?? "queue";
   if (
     composerSendMode !== "queue" &&
@@ -349,6 +358,7 @@ export function validateHostProfile(
     lastUsedWorkspace,
     approvalPolicy: value.approvalPolicy,
     toolPresentation,
+    experimentalRtkEnabled: value.experimentalRtkEnabled === true,
     composerSendMode,
     ...(maxToolRounds === undefined ? {} : { maxToolRounds }),
     ...(contextCompaction === undefined ? {} : { contextCompaction }),

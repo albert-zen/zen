@@ -18,6 +18,7 @@ const profile: ZenXHostProfile = {
   version: 3,
   onboardingComplete: true,
   computerForegroundControlEnabled: false,
+  experimentalRtkEnabled: false,
   providerProfiles: [
     {
       providerProfileId: "local",
@@ -768,6 +769,26 @@ test("Agentic compaction opt-in persists, reaches Host configuration, and valida
         }),
       /agenticEnabled/u,
     );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("RTK is an explicit boolean opt-in retained through profile persistence", async () => {
+  assert.equal(validateHostProfile(profile).experimentalRtkEnabled, false);
+  assert.throws(
+    () => validateHostProfile({ ...profile, experimentalRtkEnabled: "true" }),
+    /RTK/,
+  );
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-rtk-profile-"));
+  try {
+    const store = new ZenXHostProfileStore(
+      path.join(directory, "profile.json"),
+    );
+    await store.write({ ...profile, experimentalRtkEnabled: true });
+    assert.equal((await store.readOptional())?.experimentalRtkEnabled, true);
+    await store.write({ ...profile, experimentalRtkEnabled: false });
+    assert.equal((await store.readOptional())?.experimentalRtkEnabled, false);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

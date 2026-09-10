@@ -171,6 +171,7 @@
 - **IMZen Gateway state file** — SDK SQLite repository 持久化 inbound/outbound
   幂等 claim 等可重建 bridge state，使 `side_effect_started` 在进程重启后仍不被
   重新授权；它不是 Zen Thread、transcript、queue 或 Agent state。
+- **ZenX RTK 实验设置** — General 保存默认关闭的进程级输出展示偏好，Host 只装载应用自带且平台与 hash 验证通过的固定 RTK；Apply 与安全重启复用配置 revision 机制，运行中调用及历史 Items 不受开关变化影响，缺失资源明确显示不可用。
 - **ZenXHostProfile** — ZenX 主进程用 v3 配置以稳定 `providerProfileId` 持久化多个 Provider
   连接及各自的结构化 ModelCatalog，并把默认/标题模型保存为
   `providerProfileId / modelId` 引用；workspace、审批默认值、`direct | code | both`
