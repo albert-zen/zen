@@ -922,7 +922,7 @@ export class ShellToolRuntime implements ToolRuntime {
   async execute(invocation: ToolInvocation): Promise<ToolExecutionResult> {
     invocation.signal.throwIfAborted();
     const command = invocation.arguments.command;
-    if (typeof command !== "string" || command.length === 0)
+    if (typeof command !== "string" || command.trim().length === 0)
       throw new Error("shell.command must be a non-empty string");
     const capture =
       invocation.taskContext === undefined
