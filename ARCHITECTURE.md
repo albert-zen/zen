@@ -20,6 +20,7 @@
 - **AgentRuntime** — Zen 拥有的 provider-neutral agent loop：从 ItemList 编译上下文 → 调用模型 → 通过 Tool Environment 执行工具，并把 canonical `tool_call` / `tool_result` 在内的一切事实追加为 Item。
 - **AppServer** — 按 threadId 把请求路由到 Thread、驱动 AgentRuntime、向订阅者广播 item 事件的唯一服务入口。
 - **Repository instruction snapshot** — 新Thread metadata标记repo-root-on-first-message策略，ZAS仅在其首条消息首次Turn admission定位绑定cwd所属Git仓库并读取仓库根AGENTS.md，将路径与原文作为首个turn_started.workspaceInstructions持久化；后续Turn、恢复和压缩从同一ItemList快照投影，不再读盘、不重复累积，不给旧Thread补注入。子目录cwd仍只取repo根，不读repo外祖先、不扫描子目录；非repo或无根文件视为空快照。总原文预算128KiB，真实读取错误或超限明确拒绝，指令保持用户级上下文且不改写用户消息。
+- **IM command-name resolution**：IMZen 在产品与 SDK common 命令的完整名称表上消费 IM Agent SDK 的纯 resolver（固定源码薄 vendor 与 MIT notice），显式启用唯一前缀；精确名称/别名优先，歧义零分派，只改命令 token，参数与消息内容保留。
 - **ZAS Native Protocol** — Zen 自己定义的 App Server 调用与事件语义，由 canonical 生命周期、Host policy 和产品需求向外投影，不受兼容 adapter 可表达能力裁剪。
 - **Codex App Server Adapter** — `src/protocol/codex/` 把 ZAS 原生 surface 中可表达的部分映射为固定 codex-cli 0.146.0 shape；兼容只属于已验收的具体客户端调用面，不反向定义 ZAS。
 - **Tool Environment** — AgentRuntime 面向的混合工具执行环境，统一解析、投影、Host policy、取消、路由与结果回写，但不要求 Zen 自己实现每个工具的领域行为。

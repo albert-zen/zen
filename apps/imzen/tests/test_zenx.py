@@ -202,3 +202,25 @@ async def test_pick_numbers_follow_each_conversations_last_list(tmp_path: Path):
     finally:
         await gateway.stop()
         await state.close()
+
+
+@pytest.mark.asyncio
+async def test_zenx_prefixes_use_product_and_common_namespace(tmp_path: Path):
+    client = FakeAppServer()
+    await client.start_thread(cwd=str(tmp_path))
+    gateway, state, channel = compose_zenx(tmp_path, client)
+    await gateway.start()
+    try:
+        await channel.emit_message(inbound("list", "/threads"))
+        await channel.emit_message(inbound("pick", "/sub 1"))
+        assert "Selected thread" in sent_texts(channel)[-1]
+        await channel.emit_message(inbound("ambiguous", "/s"))
+        assert "Ambiguous" in sent_texts(channel)[-1]
+        await channel.emit_message(inbound("still-selected", "same thread"))
+        assert client.started_turns[-1][0] == "thread-1"
+        await channel.emit_message(inbound("clear", "/unsub"))
+        await channel.emit_message(inbound("new", "fresh thread"))
+        assert client.started_turns[-1][0] == "thread-2"
+    finally:
+        await gateway.stop()
+        await state.close()

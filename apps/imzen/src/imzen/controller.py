@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -41,7 +42,49 @@ from imagent.controllers.markdown import MarkdownSlashPresenter
 from imagent.controllers.slash import SlashCommand, parse_slash_command
 from imagent.gateway import InboundFailurePhase
 
+from ._vendor.command_names import resolve_command_name
 from .config import PermissionMode
+
+# One complete namespace across product commands and the pinned SDK dispatcher.
+_COMMAND_NAMES = {
+    name: name
+    for name in (
+        "model",
+        "permission",
+        "status",
+        "new",
+        "approve",
+        "deny",
+        "cancel",
+        "help",
+        "apps",
+        "app",
+        "projects",
+        "use",
+        "threads",
+        "pick",
+        "delete",
+        "catchup",
+        "history",
+        "respond",
+        "answer",
+    )
+}
+_COMMAND_NAMES.update({"start": "help", "project": "use", "thread": "pick", "archive": "delete"})
+
+
+def _replace_command_name(message: InboundMessage, name: str) -> InboundMessage:
+    """Replace only the leading command token; keep content and parameter bytes."""
+    for index, part in enumerate(message.content):
+        if not isinstance(part, TextContent) or not part.text.strip():
+            continue
+        match = re.match(r"(\s*)/\S+", part.text)
+        if match is None:
+            return message
+        content = list(message.content)
+        content[index] = replace(part, text=match[1] + "/" + name + part.text[match.end() :])
+        return replace(message, content=tuple(content))
+    return message
 
 
 def thread_start_options(mode: PermissionMode) -> dict[str, object]:
@@ -136,7 +179,14 @@ class ImZenController:
         client: AppServerClient,
         default_permission_mode: PermissionMode = "full-access",
         subscription_commands: bool = False,
+        allow_unique_prefix: bool = False,
     ) -> None:
+        if type(allow_unique_prefix) is not bool:
+            raise ValueError("allow_unique_prefix must be a Boolean")
+        self._allow_unique_prefix = allow_unique_prefix
+        self._command_names = dict(_COMMAND_NAMES)
+        if subscription_commands:
+            self._command_names.update({"subscribe": "pick", "unsubscribe": "new"})
         self._subscription_commands = subscription_commands
         self._application = application
         self._client = client
@@ -159,10 +209,24 @@ class ImZenController:
             if command is None:
                 await self._ensure_thread(message, actions)
                 return None
-            if self._subscription_commands and command.name == "subscribe":
-                translated = replace(
-                    message, content=(TextContent("/pick " + " ".join(command.arguments)),)
+            candidates = resolve_command_name(
+                command.name, self._command_names, allow_unique_prefix=self._allow_unique_prefix
+            )
+            if len(candidates) > 1:
+                choices = ", ".join("/" + name for name in candidates)
+                return (
+                    self._presenter.response(
+                        message,
+                        f"Ambiguous command /{command.name}: {choices}. Use a longer name.",
+                        error=True,
+                    ),
                 )
+            if len(candidates) == 1 and command.name not in self._command_names:
+                message = _replace_command_name(message, candidates[0])
+                command = parse_slash_command(message)
+                assert command is not None
+            if self._subscription_commands and command.name == "subscribe":
+                translated = _replace_command_name(message, "pick")
                 return await self._slash.handle(translated, actions)
             if self._subscription_commands and command.name == "unsubscribe":
                 await self._clear_thread(message, actions)
@@ -411,6 +475,11 @@ class ImZenController:
             "- `/model [name]` — list or switch Zen models\n"
             "- `/permission [full-access|approval-required]` — choose the next Thread preset\n"
             "- `/approve|/deny|/cancel <request-id>` — approval response shortcuts"
+            + (
+                "\nUnique command prefixes are accepted; ambiguous names require more letters."
+                if self._allow_unique_prefix
+                else ""
+            )
         )
 
 

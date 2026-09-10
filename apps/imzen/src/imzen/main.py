@@ -74,6 +74,7 @@ def create_gateway(
         client=client,
         default_permission_mode=resolved.permission_mode,
         subscription_commands=persistent_subscriptions,
+        allow_unique_prefix=True,
     )
     resolved_channels = (
         channels
