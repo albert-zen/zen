@@ -24,7 +24,9 @@ if (process.platform !== "win32") {
   throw new Error("The real user-browser CDP smoke is Windows-only");
 }
 
+const fixtureRequests: string[] = [];
 const server = createServer((request, response) => {
+  if (fixtureRequests.length < 32) fixtureRequests.push(request.url ?? "");
   if (request.url === "/seed") {
     response.statusCode = 302;
     response.setHeader(
@@ -50,6 +52,7 @@ const server = createServer((request, response) => {
 let browser: ChildProcess | undefined;
 let browserObservation: SmokeChildObservation | undefined;
 let directory: string | undefined;
+let diagnosticEndpoint: string | undefined;
 
 try {
   const executable = await findBrowserExecutable();
@@ -80,6 +83,7 @@ try {
     browserObservation,
   );
   const endpoint = `http://127.0.0.1:${debuggingPort}`;
+  diagnosticEndpoint = endpoint;
   const selection = await selectBrowserProvider({
     userDataDirectory: directory,
     platform: "win32",
@@ -290,6 +294,23 @@ try {
         targetsAfterClose.visibilityByTarget.get(opened.tabId) === "hidden",
     }),
   );
+} catch (error) {
+  let targets: unknown;
+  try {
+    targets =
+      diagnosticEndpoint === undefined
+        ? undefined
+        : await (
+            await fetch(`${diagnosticEndpoint}/json/list`, {
+              signal: AbortSignal.timeout(2_000),
+            })
+          ).json();
+  } catch (diagnosticError) {
+    targets = String(diagnosticError);
+  }
+  console.error(JSON.stringify({ fixtureRequests, targets }));
+  console.error(browserObservation?.diagnostics("smoke failed", String(error)));
+  throw error;
 } finally {
   if (browser !== undefined && browserObservation !== undefined) {
     await stopProcessTree(browser, browserObservation);
