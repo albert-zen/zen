@@ -2041,7 +2041,7 @@ function AppearancePanel() {
               </strong>
               <small id="sidebar-translucency-description">
                 {window.zenx.nativeBackdrop
-                  ? "Let the desktop show through a frosted sidebar."
+                  ? "Frost the docked sidebar over your desktop."
                   : "Requires macOS or Windows 11 22H2 or later."}
               </small>
             </span>
