@@ -3776,6 +3776,9 @@ select:focus-visible {
   transform: translateX(20px);
   background: var(--color-text-on-accent);
 }
+.appearance-switch-row input:focus-visible {
+  filter: brightness(0.9);
+}
 .appearance-switch-row:has(input:disabled),
 .appearance-switch-row input:disabled {
   cursor: not-allowed;
