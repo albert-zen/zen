@@ -5,6 +5,10 @@ import type {
   CodexTurn,
 } from "../../../../src/protocol/codex/mapper.js";
 import type { AttachmentRef } from "../../../../src/attachment.js";
+import type {
+  NativeProjectedThreadEvent,
+  NativeThreadRecoverySnapshot,
+} from "../../../../src/protocol/native/recovery.js";
 
 export type Thread = CodexThread;
 export type Turn = CodexTurn;
@@ -35,8 +39,8 @@ export interface ThreadConfigurationParams {
   effort?: string;
   approvalPolicy?: "on-request" | "never";
   approvalsReviewer?: "user";
-  sandbox?: "danger-full-access";
-  sandboxPolicy?: { type: "dangerFullAccess" };
+  sandbox?: FilePermissionMode;
+  sandboxPolicy?: FileSandboxPolicy;
   collaborationMode?: {
     mode: "default";
     settings: {
@@ -47,6 +51,19 @@ export interface ThreadConfigurationParams {
   };
 }
 
+export type FilePermissionMode =
+  "read-only" | "workspace-write" | "danger-full-access";
+export type FileSandboxPolicy =
+  | { type: "dangerFullAccess" }
+  | { type: "readOnly" }
+  | {
+      type: "workspaceWrite";
+      writableRoots: string[];
+      networkAccess: boolean;
+      excludeTmpdirEnvVar: boolean;
+      excludeSlashTmp: boolean;
+    };
+
 export interface ThreadSettingsSnapshot {
   model: string;
   modelProvider: string;
@@ -55,7 +72,7 @@ export interface ThreadSettingsSnapshot {
   instructionSources: unknown[];
   approvalPolicy: "on-request" | "never";
   approvalsReviewer: "user";
-  sandbox: { type: "dangerFullAccess" };
+  sandbox: FileSandboxPolicy;
   reasoningEffort: string | null;
 }
 
@@ -71,7 +88,7 @@ export interface UpdatedThreadSettings {
   model: string;
   modelProvider: string;
   personality: null;
-  sandboxPolicy: { type: "dangerFullAccess" };
+  sandboxPolicy: FileSandboxPolicy;
   serviceTier: null;
   summary: null;
 }
@@ -106,11 +123,13 @@ export type UserInputPart =
 
 export interface ClientRequestParams {
   initialize: InitializeParams;
+  "zen/initialize": Record<string, never>;
   "account/read": Record<string, never>;
   "skills/list": { cwds: string[] };
   "model/list": { cursor?: null };
   "thread/start": ThreadConfigurationParams;
   "thread/resume": { threadId: string } & ThreadConfigurationParams;
+  "zen/thread/resume": { threadId: string };
   "thread/read": { threadId: string; includeTurns?: boolean };
   "thread/list": {
     limit?: number;
@@ -120,6 +139,10 @@ export interface ClientRequestParams {
   "thread/name/set": { threadId: string; name: string };
   "thread/archive": { threadId: string };
   "thread/unarchive": { threadId: string };
+  "thread/permissions/update": {
+    threadId: string;
+    sandbox: FilePermissionMode;
+  };
   "thread/settings/update": {
     threadId: string;
     model: string;
@@ -138,6 +161,12 @@ export interface ClientRequestParams {
     input: UserInputPart[];
     clientUserMessageId?: string;
   };
+  "turn/queue": {
+    threadId: string;
+    input: UserInputPart[];
+    clientUserMessageId: string;
+  };
+  "turn/queue/resume": { threadId: string };
   "turn/replace": {
     threadId: string;
     expectedTurnId: string;
@@ -149,6 +178,7 @@ export interface ClientRequestParams {
 
 export interface ClientRequestResults {
   initialize: InitializeResult;
+  "zen/initialize": { processEpoch: string };
   "account/read": { account: null; requiresOpenaiAuth: false };
   "skills/list": {
     data: Array<{ cwd: string; skills: unknown[]; errors: unknown[] }>;
@@ -156,6 +186,7 @@ export interface ClientRequestResults {
   "model/list": { data: ModelSummary[]; nextCursor: null };
   "thread/start": { thread: Thread } & ThreadSettingsSnapshot;
   "thread/resume": { thread: Thread } & ThreadSettingsSnapshot;
+  "zen/thread/resume": NativeThreadRecoverySnapshot;
   "thread/read": { thread: Thread };
   "thread/list": {
     data: Thread[];
@@ -165,12 +196,15 @@ export interface ClientRequestResults {
   "thread/name/set": Record<string, never>;
   "thread/archive": Record<string, never>;
   "thread/unarchive": { thread: Thread };
+  "thread/permissions/update": Record<string, never>;
   "thread/settings/update": Record<string, never>;
   "thread/unsubscribe": {
     status: "unsubscribed" | "notSubscribed";
   };
   "turn/start": { turn: Turn };
   "turn/steer": { turnId: string };
+  "turn/queue": Record<string, never>;
+  "turn/queue/resume": Record<string, never>;
   "turn/replace": { interruptedTurnId: string; turnId: string };
   "turn/interrupt": Record<string, never>;
 }
@@ -178,6 +212,8 @@ export interface ClientRequestResults {
 export type ClientRequestMethod = keyof ClientRequestParams;
 
 export interface ServerNotificationParams {
+  "zen/thread/event": NativeProjectedThreadEvent;
+  "model/catalog/updated": { processEpoch: string; revision: number };
   "thread/started": { thread: Thread };
   "thread/name/updated": { threadId: string; threadName: string };
   "thread/archived": { threadId: string };
@@ -185,6 +221,10 @@ export interface ServerNotificationParams {
   "thread/settings/updated": {
     threadId: string;
     threadSettings: UpdatedThreadSettings;
+  };
+  "thread/queue/updated": {
+    threadId: string;
+    queuedMessages: NonNullable<Thread["queuedMessages"]>;
   };
   "turn/started": { threadId: string; turn: Turn };
   "item/started": {
@@ -256,6 +296,7 @@ export interface ServerRequestParams {
     environmentId: null;
     reason: null;
     command: string;
+    approvalScope?: "once";
     toolName?: string;
     toolArguments?: Readonly<Record<string, unknown>>;
     cwd: string;
@@ -283,7 +324,11 @@ export type ConnectionStatus =
   | { type: "connecting" }
   | { type: "ready"; reconnected: boolean }
   | { type: "reconnecting"; attempt: number; delayMs: number }
-  | { type: "resubscribed"; threadId: string; thread: Thread }
+  | {
+      type: "resubscribed";
+      threadId: string;
+      recovery: NativeThreadRecoverySnapshot;
+    }
   | { type: "resubscribeFailed"; threadId: string; error: Error }
   | { type: "protocolError"; error: Error }
   | { type: "closed" };

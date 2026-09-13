@@ -1,15 +1,33 @@
+import {
+  MAX_TOOL_YIELD_TIME_MS,
+  ToolTaskManager,
+  ToolWaitRuntime,
+  type ToolTaskOptions,
+  type ToolTaskPolicy,
+} from "./tool-task.js";
+import { createHash } from "node:crypto";
+import { open } from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { sandboxCommand } from "./sandbox.js";
+import type { SandboxMode } from "./item.js";
 import { StringDecoder } from "node:string_decoder";
 
-import type { ApprovalDecision, JsonValue } from "./item.js";
+import {
+  validateUserInput,
+  type ApprovalDecision,
+  type JsonValue,
+  type UserInput,
+} from "./item.js";
 import type { ModelTool } from "./model.js";
 import {
   DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES,
+  utf8Prefix,
   type ToolOutputCaptureMetadata,
   type ToolOutputSpool,
 } from "./tool-output-spool.js";
 
 const TOOL_OUTPUT_CAPTURE = Symbol("tool-output-capture");
+const TOOL_OUTPUT_SUFFIX = Symbol("tool-output-suffix");
 
 export interface ToolInvocation {
   callId: string;
@@ -17,6 +35,20 @@ export interface ToolInvocation {
   arguments: Record<string, unknown>;
   cwd: string;
   signal: AbortSignal;
+  threadId?: string;
+  sandbox?: SandboxMode;
+  task?: {
+    yieldTimeMs?: number;
+    timeoutMs?: number;
+    previewBytes?: number;
+    waitForCompletion?: boolean;
+  };
+  /** Host-owned streaming sink; bytes emitted here must not be repeated in final output. */
+  taskContext?: {
+    onOutput(text: string): void;
+    onModelContent?(content: UserInput): void;
+    requestYield?(): void;
+  };
 }
 
 export interface ToolExecutionResult {
@@ -24,8 +56,12 @@ export interface ToolExecutionResult {
   exitCode: number;
   contentType?: string;
   structuredContent?: JsonValue;
+  /** Content a trusted builtin asks Zen to include in the next model sample. */
+  modelContent?: UserInput;
   /** Host-local capture state; AgentRuntime renders it before canonical append. */
   [TOOL_OUTPUT_CAPTURE]?: ToolOutputCaptureMetadata;
+  /** Bounded builtin control text appended after any rendered capture receipt. */
+  [TOOL_OUTPUT_SUFFIX]?: string;
   /** True when the runtime already omitted source bytes before returning. */
   sourceTruncated?: boolean;
 }
@@ -47,6 +83,11 @@ export interface ToolRuntime {
   readonly specification: ModelTool;
   /** Runtime body scheduling only; not permission or resource scope. */
   readonly executionMode?: ToolExecutionMode;
+  /** Host builtin enforces invocation.sandbox before producing file effects. */
+  readonly enforcesSandbox?: boolean;
+  readonly taskPolicy?: ToolTaskPolicy;
+  /** Known model modalities required before this tool body may execute. */
+  readonly requiredModelInputModalities?: readonly string[];
   execute(invocation: ToolInvocation): Promise<ToolExecutionResult>;
 }
 
@@ -66,6 +107,15 @@ export interface ToolBundle {
 }
 
 export interface NestedToolInvocationPort {
+  drain?(): Promise<void>;
+  codeContext?: {
+    tools: readonly { name: string; description: string }[];
+    storedValues: Record<string, JsonValue>;
+    store(key: string, value: JsonValue): Promise<void>;
+    resolveMedia(
+      media: readonly { type: "image" | "audio"; value: JsonValue }[],
+    ): Promise<UserInput>;
+  };
   invoke(
     name: string,
     arguments_: Record<string, unknown>,
@@ -154,6 +204,7 @@ export interface PreparedToolInvocation {
   readonly definition: ModelTool;
   readonly invocation: ToolInvocation;
   readonly executionMode: ToolExecutionMode;
+  readonly requiredModelInputModalities: readonly string[];
 }
 
 export interface ToolAdmissionOptions {
@@ -195,6 +246,8 @@ interface PreparedRuntimeRegistration {
  * captures the exact runtime so later bundle changes affect only future calls.
  */
 export class ToolEnvironment {
+  readonly taskManager: ToolTaskManager;
+  readonly waitRuntime: ToolWaitRuntime;
   readonly #bundles = new Map<string, BundleRegistration>();
   readonly #tools = new Map<string, BundleRegistration & RuntimeRegistration>();
   readonly #reservedBundleKeys = new Set<string>();
@@ -203,11 +256,14 @@ export class ToolEnvironment {
     PreparedToolInvocation,
     PreparedRuntimeRegistration
   >();
+  readonly #unsandboxedAdmissions = new WeakSet<PreparedToolInvocation>();
   readonly #policyStore: ToolPolicyStore;
   readonly #pendingAdmissions = new Map<string, Promise<void>>();
 
   constructor(
     options: {
+      taskOptions?: ToolTaskOptions;
+      toolOutputSpool?: ToolOutputSpool;
       runtimes?: readonly ToolRuntime[];
       bundles?: readonly ToolBundle[];
       policyStore?: ToolPolicyStore;
@@ -231,6 +287,14 @@ export class ToolEnvironment {
             deniedTools: options.deniedTools ?? new Set<string>(),
           })
         : new InMemoryToolPolicyStore());
+    this.taskManager = new ToolTaskManager({
+      ...options.taskOptions,
+      ...(options.toolOutputSpool === undefined
+        ? {}
+        : { toolOutputSpool: options.toolOutputSpool }),
+    });
+    this.waitRuntime = new ToolWaitRuntime(this.taskManager);
+    this.registerRuntime(this.waitRuntime);
     for (const runtime of options.runtimes ?? []) {
       this.registerRuntime(runtime);
     }
@@ -273,6 +337,15 @@ export class ToolEnvironment {
     bundle: ToolBundle,
     options: { replaceCurrent?: boolean } = {},
   ): StagedToolBundleRegistration {
+    if (
+      bundle.tools.some(
+        (runtime) => runtime.name === "wait" && runtime !== this.waitRuntime,
+      ) ||
+      (bundle.identity.kind === "builtin" &&
+        bundle.identity.id === "wait" &&
+        bundle.tools[0] !== this.waitRuntime)
+    )
+      throw new Error("The wait tool is reserved by the runtime");
     const identity = Object.freeze({ ...bundle.identity });
     const key = bundleIdentityKey(identity);
     if (
@@ -290,6 +363,9 @@ export class ToolEnvironment {
         throw new Error(
           `Tool runtime ${runtime.name} specification name must match exactly`,
         );
+      }
+      if (executionModeFor(runtime) === "parallel_safe") {
+        definition.description = `[parallel_safe] ${definition.description}`;
       }
       return { runtime, definition };
     });
@@ -349,6 +425,7 @@ export class ToolEnvironment {
 
   unregisterBundle(identity: ToolBundleIdentity): boolean {
     const key = bundleIdentityKey(identity);
+    if (key === "builtin:wait") return false;
     const registration = this.#bundles.get(key);
     if (registration === undefined) return false;
     return this.#unregisterRegistration(key, registration);
@@ -377,6 +454,9 @@ export class ToolEnvironment {
       owner: registration.identity,
       definition: structuredClone(registration.definition),
       executionMode: executionModeFor(registration.runtime),
+      requiredModelInputModalities: Object.freeze([
+        ...(registration.runtime.requiredModelInputModalities ?? []),
+      ]),
       invocation: Object.freeze({
         ...invocation,
         arguments: Object.freeze(structuredClone(invocation.arguments)),
@@ -394,8 +474,49 @@ export class ToolEnvironment {
     prepared: PreparedToolInvocation,
     options: ToolAdmissionOptions,
   ): Promise<ApprovalDecision> {
-    this.#requirePrepared(prepared);
-    if (options.policy === "full_access") return "accept";
+    const runtime = this.#requirePrepared(prepared).runtime;
+    const sandbox = prepared.invocation.sandbox ?? "danger-full-access";
+    if (sandbox !== "danger-full-access" && runtime !== this.waitRuntime) {
+      const escalation =
+        prepared.invocation.arguments.sandbox_permissions ===
+        "require_escalated";
+      if (
+        prepared.owner.kind === "builtin" &&
+        runtime.enforcesSandbox === true &&
+        !escalation
+      )
+        return "accept";
+      try {
+        if (
+          options.policy === "full_access" ||
+          options.requestApproval === undefined
+        ) {
+          throw new Error(
+            "This call needs one-time approval to run outside the file sandbox, but approvals are unavailable.",
+          );
+        }
+        const decision = await waitForToolAbort(
+          options.requestApproval({
+            ...options.approvalRequest,
+            scope: "once",
+            command: `[One-time full file access: ${sandbox}]\n${options.approvalRequest.command}`,
+          }),
+          prepared.invocation.signal,
+        );
+        if (decision === "accept" || decision === "acceptForSession")
+          this.#unsandboxedAdmissions.add(prepared);
+        else this.#releasePrepared(prepared);
+        return decision;
+      } catch (error) {
+        this.#releasePrepared(prepared);
+        throw error;
+      }
+    }
+    if (
+      this.#requirePrepared(prepared).runtime === this.waitRuntime ||
+      options.policy === "full_access"
+    )
+      return "accept";
 
     const toolName = prepared.invocation.name;
     try {
@@ -453,7 +574,8 @@ export class ToolEnvironment {
   async admitInherited(
     prepared: PreparedToolInvocation,
   ): Promise<ApprovalDecision> {
-    this.#requirePrepared(prepared);
+    if (this.#requirePrepared(prepared).runtime === this.waitRuntime)
+      return "accept";
     try {
       const stored = await this.#policyStore.get(prepared.invocation.name);
       if (stored === "denied") {
@@ -470,24 +592,81 @@ export class ToolEnvironment {
   async execute(
     prepared: PreparedToolInvocation,
     nested?: NestedToolInvocationPort,
+    modelInputModalities?: readonly string[] | null,
   ): Promise<ToolExecutionResult> {
     const runtime = this.#requirePrepared(prepared).runtime;
+    let retained = false;
     try {
       prepared.invocation.signal.throwIfAborted();
-      const result =
-        nested !== undefined &&
-        prepared.owner.kind === "builtin" &&
-        isCompositeToolRuntime(runtime)
-          ? await runtime.executeComposite(prepared.invocation, nested)
-          : await runtime.execute(prepared.invocation);
+      if (
+        modelInputModalities !== undefined &&
+        modelInputModalities !== null &&
+        prepared.requiredModelInputModalities.some(
+          (modality) => !modelInputModalities.includes(modality),
+        )
+      ) {
+        throw new Error(
+          `The selected model does not support ${prepared.requiredModelInputModalities.join(
+            ", ",
+          )} input required by ${prepared.invocation.name}`,
+        );
+      }
+      // The manager owns this envelope; its nested tool payload was already
+      // normalized at the original execution boundary. Do not charge the
+      // fixed control envelope against the tool's original JSON byte budget.
+      if (runtime === this.waitRuntime)
+        return await runtime.execute(prepared.invocation);
+      const execute = async (original: ToolInvocation) => {
+        const invocation = this.#unsandboxedAdmissions.has(prepared)
+          ? { ...original, sandbox: "danger-full-access" as const }
+          : original;
+        const result =
+          nested !== undefined &&
+          prepared.owner.kind === "builtin" &&
+          isCompositeToolRuntime(runtime)
+            ? await runtime.executeComposite(invocation, nested)
+            : await runtime.execute(invocation);
+        await nested?.drain?.();
+        try {
+          return normalizeToolExecutionResult(result, prepared.owner);
+        } catch (error) {
+          throw new ToolResultNormalizationError(error);
+        }
+      };
+      if (runtime instanceof ToolWaitRuntime)
+        return await execute(prepared.invocation);
+      const scope =
+        (isCompositeToolRuntime(runtime)
+          ? "independent"
+          : runtime.taskPolicy?.resourceScope) ??
+        (runtime.executionMode === "parallel_safe" ? "independent" : "bundle");
+      const key =
+        scope === "independent"
+          ? undefined
+          : scope === "runtime"
+            ? runtime
+            : bundleIdentityKey(prepared.owner);
+      retained = true;
       try {
-        return normalizeToolExecutionResult(result, prepared.owner);
+        return await this.taskManager.run(
+          runtime,
+          prepared.invocation,
+          execute,
+          { resourceKey: key, release: () => this.#releasePrepared(prepared) },
+        );
       } catch (error) {
-        throw new ToolResultNormalizationError(error);
+        // Admission/validation can fail before the task acquires its lease.
+        if (!this.taskManager.ownsInvocation(prepared.invocation))
+          this.#releasePrepared(prepared);
+        throw error;
       }
     } finally {
-      this.#releasePrepared(prepared);
+      if (!retained) this.#releasePrepared(prepared);
     }
+  }
+
+  async close(): Promise<void> {
+    await this.taskManager.close();
   }
 
   #requirePrepared(
@@ -510,7 +689,6 @@ export class ToolEnvironment {
 }
 
 function executionModeFor(runtime: ToolRuntime): ToolExecutionMode {
-  if (runtime.name === "shell") return "exclusive";
   return runtime.executionMode === "parallel_safe"
     ? "parallel_safe"
     : "exclusive";
@@ -551,9 +729,31 @@ export function normalizeToolExecutionResult(
       "Structured tool results require both contentType and structuredContent",
     );
   }
-  if (!hasContentType || !hasStructuredContent) return result;
+  if (result.modelContent !== undefined) {
+    if (owner.kind !== "builtin") {
+      throw new Error("Only builtin tools may return model content");
+    }
+    validateUserInput(result.modelContent, "$modelContent");
+  }
+  if (!hasContentType || !hasStructuredContent) {
+    return result.modelContent === undefined
+      ? result
+      : {
+          output: result.output,
+          exitCode: result.exitCode,
+          modelContent: Object.freeze(
+            structuredClone(result.modelContent),
+          ) as UserInput,
+          ...(result[TOOL_OUTPUT_CAPTURE] === undefined
+            ? {}
+            : { [TOOL_OUTPUT_CAPTURE]: result[TOOL_OUTPUT_CAPTURE] }),
+          ...(result.sourceTruncated === undefined
+            ? {}
+            : { sourceTruncated: result.sourceTruncated }),
+        };
+  }
   const contentType = result.contentType!;
-  if (!/^[a-z][a-z0-9-]{1,62}\/[a-z][a-z0-9.-]{0,127}$/u.test(contentType)) {
+  if (!/^[a-z][a-z0-9-]{1,62}\/[a-z][a-z0-9.+-]{0,127}$/u.test(contentType)) {
     throw new Error(`Invalid structured result contentType: ${contentType}`);
   }
   if (owner.kind === "plugin" && !contentType.startsWith(`${owner.id}/`)) {
@@ -573,9 +773,19 @@ export function normalizeToolExecutionResult(
     exitCode: result.exitCode,
     contentType,
     structuredContent: deepFreeze(structuredClone(result.structuredContent)),
+    ...(result.modelContent === undefined
+      ? {}
+      : {
+          modelContent: Object.freeze(
+            structuredClone(result.modelContent),
+          ) as UserInput,
+        }),
     ...(result[TOOL_OUTPUT_CAPTURE] === undefined
       ? {}
       : { [TOOL_OUTPUT_CAPTURE]: result[TOOL_OUTPUT_CAPTURE] }),
+    ...(result[TOOL_OUTPUT_SUFFIX] === undefined
+      ? {}
+      : { [TOOL_OUTPUT_SUFFIX]: result[TOOL_OUTPUT_SUFFIX] }),
     ...(result.sourceTruncated === undefined
       ? {}
       : { sourceTruncated: result.sourceTruncated }),
@@ -642,6 +852,7 @@ export interface ApprovalRequest {
   itemId: string;
   callId: string;
   command: string;
+  scope?: "once";
   toolName?: string;
   toolArguments?: Readonly<Record<string, unknown>>;
   cwd: string;
@@ -652,219 +863,313 @@ export type ApprovalHandler = (
   request: ApprovalRequest,
 ) => Promise<ApprovalDecision>;
 
+/** Concrete process execution only; the environment owns waiting and deadlines. */
 export class ShellToolRuntime implements ToolRuntime {
+  readonly enforcesSandbox = true;
   readonly name = "shell";
+  readonly executionMode = "parallel_safe";
+  readonly taskPolicy: ToolTaskPolicy = {
+    resourceScope: "independent",
+    cancellation: "confirmed-on-settle",
+    timingArguments: { yieldTimeMs: "yield_time_ms", timeoutMs: "timeout_ms" },
+  };
   readonly specification: ModelTool = {
     name: this.name,
-    description: "Run a shell command in the thread working directory.",
+    description:
+      "Run a shell command. Independent commands can run concurrently; await commands sequentially when their effects depend on each other. Long operations return a task_id for wait. yield_time_ms controls how long to wait before returning a task receipt (maximum 180 seconds); timeout_ms controls the separate execution deadline (default 10 minutes, maximum 24 hours).",
     inputSchema: {
       type: "object",
       properties: {
+        sandbox_permissions: {
+          type: "string",
+          enum: ["use_default", "require_escalated"],
+          description:
+            "Use require_escalated to request one-time approval for a command that needs file access outside the current policy.",
+        },
         command: { type: "string" },
+        yield_time_ms: {
+          type: "integer",
+          minimum: 1,
+          maximum: MAX_TOOL_YIELD_TIME_MS,
+        },
+        timeout_ms: { type: "integer", minimum: 1, maximum: 86400000 },
       },
       required: ["command"],
       additionalProperties: false,
     },
   };
-
-  readonly #maxOutputBytes: number;
-  readonly #redactedValues: readonly string[];
-  readonly #terminationGraceMs: number;
   readonly #environment: NodeJS.ProcessEnv;
-  readonly #toolOutputSpool: ToolOutputSpool | undefined;
-
+  readonly #terminationGraceMs: number;
+  readonly #maxOutputBytes: number;
+  readonly #spool: ToolOutputSpool | undefined;
   constructor(
     options: {
-      maxOutputBytes?: number;
-      terminationGraceMs?: number;
       environment?: Readonly<NodeJS.ProcessEnv>;
       blockedEnvironmentVariables?: readonly string[];
-      redactedValues?: readonly string[];
+      terminationGraceMs?: number;
+      maxOutputBytes?: number;
       toolOutputSpool?: ToolOutputSpool;
     } = {},
   ) {
-    const sourceEnvironment = options.environment ?? process.env;
-    const blockedEnvironmentVariables =
-      options.blockedEnvironmentVariables ?? [];
-    this.#maxOutputBytes =
-      options.maxOutputBytes ?? DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES;
-    this.#redactedValues = Object.freeze(
-      [
-        ...(options.redactedValues ?? []),
-        ...blockedEnvironmentVariables.map(
-          (name) => sourceEnvironment[name] ?? "",
-        ),
-      ].filter((value, index, values) => {
-        return value.length > 0 && values.indexOf(value) === index;
-      }),
+    this.#environment = Object.freeze(
+      sanitizeToolEnvironment(
+        options.environment ?? process.env,
+        options.blockedEnvironmentVariables ?? [],
+      ),
     );
     this.#terminationGraceMs = options.terminationGraceMs ?? 250;
-    this.#toolOutputSpool = options.toolOutputSpool;
-    this.#environment = Object.freeze(
-      sanitizeToolEnvironment(sourceEnvironment, blockedEnvironmentVariables),
-    );
+    this.#maxOutputBytes =
+      options.maxOutputBytes ?? DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES;
+    this.#spool = options.toolOutputSpool;
   }
-
   async execute(invocation: ToolInvocation): Promise<ToolExecutionResult> {
-    if (invocation.name !== "shell") {
-      throw new Error(`Unsupported tool: ${invocation.name}`);
-    }
-    const command = invocation.arguments.command;
-    if (typeof command !== "string" || command.length === 0) {
-      throw new Error("shell.command must be a non-empty string");
-    }
     invocation.signal.throwIfAborted();
-
-    return await new Promise<ToolExecutionResult>((resolve, reject) => {
-      const child = spawn(command, {
-        cwd: invocation.cwd,
-        env: this.#environment,
-        shell: true,
-        stdio: ["ignore", "pipe", "pipe"],
-        detached: process.platform !== "win32",
-      });
-
-      const capture = this.#toolOutputSpool?.beginCapture({
-        redactedValues: this.#redactedValues,
-        maxCaptureBytes: this.#maxOutputBytes,
-      });
-      const stdoutDecoder =
-        capture === undefined ? undefined : new StringDecoder("utf8");
-      const stderrDecoder =
-        capture === undefined ? undefined : new StringDecoder("utf8");
-      const chunks: Buffer[] = [];
-      let bytes = 0;
-      let settled = false;
-      let terminationStarted = false;
-      let forceKillTimer: NodeJS.Timeout | undefined;
-      const collect = (chunk: Buffer, decoder?: StringDecoder): void => {
-        if (capture !== undefined) {
-          capture.write(decoder!.write(chunk));
-          return;
-        }
-        if (bytes >= this.#maxOutputBytes) {
-          return;
-        }
-        const remaining = this.#maxOutputBytes - bytes;
-        const kept = chunk.subarray(0, remaining);
-        chunks.push(kept);
-        bytes += kept.length;
-      };
-      child.stdout.on("data", (chunk: Buffer) => collect(chunk, stdoutDecoder));
-      child.stderr.on("data", (chunk: Buffer) => collect(chunk, stderrDecoder));
-
-      const killProcessTree = (signal: NodeJS.Signals): void => {
-        if (process.platform !== "win32" && child.pid !== undefined) {
-          try {
-            process.kill(-child.pid, signal);
-            return;
-          } catch {
-            // The process group may already have exited. Fall back to the
-            // direct child so a spawn race cannot leave it running.
-          }
-        }
+    const command = invocation.arguments.command;
+    if (typeof command !== "string" || command.trim().length === 0)
+      throw new Error("shell.command must be a non-empty string");
+    const capture =
+      invocation.taskContext === undefined
+        ? new ToolOutputWindow(this.#maxOutputBytes, this.#spool)
+        : undefined;
+    const write = (text: string) => {
+      if (capture !== undefined) capture.write(text);
+      else invocation.taskContext?.onOutput(text);
+    };
+    const launch = await sandboxCommand(
+      invocation.sandbox ?? "danger-full-access",
+      invocation.cwd,
+      command,
+    );
+    const child = spawn(launch.file, launch.args, {
+      cwd: invocation.cwd,
+      env: this.#environment,
+      shell:
+        (invocation.sandbox ?? "danger-full-access") === "danger-full-access",
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
+    });
+    const stdout = new StringDecoder("utf8"),
+      stderr = new StringDecoder("utf8");
+    child.stdout.on("data", (chunk: Buffer) => write(stdout.write(chunk)));
+    child.stderr.on("data", (chunk: Buffer) => write(stderr.write(chunk)));
+    let killTimer: NodeJS.Timeout | undefined;
+    let aborted = false;
+    const kill = (signal: NodeJS.Signals) => {
+      if (process.platform !== "win32" && child.pid !== undefined) {
         try {
-          child.kill(signal);
-        } catch {
-          // A concurrent exit is indistinguishable from successful cleanup.
-        }
-      };
-      const abort = (): void => {
-        if (terminationStarted) {
+          process.kill(-child.pid, signal);
           return;
+        } catch {
+          /* Group already exited. */
         }
-        terminationStarted = true;
-        killProcessTree("SIGTERM");
-        forceKillTimer = setTimeout(() => {
-          killProcessTree("SIGKILL");
-          // A descendant can outlive the wrapper while retaining these file
-          // descriptors. Closing our ends guarantees the invocation itself
-          // cannot wait forever after the forced termination deadline.
+      }
+      try {
+        child.kill(signal);
+      } catch {
+        /* Child already exited. */
+      }
+    };
+    const exitCode = await new Promise<number>((resolve) => {
+      let finished = false;
+      const finish = (code: number) => {
+        if (finished) return;
+        finished = true;
+        if (killTimer !== undefined) clearTimeout(killTimer);
+        invocation.signal.removeEventListener("abort", abort);
+        write(stdout.end());
+        write(stderr.end());
+        resolve(code);
+      };
+      const abort = () => {
+        if (aborted || finished) return;
+        aborted = true;
+        kill("SIGTERM");
+        killTimer = setTimeout(() => {
+          kill("SIGKILL");
           child.stdout.destroy();
           child.stderr.destroy();
-          forceKillTimer = undefined;
-          finishWithError(abortReason(invocation.signal));
+          finish(130);
         }, this.#terminationGraceMs);
       };
-      const cleanup = (): void => {
-        invocation.signal.removeEventListener("abort", abort);
-        // Keep the forced group kill scheduled after an abort even if the
-        // wrapper shell closes first; a descendant may have redirected its
-        // stdio and still be alive in the same process group.
-        if (!terminationStarted && forceKillTimer !== undefined) {
-          clearTimeout(forceKillTimer);
-        }
-      };
-      const finishWithError = (error: unknown): void => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        cleanup();
-        void capture?.discard();
-        reject(error);
-      };
-      invocation.signal.addEventListener("abort", abort, { once: true });
-      if (invocation.signal.aborted) {
-        abort();
-      }
-
       child.once("error", (error) => {
-        finishWithError(error);
+        write(`\n[shell spawn failed: ${error.message}]`);
+        finish(1);
       });
-      child.once("close", (code, signal) => {
-        if (settled) {
-          return;
-        }
-        if (invocation.signal.aborted) {
-          if (forceKillTimer !== undefined) {
-            clearTimeout(forceKillTimer);
-            forceKillTimer = undefined;
-          }
-          // `close` proves the wrapper and inherited pipes are gone, but a
-          // descendant with redirected stdio may still occupy the group.
-          killProcessTree("SIGKILL");
-          finishWithError(abortReason(invocation.signal));
-          return;
-        }
-        settled = true;
-        cleanup();
-        if (capture !== undefined) {
-          capture.write(stdoutDecoder!.end());
-          capture.write(stderrDecoder!.end());
-          if (signal !== null) capture.write(`\n[terminated by ${signal}]`);
-          void capture
-            .finish()
-            .then((outputCapture) => {
-              resolve({
-                output: outputCapture.output ?? "",
-                [TOOL_OUTPUT_CAPTURE]: outputCapture,
-                exitCode: code ?? 128,
-              });
-            })
-            .catch((error: unknown) => reject(error));
-          return;
-        }
-        const suffix =
-          bytes >= this.#maxOutputBytes ? "\n[output truncated by Zen]" : "";
-        const output = redactValues(
-          `${Buffer.concat(chunks).toString("utf8")}${suffix}`,
-          this.#redactedValues,
-        );
-        resolve({
-          output:
-            signal === null ? output : `${output}\n[terminated by ${signal}]`,
-          exitCode: code ?? 128,
-        });
+      child.once("close", (code) => {
+        if (aborted) kill("SIGKILL");
+        finish(aborted ? 130 : (code ?? 128));
       });
+      invocation.signal.addEventListener("abort", abort, { once: true });
+      if (invocation.signal.aborted) abort();
+    });
+    if (capture === undefined) return { output: "", exitCode };
+    const output = await capture.finish();
+    return attachToolOutputCapture(
+      { output: output.output, exitCode },
+      output.metadata,
+    );
+  }
+}
+
+export class ToolOutputWindow {
+  readonly #maxOutputBytes: number;
+  readonly #capture: ReturnType<ToolOutputSpool["beginCapture"]> | undefined;
+  readonly #chunks: Buffer[] = [];
+  #bytes = 0;
+  #truncated = false;
+  hasOutput = false;
+
+  constructor(
+    maxOutputBytes: number,
+    spool: ToolOutputSpool | undefined,
+    previewBytes?: number,
+  ) {
+    this.#maxOutputBytes =
+      spool === undefined && previewBytes !== undefined
+        ? Math.min(maxOutputBytes, previewBytes)
+        : maxOutputBytes;
+    this.#capture = spool?.beginCapture({
+      maxCaptureBytes: maxOutputBytes,
+      ...(previewBytes === undefined ? {} : { previewBytes }),
     });
   }
+
+  write(text: string): void {
+    if (text.length === 0) return;
+    this.hasOutput = true;
+    if (this.#capture !== undefined) {
+      this.#capture.write(text);
+      return;
+    }
+    const encoded = Buffer.from(text, "utf8");
+    const remaining = this.#maxOutputBytes - this.#bytes;
+    if (remaining <= 0) {
+      this.#truncated = true;
+      return;
+    }
+    const kept = encoded.subarray(0, remaining);
+    this.#chunks.push(kept);
+    this.#bytes += kept.length;
+    this.#truncated ||= kept.length < encoded.length;
+  }
+
+  async finish(sourceTruncated = false): Promise<{
+    output: string;
+    metadata?: ToolOutputCaptureMetadata;
+  }> {
+    if (this.#capture !== undefined) {
+      const metadata = await this.#capture.finish({ sourceTruncated });
+      return { output: metadata.output ?? "", metadata };
+    }
+    const bytes = utf8Prefix(Buffer.concat(this.#chunks), this.#bytes);
+    const text = bytes.toString("utf8");
+    return {
+      output:
+        text +
+        (this.#truncated || sourceTruncated
+          ? "\n[output truncated by Zen]"
+          : ""),
+      metadata: inlineToolOutputCapture(
+        text,
+        this.#truncated || sourceTruncated,
+      ),
+    };
+  }
+
+  /** Append original capture bytes, never its model-facing receipt. */
+  async appendCapture(capture: ToolOutputCaptureMetadata): Promise<boolean> {
+    if (capture.output !== undefined) {
+      this.write(capture.output);
+      return capture.sourceTruncated;
+    }
+    if (capture.path === undefined) {
+      this.write(capture.head);
+      return true;
+    }
+    try {
+      const file = await open(capture.path, "r");
+      try {
+        const hash = createHash("sha256");
+        const decoder = new StringDecoder("utf8");
+        const buffer = Buffer.alloc(64 * 1024);
+        let offset = 0;
+        while (offset < capture.capturedBytes) {
+          const { bytesRead } = await file.read(
+            buffer,
+            0,
+            Math.min(buffer.length, capture.capturedBytes - offset),
+            offset,
+          );
+          if (bytesRead === 0) break;
+          const chunk = buffer.subarray(0, bytesRead);
+          hash.update(chunk);
+          this.write(decoder.write(chunk));
+          offset += bytesRead;
+        }
+        this.write(decoder.end());
+        const extra = await file.read(buffer, 0, 1, offset);
+        return (
+          capture.sourceTruncated ||
+          offset !== capture.capturedBytes ||
+          extra.bytesRead !== 0 ||
+          hash.digest("hex") !== capture.sha256
+        );
+      } finally {
+        await file.close();
+      }
+    } catch {
+      return true;
+    }
+  }
+
+  async discard(): Promise<void> {
+    await this.#capture?.discard();
+  }
+}
+
+export function attachToolOutputCapture(
+  result: ToolExecutionResult,
+  metadata?: ToolOutputCaptureMetadata,
+  suffix = "",
+): ToolExecutionResult {
+  return {
+    ...result,
+    output: result.output + suffix,
+    [TOOL_OUTPUT_CAPTURE]:
+      metadata ??
+      capturedToolOutput(result) ??
+      inlineToolOutputCapture(result.output, result.sourceTruncated ?? false),
+    ...(suffix.length === 0 ? {} : { [TOOL_OUTPUT_SUFFIX]: suffix }),
+  };
+}
+
+function inlineToolOutputCapture(
+  output: string,
+  sourceTruncated: boolean,
+): ToolOutputCaptureMetadata {
+  const bytes = Buffer.from(output);
+  return {
+    unspooled: true,
+    capturedBytes: bytes.length,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    lifetime: "host_instance",
+    sourceTruncated,
+    head: output,
+    tail: "",
+    ...(sourceTruncated ? {} : { output }),
+  };
 }
 
 export function capturedToolOutput(
   result: ToolExecutionResult,
 ): ToolOutputCaptureMetadata | undefined {
   return result[TOOL_OUTPUT_CAPTURE];
+}
+
+export function toolOutputSuffix(
+  result: ToolExecutionResult,
+): string | undefined {
+  return result[TOOL_OUTPUT_SUFFIX];
 }
 
 function bundleIdentityKey(identity: ToolBundleIdentity): string {
@@ -906,14 +1211,6 @@ function abortReason(signal: AbortSignal): unknown {
   return (
     signal.reason ?? new DOMException("The operation was aborted", "AbortError")
   );
-}
-
-function redactValues(output: string, values: readonly string[]): string {
-  let redacted = output;
-  for (const value of values) {
-    redacted = redacted.replaceAll(value, "[REDACTED]");
-  }
-  return redacted;
 }
 
 const SAFE_ENVIRONMENT_VARIABLES = new Set([

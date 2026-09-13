@@ -1,3 +1,7 @@
+import type {
+  BrowserThreadRequest,
+  BrowserThreadListener,
+} from "./capabilities/browser-thread-observation.js";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -12,7 +16,6 @@ import {
 import { ToolEnvironment, type ToolInvocation } from "../../../../src/tool.js";
 import {
   BrowserZenXCapabilityPackage,
-  type BrowserLiveObservationListener,
   type ZenXBrowserBackend,
 } from "./capabilities/browser-provider.js";
 import {
@@ -102,6 +105,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #projectProjection?: ZenXProjectProjection;
   readonly #appServerPort?: AppServerRequestPort & PluginHostAppServerPort;
   #browserProfilePackage: ZenXCapabilityPackage | undefined;
+  readonly #browserObservationChanges = new Set<() => void>();
   #computerProfilePackage: ZenXCapabilityPackage | undefined;
   #stagedBrowserProfilePackage: ZenXCapabilityPackage | undefined;
   #stagedComputerProfilePackage: ZenXCapabilityPackage | undefined;
@@ -112,6 +116,16 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       }
     | undefined;
   #serviceMutationTail: Promise<void> = Promise.resolve();
+  #serviceMutationCount = 0;
+  #maintenance = false;
+  tryBeginMaintenance(): boolean {
+    if (this.#maintenance || this.#serviceMutationCount > 0) return false;
+    this.#maintenance = true;
+    return true;
+  }
+  endMaintenance(): void {
+    this.#maintenance = false;
+  }
 
   constructor(options: {
     userDataDirectory: string;
@@ -470,17 +484,56 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     return capabilityPackage;
   }
 
-  observeBrowserLive(listener: BrowserLiveObservationListener): () => void {
-    const capabilityPackage =
-      this.#stagedBrowserProfilePackage ?? this.#browserProfilePackage;
-    if (capabilityPackage instanceof BrowserZenXCapabilityPackage)
-      return capabilityPackage.observeLive(listener);
-    listener({
-      type: "status",
-      status: "unavailable",
-      message: "Live observation is unavailable for this Browser provider.",
-    });
-    return () => undefined;
+  observeBrowserLive(
+    request: BrowserThreadRequest,
+    listener: BrowserThreadListener,
+  ): () => void {
+    let selected: ZenXCapabilityPackage | undefined;
+    let initialized = false;
+    let active = true;
+    let stop: (() => void) | undefined;
+    const send: BrowserThreadListener = (event) => {
+      if (!active) return;
+      try {
+        listener(event);
+      } catch {
+        dispose();
+      }
+    };
+    const refresh = () => {
+      const enabled = this.pluginSnapshot().plugins.some(
+        (plugin) =>
+          plugin.id === "browser" && plugin.enabled && plugin.available,
+      );
+      const next = enabled ? this.#browserProfilePackage : undefined;
+      if (initialized && next === selected) return;
+      initialized = true;
+      selected = next;
+      stop?.();
+      stop = undefined;
+      if (next instanceof BrowserZenXCapabilityPackage) {
+        stop = next.observeThread(request, send);
+        if (!active) stop();
+      } else {
+        send({ type: "targets", targets: [] });
+        send({
+          type: "status",
+          status: "unavailable",
+          message:
+            "Browser observation is unavailable. Enable an available Browser plugin to view this thread.",
+        });
+      }
+    };
+    const unsubscribe = this.#registry.onChange(refresh);
+    const dispose = () => {
+      active = false;
+      unsubscribe();
+      this.#browserObservationChanges.delete(refresh);
+      stop?.();
+    };
+    this.#browserObservationChanges.add(refresh);
+    refresh();
+    return dispose;
   }
 
   computerProfilePackage(): ZenXCapabilityPackage {
@@ -694,6 +747,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   ): void {
     if (pluginId === "browser") {
       this.#browserProfilePackage = capabilityPackage;
+      for (const refresh of this.#browserObservationChanges) refresh();
     } else {
       this.#computerProfilePackage = capabilityPackage;
     }
@@ -1007,6 +1061,10 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     let packageName: string;
     let tarball: string;
     switch (pluginId) {
+      case "imzenx":
+        packageName = FIRST_PARTY_PLUGIN_PACKAGES.imzenx.packageName;
+        tarball = FIRST_PARTY_PLUGIN_PACKAGES.imzenx.tarball;
+        break;
       case "browser":
         packageName = FIRST_PARTY_PLUGIN_PACKAGES.browser.packageName;
         tarball = firstPartyProviderTarball(
@@ -1372,7 +1430,11 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   }
 
   async #serializeServiceMutation<T>(mutation: () => Promise<T>): Promise<T> {
-    const result = this.#serviceMutationTail.then(mutation);
+    if (this.#maintenance) throw new Error("host_restarting");
+    this.#serviceMutationCount++;
+    const result = this.#serviceMutationTail.then(mutation).finally(() => {
+      this.#serviceMutationCount--;
+    });
     this.#serviceMutationTail = result.then(
       () => undefined,
       () => undefined,

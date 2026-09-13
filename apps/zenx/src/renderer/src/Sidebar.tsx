@@ -1,5 +1,8 @@
 import {
+  type CSSProperties,
+  type ReactNode,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -8,6 +11,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
 } from "react";
+import { createPortal } from "react-dom";
 
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { Thread } from "../../protocol-client/index.js";
@@ -29,6 +33,8 @@ import {
   type SidebarOrderPlacement,
 } from "./thread-list.js";
 
+import { useSidebarExpansion } from "./sidebar-expansion.js";
+
 interface SidebarProps {
   collapsed?: boolean;
   mode: SidebarMode;
@@ -36,6 +42,7 @@ interface SidebarProps {
   onClose(): void;
   onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
   onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
+  onChangeProjectPinned?(key: string): Promise<void>;
   onReorderProject?(
     sourceKey: string,
     targetKey: string,
@@ -52,6 +59,7 @@ interface SidebarProps {
   newThreadDisabled?: boolean;
   onAddProject(): void;
   onRemoveProject(workspace: string): void;
+  onEditProject?(workspace: string, name: string): void;
   onSetDefaultProject(workspace: string): void;
   onOpenContribution(route: string): void;
   onOpenSettings(): void;
@@ -79,12 +87,14 @@ export function Sidebar({
   onClose,
   onChangeThreadLifecycle,
   onChangeThreadPinned,
+  onChangeProjectPinned,
   onReorderProject,
   onReorderThread,
   onNewThread,
   newThreadDisabled = false,
   onAddProject,
   onRemoveProject,
+  onEditProject,
   onSetDefaultProject,
   onOpenContribution,
   onOpenSettings,
@@ -110,7 +120,8 @@ export function Sidebar({
   const [sidebarOrderRetry, setSidebarOrderRetry] = useState<
     (() => Promise<void>) | null
   >(null);
-  const [projectsOpen, setProjectsOpen] = useState(true);
+  const [projectsOpen, toggleProjects, expansionError] =
+    useSidebarExpansion("projects");
   const lastUsedProject =
     projects.lastUsedWorkspace === null
       ? undefined
@@ -166,6 +177,51 @@ export function Sidebar({
     target.focus();
     setPendingPinFocus(null);
   }, [mode, pendingPinFocus, pinnedThreads]);
+  useEffect(() => {
+    const switchThread = (event: KeyboardEvent) => {
+      const mac = window.zenx?.platform === "darwin";
+      if (
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.repeat ||
+        event.altKey ||
+        event.shiftKey ||
+        (mac
+          ? !event.metaKey || event.ctrlKey
+          : !event.ctrlKey || event.metaKey) ||
+        !(/^[1-9]$/u.test(event.key) || event.key.toLowerCase() === "n")
+      )
+        return;
+      if (
+        document.querySelector(
+          '[role="dialog"], dialog[open], [aria-modal="true"]',
+        ) !== null ||
+        (event.target instanceof window.Element &&
+          event.target.closest(
+            '[role="menu"], .project-menu, .thread-menu-rename',
+          ))
+      )
+        return;
+      if (event.key.toLowerCase() === "n") {
+        const button = document.querySelector<HTMLButtonElement>(
+          "#primary-sidebar .new-thread-action",
+        );
+        if (button === null || button.disabled) return;
+        event.preventDefault();
+        button.click();
+        return;
+      }
+      const rows = document.querySelectorAll<HTMLButtonElement>(
+        "#primary-sidebar .thread-row-shell > button.thread-row",
+      );
+      const target = rows[Number(event.key) - 1];
+      if (target === undefined) return;
+      event.preventDefault();
+      target.click();
+    };
+    document.addEventListener("keydown", switchThread);
+    return () => document.removeEventListener("keydown", switchThread);
+  }, []);
   const watchingThreadIds = new Set<string>();
   return (
     <>
@@ -185,6 +241,18 @@ export function Sidebar({
           <div className="new-thread-control">
             <button
               className="new-thread-action"
+              title={
+                typeof window !== "undefined" &&
+                window.zenx?.platform === "darwin"
+                  ? "New thread (⌘N)"
+                  : "New thread (Ctrl+N)"
+              }
+              aria-keyshortcuts={
+                typeof window !== "undefined" &&
+                window.zenx?.platform === "darwin"
+                  ? "Meta+n"
+                  : "Control+n"
+              }
               type="button"
               disabled={newThreadDisabled}
               onClick={() => {
@@ -202,7 +270,8 @@ export function Sidebar({
                   ? configuredProjects.length === 0
                     ? "Add project first"
                     : "Choose project"
-                  : projectLabelForSidebar(lastUsedProject.workspace)}
+                  : (lastUsedProject.name ??
+                    projectLabelForSidebar(lastUsedProject.workspace))}
               </small>
             </button>
           </div>
@@ -214,7 +283,7 @@ export function Sidebar({
                 className="projects-section-toggle"
                 type="button"
                 aria-expanded={projectsOpen}
-                onClick={() => setProjectsOpen((value) => !value)}
+                onClick={toggleProjects}
               >
                 <Icon
                   className={projectsOpen ? "expanded" : undefined}
@@ -248,6 +317,9 @@ export function Sidebar({
           className="sidebar-scroll"
           aria-labelledby="sidebar-thread-list-heading"
         >
+          {expansionError !== null ? (
+            <p role="alert">{expansionError}</p>
+          ) : null}
           {sidebarOrderError !== null ? (
             <div className="sidebar-empty sidebar-error" role="alert">
               <p>{sidebarOrderError}</p>
@@ -315,11 +387,13 @@ export function Sidebar({
                   onNewThread={onNewThread}
                   newThreadDisabled={newThreadDisabled}
                   onRemoveProject={onRemoveProject}
+                  onEditProject={onEditProject}
                   onSetDefaultProject={onSetDefaultProject}
                   onSelectThread={onSelectThread}
                   onChangeThreadLifecycle={onChangeThreadLifecycle}
                   onChangeThreadPinned={changeThreadPinned}
                   onRenameThread={onRenameThread}
+                  onChangeProjectPinned={onChangeProjectPinned}
                   onReorderProject={onReorderProject}
                   onReorderThread={onReorderThread}
                   onSidebarOrderError={reportSidebarOrderError}
@@ -372,24 +446,39 @@ export function PluginSpaces({
   onOpen(route: string): void;
   selectedPage: string;
 }) {
+  const [expanded, toggleExpanded, expansionError] =
+    useSidebarExpansion("plugins");
+  const linksId = useId();
   if (contributions.length === 0) return null;
   return (
     <section className="plugin-spaces" aria-label="Enabled plugin spaces">
-      <strong>Plugin spaces</strong>
-      {contributions.map((contribution) => (
-        <button
-          className="plugin-space-link"
-          type="button"
-          aria-current={
-            selectedPage === contribution.page.route ? "page" : undefined
-          }
-          key={contribution.key}
-          onClick={() => onOpen(contribution.page.route)}
-        >
-          <Icon name={contribution.icon} />
-          <span>{contribution.label}</span>
-        </button>
-      ))}
+      <button
+        type="button"
+        className="plugin-spaces-toggle"
+        aria-expanded={expanded}
+        aria-controls={linksId}
+        onClick={toggleExpanded}
+      >
+        <Icon name={expanded ? "chevron-down" : "chevron-right"} />
+        <span>Plugin spaces</span>
+      </button>
+      {expansionError !== null ? <p role="alert">{expansionError}</p> : null}
+      <div id={linksId} hidden={!expanded}>
+        {contributions.map((contribution) => (
+          <button
+            className="plugin-space-link"
+            type="button"
+            aria-current={
+              selectedPage === contribution.page.route ? "page" : undefined
+            }
+            key={contribution.key}
+            onClick={() => onOpen(contribution.page.route)}
+          >
+            <Icon name={contribution.icon} />
+            <span>{contribution.label}</span>
+          </button>
+        ))}
+      </div>
     </section>
   );
 }
@@ -531,6 +620,7 @@ function ProjectsView({
   onNewThread,
   newThreadDisabled,
   onRemoveProject,
+  onEditProject,
   onSetDefaultProject,
   threads,
   selectedThreadId,
@@ -538,6 +628,7 @@ function ProjectsView({
   onChangeThreadLifecycle,
   onChangeThreadPinned,
   onRenameThread,
+  onChangeProjectPinned,
   onReorderProject,
   onReorderThread,
   onSidebarOrderError,
@@ -552,6 +643,7 @@ function ProjectsView({
   onNewThread(workspace?: string): void;
   newThreadDisabled: boolean;
   onRemoveProject(workspace: string): void;
+  onEditProject?(workspace: string, name: string): void;
   onSetDefaultProject(workspace: string): void;
   threads: readonly NativeThreadSummary[];
   selectedThreadId: string | null;
@@ -559,6 +651,7 @@ function ProjectsView({
   onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
   onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
   onRenameThread(threadId: string, title: string): Promise<void>;
+  onChangeProjectPinned?: SidebarProps["onChangeProjectPinned"];
   onReorderProject?: SidebarProps["onReorderProject"];
   onReorderThread?: SidebarProps["onReorderThread"];
   onSidebarOrderError?: (error: unknown, retry: () => Promise<void>) => void;
@@ -587,6 +680,10 @@ function ProjectsView({
   const groups = deriveProjectGroups(threads, projects, sidebarOrder);
   return groups.map((group, projectIndex) => (
     <ProjectRows
+      pinnedProject={
+        sidebarOrder.pinnedProjectKeys?.includes(group.key) ?? false
+      }
+      onChangeProjectPinned={onChangeProjectPinned}
       group={group}
       key={group.key}
       liveThread={liveThread}
@@ -596,6 +693,7 @@ function ProjectsView({
       onNewThread={onNewThread}
       newThreadDisabled={newThreadDisabled}
       onRemoveProject={onRemoveProject}
+      onEditProject={onEditProject}
       onSetDefaultProject={onSetDefaultProject}
       onSelectThread={onSelectThread}
       pendingApprovalThreadIds={pendingApprovalThreadIds}
@@ -771,9 +869,12 @@ interface ThreadReorderHandlers {
 
 function ProjectRows({
   group,
+  pinnedProject,
+  onChangeProjectPinned,
   onNewThread,
   newThreadDisabled,
   onRemoveProject,
+  onEditProject,
   onSetDefaultProject,
   selectedThreadId,
   onSelectThread,
@@ -788,9 +889,12 @@ function ProjectRows({
   threadReorder,
 }: {
   group: ReturnType<typeof deriveProjectGroups>[number];
+  pinnedProject: boolean;
+  onChangeProjectPinned?: SidebarProps["onChangeProjectPinned"];
   onNewThread(workspace?: string): void;
   newThreadDisabled: boolean;
   onRemoveProject(workspace: string): void;
+  onEditProject?(workspace: string, name: string): void;
   onSetDefaultProject(workspace: string): void;
   selectedThreadId: string | null;
   onSelectThread(threadId: string): void;
@@ -804,9 +908,14 @@ function ProjectRows({
   projectReorder?: ProjectReorderHandlers;
   threadReorder?: ThreadReorderHandlers;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, toggleOpen, expansionError] = useSidebarExpansion(
+    `project:${group.key}`,
+  );
   const [menuOpen, setMenuOpen] = useState(false);
+  const [pinBusy, setPinBusy] = useState(false);
+  const [pinError, setPinError] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const actionsRef = useRef<HTMLDivElement>(null);
   const moreRef = useRef<HTMLButtonElement>(null);
   const restoreMenuFocusRef = useRef(false);
   const initialMenuFocusRef = useRef<"first" | "last">("first");
@@ -823,8 +932,8 @@ function ProjectRows({
     if (!menuOpen) return;
     const closeOnOutsidePointer = (event: MouseEvent) => {
       if (
-        menuRef.current !== null &&
-        !menuRef.current.contains(event.target as Node)
+        !actionsRef.current?.contains(event.target as Node) &&
+        !menuRef.current?.contains(event.target as Node)
       ) {
         closeMenu();
       }
@@ -879,6 +988,7 @@ function ProjectRows({
       onDragOver={projectReorder?.onDragOver}
       onDrop={projectReorder?.onDrop}
     >
+      {expansionError !== null ? <p role="alert">{expansionError}</p> : null}
       <div
         className={`project-header${projectSelected ? " selected" : ""}${projectReorder === undefined ? "" : " reorderable"}`}
         draggable={projectReorder !== undefined}
@@ -906,14 +1016,17 @@ function ProjectRows({
               : "Alt+ArrowUp Alt+ArrowDown"
           }
           title={group.workspace ?? undefined}
-          onClick={() => setOpen((value) => !value)}
+          onClick={toggleOpen}
           onKeyDown={projectReorder?.onKeyDown}
         >
           <Icon name="folder" size={14} />
           <span>{group.label}</span>
+          {pinnedProject ? (
+            <Icon name="pin" size={12} aria-label="Pinned project" />
+          ) : null}
         </button>
         {group.workspace === null || !group.configured ? null : (
-          <div className="project-actions" ref={menuRef}>
+          <div className="project-actions" ref={actionsRef}>
             <button
               type="button"
               aria-label={`New thread in ${group.label}`}
@@ -939,9 +1052,11 @@ function ProjectRows({
               <Icon name="more" size={15} />
             </button>
             {menuOpen ? (
-              <div
+              <SidebarMenuPopover
+                anchorRef={moreRef}
                 className="project-menu"
                 id={projectMenuId}
+                menuRef={menuRef}
                 role="menu"
                 aria-labelledby={`project-more-trigger-${encodeURIComponent(group.key)}`}
                 aria-label={`${group.label} project actions`}
@@ -978,6 +1093,60 @@ function ProjectRows({
                   items[nextIndex]?.focus();
                 }}
               >
+                <div className="project-menu-summary">
+                  <strong>{group.label}</strong>
+                  <span>
+                    {group.threads.length}{" "}
+                    {group.threads.length === 1 ? "thread" : "threads"}
+                  </span>
+                  <span title={group.workspace ?? undefined}>
+                    {group.workspace}
+                  </span>
+                </div>
+                {onChangeProjectPinned ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={pinBusy}
+                    onClick={async () => {
+                      setPinBusy(true);
+                      setPinError(null);
+                      try {
+                        await onChangeProjectPinned(group.key);
+                        closeMenu();
+                      } catch (error) {
+                        setPinError(
+                          `Could not save project pin: ${error instanceof Error ? error.message : String(error)}`,
+                        );
+                      } finally {
+                        setPinBusy(false);
+                      }
+                    }}
+                  >
+                    <Icon name={pinnedProject ? "pin-off" : "pin"} size={13} />
+                    <span>
+                      {pinBusy
+                        ? "Saving…"
+                        : pinnedProject
+                          ? "Unpin project"
+                          : "Pin project"}
+                    </span>
+                  </button>
+                ) : null}
+                {pinError !== null ? <p role="alert">{pinError}</p> : null}
+                {onEditProject ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMenu(false);
+                      onEditProject(group.workspace!, group.label);
+                    }}
+                  >
+                    <Icon name="settings" size={13} />
+                    <span>Edit project</span>
+                  </button>
+                ) : null}
                 {!group.isDefault ? (
                   <button
                     type="button"
@@ -1002,7 +1171,7 @@ function ProjectRows({
                   <Icon name="x" size={13} />
                   <span>Remove from ZenX</span>
                 </button>
-              </div>
+              </SidebarMenuPopover>
             ) : null}
           </div>
         )}
@@ -1113,7 +1282,10 @@ function ThreadRow({
   useEffect(() => {
     if (!menuOpen) return;
     const closeOutside = (event: PointerEvent) => {
-      if (!rowRef.current?.contains(event.target as Node)) {
+      if (
+        !rowRef.current?.contains(event.target as Node) &&
+        !menuRef.current?.contains(event.target as Node)
+      ) {
         closeMenu();
       }
     };
@@ -1281,6 +1453,7 @@ function ThreadRow({
         labelledBy={`thread-menu-trigger-${thread.threadId}`}
         menuId={`thread-menu-${thread.threadId}`}
         menuRef={menuRef}
+        menuTriggerRef={menuTriggerRef}
         open={menuOpen}
         pinned={pinned}
         renaming={renaming}
@@ -1318,6 +1491,7 @@ export function ThreadItemMenu({
   labelledBy,
   menuId,
   menuRef,
+  menuTriggerRef,
   open,
   pinned,
   renaming,
@@ -1338,6 +1512,7 @@ export function ThreadItemMenu({
   labelledBy?: string;
   menuId?: string;
   menuRef?: RefObject<HTMLDivElement | null>;
+  menuTriggerRef?: RefObject<HTMLButtonElement | null>;
   open: boolean;
   pinned: boolean;
   renaming: boolean;
@@ -1354,10 +1529,11 @@ export function ThreadItemMenu({
   if (!open) return null;
   const busy = busyAction !== null;
   return (
-    <div
-      ref={menuRef}
+    <SidebarMenuPopover
+      anchorRef={menuTriggerRef}
       className="thread-item-menu"
       id={menuId}
+      menuRef={menuRef}
       role="menu"
       aria-labelledby={labelledBy}
       onKeyDown={(event) => {
@@ -1482,8 +1658,130 @@ export function ThreadItemMenu({
         </>
       )}
       {error === null ? null : <p role="alert">{error}</p>}
+    </SidebarMenuPopover>
+  );
+}
+
+const SIDEBAR_MENU_GAP = 6;
+const SIDEBAR_MENU_VIEWPORT_MARGIN = 8;
+
+function SidebarMenuPopover({
+  anchorRef,
+  children,
+  className,
+  menuRef,
+  ...props
+}: {
+  anchorRef?: RefObject<HTMLElement | null>;
+  children: ReactNode;
+  className: string;
+  menuRef?: RefObject<HTMLDivElement | null>;
+} & Omit<React.HTMLAttributes<HTMLDivElement>, "children" | "className">) {
+  const [layout, setLayout] = useState<SidebarMenuLayout | null>(null);
+
+  useLayoutEffect(() => {
+    const anchor = anchorRef?.current;
+    const menu = menuRef?.current;
+    if (
+      anchor === undefined ||
+      anchor === null ||
+      menu === undefined ||
+      menu === null
+    ) {
+      return;
+    }
+    const update = () => {
+      const next = sidebarMenuLayout(
+        anchor.getBoundingClientRect(),
+        menu.getBoundingClientRect(),
+        window.innerWidth,
+        window.innerHeight,
+      );
+      setLayout((current) =>
+        current?.left === next.left &&
+        current.top === next.top &&
+        current.placement === next.placement
+          ? current
+          : next,
+      );
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    const observer =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    observer?.observe(anchor);
+    observer?.observe(menu);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+      observer?.disconnect();
+    };
+  }, [anchorRef, menuRef]);
+
+  const element = (
+    <div
+      {...props}
+      ref={menuRef}
+      className={className}
+      data-placement={layout?.placement}
+      style={anchorRef === undefined ? undefined : popoverStyle(layout)}
+    >
+      {children}
     </div>
   );
+  return anchorRef === undefined || typeof document === "undefined"
+    ? element
+    : createPortal(element, document.body);
+}
+
+interface SidebarMenuLayout {
+  left: number;
+  top: number;
+  placement: "left" | "right";
+}
+
+function sidebarMenuLayout(
+  anchor: DOMRect,
+  menu: DOMRect,
+  viewportWidth: number,
+  viewportHeight: number,
+): SidebarMenuLayout {
+  const right = anchor.right + SIDEBAR_MENU_GAP;
+  const left = anchor.left - SIDEBAR_MENU_GAP - menu.width;
+  const rightFits =
+    right + menu.width <= viewportWidth - SIDEBAR_MENU_VIEWPORT_MARGIN;
+  const leftFits = left >= SIDEBAR_MENU_VIEWPORT_MARGIN;
+  const placement =
+    rightFits || (!leftFits && viewportWidth - anchor.right >= anchor.left)
+      ? "right"
+      : "left";
+  const preferredLeft = placement === "right" ? right : left;
+  const maxLeft = Math.max(
+    SIDEBAR_MENU_VIEWPORT_MARGIN,
+    viewportWidth - SIDEBAR_MENU_VIEWPORT_MARGIN - menu.width,
+  );
+  const maxTop = Math.max(
+    SIDEBAR_MENU_VIEWPORT_MARGIN,
+    viewportHeight - SIDEBAR_MENU_VIEWPORT_MARGIN - menu.height,
+  );
+  return {
+    left: Math.round(
+      Math.min(Math.max(preferredLeft, SIDEBAR_MENU_VIEWPORT_MARGIN), maxLeft),
+    ),
+    top: Math.round(
+      Math.min(Math.max(anchor.top, SIDEBAR_MENU_VIEWPORT_MARGIN), maxTop),
+    ),
+    placement,
+  };
+}
+
+function popoverStyle(layout: SidebarMenuLayout | null): CSSProperties {
+  return {
+    left: `${layout?.left ?? 0}px`,
+    top: `${layout?.top ?? 0}px`,
+    visibility: layout === null ? "hidden" : undefined,
+  };
 }
 
 function enabledMenuItems(container: HTMLElement | null): HTMLButtonElement[] {

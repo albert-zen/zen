@@ -53,7 +53,7 @@ test("Settings glyph surfaces keep distinct default, hover, and active states", 
   );
   assert.match(
     styles,
-    /\.settings-nav button:hover,\s*\.settings-nav button\[aria-selected="true"\]\s*\{[^}]*color:\s*var\(--text\)[^}]*background:\s*var\(--surface-2\)/su,
+    /\.settings-nav button\[aria-selected="true"\]\s*\{[^}]*color:\s*var\(--text-accent\)[^}]*background:\s*var\(--accent-soft\)/su,
   );
 });
 

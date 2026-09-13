@@ -52,6 +52,7 @@ export interface StagedProfileRemoval {
 export interface ZenXTrustedProfilePluginRuntime {
   readonly storage?: ZenXCapabilityPackage["storage"];
   start?(sdk: ZenXPluginHostSdkV1): Promise<void> | void;
+  activate?(previousRetired: Promise<void>): void;
   invoke(
     toolName: string,
     invocation: Omit<ToolInvocation, "name">,
@@ -156,20 +157,9 @@ export async function stagePluginPackage(options: {
         generationDirectory,
         options.allowBuilds,
       );
-      await runBundledPnpm({
-        cliPath: options.pnpmCliPath,
-        cwd: generationDirectory,
-        environment: options.pnpmEnvironment,
-        arguments: [
-          "install",
-          "--offline",
-          "--ignore-workspace",
-          "--store-dir",
-          paths.store,
-        ],
-        signal: options.signal,
-        abortGraceMs: options.pnpmAbortGraceMs,
-      });
+      // The add/update below materializes this staged generation from the
+      // copied lockfile. Installing the old dependency set first would require
+      // an App Resource tarball that an application upgrade may have removed.
     }
 
     const before = (await readProfilePackageJson(generationDirectory))
@@ -179,6 +169,21 @@ export async function stagePluginPackage(options: {
       options.source,
       generationDirectory,
     );
+    if (
+      options.expectedPackageName !== undefined &&
+      (options.source.mode === "bundled" || options.source.mode === "tarball")
+    ) {
+      // pnpm reads existing direct file specs even during add. Retire only the
+      // replaced dependency in staging before resolving its new tarball.
+      const stagedProfile = await readProfilePackageJson(generationDirectory);
+      const dependencies = { ...stagedProfile.dependencies };
+      delete dependencies[options.expectedPackageName];
+      await writeProfilePackageJson(
+        generationDirectory,
+        dependencies,
+        stagedProfile.pnpm?.allowBuilds ?? {},
+      );
+    }
     const pnpmArguments =
       options.source.mode === "npm" &&
       options.expectedPackageName !== undefined &&
@@ -369,7 +374,7 @@ export async function loadProfilePluginPackage(
   const module = (await import(
     `${pathToFileURL(runtimeEntry).href}?generation=${encodeURIComponent(path.basename(generationDirectory))}`
   )) as Readonly<Record<string, unknown>>;
-  return new ProfileTrustedPluginPackage(manifest, trustedLoader(module));
+  return new ProfileTrustedPluginPackage(manifest, () => trustedLoader(module));
 }
 
 async function prepareInstallSpec(
@@ -517,7 +522,13 @@ class ProfileProcessPluginPackage implements ZenXCapabilityPackage {
       invocationId: invocation.callId,
       tool: toolName,
       arguments: invocation.arguments,
-      context: { callId: invocation.callId, cwd: invocation.cwd },
+      context: {
+        callId: invocation.callId,
+        cwd: invocation.cwd,
+        ...(invocation.threadId === undefined
+          ? {}
+          : { threadId: invocation.threadId }),
+      },
       signal: invocation.signal,
     });
   }
@@ -560,7 +571,13 @@ class ProfileHttpPluginPackage implements ZenXCapabilityPackage {
       invocationId: invocation.callId,
       tool: toolName,
       arguments: invocation.arguments,
-      context: { callId: invocation.callId, cwd: invocation.cwd },
+      context: {
+        callId: invocation.callId,
+        cwd: invocation.cwd,
+        ...(invocation.threadId === undefined
+          ? {}
+          : { threadId: invocation.threadId }),
+      },
       signal: invocation.signal,
     });
   }
@@ -576,13 +593,21 @@ class ProfileTrustedPluginPackage implements ZenXCapabilityPackage {
   readonly manifest: ZenXPluginManifestV2;
   readonly storage?: ZenXCapabilityPackage["storage"];
   readonly #runtime: ZenXTrustedProfilePluginRuntime;
+  readonly activate?: (previousRetired: Promise<void>) => void;
+  readonly createRuntime?: ZenXCapabilityPackage["createRuntime"];
 
   constructor(
     manifest: ZenXPluginManifestV2,
-    runtime: ZenXTrustedProfilePluginRuntime,
+    create: () => ZenXTrustedProfilePluginRuntime,
   ) {
     this.manifest = manifest;
+    const runtime = create();
     this.#runtime = runtime;
+    if (runtime.activate !== undefined) {
+      this.activate = (previousRetired) => runtime.activate!(previousRetired);
+      this.createRuntime = () =>
+        new ProfileTrustedPluginPackage(manifest, create);
+    }
     if (runtime.storage !== undefined) this.storage = runtime.storage;
   }
 
@@ -595,6 +620,9 @@ class ProfileTrustedPluginPackage implements ZenXCapabilityPackage {
       callId: invocation.callId,
       arguments: invocation.arguments,
       cwd: invocation.cwd,
+      ...(invocation.threadId === undefined
+        ? {}
+        : { threadId: invocation.threadId }),
       signal: invocation.signal,
     });
   }

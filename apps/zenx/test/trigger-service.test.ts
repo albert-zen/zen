@@ -1220,6 +1220,221 @@ test("restart preserves completed predicate and match audits while a Turn remain
   }
 });
 
+for (const operation of ["cancel", "delete"] as const) {
+  test(`failed timer ${operation} preserves its scheduled wakeup`, async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-timer-write-"),
+    );
+    const manager = new ControlledManager();
+    const store = new AlwaysFailWriteStore(
+      path.join(directory, "triggers.json"),
+    );
+    const clock = new ManualTimerClock();
+    const triggers = new ZenXTriggerService(manager, store, clock);
+    try {
+      await triggers.start();
+      const trigger = await triggers.create({
+        threadId: "thread-a",
+        kind: "timer",
+        label: "Keep scheduled",
+        prompt: "Wake at the saved time.",
+        runAt: 2_000,
+      });
+      const timer = clock.tasks[0]!;
+      store.failWrites = true;
+      await assert.rejects(
+        triggers[operation](trigger.id),
+        /store unavailable/u,
+      );
+      store.failWrites = false;
+      assert.equal(triggers.snapshot().triggers[0]?.active, true);
+      assert.equal(timer.cancelled, false);
+      clock.time = 2_000;
+      timer.callback();
+      await snapshotWhen(
+        triggers,
+        (snapshot) => snapshot.history[0]?.status === "running",
+      );
+      assert.equal(manager.requests.length, 1);
+    } finally {
+      store.failWrites = false;
+      await triggers.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+test("unrelated Trigger changes preserve existing timer registrations", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-timer-stable-"));
+  const manager = new ControlledManager();
+  const clock = new ManualTimerClock();
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+    clock,
+  );
+  try {
+    await triggers.start();
+    const input = {
+      threadId: "thread-a",
+      kind: "timer" as const,
+      label: "Timer",
+      prompt: "Check status.",
+      runAt: 2_000,
+      intervalMinutes: 1,
+    };
+    const first = await triggers.create(input);
+    const second = await triggers.create({ ...input, runAt: 5_000 });
+    const signal = await triggers.create({
+      threadId: "thread-b",
+      kind: "signal",
+      label: "Signal",
+      prompt: "Check signal.",
+      signalName: "ready",
+    });
+    await triggers.update({ ...input, id: first.id, label: "Renamed timer" });
+    await triggers.signal("ready", "Explicit wakeup");
+    await triggers.cancel(signal.id);
+    await triggers.delete(signal.id);
+    assert.equal(clock.tasks.length, 2);
+    assert(clock.tasks.every((task) => !task.cancelled));
+
+    clock.time = 2_000;
+    clock.tasks[0]!.callback();
+    await snapshotWhen(triggers, (snapshot) =>
+      snapshot.history.some(
+        (entry) => entry.triggerId === first.id && entry.status === "running",
+      ),
+    );
+    assert.equal(clock.tasks.length, 3);
+    assert.equal(clock.tasks[1]!.cancelled, false);
+    assert.equal(clock.tasks[2]!.delay, 60_000);
+    assert.equal(triggers.snapshot().triggers[0]?.timer?.nextRunAt, 62_000);
+    await triggers.cancel(second.id);
+    assert.equal(clock.tasks[1]!.cancelled, true);
+    assert.equal(clock.tasks[2]!.cancelled, false);
+    assert.equal(clock.tasks.length, 3);
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+for (const duringWrite of [false, true]) {
+  test(`an old timer callback cannot wake an updated Trigger (${duringWrite ? "queued during save" : "after save"})`, async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-timer-update-"),
+    );
+    const manager = new ControlledManager();
+    const clock = new ManualTimerClock();
+    const store = new BlockingWriteStore(path.join(directory, "triggers.json"));
+    const triggers = new ZenXTriggerService(manager, store, clock);
+    try {
+      await triggers.start();
+      const input = {
+        threadId: "thread-a",
+        kind: "timer" as const,
+        label: "Timer",
+        prompt: "Use the latest scheduled time.",
+        runAt: 2_000,
+      };
+      const trigger = await triggers.create(input);
+      const oldTimer = clock.tasks[0]!;
+      clock.time = 2_000;
+      if (duringWrite) store.blockNextWrite = true;
+      const updating = triggers.update({
+        ...input,
+        id: trigger.id,
+        runAt: 5_000,
+      });
+      if (duringWrite) {
+        await store.started.promise;
+        oldTimer.callback();
+        store.release();
+      }
+      await updating;
+      if (!duringWrite) oldTimer.callback();
+      // Drain the mutation queued by the old callback through the public API.
+      await triggers.create({
+        threadId: "thread-b",
+        kind: "signal",
+        label: "Barrier",
+        prompt: "No wakeup.",
+        signalName: "barrier",
+      });
+      assert.equal(manager.requests.length, 0);
+      assert.equal(triggers.snapshot().history.length, 0);
+      assert.equal(triggers.snapshot().triggers[0]?.active, true);
+      clock.time = 5_000;
+      clock.tasks.at(-1)!.callback();
+      await snapshotWhen(
+        triggers,
+        (snapshot) => snapshot.history[0]?.status === "running",
+      );
+      assert.equal(manager.requests.length, 1);
+      assert.equal(triggers.snapshot().triggers[0]?.active, false);
+    } finally {
+      store.release();
+      await triggers.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+test("suspended and stopped timer registrations cannot wake resumed generations", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-timer-lifecycle-"),
+  );
+  const manager = new ControlledManager();
+  const clock = new ManualTimerClock();
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+    clock,
+  );
+  try {
+    await triggers.start();
+    await triggers.create({
+      threadId: "thread-a",
+      kind: "timer",
+      label: "Lifecycle",
+      prompt: "Wake once.",
+      runAt: 2_000,
+    });
+    const suspendedTimer = clock.tasks[0]!;
+    triggers.suspendWakeups();
+    assert.equal(suspendedTimer.cancelled, true);
+    triggers.resumeWakeups();
+    const stoppedTimer = clock.tasks[1]!;
+    await triggers.stop();
+    assert.equal(stoppedTimer.cancelled, true);
+    clock.time = 2_000;
+    await triggers.start();
+    const currentTimer = clock.tasks[2]!;
+    suspendedTimer.callback();
+    stoppedTimer.callback();
+    await triggers.create({
+      threadId: "thread-b",
+      kind: "signal",
+      label: "Barrier",
+      prompt: "No wakeup.",
+      signalName: "barrier",
+    });
+    assert.equal(manager.requests.length, 0);
+    assert.equal(clock.tasks.length, 3);
+    assert.equal(currentTimer.cancelled, false);
+    currentTimer.callback();
+    await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "running",
+    );
+    assert.equal(manager.requests.length, 1);
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("long timers reschedule at the clamp boundary instead of firing early", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-long-timer-"));
   const manager = new ControlledManager();
@@ -1540,6 +1755,24 @@ class FailTerminalWriteStore extends ZenXTriggerStore {
     }
     await super.write(snapshot);
   }
+}
+
+class ManualTimerClock {
+  time = 1_000;
+  readonly tasks: Array<{
+    callback(): void;
+    delay: number;
+    cancelled: boolean;
+  }> = [];
+  readonly now = () => this.time;
+  readonly schedule = (callback: () => void, delay: number) => {
+    const task = { callback, delay, cancelled: false };
+    this.tasks.push(task);
+    return task;
+  };
+  readonly cancelScheduled = (handle: unknown) => {
+    (handle as { cancelled: boolean }).cancelled = true;
+  };
 }
 
 class AlwaysFailWriteStore extends ZenXTriggerStore {

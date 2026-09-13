@@ -383,6 +383,7 @@ function validateUi(
     "terminal",
     "trigger",
     "users",
+    "imzenx",
   ] as const;
   for (const sidebar of optionalArray(
     contributions.sidebar,

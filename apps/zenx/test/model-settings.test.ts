@@ -15,6 +15,7 @@ import {
   canSendWithModel,
   canChangeThreadModel,
   groupedModelOptions,
+  hasValidReasoningSelection,
   imageCapabilityMessage,
   imageCapabilityNotice,
   modelChangeRequest,
@@ -54,6 +55,28 @@ test("blocks unsupported images but offers an explicit try-send path for Unknown
     })),
   };
   assert.equal(imageCapabilityMessage([supported], selected), null);
+});
+
+test("image guidance follows published capabilities while saved edits remain unconfirmed", () => {
+  const settings = {
+    threadId: "thread",
+    model: key("provider", "vision"),
+    modelProvider: "provider",
+    reasoningEffort: null,
+  };
+  const saved = provider("provider", "Provider", ["vision"]);
+  const runtime = [
+    model(settings.model, { inputModalities: ["text", "image"] }),
+  ];
+  assert.equal(imageCapabilityMessage([saved], settings, runtime), null);
+  assert.equal(imageCapabilityNotice([saved], settings, runtime), null);
+  saved.models[0]!.inputModalities = ["text", "image"];
+  assert.match(
+    imageCapabilityMessage([saved], settings, [
+      model(settings.model, { inputModalities: ["text"] }),
+    ]) ?? "",
+    /does not support image/,
+  );
 });
 
 test("all built-in subscription presets pass the image send gate", () => {
@@ -137,6 +160,52 @@ test("initializes from resume, mirrors only ZAS events, and allows next-turn cha
   assert.equal(canChangeThreadModel(active), true);
 });
 
+test("selected permissions follow resume and notifications independently of the list", () => {
+  const selected = settingsFromSnapshot("thread-1", {
+    ...settingsSnapshot("model-a"),
+    sandbox: { type: "readOnly" },
+    approvalPolicy: "on-request",
+  });
+  assert.equal(selected.permissionMode, "read-only");
+  const updated = applySettingsMirror(selected, "thread-1", {
+    ...updatedSettings("model-a"),
+    sandboxPolicy: { type: "dangerFullAccess" },
+    approvalPolicy: "never",
+  });
+  assert.equal(updated?.permissionMode, "danger-full-access");
+  assert.equal(updated?.approvalPolicy, "never");
+});
+
+test("groups the published catalog even when saved provider edits are still unconfirmed", () => {
+  const published = model(key("removed-provider", "old-model"), {
+    isDefault: true,
+  });
+  const newlyPublished = model(key("known-provider", "new-model"));
+  const groups = groupedModelOptions(
+    [published, newlyPublished],
+    [provider("known-provider", "Known", ["unpublished-model"])],
+  );
+  assert.deepEqual(
+    groups.map((group) => ({
+      provider: group.providerProfileId,
+      label: group.displayName,
+      models: group.models.map((entry) => entry.id),
+    })),
+    [
+      {
+        provider: "removed-provider",
+        label: "removed-provider",
+        models: [published.id],
+      },
+      {
+        provider: "known-provider",
+        label: "Known",
+        models: [newlyPublished.id],
+      },
+    ],
+  );
+});
+
 test("groups runnable visible models by Provider and lists only selected-model efforts", () => {
   const alphaKey = key("provider-alpha", "shared");
   const betaKey = key("provider-beta", "shared");
@@ -188,6 +257,42 @@ test("groups runnable visible models by Provider and lists only selected-model e
     model: alphaKey,
     effort: "low",
   });
+});
+
+test("requires an explicit valid effort only when the model exposes effort control", () => {
+  const controlled = model("controlled", {
+    isDefault: true,
+    supportedReasoningEfforts: efforts("low", "medium", "high"),
+    defaultReasoningEffort: "medium",
+  });
+  const uncontrolled = model("uncontrolled");
+  const selection = {
+    model: controlled.id,
+    reasoningEffort: null,
+  };
+
+  assert.equal(hasValidReasoningSelection([controlled], selection), false);
+  assert.equal(
+    hasValidReasoningSelection([controlled], {
+      ...selection,
+      reasoningEffort: "unsupported",
+    }),
+    false,
+  );
+  assert.equal(
+    hasValidReasoningSelection([controlled], {
+      ...selection,
+      reasoningEffort: "medium",
+    }),
+    true,
+  );
+  assert.equal(
+    hasValidReasoningSelection([uncontrolled], {
+      model: uncontrolled.id,
+      reasoningEffort: null,
+    }),
+    true,
+  );
 });
 
 function model(

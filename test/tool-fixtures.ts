@@ -13,6 +13,7 @@ export function testToolRuntime(options: {
   description?: string;
   inputSchema?: ModelTool["inputSchema"];
   executionMode?: ToolExecutionMode;
+  taskPolicy?: ToolRuntime["taskPolicy"];
   execute(invocation: ToolInvocation): Promise<ToolExecutionResult>;
 }): ToolRuntime {
   return {
@@ -25,6 +26,9 @@ export function testToolRuntime(options: {
     ...(options.executionMode === undefined
       ? {}
       : { executionMode: options.executionMode }),
+    ...(options.taskPolicy === undefined
+      ? {}
+      : { taskPolicy: options.taskPolicy }),
     execute: options.execute,
   };
 }

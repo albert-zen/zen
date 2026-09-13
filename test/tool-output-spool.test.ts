@@ -16,13 +16,20 @@ import test from "node:test";
 import { ZenAppServer } from "../src/app-server.js";
 import { InMemoryThreadJournal } from "../src/journal.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
-import type { ModelAdapter, ModelEvent, ModelRequest } from "../src/model.js";
+import {
+  compileModelMessages,
+  type ModelAdapter,
+  type ModelEvent,
+  type ModelRequest,
+} from "../src/model.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { renderToolOutput, ToolOutputSpool } from "../src/tool-output-spool.js";
+import { DEFAULT_TOOL_OUTPUT_PREVIEW_BYTES } from "../src/tool-output-spool.js";
 import {
   ShellToolRuntime,
+  type ToolInvocation,
   ToolEnvironment,
   type ToolBundleIdentity,
   type ToolRuntime,
@@ -51,7 +58,15 @@ test("oversized shell output becomes a bounded receipt with readable full output
     assert(result.output.includes("HEAD-"));
     assert(result.output.includes("-TAIL"));
     assert(!result.output.includes("-MIDDLE-"));
-    assert(Buffer.byteLength(result.output, "utf8") < 40 * 1024);
+    assert.equal(DEFAULT_TOOL_OUTPUT_PREVIEW_BYTES, 8 * 1024);
+    assert(Buffer.byteLength(result.output, "utf8") < 10 * 1024);
+    const receiptText = result.output;
+    const headPreview = receiptText
+      .split("--- head ---\n")[1]!
+      .split("\n--- tail ---")[0]!;
+    const tailPreview = receiptText.split("--- tail ---\n")[1]!;
+    assert.equal(Buffer.byteLength(headPreview, "utf8"), 4 * 1024);
+    assert.equal(Buffer.byteLength(tailPreview, "utf8"), 4 * 1024);
     const receipt = parseReceipt(result.output);
     const captured = await readFile(receipt.path);
     assert.equal(captured.toString("utf8"), expected);
@@ -87,6 +102,94 @@ test("small shell output keeps its exact canonical text shape", async () => {
     assert.equal(result.exitCode, 0);
     assert(!JSON.stringify(result).includes("capturedBytes"));
   } finally {
+    await spool.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a saturated running shell capture keeps its wait receipt model-visible", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-spool-session-"));
+  const spool = new ToolOutputSpool({ rootDirectory: root, previewBytes: 8 });
+  const environment = new ToolEnvironment({
+    runtimes: [new ShellToolRuntime()],
+    toolOutputSpool: spool,
+    taskOptions: { maxOutputBytes: 1, yieldTimeMs: 1 },
+  });
+  const shell = {
+    execute: (invocation: ToolInvocation) =>
+      environment.execute(environment.prepare(invocation)),
+    waitRuntime: environment.waitRuntime,
+    close: () => environment.close(),
+  };
+  try {
+    const emit = path.join(root, "emit");
+    const outputReady = path.join(root, "output-ready");
+    const command = [
+      `while [ ! -f ${JSON.stringify(emit)} ]; do sleep 0.005; done`,
+      "printf xx",
+      `printf ready > ${JSON.stringify(outputReady)}`,
+      "while :; do sleep 1; done",
+    ].join("; ");
+    const started = await shell.execute({
+      callId: "start-noisy-shell",
+      name: "shell",
+      arguments: { command },
+      cwd: root,
+      signal: new AbortController().signal,
+      threadId: "thread-a",
+    });
+    const structured = started.structuredContent;
+    assert(
+      typeof structured === "object" &&
+        structured !== null &&
+        "task_id" in structured &&
+        typeof structured.task_id === "string",
+    );
+    await writeFile(emit, "emit");
+    await waitForFile(outputReady);
+    const waitResult = await shell.waitRuntime.execute({
+      callId: "wait-noisy-shell",
+      name: "wait",
+      arguments: {
+        task_id: structured.task_id,
+        yield_time_ms: 1,
+      },
+      cwd: root,
+      signal: new AbortController().signal,
+      threadId: "thread-a",
+    });
+    const fixture = testToolRuntime({
+      name: "fixture_shell_result",
+      description: "Return a captured shell wait result",
+      inputSchema: { type: "object" },
+      execute: async () => waitResult,
+    });
+    const server = createToolServer(
+      spool,
+      fixture,
+      "fixture_shell_result",
+      {},
+      { kind: "builtin", id: "fixture-shell-result" },
+    );
+    const thread = await server.startThread();
+    await (
+      await server.startTurn(thread.id, "run noisy job")
+    ).done;
+
+    const snapshot = await server.readThread(thread.id);
+    const result = snapshot.items.find((item) => item.type === "tool_result");
+    assert(result?.type === "tool_result");
+    assert.match(result.output, /\[tool output receipt\]/u);
+    assert.match(result.output, /\[tool task running\]/u);
+    assert.match(result.output, /^task_id: [a-f0-9-]+$/mu);
+    assert.match(result.output, /^timeout_ms: 600000$/mu);
+    const modelResult = compileModelMessages(snapshot.items).find(
+      (message) => message.role === "tool",
+    );
+    assert(modelResult?.role === "tool");
+    assert.match(modelResult.text, /^task_id: [a-f0-9-]+$/mu);
+  } finally {
+    await shell.close();
     await spool.close();
     await rm(root, { recursive: true, force: true });
   }
@@ -144,11 +247,11 @@ test("UTF-8 head and tail stay valid while the full normalized bytes match", asy
   }
 });
 
-test("stream redaction crosses chunk and UTF-8 decoder boundaries before disk", async () => {
+test("capture preserves original values across chunk and UTF-8 decoder boundaries", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-spool-redact-"));
   const spool = new ToolOutputSpool({ rootDirectory: root, previewBytes: 12 });
   try {
-    const capture = spool.beginCapture({ redactedValues: ["密钥SECRET"] });
+    const capture = spool.beginCapture();
     const source = Buffer.from("start-密钥SECRET-end-and-padding", "utf8");
     capture.write(source.subarray(0, 8));
     capture.write(source.subarray(8, 13));
@@ -156,9 +259,8 @@ test("stream redaction crosses chunk and UTF-8 decoder boundaries before disk", 
     const metadata = await capture.finish();
     assert(metadata.path !== undefined);
     const stored = await readFile(metadata.path, "utf8");
-    assert.equal(stored, "start-[REDACTED]-end-and-padding");
-    assert(!renderToolOutput(metadata).includes("密钥SECRET"));
-    assert(!stored.includes("密钥SECRET"));
+    assert.equal(stored, "start-密钥SECRET-end-and-padding");
+    assert(!stored.includes("[REDACTED]"));
   } finally {
     await spool.close();
     await rm(root, { recursive: true, force: true });
@@ -288,7 +390,11 @@ function createShellServer(
 ): ZenAppServer {
   return createToolServer(
     spool,
-    new ShellToolRuntime({ toolOutputSpool: spool }),
+    new ShellToolRuntime({
+      toolOutputSpool: spool,
+      environment: { ...process.env, ZEN_TEST_SECRET: "-MIDDLE-" },
+      blockedEnvironmentVariables: ["ZEN_TEST_SECRET"],
+    }),
     "shell",
     { command },
     { kind: "builtin", id: "shell" },
@@ -324,6 +430,7 @@ function createToolServer(
     journal: new InMemoryThreadJournal(),
     runtime: new AgentRuntime({
       toolEnvironment: new ToolEnvironment({
+        toolOutputSpool: spool,
         bundles: [testToolBundle(owner, [tools])],
       }),
       toolOutputSpool: spool,
@@ -366,4 +473,17 @@ function parseReceipt(output: string): {
     sha256: hashMatch[1]!,
     sourceTruncated: truncatedMatch[1] === "true",
   };
+}
+
+async function waitForFile(filename: string): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline) {
+    try {
+      await stat(filename);
+      return;
+    } catch {
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    }
+  }
+  throw new Error(`file was not created: ${filename}`);
 }

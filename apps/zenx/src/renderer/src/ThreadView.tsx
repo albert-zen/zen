@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import {
   useEffect,
   useLayoutEffect,
@@ -27,6 +28,8 @@ import type {
 import type { ApprovalCardState } from "./approval-state.js";
 import {
   composerDraftHasContent,
+  defaultComposerIntent,
+  type ComposerSendMode,
   type ComposerDraftImage,
   type ComposerIntent,
   type ComposerState,
@@ -34,7 +37,15 @@ import {
 import type { ZenXThreadAttachmentProjection } from "../../main/image-attachments.js";
 import { ComposerModelMenu } from "./ComposerModelMenu.js";
 import { Icon } from "./icons.js";
+import { PermissionSelect } from "./PermissionSelect.js";
+import type { FilePermissionMode } from "../../protocol-client/types.js";
 import { Markdown } from "./Markdown.js";
+import {
+  AttachmentImage,
+  ImagePreview,
+  ThreadImagesContext,
+  ToolImages,
+} from "./ImagePresentation.js";
 import { activeTurn } from "./thread-view-state.js";
 import type { PluginUiRegistry } from "./plugin-ui-host.js";
 import { ToolResultRenderer } from "./ToolResultRenderer.js";
@@ -46,6 +57,8 @@ import {
 } from "./turn-projection.js";
 
 interface ThreadViewProps {
+  composerSendMode?: ComposerSendMode;
+  onResumeQueue?(): Promise<void>;
   approvals: readonly ApprovalCardState[];
   composer: ComposerState;
   composerContext?: ReactNode;
@@ -57,6 +70,10 @@ interface ThreadViewProps {
   imageCapabilityNotice?: string | null;
   models?: readonly ModelSummary[];
   permissionLabel?: string | null;
+  permissionMode?: FilePermissionMode;
+  permissionError?: string | null;
+  switchingPermission?: boolean;
+  onPermissionChange?(mode: FilePermissionMode): void;
   providerProfiles?: readonly ZenXProviderProfile[];
   selectedModel?: string;
   selectedReasoningEffort?: string | null;
@@ -87,6 +104,8 @@ interface ThreadViewProps {
 }
 
 export function ThreadView({
+  composerSendMode = "queue",
+  onResumeQueue,
   approvals,
   composer,
   composerContext = null,
@@ -98,6 +117,10 @@ export function ThreadView({
   imageCapabilityNotice = null,
   models = [],
   permissionLabel = "Full access",
+  permissionMode = "danger-full-access",
+  permissionError,
+  switchingPermission,
+  onPermissionChange,
   providerProfiles = [],
   selectedModel,
   selectedReasoningEffort = null,
@@ -228,17 +251,30 @@ export function ThreadView({
     }
   };
 
+  const sendIntent = defaultComposerIntent(
+    runningTurn !== null,
+    composerSendMode,
+  );
+  const alternateIntent = defaultComposerIntent(
+    runningTurn !== null,
+    composerSendMode,
+    true,
+  );
   const primaryMode =
-    runningTurn === null ? "send" : !hasDraft ? "stop" : "replace";
+    runningTurn === null ? "send" : !hasDraft ? "stop" : sendIntent;
+  const intentLabel = (intent: ComposerIntent) =>
+    intent === "queue"
+      ? "Queue message"
+      : intent === "steer"
+        ? "Soft steer"
+        : intent === "replace"
+          ? "Interrupt and send"
+          : "Send";
   const primaryLabel =
-    primaryMode === "send"
-      ? "Send"
-      : primaryMode === "stop"
-        ? "Stop"
-        : "Interrupt and send";
+    primaryMode === "stop" ? "Stop" : intentLabel(sendIntent);
   const primary = () => {
     if (primaryMode === "stop") void interrupt();
-    else submit(primaryMode === "replace" ? "replace" : "start");
+    else submit(sendIntent);
   };
 
   return (
@@ -283,34 +319,44 @@ export function ThreadView({
           setAtLive(live);
         }}
       >
-        <div className="messages-inner">
-          {turns.length === 0
-            ? (emptyContent ?? (
-                <div className="thread-empty">
-                  <h2>Start a new thread</h2>
-                  <p>
-                    Describe the outcome you want. ZenX will use this Thread’s
-                    workspace, model, and permission policy.
-                  </p>
-                </div>
-              ))
-            : turns.map((turn, index) => (
-                <TurnBlock
-                  index={index}
-                  key={turn.id}
-                  turn={turn}
-                  usage={threadUsage?.turns[turn.id]}
-                  wakeups={wakeups}
-                  attachments={threadAttachments}
-                  onOpenImage={(attachment, name, trigger) =>
-                    setPreview({ attachment, name, trigger })
-                  }
-                  onReadAttachment={onReadAttachment}
-                  pluginSnapshot={pluginSnapshot}
-                  pluginUiRegistry={pluginUiRegistry}
-                />
-              ))}
-        </div>
+        <ThreadImagesContext.Provider
+          value={{
+            cwd: thread?.cwd,
+            attachments: threadAttachments,
+            read: onReadAttachment,
+            open: (attachment, name, trigger) =>
+              setPreview({ attachment, name, trigger }),
+          }}
+        >
+          <div className="messages-inner">
+            {turns.length === 0
+              ? (emptyContent ?? (
+                  <div className="thread-empty">
+                    <h2>Start a new thread</h2>
+                    <p>
+                      Describe the outcome you want. ZenX will use this Thread’s
+                      workspace, model, and permission policy.
+                    </p>
+                  </div>
+                ))
+              : turns.map((turn, index) => (
+                  <TurnBlock
+                    index={index}
+                    key={turn.id}
+                    turn={turn}
+                    usage={threadUsage?.turns[turn.id]}
+                    wakeups={wakeups}
+                    attachments={threadAttachments}
+                    onOpenImage={(attachment, name, trigger) =>
+                      setPreview({ attachment, name, trigger })
+                    }
+                    onReadAttachment={onReadAttachment}
+                    pluginSnapshot={pluginSnapshot}
+                    pluginUiRegistry={pluginUiRegistry}
+                  />
+                ))}
+          </div>
+        </ThreadImagesContext.Provider>
       </div>
 
       {atLive ? null : (
@@ -339,6 +385,34 @@ export function ThreadView({
             onRespond={onRespondToApproval}
           />
         ))}
+        {(thread?.queuedMessages?.length ?? 0) > 0 ? (
+          <div
+            className="queued-messages"
+            aria-label="Message queue"
+            aria-live="polite"
+          >
+            <strong>{thread!.queuedMessages!.length} queued</strong>
+            <ol>
+              {thread!.queuedMessages!.map((message) => (
+                <li key={message.id}>
+                  {message.text || `${message.imageCount} image(s)`}
+                </li>
+              ))}
+            </ol>
+            {runningTurn === null && onResumeQueue !== undefined ? (
+              <button
+                type="button"
+                onClick={() =>
+                  void onResumeQueue().catch((error: unknown) =>
+                    setInterruptError(describeError(error)),
+                  )
+                }
+              >
+                Continue queue
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         <form
           className="composer"
           onSubmit={(event) => {
@@ -389,14 +463,22 @@ export function ThreadView({
               if (event.nativeEvent.isComposing) return;
               event.preventDefault();
               if (event.repeat) return;
-              submit(runningTurn === null ? "start" : "steer");
+              submit(
+                defaultComposerIntent(
+                  runningTurn !== null,
+                  composerSendMode,
+                  event.metaKey || event.ctrlKey,
+                ),
+              );
             }}
             placeholder={
               runningTurn === null
                 ? watching
                   ? "Send a message to wake this thread…"
                   : "Ask ZenX anything…"
-                : "Steer the current run…"
+                : composerSendMode === "queue"
+                  ? "Queue a message…"
+                  : "Steer the current run…"
             }
             ref={composerTextareaRef}
             rows={1}
@@ -437,15 +519,18 @@ export function ThreadView({
                 threadCacheHitRate={threadUsage?.thread.cacheHitRate}
               />
               {permissionLabel === null ? null : (
-                <button
-                  className="composer-tool permission-control"
-                  type="button"
-                  aria-label={`Permission policy: ${permissionLabel}`}
-                  disabled
-                >
-                  <Icon name="lock" size={14} />
-                  <span>{permissionLabel}</span>
-                </button>
+                <PermissionSelect
+                  legacyApproval={permissionLabel === "Approval required"}
+                  value={permissionMode}
+                  disabled={
+                    runningTurn !== null ||
+                    composerDisabled ||
+                    composer.submission?.status === "pending"
+                  }
+                  switching={switchingPermission ?? false}
+                  error={permissionError ?? null}
+                  onChange={onPermissionChange}
+                />
               )}
             </div>
             <div className="composer-actions">
@@ -456,11 +541,9 @@ export function ThreadView({
                   disabled={
                     composerDisabled || submitting || blockedByImageCapability
                   }
-                  onClick={() => submit("steer")}
+                  onClick={() => submit(alternateIntent)}
                 >
-                  {submitting && composer.submission?.intent === "steer"
-                    ? "Steering…"
-                    : "Steer"}
+                  {intentLabel(alternateIntent)}
                 </button>
               ) : null}
               <button
@@ -523,6 +606,26 @@ export function ThreadView({
   );
 }
 
+function RunningTurnLabel({ startedAt }: { startedAt: number | null }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, []);
+  const seconds =
+    startedAt === null
+      ? null
+      : Math.max(0, Math.floor(now / 1_000 - startedAt));
+  return (
+    <div className="turn-running-label" role="status" aria-label="Working">
+      <span className="mini-spinner" aria-hidden="true" />
+      <span aria-hidden="true">
+        {seconds === null ? "Working" : `Working for ${seconds}s`}
+      </span>
+    </div>
+  );
+}
+
 function TurnBlock({
   turn,
   index,
@@ -549,7 +652,10 @@ function TurnBlock({
   usage?: ModelUsageAggregate;
 }) {
   const projection = useMemo(() => projectTurn(turn), [turn]);
-  const [expanded, setExpanded] = useState(false);
+  const [expandedOverride, setExpanded] = useState<boolean | null>(null);
+  const expanded =
+    expandedOverride ??
+    (turn.status === "failed" || turn.status === "interrupted");
   const complete = turn.status !== "inProgress";
   const renderUserItem = (
     item: Extract<ThreadItem, { type: "userMessage" }>,
@@ -578,16 +684,13 @@ function TurnBlock({
           className="turn-toggle"
           type="button"
           aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
+          onClick={() => setExpanded(!expanded)}
         >
           <span>{completedTurnLabel(turn)}</span>
           <Icon name="chevron-down" size={14} />
         </button>
       ) : (
-        <div className="turn-running-label" aria-live="polite">
-          <span className="mini-spinner" aria-hidden="true" />
-          <span>Working</span>
-        </div>
+        <RunningTurnLabel startedAt={turn.startedAt} />
       )}
       {!complete || expanded ? (
         <div className="turn-history">
@@ -744,7 +847,14 @@ function DisplayNode({
   return node.kind === "agent" ? (
     <AgentMessage
       item={node.item}
-      showActions={false}
+      showActions={
+        (turn.status === "failed" || turn.status === "interrupted") &&
+        turn.items
+          .filter(
+            (item) => item.type === "agentMessage" && item.text.length > 0,
+          )
+          .at(-1)?.id === node.item.id
+      }
       turn={turn}
       usage={usage}
     />
@@ -891,8 +1001,12 @@ function TraceItemHeader({
             : "Tool"}
       </strong>
       <span>{traceItemLabel(item)}</span>
-      <StatusMark item={item} />
-      {expandable ? <Icon name="chevron-down" size={13} /> : null}
+      <span className="trace-item-status">
+        <StatusMark item={item} />
+      </span>
+      <span className="trace-item-chevron">
+        {expandable ? <Icon name="chevron-down" size={13} /> : null}
+      </span>
     </>
   );
 }
@@ -906,12 +1020,19 @@ function traceItemExpandable(
 }
 
 function StatusMark({ item }: { item: ThreadItem }) {
+  if (item.type === "reasoning") {
+    if (item.status === "inProgress")
+      return <span className="mini-spinner" aria-label="Thinking" />;
+    if (item.status === "interrupted")
+      return <small className="tool-status interrupted">Interrupted</small>;
+    return null;
+  }
   if (item.type !== "commandExecution") return null;
   return item.status === "inProgress" ? (
     <span className="mini-spinner" aria-label="Running" />
   ) : (
     <small className={`tool-status ${item.status}`}>
-      {commandStatus(item.status)}
+      {commandStatus(item)}
     </small>
   );
 }
@@ -938,6 +1059,7 @@ function TraceDetail({
       <pre className="trace-command">
         <code>{item.command}</code>
       </pre>
+      <ToolImages itemId={item.id} />
       <ToolResultRenderer
         item={item}
         snapshot={pluginSnapshot}
@@ -1036,212 +1158,6 @@ function DraftImage({
       </button>
     </div>
   );
-}
-
-function AttachmentImage({
-  attachment,
-  name,
-  onOpen,
-  onReadAttachment,
-}: {
-  attachment: AttachmentRef;
-  name: string;
-  onOpen(
-    attachment: AttachmentRef,
-    name: string,
-    trigger: HTMLButtonElement,
-  ): void;
-  onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
-}) {
-  const { url, error } = useAttachmentUrl(attachment, onReadAttachment);
-  return (
-    <button
-      className="image-thumbnail"
-      type="button"
-      aria-label={`Preview ${name}`}
-      disabled={url === null}
-      onClick={(event) => onOpen(attachment, name, event.currentTarget)}
-    >
-      {url === null ? (
-        <span className="image-placeholder" role={error ? "alert" : undefined}>
-          {error ? "Image unavailable" : "Loading image"}
-        </span>
-      ) : (
-        <img alt={name} src={url} />
-      )}
-    </button>
-  );
-}
-
-function ImagePreview({
-  attachment,
-  name,
-  onClose,
-  onReadAttachment,
-  trigger,
-}: {
-  attachment: AttachmentRef;
-  name: string;
-  onClose(): void;
-  onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
-  trigger: HTMLButtonElement;
-}) {
-  const closeRef = useRef<HTMLButtonElement>(null);
-  const { url, error } = useAttachmentUrl(attachment, onReadAttachment);
-  useEffect(() => {
-    closeRef.current?.focus();
-    const keydown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
-      } else if (event.key === "Tab") {
-        event.preventDefault();
-        closeRef.current?.focus();
-      }
-    };
-    document.addEventListener("keydown", keydown);
-    return () => {
-      document.removeEventListener("keydown", keydown);
-      trigger.focus();
-    };
-  }, [onClose, trigger]);
-  return (
-    <div
-      className="image-preview-layer"
-      role="presentation"
-      onPointerDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <section
-        className="image-preview"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="image-preview-title"
-      >
-        <header>
-          <strong id="image-preview-title">{name}</strong>
-          <button
-            ref={closeRef}
-            className="icon-button"
-            type="button"
-            aria-label="Close image preview"
-            onClick={onClose}
-          >
-            <Icon name="x" />
-          </button>
-        </header>
-        <div className="image-preview-content">
-          {url === null ? (
-            <p role={error ? "alert" : "status"}>{error ?? "Loading image…"}</p>
-          ) : (
-            <img alt={name} src={url} />
-          )}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-// Keep a small LRU of URLs after their last consumer unmounts so streaming
-// re-renders and disclosure remounts do not flash. Mounted URLs are never
-// evicted; at most this many inactive URLs remain retained for later reuse.
-const retainedAttachmentUrlLimit = 32;
-const attachmentUrlCache = new Map<
-  string,
-  { url: string; consumers: number }
->();
-
-function touchAttachmentUrl(
-  cacheKey: string,
-  entry: { url: string; consumers: number },
-): void {
-  attachmentUrlCache.delete(cacheKey);
-  attachmentUrlCache.set(cacheKey, entry);
-}
-
-function trimAttachmentUrls(): void {
-  while (attachmentUrlCache.size > retainedAttachmentUrlLimit) {
-    const inactive = [...attachmentUrlCache].find(
-      ([, entry]) => entry.consumers === 0,
-    );
-    if (inactive === undefined) return;
-    const [cacheKey, entry] = inactive;
-    attachmentUrlCache.delete(cacheKey);
-    URL.revokeObjectURL(entry.url);
-  }
-}
-
-function releaseAttachmentUrl(
-  cacheKey: string,
-  entry: { url: string; consumers: number },
-): void {
-  if (attachmentUrlCache.get(cacheKey) !== entry) return;
-  entry.consumers = Math.max(0, entry.consumers - 1);
-  trimAttachmentUrls();
-}
-
-if (typeof window !== "undefined") {
-  window.addEventListener("beforeunload", () => {
-    for (const entry of attachmentUrlCache.values())
-      URL.revokeObjectURL(entry.url);
-    attachmentUrlCache.clear();
-  });
-}
-
-function useAttachmentUrl(
-  attachment: AttachmentRef,
-  read: (attachment: AttachmentRef) => Promise<Uint8Array>,
-): { url: string | null; error: string | null } {
-  const cacheKey = `${attachment.mediaType}:${attachment.sha256}`;
-  const [state, setState] = useState<{
-    url: string | null;
-    error: string | null;
-  }>(() => ({
-    url: attachmentUrlCache.get(cacheKey)?.url ?? null,
-    error: null,
-  }));
-  useEffect(() => {
-    const cached = attachmentUrlCache.get(cacheKey);
-    if (cached !== undefined) {
-      cached.consumers += 1;
-      touchAttachmentUrl(cacheKey, cached);
-      setState((current) =>
-        current.url === cached.url && current.error === null
-          ? current
-          : { url: cached.url, error: null },
-      );
-      return () => releaseAttachmentUrl(cacheKey, cached);
-    }
-    let active = true;
-    let acquired: { url: string; consumers: number } | null = null;
-    setState({ url: null, error: null });
-    void read(attachment)
-      .then((bytes) => {
-        const objectUrl = URL.createObjectURL(
-          new Blob([bytes.slice().buffer], { type: attachment.mediaType }),
-        );
-        const raced = attachmentUrlCache.get(cacheKey);
-        const entry = raced ?? { url: objectUrl, consumers: 0 };
-        if (raced === undefined) attachmentUrlCache.set(cacheKey, entry);
-        else URL.revokeObjectURL(objectUrl);
-        if (active) {
-          entry.consumers += 1;
-          acquired = entry;
-          touchAttachmentUrl(cacheKey, entry);
-          setState({ url: entry.url, error: null });
-        }
-        trimAttachmentUrls();
-      })
-      .catch((error: unknown) => {
-        if (active) setState({ url: null, error: describeError(error) });
-      });
-    return () => {
-      active = false;
-      if (acquired !== null) releaseAttachmentUrl(cacheKey, acquired);
-    };
-  }, [cacheKey, attachment, read]);
-  return state;
 }
 
 function imageFiles(files: FileList): File[] {
@@ -1365,6 +1281,7 @@ function ApprovalBar({
       setError(describeError(reason));
     }
   };
+  const once = approval.params.approvalScope === "once";
   const runCode = approval.params.toolName === "run_code";
   const toolName = approval.params.toolName ?? "tool";
   const code =
@@ -1378,13 +1295,16 @@ function ApprovalBar({
       </span>
       <div>
         <strong>
-          {runCode
-            ? "Allow the shell-equivalent run_code capability?"
-            : `Allow the ${toolName} capability?`}
+          {once
+            ? `Allow ${toolName} with full file access once?`
+            : runCode
+              ? "Allow the shell-equivalent run_code capability?"
+              : `Allow the ${toolName} capability?`}
         </strong>
         <p>
-          Approval is remembered for the stable {toolName} capability, not
-          granted per command or code segment.
+          {once
+            ? "This call runs outside the file sandbox. Approval applies only to this call and its nested operations."
+            : `Approval is remembered for the stable ${toolName} capability, not granted per command or code segment.`}
         </p>
         <pre className="approval-command">
           <code>{code}</code>
@@ -1403,7 +1323,7 @@ function ApprovalBar({
           type="button"
           onClick={() => void respond("accept")}
         >
-          Allow capability
+          {once ? "Allow once" : "Allow capability"}
         </button>
       </div>
     </section>
@@ -1468,14 +1388,32 @@ function formatDuration(milliseconds: number): string {
 }
 
 function commandStatus(
-  status: Extract<ThreadItem, { type: "commandExecution" }>["status"],
+  item: Extract<ThreadItem, { type: "commandExecution" }>,
 ): string {
+  const data = item.structuredContent;
+  if (
+    item.contentType === "application/vnd.zen.tool-task+json" &&
+    typeof data === "object" &&
+    data !== null &&
+    !Array.isArray(data) &&
+    "status" in data
+  ) {
+    if (data.status === "running")
+      return item.toolName === "wait" ? "Waiting" : "Started";
+    if (data.status === "cancel_requested") return "Cancelling";
+    if (data.status === "cancellation_unconfirmed")
+      return "Cancellation unconfirmed";
+    if (data.status === "failed") return "Failed";
+    if (data.status === "completed") return "Done";
+    if (data.status === "timed_out") return "Timed out";
+    if (data.status === "cancelled") return "Cancelled";
+  }
   return {
     inProgress: "Running",
     completed: "Done",
     failed: "Failed",
     declined: "Declined",
-  }[status];
+  }[item.status];
 }
 
 function describeError(error: unknown): string {

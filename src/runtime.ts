@@ -1,10 +1,20 @@
+import type { WorkspaceInstructionFile } from "./item.js";
 import { randomUUID } from "node:crypto";
+import { codeExecutionOptions } from "./code-options.js";
+import { codeStateFromItems, validateCodeStateWrite } from "./code-state.js";
+import {
+  AttachmentNotReferencedError,
+  projectModelMessages,
+} from "./model-content.js";
+import { TOOL_TASK_CONTENT_TYPE } from "./tool-task.js";
 
 import type {
+  AgenticContextCompactionItem,
   AgentMessageItem,
   ApprovalDecision,
   ApprovalPolicy,
   CanonicalItem,
+  JsonValue,
   FailureItem,
   ModelUsageItem,
   ReasoningItem,
@@ -17,8 +27,21 @@ import type {
   UserInput,
   UserMessageItem,
 } from "./item.js";
+import {
+  AGENTIC_CONTEXT_COMPACTION_ALGORITHM_VERSION,
+  AGENTIC_CONTEXT_COMPACTION_TOOL,
+  AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
+  CONTEXT_COMPACTION_SUMMARY_PREFIX,
+} from "./context-compaction.js";
 import { ThreadJournalAppendOutcomeUnknownError } from "./journal.js";
-import type { ModelAdapter, ModelMessage, ModelTool } from "./model.js";
+import {
+  compileModelMessages,
+  compileWorkspaceInstructionMessages,
+  type ModelAdapter,
+  type ModelMessage,
+  type ModelTool,
+} from "./model.js";
+import { estimateModelMessageInputTokens } from "./model-usage.js";
 import {
   buildToolPresentation,
   type ToolPresentation,
@@ -31,6 +54,7 @@ import {
   ToolResultNormalizationError,
   UnawaitedNestedToolCallError,
   capturedToolOutput,
+  toolOutputSuffix,
   type ApprovalHandler,
   type NestedToolObservation,
   type ToolExecutionMode,
@@ -45,6 +69,22 @@ export interface RuntimeConfiguration {
   reasoningEffort: string | null;
   sandbox: SandboxMode;
   approvalPolicy: ApprovalPolicy;
+  /** null preserves the existing Unknown capability semantics. */
+  inputModalities?: readonly string[] | null;
+  /** Present only when Host admission enables agent-authored context resets. */
+  agenticContextCompaction?: {
+    contextWindow: number;
+  };
+  /** Turn-scoped execution limit captured at Host admission. */
+  maxToolRounds?: number;
+  /** Turn-scoped tool body concurrency captured at Host admission. */
+  maxConcurrentToolBodies?: number;
+}
+
+export interface PreparedModelSample {
+  messages: ModelMessage[];
+  /** Last canonical Item included in the atomically captured projection. */
+  contextBoundaryItemId: string;
 }
 
 export type RuntimeEvent =
@@ -96,6 +136,8 @@ export type RuntimeEvent =
 
 export interface RunTurnOptions {
   thread: Thread;
+  workspaceInstructions?: WorkspaceInstructionFile[];
+  reloadWorkspaceInstructions?: () => Promise<WorkspaceInstructionFile[]>;
   turnId?: string;
   input: UserInput;
   clientId?: string;
@@ -103,13 +145,16 @@ export interface RunTurnOptions {
   modelAdapter: ModelAdapter;
   signal: AbortSignal;
   commit: (item: CanonicalItem) => Promise<void>;
-  prepareModelSample: (modelResponseId: string) => Promise<ModelMessage[]>;
+  prepareModelSample: (
+    modelResponseId: string,
+  ) => Promise<ModelMessage[] | PreparedModelSample>;
   commitFinal: (
     message: AgentMessageItem,
     modelResponseId: string,
   ) => Promise<boolean>;
   emit: (event: RuntimeEvent) => void;
   initialInputCommitted?: () => void;
+  agenticCompactionCommitted?: () => void;
   requestApproval?: ApprovalHandler;
 }
 
@@ -118,6 +163,12 @@ export type ToolDefinitionProjection = (
 ) => readonly ModelTool[];
 
 export const DEFAULT_MAX_CONCURRENT_TOOL_BODIES = 8;
+
+function assertPositiveExecutionLimit(value: number, label: string): void {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`${label} must be a positive safe integer`);
+  }
+}
 
 export class AgentRuntime {
   readonly #tools: ToolEnvironment;
@@ -128,6 +179,13 @@ export class AgentRuntime {
   readonly #toolPresentation: ToolPresentation | undefined;
   readonly #toolOutputSpool: ToolOutputSpool | undefined;
   readonly #maxConcurrentToolBodies: number;
+  readonly #codeStateTails = new Map<string, Promise<void>>();
+  readonly #resolveCodeMedia:
+    | ((
+        media: readonly { type: "image" | "audio"; value: JsonValue }[],
+        items: readonly CanonicalItem[],
+      ) => Promise<UserInput>)
+    | undefined;
 
   constructor(options: {
     toolEnvironment: ToolEnvironment;
@@ -138,8 +196,13 @@ export class AgentRuntime {
     toolPresentation?: ToolPresentation;
     toolOutputSpool?: ToolOutputSpool;
     maxConcurrentToolBodies?: number;
+    resolveCodeMedia?: (
+      media: readonly { type: "image" | "audio"; value: JsonValue }[],
+      items: readonly CanonicalItem[],
+    ) => Promise<UserInput>;
   }) {
     this.#tools = options.toolEnvironment;
+    this.#resolveCodeMedia = options.resolveCodeMedia;
     this.#id = options.idFactory ?? randomUUID;
     this.#now = options.now ?? (() => new Date().toISOString());
     if (
@@ -166,15 +229,38 @@ export class AgentRuntime {
     this.#maxConcurrentToolBodies = maxConcurrentToolBodies;
   }
 
+  hasActiveToolTasks(threadId: string): boolean {
+    return this.#tools.taskManager.hasActiveTasks(threadId);
+  }
+
+  get activeToolTaskCount(): number {
+    return this.#tools.taskManager.activeTaskCount;
+  }
+
   async runTurn(options: RunTurnOptions): Promise<void> {
     const turnId = options.turnId ?? this.#id();
-    const scheduler = new TurnToolScheduler(this.#maxConcurrentToolBodies);
+    const maxConcurrentToolBodies =
+      options.configuration.maxConcurrentToolBodies ??
+      this.#maxConcurrentToolBodies;
+    assertPositiveExecutionLimit(
+      maxConcurrentToolBodies,
+      "Maximum concurrent tool bodies",
+    );
+    const maxToolRounds =
+      options.configuration.maxToolRounds ?? this.#maxToolRounds;
+    if (maxToolRounds !== undefined) {
+      assertPositiveExecutionLimit(maxToolRounds, "Maximum tool rounds");
+    }
+    const scheduler = new TurnToolScheduler(maxConcurrentToolBodies);
     const started: TurnStartedItem = {
       id: this.#id(),
       threadId: options.thread.id,
       turnId,
       createdAt: this.#now(),
       type: "turn_started",
+      ...(options.workspaceInstructions === undefined
+        ? {}
+        : { workspaceInstructions: options.workspaceInstructions }),
       selection: {
         providerProfileId: options.configuration.providerProfileId,
         modelId: options.configuration.model,
@@ -227,9 +313,9 @@ export class AgentRuntime {
           });
           return;
         }
-        if (this.#maxToolRounds !== undefined && round >= this.#maxToolRounds) {
+        if (maxToolRounds !== undefined && round >= maxToolRounds) {
           throw new Error(
-            `Model exceeded ${String(this.#maxToolRounds)} tool rounds`,
+            `Model exceeded ${String(maxToolRounds)} tool rounds`,
           );
         }
 
@@ -266,6 +352,7 @@ export class AgentRuntime {
           turnId,
           toolCallItems,
           result.presentation,
+          result.contextBoundaryItemId,
           options,
           scheduler,
         );
@@ -340,6 +427,7 @@ export class AgentRuntime {
     itemId: string;
     text: string;
     presentation: ToolPresentationSnapshot;
+    contextBoundaryItemId: string;
     toolCalls: Array<{
       callId: string;
       name: string;
@@ -355,6 +443,10 @@ export class AgentRuntime {
       arguments: Record<string, unknown>;
     }> = [];
     const reasoningItems = new Map<string, string>();
+    const reasoningDeltas = new Map<
+      string,
+      { content: string; summary: string }
+    >();
     let latestUsage:
       | {
           inputTokens: number;
@@ -369,6 +461,7 @@ export class AgentRuntime {
       if (existing !== undefined) return existing;
       const reasoningItemId = this.#id();
       reasoningItems.set(reasoningId, reasoningItemId);
+      reasoningDeltas.set(reasoningId, { content: "", summary: "" });
       options.emit({
         type: "item_started",
         threadId: options.thread.id,
@@ -379,10 +472,31 @@ export class AgentRuntime {
       return reasoningItemId;
     };
 
-    const messages = await options.prepareModelSample(itemId);
-    const definitions =
+    const preparedSample = await options.prepareModelSample(itemId);
+    if (
+      Array.isArray(preparedSample) &&
+      options.configuration.agenticContextCompaction !== undefined
+    ) {
+      throw new Error(
+        "Agentic context compaction requires an atomic model sample boundary",
+      );
+    }
+    const messages = Array.isArray(preparedSample)
+      ? preparedSample
+      : preparedSample.messages;
+    const contextBoundaryItemId = Array.isArray(preparedSample)
+      ? options.thread.items.at(-1)?.id
+      : preparedSample.contextBoundaryItemId;
+    if (contextBoundaryItemId === undefined) {
+      throw new Error("Model sample requires a canonical context boundary");
+    }
+    const projectedDefinitions =
       this.#toolDefinitionProjection?.(options.thread.items) ??
       this.#tools.definitions;
+    const definitions =
+      options.configuration.agenticContextCompaction === undefined
+        ? projectedDefinitions
+        : [...projectedDefinitions, AGENTIC_CONTEXT_COMPACTION_TOOL];
     const presentation = buildToolPresentation(
       definitions,
       this.#toolPresentation ??
@@ -395,7 +509,10 @@ export class AgentRuntime {
       for await (const event of options.modelAdapter.stream({
         model: options.configuration.model,
         reasoningEffort: options.configuration.reasoningEffort,
-        messages,
+        messages: projectModelMessages(
+          messages,
+          options.configuration.inputModalities,
+        ),
         tools: presentation.modelTools.map((definition) =>
           structuredClone(definition),
         ),
@@ -428,6 +545,11 @@ export class AgentRuntime {
           event.type === "reasoning_content_delta"
         ) {
           if (event.delta.length === 0) continue;
+          ensureReasoningItem(event.reasoningId);
+          const partial = reasoningDeltas.get(event.reasoningId)!;
+          if (event.type === "reasoning_content_delta")
+            partial.content += event.delta;
+          else partial.summary += event.delta;
           options.emit({
             type: event.type,
             threadId: options.thread.id,
@@ -466,6 +588,7 @@ export class AgentRuntime {
           options.emit({ type: "item_completed", item: reasoning });
           if (event.reasoningId !== undefined) {
             reasoningItems.delete(event.reasoningId);
+            reasoningDeltas.delete(event.reasoningId);
           }
         } else if (event.type === "tool_call") {
           toolCalls.push({
@@ -499,6 +622,42 @@ export class AgentRuntime {
           });
         }
       }
+      if (reasoningItems.size > 0) {
+        throw new Error("Model stream ended with incomplete reasoning");
+      }
+    } catch (error) {
+      // Never retry a journal append whose outcome is unknown.
+      if (error instanceof ThreadJournalAppendOutcomeUnknownError) throw error;
+      for (const [reasoningId, partialId] of reasoningItems) {
+        const partial = reasoningDeltas.get(reasoningId)!;
+        if (!partial.content && !partial.summary) continue;
+        const snapshot: ReasoningItem = {
+          id: partialId,
+          threadId: options.thread.id,
+          turnId,
+          createdAt: this.#now(),
+          type: "reasoning",
+          incomplete: true,
+          reasoningContent: partial.content,
+          contentVisibility: "public",
+          ...(partial.summary ? { summary: partial.summary } : {}),
+        };
+        await options.commit(snapshot);
+        options.emit({ type: "item_completed", item: snapshot });
+      }
+      if (text.length > 0) {
+        const snapshot: AgentMessageItem = {
+          id: itemId,
+          threadId: options.thread.id,
+          turnId,
+          createdAt: this.#now(),
+          type: "agent_message",
+          text,
+        };
+        await options.commit(snapshot);
+        options.emit({ type: "item_completed", item: snapshot });
+      }
+      throw error;
     } finally {
       if (latestUsage !== undefined) {
         const usage: ModelUsageItem = {
@@ -515,10 +674,6 @@ export class AgentRuntime {
       }
     }
 
-    if (reasoningItems.size > 0) {
-      throw new Error("Model stream ended with incomplete reasoning");
-    }
-
     if (!started && toolCalls.length === 0) {
       options.emit({
         type: "item_started",
@@ -528,13 +683,20 @@ export class AgentRuntime {
         itemType: "agent_message",
       });
     }
-    return { itemId, text, toolCalls, presentation };
+    return {
+      itemId,
+      text,
+      toolCalls,
+      presentation,
+      contextBoundaryItemId,
+    };
   }
 
   async #runToolBatch(
     turnId: string,
     toolCalls: readonly ToolCallItem[],
     presentation: ToolPresentationSnapshot,
+    contextBoundaryItemId: string,
     options: RunTurnOptions,
     scheduler: TurnToolScheduler,
   ): Promise<void> {
@@ -552,8 +714,16 @@ export class AgentRuntime {
           signal: options.signal,
           allowedToolNames: presentation.modelToolNames,
           nestedToolNames: presentation.nestedToolNames,
+          codeTools: presentation.codeTools,
         },
         scheduler,
+        undefined,
+        {
+          contextBoundaryItemId,
+          standalone:
+            toolCalls.length === 1 &&
+            toolCall.name === AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
+        },
       );
       tickets.push(ticket);
       try {
@@ -600,6 +770,10 @@ export class AgentRuntime {
     execution: ScheduledToolCapability,
     scheduler: TurnToolScheduler,
     observation?: Promise<NestedToolObservation>,
+    agentic?: {
+      contextBoundaryItemId: string;
+      standalone: boolean;
+    },
   ): ScheduledToolCall {
     return scheduler.schedule(
       scope,
@@ -620,6 +794,16 @@ export class AgentRuntime {
             exitCode: 1,
           });
         }
+        if (
+          toolCall.parentCallId === undefined &&
+          toolCall.name === AGENTIC_CONTEXT_COMPACTION_TOOL_NAME
+        ) {
+          return await this.#prepareAgenticContextCompaction(
+            toolCall,
+            options,
+            agentic,
+          );
+        }
         return await this.#prepareToolCall(
           turnId,
           toolCall,
@@ -630,6 +814,127 @@ export class AgentRuntime {
       },
       async (outcome) => this.#completeToolResult(toolCall, outcome, options),
     );
+  }
+
+  async #prepareAgenticContextCompaction(
+    toolCall: ToolCallItem,
+    options: RunTurnOptions,
+    agentic:
+      | {
+          contextBoundaryItemId: string;
+          standalone: boolean;
+        }
+      | undefined,
+  ): Promise<ScheduledToolExecution> {
+    const configuration = options.configuration.agenticContextCompaction;
+    if (configuration === undefined || agentic === undefined) {
+      return immediateScheduledExecution({
+        output: "Agentic context compaction is not enabled for this Turn.",
+        exitCode: 1,
+      });
+    }
+    if (!agentic.standalone) {
+      return immediateScheduledExecution({
+        output:
+          "compact_context must be the only top-level tool call in its model response.",
+        exitCode: 1,
+      });
+    }
+    const argumentKeys = Object.keys(toolCall.arguments);
+    const text = toolCall.arguments.text;
+    if (
+      argumentKeys.length !== 1 ||
+      argumentKeys[0] !== "text" ||
+      typeof text !== "string" ||
+      text.trim().length === 0
+    ) {
+      return immediateScheduledExecution({
+        output:
+          "compact_context requires exactly one non-empty string argument named text.",
+        exitCode: 1,
+      });
+    }
+    if (toolCall.modelResponseId === undefined) {
+      return immediateScheduledExecution({
+        output: "compact_context requires a stable source model response.",
+        exitCode: 1,
+      });
+    }
+    const projectedTokens = estimateModelMessageInputTokens([
+      {
+        role: "user",
+        text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${text}`,
+      },
+    ]);
+    if (projectedTokens > configuration.contextWindow) {
+      return immediateScheduledExecution({
+        output: `compact_context text exceeds the selected model context window (${String(projectedTokens)} > ${String(configuration.contextWindow)} estimated input tokens).`,
+        exitCode: 1,
+      });
+    }
+
+    const compaction: AgenticContextCompactionItem = {
+      id: this.#id(),
+      threadId: options.thread.id,
+      turnId: toolCall.turnId,
+      createdAt: this.#now(),
+      type: "context_compaction",
+      provenance: "agentic",
+      coveredThroughItemId: agentic.contextBoundaryItemId,
+      summary: text,
+      retainedItemIds: [],
+      callId: toolCall.callId,
+      sourceModelResponseId: toolCall.modelResponseId,
+      algorithmVersion: AGENTIC_CONTEXT_COMPACTION_ALGORITHM_VERSION,
+    };
+    return {
+      mode: "exclusive",
+      run: async (): Promise<ScheduledToolOutcome> => {
+        try {
+          options.signal.throwIfAborted();
+          const workspaceInstructions =
+            await options.reloadWorkspaceInstructions?.();
+          const refreshed =
+            workspaceInstructions === undefined
+              ? compaction
+              : { ...compaction, workspaceInstructions };
+          const instructionTokens = estimateModelMessageInputTokens(
+            compileWorkspaceInstructionMessages(workspaceInstructions),
+          );
+          if (
+            projectedTokens + instructionTokens >
+            configuration.contextWindow
+          ) {
+            throw new Error(
+              "Compacted context and repository instructions exceed the selected model context window",
+            );
+          }
+          options.signal.throwIfAborted();
+          await options.commit(refreshed);
+          options.emit({ type: "item_completed", item: refreshed });
+          options.agenticCompactionCommitted?.();
+          return {
+            result: {
+              output: "Working context replaced with the supplied text.",
+              exitCode: 0,
+            },
+          };
+        } catch (error) {
+          if (error instanceof ThreadJournalAppendOutcomeUnknownError) {
+            throw error;
+          }
+          const interrupted = options.signal.aborted || isAbortError(error);
+          return {
+            result: {
+              output: `Context compaction failed: ${describeError(error)}`,
+              exitCode: interrupted ? 130 : 1,
+            },
+            ...(interrupted ? { controlError: error } : {}),
+            ...(interrupted ? { executionStatus: "declined" as const } : {}),
+          };
+        }
+      },
+    };
   }
 
   async #prepareToolCall(
@@ -651,7 +956,25 @@ export class AgentRuntime {
         name: toolCall.name,
         arguments: toolCall.arguments,
         cwd: options.configuration.cwd,
-        signal: execution.signal,
+        task: {
+          ...(toolCall.name === "run_code"
+            ? codeExecutionOptions(toolCall.arguments.code)
+            : {}),
+          ...(toolCall.parentCallId === undefined
+            ? {}
+            : { waitForCompletion: true }),
+        },
+        sandbox:
+          execution.admission === "inherited"
+            ? "danger-full-access"
+            : options.configuration.sandbox,
+        // Yielded nested tasks outlive their composite request, but must still
+        // observe a later interruption of the owning Turn.
+        signal:
+          execution.signal === options.signal
+            ? options.signal
+            : AbortSignal.any([execution.signal, options.signal]),
+        threadId: options.thread.id,
       });
     } catch (error) {
       const result = {
@@ -744,12 +1067,13 @@ export class AgentRuntime {
               execution.signal,
               scheduler,
               execution.nestedToolNames,
+              execution.codeTools,
             ),
+            options.configuration.inputModalities,
           );
-          const result =
-            execution.admission === "inherited"
-              ? await waitForAbortGracefully(operation, execution.signal)
-              : await operation;
+          // The task manager bounds cancellation and owns the partial-output
+          // receipt. Racing it here would discard its live wait handle.
+          const result = await operation;
           outcome = {
             result,
             ...(execution.signal.aborted
@@ -784,7 +1108,10 @@ export class AgentRuntime {
           };
         }
 
-        if (execution.signal.reason instanceof UnawaitedNestedToolCallError) {
+        if (
+          execution.signal.reason instanceof UnawaitedNestedToolCallError &&
+          outcome.result.contentType !== TOOL_TASK_CONTENT_TYPE
+        ) {
           outcome = {
             result: {
               output:
@@ -792,12 +1119,6 @@ export class AgentRuntime {
               exitCode: 125,
             },
           };
-        }
-        if (
-          toolCall.parentCallId === undefined &&
-          toolCall.name === "run_code"
-        ) {
-          await scheduler.drain(toolCall.callId);
         }
         return outcome;
       },
@@ -811,8 +1132,65 @@ export class AgentRuntime {
     inheritedSignal: AbortSignal,
     scheduler: TurnToolScheduler,
     allowedToolNames: ReadonlySet<string>,
+    codeTools: readonly { name: string; description: string }[],
   ) {
     return {
+      drain: () => scheduler.drain(parent.callId),
+      codeContext: {
+        tools: codeTools,
+        storedValues: codeStateFromItems(options.thread.items),
+        store: async (key: string, value: JsonValue): Promise<void> => {
+          const previous =
+            this.#codeStateTails.get(options.thread.id) ?? Promise.resolve();
+          const write = previous.then(async () => {
+            inheritedSignal.throwIfAborted();
+            validateCodeStateWrite(
+              codeStateFromItems(options.thread.items),
+              key,
+              value,
+            );
+            await this.#completeItem(
+              {
+                id: this.#id(),
+                type: "code_state",
+                threadId: options.thread.id,
+                turnId,
+                callId: parent.callId,
+                createdAt: this.#now(),
+                key,
+                value: structuredClone(value),
+              },
+              options,
+            );
+          });
+          const tail = write.catch(() => undefined);
+          this.#codeStateTails.set(options.thread.id, tail);
+          try {
+            await write;
+          } finally {
+            if (this.#codeStateTails.get(options.thread.id) === tail)
+              this.#codeStateTails.delete(options.thread.id);
+          }
+        },
+        resolveMedia: async (
+          media: readonly { type: "image" | "audio"; value: JsonValue }[],
+        ): Promise<UserInput> => {
+          if (media.length === 0) return [];
+          if (this.#resolveCodeMedia === undefined)
+            throw new Error(
+              "Code media output requires the Host attachment store",
+            );
+          try {
+            return await this.#resolveCodeMedia(media, options.thread.items);
+          } catch (error) {
+            if (!(error instanceof AttachmentNotReferencedError)) throw error;
+            // Only a not-yet-authorized ref needs the FIFO commit barrier.
+            // Inline bytes and already committed refs can stream immediately.
+            await scheduler.drain(parent.callId);
+            return await this.#resolveCodeMedia(media, options.thread.items);
+          }
+        },
+      },
       invoke: async (
         name: string,
         arguments_: Record<string, unknown>,
@@ -841,6 +1219,7 @@ export class AgentRuntime {
             signal,
             allowedToolNames,
             nestedToolNames: allowedToolNames,
+            codeTools,
           },
           scheduler,
           observation,
@@ -855,16 +1234,19 @@ export class AgentRuntime {
     options: RunTurnOptions,
   ): Promise<void> {
     const { result } = outcome;
+    const originalCapture = capturedToolOutput(result);
     const capture =
-      capturedToolOutput(result) ??
-      (this.#toolOutputSpool === undefined
-        ? undefined
-        : await this.#toolOutputSpool.captureText(
-            result.output,
-            result.sourceTruncated === undefined
-              ? {}
-              : { sourceTruncated: result.sourceTruncated },
-          ));
+      this.#toolOutputSpool !== undefined &&
+      (originalCapture === undefined || originalCapture.unspooled)
+        ? await this.#toolOutputSpool.captureText(
+            originalCapture?.output ?? originalCapture?.head ?? result.output,
+            {
+              sourceTruncated:
+                originalCapture?.sourceTruncated === true ||
+                result.sourceTruncated === true,
+            },
+          )
+        : originalCapture;
     const resultItem: ToolResultItem = {
       id: this.#id(),
       threadId: options.thread.id,
@@ -872,7 +1254,9 @@ export class AgentRuntime {
       createdAt: this.#now(),
       type: "tool_result",
       callId: toolCall.callId,
-      output: capture === undefined ? result.output : renderToolOutput(capture),
+      output: `${
+        capture === undefined ? result.output : renderToolOutput(capture)
+      }${toolOutputSuffix(result) ?? ""}`,
       exitCode: result.exitCode,
       executionStatus:
         outcome.executionStatus ??
@@ -883,6 +1267,9 @@ export class AgentRuntime {
             contentType: result.contentType,
             structuredContent: result.structuredContent,
           }),
+      ...(result.modelContent === undefined
+        ? {}
+        : { modelContent: result.modelContent }),
     };
     await this.#completeItem(resultItem, options);
   }
@@ -905,7 +1292,9 @@ export class AgentRuntime {
   }
 
   #assertSandbox(sandbox: string): asserts sandbox is SandboxMode {
-    if (sandbox !== "danger-full-access") {
+    if (
+      !["danger-full-access", "read-only", "workspace-write"].includes(sandbox)
+    ) {
       throw new UnsupportedSandboxError(sandbox);
     }
   }
@@ -916,6 +1305,7 @@ interface ScheduledToolCapability {
   signal: AbortSignal;
   allowedToolNames: ReadonlySet<string>;
   nestedToolNames: ReadonlySet<string>;
+  codeTools: readonly { name: string; description: string }[];
 }
 
 interface ScheduledToolOutcome {
@@ -1181,42 +1571,6 @@ async function waitForAbort<T>(
     if (signal.aborted) {
       abort();
     }
-    void operation.then(
-      (value) => {
-        cleanup();
-        resolve(value);
-      },
-      (error: unknown) => {
-        cleanup();
-        reject(error);
-      },
-    );
-  });
-}
-
-async function waitForAbortGracefully<T>(
-  operation: Promise<T>,
-  signal: AbortSignal,
-  graceMs = 300,
-): Promise<T> {
-  return await new Promise<T>((resolve, reject) => {
-    let timer: NodeJS.Timeout | undefined;
-    const abort = (): void => {
-      if (timer !== undefined) return;
-      timer = setTimeout(() => {
-        cleanup();
-        reject(
-          signal.reason ??
-            new DOMException("The operation was aborted", "AbortError"),
-        );
-      }, graceMs);
-    };
-    const cleanup = (): void => {
-      signal.removeEventListener("abort", abort);
-      if (timer !== undefined) clearTimeout(timer);
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    if (signal.aborted) abort();
     void operation.then(
       (value) => {
         cleanup();

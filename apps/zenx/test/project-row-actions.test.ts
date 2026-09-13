@@ -103,6 +103,19 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
 
     const more = beta.querySelector<HTMLButtonElement>(".project-more-trigger");
     assert.ok(more);
+    more.getBoundingClientRect = () =>
+      rect({ left: 760, top: 20, width: 26, height: 28 });
+    const getBoundingClientRect =
+      dom.window.HTMLElement.prototype.getBoundingClientRect;
+    dom.window.HTMLElement.prototype.getBoundingClientRect = function () {
+      return this.classList.contains("project-menu")
+        ? rect({ left: 0, top: 0, width: 172, height: 84 })
+        : getBoundingClientRect.call(this);
+    };
+    Object.defineProperties(dom.window, {
+      innerHeight: { configurable: true, value: 640 },
+      innerWidth: { configurable: true, value: 800 },
+    });
     await act(async () => {
       more.focus();
       more.dispatchEvent(
@@ -113,6 +126,11 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
         }),
       );
     });
+    const openedMenu = requiredElement<HTMLElement>(".project-menu");
+    assert.equal(openedMenu.parentElement, document.body);
+    assert.equal(openedMenu.dataset.placement, "left");
+    assert.equal(openedMenu.style.left, "582px");
+    assert.equal(openedMenu.style.top, "20px");
     assert.match(document.activeElement?.textContent ?? "", /Set as default/u);
     await act(async () => {
       document.activeElement?.dispatchEvent(
@@ -149,15 +167,11 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
     assert.equal(document.activeElement, more);
     await act(async () => more.click());
     assert.equal(
-      beta
-        .querySelector('[role="menu"]')
-        ?.textContent?.includes("Set as default"),
+      currentProjectMenu()?.textContent?.includes("Set as default"),
       true,
     );
     assert.equal(
-      beta
-        .querySelector('[role="menu"]')
-        ?.textContent?.includes("Remove from ZenX"),
+      currentProjectMenu()?.textContent?.includes("Remove from ZenX"),
       true,
     );
     assert.match(document.activeElement?.textContent ?? "", /Set as default/u);
@@ -218,13 +232,15 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
       );
     });
     assert.equal(document.activeElement, focusedMore);
-    assert.equal(beta.querySelector('[role="menu"]'), null);
+    assert.equal(currentProjectMenu(), null);
     await act(async () => more.click());
     await act(async () =>
-      beta.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click(),
+      currentProjectMenu()!
+        .querySelector<HTMLButtonElement>('[role="menuitem"]')!
+        .click(),
     );
     assert.deepEqual(defaults, ["/work/beta"]);
-    assert.equal(beta.querySelector('[role="menu"]'), null);
+    assert.equal(currentProjectMenu(), null);
 
     await act(async () => more.click());
     await act(async () => {
@@ -232,7 +248,7 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
         new dom.window.MouseEvent("mousedown", { bubbles: true }),
       );
     });
-    assert.equal(beta.querySelector('[role="menu"]'), null);
+    assert.equal(currentProjectMenu(), null);
 
     await act(async () => more.focus());
     await act(async () =>
@@ -243,7 +259,7 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
         }),
       ),
     );
-    assert.ok(beta.querySelector('[role="menu"]'));
+    assert.ok(currentProjectMenu());
     await act(async () =>
       dom.window.document.dispatchEvent(
         new dom.window.KeyboardEvent("keydown", {
@@ -252,11 +268,13 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
         }),
       ),
     );
-    assert.equal(beta.querySelector('[role="menu"]'), null);
+    assert.equal(currentProjectMenu(), null);
 
     await act(async () => more.click());
     const removeAgain = Array.from(
-      beta.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      currentProjectMenu()!.querySelectorAll<HTMLButtonElement>(
+        '[role="menuitem"]',
+      ),
     ).find((button) => button.textContent?.includes("Remove from ZenX"));
     assert.ok(removeAgain);
     await act(async () => removeAgain.click());
@@ -272,7 +290,7 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
     assert.ok(defaultMore);
     await act(async () => defaultMore.click());
     assert.equal(
-      defaultProject.querySelectorAll('[role="menuitem"]').length,
+      currentProjectMenu()!.querySelectorAll('[role="menuitem"]').length,
       1,
     );
     assert.match(
@@ -310,3 +328,37 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
     dom.window.close();
   }
 });
+
+function currentProjectMenu(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(".project-menu");
+}
+
+function requiredElement<T extends Element>(selector: string): T {
+  const element = document.querySelector<T>(selector);
+  assert.ok(element, `Expected ${selector}`);
+  return element;
+}
+
+function rect({
+  left,
+  top,
+  width,
+  height,
+}: {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}): DOMRect {
+  return {
+    bottom: top + height,
+    height,
+    left,
+    right: left + width,
+    top,
+    width,
+    x: left,
+    y: top,
+    toJSON: () => ({}),
+  };
+}

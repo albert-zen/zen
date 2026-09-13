@@ -9,6 +9,7 @@ export interface ProjectProjectionThread {
 export interface ZenXProjectProjectionEntry {
   key: string;
   workspace: string;
+  name?: string;
   configured: boolean;
   isDefault: boolean;
   threadIds: string[];
@@ -25,12 +26,18 @@ export type ProjectRealpath = (candidate: string) => Promise<string>;
 export interface ProjectThreadStartOptions {
   model?: string;
   effort?: string;
+  sandbox?: import("../protocol-client/types.js").FilePermissionMode;
 }
 
 export async function startConfiguredProjectThread<T>(
   projection: ZenXProjectProjection,
   workspace: unknown,
-  start: (params: { cwd: string } & ProjectThreadStartOptions) => Promise<T>,
+  start: (
+    params: {
+      cwd: string;
+      approvalPolicy?: "on-request" | "never";
+    } & ProjectThreadStartOptions,
+  ) => Promise<T>,
   options: ProjectThreadStartOptions = {},
 ): Promise<T> {
   if (typeof workspace !== "string" || workspace.trim().length === 0) {
@@ -40,7 +47,16 @@ export async function startConfiguredProjectThread<T>(
   if (configuredWorkspace === null) {
     throw new Error("Project workspace is not configured");
   }
-  return await start({ cwd: configuredWorkspace, ...options });
+  return await start({
+    cwd: configuredWorkspace,
+    ...options,
+    ...(options.sandbox === undefined
+      ? {}
+      : {
+          approvalPolicy:
+            options.sandbox === "danger-full-access" ? "never" : "on-request",
+        }),
+  });
 }
 
 export interface ProjectPathIdentity {
@@ -51,6 +67,7 @@ export interface ProjectPathIdentity {
 export type ProjectPathSnapshot = readonly ProjectPathIdentity[];
 
 interface ProjectConfigurationSnapshot {
+  readonly names: Readonly<Record<string, string>>;
   readonly revision: number;
   readonly workspaces: readonly string[];
   readonly defaultWorkspace: string | null;
@@ -66,6 +83,7 @@ export class ZenXProjectProjection {
   readonly #platform: NodeJS.Platform;
   readonly #realpath: ProjectRealpath;
   #configuration: ProjectConfigurationSnapshot = Object.freeze({
+    names: Object.freeze({}),
     revision: 0,
     workspaces: Object.freeze([]),
     defaultWorkspace: null,
@@ -86,6 +104,7 @@ export class ZenXProjectProjection {
     workspaces: readonly string[],
     defaultWorkspace: string | null,
     lastUsedWorkspace: string | null = null,
+    names: Readonly<Record<string, string>> = {},
   ): Promise<void> {
     const revision = ++this.#configurationRevision;
     const unique = new Map<string, ProjectPathIdentity>();
@@ -122,6 +141,7 @@ export class ZenXProjectProjection {
     if (revision !== this.#configurationRevision) return;
     this.#configuration = Object.freeze({
       revision,
+      names: Object.freeze({ ...names }),
       workspaces: Object.freeze(nextWorkspaces),
       defaultWorkspace: nextDefaultWorkspace,
       lastUsedWorkspace: nextLastUsedWorkspace,
@@ -173,6 +193,9 @@ export class ZenXProjectProjection {
       projects.set(workspace.key, {
         key: workspace.key,
         workspace: workspace.displayPath,
+        ...(configuration.names[workspace.displayPath] === undefined
+          ? {}
+          : { name: configuration.names[workspace.displayPath] }),
         configured: true,
         isDefault: workspace.key === defaultKey,
         threadIds: [],

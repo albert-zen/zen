@@ -51,7 +51,10 @@ import type {
 import type { AttachmentRef } from "../../../../../src/attachment.js";
 import type { MarketplaceCatalogLoadSnapshot } from "../../marketplace.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
-import type { BrowserLiveObservationEvent } from "../../main/capabilities/browser-provider.js";
+import type {
+  BrowserThreadRequest,
+  BrowserThreadEvent,
+} from "../../main/capabilities/browser-thread-observation.js";
 
 declare global {
   interface Window {
@@ -89,6 +92,10 @@ declare global {
         ): Promise<NativeThreadSummary[]>;
       };
       imageAttachments: {
+        readLocal(
+          source: string,
+          cwd?: string,
+        ): Promise<{ bytes: Uint8Array; mediaType: string }>;
         pick(): Promise<ZenXImageDraft[]>;
         import(images: readonly ZenXImageImport[]): Promise<ZenXImageDraft[]>;
         read(attachment: AttachmentRef): Promise<Uint8Array>;
@@ -103,10 +110,12 @@ declare global {
         ): Promise<ZenXProjectProjectionSnapshot>;
         startThread(
           workspace: string,
-          selection?: { model?: string; effort?: string },
+          selection?: import("../../main/project-projection.js").ProjectThreadStartOptions,
         ): Promise<ClientRequestResults["thread/start"]>;
       };
       settings: {
+        safeRestart(): Promise<PublicHostSettings>;
+        reconcile(retry: boolean): Promise<PublicHostSettings>;
         get(): Promise<PublicHostSettings>;
         save(
           settings: ZenXSettingsUpdate,
@@ -115,6 +124,7 @@ declare global {
         addProvider(
           provider: ZenXProviderProfile,
           apiKey?: string,
+          baseRevision?: number,
         ): Promise<PublicHostSettings>;
         editProvider(
           providerProfileId: string,
@@ -133,6 +143,11 @@ declare global {
           modelId: string,
         ): Promise<ZenXImageCapabilityProbeResult>;
         addWorkspace(workspace: string): Promise<PublicHostSettings>;
+        editWorkspace(
+          workspace: string,
+          name: string,
+          nextWorkspace: string,
+        ): Promise<PublicHostSettings>;
         removeWorkspace(workspace: string): Promise<PublicHostSettings>;
         setDefaultWorkspace(workspace: string): Promise<PublicHostSettings>;
         markWorkspaceUsed(workspace: string): Promise<PublicHostSettings>;
@@ -162,7 +177,8 @@ declare global {
       };
       browserObservation: {
         subscribe(
-          listener: (event: BrowserLiveObservationEvent) => void,
+          request: BrowserThreadRequest,
+          listener: (event: BrowserThreadEvent) => void,
         ): () => void;
       };
       plugins: {

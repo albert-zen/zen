@@ -17,6 +17,12 @@ let summaryRequestCount = 0;
 let generationToken = "legacy";
 let replacementCount = 0;
 let currentQueryCount = 0;
+let maintenance:
+  | {
+      token: string;
+      end(): void;
+    }
+  | undefined;
 
 process.on("message", (message: unknown) => {
   if (!isHostCommand(message)) return;
@@ -44,7 +50,11 @@ async function handle(command: HostCommand): Promise<void> {
       listen: "ws://127.0.0.1:0",
       bearerToken: command.bearerToken,
     });
-    process.send?.({ type: "ready", url: server.url });
+    process.send?.({
+      type: "ready",
+      url: server.url,
+      processEpoch: `fixture-${process.pid}`,
+    });
     return;
   }
   if (command.type === "capabilities/replace") {
@@ -97,6 +107,30 @@ async function handle(command: HostCommand): Promise<void> {
       requestId: command.requestId,
       generationToken,
     });
+    return;
+  }
+  if (command.type === "maintenance/try-begin") {
+    if (appServer === undefined) return;
+    const result = appServer.tryBeginMaintenance();
+    if (result.accepted) {
+      maintenance = { token: command.requestId, end: result.end };
+    }
+    if (process.env["ZENX_SUMMARY_FIXTURE_MODE"] === "maintenance-timeout") {
+      return;
+    }
+    process.send?.({
+      type: "maintenance/result",
+      requestId: command.requestId,
+      accepted: result.accepted,
+      activity: result.activity,
+    });
+    return;
+  }
+  if (command.type === "maintenance/end") {
+    if (maintenance?.token === command.maintenanceToken) {
+      maintenance.end();
+      maintenance = undefined;
+    }
     return;
   }
   if (command.type !== "thread-summary/list") return;

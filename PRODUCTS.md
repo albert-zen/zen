@@ -122,22 +122,36 @@ ZenX host profile 也可以保存可选的 context compaction summary instructio
 Core 默认 prompt，配置只影响未来 compaction，不进入 Thread canonical state 或 CAS/ZAS
 wire。
 
+Context compaction 设置页另提供默认关闭的 Agentic compaction 实验开关，保存为
+`contextCompaction.agenticEnabled`，通过既有 Apply & restart 生效。启用后，当前 Agent 可以
+单独顶层调用 `compact_context({ text })`，在同一活动 Turn 中用原样接续文本替换旧工作上下文，
+然后继续推理；完整 journal 和用户可见历史保留。`direct | code | both` 均有这个独立控制入口，
+不能嵌入 `run_code` 或与同一响应的其他工具调用混用。文件路径作为普通文本，Agent 按需读取。
+现有自动压缩的触发策略保持不变，生成摘要的 prompt/retention 不应用于 Agent 接续文本；
+关闭开关只停止未来披露，不撤销已经保存的上下文切换事实。
+
 CLI 与 ZenX 现在通过同一个 Host composition 默认发布 `both` Tool Presentation；Host-owned
-配置可显式切换 `direct | code | both`，不进入 Item。`run_code` 使用 fresh、可取消的 Node
-Worker 执行与 shell 权限等同的 erasable TypeScript，并通过同一 Tool Environment 形成
-canonical outer/child tool lifecycle。显式 `code` 初始化失败会阻止 Host 启动，默认 `both`
+配置可显式切换 `direct | code | both`，不进入 Item。`run_code` 使用 fresh、可取消的 JavaScript module，
+机器操作通过现有 tools 完成，完整程序共用 ToolTaskManager/wait，并形成 canonical outer/child
+tool lifecycle。Responses 使用原始 JS custom tool，其余协议采用 `{ code }`；显式 text/image/audio、
+线程 JSON store/load 和失败输出保留复用 Core 的输出与 Item 通路。显式 `code` 初始化失败会阻止 Host 启动，默认 `both`
 则明确 warning 后退回 direct。ZenX approval 展示完整 code 并按稳定 `run_code` capability
 说明记忆单位，Transcript 只按 canonical parent lineage 投影层级。portable smoke 从实际
-artifact 定位 Worker，覆盖 Node builtin、nested、`text`、abort 与 temporary output spool；
+artifact 定位 Worker，覆盖 guest 无 Node、nested、`text`、abort 与 temporary output spool；
 切回 `direct` 不删除 runtime 或改写历史，旧 trace 仍可重放。CLI 与 ZenX composition 还注册
 同一个 exclusive `apply_patch` runtime；direct 与 `tools.apply_patch(...)` 共享 Tool Environment、
 approval、scheduler 和 canonical lifecycle。patch 使用普通 JSON function 的 `{ patch: string }`
 包装和 Codex-style supported subset（Begin/End Patch、Add/Update/Move/Delete、`@@` exact context、
-可选 End of File），不宣称实现完整宽松 parser；UTF-8 输入在全部内容精确预检后写回 LF。
+可选 End of File），不宣称实现完整宽松 parser；每个修改 hunk 只有一个精确候选时，UTF-8 输入才在全部内容预检后写回 LF，零候选或多个候选要求扩展上下文。
 I/O 阶段不是 durable transaction，失败必须报告已经落盘的前缀。
 
 目标插件生命周期只有 installed / enabled / uninstalled；bundled plugin 同样可卸载、以后重装，
-卸载默认保留数据，删除数据是独立动作。目标权限只有默认 `full_access` 与可选 `ask_unknown`；后者
+卸载默认保留数据，删除数据是独立动作。ZenX 输入框支持 Read Only / Workspace Write / Full Access，
+默认 Full Access；新会话可预选，已有会话空闲且无运行工具时可切换，恢复后保留。
+前两档限制文件写入；不能文件隔离的 run_code 与插件调用逐次审批，shell 可显式请求单次越界批准。
+macOS 使用 Seatbelt，Linux 需要 bwrap；其他平台的限制模式 shell 明确失败，可逐次申请批准执行。
+Workspace Write 只开放当前项目，不开放全局临时目录，网络访问不受文件策略限制。
+兼容权限 `ask_unknown`
 由 Host 按稳定 tool name 维护 approved/denied 集合，不另设细粒度 package grant UX，也不增加风险引擎。
 通用 UI Host 已支持 sidebar、pages/subroutes、settings、panel、commands/menu 与 result renderer。
 第一方/第三方共用逻辑 UI SDK且第三方隔离运行。直接操作插件 UI 不创建 Turn，只有显式 Run Agent
@@ -180,6 +194,21 @@ Project row 的 New thread 始终选择被点击 Project 的 canonical workspace
 
 固定版本 T3 Code 仍是机会型互操作目标：它可以通过已验收的 CAS mapped surface
 把 Zen 当 provider 驱动，但不会替代 ZenX 的外层产品能力，也不会反向扩大 Zen Core。
+
+## IMZenX
+
+IMZenX 是可从内置 Plugins 库存安装的可选第一方插件，复用 IMZen 与同一固定 IM Agent SDK。
+Plugin Host 注入本实例 ZAS 发现入口；Python Gateway 跟随 Host 服务就绪、停用、卸载和 Quit
+生命周期连接或停止，配置由 Plugin SDK namespace 保存，频道 credential 留在私有文件。
+侧栏配置页提供 Python / 频道配置路径、默认 cwd、连接状态及显式重新连接。
+
+每个 IM Conversation 通过 `/threads` 查看标题与序号，再用 `/pick <序号>` 选择并接收该 ZenX Thread 的回复；
+多个 Conversation 可订阅同一 Thread。桌面发起的 Agent 回复投递到订阅频道；IM 用户消息和
+Agent 回复通过同一 ZAS canonical Item 投影到桌面。订阅不改变桌面选择。
+`/new` 清除当前绑定，下一条普通消息创建新 Thread；旧 `/subscribe` 与 `/unsubscribe` 分别保留为选择和清除入口。序号对应本频道最近展示的列表，重启后须重新 `/threads`。SDK SQLite 保存绑定、路由、
+checkpoint 与去重；没有第二份 Thread / transcript 或插件恢复队列。插件重启可恢复绑定和
+SDK 的有界 catch-up；平台原生机器人推送限制仍适用。部署需安装 pinned SDK 的 Python 3.13+
+及频道凭证，真实平台投递需单独联调，不能以本地 FakeChannel 互操作测试替代。
 
 ## IMZen
 

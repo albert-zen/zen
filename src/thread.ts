@@ -5,7 +5,11 @@ import type {
   SandboxMode,
   ThreadMetadataItem,
 } from "./item.js";
-import { validateContextCompactionItem } from "./context-compaction.js";
+import {
+  isAgenticContextCompaction,
+  validateContextCompactionItem,
+} from "./context-compaction.js";
+import { codeStateFromItems, validateCodeStateWrite } from "./code-state.js";
 
 export type DerivedTurnStatus =
   "inProgress" | "completed" | "failed" | "interrupted";
@@ -67,6 +71,25 @@ export class Thread {
     if (item.type === "model_usage") {
       validateModelUsage(item);
     }
+    if (item.type === "code_state") {
+      if (
+        !this.#items.some(
+          (parent) =>
+            parent.type === "tool_call" &&
+            parent.name === "run_code" &&
+            parent.callId === item.callId &&
+            parent.turnId === item.turnId,
+        )
+      )
+        throw new Error(
+          "Code state requires an earlier run_code call in this Turn",
+        );
+      validateCodeStateWrite(
+        codeStateFromItems(this.#items),
+        item.key,
+        item.value,
+      );
+    }
     if (item.type === "tool_call" && item.parentCallId !== undefined) {
       if (
         typeof item.parentCallId !== "string" ||
@@ -96,6 +119,7 @@ export class Thread {
     }
     if (item.type === "context_compaction") {
       validateContextCompactionItem(this.#items, item);
+      if (isAgenticContextCompaction(item)) return;
       const current = this.effectiveConfiguration();
       const boundaryTurn = this.deriveTurns().find((turn) =>
         turn.items.some(
@@ -114,7 +138,18 @@ export class Thread {
     }
     if (item.type === "thread_configuration_changed") {
       const current = this.effectiveConfiguration();
-      if ("selection" in item) {
+      if ("permissions" in item) {
+        if (
+          current.sandbox !== item.permissions.from.sandbox ||
+          current.approvalPolicy !== item.permissions.from.approvalPolicy
+        )
+          throw new Error("Stale permission change");
+        if (
+          current.sandbox === item.permissions.to.sandbox &&
+          current.approvalPolicy === item.permissions.to.approvalPolicy
+        )
+          throw new Error("Permission change must change configuration");
+      } else if ("selection" in item) {
         if (!sameSelection(current, item.selection.from)) {
           throw new Error("Stale provider selection change");
         }
@@ -255,6 +290,14 @@ function applyConfigurationItem(
   }
   if (configuration === undefined) {
     throw new Error(`Thread ${threadId} changed configuration before metadata`);
+  }
+  if ("permissions" in item) {
+    if (
+      configuration.sandbox !== item.permissions.from.sandbox ||
+      configuration.approvalPolicy !== item.permissions.from.approvalPolicy
+    )
+      throw new Error(`Thread ${threadId} has a stale permission change`);
+    return { ...configuration, ...item.permissions.to };
   }
   if ("selection" in item) {
     if (!sameSelection(configuration, item.selection.from)) {

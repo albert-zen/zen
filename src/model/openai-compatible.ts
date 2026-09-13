@@ -1,3 +1,5 @@
+import { fetchModelResponse } from "./request-retry.js";
+import { randomUUID } from "node:crypto";
 import type {
   ModelAdapter,
   ModelEvent,
@@ -7,7 +9,25 @@ import type {
 } from "../model.js";
 import type { AttachmentStore } from "../attachment.js";
 
+export interface ModelStreamDiagnostic {
+  timestamp: string;
+  diagnosticId: string;
+  sessionId?: string;
+  model: string;
+  requestId?: string;
+  status: number;
+  payloadIndex: number;
+  field?: string;
+  valueType?: string;
+  toolIndex?: number;
+  failure?: string;
+  /** Bounded received SSE payloads, oldest first; present only on failure. */
+  payloads?: Array<{ index: number; text: string; truncated: boolean }>;
+}
+
 export interface OpenAiCompatibleModelOptions {
+  onStreamFailure?: (event: ModelStreamDiagnostic) => Promise<void>;
+
   baseUrl: string;
   apiKey: string;
   provider?: string;
@@ -54,6 +74,7 @@ export class OpenAiCompatibleModelError extends Error {
 export class OpenAiCompatibleModel implements ModelAdapter {
   readonly provider: string;
 
+  readonly #onStreamFailure: OpenAiCompatibleModelOptions["onStreamFailure"];
   readonly #apiKey: string;
   readonly #defaultParams: Readonly<Record<string, unknown>>;
   readonly #endpoint: string;
@@ -70,6 +91,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     this.#defaultParams = compatibleDefaultParams(options.defaultParams ?? {});
     this.#fetch = options.fetch ?? globalThis.fetch;
     this.#attachments = options.attachments;
+    this.#onStreamFailure = options.onStreamFailure;
   }
 
   async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
@@ -113,6 +135,11 @@ export class OpenAiCompatibleModel implements ModelAdapter {
         pendingReasoning = "";
       }
       messages.push(encoded);
+      if (message.role === "tool" && message.modelContent !== undefined) {
+        messages.push(
+          await toChatUserContent(message.modelContent, this.#attachments),
+        );
+      }
     }
     if (
       pendingReasoning.length > 0 &&
@@ -150,16 +177,20 @@ export class OpenAiCompatibleModel implements ModelAdapter {
 
     let response: Response;
     try {
-      response = await this.#fetch(this.#endpoint, {
-        method: "POST",
-        signal: request.signal,
-        headers: {
-          accept: "text/event-stream",
-          authorization: `Bearer ${this.#apiKey}`,
-          "content-type": "application/json",
-        },
-        body,
-      });
+      response = await fetchModelResponse(
+        () =>
+          this.#fetch(this.#endpoint, {
+            method: "POST",
+            signal: request.signal,
+            headers: {
+              accept: "text/event-stream",
+              authorization: `Bearer ${this.#apiKey}`,
+              "content-type": "application/json",
+            },
+            body,
+          }),
+        request.signal,
+      );
     } catch {
       request.signal.throwIfAborted();
       throw modelError(
@@ -186,18 +217,70 @@ export class OpenAiCompatibleModel implements ModelAdapter {
       );
     }
 
-    if (response.body === null) {
-      throw modelError(
-        "protocol",
-        "OpenAI-compatible model response had no stream body",
+    const diagnostic: ModelStreamDiagnostic = {
+      timestamp: new Date().toISOString(),
+      diagnosticId: randomUUID(),
+      model: request.model.includes(this.#apiKey)
+        ? "[redacted]"
+        : request.model.slice(0, 200),
+      status: response.status,
+      payloadIndex: 0,
+      ...(request.sessionId === undefined
+        ? {}
+        : { sessionId: request.sessionId }),
+      ...(safeRequestId(response.headers, this.#apiKey) === undefined
+        ? {}
+        : { requestId: safeRequestId(response.headers, this.#apiKey)! }),
+    };
+    try {
+      if (response.body === null) {
+        diagnosticField(diagnostic, "response.body", null);
+        throw modelError(
+          "protocol",
+          "OpenAI-compatible model response had no stream body",
+        );
+      }
+      yield* parseChatCompletionStream(
+        response.body,
+        request.signal,
+        allowedToolNames,
+        diagnostic,
+        this.#onStreamFailure === undefined
+          ? undefined
+          : (payload, index) => {
+              // Capture received payloads only, never request headers or request bodies.
+              const escapedKey = JSON.stringify(this.#apiKey).slice(1, -1);
+              const redacted = payload
+                .split(this.#apiKey)
+                .join("[redacted]")
+                .split(escapedKey)
+                .join("[redacted]");
+              const bytes = Buffer.from(redacted);
+              const payloads = (diagnostic.payloads ??= []);
+              payloads.push({
+                index,
+                text: new TextDecoder().decode(bytes.subarray(0, 8192), {
+                  stream: true,
+                }),
+                truncated: bytes.length > 8192,
+              });
+              if (payloads.length > 8) payloads.shift();
+            },
       );
+    } catch (error) {
+      if (!request.signal.aborted && this.#onStreamFailure !== undefined) {
+        diagnostic.failure =
+          error instanceof OpenAiCompatibleModelError
+            ? error.message
+            : "Model stream read failed";
+        try {
+          await this.#onStreamFailure(diagnostic);
+        } catch {
+          console.error("Model stream diagnostic could not be persisted");
+        }
+      }
+      throw error;
     }
-
-    yield* parseChatCompletionStream(
-      response.body,
-      request.signal,
-      allowedToolNames,
-    );
   }
 }
 
@@ -453,30 +536,56 @@ async function toChatMessage(
   }
 
   if ("content" in message) {
-    const content: Array<Record<string, unknown>> = [];
-    for (const part of message.content) {
-      if (part.type === "text") {
-        content.push({ type: "text", text: part.text });
-      } else {
-        if (attachments === undefined) {
-          throw modelError(
-            "configuration",
-            "OpenAI-compatible attachment reader is required for image input",
-          );
-        }
-        const bytes = await attachments.read(part.attachment);
+    return await toChatUserContent(message.content, attachments);
+  }
+
+  return { role: message.role, content: message.text };
+}
+
+async function toChatUserContent(
+  modelContent: import("../item.js").UserInput,
+  attachments: Pick<AttachmentStore, "read"> | undefined,
+): Promise<Readonly<Record<string, unknown>>> {
+  const content: Array<Record<string, unknown>> = [];
+  for (const part of modelContent) {
+    if (part.type === "text") {
+      content.push({ type: "text", text: part.text });
+    } else {
+      if (attachments === undefined) {
+        throw modelError(
+          "configuration",
+          "OpenAI-compatible attachment reader is required for media input",
+        );
+      }
+      const attachment = part.attachment;
+      const bytes = await attachments.read(attachment);
+      const data = Buffer.from(bytes).toString("base64");
+      if (part.type === "image") {
         content.push({
           type: "image_url",
           image_url: {
-            url: `data:${part.attachment.mediaType};base64,${Buffer.from(bytes).toString("base64")}`,
+            url: `data:${part.attachment.mediaType};base64,${data}`,
+          },
+        });
+      } else {
+        const mediaType: string = attachment.mediaType;
+        if (!["audio/wav", "audio/mpeg"].includes(mediaType)) {
+          throw modelError(
+            "configuration",
+            "OpenAI-compatible audio input requires WAV or MP3",
+          );
+        }
+        content.push({
+          type: "input_audio",
+          input_audio: {
+            data,
+            format: mediaType === "audio/wav" ? "wav" : "mp3",
           },
         });
       }
     }
-    return { role: "user", content };
   }
-
-  return { role: message.role, content: message.text };
+  return { role: "user", content };
 }
 
 function chatCompletionsEndpoint(baseUrl: string): string {
@@ -555,6 +664,8 @@ async function* parseChatCompletionStream(
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal,
   allowedToolNames: ReadonlySet<string>,
+  diagnostic: ModelStreamDiagnostic,
+  capturePayload?: (payload: string, index: number) => void,
 ): AsyncIterable<ModelEvent> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -582,7 +693,12 @@ async function* parseChatCompletionStream(
         false,
       );
       for (const payload of payloads) {
-        yield* consumePayload(payload, state);
+        diagnostic.payloadIndex += 1;
+        capturePayload?.(payload, diagnostic.payloadIndex);
+        delete diagnostic.field;
+        delete diagnostic.valueType;
+        delete diagnostic.toolIndex;
+        yield* consumePayload(payload, state, diagnostic);
       }
       if (state.doneSeen) {
         endedByDone = true;
@@ -593,7 +709,12 @@ async function* parseChatCompletionStream(
     if (!endedByDone) {
       const payloads = feedSse(sse, decoder.decode(), true);
       for (const payload of payloads) {
-        yield* consumePayload(payload, state);
+        diagnostic.payloadIndex += 1;
+        capturePayload?.(payload, diagnostic.payloadIndex);
+        delete diagnostic.field;
+        delete diagnostic.valueType;
+        delete diagnostic.toolIndex;
+        yield* consumePayload(payload, state, diagnostic);
       }
     }
   } finally {
@@ -670,6 +791,7 @@ async function* parseChatCompletionStream(
 async function* consumePayload(
   payload: string,
   state: StreamState,
+  diagnostic: ModelStreamDiagnostic,
 ): AsyncIterable<ModelEvent> {
   if (payload.trim() === "[DONE]") {
     if (state.doneSeen) {
@@ -689,19 +811,23 @@ async function* consumePayload(
     );
   }
 
+  diagnosticField(diagnostic, "payload", payload);
   const chunk = parseChunk(payload);
   if ("error" in chunk) {
+    diagnosticField(diagnostic, "error", chunk.error);
     throw modelError(
       "protocol",
       "OpenAI-compatible provider reported a streaming error",
     );
   }
 
+  diagnosticField(diagnostic, "usage", chunk.usage);
   const usage = readUsage(chunk.usage);
   if (usage !== undefined) {
     yield { type: "usage", ...usage };
   }
 
+  diagnosticField(diagnostic, "choices", chunk.choices);
   if (!Array.isArray(chunk.choices)) {
     throw modelError(
       "protocol",
@@ -710,7 +836,9 @@ async function* consumePayload(
   }
 
   for (const choiceValue of chunk.choices) {
+    diagnosticField(diagnostic, "choices[]", choiceValue);
     const choice = record(choiceValue, "choice");
+    diagnosticField(diagnostic, "choices[].index", choice.index);
     const choiceIndex = choice.index;
     if (choiceIndex !== undefined && choiceIndex !== 0) {
       throw modelError(
@@ -719,8 +847,10 @@ async function* consumePayload(
       );
     }
 
+    diagnosticField(diagnostic, "choices[].delta", choice.delta);
     const delta =
       choice.delta === undefined ? {} : record(choice.delta, "choice delta");
+    diagnosticField(diagnostic, "choices[].delta.content", delta.content);
     const content = delta.content;
     if (
       content !== undefined &&
@@ -746,6 +876,11 @@ async function* consumePayload(
       yield { type: "text_delta", delta: content };
     }
 
+    diagnosticField(
+      diagnostic,
+      "choices[].delta.reasoning_content",
+      delta.reasoning_content,
+    );
     const reasoningContent = delta.reasoning_content;
     if (
       reasoningContent !== undefined &&
@@ -780,6 +915,7 @@ async function* consumePayload(
       state.reasoningContent += reasoningContent;
     }
 
+    diagnosticField(diagnostic, "tool_calls", delta.tool_calls);
     if (delta.tool_calls !== undefined) {
       if (!Array.isArray(delta.tool_calls)) {
         throw modelError(
@@ -793,9 +929,14 @@ async function* consumePayload(
           "OpenAI-compatible model stream continued after finishing",
         );
       }
-      mergeToolCalls(state.toolCalls, delta.tool_calls);
+      mergeToolCalls(state.toolCalls, delta.tool_calls, diagnostic);
     }
 
+    diagnosticField(
+      diagnostic,
+      "choices[].finish_reason",
+      choice.finish_reason,
+    );
     const finishReason = choice.finish_reason;
     if (finishReason !== undefined && finishReason !== null) {
       if (typeof finishReason !== "string" || finishReason.length === 0) {
@@ -823,6 +964,8 @@ async function* consumePayload(
       state.finishReason = finishReason;
     }
   }
+  delete diagnostic.field;
+  delete diagnostic.valueType;
 }
 
 function parseChunk(payload: string): Readonly<Record<string, unknown>> {
@@ -907,9 +1050,13 @@ function isTokenCount(value: unknown): value is number {
 function mergeToolCalls(
   calls: Map<number, ToolCallAccumulator>,
   deltas: readonly unknown[],
+  diagnostic: ModelStreamDiagnostic,
 ): void {
   for (const value of deltas) {
+    diagnosticField(diagnostic, "tool_calls[]", value);
     const delta = record(value, "tool call delta");
+    diagnostic.field = "tool_calls.index";
+    diagnostic.valueType = diagnosticValueType(delta.index);
     const index = delta.index ?? 0;
     if (
       typeof index !== "number" ||
@@ -922,6 +1069,9 @@ function mergeToolCalls(
       );
     }
 
+    diagnostic.toolIndex = index;
+    diagnostic.field = "tool_calls.id";
+    diagnostic.valueType = diagnosticValueType(delta.id);
     const current = calls.get(index) ?? { arguments: "" };
     const id = nonEmptyFragment(delta.id, "tool call id");
     if (id !== undefined && current.id !== undefined && id !== current.id) {
@@ -931,10 +1081,14 @@ function mergeToolCalls(
       );
     }
 
+    diagnostic.field = "tool_calls.function";
+    diagnostic.valueType = diagnosticValueType(delta.function);
     const functionDelta =
       delta.function === undefined
         ? {}
         : record(delta.function, "tool call function");
+    diagnostic.field = "tool_calls.function.name";
+    diagnostic.valueType = diagnosticValueType(functionDelta.name);
     const name = nonEmptyFragment(functionDelta.name, "tool name");
     if (
       name !== undefined &&
@@ -947,6 +1101,8 @@ function mergeToolCalls(
       );
     }
 
+    diagnostic.field = "tool_calls.function.arguments";
+    diagnostic.valueType = diagnosticValueType(functionDelta.arguments);
     const argumentDelta = functionDelta.arguments;
     if (argumentDelta !== undefined && typeof argumentDelta !== "string") {
       throw modelError(
@@ -962,11 +1118,31 @@ function mergeToolCalls(
       ...(mergedName === undefined ? {} : { name: mergedName }),
       arguments: current.arguments + (argumentDelta ?? ""),
     });
+    delete diagnostic.field;
+    delete diagnostic.valueType;
+    delete diagnostic.toolIndex;
   }
 }
 
+function diagnosticField(
+  diagnostic: ModelStreamDiagnostic,
+  field: string,
+  value: unknown,
+): void {
+  diagnostic.field = field;
+  diagnostic.valueType = diagnosticValueType(value);
+}
+
+function diagnosticValueType(value: unknown): string {
+  return value === null
+    ? "null"
+    : Array.isArray(value)
+      ? "array"
+      : typeof value;
+}
+
 function nonEmptyFragment(value: unknown, label: string): string | undefined {
-  if (value === undefined || value === "") {
+  if (value === undefined || value === null || value === "") {
     return undefined;
   }
   if (typeof value !== "string") {

@@ -968,6 +968,71 @@ test("assembles interleaved parallel tool-call deltas without losing ids", async
   );
 });
 
+test("accepts null metadata on continuation deltas but still requires a complete identity", async () => {
+  const response = (id: unknown) =>
+    streamResponse([
+      chunk({
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id,
+                  function: { name: "shell", arguments: '{"command":' },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+      }),
+      chunk({
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: null,
+                  function: { name: null, arguments: '"pwd"}' },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      }),
+      "[DONE]",
+    ]);
+  assert.deepEqual(
+    await collect(
+      adapterReturning(response("call-null")).stream(
+        request({ tools: [shellTool()] }),
+      ),
+    ),
+    [
+      {
+        type: "tool_call",
+        callId: "call-null",
+        name: "shell",
+        arguments: { command: "pwd" },
+      },
+    ],
+  );
+  for (const id of [null, 123, {}, false]) {
+    await assert.rejects(
+      collect(
+        adapterReturning(response(id)).stream(
+          request({ tools: [shellTool()] }),
+        ),
+      ),
+    );
+  }
+});
+
 test("rejects malformed or unavailable tool calls instead of executing raw input", async (t) => {
   await t.test("malformed arguments", async () => {
     const adapter = adapterReturning(
@@ -1363,3 +1428,33 @@ async function collect(
   }
   return collected;
 }
+
+test("compatible adapter recovers a transient admission failure without replaying the stream", async () => {
+  let calls = 0;
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: "https://provider.test/v1",
+    apiKey: fakeKey,
+    fetch: async () => {
+      calls++;
+      if (calls === 1) return new Response(null, { status: 429 });
+      return streamResponse([
+        chunk({
+          choices: [
+            {
+              index: 0,
+              delta: { content: "Recovered" },
+              finish_reason: "stop",
+            },
+          ],
+        }),
+        "[DONE]",
+      ]);
+    },
+  });
+  const events = await collect(adapter.stream(request()));
+  assert.equal(calls, 2);
+  assert.deepEqual(
+    events.filter((event) => event.type === "text_delta"),
+    [{ type: "text_delta", delta: "Recovered" }],
+  );
+});

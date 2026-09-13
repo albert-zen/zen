@@ -1,4 +1,5 @@
 import type {
+  Thread,
   ServerNotificationMethod,
   ServerNotificationParams,
 } from "../protocol-client/index.js";
@@ -30,5 +31,45 @@ export async function observeCompletedUserMessageTitle(
         error instanceof Error ? error.message : String(error)
       }`,
     );
+  }
+}
+
+/** Discover external threads without selecting them in any desktop window.
+ * Resume atomically supplies the canonical snapshot plus future notifications,
+ * so a first input arriving before discovery completes cannot miss naming.
+ */
+export async function observeDiscoveredThreadTitle(
+  titles: ThreadTitleObservationPort,
+  resume: (threadId: string) => Promise<Thread>,
+  thread: Thread,
+  warn: (message: string) => void = console.warn,
+): Promise<void> {
+  try {
+    const snapshot = await resume(thread.id);
+    await observeThreadSnapshotTitle(titles, snapshot);
+  } catch (error) {
+    warn(
+      `Could not observe discovered Thread for ZenX title: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+export async function observeThreadSnapshotTitle(
+  titles: ThreadTitleObservationPort,
+  snapshot: Thread,
+): Promise<void> {
+  // A snapshot is not a rename notification; preserve native names without
+  // treating a potentially stale read as new naming authority.
+  if (snapshot.name) return;
+  for (const turn of snapshot.turns) {
+    const message = turn.items.find((item) => item.type === "userMessage");
+    if (message?.type !== "userMessage") continue;
+    const input = message.content
+      .map((part) => part.text)
+      .join("\n")
+      .slice(0, MAX_OBSERVED_INPUT_LENGTH);
+    if (!input.trim()) continue;
+    await titles.observe(snapshot.id, input);
+    break;
   }
 }

@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { AppServerManager } from "../src/main/app-server-manager.js";
 import type { ZenXCapabilityHost } from "../src/main/capabilities/types.js";
-import { isHostEvent } from "../src/main/host-messages.js";
+import { isHostCommand, isHostEvent } from "../src/main/host-messages.js";
 
 const validSummary = {
   threadId: "thread-1",
@@ -310,6 +310,109 @@ test("validates exclusive canonical Thread usage projections", () => {
   );
 });
 
+test("validates configuration control messages and binds candidates to a process epoch", () => {
+  const config = {
+    cwd: "/workspace",
+    dataDirectory: "/data",
+    model: "fake",
+    models: ["fake"],
+    approvalPolicy: "never",
+    provider: { type: "fake" },
+  };
+  const candidate = {
+    processEpoch: "epoch-a",
+    candidateToken: "candidate-a",
+    revision: 3,
+    pendingRestart: ["dataDirectory"],
+  };
+  assert.equal(
+    isHostCommand({
+      type: "configuration/prepare",
+      requestId: "prepare-1",
+      candidateToken: "candidate-a",
+      config,
+      revision: 3,
+    }),
+    true,
+  );
+  assert.equal(
+    isHostCommand({
+      type: "configuration/publish",
+      requestId: "publish-1",
+      candidate,
+    }),
+    true,
+  );
+  assert.equal(
+    isHostCommand({
+      type: "configuration/discard",
+      requestId: "discard-1",
+      candidate: { ...candidate, revision: -1 },
+    }),
+    false,
+  );
+  assert.equal(
+    isHostEvent({
+      type: "configuration/prepared",
+      requestId: "prepare-1",
+      candidate,
+    }),
+    true,
+  );
+  assert.equal(
+    isHostEvent({
+      type: "configuration/prepared",
+      requestId: "prepare-1",
+      candidate,
+      error: "ambiguous",
+    }),
+    false,
+  );
+  assert.equal(
+    isHostEvent({
+      type: "configuration/current",
+      requestId: "current-1",
+      current: {
+        processEpoch: "epoch-a",
+        revision: 3,
+        pendingRestart: ["dataDirectory"],
+      },
+    }),
+    true,
+  );
+  assert.equal(isHostEvent({ type: "ready", url: "ws://127.0.0.1:1" }), false);
+  assert.equal(
+    isHostCommand({ type: "maintenance/try-begin", requestId: "restart-1" }),
+    true,
+  );
+  assert.equal(
+    isHostEvent({
+      type: "maintenance/result",
+      requestId: "restart-1",
+      accepted: false,
+      activity: {
+        acceptingRootOperations: true,
+        rootOperations: [{ kind: "provider", label: "title" }],
+        activeToolTasks: 0,
+      },
+    }),
+    true,
+  );
+  assert.equal(
+    isHostEvent({
+      type: "maintenance/result",
+      requestId: "restart-1",
+      accepted: true,
+      activity: {
+        acceptingRootOperations: false,
+        rootOperations: [{ kind: "invalid" }],
+        activeToolTasks: 0,
+      },
+    }),
+    false,
+  );
+});
+
 test("validates every canonical item in plugin Turn results", () => {
   assert.equal(
     isHostEvent({
@@ -453,6 +556,37 @@ test("manager ignores unmatched and late malformed summary responses", async () 
     const summary = archived[0];
     assert(summary !== undefined && summary.status !== "systemError");
     assert.equal(summary.currentMetadata.cwd, "/archived");
+  } finally {
+    await fixture.manager.stop();
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("maintenance ACK timeout reopens root admission when restart did not begin", async () => {
+  const fixture = await createFixtureManager("maintenance-timeout", undefined, {
+    configurationControlTimeoutMs: 20,
+  });
+  try {
+    await fixture.manager.start();
+    await assert.rejects(
+      fixture.manager.safeRestart({
+        cwd: process.cwd(),
+        dataDirectory: path.join(fixture.directory, "data"),
+        model: "fake",
+        models: ["fake"],
+        approvalPolicy: "never",
+        provider: { type: "fake" },
+      }),
+      /maintenance admission timed out/u,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const thread = (await fixture.manager.request("thread/start", {})).thread;
+    await assert.doesNotReject(
+      fixture.manager.request("turn/start", {
+        threadId: thread.id,
+        input: [{ type: "text", text: "still admitted" }],
+      }),
+    );
   } finally {
     await fixture.manager.stop();
     await rm(fixture.directory, { recursive: true, force: true });
@@ -631,6 +765,7 @@ async function createFixtureManager(
   capabilityHost?: ZenXCapabilityHost,
   options: {
     capabilityReplacementTimeoutMs?: number;
+    configurationControlTimeoutMs?: number;
     recoveryDelaysMs?: readonly number[];
   } = {},
 ): Promise<{

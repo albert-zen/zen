@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -10,9 +10,183 @@ import {
   type ZenXHostProfile,
   ZenXHostProfileStore,
 } from "../src/main/host-profile.js";
-import { discoverOpenAiCompatibleModels } from "../src/main/model-discovery.js";
+import {
+  discoverOpenAiCompatibleModels,
+  discoverOpenAiSubscriptionModels,
+  OpenAiSubscriptionModelCache,
+} from "../src/main/model-discovery.js";
 import { KNOWN_PROVIDER_PRESETS } from "../src/main/provider-presets.js";
 import { ZenXSettingsService } from "../src/main/settings-service.js";
+
+test("ChatGPT subscription discovery maps the official Codex catalog and filters unsupported entries", async () => {
+  const accessToken = subscriptionToken("acct-models");
+  let requestUrl = "";
+  let requestHeaders = new Headers();
+  const result = await discoverOpenAiSubscriptionModels({
+    accessToken,
+    clientVersion: "1.2.3",
+    etag: '"previous"',
+    fetch: async (input, init) => {
+      requestUrl = String(input);
+      requestHeaders = new Headers(init?.headers);
+      return Response.json(
+        {
+          models: [
+            {
+              slug: "official-fast",
+              display_name: "Official Fast",
+              description: "Current account model",
+              default_reasoning_level: "medium",
+              supported_reasoning_levels: [
+                { effort: "low", description: "Fast" },
+                { effort: "medium", description: "Balanced" },
+              ],
+              visibility: "list",
+              priority: 2,
+              input_modalities: ["text", "image"],
+              context_window: 300_000,
+            },
+            {
+              slug: "audio-only",
+              display_name: "Audio only",
+              supported_reasoning_levels: [],
+              visibility: "list",
+              priority: 1,
+              input_modalities: ["audio"],
+            },
+            {
+              slug: "internal",
+              display_name: "Internal",
+              supported_reasoning_levels: [],
+              visibility: "hide",
+              priority: 0,
+              input_modalities: ["text"],
+            },
+          ],
+        },
+        { headers: { etag: '"latest"' } },
+      );
+    },
+  });
+
+  assert.equal(
+    requestUrl,
+    "https://chatgpt.com/backend-api/codex/models?client_version=1.2.3",
+  );
+  assert.equal(requestHeaders.get("authorization"), `Bearer ${accessToken}`);
+  assert.equal(requestHeaders.get("chatgpt-account-id"), "acct-models");
+  assert.equal(requestHeaders.get("if-none-match"), '"previous"');
+  assert.equal(result.etag, '"latest"');
+  assert.deepEqual(result.models, [
+    {
+      id: "official-fast",
+      displayName: "Official Fast",
+      description: "Current account model",
+      hidden: false,
+      source: "discovered",
+      supportedReasoningEfforts: ["low", "medium"],
+      defaultReasoningEffort: "medium",
+      inputModalities: ["text", "image"],
+      contextWindow: 300_000,
+    },
+  ]);
+});
+
+test("subscription discovery uses an account-scoped cache and then built-in fallback", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-sub-models-"));
+  const profileStore = new ZenXHostProfileStore(
+    path.join(directory, "host-profile.json"),
+  );
+  const vault = new ZenXCredentialVault(
+    path.join(directory, "credentials.vault"),
+    encryption,
+  );
+  const accessToken = subscriptionToken("acct-cache");
+  let online = true;
+  try {
+    await profileStore.write(subscriptionProfile());
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      profileStore,
+      vault,
+      subscription: {
+        ...inactiveSubscription,
+        status: async () => ({
+          authenticated: true,
+          expired: false,
+          accountId: "acct-cache",
+        }),
+        acquireAccessLease: async () => ({ accessToken }),
+      },
+      providerFetchFactory: () =>
+        Object.assign(
+          async () => {
+            if (!online) throw new Error("offline");
+            return Response.json(
+              {
+                models: [
+                  {
+                    slug: "official-new",
+                    display_name: "Official New",
+                    description: null,
+                    default_reasoning_level: "high",
+                    supported_reasoning_levels: [
+                      { effort: "medium", description: "" },
+                      { effort: "high", description: "" },
+                    ],
+                    visibility: "list",
+                    priority: 0,
+                    input_modalities: ["text", "image"],
+                    context_window: 400_000,
+                  },
+                ],
+              },
+              { headers: { etag: '"catalog-1"' } },
+            );
+          },
+          { close: async () => undefined },
+        ),
+    });
+    await service.initialize({});
+    const remote = await service.discoverProviderModels("openai-codex");
+    assert.equal(remote.source, "remote");
+    assert.equal(
+      remote.models.some((model) => model.id === "official-new"),
+      true,
+    );
+
+    online = false;
+    const cached = await service.discoverProviderModels("openai-codex");
+    assert.equal(cached.source, "cache");
+    assert.match(cached.warning ?? "", /request failed/u);
+    assert.equal(
+      cached.models.some((model) => model.id === "official-new"),
+      true,
+    );
+
+    const fallbackService = new ZenXSettingsService({
+      userDataDirectory: path.join(directory, "fresh"),
+      zenDataDirectory: path.join(directory, "fresh", "zen"),
+      profileStore,
+      vault,
+      subscription: inactiveSubscription,
+      subscriptionModelCache: new OpenAiSubscriptionModelCache(
+        path.join(directory, "missing-cache.json"),
+      ),
+    });
+    await fallbackService.initialize({});
+    const fallback =
+      await fallbackService.discoverProviderModels("openai-codex");
+    assert.equal(fallback.source, "fallback");
+    assert.equal(
+      fallback.models.some((model) => model.id === "gpt-5.6-terra"),
+      true,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("GET /models discovers ids as text-only and routes the selected credential", async () => {
   let requestUrl = "";
@@ -74,7 +248,7 @@ test("GET /models uses explicit rich modalities and exact catalog enrichment wit
       }),
   });
   assert.deepEqual(models[0]?.inputModalities, ["text", "image"]);
-  assert.deepEqual(models[1]?.inputModalities, []);
+  assert.deepEqual(models[1]?.inputModalities, ["audio"]);
   assert.equal(Object.isFrozen(models[1]?.inputModalities), true);
   assert.equal(models[1]?.source, "preset");
   assert.deepEqual(models[2]?.inputModalities, ["text"]);
@@ -551,6 +725,47 @@ const inactiveSubscription = {
   status: async () => ({ authenticated: false, expired: false }),
 };
 
+function subscriptionToken(accountId: string): string {
+  const encode = (value: object) =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  return `${encode({ alg: "none" })}.${encode({
+    "https://api.openai.com/auth": { chatgpt_account_id: accountId },
+  })}.signature`;
+}
+
+function subscriptionProfile(): ZenXHostProfile {
+  const models = structuredLegacyModelCatalog("openai-subscription", [
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+  ]);
+  return {
+    version: 3,
+    onboardingComplete: true,
+    providerProfiles: [
+      {
+        providerProfileId: "openai-codex",
+        type: "openai-subscription",
+        displayName: "OpenAI subscription",
+        models,
+      },
+    ],
+    defaultModel: {
+      providerProfileId: "openai-codex",
+      modelId: "gpt-5.6-terra",
+    },
+    titleModel: {
+      providerProfileId: "openai-codex",
+      modelId: "gpt-5.6-luna",
+    },
+    workspace: null,
+    workspaces: [],
+    lastUsedWorkspace: null,
+    approvalPolicy: "never",
+    pinnedThreadIds: [],
+    sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
+  };
+}
+
 function compatibleProfile(
   model: ZenXHostProfile["providerProfiles"][number]["models"][number],
 ): ZenXHostProfile {
@@ -592,3 +807,187 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+test("subscription discovery rejects old account results after account switch or logout", async () => {
+  for (const responseKind of ["remote", "cache", "offline"] as const) {
+    for (const nextAccount of ["account-b", undefined]) {
+      const directory = await mkdtemp(
+        path.join(os.tmpdir(), "zenx-catalog-account-"),
+      );
+      try {
+        const profileStore = new ZenXHostProfileStore(
+          path.join(directory, "profile.json"),
+        );
+        await profileStore.write(subscriptionProfile());
+        let account: string | undefined = "account-a";
+        const entered = deferred<void>();
+        const reply = deferred<Response>();
+        const cache = new OpenAiSubscriptionModelCache(
+          path.join(directory, "models-cache.json"),
+        );
+        await cache.store({
+          accountId: "account-a",
+          fetchedAt: Date.now(),
+          etag: '"a"',
+          models: [],
+        });
+        const service = new ZenXSettingsService({
+          userDataDirectory: directory,
+          zenDataDirectory: path.join(directory, "zen"),
+          profileStore,
+          vault: new ZenXCredentialVault(
+            path.join(directory, "vault"),
+            encryption,
+          ),
+          subscriptionModelCache: cache,
+          subscription: {
+            ...inactiveSubscription,
+            status: async () => ({
+              authenticated: account !== undefined,
+              expired: false,
+              accountId: account,
+            }),
+            acquireAccessLease: async () => ({
+              accessToken: subscriptionToken("account-a"),
+            }),
+          },
+          providerFetchFactory: () =>
+            Object.assign(
+              async () => {
+                entered.resolve();
+                return await reply.promise;
+              },
+              { close: async () => undefined },
+            ),
+        });
+        await service.initialize({});
+        const result = service.discoverProviderModels("openai-codex");
+        await entered.promise;
+        account = nextAccount;
+        if (responseKind === "offline") reply.reject(new Error("offline"));
+        else
+          reply.resolve(
+            responseKind === "cache"
+              ? new Response(null, { status: 304 })
+              : Response.json({ models: [] }),
+          );
+        await assert.rejects(result, /account.*changed/i);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
+  }
+});
+
+test("subscription discovery renews rejected tokens and honors same-account ETag cache", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-catalog-renew-"),
+  );
+  try {
+    const profileStore = new ZenXHostProfileStore(
+      path.join(directory, "profile.json"),
+    );
+    await profileStore.write(subscriptionProfile());
+    const cache = new OpenAiSubscriptionModelCache(
+      path.join(directory, "catalog.json"),
+    );
+    await cache.store({
+      accountId: "account-a",
+      fetchedAt: Date.now(),
+      etag: '"cached-a"',
+      models: [],
+    });
+    const first = subscriptionToken("account-a");
+    const renewed = first.replace(".signature", ".renewed");
+    let calls = 0;
+    let renewals = 0;
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      profileStore,
+      vault: new ZenXCredentialVault(path.join(directory, "vault"), encryption),
+      subscriptionModelCache: cache,
+      subscription: {
+        ...inactiveSubscription,
+        status: async () => ({
+          authenticated: true,
+          expired: false,
+          accountId: "account-a",
+        }),
+        acquireAccessLease: async () => ({ accessToken: first }),
+        renewAccessLease: async (rejected) => {
+          assert.equal(rejected, first);
+          renewals++;
+          return { accessToken: renewed };
+        },
+      },
+      providerFetchFactory: () =>
+        Object.assign(
+          async (_input: string | URL | Request, init?: RequestInit) => {
+            const headers = new Headers(init?.headers);
+            assert.equal(headers.get("if-none-match"), '"cached-a"');
+            assert.equal(
+              headers.get("authorization"),
+              `Bearer ${calls === 0 ? first : renewed}`,
+            );
+            calls++;
+            return new Response(null, { status: calls === 1 ? 401 : 304 });
+          },
+          { close: async () => undefined },
+        ),
+    });
+    await service.initialize({});
+    const snapshot = await service.discoverProviderModels("openai-codex");
+    assert.equal(snapshot.source, "cache");
+    assert.equal(snapshot.warning, undefined);
+    assert.equal(calls, 2);
+    assert.equal(renewals, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("subscription discovery defaults to its own current catalog compatibility version", async () => {
+  let requested = "";
+  await discoverOpenAiSubscriptionModels({
+    accessToken: subscriptionToken("catalog-version"),
+    fetch: async (url) => {
+      requested = String(url);
+      return Response.json({ models: [] });
+    },
+  });
+  assert.equal(
+    new URL(requested).searchParams.get("client_version"),
+    "0.153.4",
+  );
+});
+
+test("subscription cache rejects ETags from another catalog compatibility version", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-catalog-version-"),
+  );
+  try {
+    const file = path.join(directory, "cache.json");
+    const cache = new OpenAiSubscriptionModelCache(file);
+    const entry = {
+      accountId: "account",
+      fetchedAt: Date.now(),
+      etag: '"catalog"',
+      models: [],
+    };
+    await cache.store(entry);
+    assert.deepEqual(await cache.load("account"), entry);
+    const stored = JSON.parse(await readFile(file, "utf8"));
+    assert.equal(stored.catalogClientVersion, "0.153.4");
+    await writeFile(
+      file,
+      JSON.stringify({ ...stored, catalogClientVersion: "0.146.0" }),
+    );
+    assert.equal(await cache.load("account"), undefined);
+    delete stored.catalogClientVersion;
+    await writeFile(file, JSON.stringify(stored));
+    assert.equal(await cache.load("account"), undefined);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

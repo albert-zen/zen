@@ -1,15 +1,20 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import type { CanonicalItem } from "../../../src/item.js";
-import {
-  packZenXFirstPartyPlugins,
-  packZenXRoomsPlugin,
-} from "../scripts/pack-first-party-plugins.mjs";
+import { ZENX_ROOMS_TARBALL } from "../scripts/pack-first-party-plugins.mjs";
 import { AppServerManager } from "../src/main/app-server-manager.js";
 import { createBundledAutomationPluginService } from "../src/main/automation-plugin-service.js";
 import { installZenXBundledPluginsAtStartup } from "../src/main/bundled-plugin-startup.js";
@@ -36,6 +41,20 @@ const pnpmCli = fileURLToPath(
   new URL("../../../node_modules/pnpm/bin/pnpm.cjs", import.meta.url),
 );
 
+// Lifecycle fixtures consume pretest output; packaging tests still build from source.
+// Copy into each fixture because lifecycle assertions remove and restore tarballs.
+const preparedPluginsDirectory = fileURLToPath(
+  new URL("../resources/plugins/", import.meta.url),
+);
+
+async function copyPreparedRoomsPlugin(resources: string): Promise<string> {
+  const pluginsDirectory = path.join(resources, "plugins");
+  await mkdir(pluginsDirectory, { recursive: true });
+  const tarball = path.join(pluginsDirectory, ZENX_ROOMS_TARBALL);
+  await cp(path.join(preparedPluginsDirectory, ZENX_ROOMS_TARBALL), tarball);
+  return tarball;
+}
+
 test("packaged Rooms installs offline through profile discovery and preserves its lifecycle data", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-rooms-profile-"),
@@ -56,7 +75,7 @@ test("packaged Rooms installs offline through profile discovery and preserves it
       },
     ],
   });
-  const tarball = await packZenXRoomsPlugin({ outputDirectory: resources });
+  const tarball = await copyPreparedRoomsPlugin(resources);
   const appServer = {
     request: async () => {
       throw new Error("Room CRUD must not start a Turn");
@@ -277,7 +296,7 @@ test("packaged Rooms installs offline through profile discovery and preserves it
       await restarted.close();
     }
 
-    await packZenXRoomsPlugin({ outputDirectory: resources });
+    await copyPreparedRoomsPlugin(resources);
     const lifecycleDomain = await createBundledAutomationPluginService({
       userDataDirectory: userData,
       appServer,
@@ -343,7 +362,7 @@ test("packaged Rooms adopts disabled and uninstalled legacy Catalog lifecycle wi
       );
       const userData = path.join(directory, "user-data");
       const resources = path.join(directory, "resources");
-      const tarball = await packZenXRoomsPlugin({ outputDirectory: resources });
+      const tarball = await copyPreparedRoomsPlugin(resources);
       const appServer = {
         request: async () => {
           throw new Error("Room adoption must not start a Turn");
@@ -418,7 +437,7 @@ test("packaged Rooms refuses bundled adoption across a legacy Catalog identity m
   );
   const userData = path.join(directory, "user-data");
   const resources = path.join(directory, "resources");
-  const tarball = await packZenXRoomsPlugin({ outputDirectory: resources });
+  const tarball = await copyPreparedRoomsPlugin(resources);
   const appServer = {
     request: async () => {
       throw new Error("Room adoption must not start a Turn");
@@ -470,7 +489,9 @@ test("packaged startup isolates a Rooms identity mismatch and starts with a late
   );
   const userData = path.join(directory, "user-data");
   const resources = path.join(directory, "resources");
-  await packZenXFirstPartyPlugins({ outputDirectory: resources });
+  await cp(preparedPluginsDirectory, path.join(resources, "plugins"), {
+    recursive: true,
+  });
   const appServer = {
     request: async () => {
       throw new Error("Startup fixture must not start an automation Turn");
@@ -551,7 +572,7 @@ test("an external tarball cannot self-declare the bundled Rooms runtime or trust
     path.join(os.tmpdir(), "zenx-rooms-untrusted-"),
   );
   const resources = path.join(directory, "resources");
-  const tarball = await packZenXRoomsPlugin({ outputDirectory: resources });
+  const tarball = await copyPreparedRoomsPlugin(resources);
   const capabilities = new ZenXCapabilityService({
     userDataDirectory: path.join(directory, "user-data"),
     pnpmCliPath: pnpmCli,

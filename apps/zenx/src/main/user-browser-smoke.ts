@@ -24,7 +24,9 @@ if (process.platform !== "win32") {
   throw new Error("The real user-browser CDP smoke is Windows-only");
 }
 
+const fixtureRequests: string[] = [];
 const server = createServer((request, response) => {
+  if (fixtureRequests.length < 32) fixtureRequests.push(request.url ?? "");
   if (request.url === "/seed") {
     response.statusCode = 302;
     response.setHeader(
@@ -50,6 +52,7 @@ const server = createServer((request, response) => {
 let browser: ChildProcess | undefined;
 let browserObservation: SmokeChildObservation | undefined;
 let directory: string | undefined;
+let diagnosticEndpoint: string | undefined;
 
 try {
   const executable = await findBrowserExecutable();
@@ -62,9 +65,16 @@ try {
       "--remote-debugging-port=0",
       "--no-first-run",
       "--no-default-browser-check",
+      "--enable-logging=stderr",
       `http://127.0.0.1:${String(port)}/seed`,
     ],
     { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
+  );
+  console.log(
+    JSON.stringify({
+      fixtureExecutable: executable,
+      fixtureProfile: directory,
+    }),
   );
   browserObservation = observeSmokeChild(browser);
   const debuggingPort = await readDevToolsPort(
@@ -73,6 +83,7 @@ try {
     browserObservation,
   );
   const endpoint = `http://127.0.0.1:${debuggingPort}`;
+  diagnosticEndpoint = endpoint;
   const selection = await selectBrowserProvider({
     userDataDirectory: directory,
     platform: "win32",
@@ -91,9 +102,8 @@ try {
   );
   assert.equal(selected?.providerId, "user-browser-cdp");
   assert.equal(selection.manifest.provider.id, "user-browser-cdp");
-  assert.equal(typeof backend.observeLive, "function");
+  assert.equal(typeof backend.observeTab, "function");
   const liveEvents: BrowserLiveObservationEvent[] = [];
-  const stopLive = backend.observeLive!((event) => liveEvents.push(event));
   const tabs = await retry(async () => {
     try {
       const current = await backend.listTabs("windows-smoke");
@@ -107,6 +117,11 @@ try {
   });
   const account = tabs.find((tab) => tab.url.includes("/account"));
   assert.ok(account, "Expected the already-running authenticated account tab");
+  const stopLive = backend.observeTab!(
+    "windows-smoke",
+    account.tabId,
+    (event) => liveEvents.push(event),
+  );
   const inspection = await retryDocumentInspection(() =>
     backend.inspect("windows-smoke", account.tabId),
   );
@@ -204,7 +219,10 @@ try {
   const detached = await backend.closeSession("windows-smoke");
   await retry(async () =>
     liveEvents.some(
-      (event) => event.type === "status" && event.status === "idle",
+      (event) =>
+        event.type === "status" &&
+        event.status === "unavailable" &&
+        event.message === "The observed browser tab is no longer attached.",
     )
       ? true
       : undefined,
@@ -276,6 +294,23 @@ try {
         targetsAfterClose.visibilityByTarget.get(opened.tabId) === "hidden",
     }),
   );
+} catch (error) {
+  let targets: unknown;
+  try {
+    targets =
+      diagnosticEndpoint === undefined
+        ? undefined
+        : await (
+            await fetch(`${diagnosticEndpoint}/json/list`, {
+              signal: AbortSignal.timeout(2_000),
+            })
+          ).json();
+  } catch (diagnosticError) {
+    targets = String(diagnosticError);
+  }
+  console.error(JSON.stringify({ fixtureRequests, targets }));
+  console.error(browserObservation?.diagnostics("smoke failed", String(error)));
+  throw error;
 } finally {
   if (browser !== undefined && browserObservation !== undefined) {
     await stopProcessTree(browser, browserObservation);

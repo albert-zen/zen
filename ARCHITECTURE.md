@@ -2,6 +2,12 @@
 
 ## 核心概念
 
+- **Host 配置快照** — Host 将已准备的 Provider 目录、默认选择与执行参数作为一致的瞬时快照发布，新根执行只从当前快照取得依赖，配置文件仍是唯一持久配置权威。
+- **Provider 执行依赖持有** — 一次 Turn 或 Host 辅助模型请求对 adapter、模型元数据及 transport 的瞬时引用在真正执行结束后释放，退役资源待最后一个引用结束后关闭，不进入 journal。
+- **Host 配置候选** — prepare 产生绑定 processEpoch 与 revision 的瞬时候选，publish/discard 幂等且进程退出即丢弃；候选不成为持久配置权威。
+- **Host Provider 资源** — Host 按连接身份复用 adapter/transport，由配置快照与执行持有共同决定寿命，最后引用结束后异步关闭。
+- **原生恢复投影** — ZAS 为每个 Thread 保留当前 processEpoch 的单调水位与活动显示尾部，在恢复快照中与 canonical 历史一起交付，不重放执行或保存第二份会话权威。
+
 五个概念，各一句话。新抽象必须先在这里获得自己的一句话。
 
 `NewThreadDraft` 是 Renderer 中非持久的临时编辑 UI，在通过 App Server 正常创建前不拥有任何 Thread 或 session 权威。
@@ -13,15 +19,26 @@
 - **Turn** — 一次交换：从一条用户输入开始、到 agent 完成响应为止追加的那段连续 Item。
 - **AgentRuntime** — Zen 拥有的 provider-neutral agent loop：从 ItemList 编译上下文 → 调用模型 → 通过 Tool Environment 执行工具，并把 canonical `tool_call` / `tool_result` 在内的一切事实追加为 Item。
 - **AppServer** — 按 threadId 把请求路由到 Thread、驱动 AgentRuntime、向订阅者广播 item 事件的唯一服务入口。
+- **Repository instructions** — ZAS在新Thread首条消息及每次上下文压缩（手动、自动、agentic）提交时读取绑定cwd所属Git仓库根AGENTS.md，路径和原文分别保存在turn_started与context_compaction Item中；模型投影仅使用最近一次读取，恢复与普通Turn不读盘。压缩摘要生成后重新读取并与压缩结果一起提交，失败明确返回、不提交半次压缩；删除文件追加空规则，旧规则只留历史。只定位repo根，不叠加祖先或扫描子目录；总原文128KiB、模型预算含最新规则。
+- **IM command-name resolution**：IMZen 在产品与 SDK common 命令的完整名称表上消费 IM Agent SDK 的纯 resolver（固定源码薄 vendor 与 MIT notice），显式启用唯一前缀；精确名称/别名优先，歧义零分派，只改命令 token，参数与消息内容保留。
 - **ZAS Native Protocol** — Zen 自己定义的 App Server 调用与事件语义，由 canonical 生命周期、Host policy 和产品需求向外投影，不受兼容 adapter 可表达能力裁剪。
 - **Codex App Server Adapter** — `src/protocol/codex/` 把 ZAS 原生 surface 中可表达的部分映射为固定 codex-cli 0.146.0 shape；兼容只属于已验收的具体客户端调用面，不反向定义 ZAS。
 - **Tool Environment** — AgentRuntime 面向的混合工具执行环境，统一解析、投影、Host policy、取消、路由与结果回写，但不要求 Zen 自己实现每个工具的领域行为。
 - **Tool Presentation** — AgentRuntime 把同一个 Tool Environment 以 `direct`、`code` 或 `both` 形态投影给模型；它只改变模型调用入口，不拥有第二套工具、权限或会话语义。
-- **Code Runtime** — 每次调用在 fresh、空环境、有限 heap/time/output 且可硬终止的 Node Worker 中运行 erasable TypeScript，权限明确等同 builtin shell，并用同一个 Tool Environment 的 `tools.*` bindings 调用结构化工具。
+- **Code Runtime** — 每次调用在可硬终止的 Worker 内用独立 JavaScript module context 编排同一个 Tool Environment 的工具；guest 无 Node、文件、网络或模块加载能力，执行生命期由统一工具任务管理器持有。
+- **Code State** — 线程内有界 JSON 数据从 append-only `code_state` Items 重建，`store/load` 只提供显式写入和当前程序的快照读取，不保存函数、执行栈或另一份会话权威。
+- **Model Content Projection** — 根据本次模型的输入能力投影历史与当前媒体内容，只改变 ModelRequest，不改写 canonical Items 或附件。
+- **Code Media Converter** — 将程序显式 image/audio 数据或当前线程已授权附件引用转换到同一个 AttachmentStore 与模型内容通路，不自行读取路径或网络。
 - **Nested Tool Invocation Port** — AgentRuntime 只向可信 builtin 组合工具提供的 turn-scoped capability，用同一 Tool Environment 和 canonical lifecycle 提交子调用，不序列化或下放给 plugin / external provider。
-- **Tool Output Spool** — Host 把超出模型 preview 上限的完整已捕获 text result 暂存到权限收窄的临时文件，并只把含 head/tail、大小、hash 和易失路径的 receipt canonicalize；临时副本不是 Thread authority。
-- **Tool Execution Mode** — Tool Runtime 对执行 body 只声明 `parallel_safe` 或 `exclusive`；未声明与 builtin shell 一律按 `exclusive`，该分类不是权限或资源 scope。
+- **Tool Output Spool** — Host 把超出默认 8 KiB 模型 preview（4 KiB head 与 4 KiB tail）的完整已捕获 text result 暂存到权限收窄的临时文件，并只把含 head/tail、大小、hash 和易失路径的 receipt canonicalize；临时副本不是 Thread authority。
+- **Tool Execution Mode** — Tool Runtime 对执行 body 只声明 `parallel_safe` 或 `exclusive`；未声明按 `exclusive`，builtin shell 的独立进程声明 `parallel_safe`，该分类不是权限或资源 scope。
+- **ToolTaskManager** — ToolEnvironment 统一拥有普通工具的 Host-local 执行、按 Thread 隔离的 task_id、增量输出与 wait；交回时间（默认 10 秒、最高 180 秒）和执行超时（默认 10 分钟）分开，快速结果原样返回，任务不参与 journal 重建。
+- **ToolTaskPolicy** — 具体工具只声明取消确认能力、资源作用域和可选 timingArguments 字段映射；默认未知取消保留 owner fence 与执行容量直到真实完成或 Host 关闭，shell 在进程组停止后确认取消，composite 由同一任务管理器持有并协调嵌套调用，本身不占子工具容量。
+- **ToolWaitRuntime** — 内建且保留名称的 wait 仅观察或请求取消同 Thread 已获准任务，只在任务完成或本次 wait 到期时返回自上次领取后的增量输出，到期不停止底层执行；它不重新授权、不占执行体容量，取消请求、无法确认取消和已停止是不同状态，Host 关闭有界清理临时资源；每个任务同时只有一个增量输出消费者，并发取消可返回不消费输出的状态，活动观察持有结果保留期。
+- **ToolTaskBounds** — 同一 Environment 默认最多 8 个尚未确认结束的执行体、64 个含待领取结果的任务，已完成结果保留 5 分钟；交回不释放 prepared bundle lease 或资源 fence，完成/关闭才释放，达到容量时立即告知模型等待现有任务。
 - **Tool Execution Status** — AgentRuntime 为每条新 `tool_result` 记录 `completed`、`failed` 或 `declined` 的 provider-neutral canonical 事实，Tool Runtime 只返回结果内容和 exit code，不能决定审批语义。
+- **Tool Model Content** — trusted builtin 可以让 canonical `tool_result` 携带 provider-neutral `UserInput`，由既有 Attachment Store 在后续模型采样时投影为真实媒体内容，并随 ItemList 重放而不保存 payload 副本。
+- **Tool Model Modality Requirement** — Tool Runtime 可声明执行所需的模型输入 modality；AgentRuntime 对已知不支持的模型在执行 body 前明确失败，而 `null` 继续表示 Unknown 并沿用尝试语义。
 - **Tool Policy Store** — Host 按稳定 tool name 持有 `ask_unknown` 的 approved/denied 决定并通过可持久化 port 注入 Tool Environment，不进入 Thread 或 canonical ItemList。
 - **Tool Runtime** — Tool Environment 按一个精确 stable tool name 注册的 specification、execution mode 与 execution body；builtin、plugin proxy 与 external proxy 使用同一单工具合同。
 - **Tool Bundle** — 可选的瞬时共享归属对象，用一个 identity 原子发布或替换一组 Tool Runtime，并为 plugin 或跨进程 bridge 持有 prepared-invocation lease；它不参与模型展示或按 name 二次分发。
@@ -51,16 +68,21 @@
 - **Plugin UI SDK** — 第一方 bundled 插件和隔离运行的第三方插件共享的逻辑 UI contribution API；信任和进程隔离不同，不产生两套产品语义。
 - **Tool Result Renderer** — 按 namespaced content type 渲染既有 `ToolResultItem` 可选 structured content 的插件 UI contribution；renderer 缺失时必须回退 text/JSON，且不得改写历史 Item。
 - **ZenX ZAS Endpoint** — ZenX Host 拥有的稳定、带认证、可供其他应用连接的 Zen App Server endpoint；当前原生 surface 与 CAS mapped surface 共用它，但不创建第二个 AppServer authority，也不要求 OS daemon。
-- **ZenX Resume Projection Buffer** — renderer 在一次 Thread selection epoch 内只短时缓存 resume 响应到 React commit 之间到达的协议事件，并在 canonical snapshot 提交时按序重放；它不持久化，也不成为第二份 Thread 状态。
+- **ZenX Resume Projection Buffer** — renderer 只重放当前连接、同一 Host processEpoch 且晚于原生 resume snapshot watermark 的事件；Host 快照同时包含 canonical 历史与尚未 canonicalize 的活动显示投影，瞬时序号与显示尾部不进入 journal，也不决定会话执行或终态。
 - **ZenX Approval UI Identity** — ZenX main 为每个 connection generation 的瞬时 approval 分配 opaque UI id，并把应答绑定到发起请求的 exact client/socket 与 wire id；stop 或 reconnect 会取消并清空旧 generation，renderer ready snapshot 只镜像当前 pending 集合。
 - **AttachmentStore** — ZAS 管理的不可变、SHA-256 内容寻址 payload store；
   canonical Item 只保存 provider-neutral `AttachmentRef`，Store 与 ItemList 合起来才足以重放输入，
   它不保存消息、Turn、引用关系或任何第二份会话状态。
-- **ContextCompactionItem** — Zen 在完整 Turn 边界生成并追加的 provider-neutral
-  context summary；它记录覆盖边界、稳定有序的保留 Item、冻结的 Provider selection、
-  版本化算法与 token usage，使后续模型上下文和重启投影都只由 append-only ItemList 推导。
-- **ContextCompactionConfig** — Host-owned 压缩策略配置；当前只允许替换模型摘要指令，
-  省略时使用 Core 默认，配置本身不写入 Thread canonical ItemList。
+- **View Image Tool** — host-owned builtin `view_image` 把按 Thread cwd 解析并导入的本地图片，或当前 Thread 已引用的 `AttachmentRef`，作为 Tool Model Content 重新加入下一次视觉模型采样。
+- **ContextCompactionItem** — Zen 追加的 provider-neutral context projection reset；
+  discriminator 区分完整 Turn 边界的 Provider-generated summary 与 active Turn 内 agent
+  提供的 continuation text，使覆盖边界、来源和重启投影都只由 append-only ItemList 推导。
+- **Agentic Context Compaction Tool** — Host admission 可选启用的 `compact_context` 顶层
+  Runtime control，让当前模型用原样 continuation text 在同一 active Turn 建立新的 durable
+  context projection boundary，而不把它下放给通用 Tool Environment 或 nested `tools.*`。
+- **ContextCompactionConfig** — Host-owned 压缩策略配置；它规范化摘要指令、触发与目标占比及
+  canonical Item 保留规则，并以默认关闭的实验开关控制 agentic compaction admission；省略字段时
+  使用 Core 默认，配置本身不写入 Thread canonical ItemList。
 - **ModelUsageItem** — Provider 对一次稳定 model response 报告的 canonical 执行事实，
   保存包含 cached 部分的 total input、可选 cached input、output 与可选 reasoning output tokens。
 - **NativeThreadSummaryProjection** — ZAS 把 canonical journal 与
@@ -79,6 +101,8 @@
 - **ZenXImageAttachmentProjection** — ZenX Electron main 通过既有 host-local 边界从 canonical
   `user_message` 投影按 Item 顺序排列的 `AttachmentRef`，并以只接受这些引用的 typed preload IPC
   导入和读取 Attachment Store payload；renderer 只持有草稿引用与短时 object URL，不取得任意文件读取权。
+- **ZenXSidebarMenuPopover** — 项目与会话菜单共用锚点定位的临时浮层，在侧栏右侧显示并按视口边界回退，不参与列表布局或持久化状态。
+- **ZenXProjectNamePreference** — host-profile 按已配置 workspace 保存可编辑显示名称；名称不改变目录身份、Thread cwd 或 journal，修改只刷新 Project 投影，不重启 Host。
 - **ZenXProjectProjection** — ZenX main 的同一个实例把 host-profile workspace 与 ZAS
   原生 Thread cwd 按最近存在祖先的异步 realpath 归一为 UI 和 Agent self-control 共用的
   Project 读模型；Windows 路径折叠大小写，POSIX 路径保留大小写，配置保留用户选择的展示路径，
@@ -115,15 +139,25 @@
   默认模型；`hidden` 只表示不在客户端选择器展示，已知模型 id 仍可由既有 Thread
   或显式请求使用。
 - **ModelCatalogPreset** — 宿主版本化维护的内建 catalog 数据层，只记录仓库已确认的
-  Provider/model metadata，并由手工配置覆盖、由 discovery 仅补充未知 capability 的 id。
+  Provider/model metadata；手工配置始终覆盖 discovery，OpenAI-compatible discovery 只补充
+  Unknown capability，而 OpenAI subscription 的官方目录替换非手工 preset metadata，失败时 preset 才作为兜底。
+- **OpenAI Subscription Model Cache** — ZenX Host 按 ChatGPT account id 保存官方 Codex
+  `/models` 的最近一次成功投影与 ETag；它只作为可替换的模型发现缓存，远端失败时依次退回
+  同账户缓存和内建 preset，不保存 credential，也不成为 Provider 或 Thread 权威状态。
+  目录 API 必需的 client_version 独立于 CAS adapter 版本维护；缓存与 ETag 仅在
+  目录兼容版本一致时复用，升级版本后重新获取，且无需安装 Codex。
 - **ProviderRegistry** — 宿主以稳定 `providerProfileId` 把每个注入的 ModelAdapter
   与其 ModelCatalog 绑定；canonical selection 是
   `providerProfileId / modelId / reasoningEffort` 的原子三元组，Thread 只记录生效选择而不持有 profile 或 credential；
-  输入省略 effort 时，目标支持当前 effort 就保留，否则使用目标 model 的默认 effort。
+  明确切换选择时省略 effort，目标支持当前 effort 就保留，否则使用目标 model 的默认 effort；已有 canonical selection 的 null 是明确值，不因新增能力而静默采用新默认。
+- **IMZen App Server Read Projection** — 产品 client 把 ZAS 的有界原生列表页投影为 SDK 所需排序/搜索，并以无配置的 `thread/resume` 建立当前 socket 的 snapshot + live 订阅；它不激活桌面、不改变 Thread，IM 目的地仍只由 SDK routes 授权。
+- **IMZenX Plugin** — 第一方 npm package 在 ZenX Host 生命周期内组合 IMZen 与固定 IM Agent SDK；Host 在 Catalog 发布后通过可选 activate 钩子交付所有尚未退出前代 runtime 的传递退出屏障；后台插件以 package createRuntime 工厂为每代捕获独立的 invoke/close 实例，停用恢复不会改写尚未退出的旧代对象；后台消费者等待前代退出才连接；准备阶段不连接 IM。Host 注入唯一 ZAS descriptor，Plugin SDK 存储连接配置，SDK SQLite 只持久化频道绑定、订阅投影和去重，不产生第二份 Thread 或 transcript；ZAS 在 canonical metadata 提交后广播 Thread 创建通知，使桌面发现 IM 新建会话；discovery 广播本身不订阅 transcript，ZenX Host 为自动命名主动取得无配置的 snapshot + live 订阅，不改变窗口选中的 Thread，并从 canonical 首条有意义输入交给既有命名 coordinator。
 - **IMZenController** — IMZen 通过 IM Agent SDK typed actions，以及 SDK 明确保留
   的 App Server native Thread profile seam，组合 `/model`、`/permission` 与审批
   快捷命令的产品 UX；`/model` 是当前 typed contracts 外的 Zen native operation，
   Controller 仍不拥有 Thread、Turn、binding 或调度语义。
+  IMZenX 的 Slash presenter 和固定版本 SlashController 展示子类仅将列表与选择确认
+  投影为标题和列表序号，沿用 SDK 的每频道列表快照、选择和 ObserveThread 路径。
 - **ImZenContentTransformer** — 在 SDK I1 强类型位置把已暂存的通用文件投影为
   Zen 可读 manifest，并保留图片的 typed content；它不改变消息身份、binding、
   continuation 或 correlation。
@@ -144,6 +178,7 @@
   committed，使 post-commit credential cleanup 即使失败也必须先尝试把 live Host 重启到新配置再明确报错。
 - **ZenX Bootstrap Fence** — Electron 主进程用一个 process-local cancellation/join fence 把 asynchronous
   bootstrap 与显式 Quit 串行，并只允许在未取消时发布 Host/window；它不持久化或扩展成通用 lifecycle framework。
+- ZenX 启动页与主 renderer 使用同一 origin 及同一个首帧前外观脚本，直接读取 `zenx.appearance`；不复制偏好，也不等待 Host 或 IPC。
 - **ZenXModelDiscovery** — ZenX 主进程从同一份瞬时 Provider operation snapshot 取得所选
   OpenAI-compatible profile 的 endpoint、credential、transport 与 model metadata，发起一次无持久状态的
   `GET /models` 并在返回前精确重验目标，采信响应中可明确解析的 modality metadata，再按完整 model id
@@ -163,9 +198,11 @@
 - **ZenXThreadPinProjection** — ZenXHostProfile 按本机 threadId 顺序持久化 Sidebar Pin，
   renderer 只把仍存在的 active Thread 投影到独立 Pinned section；Pin 不同步、不进入
   canonical ItemList，也不改变 Runtime、调度或 Inbox 优先级。
+- **ZenXImagePresentation** — Renderer 将 Markdown 图片源与既有 tool modelContent 附件投影为缩略图和共享全窗口预览；本地 Markdown 图片经只读、格式/大小受限的 IPC 读取，工具原文、路径和 journal 不变，不导入新的持久化附件。
+- **ZenXSidebarExpansionPreference** — Renderer 在本机 app origin 按区域与 canonical Project key 保存折叠选择；父区关闭、页面切换与重启不重置子区选择，不进入 Core 或 Host restart。数字线程快捷键只按当前展开的可选择线程行顺序投影。
 - **ZenXSidebarOrderPreference** — ZenXHostProfile 按 canonical Project key 与 owning
   Project 分区的 threadId preference list 持久化本机 Sidebar 顺序；未知项按稳定投影追加、
-  移除项忽略，且排序不改变 cwd、Project identity、Thread state 或 canonical ItemList。
+  移除项忽略；同一偏好可保存 pinnedProjectKeys，将置顶项目稳定排在项目列表前部而保留原排序，且排序不改变 cwd、Project identity、Thread state 或 canonical ItemList。
 - **ZenXCredentialVault** — ZenX 通过操作系统安全存储按 `providerProfileId` 保存
   Provider credential；每个 profile 的加密 secret 可独立读取、替换和清除，Host profile、
   renderer settings、进程环境与 App Server 协议配置字段都不主动序列化解密值。Provider、
@@ -200,6 +237,7 @@
   从准备到实际进程 spawn 的每个边界都重验当前 consent，已撤销的 signal 绝不启动全局输入 helper。
 - **ZenXCapabilityObservation** — ZenX provider 用短时、目标域绑定的 opaque ID 连接 observe→act，执行前按语义指纹
   重验且在导航、关闭、新观察或动作后失效；它是产品侧瞬时状态，不进入 Zen Core 或 durable journal。
+  Browser 在候选截断前排除无动作节点；Computer 各后端共用有界选择，优先保留可用语义动作，再以剩余名额保留文字上下文，返回仍按原观察顺序。
 - **ZenXUserBrowserAttachmentEpoch** — ZenX user-browser provider 用实际 CDP sessionId、target、逻辑 session owner 与
   attach attempt/incarnation 关联一次瞬时 attachment ownership，并在移除任何映射前把无法证明闭合的生命周期证据
   单调提升为有界 session taint；target 只在发布点原子授予一个逻辑 session/incarnation，且每次操作与清理都重验该
@@ -216,9 +254,10 @@
   Playwright、Peekaboo、WinApp 或适用平台的 bundled fallback；版本、权限与可用性只属于 host 配置和瞬时诊断，不进入 Zen Core。
 - **ZenXBrowserScreenshotArtifactStore** — ZenX provider 为一次最新 Browser observation 写入有界、短时、可清理的 PNG
   artifact，并把 observation identity 与 artifact metadata 一起投影；文件是外部瞬时观测，不进入 Zen Core 或 durable journal。
-- **ZenXBrowserLiveObservation** — ZenX user-browser provider 把 Agent 当前实际操作的同一 CDP target 作为
+- **ZenXBrowserLiveObservation** — ZenX user-browser provider 把当前线程面板选择的同一 CDP target 作为
   observer-scoped、只读、host-local 的有界 latest-frame/status 投影交给当前 renderer；它逐帧 ack、在无观察者、页面隐藏、
   target/document/provider 生命周期变化时停止，且不进入 plugin storage、Core、ItemList、ZAS protocol、磁盘或历史。
+- **ZenXBrowserThreadObservation** — Browser 插件沿可信工具上下文接收 threadId，在 Host 内将每线程的逻辑 session 隔离为独立 provider session，并把目标集合、最近观察截图和定向实时订阅投影到线程右栏；这些瞬时资源随 provider 退役失效，不从模型参数或当前选中线程推断归属，不增加会话历史权威。
 - **ZenXCapabilityTransientReset** — ZenX 主进程在 App Server/settings restart、provider replacement 或 close 时
   单调使 provider-owned artifacts 失效并重建可重建 backend；它不改写 canonical ItemList、Catalog lifecycle
   或 durable plugin data，也不成为第二个 runtime/coordinator。
@@ -277,7 +316,8 @@
   `userMessage` 完成通知处幂等补观察跨客户端首条输入，失败只记录 warning 且不影响 Turn。
 - **ZenXTriggerLifecycleGeneration** — Trigger 服务把定时器、瞬态完成证据、唤醒 admission
   与取消句柄绑定到一次可退休的进程内代数；迟到异步结果只能观察其创建代数，不能修改新代数或
-  重新占用已释放的唤醒名额。
+  重新占用已释放的唤醒名额。定时器按已提交的规则与执行时间增量同步，未变化的注册保持不动；
+  定时命中在持久化 mutation 内重新核对执行时间，拒绝更新前已排队的旧 occurrence。
 - **ZenXTriggerProgramRunner** — ZenX 外层以一次性、有界的本地子进程执行 Trigger predicate/action，
   通过稳定 invocation id、显式 stdin/stdout JSON、cwd/env、超时、取消与平台化进程树终止把结果归约为
   Trigger 历史中的明确 outcome；它不是 sandbox、队列、重试器或第二个 Runtime。
@@ -346,27 +386,31 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   prepare、Host policy、调度、取消、归一化与回写路径。需要共享生命周期的插件或跨进程
   bridge 以 Tool Bundle 原子发布多个 proxy runtimes，bundle 不按 invocation name 再分发。
 - Tool Presentation 支持 `direct`、`code` 与 `both`。`direct` 投影普通 structured
-  tool schemas；`code` 只投影普通 JSON function `run_code({ code, description })`，并在
-  TypeScript SDK 中声明当前可用的 `tools.*` bindings；`both` 同时投影两者，作为目标
+  tool schemas；`code` 投影 `run_code` 与显式启用的顶层 Runtime control。ModelTool 的
+  rawSource 元数据声明 JavaScript 源码到 canonical `{code}` 参数的映射；支持 custom tool
+  的 Provider 接受原始代码，JSON Provider 使用同一参数入口，wire grammar 留在 adapter。
+  SDK 的 TypeScript 声明只是参数参考；实际 guest 是支持 top-level await 的 JavaScript
+  module，不提供 Node 或 import 加载。`both` 同时投影两者，作为目标
   默认，使简单调用无需经过 JavaScript，而循环、分支、并发和中间结果过滤可以使用
   `run_code`。默认 `both` 的 composition 无法初始化 Code Runtime 时明确 warning 并退回
   `direct`；显式选择 `code` 时则启动失败，不得假装执行成功。
 - 每次模型采样捕获该次实际投影的 stable tool-name set；模型返回的 direct calls 与
   该次 `run_code` 的 bindings 都只能调用该集合，不能靠猜测名字越过 plugin discovery，
-  后续披露从下一次采样生效。
+  后续披露从下一次采样生效。SDK 与 ALL_TOOLS 元数据从这份同源快照生成，不建立第二 registry。
 - `run_code` 是与 builtin `shell` 同级的 Host-authority tool：完整程序和外层结果构成
-  canonical 审计单位，Node `fs` / process / network 等直接机器动作不逐 syscall 建立
-  Item；通过 `tools.*` 调用的 browser、plugin、external 或 shell 仍逐次经过同一个
+  canonical 审计单位；guest 的机器操作全部通过 `tools.*` 调用的 browser、plugin、external 或 shell，逐次经过同一个
   Tool Environment 的参数验证、路由、取消、结果归一化与 nested canonical lifecycle。
   builtin `shell` 在 `direct` / `both` 中可直接调用，在 `code` / `both` 中也可作为
-  `tools.shell(...)` 调用。Node `fetch` / HTTP 和 curl 保证通用网络 reachability，Web
+  `tools.shell(...)` 调用。文件路径和进程环境由下层工具使用线程 cwd 解析；curl 等工具提供网络访问，Web
   search 仍是不同领域语义，不能在没有搜索服务或索引时伪造。
-- Code Runtime 首版每次调用新建 Node Worker；Host 先用 Node builtin type stripping
-  处理 erasable TypeScript，Worker 使用空 environment、无继承 `execArgv`、V8 heap/
-  stack 与 wall-time/output/call-count 限制、显式 `text(...)` capture 和 hard termination；
-  异步 `tools.*` 以 plain JSON MessagePort/Promise bridge 回到 AgentRuntime。该 Worker
-  的 resource limits 与 termination 是运行控制而非安全沙箱，不保证限制外部分配、
-  回滚已发生的机器副作用或收拢程序自行 detached 的子进程。
+- Code Runtime 每次创建 Worker 并使用独立 module context，仅暴露 context 内构造的 helpers，
+  通过 JSON bridge 返回工具请求、数据写入和输出；限制 heap/stack/output/call count，统一
+  任务管理器负责执行 deadline、yield 和取消。宿主实现使用 Node 不意味着 guest 拥有 Node。
+  这定义受支持的语言能力，不把 VM 声称为可执行敌意代码的完整安全沙箱；不回滚工具副作用。
+- 普通工具和代码程序都由 ToolTaskManager 持有，模型观察时间到返回 running/task_id，
+  同一 wait 读取增量输出。程序内部 await 子工具等待真实终态结果，不收到中间 running 回执。
+  协调程序不占子工具的运行容量或资源锁。yield 后原父调用、能力快照和调度作用域由任务持有，
+  后续子结果仍按原 lineage 提交；所属 Turn 的中断传播到任务及子调用，不重放执行栈。
 - `run_code` 内部每次 nested tool call/result 都必须从 append-only ItemList 推导，并
   关联外层调用；模型上下文可以只接收程序显式返回的汇总结果，但 durable history
   不能省略中间调用。nested tool 失败明确返回程序，由程序或后续模型调用决定是否
@@ -374,17 +418,37 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
 - AgentRuntime 仍独占 journal append；`run_code` 只能通过 Nested Tool Invocation Port
   请求子调用，Plugin / External Tool Runtime 无法取得该 port。`ToolCallItem` 只增加
   可选 `parentCallId`：root lineage 与 submission order 分别沿 parent chain 和 Item 顺序
-  推导，不重复保存；nested lifecycle 不编入后续模型 messages，但 compaction retention
+  推导，不重复保存；nested lifecycle 不编入后续模型 messages，但未确认取消的子任务回执和已捕获输出
+  必须提升到父结果的模型投影，让模型取得可继续 wait 的句柄。compaction retention
   必须保持完整的 outer/child closure。
-- `run_code` 只有显式 `text(value)` 形成 outer model-visible output；nested result、函数
-  return 和 console 不自动进入上下文。多次 `text` 按调用顺序连接，无输出时返回固定
-  提示；非字符串值只接受 lossless JSON。
+- `run_code` 用 text/image/audio 显式选择输出，exit 提前正常结束，yield_control 请求提前观察；
+  view_image 本身仍是明确的查看请求，nested modelContent 继续提升并去重，不要求再次 image。
+  text 逐步送到 Host 捕获，异常/超时/取消均保留已捕获部分。输出预算只限制预览，完整捕获沿 spool 上限。
+- guest 提供 atob/btoa 与 TextEncoder/TextDecoder 纯内存编解码；接口、返回值和异常属于 guest realm，
+  原生编解码通过闭包中的桥接执行，数据为 primitive；字节使用紧凑字符串，避免展开成 JSON 数字数组。
+  每个 decoder 的原生回调仅保存在 guest 私有字段中，随实例一起回收，不进入宿主强引用注册表；
+  不向用户代码返回 Host 函数、构造器或 I/O。import.meta 明确报错。
+  工具失败和未知名称以非零 exitCode 返回，序列化或 bridge 错误仍可能抛出；不承诺 never throws。
+- guest 同样提供 URL、URLSearchParams 与 crypto.randomUUID；URL 解析和参数操作复用原生实现，
+  guest 私有回调持有实例及关联 searchParams，不建立宿主强引用注册表，不暴露 Node、网络或其他 crypto API。
+- 代码诊断从异常栈提取用户模块的行列号及最多 160 字符的单行片段，不输出内部栈。
+  V8 模块编译失败且未提供位置时，Acorn 仅辅助定位；静态导入拒绝同样定位声明。
+  执行接受性仍由 V8 决定，无法确定位置时保留原消息，不猜测位置或新增 journal 状态。
+- store 的 key 为 1–160 字符，JSON 单值最多 256 KiB、线程最多 128 keys/2 MiB；Host 串行
+  校验并由 AgentRuntime 追加 code_state（父 callId、key、value）。程序完成前等待已发起写入提交，
+  已提交写入不随后续程序失败回滚。load 使用执行开始时的已提交快照加本程序写入，普通 globals 每次 fresh。
+  状态从完整 Items 重建，不依赖压缩后的模型消息；code_state 不直接送进模型上下文。
+- 图片和 WAV/MP3 音频复用内容寻址 AttachmentStore；每次请求按模型能力投递原生媒体或文本引用，
+  未知能力按文本处理，Provider 不支持的 wire 模态进一步降级。canonical 内容保持原样。
+- `programToolResult` 是 nested JSON bridge 的程序数据投影：完整原文最多 1 MiB，与模型预览预算分开；大 capture 从宿主 spool 有界读回并核对长度/hash。超过程序上限、源截断或读回失败时 output=null，独立 outputInfo 提供原因、捕获字节数与可用文件引用，绝不注入回执或半截原文。控制后缀进入 diagnostic，structuredContent 不变。模型投影继续使用既有 receipt。
+- 内存原文捕获标记 unspooled，在模型边界仍应用 Host spool 的预览/落盘预算；run_code 自身的失败诊断同样在生产者处存入独立后缀。
+- 无 spool 的窗口也携带机器可读原文/截断元数据，控制后缀及快照诊断始终独立保存。任务窗口合并已有 capture 时有界读取原始字节并核对完整性，不能把模型 receipt 再作为原文捕获。
 - direct、nested 与 outer `run_code` 的 text result 共用 Tool Output Spool。默认模型
-  preview 只保留 16 KiB head 与 16 KiB tail；完整已捕获输出以 POSIX 0700 directory /
+  preview 只保留 4 KiB head 与 4 KiB tail；完整已捕获输出以 POSIX 0700 directory /
   0600 file 或 Windows current-user private temp/ACL 暂存，receipt 记录 captured bytes、SHA-256、绝对路径和 temporary lifetime，
   Agent 需要中段时必须主动再读。Provider 已截断或达到 64 MiB capture hard cap 时必须
-  标记 `source_truncated: true`，不能声称 temp file 完整；caller-designated shell redaction 在写盘
-  前完成。Host clean shutdown 删除当前 instance spool，启动只 best-effort 清理 stale
+  标记 `source_truncated: true`，不能声称 temp file 完整。捕获的原文不按秘密值替换、脱敏或改写；
+  head/tail 只节省模型上下文，临时文件保留已捕获原文。Host clean shutdown 删除当前 instance spool，启动只 best-effort 清理 stale
   directories，缺失路径显式失败且不建立 durable recovery。
 - `structuredContent` 继续使用既有 1 MiB JSON-compatible 校验和 canonical 存储合同，
   不写入 Tool Output Spool，也不以临时文件替代结构化结果。
@@ -408,6 +472,9 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   canonical result commit 保持模型提交顺序，只有标记为 `parallel_safe` 的 runtime
   execution body 可以并发；`exclusive` 在前后形成 barrier。并发上限由 Host 配置，
   未声明模式时 fail-closed 为 `exclusive`。
+  Tool Environment 从同一 runtime 执行声明为可并发工具自动附加 `[parallel_safe]` 说明标记，
+  模型工具、生成 SDK 与 ALL_TOOLS 复用此说明；未标记默认独占，不新增 schema 或插件注册配置。
+  builtin shell 支持直接及 nested Promise.all 并发；有数据依赖或写同一文件的命令由程序显式顺序 await。
 - 每条 canonical `tool_call` 必须恰好结算一条 canonical `tool_result`。prepare、
   Host admission、runtime execution 或 result normalization 的局部失败以简洁错误和
   非零 exit code 形成该结果，继续执行同一模型响应中后续调用并进入下一次模型采样；
@@ -416,7 +483,7 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   `apply_patch({ patch })` 提交 Codex-style supported subset，使用 Begin/End Patch 边界、
   Add/Update/Move/Delete、`@@` exact context 与可选 `*** End of File`；不宣称复制
   Codex 的完整宽松 parser。relative path 以 Thread cwd 解析，输入文件必须是 UTF-8，更新写回
-  LF；全部内容预检通过后才开始写盘。它与 shell/run_code 拥有相同机器权限并默认跟随 Node
+  LF；每个修改 hunk 必须有且只有一个精确匹配，零匹配或多匹配都要求扩展上下文，全部内容预检通过后才开始写盘。它与 shell/run_code 拥有相同机器权限并默认跟随 Node
   文件 API 的 symlink 语义；预检失败不产生文件修改，真正 I/O 失败可能留下已明确报告的提交
   前缀，不提供 durable filesystem transaction。
 - 显式用户取消或 Turn abort 仍是中断 Turn 的控制流；模型流、journal append、Runtime
@@ -434,7 +501,10 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
 
 ### 权限与 Host policy
 
-- 目标工具策略只有两档：默认 `full_access` 直接执行；可选 `ask_unknown` 由 Host
+- **File Permission Presets** — ZAS owns `read-only`, `workspace-write`, and default `danger-full-access`; changes append `thread_configuration_changed.permissions` and require an idle Thread with no running tool tasks. Both restricted presets use one-time approval for execution outside their file policy.
+- **File Sandbox** — builtin shell enforces file writes with macOS Seatbelt or Linux bwrap; builtin apply_patch checks all real destination paths before writing. Workspace Write grants cwd only, without a global temporary-directory grant. Unsupported platforms or missing launchers fail closed. Network access is unchanged; this is not hostile-code isolation for installed plugins or in-process builtins.
+- **Restricted Tool Admission** — only Host builtins implementing `enforcesSandbox` execute automatically in restricted modes. run_code, plugin tools and explicit shell escalation require approval for each call, ignoring remembered capability grants. Approved run_code children inherit this one execution's full file access.
+- 兼容的工具审批策略保留：默认 `full_access` 直接执行；可选 `ask_unknown` 由 Host
   按稳定 tool name 维护 `approvedTools` / `deniedTools`。未知工具只询问一次，允许后
   加入 approved，拒绝后加入 denied。
 - `run_code` 不 pre-approve，按稳定 tool name 与 shell 同样 admission；由于
@@ -446,7 +516,7 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   显式 pnpm `allowBuilds` 执行，未列入者保持 blocked，这一 package-manager policy
   不扩展成风险评分或新的权限语义。
 - 不引入 risk scoring、参数级 scope graph、权限矩阵、rules engine 或复杂 sandbox
-  产品框架；package 安装信任与 Host 的 `full_access` / `ask_unknown` 是现有的完整控制边界。
+  产品框架；package 安装信任、三档文件权限与工具 admission 是现有控制边界。
 
 ### 插件生命周期、UI 与 ZAS
 
@@ -548,36 +618,81 @@ telemetry。`inputTokens` 始终是包含 cached 部分的 total input，uncache
 cached 数据的 response 做 token-weighted 归约：`sum(cachedInputTokens) / sum(inputTokens)`。
 ZenX 的上下文占比读模型不能使用 Thread 累计 input tokens；它用最新未被 compaction 覆盖的
 Provider `inputTokens`，若 compaction 已经使该样本代表旧上下文，则用当前 `compileModelMessages`
-的固定轻量估算并在展示中标记 estimated。该估算只用于 UI 参考，不参与自动 compaction。
+的固定轻量估算并在展示中标记 estimated。同一估算也为 compaction v2 提供保守且确定的
+投影预算边界；Provider usage 仍只决定何时触发自动 compaction。
 
 手动 context compaction 只在没有 active / incomplete Turn 时取最新
 `turn_completed` 作为覆盖边界；调用者不能指定任意 Item。Zen 以 admission 时
 Thread 当前生效的 `providerProfileId / modelId / reasoningEffort` 调用所选 Provider，
 默认使用版本化、provider-neutral 的 summary 指令且不使用 Provider opaque compaction
-或 cache。Host 可以配置替代的 summary 指令；该配置只影响未来 summary 生成，不写入
-Thread Item，也不改变已生成 compaction 的重放语义。v1 确定性保留该最新完整 Turn 的全部
-canonical Item；生成、abort、验证或 journal append 失败都明确返回且不追加 compaction
-Item，不隐藏重试。
+或 cache。Host 可以配置替代的 summary 指令、1–100 的 trigger/target 百分比与保留策略；
+target 不得高于 trigger，这些配置只影响未来 compaction，不写入 Thread Item，也不改变已生成
+compaction 的重放语义。默认 trigger 与 target 均为 context window 的 80%，`budget` 模式保持
+v2 原行为：summary 生成后，从最新完整 Turn 中保留目标预算可容纳的最大模型消息后缀；
+不参与模型投影的 Turn/usage 控制 Item 可以继续保留。`recent-items` 从完整覆盖历史中取最近 N 条
+会进入模型上下文的 canonical Item，`selected-items` 不自动选择尾部；两者都可以叠加所有
+`user_message`，以及所有或最近 N 条成功 `turn_completed` 前该 Turn 最后一条 `agent_message`。
+失败 Turn 的 partial agent text 不算 final。默认 N 分别为 20 和 10。
+
+实验性 `agenticEnabled` 默认 `false`。启用后，Runtime 在每次模型采样原子捕获当时最后一个
+canonical Item 作为 active boundary，并提供 `compact_context({ text })`；它只能作为该模型响应
+唯一的顶层 tool call，`code` presentation 仍把它作为独立顶层入口且不加入 `tools.*`。混合响应只让
+compaction call 返回局部失败，其他 call 沿原调度语义结算。Runtime 校验非空原样文本及所选模型
+`contextWindow`，自己创建并提交 canonical compaction，通用 Tool Runtime 的 result 不能触发 reset。
+成功 append 后才提交普通配对 `tool_result`，两项都 durable 后才继续同一 Turn 的下一次采样；
+validation、abort 或已知提交失败不改变旧 projection，journal append 结果未知则停止 Turn 而不继续采样。
+这项路径不调用 summary Provider，不记录伪造的 Provider selection 或 summary token usage，也不使用
+generated compaction 的 prompt、trigger/target 百分比或 retention policy。
+
+显式保留与 recent-items 选择是硬约束；Core 先取得它们，再让 budget 模式使用剩余预算选择后缀，
+不能为满足 target 静默删除所选 Item。任何被选中的 tool call、result、同一 model response 的
+agent message 与 sibling calls，以及嵌套 parent/child calls 都扩展为完整闭包，因此实际保留数
+可以超过 N。summary 或闭包后的保留投影超出目标时明确失败并不追加 compaction；自动完成后的
+失败沿既有 Host warning 路径，手动与 next-Turn admission 路径向调用者返回错误。生成、abort、
+验证或 journal append 失败也都明确处理且不追加 compaction Item，不隐藏重试。
+
+Summary Provider 的每个请求也必须落在所选模型的 context window 内。输入按模型消息顺序分块；
+能放入预算的 tool-call/result 响应组保持完整，单个已经超预算的组则无损序列化为带 excerpt
+标记的普通文本片段，使每个请求都有合法消息形状且全部序列化内容都进入某个 summary 请求。
+每块独立摘要后按原顺序合并，累计 usage 写入同一个 compaction Item；合并摘要仍须满足上述
+80% 最终投影目标，否则不写 journal 并明确失败。
 
 成功 Turn 使用 admission 时冻结的 Provider adapter、selection、catalog entry 与
 `contextWindow` 判断自动 compaction；只有 Provider 实际报告的有效 `inputTokens`
-达到窗口的 80% 整数上界才执行，多次采样或 tool round 取观察到的最高 input context。
+达到配置 trigger 百分比的整数上界才执行，多次采样或 tool round 取观察到的最高 input context。
 缺失窗口只可能来自尚待修复的 legacy/incomplete metadata，不能通过正常 runtime admission；这里仍
 防御性地不猜测窗口。缺失或无效 usage、非成功 Turn 与已覆盖边界都不追加。
 自动生成、验证或 persistence 在成功 Turn handle settle 前尝试一次；失败只记录 Host
 诊断，不得把已经 canonical completed 的 Turn 重新投影为 failed，也不在同一 Turn 内重试。
 下一次达到条件的 completed Turn 可以再次尝试，已完成 Turn 的原始 canonical trace 保持不变。
+若 Provider 没有报告 usage，Host 在下一 Turn 写入任何 canonical Item 前，用包含待提交输入的
+消息估算检查配置 trigger 阈值；存在尚未覆盖的 completed boundary 时先完成并持久化同一压缩流程，
+再 admission 新 Turn。这样 oversized completed Turn 不必等下一次普通模型请求失败才被发现。
 
-`context_compaction` canonical Item 记录 `coveredThroughItemId`、原样 summary、
-稳定 canonical 顺序的 `retainedItemIds`、实际 Provider selection、
-`algorithmVersion` 与 input/output token usage。覆盖目标必须是已存在的
-`turn_completed`；保留引用必须已存在、不重复、不晚于覆盖边界且按 journal 顺序排列，
+Provider-generated `context_compaction` canonical Item 记录 `provenance`、`coveredThroughItemId`、
+原样 summary、稳定 canonical 顺序的 `retainedItemIds`、实际 Provider selection、
+`algorithmVersion` 与 input/output token usage；旧 journal 缺少 `provenance` 时仍按此形态读取。
+覆盖目标必须是已存在的 `turn_completed`；保留引用必须已存在、不重复、不晚于覆盖边界且按 journal 顺序排列，
 并完整保留同一模型响应的 tool-call 集及每个 call/result 对。相同或更早的有效边界
 不得再次追加。最新有效 compaction 决定模型投影并 supersede 更早投影状态，但所有
 compaction 与原始 Item 都继续留在 journal。
 
+Agentic compaction 记录 `provenance: agentic`、active `turnId`、source `callId` /
+`sourceModelResponseId`、采样时已见的 `coveredThroughItemId`、原样 text 与版本化算法，不记录
+Provider fields 或 token usage，也不保留 covered Item。模型投影从 text 开始，排除发起 reset 的
+model response 所产生的 reasoning、pre-tool agent message 与 compact call/result，同时保留 boundary
+之后模型没有见过的 steer/user input；journal 与 transcript 仍保存全部原始 trace 和完整 call/result 对。
+后续 agentic reset 以更晚 boundary supersede 前者；后续 generated compaction 只能从最新 agentic
+barrier 后仍有效的 canonical Items 选择 retention，不能复活已替换的 source trace。Agentic reset
+同时开始新的本 Turn usage epoch，完成 Turn 的自动策略只使用 reset 后观察到的 Provider usage。
+
+Provider 请求报告 context-window overflow 时，本版本仍按普通失败写入原始事实，不自动重试，
+也不增加 durable 自愈状态。活动 Turn 可以已经包含早先成功的 Agentic reset，但失败请求已经
+使用该投影，不能把此前的缩减当作再次请求会缩小输入的证据。若未来引入 retry 策略，必须先在
+失败请求之后成功持久化新的 compaction，并确认重新编译的估算输入严格缩小；该策略不属于本次实验。
+
 模型上下文编译器先投影最新 compaction 的 retained canonical Item，再加入稳定标记的
-summary，最后加入覆盖边界后的 canonical Item；当前实现没有独立 system/developer
+summary，最后按上述 provenance 规则加入覆盖边界后的 canonical Item；当前实现没有独立 system/developer
 message，未来若有则必须置于这些 compaction 输入之前。未包含 compaction 的 legacy
 journal 继续按原始 ItemList 编译。Thread/Turn transcript 始终从完整原始历史派生，
 默认忽略 compaction Item；保留 Item 中的 `AttachmentRef` 仍通过同一 Attachment Store
@@ -713,8 +828,8 @@ claim，不得被称为 Codex extension 或因固定 CAS schema 缺失而删除�
   sandbox 限制工具实际上能做什么，approval 决定何时询问用户。当前只接受明确
   支持的 sandbox mode，其他 mode 返回 unsupported；审批不能冒充隔离，外部字段
   也不能反向要求 Zen 建立新的权限产品。MCP 相关方法在未实现时同样明确返回 unsupported。
-  当前唯一模式 `danger-full-access` **不是安全隔离**；最小环境与已知 secret
-  脱敏只防止意外泄漏，不能阻止已批准的命令主动读取本机可访问的文件。
+  默认模式 `danger-full-access` **不是安全隔离**；shell 环境过滤只控制子进程继承的环境变量，
+  不修改实际工具输出，也不能阻止已批准的命令主动读取本机可访问的文件。
 - **CAS 边界是目录不是包**：内部保持极小的 `Item` / `Thread` 类型，
   CAS-specific types、普通函数映射和兼容文档只放在 `src/protocol/codex/`；当前
   shared connection 也在这里分发 ZAS native calls，但目录位置不赋予 CAS 语义权威。
@@ -743,7 +858,7 @@ claim，不得被称为 Codex extension 或因固定 CAS schema 缺失而删除�
 - **工具** — AgentRuntime 只依赖 Tool Environment；builtin `shell` / `apply_patch` 由 Zen 执行，
   plugin / external proxy runtimes 分别路由到拥有领域行为的 Plugin Runtime 或外部服务。
 - **审批** — 审批请求的呈现与应答（各接入端自行实现 UI）。
-- **接入端权限预设** — ZAS/Host 拥有默认 `full_access` 与可选 `ask_unknown`；
+- **接入端权限预设** — ZAS/Host 拥有三档文件权限（默认 Full Access）及兼容的 `ask_unknown`；
   CAS adapter 只把固定 shape 的 sandbox 与 approval 字段映射到该策略，接入端与
   CAS schema 都不能反向扩展新的 risk/scope 权限模型。
 
@@ -791,3 +906,29 @@ root；这些 package 关系不会长出 Project、第二套 Agent 或调度语�
 
 自建薄 CLI 是首个稳定接入端；原版 `codex --remote` / T3 Code 只作为固定版本
 CAS mapped surface 的机会型验收，不反向塑造 ZAS 或 Zen Core。
+
+模型流异常终止时，Runtime 将已收到的公开文本与 reasoning 一次性提交为 canonical 快照，再记录失败或中断；不记录流式 delta、不执行未完成工具调用。Reasoning 的 `incomplete: true` 标记只供历史显示，禁止作为 Provider reasoning 重放；失败回合的文本属于 trace，不作为成功最终答复。
+
+Host 为兼容模型流解析失败保存独立、限量轮转的结构化诊断（请求关联、分片序号、字段类型），失败时附带最近8个接收分片（各至多8KiB，明确标记截断），保留实际响应及工具参数以支持诊断；不记录请求头或请求正文，遮盖配置的API密钥，不作为会话语义来源；诊断写入失败不得替换原始模型错误。
+
+消息队列由 canonical `user_message_queued` 记录及同clientId的已交付user_message推导，Core按FIFO在正常完成后启动新Turn，失败/中断暂停且可显式继续；接入端仅投影队列。运行中发送模式是桌面偏好，默认queue，Enter/按钮按偏好，Cmd/Ctrl+Enter在queue与steer间按用户规则切换。
+
+ZenX 在 app ready 后先打开无需IPC的静态启动页，同一窗口在Host/IPC准备就绪后切入应用；启动错误显示在该窗口，启动中再次激活只聚焦或恢复启动窗口。
+
+Context pressure estimation includes tool `modelContent` as the additional user content sent by adapters; image dimensions contribute a provider-neutral patch estimate, not an exact provider token count.
+
+工具适配器返回的 ToolExecutionResult 必须代表底层操作的真实最终结果（包括非零退出）；仅停止本地等待或不确认远端状态时必须 reject，不能伪造最终结果。默认取消后 reject 保留未知状态与资源 fence，但其诊断输出会回传一次。wait 的固定控制 envelope 不占用已独立校验的原工具 structuredContent 预算。
+
+模型请求在适配器共享的 request admission 边界最多尝试 4 次：临时连接错误及 HTTP 408/429/500/502/503/504 采用可取消、带抖动的指数退避，遵守 Retry-After，累计退避不超过 120 秒。成功响应开始后不重放流、Turn 或工具；耗尽后由原有 failure 路径告知用户，不引入 durable 重试状态。
+
+ZenX 的 reasoning 状态仅是展示投影：item/started 开始转圈，item/completed 移除运行态，canonical incomplete 显示 Interrupted；Turn 终止时尚未闭合的展示行收束为 Interrupted。兼容投影允许携带可选状态元数据，旧 CAS/已完成记录缺省不显示状态；不新增运行时对象或推断工具与推理的先后生命周期。
+
+## 运行时配置发布
+
+AppServer 的 Host 根操作接纳门在线性化边界排序新执行与维护，活动概览包括 Turn、压缩、辅助操作及 ToolTaskManager 尚未确认结束的执行体；忙时拒绝维护，空闲进入维护后向新根操作返回 host_restarting。
+
+SettingsService 串行校验配置草稿与 baseRevision，经 Host prepare 后原子保存 revision，再通过私有认证控制通道 publish；无有效变化不创建 transport。凭证写入新引用后才提交配置引用，不能先覆盖正在使用的秘密槽。保存后回执未知显示“已保存，应用未确认”，通过 processEpoch/revision 查询或显式重试同一 revision，暂停后续提交而不重启 Host。进程级配置默认下次启动生效；安全重启必须在根操作接纳边界原子检查并拒绝忙状态，不安排后台自动重启。
+
+Provider 删除、能力更新与连接替换只改变后续执行目录。AppServer 在接纳时固定 selection、目录条目、adapter 与本轮压缩和执行限制，保留至包括压缩在内的真实 finally；全局默认不改写已有 canonical selection。工具权限仍沿既有授权边界更新。
+
+源码模式的 ZenX Host 通过仅开发期的 Worker 入口注册 tsx 模块解析，再加载同一 Code Runtime Worker；打包模式继续使用编译后的 Worker，不继承 Host 的任意 execArgv。

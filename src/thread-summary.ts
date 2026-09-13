@@ -164,7 +164,9 @@ function isCurrentMetadata(value: unknown): value is CurrentMetadata {
     typeof value.model === "string" &&
     typeof value.provider === "string" &&
     typeof value.cwd === "string" &&
-    value.sandbox === "danger-full-access" &&
+    (value.sandbox === "danger-full-access" ||
+      value.sandbox === "read-only" ||
+      value.sandbox === "workspace-write") &&
     (value.approvalPolicy === "always" || value.approvalPolicy === "never")
   );
 }

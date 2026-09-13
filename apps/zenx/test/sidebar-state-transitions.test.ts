@@ -45,6 +45,20 @@ test("collapsed Projects remain recoverable without an Archived scope", async ()
     await act(async () => projectsToggle.click());
     assert.equal(projectsToggle.getAttribute("aria-expanded"), "true");
     assert.match(document.body.textContent ?? "", /Active Thread/u);
+    const projectToggle = requiredButton(".project-toggle");
+    await act(async () => projectToggle.click());
+    await act(async () => projectsToggle.click());
+    await act(async () => projectsToggle.click());
+    assert.equal(
+      requiredButton(".project-toggle").getAttribute("aria-expanded"),
+      "false",
+    );
+    await act(async () => root.render(null));
+    await act(async () => root.render(createElement(ActiveSidebar)));
+    assert.equal(
+      requiredButton(".project-toggle").getAttribute("aria-expanded"),
+      "false",
+    );
   } finally {
     await act(async () => root.unmount());
     Object.assign(globalThis, previousGlobals, {

@@ -12,7 +12,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 
-export const DEFAULT_TOOL_OUTPUT_PREVIEW_BYTES = 32 * 1024;
+export const DEFAULT_TOOL_OUTPUT_PREVIEW_BYTES = 8 * 1024;
 export const DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES = 64 * 1024 * 1024;
 
 export interface ToolOutputSpoolOptions {
@@ -23,6 +23,8 @@ export interface ToolOutputSpoolOptions {
 
 /** Non-canonical metadata consumed by AgentRuntime before it appends an Item. */
 export interface ToolOutputCaptureMetadata {
+  /** Raw in-memory capture has not yet applied the model spool budget. */
+  readonly unspooled?: true;
   readonly capturedBytes: number;
   readonly sha256: string;
   readonly path?: string;
@@ -78,19 +80,28 @@ export class ToolOutputSpool {
       throw new Error("Tool output preview cannot exceed its capture limit");
     }
     this.#ready = this.#initialize();
+    // Initialization may fail before the first capture attaches its handler.
+    // Keep the rejection available to captures without an unhandled-rejection gap.
+    void this.#ready.catch(() => undefined);
   }
 
   beginCapture(
     options: {
-      redactedValues?: readonly string[];
       maxCaptureBytes?: number;
+      previewBytes?: number;
     } = {},
   ): ToolOutputCapture {
     if (this.#closed) throw new Error("Tool output spool is closed");
     const capture = new ToolOutputCapture({
       ready: this.#ready,
       filePath: path.join(this.#instanceDirectory, `${randomUUID()}.txt`),
-      previewBytes: this.#previewBytes,
+      previewBytes:
+        options.previewBytes === undefined
+          ? this.#previewBytes
+          : Math.min(
+              positiveInteger(options.previewBytes, "previewBytes"),
+              this.#maxCaptureBytes,
+            ),
       maxCaptureBytes:
         options.maxCaptureBytes === undefined
           ? this.#maxCaptureBytes
@@ -101,7 +112,6 @@ export class ToolOutputSpool {
                 "Tool output capture bytes",
               ),
             ),
-      redactedValues: options.redactedValues ?? [],
       onSettled: (settled) => this.#active.delete(settled),
       register: (settled) => this.#active.add(settled),
     });
@@ -162,7 +172,6 @@ export class ToolOutputSpool {
 
 export class ToolOutputCapture {
   readonly #decoder = new StringDecoder("utf8");
-  readonly #redactor: StreamingRedactor;
   readonly #ready: Promise<void>;
   readonly #filePath: string;
   readonly #previewBytes: number;
@@ -190,7 +199,6 @@ export class ToolOutputCapture {
     filePath: string;
     previewBytes: number;
     maxCaptureBytes: number;
-    redactedValues: readonly string[];
     register(settled: Promise<void>): void;
     onSettled(settled: Promise<void>): void;
   }) {
@@ -200,7 +208,6 @@ export class ToolOutputCapture {
     this.#maxCaptureBytes = options.maxCaptureBytes;
     this.#headLimit = Math.floor(options.previewBytes / 2);
     this.#tailLimit = options.previewBytes - this.#headLimit;
-    this.#redactor = new StreamingRedactor(options.redactedValues);
     let resolveSettled!: () => void;
     this.#settled = new Promise<void>((resolve) => {
       resolveSettled = resolve;
@@ -215,7 +222,7 @@ export class ToolOutputCapture {
     if (this.#finished) throw new Error("Tool output capture is finished");
     const decoded =
       typeof chunk === "string" ? chunk : this.#decoder.write(chunk);
-    this.#appendText(this.#redactor.write(decoded));
+    this.#appendText(decoded);
   }
 
   async finish(
@@ -223,8 +230,7 @@ export class ToolOutputCapture {
   ): Promise<ToolOutputCaptureMetadata> {
     if (this.#finished) throw new Error("Tool output capture is finished");
     this.#finished = true;
-    this.#appendText(this.#redactor.write(this.#decoder.end()));
-    this.#appendText(this.#redactor.end());
+    this.#appendText(this.#decoder.end());
     this.#sourceTruncated ||= options.sourceTruncated ?? false;
     await this.#writes;
     const file = await this.#file;
@@ -346,75 +352,7 @@ export function renderToolOutput(capture: ToolOutputCaptureMetadata): string {
   ].join("\n");
 }
 
-class StreamingRedactor {
-  readonly #values: readonly string[];
-  readonly #maximumLength: number;
-  #carry = "";
-
-  constructor(values: readonly string[]) {
-    this.#values = Object.freeze(
-      values
-        .filter(
-          (value, index) => value.length > 0 && values.indexOf(value) === index,
-        )
-        .sort((left, right) => right.length - left.length),
-    );
-    this.#maximumLength = Math.max(
-      1,
-      ...this.#values.map((value) => value.length),
-    );
-  }
-
-  write(text: string): string {
-    if (text.length === 0) return "";
-    const combined = this.#carry + text;
-    const safeEnd = combined.length - this.#maximumLength + 1;
-    if (safeEnd <= 0) {
-      this.#carry = combined;
-      return "";
-    }
-    let position = 0;
-    let output = "";
-    let boundary = safeEnd;
-    if (
-      boundary > 0 &&
-      boundary < combined.length &&
-      isHighSurrogate(combined.charCodeAt(boundary - 1)) &&
-      isLowSurrogate(combined.charCodeAt(boundary))
-    ) {
-      boundary -= 1;
-    }
-    while (position < boundary) {
-      const match = this.#values.find((value) =>
-        combined.startsWith(value, position),
-      );
-      if (match !== undefined) {
-        output += "[REDACTED]";
-        position += match.length;
-      } else {
-        output += combined[position]!;
-        position += 1;
-      }
-    }
-    this.#carry = combined.slice(position);
-    return output;
-  }
-
-  end(): string {
-    const output = this.#redact(this.#carry);
-    this.#carry = "";
-    return output;
-  }
-
-  #redact(text: string): string {
-    let output = text;
-    for (const value of this.#values)
-      output = output.replaceAll(value, "[REDACTED]");
-    return output;
-  }
-}
-
-function utf8Prefix(value: Buffer, limit: number): Buffer {
+export function utf8Prefix(value: Buffer, limit: number): Buffer {
   let end = Math.min(value.length, limit);
   while (end > Math.max(0, Math.min(value.length, limit) - 4)) {
     const candidate = value.subarray(0, end);
@@ -458,14 +396,6 @@ async function writeAll(file: FileHandle, value: Buffer): Promise<void> {
       throw new Error("Tool output spool write made no progress");
     offset += bytesWritten;
   }
-}
-
-function isHighSurrogate(value: number): boolean {
-  return value >= 0xd800 && value <= 0xdbff;
-}
-
-function isLowSurrogate(value: number): boolean {
-  return value >= 0xdc00 && value <= 0xdfff;
 }
 
 function processIsAlive(pid: number): boolean {

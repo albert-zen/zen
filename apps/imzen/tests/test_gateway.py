@@ -247,6 +247,7 @@ def compose(
     client: FakeAppServer | None = None,
     *,
     idempotency=None,
+    allow_unique_prefix=False,
 ):
     resolved_client = client or FakeAppServer()
     channel = FakeChannelAdapter("test")
@@ -257,7 +258,9 @@ def compose(
         shared_filesystem_root=tmp_path,
         thread_start_options=thread_start_options("full-access"),
     )
-    controller = ImZenController(application=application, client=resolved_client)
+    controller = ImZenController(
+        application=application, client=resolved_client, allow_unique_prefix=allow_unique_prefix
+    )
     gateway = ImAgentGateway(
         channels=[channel],
         applications=[application],
@@ -682,3 +685,81 @@ async def test_failure_presenter_preserves_sdk_classification(phase, expected) -
 
 def sent_texts_for(message) -> str:
     return "\n".join(part.text for part in message.content if isinstance(part, TextContent))
+
+
+@pytest.mark.asyncio
+async def test_unique_prefix_exact_commands_and_ambiguity_have_one_dispatch(tmp_path: Path) -> None:
+    gateway, channel, client = compose(tmp_path, allow_unique_prefix=True)
+    await gateway.start()
+    try:
+        await channel.emit_message(inbound("p1", "/per approval-required"))
+        assert any("Commands require approval" in text for text in sent_texts(channel))
+        await channel.emit_message(inbound("p2", "/model"))
+        assert any("model-one" in text for text in sent_texts(channel))
+        before = (list(client.started_threads), list(client.started_turns), list(client.calls))
+        await channel.emit_message(inbound("p3", "/a"))
+        assert "Ambiguous" in sent_texts(channel)[-1]
+        assert (client.started_threads, client.started_turns, client.calls) == before
+        await channel.emit_message(inbound("p4", "/th"))
+        assert "Ambiguous" in sent_texts(channel)[-1]
+        await channel.emit_message(inbound("p5", "/thread"))
+        assert "Ambiguous" not in sent_texts(channel)[-1]
+    finally:
+        await gateway.stop()
+
+
+@pytest.mark.asyncio
+async def test_prefix_default_is_exact_and_plain_messages_are_unchanged(tmp_path: Path) -> None:
+    gateway, channel, client = compose(tmp_path)
+    await gateway.start()
+    try:
+        await channel.emit_message(inbound("d1", "/per approval-required"))
+        assert "Unknown command" in sent_texts(channel)[-1]
+        text = "normal /per text\nwith a second line"
+        await channel.emit_message(inbound("d2", text))
+        assert client.started_turns[-1][1] == text
+        assert client.started_threads[-1]["approval_policy"] == "never"
+    finally:
+        await gateway.stop()
+
+
+@pytest.mark.asyncio
+async def test_prefix_preserves_quoted_parameters_and_multipart_content(tmp_path: Path) -> None:
+    client = FakeAppServer()
+    application = ZenApplicationAdapter(
+        application_instance_id="zen-main", client=client, cwd=str(tmp_path)
+    )
+    controller = ImZenController(application=application, client=client, allow_unique_prefix=True)
+    captured = []
+
+    class RecordingSlash:
+        async def handle(self, message, actions):
+            captured.append(message)
+            return ()
+
+    controller._slash = RecordingSlash()
+    attachment = AttachmentContent(
+        attachment_id="file",
+        source=LocalPath(str(tmp_path / "file.txt")),
+        media_type="text/plain",
+        filename="file.txt",
+    )
+    message = inbound(
+        "quote",
+        "",
+        content=(
+            TextContent("  \n"),
+            attachment,
+            TextContent('  /ans  zen-main request-1 "q=two words"\nextra line'),
+            TextContent("tail text"),
+        ),
+    )
+    await controller.handle(message, None)
+    assert captured[0].content == (
+        message.content[0],
+        attachment,
+        TextContent('  /answer  zen-main request-1 "q=two words"\nextra line'),
+        message.content[3],
+    )
+    assert captured[0].message_id == message.message_id
+    assert captured[0].conversation_ref == message.conversation_ref

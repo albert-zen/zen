@@ -280,14 +280,8 @@ test("light and dark semantic text, actions, boundaries, and focus meet contrast
     styles,
     /\.primary-button\s*\{[^}]*color:\s*var\(--color-text-on-accent\)/u,
   );
-  assert.match(
-    styles,
-    /button:focus-visible,[\s\S]*?outline:\s*2px solid var\(--color-focus-ring\)/u,
-  );
-  assert.match(
-    styles,
-    /\.composer:focus-within\s*\{[^}]*border-color:\s*var\(--color-border-focus\);[^}]*outline:\s*2px solid var\(--color-focus-ring\);[^}]*outline-offset:\s*1px;[^}]*box-shadow:[^}]*var\(--color-shadow-low\)/u,
-  );
+  assert.doesNotMatch(styles, /outline:\s*2px solid/u);
+  assert.match(styles, /button:focus-visible,[\s\S]*?filter:\s*brightness/u);
   assert.match(
     styles,
     /\.composer > textarea::placeholder\s*\{[^}]*color:\s*var\(--color-text-muted\)[^}]*opacity:\s*1/u,

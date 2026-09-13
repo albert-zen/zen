@@ -1,3 +1,5 @@
+import { pendingQueuedMessages } from "../../input-queue.js";
+import { textFromUserInput } from "../../item.js";
 import type {
   ThreadListEntry,
   ThreadSnapshot,
@@ -39,6 +41,12 @@ export interface CodexThread {
   agentRole: null;
   gitInfo: null;
   name: string | null;
+  queuedMessages?: Array<{
+    id: string;
+    clientId: string;
+    text: string;
+    imageCount: number;
+  }>;
   turns: CodexTurn[];
 }
 
@@ -76,6 +84,8 @@ export type CodexThreadItem =
   | {
       type: "reasoning";
       id: string;
+      /** Zen presentation metadata; absent on completed legacy/CAS items. */
+      status?: "inProgress" | "interrupted";
       summary: string[];
       content: string[];
     }
@@ -142,6 +152,12 @@ export function projectThread(
     agentRole: null,
     gitInfo: null,
     name: snapshot.name ?? null,
+    queuedMessages: pendingQueuedMessages(snapshot.items).map((item) => ({
+      id: item.id,
+      clientId: item.clientId,
+      text: textFromUserInput(item.input),
+      imageCount: item.input.filter((part) => part.type === "image").length,
+    })),
     turns: options.includeTurns
       ? snapshot.turns.map((turn) => projectTurn(turn, true, snapshot.cwd))
       : [],
@@ -293,6 +309,7 @@ export function projectCompletedItem(
       return {
         type: "reasoning",
         id: item.id,
+        ...(item.incomplete === true ? { status: "interrupted" as const } : {}),
         summary: item.summary === undefined ? [] : [item.summary],
         content:
           item.contentVisibility === "public" ? [item.reasoningContent] : [],
@@ -300,6 +317,7 @@ export function projectCompletedItem(
     case "tool_call":
       return projectCommandStarted(item, "");
     case "failure":
+    case "code_state":
     case "context_compaction":
     case "model_usage":
     case "thread_configuration_changed":
@@ -307,6 +325,7 @@ export function projectCompletedItem(
     case "tool_result":
     case "turn_aborted":
     case "turn_completed":
+    case "user_message_queued":
     case "turn_replacement_requested":
     case "turn_started":
       return null;
@@ -403,7 +422,7 @@ export function threadSettings(
     approvalPolicy:
       snapshot.approvalPolicy === "never" ? "never" : "on-request",
     approvalsReviewer: "user",
-    sandbox: { type: "dangerFullAccess" },
+    sandbox: projectSandbox(snapshot.sandbox),
     reasoningEffort: snapshot.reasoningEffort,
   };
 }
@@ -435,7 +454,7 @@ export function threadSettingsUpdated(
     model: encodeModelKey(snapshot),
     modelProvider: snapshot.providerProfileId,
     personality: null,
-    sandboxPolicy: { type: "dangerFullAccess" },
+    sandboxPolicy: projectSandbox(snapshot.sandbox),
     serviceTier: null,
     summary: null,
   };
@@ -491,4 +510,17 @@ function firstUserMessagePreview(items: readonly CanonicalItem[]): string {
 
 function seconds(timestamp: string): number {
   return Math.floor(new Date(timestamp).getTime() / 1000);
+}
+
+function projectSandbox(sandbox: ThreadSnapshot["sandbox"]) {
+  if (sandbox === "read-only") return { type: "readOnly" };
+  if (sandbox === "workspace-write")
+    return {
+      type: "workspaceWrite",
+      writableRoots: [],
+      networkAccess: true,
+      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: true,
+    };
+  return { type: "dangerFullAccess" };
 }

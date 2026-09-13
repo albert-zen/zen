@@ -55,7 +55,7 @@ test("renders strong, emphasis, and list item inline syntax", () => {
   assert.match(html, /<li><em>second<\/em><\/li>/u);
 });
 
-test("keeps Markdown images inert and preserves fence contents", () => {
+test("renders Markdown images and preserves fence contents", () => {
   const source = [
     "![remote](https://evil.example/x.png)",
     "",
@@ -66,7 +66,7 @@ test("keeps Markdown images inert and preserves fence contents", () => {
     "````",
   ].join("\n");
   const html = renderToStaticMarkup(createElement(Markdown, { text: source }));
-  assert.doesNotMatch(html, /<img\b/u);
+  assert.match(html, /<img\b/u);
   assert.match(html, /\[bad\]\(javascript:alert\(1\)\)\n```\ntail/u);
 });
 

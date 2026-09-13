@@ -202,6 +202,7 @@ test("persists Sidebar Project and per-Project Thread order across reload", asyn
     const first = settingsFor(directory, inactiveSubscription());
     await first.initialize({});
     await first.setSidebarOrder({
+      pinnedProjectKeys: ["/work/a"],
       projectKeys: ["/work/b", "/work/a"],
       threadIdsByProject: {
         "/work/a": ["thread-2", "thread-1"],
@@ -211,6 +212,7 @@ test("persists Sidebar Project and per-Project Thread order across reload", asyn
     const reloaded = settingsFor(directory, inactiveSubscription());
     await reloaded.initialize({});
     assert.deepEqual((await reloaded.publicSettings()).profile.sidebarOrder, {
+      pinnedProjectKeys: ["/work/a"],
       projectKeys: ["/work/b", "/work/a"],
       threadIdsByProject: {
         "/work/a": ["thread-2", "thread-1"],
@@ -599,7 +601,7 @@ test("restores the previous credential when profile persistence fails", async ()
   }
 });
 
-test("reports an explicit partial save when credential compensation fails", async () => {
+test("keeps the original credential even when unused candidate cleanup fails", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-credential-compensation-failure-"),
   );
@@ -623,7 +625,7 @@ test("reports an explicit partial save when credential compensation fails", asyn
       service.save(compatibleProfile("second"), "second-key"),
       (error: unknown) =>
         error instanceof AggregateError &&
-        /partially saved/u.test(error.message) &&
+        /not saved; unused candidate cleanup failed/u.test(error.message) &&
         error.errors.length === 2,
     );
 
@@ -1041,7 +1043,7 @@ test("routes subscription account operations by its configured opaque profile id
     assert.equal(loginCount, 1);
     assert.equal(logoutCount, 1);
     await service.deleteProviderProfile(subscriptionProfileId);
-    assert.equal(logoutCount, 2);
+    assert.equal(logoutCount, 1); // Catalog removal must not revoke an active OAuth identity.
     assert.ok(
       factoryPaths.every((value) =>
         value.includes("openai-subscription-auth."),
@@ -1345,6 +1347,15 @@ test("title inference resolves the selected profile's adapter and credential", a
   globalThis.fetch = async (input, init) => {
     requestUrl = String(input);
     authorization = new Headers(init?.headers).get("authorization");
+    const requestedBudget = (
+      JSON.parse(String(init?.body)) as { max_tokens: number }
+    ).max_tokens;
+    // A reasoning provider needs tokens before it can emit the short title.
+    if (requestedBudget < 512)
+      return new Response(
+        'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\ndata: [DONE]\n\n',
+        { status: 200 },
+      );
     return new Response(
       'data: {"choices":[{"delta":{"content":"Title second-key"},"finish_reason":null}]}\n\n' +
         'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n' +
@@ -1768,3 +1779,97 @@ class FailingCompensationVault extends ZenXCredentialVault {
     await super.clearApiKey(providerProfileId);
   }
 }
+
+test("project names persist without changing workspace identity or unrelated settings", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-project-edit-"));
+  const options = {
+    userDataDirectory: directory,
+    zenDataDirectory: path.join(directory, "zen"),
+    vault: new ZenXCredentialVault(
+      path.join(directory, "credentials.vault"),
+      encryption,
+    ),
+  };
+  try {
+    const service = new ZenXSettingsService(options);
+    await service.initialize({ ZENX_PROVIDER: "fake", ZENX_CWD: directory });
+    const before = (await service.publicSettings()).profile;
+    await service.editWorkspace(directory, "My project", directory);
+    const reloaded = new ZenXSettingsService(options);
+    await reloaded.initialize({});
+    const after = (await reloaded.publicSettings()).profile;
+    assert.equal(after.projectNames?.[directory], "My project");
+    assert.deepEqual(after.workspaces, before.workspaces);
+    assert.deepEqual(after.defaultModel, before.defaultModel);
+    await assert.rejects(
+      service.editWorkspace(directory, "  ", directory),
+      /name/i,
+    );
+    await assert.rejects(
+      service.editWorkspace(
+        path.join(directory, "missing"),
+        "Other",
+        directory,
+      ),
+      /configured/i,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("single-folder edits save atomically, reject collisions and preserve unrelated project names", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-project-folder-edit-"),
+  );
+  const options = {
+    userDataDirectory: directory,
+    zenDataDirectory: path.join(directory, "zen"),
+    vault: new ZenXCredentialVault(
+      path.join(directory, "credentials.vault"),
+      encryption,
+    ),
+  };
+  try {
+    const service = new ZenXSettingsService(options);
+    await service.initialize({ ZENX_PROVIDER: "fake", ZENX_CWD: directory });
+    const other = path.join(directory, "other"),
+      changed = path.join(directory, "changed");
+    await mkdir(other);
+    await mkdir(changed);
+    await service.addWorkspace(other);
+    await service.editWorkspace(other, "Other name", other);
+    await assert.rejects(
+      service.editWorkspace(directory, "Collision", other),
+      /already belongs/,
+    );
+    assert.equal(
+      (await service.publicSettings()).profile.projectNames?.[directory],
+      undefined,
+    );
+    assert.equal(
+      await service.editWorkspace(directory, "Changed", changed),
+      true,
+    );
+    const reloaded = new ZenXSettingsService(options);
+    await reloaded.initialize({});
+    const profile = (await reloaded.publicSettings()).profile;
+    assert.equal(profile.workspace, changed);
+    assert.deepEqual(profile.workspaces, [changed, other]);
+    assert.deepEqual(profile.projectNames, {
+      [changed]: "Changed",
+      [other]: "Other name",
+    });
+    assert.equal(
+      await reloaded.editWorkspace(other, "Renamed again", other),
+      false,
+    );
+    await reloaded.removeWorkspace(other);
+    assert.equal(
+      (await reloaded.publicSettings()).profile.projectNames?.[other],
+      undefined,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

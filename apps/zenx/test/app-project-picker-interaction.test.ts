@@ -13,6 +13,7 @@ import type { ZenXImageDraft } from "../src/main/image-attachments.js";
 import type { ZenXProjectProjectionSnapshot } from "../src/main/project-projection.js";
 import type { ModelSummary, Thread } from "../src/protocol-client/index.js";
 import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
+import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 const {
@@ -166,13 +167,23 @@ test("startup opens a local welcome draft without creating a Thread", async () =
 
 test("optimistic summary preserves Thread seconds, identity, and idle status", () => {
   const value = optimisticThreadSummary(
-    started(liveThread(), "/work/zen"),
+    {
+      ...started(liveThread(), "/work/zen"),
+      sandbox: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        networkAccess: true,
+        excludeTmpdirEnvVar: true,
+        excludeSlashTmp: true,
+      },
+    },
     "preview",
   );
   assert.equal(value.createdAt, new Date(1_000).toISOString());
   assert.equal(value.updatedAt, new Date(2_000).toISOString());
   assert.equal(value.threadId, "thread-1");
   assert.equal(value.status, "idle");
+  assert.equal(value.currentMetadata.sandbox, "workspace-write");
   assert.equal(value.currentMetadata.cwd, "/work/zen");
 });
 
@@ -330,7 +341,7 @@ test("New thread stays local, switches Project, and creates on first Send", asyn
   }
 });
 
-test("New thread sends its selected model and reasoning effort to Project start", async () => {
+test("New thread sends its selected model, reasoning and file permissions to Project start", async () => {
   const starts: Array<{
     workspace: string;
     selection: { model?: string; effort?: string } | undefined;
@@ -399,6 +410,16 @@ test("New thread sends its selected model and reasoning effort to Project start"
     const composer = await waitFor(() =>
       document.querySelector<HTMLTextAreaElement>("#thread-composer"),
     );
+    const permission = document.querySelector<HTMLButtonElement>(
+      '[aria-label="File permissions"]',
+    )!;
+    assert.equal(permission.textContent, "Full access");
+    await invokeButtonClick(permission);
+    await invokeButtonClick(
+      document.querySelector<HTMLButtonElement>(
+        '[role="menuitemradio"][data-permission="read-only"]',
+      )!,
+    );
     await setTextareaValue(composer, "Use the selected model");
     await invokeButtonClick(
       await waitFor(() =>
@@ -409,7 +430,7 @@ test("New thread sends its selected model and reasoning effort to Project start"
     assert.deepEqual(starts, [
       {
         workspace: "/work/zen",
-        selection: { model: advanced.id, effort: "low" },
+        selection: { model: advanced.id, effort: "low", sandbox: "read-only" },
       },
     ]);
   } finally {
@@ -544,7 +565,7 @@ test("New thread replaces a pending Thread resume with the local draft", async (
   };
   const harness = await mountApp(projects, {
     request: async (method) => {
-      if (method === "thread/resume") return await resumeResponse.promise;
+      if (method === "zen/thread/resume") return await resumeResponse.promise;
       throw new Error(`Unexpected protocol request: ${method}`);
     },
     startProjectThread: async (workspace) => {
@@ -893,7 +914,7 @@ test("selecting an existing Thread discards stale recovery", async () => {
       threads: async (archived) => (archived ? [] : [existing]),
       startProjectThread: async () => create.promise,
       request: async (method) => {
-        if (method === "thread/resume") return resumed(liveThread());
+        if (method === "zen/thread/resume") return resumed(liveThread());
         throw new Error(`Unexpected protocol request: ${method}`);
       },
     },
@@ -1694,7 +1715,7 @@ test("same-event-loop duplicate Send owns one title stage and turn request", asy
       return await titleResponse.promise;
     },
     request: async (method, params) => {
-      if (method === "thread/resume") return resumed(liveThread());
+      if (method === "zen/thread/resume") return resumed(liveThread());
       if (method === "turn/start") {
         turnStartRequests.push(params);
         return {};
@@ -1720,10 +1741,6 @@ test("same-event-loop duplicate Send owns one title stage and turn request", asy
 });
 
 test("deleted Provider history stays readable and requires an explicit model switch before Send", async () => {
-  const oldModel = encodeModelKey({
-    providerProfileId: "deleted-provider",
-    modelId: "old-model",
-  });
   const replacement = encodeModelKey({
     providerProfileId: "fake",
     modelId: "gpt-5.6-luna",
@@ -1733,13 +1750,12 @@ test("deleted Provider history stays readable and requires an explicit model swi
   const harness = await mountThreadApp({
     models: [wireModel(replacement, true, "Replacement model")],
     request: async (method, params) => {
-      if (method === "thread/resume")
-        return {
-          ...resumed(liveThread()),
-          model: oldModel,
+      if (method === "zen/thread/resume")
+        return nativeRecoveryForThread(liveThread(), {
+          model: "old-model",
           modelProvider: "deleted-provider",
           reasoningEffort: "medium",
-        };
+        });
       if (method === "turn/start") {
         turnRequests.push(params);
         return {};
@@ -1791,7 +1807,7 @@ test("Composer keyboard and form routes do not duplicate one submit event", asyn
   const turnStartRequests: unknown[] = [];
   const harness = await mountThreadApp({
     request: async (method, params) => {
-      if (method === "thread/resume") return resumed(liveThread());
+      if (method === "zen/thread/resume") return resumed(liveThread());
       if (method === "turn/start") {
         turnStartRequests.push(params);
         return {};
@@ -1826,56 +1842,43 @@ test("Composer keyboard and form routes do not duplicate one submit event", asyn
   }
 });
 
-test("running Steer and Interrupt and send each own one pending admission", async () => {
-  const steerResponse = deferred<unknown>();
-  const replaceResponse = deferred<unknown>();
-  let steerCalls = 0;
-  let replaceCalls = 0;
-  const harness = await mountThreadApp({
-    request: async (method) => {
-      if (method === "thread/resume") return resumed(runningThread());
-      if (method === "turn/steer") {
-        steerCalls += 1;
-        return await steerResponse.promise;
-      }
-      if (method === "turn/replace") {
-        replaceCalls += 1;
-        return await replaceResponse.promise;
-      }
-      throw new Error(`Unexpected protocol request: ${method}`);
-    },
-  });
-  try {
-    const composer = await selectedComposer();
-    await setTextareaValue(composer, "Guide this turn");
-    const steer = await waitFor(() => exactButton("Steer"));
-    await invokeButtonClick(steer, 2);
-    assert.equal(steerCalls, 1);
-    await act(async () => {
-      steerResponse.resolve({ turnId: "turn-1" });
-      await Promise.resolve();
-      await Promise.resolve();
+test("running queue, soft steer and hard steer each own one pending admission", async () => {
+  for (const [mode, method, label] of [
+    ["queue", "turn/queue", "Queue message"],
+    ["soft", "turn/steer", "Soft steer"],
+    ["hard", "turn/replace", "Interrupt and send"],
+  ] as const) {
+    const response = deferred<unknown>();
+    let calls = 0;
+    const harness = await mountThreadApp({
+      composerSendMode: mode,
+      request: async (requestedMethod) => {
+        if (requestedMethod === "zen/thread/resume")
+          return resumed(runningThread());
+        if (requestedMethod === method) {
+          calls += 1;
+          return await response.promise;
+        }
+        throw new Error(`Unexpected protocol request: ${requestedMethod}`);
+      },
     });
-    await waitFor(() => composer.value === "");
-
-    await setTextareaValue(composer, "Replace this turn");
-    const replace = await waitFor(() =>
-      document.querySelector<HTMLButtonElement>(
-        '[aria-label="Interrupt and send"]',
-      ),
-    );
-    await invokePrimarySubmit(replace, 2);
-    assert.equal(replaceCalls, 1);
-    await act(async () => {
-      replaceResponse.resolve({
-        interruptedTurnId: "turn-1",
-        turnId: "turn-2",
+    try {
+      const composer = await selectedComposer();
+      await setTextareaValue(composer, "Guide this turn");
+      const send = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`),
+      );
+      await invokePrimarySubmit(send, 2);
+      assert.equal(calls, 1);
+      await act(async () => {
+        response.resolve({ turnId: "turn-1" });
+        await Promise.resolve();
+        await Promise.resolve();
       });
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-  } finally {
-    await unmountApp(harness);
+      await waitFor(() => composer.value === "");
+    } finally {
+      await unmountApp(harness);
+    }
   }
 });
 
@@ -1885,7 +1888,7 @@ test("failed Send preserves its draft and stable id for a deliberate retry", asy
   }> = [];
   const harness = await mountThreadApp({
     request: async (method, params) => {
-      if (method === "thread/resume") return resumed(liveThread());
+      if (method === "zen/thread/resume") return resumed(liveThread());
       if (method === "turn/start") {
         turnStartRequests.push(
           (params ?? {}) as { clientUserMessageId?: string },
@@ -1927,7 +1930,10 @@ test("failed Send preserves its draft and stable id for a deliberate retry", asy
 
 test("host recovery refreshes the selected Thread without clearing draft or local navigation", async () => {
   let statusListener: ((status: AppServerHostStatus) => void) | undefined;
+  let notificationListener:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
   let resumeCalls = 0;
+  const reconnected = deferred<ReturnType<typeof nativeRecoveryForThread>>();
   const harness = await mountThreadApp({
     onStatus: (listener) => {
       statusListener = listener;
@@ -1935,10 +1941,20 @@ test("host recovery refreshes the selected Thread without clearing draft or loca
         statusListener = undefined;
       };
     },
+    onNotification: (listener) => {
+      notificationListener = listener;
+      return () => {
+        notificationListener = undefined;
+      };
+    },
     request: async (method) => {
-      if (method === "thread/resume") {
+      if (method === "zen/thread/resume") {
         resumeCalls += 1;
-        return resumed(liveThread());
+        return resumeCalls === 1
+          ? nativeRecoveryForThread(liveThread(), {
+              processEpoch: "old-host",
+            })
+          : await reconnected.promise;
       }
       throw new Error(`Unexpected protocol request: ${method}`);
     },
@@ -1958,6 +1974,7 @@ test("host recovery refreshes the selected Thread without clearing draft or loca
       ),
     );
     assert.ok(statusListener);
+    assert.ok(notificationListener);
 
     await act(async () => {
       statusListener?.({ type: "reconnecting", attempt: 1, delayMs: 10 });
@@ -1966,6 +1983,36 @@ test("host recovery refreshes the selected Thread without clearing draft or loca
       await Promise.resolve();
     });
     await waitFor(() => resumeCalls === 2);
+    await act(async () => {
+      notificationListener?.("zen/thread/event", {
+        processEpoch: "new-host",
+        threadId: "thread-1",
+        watermark: 1,
+        event: {
+          type: "item_completed",
+          item: {
+            id: "new-host-message",
+            type: "agent_message",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            createdAt: new Date(20_000).toISOString(),
+            text: "Arrived after the recovery snapshot",
+          },
+        },
+      });
+      reconnected.resolve(
+        nativeRecoveryForThread(runningThread(), {
+          processEpoch: "new-host",
+          watermark: 0,
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.match(
+      document.body.textContent ?? "",
+      /Arrived after the recovery snapshot/u,
+    );
     assert.ok(
       document.querySelector<HTMLButtonElement>(
         '[aria-label="Close workspace"]',
@@ -2017,8 +2064,8 @@ test("conversation header omits usage while Composer owns context indicator and 
         },
       }),
       request: async (method) => {
-        if (method === "thread/resume")
-          return { thread: liveThread(), model: "fake", modelProvider: "fake" };
+        if (method === "zen/thread/resume")
+          return started(liveThread(), "/work/zen");
         throw new Error(`Unexpected protocol request: ${method}`);
       },
     },
@@ -2107,7 +2154,7 @@ test("Sidebar archive clears the selected Chat and opens its Settings restore en
     },
     {
       request: async (method) => {
-        if (method === "thread/resume")
+        if (method === "zen/thread/resume")
           return {
             thread: liveThread(),
             model: "fake",
@@ -2178,7 +2225,7 @@ test("selected Sidebar archive fences Send until a failed response restores Chat
     },
     {
       request: async (method) => {
-        if (method === "thread/resume")
+        if (method === "zen/thread/resume")
           return {
             thread: liveThread(),
             model: "fake",
@@ -2269,7 +2316,7 @@ test("selected archive fences a submission already staging its title", async () 
     {
       observeTitle: async () => await titleResponse.promise,
       request: async (method) => {
-        if (method === "thread/resume")
+        if (method === "zen/thread/resume")
           return {
             thread: liveThread(),
             model: "fake",
@@ -2363,7 +2410,7 @@ test("duplicate selected archive shares one pending fence owner", async () => {
     },
     {
       request: async (method) => {
-        if (method === "thread/resume")
+        if (method === "zen/thread/resume")
           return {
             thread: liveThread(),
             model: "fake",
@@ -2505,12 +2552,175 @@ test("serializes cross-row Pin mutations against the latest confirmed order", as
   }
 });
 
+test("existing Thread reasoning selection follows native settings events", async () => {
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  const projects = oneProject();
+  projects.projects[0]!.threadIds = ["thread-1"];
+  const model = wireModel("fake", true);
+  model.supportedReasoningEfforts.push({
+    reasoningEffort: "high",
+    description: "high",
+  });
+  const recovery = nativeRecoveryForThread(liveThread(), {
+    reasoningEffort: null,
+  });
+  const harness = await mountApp(projects, {
+    models: [model],
+    threads: async (archived) => (archived ? [] : [summary(false)]),
+    onNotification: (listener) => {
+      notify = listener;
+      return () => undefined;
+    },
+    request: async (method, params) => {
+      if (method === "zen/thread/resume") return recovery;
+      if (method === "thread/settings/update") {
+        assert.deepEqual(params, {
+          threadId: "thread-1",
+          model: model.id,
+          effort: "high",
+        });
+        notify?.("zen/thread/event", {
+          processEpoch: recovery.processEpoch,
+          threadId: "thread-1",
+          watermark: 1,
+          event: {
+            type: "thread_settings_updated",
+            threadId: "thread-1",
+            settings: { ...recovery.thread, reasoningEffort: "high" },
+          },
+        });
+        return {};
+      }
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    const row = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".thread-row"),
+    );
+    await invokeButtonClick(row);
+    await waitFor(() => document.querySelector("#thread-composer"));
+    const trigger = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".composer-model-trigger"),
+    );
+    await invokeButtonClick(trigger);
+    const reasoning = await waitFor(() =>
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      ).find((button) => button.textContent?.startsWith("Reasoning")),
+    );
+    await invokeButtonClick(reasoning);
+    const high = await waitFor(() =>
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+      ).find((button) => button.textContent === "High"),
+    );
+    await invokeButtonClick(high);
+    assert.match(trigger.textContent ?? "", /High/u);
+    await invokeButtonClick(trigger);
+    await invokeButtonClick(
+      await waitFor(() =>
+        Array.from(
+          document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+        ).find((button) => button.textContent?.startsWith("Reasoning")),
+      ),
+    );
+    assert.equal(
+      document.querySelector('[role="menuitemradio"][aria-checked="true"]')
+        ?.textContent,
+      "High",
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("current permissions follow notifications even when the Thread list fails", async () => {
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  let failList = false;
+  const projects = oneProject();
+  projects.projects[0]!.threadIds = ["thread-1"];
+  const harness = await mountApp(projects, {
+    threads: async (archived) => {
+      if (failList) throw new Error("list unavailable");
+      return archived
+        ? []
+        : [
+            {
+              ...summary(false),
+              currentMetadata: {
+                model: "fake",
+                provider: "fake",
+                cwd: "/work/zen",
+                sandbox: "read-only",
+                approvalPolicy: "always",
+              },
+            } as NativeThreadSummary,
+          ];
+    },
+    onNotification: (listener) => {
+      notify = listener;
+      return () => undefined;
+    },
+    request: async (method) => {
+      if (method === "zen/thread/resume")
+        return nativeRecoveryForThread(liveThread(), {
+          sandbox: "read-only",
+          approvalPolicy: "on-request",
+        });
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".thread-row")?.click(),
+    );
+    const select = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="File permissions"]',
+      ),
+    );
+    assert.equal(select.textContent, "Read only");
+    failList = true;
+    await act(async () =>
+      notify?.("thread/settings/updated", {
+        threadId: "thread-1",
+        threadSettings: {
+          approvalPolicy: "never",
+          approvalsReviewer: "user",
+          collaborationMode: {
+            mode: "default",
+            settings: { model: "fake", reasoning_effort: null },
+          },
+          cwd: "/work/zen",
+          effort: null,
+          model: "fake",
+          modelProvider: "fake",
+          personality: null,
+          sandboxPolicy: { type: "dangerFullAccess" },
+          serviceTier: null,
+          summary: null,
+        },
+      }),
+    );
+    await waitFor(() => select.textContent === "Full access");
+    assert.equal(select.disabled, false);
+    assert.match(document.body.textContent ?? "", /list unavailable/);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 async function mountApp(
   projects: ZenXProjectProjectionSnapshot,
   options: {
     addWorkspace?(workspace: string): Promise<void>;
     getStatus?(): Promise<AppServerHostStatus>;
     initialPinnedThreadIds?: string[];
+    composerSendMode?: "queue" | "soft" | "hard";
+    onNotification?: Window["zenx"]["protocol"]["onNotification"];
     onStatus?(listener: (status: AppServerHostStatus) => void): () => void;
     onPinnedThreadIds?(threadIds: readonly string[]): void;
     models?: ModelSummary[];
@@ -2550,6 +2760,8 @@ async function mountApp(
     detachEvent: { value: () => undefined },
   });
   let currentSettings = publicSettings(options.initialPinnedThreadIds ?? []);
+  currentSettings.profile.composerSendMode =
+    options.composerSendMode ?? "queue";
   const zenx = {
     platform: "darwin",
     protocol: {
@@ -2564,8 +2776,37 @@ async function mountApp(
             data: options.models ?? [wireModel("fake", true)],
             nextCursor: null,
           };
-        if (options.request !== undefined)
-          return await options.request(method, params);
+        if (options.request !== undefined) {
+          const result = await options.request(method, params);
+          // Keep older scenario setup concise while exposing the native resume
+          // contract at the preload boundary.
+          if (
+            method === "zen/thread/resume" &&
+            typeof result === "object" &&
+            result !== null &&
+            "thread" in result &&
+            !("processEpoch" in result)
+          ) {
+            const thread = result.thread as Thread;
+            const overrides = result as {
+              model?: string;
+              modelProvider?: string;
+              reasoningEffort?: string | null;
+            };
+            return nativeRecoveryForThread(thread, {
+              ...(overrides.model === undefined
+                ? {}
+                : { model: overrides.model }),
+              ...(overrides.modelProvider === undefined
+                ? {}
+                : { modelProvider: overrides.modelProvider }),
+              ...(overrides.reasoningEffort === undefined
+                ? {}
+                : { reasoningEffort: overrides.reasoningEffort }),
+            });
+          }
+          return result;
+        }
         throw new Error(`Unexpected protocol request: ${method}`);
       },
       respondToApproval: async () => undefined,
@@ -2573,7 +2814,9 @@ async function mountApp(
       onApprovalResolved: () => () => undefined,
       onStatus: (listener: (status: AppServerHostStatus) => void) =>
         options.onStatus?.(listener) ?? (() => undefined),
-      onNotification: () => () => undefined,
+      onNotification: (
+        listener: Parameters<Window["zenx"]["protocol"]["onNotification"]>[0],
+      ) => options.onNotification?.(listener) ?? (() => undefined),
     },
     threads: {
       list: async ({ archived }: { archived: boolean }) =>
@@ -2675,6 +2918,7 @@ function publicSettings(pinnedThreadIds: string[]) {
   return {
     profile: {
       version: 3 as const,
+      composerSendMode: "queue" as "queue" | "soft" | "hard",
       onboardingComplete: true,
       providerProfiles: [
         {
@@ -2718,8 +2962,11 @@ function catalogModel(id: string) {
 }
 
 function wireModel(id: string, isDefault = false, displayName = id) {
+  const wireId = id.startsWith("zen-model-v1:")
+    ? id
+    : encodeModelKey({ providerProfileId: "fake", modelId: id });
   return {
-    id,
+    id: wireId,
     model: id,
     upgrade: null,
     upgradeInfo: null,
@@ -2819,12 +3066,14 @@ function runningThread(): Thread {
 }
 
 function resumed(thread: Thread) {
-  return { thread, model: "fake", modelProvider: "fake" };
+  return nativeRecoveryForThread(thread);
 }
 
 function started(thread: Thread, cwd: string) {
   return {
-    ...resumed({ ...thread, cwd }),
+    thread: { ...thread, cwd },
+    model: encodeModelKey({ providerProfileId: "fake", modelId: "fake" }),
+    modelProvider: "fake",
     approvalPolicy: "never" as const,
     approvalsReviewer: "user" as const,
     cwd,
@@ -3028,3 +3277,87 @@ function deferred<T>(): {
   });
   return { promise, reject, resolve };
 }
+
+test("Settings and thread navigation are mutually exclusive, including return to the same thread", async () => {
+  const harness = await mountApp(
+    {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: true,
+          threadIds: ["thread-1", "thread-2"],
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/zen",
+    },
+    {
+      threads: async () => [
+        summary(false, "thread-1", "Thread one"),
+        summary(false, "thread-2", "Thread two"),
+      ],
+      request: async (method, params) => {
+        if (method === "zen/thread/resume")
+          return resumed({
+            ...liveThread(),
+            id: (params as { threadId: string }).threadId,
+          });
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+    },
+  );
+  try {
+    await selectedComposer();
+    for (const id of ["thread-1", "thread-2", "thread-1"]) {
+      await act(async () =>
+        document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
+      );
+      await waitFor(() =>
+        document.querySelector('[aria-label="ZenX settings"]'),
+      );
+      assert.equal(
+        document.querySelectorAll('.thread-row[aria-current="page"]').length,
+        0,
+      );
+      assert.equal(
+        document
+          .querySelector(".settings-nav-row")
+          ?.getAttribute("aria-current"),
+        "page",
+      );
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(
+            `[data-thread-id="${id}"] .thread-row`,
+          )!
+          .click(),
+      );
+      await waitFor(() => document.querySelector("#thread-composer"));
+      assert.equal(
+        document.querySelector('[aria-label="ZenX settings"]'),
+        null,
+      );
+      assert.equal(
+        document.querySelectorAll('.thread-row[aria-current="page"]').length,
+        1,
+      );
+      assert.equal(
+        document
+          .querySelector('.thread-row[aria-current="page"]')
+          ?.closest("[data-thread-id]")
+          ?.getAttribute("data-thread-id"),
+        id,
+      );
+      assert.equal(
+        document
+          .querySelector(".settings-nav-row")
+          ?.getAttribute("aria-current"),
+        null,
+      );
+    }
+  } finally {
+    await unmountApp(harness);
+  }
+});

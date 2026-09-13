@@ -22,7 +22,7 @@ import { createRunCodeModelTool } from "../src/tool-presentation.js";
 const accountId = "acct_zen_test";
 const secretAccessToken = jwt(accountId);
 
-test("subscription transports run_code as a normal function with stable ids and arguments", async () => {
+test("subscription transports run_code as raw source with stable ids and arguments", async () => {
   let body: Record<string, unknown> = {};
   const adapter = new OpenAiSubscriptionModel({
     acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
@@ -33,27 +33,27 @@ test("subscription transports run_code as a normal function with stable ids and 
           type: "response.output_item.added",
           output_index: 0,
           item: {
-            type: "function_call",
-            id: "fc_code",
+            type: "custom_tool_call",
+            id: "ctc_code",
             call_id: "call_code",
             name: "run_code",
-            arguments: "",
+            input: "",
           },
         },
         {
-          type: "response.function_call_arguments.done",
+          type: "response.custom_tool_call_input.done",
           output_index: 0,
-          arguments: '{"code":"text(2)","description":"two"}',
+          input: "text(2)",
         },
         {
           type: "response.output_item.done",
           output_index: 0,
           item: {
-            type: "function_call",
-            id: "fc_code",
+            type: "custom_tool_call",
+            id: "ctc_code",
             call_id: "call_code",
             name: "run_code",
-            arguments: '{"code":"text(2)","description":"two"}',
+            input: "text(2)",
           },
         },
         {
@@ -69,19 +69,17 @@ test("subscription transports run_code as a normal function with stable ids and 
   assert.deepEqual(events, [
     {
       type: "tool_call",
-      callId: "call_code|fc_code",
+      callId: "call_code|ctc_code",
       name: "run_code",
-      arguments: { code: "text(2)", description: "two" },
+      arguments: { code: "text(2)" },
     },
     { type: "usage", inputTokens: 0, outputTokens: 0 },
   ]);
-  assert.deepEqual((body.tools as Array<Record<string, unknown>>)[0], {
-    type: "function",
-    name: "run_code",
-    description: runCode.description,
-    parameters: runCode.inputSchema,
-    strict: null,
-  });
+  const offered = (body.tools as Array<Record<string, unknown>>)[0]!;
+  assert.equal(offered.type, "custom");
+  assert.equal(offered.name, "run_code");
+  assert.equal(offered.description, runCode.description);
+  assert.equal((offered.format as Record<string, unknown>).syntax, "lark");
 });
 
 test("maps AttachmentRef input to a Responses image part", async () => {
@@ -122,6 +120,57 @@ test("maps AttachmentRef input to a Responses image part", async () => {
       role: "user",
       content: [
         { type: "input_text", text: "describe" },
+        {
+          type: "input_image",
+          image_url: `data:image/png;base64,${Buffer.from(png1x1()).toString("base64")}`,
+        },
+      ],
+    },
+  ]);
+});
+
+test("maps canonical tool model content after its function output", async () => {
+  const attachments = new InMemoryAttachmentStore();
+  const ref = await attachments.importBytes(png1x1());
+  let body: Record<string, unknown> = {};
+  const adapter = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+    attachments,
+    fetch: async (_input, init) => {
+      body = requestBody(init);
+      return sseResponse([
+        {
+          type: "response.completed",
+          response: { status: "completed", output: [] },
+        },
+      ]);
+    },
+  });
+
+  await collect(
+    adapter.stream(
+      request({
+        messages: [
+          {
+            role: "tool",
+            callId: "view-call|provider-call",
+            text: "Viewed image",
+            exitCode: 0,
+            modelContent: [{ type: "image", attachment: ref }],
+          },
+        ],
+      }),
+    ),
+  );
+  assert.deepEqual(body.input, [
+    {
+      type: "function_call_output",
+      call_id: "view-call",
+      output: "Exit code: 0\nViewed image",
+    },
+    {
+      role: "user",
+      content: [
         {
           type: "input_image",
           image_url: `data:image/png;base64,${Buffer.from(png1x1()).toString("base64")}`,
@@ -1428,3 +1477,22 @@ async function collect(
   }
   return events;
 }
+
+test("subscription adapter recovers transient admission failure", async () => {
+  let calls = 0;
+  const adapter = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+    fetch: async () => {
+      calls++;
+      if (calls === 1) throw new TypeError("fetch failed");
+      return sseResponse([
+        {
+          type: "response.completed",
+          response: { status: "completed", output: [] },
+        },
+      ]);
+    },
+  });
+  await collect(adapter.stream(request()));
+  assert.equal(calls, 2);
+});

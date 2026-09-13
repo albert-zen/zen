@@ -202,6 +202,8 @@ test("Playwright rejects unbounded or multiply-current page state before reconci
 });
 
 class FakePlaywrightRunner implements ExternalProviderProcessRunner {
+  onCommand?: (command: string, args: readonly string[]) => void;
+  crowded = false;
   readonly calls: string[][] = [];
   readonly environments: Array<NodeJS.ProcessEnv | undefined> = [];
   url = "https://example.com/";
@@ -236,6 +238,7 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
     this.calls.push([...args]);
     this.environments.push(options.environment);
     const command = args[2];
+    this.onCommand?.(command!, args);
     let response: Record<string, unknown> = {};
     if (command === "open") {
       this.url = args[3] ?? this.url;
@@ -324,6 +327,13 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
         ? { snapshot: "bad" }
         : {
             snapshot: [
+              ...(this.crowded
+                ? Array.from({ length: 128 }, (_, index) => ({
+                    role: "paragraph",
+                    name: `Text ${index}`,
+                    ref: `static${index}`,
+                  }))
+                : []),
               { role: "heading", name: "Fixture" },
               {
                 role: "button",
@@ -363,4 +373,129 @@ function dom(
     autocomplete: options.autocomplete ?? "",
     href: "",
   };
+}
+
+test("Playwright inspection finds and operates buttons after 128 static references", async () => {
+  const runner = new FakePlaywrightRunner();
+  runner.crowded = true;
+  const backend = new PlaywrightCliBrowserBackend({
+    executable: "/opt/playwright-cli",
+    runner,
+    cwd: "/tmp/zenx-playwright",
+  });
+  try {
+    const tab = await backend.open("crowded", "https://example.com/");
+    const inspection = await backend.inspect("crowded", tab.tabId);
+    const button = inspection.targets.find(({ name }) => name === "Run");
+    assert.ok(
+      button,
+      "actionable button must survive static reference truncation",
+    );
+    assert.ok(inspection.targets.length <= 128);
+    await backend.click(
+      "crowded",
+      tab.tabId,
+      inspection.observationId,
+      button.targetId,
+    );
+    assert.ok(runner.calls.some((args) => args[2] === "click"));
+  } finally {
+    await backend.close();
+  }
+});
+
+test("Playwright inspection needs at most eight CLI round trips", async () => {
+  const runner = new FakePlaywrightRunner();
+  const backend = new PlaywrightCliBrowserBackend({
+    executable: "/opt/playwright-cli",
+    runner,
+    cwd: "/tmp/zenx-playwright",
+  });
+  try {
+    const tab = await backend.open("fast", "https://example.com/");
+    const before = runner.calls.length;
+    await backend.inspect("fast", tab.tabId);
+    assert.ok(
+      runner.calls.length - before <= 8,
+      `inspection used ${runner.calls.length - before} CLI round trips`,
+    );
+  } finally {
+    await backend.close();
+  }
+});
+
+for (const action of ["click", "type"] as const) {
+  test(`Playwright rejects an old ${action} target after same-URL document replacement`, async () => {
+    const runner = new FakePlaywrightRunner();
+    const backend = new PlaywrightCliBrowserBackend({
+      executable: "/opt/playwright-cli",
+      runner,
+      cwd: "/tmp/zenx-playwright",
+    });
+    try {
+      const tab = await backend.open("reload", "https://example.com/");
+      const inspection = await backend.inspect("reload", tab.tabId);
+      const target = inspection.targets.find(
+        ({ name }) => name === (action === "click" ? "Run" : "Query"),
+      )!;
+      runner.documentKey = "replacement-document";
+      await assert.rejects(
+        action === "click"
+          ? backend.click(
+              "reload",
+              tab.tabId,
+              inspection.observationId,
+              target.targetId,
+            )
+          : backend.type(
+              "reload",
+              tab.tabId,
+              inspection.observationId,
+              target.targetId,
+              "value",
+              false,
+            ),
+        /stale|inspect again/u,
+      );
+      assert.equal(
+        runner.calls.filter((args) => args[2] === "click" || args[2] === "fill")
+          .length,
+        0,
+      );
+    } finally {
+      await backend.close();
+    }
+  });
+}
+
+for (const phase of ["snapshot", "screenshot"] as const) {
+  test(`Playwright optimized inspection rejects document changes during ${phase}`, async () => {
+    const runner = new FakePlaywrightRunner();
+    const backend = new PlaywrightCliBrowserBackend({
+      executable: "/opt/playwright-cli",
+      runner,
+      cwd: "/tmp/zenx-playwright",
+    });
+    try {
+      const tab = await backend.open("changing", "https://example.com/");
+      runner.onCommand = (command, args) => {
+        if (
+          phase === "snapshot"
+            ? command === "snapshot"
+            : command === "run-code" && args[3]?.includes("screenshot")
+        ) {
+          runner.documentKey = "replacement-document";
+        }
+      };
+      await assert.rejects(
+        backend.inspect("changing", tab.tabId),
+        /page changed during/u,
+      );
+      runner.onCommand = undefined;
+      const inspection = await backend.inspect("changing", tab.tabId);
+      assert.ok(inspection.targets.some(({ name }) => name === "Run"));
+    } finally {
+      await backend.close();
+    }
+  });
 }

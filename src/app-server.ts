@@ -1,3 +1,6 @@
+import { loadWorkspaceInstructions } from "./workspace-instructions.js";
+import type { WorkspaceInstructionFile } from "./item.js";
+import { pendingQueuedMessages } from "./input-queue.js";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
@@ -8,7 +11,10 @@ import {
   type AttachmentStore,
 } from "./attachment.js";
 import {
+  boundedCompactionBoundary,
   CONTEXT_COMPACTION_ALGORITHM_VERSION,
+  CONTEXT_COMPACTION_SUMMARY_PREFIX,
+  contextCompactionTokenBudget,
   latestCompaction,
   latestEligibleCompactionBoundary,
   normalizeContextCompactionConfig,
@@ -28,6 +34,7 @@ import type {
   TurnReplacementRequestedItem,
   UserInput,
   UserMessageItem,
+  QueuedUserMessageItem,
 } from "./item.js";
 import {
   contentFromUserMessage,
@@ -45,10 +52,14 @@ import {
   type ModelEvent,
   type ModelMessage,
 } from "./model.js";
+import { estimateModelMessageInputTokens } from "./model-usage.js";
 import {
   ProviderRegistryError,
   type ProviderModel,
+  type ProviderProfile,
   type ProviderRegistry,
+  type ProviderRegistrySnapshot,
+  type ProviderSelectionLease,
   type ResolvedProviderSelection,
   type ProviderSelection,
   type ProviderSelectionInput,
@@ -165,11 +176,68 @@ export interface ThreadArchivedUpdatedEvent {
   archived: boolean;
 }
 
+export interface ThreadStartedEvent {
+  type: "thread_started";
+  threadId: string;
+  thread: ThreadSnapshot;
+}
+
+export interface ModelCatalogUpdatedEvent {
+  type: "model_catalog_updated";
+  revision: number;
+}
+
 export type AppServerEvent =
   | RuntimeEvent
   | ThreadSettingsUpdatedEvent
   | ThreadNameUpdatedEvent
-  | ThreadArchivedUpdatedEvent;
+  | ThreadArchivedUpdatedEvent
+  | ThreadStartedEvent
+  | ModelCatalogUpdatedEvent;
+
+export type HostOperationKind =
+  "turn" | "compaction" | "provider" | "tool" | "plugin" | "other";
+
+export interface HostOperationLease {
+  release(): void;
+}
+
+export interface HostActivitySnapshot {
+  acceptingRootOperations: boolean;
+  rootOperations: readonly {
+    kind: HostOperationKind;
+    label?: string;
+  }[];
+  activeToolTasks: number;
+}
+
+export type MaintenanceAdmission =
+  | { accepted: false; activity: HostActivitySnapshot }
+  | {
+      accepted: true;
+      activity: HostActivitySnapshot;
+      end(): void;
+    };
+
+export interface RuntimeConfigurationSnapshot {
+  readonly revision: number;
+  readonly providerSnapshot: ProviderRegistrySnapshot;
+  readonly defaults: Readonly<AppServerDefaults>;
+  readonly contextCompaction: ResolvedContextCompactionConfig;
+  readonly maxToolRounds?: number;
+  readonly maxConcurrentToolBodies?: number;
+}
+
+export interface RuntimeConfigurationUpdate {
+  revision: number;
+  providerProfiles: readonly ProviderProfile[];
+  defaults: AppServerDefaults;
+  contextCompaction?: ContextCompactionConfig;
+  maxToolRounds?: number;
+  maxConcurrentToolBodies?: number;
+}
+
+export interface PreparedRuntimeConfiguration extends RuntimeConfigurationSnapshot {}
 
 export interface UpdateThreadSettingsInput {
   selection?: ProviderSelectionInput;
@@ -189,8 +257,13 @@ export class ZenAppServer {
   readonly #providerRegistry: ProviderRegistry;
   readonly #threadMetadata: ThreadMetadataStore;
   readonly #threadSummaryProjection: ThreadSummaryProjection;
-  readonly #defaults: AppServerDefaults;
-  readonly #contextCompaction: ResolvedContextCompactionConfig;
+  #runtimeConfiguration: RuntimeConfigurationSnapshot;
+  readonly #preparedRuntimeConfigurations = new WeakSet<object>();
+  readonly #rootOperations = new Set<{
+    kind: HostOperationKind;
+    label?: string;
+  }>();
+  #acceptingRootOperations = true;
   readonly #id: () => string;
   readonly #now: () => string;
   readonly #threads = new Map<string, Thread>();
@@ -233,16 +306,21 @@ export class ZenAppServer {
     this.#threadMetadata = options.threadMetadata;
     this.#threadSummaryProjection =
       options.threadSummaryProjection ?? new InMemoryThreadSummaryProjection();
-    this.#defaults = {
+    const defaults = Object.freeze({
       ...options.defaults,
       cwd: path.resolve(options.defaults.cwd),
-    };
-    this.#contextCompaction = normalizeContextCompactionConfig(
-      options.contextCompaction,
-    );
+    });
+    this.#runtimeConfiguration = Object.freeze({
+      revision: this.#providerRegistry.currentSnapshot().revision,
+      providerSnapshot: this.#providerRegistry.currentSnapshot(),
+      defaults,
+      contextCompaction: normalizeContextCompactionConfig(
+        options.contextCompaction,
+      ),
+    });
     this.#id = options.idFactory ?? randomUUID;
     this.#now = options.now ?? (() => new Date().toISOString());
-    this.#requireSelection(this.#defaults);
+    this.#requireSelection(defaults);
   }
 
   subscribe(listener: (event: AppServerEvent) => void): () => void {
@@ -252,12 +330,143 @@ export class ZenAppServer {
     };
   }
 
+  prepareRuntimeConfiguration(
+    update: RuntimeConfigurationUpdate,
+  ): PreparedRuntimeConfiguration {
+    assertRuntimeRevision(update.revision);
+    assertOptionalExecutionLimit(update.maxToolRounds, "Maximum tool rounds");
+    assertOptionalExecutionLimit(
+      update.maxConcurrentToolBodies,
+      "Maximum concurrent tool bodies",
+    );
+    const defaults = Object.freeze({
+      ...update.defaults,
+      cwd: path.resolve(update.defaults.cwd),
+    });
+    const contextCompaction = normalizeContextCompactionConfig(
+      update.contextCompaction,
+    );
+    const providerSnapshot = this.#providerRegistry.prepareSnapshot(
+      update.providerProfiles,
+      update.revision,
+    );
+    try {
+      providerSnapshot.resolve(defaults);
+    } catch (error) {
+      void this.#providerRegistry
+        .discardSnapshot(providerSnapshot)
+        .catch((discardError) =>
+          console.warn(
+            "Could not discard invalid Provider snapshot",
+            discardError,
+          ),
+        );
+      throw error;
+    }
+    const prepared = Object.freeze({
+      revision: update.revision,
+      providerSnapshot,
+      defaults,
+      contextCompaction,
+      ...(update.maxToolRounds === undefined
+        ? {}
+        : { maxToolRounds: update.maxToolRounds }),
+      ...(update.maxConcurrentToolBodies === undefined
+        ? {}
+        : { maxConcurrentToolBodies: update.maxConcurrentToolBodies }),
+    });
+    this.#preparedRuntimeConfigurations.add(prepared);
+    return prepared;
+  }
+
+  publishRuntimeConfiguration(prepared: PreparedRuntimeConfiguration): void {
+    if (!this.#preparedRuntimeConfigurations.delete(prepared)) {
+      throw new Error(
+        "Runtime configuration was not prepared by this App Server",
+      );
+    }
+    this.#providerRegistry.publishSnapshot(prepared.providerSnapshot);
+    this.#runtimeConfiguration = prepared;
+    this.#emit({
+      type: "model_catalog_updated",
+      revision: prepared.revision,
+    });
+  }
+
+  async discardRuntimeConfiguration(
+    prepared: PreparedRuntimeConfiguration,
+  ): Promise<void> {
+    if (!this.#preparedRuntimeConfigurations.delete(prepared)) {
+      throw new Error(
+        "Runtime configuration was not prepared by this App Server",
+      );
+    }
+    await this.#providerRegistry.discardSnapshot(prepared.providerSnapshot);
+  }
+
+  currentRuntimeConfiguration(): RuntimeConfigurationSnapshot {
+    return this.#runtimeConfiguration;
+  }
+
+  async closeRuntimeConfiguration(): Promise<void> {
+    this.#acceptingRootOperations = false;
+    await this.#providerRegistry.close();
+  }
+
+  beginHostOperation(
+    kind: HostOperationKind,
+    label?: string,
+  ): HostOperationLease {
+    if (!this.#acceptingRootOperations) {
+      throw new AppServerError(
+        "host_restarting",
+        "The Zen host is restarting and is not accepting new work",
+      );
+    }
+    return this.#reserveRootOperation(kind, label);
+  }
+
+  activitySnapshot(): HostActivitySnapshot {
+    return Object.freeze({
+      acceptingRootOperations: this.#acceptingRootOperations,
+      rootOperations: Object.freeze(
+        [...this.#rootOperations].map((operation) =>
+          Object.freeze({ ...operation }),
+        ),
+      ),
+      activeToolTasks: this.#runtime.activeToolTaskCount,
+    });
+  }
+
+  tryBeginMaintenance(): MaintenanceAdmission {
+    const activity = this.activitySnapshot();
+    if (
+      !this.#acceptingRootOperations ||
+      activity.rootOperations.length > 0 ||
+      activity.activeToolTasks > 0
+    ) {
+      return { accepted: false, activity };
+    }
+    this.#acceptingRootOperations = false;
+    let ended = false;
+    return {
+      accepted: true,
+      activity: this.activitySnapshot(),
+      end: () => {
+        if (ended) return;
+        ended = true;
+        this.#acceptingRootOperations = true;
+      },
+    };
+  }
+
   listModels(): readonly ListedProviderModel[] {
     return this.#providerRegistry.listModels().map((entry) => ({
       ...entry,
       isDefault:
-        entry.providerProfileId === this.#defaults.providerProfileId &&
-        entry.model.id === this.#defaults.modelId,
+        entry.providerProfileId ===
+          this.#runtimeConfiguration.defaults.providerProfileId &&
+        entry.model.id === this.#runtimeConfiguration.defaults.modelId,
     }));
   }
 
@@ -269,30 +478,43 @@ export class ZenAppServer {
   }
 
   async startThread(input: StartThreadInput = {}): Promise<ThreadSnapshot> {
-    const threadId = this.#id();
-    const thread = new Thread(threadId);
-    const selection = this.#selectionFromInput(this.#defaults, input);
-    this.#requireSelection(selection);
-    const metadata: ThreadMetadataItem = {
-      id: this.#id(),
-      threadId,
-      createdAt: this.#now(),
-      type: "thread_metadata",
-      cwd: path.resolve(input.cwd ?? this.#defaults.cwd),
-      ...selection,
-      sandbox: input.sandbox ?? this.#defaults.sandbox,
-      approvalPolicy: input.approvalPolicy ?? this.#defaults.approvalPolicy,
-    };
-    this.#threads.set(threadId, thread);
+    const admission = this.beginHostOperation("turn", "thread/start");
     try {
-      await this.#commit(thread, metadata);
-    } catch (error) {
-      if (this.#threads.get(threadId) === thread) {
-        this.#threads.delete(threadId);
+      const threadId = this.#id();
+      const thread = new Thread(threadId);
+      const defaults = this.#runtimeConfiguration.defaults;
+      const selection = this.#selectionFromInput(defaults, input);
+      this.#requireSelection(selection);
+      const metadata: ThreadMetadataItem = {
+        id: this.#id(),
+        threadId,
+        createdAt: this.#now(),
+        type: "thread_metadata",
+        workspaceInstructionPolicy: "repo-root-on-first-message",
+        cwd: path.resolve(input.cwd ?? defaults.cwd),
+        ...selection,
+        sandbox: input.sandbox ?? defaults.sandbox,
+        approvalPolicy:
+          input.approvalPolicy ??
+          ((input.sandbox ?? defaults.sandbox) === "danger-full-access"
+            ? defaults.approvalPolicy
+            : "always"),
+      };
+      this.#threads.set(threadId, thread);
+      try {
+        await this.#commit(thread, metadata);
+      } catch (error) {
+        if (this.#threads.get(threadId) === thread) {
+          this.#threads.delete(threadId);
+        }
+        throw error;
       }
-      throw error;
+      const snapshot = await this.#snapshot(thread);
+      this.#emit({ type: "thread_started", threadId, thread: snapshot });
+      return snapshot;
+    } finally {
+      admission.release();
     }
-    return await this.#snapshot(thread);
   }
 
   async listThreads(
@@ -345,6 +567,52 @@ export class ZenAppServer {
       }
       this.#requireSelection(selection);
       return await this.#updateThreadSettingsUnlocked(thread, { selection });
+    });
+  }
+
+  async setThreadPermissions(
+    threadId: string,
+    sandbox: SandboxMode,
+  ): Promise<ThreadSnapshot> {
+    return await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#requireThread(threadId);
+      const current = thread.effectiveConfiguration();
+      const approvalPolicy =
+        sandbox === "danger-full-access" ? "never" : "always";
+      if (
+        current.sandbox === sandbox &&
+        current.approvalPolicy === approvalPolicy
+      )
+        return await this.#snapshot(thread);
+      if (
+        this.#activeTurns.has(threadId) ||
+        this.#pendingReplacement(thread) !== undefined ||
+        this.#runtime.hasActiveToolTasks(threadId)
+      ) {
+        throw new AppServerError(
+          "thread_busy",
+          "Wait for the running turn and tools to finish before changing permissions",
+        );
+      }
+      await this.#commit(thread, {
+        id: this.#id(),
+        threadId,
+        createdAt: this.#now(),
+        type: "thread_configuration_changed",
+        permissions: {
+          from: {
+            sandbox: current.sandbox,
+            approvalPolicy: current.approvalPolicy,
+          },
+          to: { sandbox, approvalPolicy },
+        },
+      });
+      this.#emit({
+        type: "thread_settings_updated",
+        threadId,
+        settings: thread.effectiveConfiguration(),
+      });
+      return await this.#snapshot(thread);
     });
   }
 
@@ -401,6 +669,107 @@ export class ZenAppServer {
       });
       return await this.#snapshot(thread);
     });
+  }
+
+  async queueMessage(
+    threadId: string,
+    requestedInput: string | UserInput,
+    clientId: string,
+    options: { requestApproval?: ApprovalHandler } = {},
+  ): Promise<void> {
+    const input = normalizeAppServerInput(requestedInput, "Queue");
+    if (clientId.trim().length === 0)
+      throw new AppServerError("invalid_input", "Queue client id is required");
+    await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#requireThread(threadId);
+      const duplicate = thread.items.find(
+        (item) =>
+          (item.type === "user_message_queued" ||
+            item.type === "user_message") &&
+          item.clientId === clientId,
+      );
+      if (
+        duplicate?.type === "user_message_queued" ||
+        duplicate?.type === "user_message"
+      ) {
+        const prior =
+          duplicate.type === "user_message_queued"
+            ? duplicate.input
+            : contentFromUserMessage(duplicate);
+        if (!sameUserInput(prior, input))
+          throw new AppServerError(
+            "idempotency_conflict",
+            "Queue client id was already used for different input",
+          );
+        return;
+      }
+      const resolved = this.#requireSelection(thread.effectiveConfiguration());
+      await this.#validateInput(input, resolved.model.inputModalities);
+      const queued: QueuedUserMessageItem = {
+        id: this.#id(),
+        type: "user_message_queued",
+        threadId,
+        createdAt: this.#now(),
+        clientId,
+        input,
+      };
+      await this.#commit(thread, queued);
+      this.#emit({ type: "item_completed", item: queued });
+    });
+    await this.resumeQueue(threadId, options);
+  }
+
+  async resumeQueue(
+    threadId: string,
+    options: { requestApproval?: ApprovalHandler } = {},
+  ): Promise<void> {
+    const thread = await this.#requireThread(threadId);
+    if (this.#activeTurns.has(threadId)) return;
+    const first = pendingQueuedMessages(thread.items)[0];
+    if (first !== undefined) {
+      const selection = this.#requireSelection(thread.effectiveConfiguration());
+      await this.#validateInput(first.input, selection.model.inputModalities);
+    }
+    void this.#drainQueue(threadId, options).catch(() => {
+      console.error(
+        "Queued message could not start; the durable queue remains available for retry",
+      );
+    });
+  }
+
+  readonly #drainingQueues = new Set<string>();
+
+  async #drainQueue(
+    threadId: string,
+    options: { requestApproval?: ApprovalHandler },
+  ): Promise<void> {
+    if (this.#drainingQueues.has(threadId) || this.#activeTurns.has(threadId))
+      return;
+    this.#drainingQueues.add(threadId);
+    try {
+      while (!this.#activeTurns.has(threadId)) {
+        const thread = await this.#requireThread(threadId);
+        if (this.#pendingReplacement(thread) !== undefined) return;
+        const queued = pendingQueuedMessages(thread.items)[0];
+        if (queued === undefined) return;
+        const turn = await this.#launchTurn(threadId, queued.input, {
+          ...options,
+          clientId: queued.clientId,
+        });
+        await turn.done;
+        if (
+          !thread.items.some(
+            (item) =>
+              item.type === "turn_completed" &&
+              item.turnId === turn.id &&
+              item.status === "completed",
+          )
+        )
+          return;
+      }
+    } finally {
+      this.#drainingQueues.delete(threadId);
+    }
   }
 
   async startTurn(
@@ -463,14 +832,24 @@ export class ZenAppServer {
       }
 
       const configuration = thread.effectiveConfiguration();
-      const resolved = this.#requireSelection(configuration);
-      const item = await this.#appendContextCompaction({
-        thread,
-        boundary,
-        selection: resolved,
-        signal,
-      });
-      return { compactionItemId: item.id };
+      const admitted = this.#admitProviderOperation(
+        "compaction",
+        `thread:${threadId}`,
+        configuration,
+      );
+      try {
+        const item = await this.#appendContextCompaction({
+          thread,
+          boundary,
+          selection: admitted.provider,
+          contextCompaction: admitted.configuration.contextCompaction,
+          signal,
+        });
+        return { compactionItemId: item.id };
+      } finally {
+        admitted.provider.release();
+        admitted.operation.release();
+      }
     });
   }
 
@@ -552,17 +931,60 @@ export class ZenAppServer {
         });
       }
       const configuration = thread.effectiveConfiguration();
-      const resolved = this.#requireSelection(configuration);
       const turnId = internal.turnId ?? this.#id();
       const controller = new AbortController();
+      const admitted = this.#admitProviderOperation(
+        "turn",
+        `thread:${threadId}`,
+        configuration,
+      );
+      const resolved = admitted.provider;
+      let workspaceInstructions: WorkspaceInstructionFile[] | undefined;
+      try {
+        const metadata = thread.items.find(
+          (item) => item.type === "thread_metadata",
+        );
+        if (
+          metadata?.workspaceInstructionPolicy ===
+            "repo-root-on-first-message" &&
+          !thread.items.some(
+            (item) =>
+              item.type === "turn_started" || item.type === "user_message",
+          )
+        ) {
+          workspaceInstructions = await loadWorkspaceInstructions(
+            configuration.cwd,
+          );
+        }
+        await this.#validateInput(input, resolved.model.inputModalities);
+        await this.#compactBeforeTurnIfNeeded({
+          ...(workspaceInstructions === undefined
+            ? {}
+            : { workspaceInstructions }),
+          thread,
+          turnId,
+          input,
+          resolved,
+          contextCompaction: admitted.configuration.contextCompaction,
+          signal: controller.signal,
+        });
+      } catch (error) {
+        resolved.release();
+        admitted.operation.release();
+        throw error;
+      }
       const ready = deferred<void>();
       let highestInputTokens: number | undefined;
+      let executionSucceeded = false;
 
       const done = new Promise<void>((resolve, reject) => {
         setImmediate(() => {
           void (async () => {
             try {
               await this.#runtime.runTurn({
+                ...(workspaceInstructions === undefined
+                  ? {}
+                  : { workspaceInstructions }),
                 thread,
                 turnId,
                 input,
@@ -576,8 +998,31 @@ export class ZenAppServer {
                   reasoningEffort: configuration.reasoningEffort,
                   sandbox: configuration.sandbox,
                   approvalPolicy: configuration.approvalPolicy,
+                  inputModalities: resolved.model.inputModalities,
+                  ...(admitted.configuration.contextCompaction.agenticEnabled &&
+                  resolved.model.contextWindow !== null
+                    ? {
+                        agenticContextCompaction: {
+                          contextWindow: resolved.model.contextWindow,
+                        },
+                      }
+                    : {}),
+                  ...(admitted.configuration.maxToolRounds === undefined
+                    ? {}
+                    : {
+                        maxToolRounds: admitted.configuration.maxToolRounds,
+                      }),
+                  ...(admitted.configuration.maxConcurrentToolBodies ===
+                  undefined
+                    ? {}
+                    : {
+                        maxConcurrentToolBodies:
+                          admitted.configuration.maxConcurrentToolBodies,
+                      }),
                 },
                 modelAdapter: resolved.adapter,
+                reloadWorkspaceInstructions: () =>
+                  loadWorkspaceInstructions(configuration.cwd),
                 signal: controller.signal,
                 commit: async (item) => {
                   await this.#withThreadMutation(threadId, async () => {
@@ -594,10 +1039,23 @@ export class ZenAppServer {
                       );
                     }
                     active.deliveryAnchorId = modelResponseId;
-                    return compileModelMessages(
-                      thread.items,
-                      resolved.selection,
-                    );
+                    const items = thread.items;
+                    // Thread-level settings may be appended between samples.
+                    // They do not enter model messages; anchor the reset to the
+                    // latest observed Item in this Turn under the same lock.
+                    const contextBoundaryItemId = items.findLast(
+                      (item) => item.turnId === turnId,
+                    )?.id;
+                    if (contextBoundaryItemId === undefined) {
+                      throw new AppServerError(
+                        "runtime_error",
+                        "Model sample has no canonical context boundary",
+                      );
+                    }
+                    return {
+                      messages: compileModelMessages(items, resolved.selection),
+                      contextBoundaryItemId,
+                    };
                   }),
                 commitFinal: async (message, modelResponseId) =>
                   await this.#commitFinalResponse(
@@ -607,12 +1065,17 @@ export class ZenAppServer {
                     modelResponseId,
                     {
                       resolved,
+                      contextCompaction:
+                        admitted.configuration.contextCompaction,
                       highestInputTokens: () => highestInputTokens,
                       signal: controller.signal,
                     },
                   ),
                 initialInputCommitted: () => {
                   ready.resolve();
+                },
+                agenticCompactionCommitted: () => {
+                  highestInputTokens = undefined;
                 },
                 emit: (event) => {
                   if (
@@ -633,6 +1096,7 @@ export class ZenAppServer {
                   ? {}
                   : { requestApproval: options.requestApproval }),
               });
+              executionSucceeded = true;
               resolve();
             } catch (error) {
               const normalized =
@@ -640,9 +1104,28 @@ export class ZenAppServer {
               ready.reject(normalized);
               reject(normalized);
             } finally {
+              resolved.release();
+              admitted.operation.release();
               const active = this.#activeTurns.get(threadId);
               if (active?.turnId === turnId) {
                 this.#activeTurns.delete(threadId);
+                if (
+                  executionSucceeded &&
+                  thread.items.some(
+                    (item) =>
+                      item.type === "turn_completed" &&
+                      item.turnId === turnId &&
+                      item.status === "completed",
+                  )
+                ) {
+                  queueMicrotask(() => {
+                    void this.resumeQueue(threadId, options).catch(() =>
+                      console.error(
+                        "Queued input is paused because it could not be admitted",
+                      ),
+                    );
+                  });
+                }
               }
             }
           })();
@@ -969,6 +1452,7 @@ export class ZenAppServer {
     modelResponseId: string,
     automaticCompaction: {
       resolved: ResolvedProviderSelection;
+      contextCompaction: ResolvedContextCompactionConfig;
       highestInputTokens: () => number | undefined;
       signal: AbortSignal;
     },
@@ -1023,6 +1507,7 @@ export class ZenAppServer {
     thread: Thread;
     completed: TurnCompletedItem;
     resolved: ResolvedProviderSelection;
+    contextCompaction: ResolvedContextCompactionConfig;
     highestInputTokens: () => number | undefined;
     signal: AbortSignal;
   }): Promise<void> {
@@ -1031,7 +1516,11 @@ export class ZenAppServer {
     if (
       contextWindow === null ||
       inputTokens === undefined ||
-      inputTokens < automaticCompactionThreshold(contextWindow)
+      inputTokens <
+        automaticCompactionThreshold(
+          contextWindow,
+          options.contextCompaction.triggerPercent,
+        )
     ) {
       return;
     }
@@ -1066,6 +1555,7 @@ export class ZenAppServer {
         thread: options.thread,
         boundary,
         selection: options.resolved,
+        contextCompaction: options.contextCompaction,
         signal: options.signal,
       });
     } catch (error) {
@@ -1079,10 +1569,78 @@ export class ZenAppServer {
     }
   }
 
+  async #compactBeforeTurnIfNeeded(options: {
+    workspaceInstructions?: WorkspaceInstructionFile[];
+    thread: Thread;
+    turnId: string;
+    input: UserInput;
+    resolved: ResolvedProviderSelection;
+    contextCompaction: ResolvedContextCompactionConfig;
+    signal: AbortSignal;
+  }): Promise<void> {
+    const contextWindow = options.resolved.model.contextWindow;
+    if (contextWindow === null) return;
+    const previewItems: CanonicalItem[] = [
+      ...options.thread.items,
+      {
+        ...(options.workspaceInstructions === undefined
+          ? {}
+          : { workspaceInstructions: options.workspaceInstructions }),
+        id: `${options.turnId}:context-preview-started`,
+        threadId: options.thread.id,
+        turnId: options.turnId,
+        createdAt: this.#now(),
+        type: "turn_started",
+        selection: options.resolved.selection,
+      },
+      {
+        id: `${options.turnId}:context-preview-input`,
+        threadId: options.thread.id,
+        turnId: options.turnId,
+        createdAt: this.#now(),
+        type: "user_message",
+        content: options.input,
+      },
+    ];
+    if (
+      estimateModelMessageInputTokens(
+        compileModelMessages(previewItems, options.resolved.selection),
+      ) <
+      contextCompactionTokenBudget(
+        contextWindow,
+        options.contextCompaction.triggerPercent,
+      )
+    ) {
+      return;
+    }
+
+    let boundary: ReturnType<typeof latestEligibleCompactionBoundary>;
+    try {
+      boundary = latestEligibleCompactionBoundary(options.thread.items);
+    } catch {
+      return;
+    }
+    if (
+      boundary === undefined ||
+      latestCompaction(options.thread.items)?.coveredThroughItemId ===
+        boundary.item.id
+    ) {
+      return;
+    }
+    await this.#appendContextCompaction({
+      thread: options.thread,
+      boundary,
+      selection: options.resolved,
+      contextCompaction: options.contextCompaction,
+      signal: options.signal,
+    });
+  }
+
   async #appendContextCompaction(options: {
     thread: Thread;
     boundary: NonNullable<ReturnType<typeof latestEligibleCompactionBoundary>>;
     selection: ResolvedProviderSelection;
+    contextCompaction: ResolvedContextCompactionConfig;
     signal: AbortSignal;
   }): Promise<ContextCompactionItem> {
     const sourceMessages = compileModelMessages(
@@ -1094,17 +1652,73 @@ export class ZenAppServer {
       model: options.selection.selection.modelId,
       reasoningEffort: options.selection.selection.reasoningEffort,
       messages: sourceMessages,
-      summaryInstruction: this.#contextCompaction.summaryInstruction,
+      summaryInstruction: options.contextCompaction.summaryInstruction,
+      inputTokenBudget: options.selection.model.contextWindow,
       signal: options.signal,
     });
+    const contextWindow = options.selection.model.contextWindow;
+    if (contextWindow === null) {
+      throw new AppServerError(
+        "compaction_budget_unavailable",
+        "Context compaction requires a known model context window",
+      );
+    }
+    const targetTokenBudget = contextCompactionTokenBudget(
+      contextWindow,
+      options.contextCompaction.targetPercent,
+    );
+    const summaryTokens = estimateModelMessageInputTokens([
+      {
+        role: "user",
+        text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${summary.text}`,
+      },
+    ]);
+    if (summaryTokens > targetTokenBudget) {
+      throw new AppServerError(
+        "compaction_budget_exceeded",
+        `Context compaction summary exceeds the ${String(targetTokenBudget)} token target`,
+      );
+    }
+    const workspaceInstructions = await loadWorkspaceInstructions(
+      options.thread.effectiveConfiguration().cwd,
+    );
+    options.signal.throwIfAborted();
+    let boundedBoundary: ReturnType<typeof boundedCompactionBoundary>;
+    try {
+      boundedBoundary = boundedCompactionBoundary(options.thread.items, {
+        retainedTokenBudget: targetTokenBudget - summaryTokens,
+        estimateRetainedTokens: (retainedItems) =>
+          estimateModelMessageInputTokens(
+            compileModelMessages(
+              retainedItems,
+              options.selection.selection,
+              workspaceInstructions,
+            ),
+          ),
+        retention: options.contextCompaction.retention,
+      });
+    } catch (error) {
+      throw new AppServerError(
+        "compaction_budget_exceeded",
+        `Context compaction retained Items exceed the ${String(targetTokenBudget)} token target: ${describeCompactionError(error, "bounded projection unavailable")}`,
+      );
+    }
+    if (boundedBoundary?.item.id !== options.boundary.item.id) {
+      throw new AppServerError(
+        "compaction_boundary_changed",
+        "Context compaction boundary changed during generation",
+      );
+    }
     const item: ContextCompactionItem = {
       id: this.#id(),
       threadId: options.thread.id,
       createdAt: this.#now(),
       type: "context_compaction",
+      provenance: "provider_generated",
+      workspaceInstructions,
       coveredThroughItemId: options.boundary.item.id,
       summary: summary.text,
-      retainedItemIds: options.boundary.retainedItemIds,
+      retainedItemIds: boundedBoundary.retainedItemIds,
       providerProfileId: options.selection.selection.providerProfileId,
       modelId: options.selection.selection.modelId,
       reasoningEffort: options.selection.selection.reasoningEffort,
@@ -1460,6 +2074,57 @@ export class ZenAppServer {
     return await this.#snapshot(thread);
   }
 
+  #admitProviderOperation(
+    kind: "turn" | "compaction",
+    label: string,
+    selection: ProviderSelectionInput,
+  ): {
+    configuration: RuntimeConfigurationSnapshot;
+    provider: ProviderSelectionLease;
+    operation: HostOperationLease;
+  } {
+    if (!this.#acceptingRootOperations) {
+      throw new AppServerError(
+        "host_restarting",
+        "The Zen host is restarting and is not accepting new work",
+      );
+    }
+    const configuration = this.#runtimeConfiguration;
+    let provider: ProviderSelectionLease;
+    try {
+      provider = this.#providerRegistry.acquire(selection);
+    } catch (error) {
+      if (error instanceof ProviderRegistryError) {
+        throw new AppServerError(error.code, error.message);
+      }
+      throw error;
+    }
+    return {
+      configuration,
+      provider,
+      operation: this.#reserveRootOperation(kind, label),
+    };
+  }
+
+  #reserveRootOperation(
+    kind: HostOperationKind,
+    label?: string,
+  ): HostOperationLease {
+    const operation = Object.freeze({
+      kind,
+      ...(label === undefined ? {} : { label }),
+    });
+    this.#rootOperations.add(operation);
+    let released = false;
+    return Object.freeze({
+      release: () => {
+        if (released) return;
+        released = true;
+        this.#rootOperations.delete(operation);
+      },
+    });
+  }
+
   #requireSelection(
     selection: ProviderSelectionInput,
     fallbackReasoningEffort?: string | null,
@@ -1569,6 +2234,23 @@ export class ZenAppServer {
   }
 }
 
+function assertRuntimeRevision(revision: number): void {
+  if (!Number.isSafeInteger(revision) || revision < 0) {
+    throw new Error(
+      "Runtime configuration revision must be a non-negative integer",
+    );
+  }
+}
+
+function assertOptionalExecutionLimit(
+  value: number | undefined,
+  label: string,
+): void {
+  if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) {
+    throw new Error(`${label} must be a positive safe integer`);
+  }
+}
+
 function normalizeAppServerInput(
   input: string | UserInput,
   label: string,
@@ -1659,10 +2341,11 @@ function sameSelection(
   );
 }
 
-function automaticCompactionThreshold(contextWindow: number): number {
-  const quotient = Math.floor(contextWindow / 5);
-  const remainder = contextWindow % 5;
-  return quotient * 4 + Math.ceil((remainder * 4) / 5);
+function automaticCompactionThreshold(
+  contextWindow: number,
+  triggerPercent: number,
+): number {
+  return contextCompactionTokenBudget(contextWindow, triggerPercent);
 }
 
 async function generateContextCompactionSummary(options: {
@@ -1671,46 +2354,67 @@ async function generateContextCompactionSummary(options: {
   reasoningEffort: string | null;
   messages: ModelMessage[];
   summaryInstruction: string;
+  inputTokenBudget: number | null;
   signal: AbortSignal;
 }): Promise<{
   text: string;
   tokenUsage: { inputTokens: number; outputTokens: number };
 }> {
-  let text = "";
+  if (options.inputTokenBudget === null) {
+    throw new AppServerError(
+      "compaction_budget_unavailable",
+      "Context compaction requires a known model context window",
+    );
+  }
+  const chunks = contextCompactionSummaryChunks(
+    options.messages,
+    options.summaryInstruction,
+    options.inputTokenBudget,
+  );
+  const summaries: string[] = [];
   let inputTokens = 0;
   let outputTokens = 0;
-  const messages: ModelMessage[] = [
-    ...options.messages,
-    { role: "user", text: options.summaryInstruction },
-  ];
   try {
-    for await (const event of options.adapter.stream({
-      model: options.model,
-      reasoningEffort: options.reasoningEffort,
-      messages,
-      tools: [],
-      signal: options.signal,
-    })) {
-      options.signal.throwIfAborted();
-      if (event.type === "text_delta") {
-        text += event.delta;
-      } else if (event.type === "usage") {
-        validateCompactionUsage(event);
-        inputTokens += event.inputTokens;
-        outputTokens += event.outputTokens;
-        if (
-          !Number.isSafeInteger(inputTokens) ||
-          !Number.isSafeInteger(outputTokens)
-        ) {
+    for (const chunk of chunks) {
+      let text = "";
+      const messages: ModelMessage[] = [
+        ...chunk,
+        { role: "user", text: options.summaryInstruction },
+      ];
+      for await (const event of options.adapter.stream({
+        model: options.model,
+        reasoningEffort: options.reasoningEffort,
+        messages,
+        tools: [],
+        signal: options.signal,
+      })) {
+        options.signal.throwIfAborted();
+        if (event.type === "text_delta") {
+          text += event.delta;
+        } else if (event.type === "usage") {
+          validateCompactionUsage(event);
+          inputTokens += event.inputTokens;
+          outputTokens += event.outputTokens;
+          if (
+            !Number.isSafeInteger(inputTokens) ||
+            !Number.isSafeInteger(outputTokens)
+          ) {
+            throw new CompactionSummaryValidationError(
+              "Context compaction token usage exceeded safe integer range",
+            );
+          }
+        } else if (event.type === "tool_call") {
           throw new CompactionSummaryValidationError(
-            "Context compaction token usage exceeded safe integer range",
+            "Context compaction summary generation must not call tools",
           );
         }
-      } else if (event.type === "tool_call") {
+      }
+      if (text.trim().length === 0) {
         throw new CompactionSummaryValidationError(
-          "Context compaction summary generation must not call tools",
+          "Context compaction Provider returned an empty summary",
         );
       }
+      summaries.push(text);
     }
   } catch (error) {
     if (options.signal.aborted || isCompactionAbort(error)) {
@@ -1731,13 +2435,102 @@ async function generateContextCompactionSummary(options: {
       describeCompactionError(error, "Context compaction generation failed"),
     );
   }
-  if (text.trim().length === 0) {
+  return {
+    text: summaries.join("\n\n"),
+    tokenUsage: { inputTokens, outputTokens },
+  };
+}
+
+function contextCompactionSummaryChunks(
+  messages: readonly ModelMessage[],
+  summaryInstruction: string,
+  inputTokenBudget: number,
+): ModelMessage[][] {
+  const instructionTokens = estimateModelMessageInputTokens([
+    { role: "user", text: summaryInstruction },
+  ]);
+  const sourceTokenBudget = inputTokenBudget - instructionTokens;
+  if (sourceTokenBudget <= 4) {
     throw new AppServerError(
-      "compaction_invalid_summary",
-      "Context compaction Provider returned an empty summary",
+      "compaction_budget_exceeded",
+      "Context compaction instruction leaves no room for source context",
     );
   }
-  return { text, tokenUsage: { inputTokens, outputTokens } };
+
+  const groups = summaryMessageGroups(messages).flatMap((group) =>
+    fitSummaryMessageGroup(group, sourceTokenBudget),
+  );
+  const chunks: ModelMessage[][] = [];
+  let current: ModelMessage[] = [];
+  for (const group of groups) {
+    const candidate = [...current, ...group];
+    if (
+      current.length > 0 &&
+      estimateModelMessageInputTokens(candidate) > sourceTokenBudget
+    ) {
+      chunks.push(current);
+      current = [...group];
+    } else {
+      current = candidate;
+    }
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks.length === 0 ? [[]] : chunks;
+}
+
+function summaryMessageGroups(
+  messages: readonly ModelMessage[],
+): ModelMessage[][] {
+  const groups: ModelMessage[][] = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (
+      message?.role !== "assistant" ||
+      !("toolCalls" in message) ||
+      message.toolCalls.length === 0
+    ) {
+      if (message !== undefined) groups.push([message]);
+      continue;
+    }
+    const callIds = new Set(message.toolCalls.map((call) => call.callId));
+    const group: ModelMessage[] = [message];
+    while (index + 1 < messages.length) {
+      const next = messages[index + 1];
+      if (next?.role !== "tool" || !callIds.has(next.callId)) break;
+      group.push(next);
+      index += 1;
+    }
+    groups.push(group);
+  }
+  return groups;
+}
+
+function fitSummaryMessageGroup(
+  group: readonly ModelMessage[],
+  tokenBudget: number,
+): ModelMessage[][] {
+  if (estimateModelMessageInputTokens(group) <= tokenBudget) {
+    return [[...group]];
+  }
+  const source = JSON.stringify(group);
+  const prefix = "[excerpt]\n";
+  const payloadCharacters = (tokenBudget - 4) * 4 - prefix.length;
+  if (payloadCharacters <= 0) {
+    throw new AppServerError(
+      "compaction_budget_exceeded",
+      "Context compaction budget cannot fit a source excerpt",
+    );
+  }
+  const excerpts: ModelMessage[][] = [];
+  for (let offset = 0; offset < source.length; offset += payloadCharacters) {
+    excerpts.push([
+      {
+        role: "user",
+        text: `${prefix}${source.slice(offset, offset + payloadCharacters)}`,
+      },
+    ]);
+  }
+  return excerpts;
 }
 
 class CompactionSummaryValidationError extends Error {}

@@ -11,6 +11,17 @@ import {
   pluginSpacesForSettings,
 } from "../src/renderer/src/PluginSettings.js";
 
+// SettingsView owns transient feedback; this harness observes that public callback.
+function PluginSettingsHarness() {
+  const [message, setMessage] = React.useState<string | null>(null);
+  return React.createElement(
+    React.Fragment,
+    null,
+    React.createElement(PluginSettings, { onFeedback: setMessage }),
+    React.createElement("div", { role: "status" }, message),
+  );
+}
+
 test("Plugin Settings does not offer enable for an uninstalled catalog package", () => {
   const plugins: ZenXPluginSnapshot = {
     bundles: [],
@@ -64,6 +75,8 @@ test("Plugin Settings exposes the typed tarball installer entry", async () => {
     configurable: true,
   });
   let selected = 0;
+  let refreshFails = true;
+  const feedback: Array<string | null> = [];
   Object.defineProperty(dom.window, "zenx", {
     configurable: true,
     value: {
@@ -73,6 +86,12 @@ test("Plugin Settings exposes the typed tarball installer entry", async () => {
         onChange: () => () => {},
         selectTarball: async () => {
           selected += 1;
+          if (!refreshFails)
+            return {
+              canceled: false,
+              snapshot: emptyPluginSnapshot,
+              capabilityRefresh: { status: "applied" },
+            };
           return {
             canceled: false,
             snapshot: emptyPluginSnapshot,
@@ -91,7 +110,11 @@ test("Plugin Settings exposes the typed tarball installer entry", async () => {
   });
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => {
-    root.render(React.createElement(PluginSettings));
+    root.render(
+      React.createElement(PluginSettings, {
+        onFeedback: (message) => feedback.push(message),
+      }),
+    );
     await Promise.resolve();
   });
   const sourceToggle = [...dom.window.document.querySelectorAll("button")].find(
@@ -108,9 +131,25 @@ test("Plugin Settings exposes the typed tarball installer entry", async () => {
   });
   assert.equal(selected, 1);
   assert.match(
+    document.querySelector('[role="alert"]')?.textContent ?? "",
+    /Agent capability refresh failed/u,
+  );
+  assert.equal(document.querySelector(".settings-success"), null);
+  assert.deepEqual(feedback, [null]);
+
+  assert.match(
     dom.window.document.body.textContent ?? "",
     /installed and enabled\. Agent capability refresh failed: refresh fixture failure/u,
   );
+
+  refreshFails = false;
+  await act(async () => {
+    button.click();
+    await Promise.resolve();
+  });
+  assert.equal(document.querySelector('[role="alert"]'), null);
+  assert.match(feedback.at(-1) ?? "", /installed and enabled/u);
+  assert.equal(document.querySelector(".settings-success"), null);
   await act(async () => root.unmount());
 });
 
@@ -174,7 +213,7 @@ test("Plugin Settings exposes typed package sources and reports post-commit upda
   });
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => {
-    root.render(React.createElement(PluginSettings));
+    root.render(React.createElement(PluginSettingsHarness));
     await Promise.resolve();
   });
   const button = (label: string) =>
@@ -302,7 +341,7 @@ test("Marketplace exposes loading, search, detail, version install, and canonica
   });
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => {
-    root.render(React.createElement(PluginSettings));
+    root.render(React.createElement(PluginSettingsHarness));
     await Promise.resolve();
   });
   assert.match(
@@ -461,7 +500,7 @@ test("Marketplace has explicit empty and retryable error states", async () => {
     });
     const root = createRoot(dom.window.document.getElementById("root")!);
     await act(async () => {
-      root.render(React.createElement(PluginSettings));
+      root.render(React.createElement(PluginSettingsHarness));
       await Promise.resolve();
     });
     assert.match(dom.window.document.body.textContent ?? "", fixture.expected);
@@ -574,7 +613,7 @@ test("Marketplace is the single searchable plugin management surface with compac
   });
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => {
-    root.render(React.createElement(PluginSettings));
+    root.render(React.createElement(PluginSettingsHarness));
     await Promise.resolve();
   });
   const text = () => dom.window.document.body.textContent ?? "";
@@ -668,7 +707,7 @@ test("real Plugin Settings DOM confirms uninstall and keeps delete-data separate
   });
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => {
-    root.render(React.createElement(PluginSettings));
+    root.render(React.createElement(PluginSettingsHarness));
     await Promise.resolve();
   });
   assert.match(dom.window.document.body.textContent ?? "", /Enabled/u);

@@ -1,3 +1,5 @@
+import { createImZenXProfileLoader } from "./imzenx-profile-loader.js";
+import { readZenXConnectionDescriptor } from "../protocol-client/connection-descriptor.js";
 import {
   app,
   BrowserWindow,
@@ -43,7 +45,11 @@ import { createBundledAutomationPluginService } from "./automation-plugin-servic
 import { ZenXThreadTitleCoordinator } from "./thread-title-coordinator.js";
 import { normalizeTitleOwnershipFailure } from "./thread-title-failure.js";
 import { ZenXThreadTitleStore } from "./thread-title-store.js";
-import { observeCompletedUserMessageTitle } from "./thread-title-notification.js";
+import {
+  observeCompletedUserMessageTitle,
+  observeDiscoveredThreadTitle,
+  observeThreadSnapshotTitle,
+} from "./thread-title-notification.js";
 import { ZenXConfiguredTitleInference } from "./title-inference.js";
 import { ZenXCapabilityService } from "./capability-service.js";
 import { PACKAGED_PROVIDER_MANIFEST_SHA256 } from "./capabilities/packaged-provider-integrity.js";
@@ -65,6 +71,7 @@ import {
   importImageDrafts,
   importLocalImageDrafts,
   readAttachmentPayload,
+  readLocalImagePayload,
   type ZenXImageImport,
 } from "./image-attachments.js";
 import {
@@ -88,7 +95,6 @@ import { ZenXPluginDevControlServer } from "./plugin-dev-control.js";
 import { createDelegatingFirstPartyProfileLoader } from "./first-party-profile-loader.js";
 import { installZenXBundledPluginsAtStartup } from "./bundled-plugin-startup.js";
 import { BrowserLiveObservationIpcBridge } from "./browser-live-observation-ipc.js";
-import { deleteProviderProfileWithHostRestart } from "./provider-deletion.js";
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
@@ -129,6 +135,31 @@ const externalZasAcceptancePath = externalZasAcceptanceConfigPath(
   externalZasAcceptanceEnvironment,
 );
 
+let rendererReady = false;
+let bootstrapFailure: string | undefined;
+
+function loadAppRenderer(window: BrowserWindow): void {
+  if (process.env["ELECTRON_RENDERER_URL"])
+    void window.loadURL(process.env["ELECTRON_RENDERER_URL"]);
+  else void window.loadFile(join(__dirname, "../renderer/index.html"));
+}
+
+function loadStartupPage(window: BrowserWindow): void {
+  const query: Record<string, string> =
+    bootstrapFailure === undefined ? {} : { error: bootstrapFailure };
+  const rendererUrl = process.env["ELECTRON_RENDERER_URL"];
+  if (rendererUrl) {
+    const url = new URL("/startup.html", rendererUrl);
+    if (bootstrapFailure !== undefined)
+      url.searchParams.set("error", bootstrapFailure);
+    void window.loadURL(url.href);
+  } else {
+    void window.loadFile(join(__dirname, "../renderer/startup.html"), {
+      query,
+    });
+  }
+}
+
 function createWindow(): BrowserWindow {
   const backdrop = windowBackdropOptions(process.platform, release());
   const window = new BrowserWindow({
@@ -164,11 +195,8 @@ function createWindow(): BrowserWindow {
     return { action: "deny" };
   });
 
-  if (process.env["ELECTRON_RENDERER_URL"]) {
-    void window.loadURL(process.env["ELECTRON_RENDERER_URL"]);
-  } else {
-    void window.loadFile(join(__dirname, "../renderer/index.html"));
-  }
+  if (rendererReady) loadAppRenderer(window);
+  else loadStartupPage(window);
 
   return window;
 }
@@ -230,6 +258,17 @@ async function bootstrapZenX(): Promise<void> {
         ? undefined
         : join(__dirname, "../../../../node_modules/pnpm/bin/pnpm.cjs"),
       trustedProfileLoaders: {
+        imzenx: createImZenXProfileLoader({
+          dataDirectory: join(userDataDirectory, "plugin-data", "imzenx"),
+          isServerReady: () => appServerManager?.status.type === "ready",
+          onServerStatus: (listener) => {
+            if (appServerManager === undefined)
+              throw new Error("ZAS manager is not attached");
+            return appServerManager.onStatus(listener);
+          },
+          readConnection: () =>
+            readZenXConnectionDescriptor(connectionDescriptorFile),
+        }),
         [ZENX_ROOMS_CAPABILITY_ID]: createZenXRoomsProfileLoader(roomsService),
         browser: createDelegatingFirstPartyProfileLoader(() =>
           capabilityService!.browserProfilePackage(),
@@ -368,15 +407,73 @@ async function bootstrapZenX(): Promise<void> {
     }
   }
   bootstrapFence.throwIfCancelled();
+  const attachConfigurationControl = async () => {
+    if (!appServerManager || appServerManager.status.type !== "ready") return;
+    settingsService!.setConfigurationControl({
+      prepare: async (config, revision) =>
+        appServerManager!.prepareConfiguration(
+          await withZenXProviderTransports(config, async (url) =>
+            session.defaultSession.resolveProxy(url),
+          ),
+          revision,
+        ),
+      publish: async (candidate) =>
+        appServerManager!.publishConfiguration(candidate),
+      discard: async (candidate) =>
+        appServerManager!.discardConfiguration(candidate),
+      current: async () => appServerManager!.currentConfiguration(),
+    });
+    await settingsService!.reconcileConfiguration();
+  };
+  await attachConfigurationControl();
+  ipcMain.handle(ipcChannels.settingsSafeRestart, async () => {
+    const manager = appServerManager;
+    if (!manager || manager.status.type !== "ready")
+      throw new Error("Host is not ready");
+    const config = await withZenXProviderTransports(
+      await settingsService!.hostConfig(),
+      async (url) => session.defaultSession.resolveProxy(url),
+    );
+    if (!settingsService!.tryBeginMaintenance())
+      throw new Error(
+        "Cannot safely restart while configuration or auxiliary model work is active",
+      );
+    let capabilityGate = false;
+    try {
+      if (
+        config.configurationRevision !==
+        settingsService!.configurationRevision()
+      )
+        throw new Error(
+          "Settings changed while preparing restart; retry explicitly",
+        );
+      capabilityGate = capabilityService?.tryBeginMaintenance() ?? true;
+      if (!capabilityGate)
+        throw new Error(
+          "Cannot safely restart while plugin changes are active",
+        );
+      const result = await manager.safeRestart(config);
+      if (result.status === "busy")
+        throw new Error(
+          `Cannot safely restart: ${result.activity.rootOperations.length} active root operations and ${result.activity.activeToolTasks} unfinished tools`,
+        );
+    } finally {
+      if (capabilityGate) capabilityService?.endMaintenance();
+      settingsService!.endMaintenance();
+    }
+    await settingsService!.reconcileConfiguration();
+    return settingsService!.publicSettings();
+  });
   installSettingsIpc(
     settingsService,
     directoryBrowser,
     async () => {
+      if (appServerManager?.status.type === "ready") return;
       const hostConfig = await withZenXProviderTransports(
         await settingsService!.hostConfig(),
-        async (url) => await session.defaultSession.resolveProxy(url),
+        async (url) => session.defaultSession.resolveProxy(url),
       );
-      if (appServerManager === undefined) {
+      if (!appServerManager) {
         appServerManager = new AppServerManager({
           entryPath,
           tokenFile,
@@ -388,74 +485,16 @@ async function bootstrapZenX(): Promise<void> {
         });
         await selfControlPort.attach(appServerManager);
         await appServerManager.start();
-        await startPluginDevControl(
-          userDataDirectory,
-          capabilityService!,
-          appServerManager,
-        );
-      } else {
-        await selfControlPort.attach(appServerManager);
-        const restartErrors: Error[] = [];
-        let hostStopped = false;
-        try {
-          await appServerManager.stop({
-            preserveConnectionAuthority: true,
-          });
-          hostStopped = true;
-        } catch (error) {
-          restartErrors.push(normalizeTitleOwnershipFailure(error));
-        }
-        try {
-          await titleCoordinator?.stop();
-        } catch (error) {
-          restartErrors.push(normalizeTitleOwnershipFailure(error));
-        }
-        let capabilitiesReset = false;
-        let hostRestarted = false;
-        if (hostStopped) {
-          try {
-            await capabilityService?.resetTransient();
-            capabilitiesReset = true;
-          } catch (error) {
-            restartErrors.push(normalizeTitleOwnershipFailure(error));
-          }
-        }
-        if (hostStopped && capabilitiesReset) {
-          try {
-            await appServerManager.restart(hostConfig);
-            hostRestarted = true;
-            await startPluginDevControl(
-              userDataDirectory,
-              capabilityService!,
-              appServerManager,
-            );
-          } catch (error) {
-            restartErrors.push(normalizeTitleOwnershipFailure(error));
-          }
-        }
-        try {
-          await titleCoordinator?.restart();
-        } catch (error) {
-          restartErrors.push(normalizeTitleOwnershipFailure(error));
-        }
-        if (hostStopped && !hostRestarted) {
-          try {
-            await appServerManager.stop();
-          } catch (error) {
-            restartErrors.push(normalizeTitleOwnershipFailure(error));
-          }
-        }
-        if (restartErrors.length > 0)
-          throw new AggregateError(
-            restartErrors,
-            "Could not fully restart ZenX",
-          );
-      }
+      } else await appServerManager.restart(hostConfig);
+      await attachConfigurationControl();
     },
     async () => await syncProjectProjection(settingsService!),
   );
   bootstrapFence.throwIfCancelled();
-  const mainWindow = createWindow();
+  rendererReady = true;
+  const existingWindow = BrowserWindow.getAllWindows()[0];
+  const mainWindow = existingWindow ?? createWindow();
+  if (existingWindow !== undefined) loadAppRenderer(existingWindow);
   bootstrapFence.throwIfCancelled();
   if (
     projectWorkspaceAcceptancePath !== null &&
@@ -495,18 +534,21 @@ async function bootstrapZenX(): Promise<void> {
   }
 
   bootstrapFence.throwIfCancelled();
-  app.on("activate", () => {
-    hostLifecycle.activate();
-  });
 }
 
 void app
   .whenReady()
-  .then(async () => await bootstrapFence.run(bootstrapZenX))
+  .then(async () => {
+    if (!ownsSingleInstance || bootstrapFence.cancelled) return;
+    createWindow();
+    await bootstrapFence.run(bootstrapZenX);
+  })
   .catch((error: unknown) => {
     console.error("ZenX bootstrap failed", error);
-    process.exitCode = 1;
-    app.quit();
+    if (hostLifecycle.quitting) return;
+    bootstrapFailure = error instanceof Error ? error.message : String(error);
+    const window = BrowserWindow.getAllWindows()[0] ?? createWindow();
+    loadStartupPage(window);
   });
 
 app.on("before-quit", (event) => {
@@ -516,6 +558,10 @@ app.on("before-quit", (event) => {
 
 app.on("window-all-closed", () => {
   if (ownsSingleInstance) hostLifecycle.windowAllClosed();
+});
+
+app.on("activate", () => {
+  if (ownsSingleInstance) hostLifecycle.activate();
 });
 
 app.on("second-instance", () => {
@@ -645,6 +691,11 @@ function installProtocolIpc(
       return await importImageDrafts(attachments, images);
     },
   );
+  ipcMain.handle(
+    ipcChannels.imageLocalRead,
+    async (_event, source: unknown, cwd: unknown) =>
+      await readLocalImagePayload(source, cwd),
+  );
   ipcMain.handle(ipcChannels.imageAttachmentsRead, async (_event, value) =>
     Uint8Array.from(await readAttachmentPayload(attachments, value)),
   );
@@ -692,7 +743,20 @@ function installProtocolIpc(
       if (!isClientRequestMethod(method)) {
         throw new Error(`Unsupported ZenX protocol method: ${String(method)}`);
       }
-      return await manager.request(method, params as never);
+      const result = await manager.request(method, params as never);
+      if (method === "thread/resume" || method === "thread/read") {
+        const snapshot =
+          result as import("../protocol-client/index.js").ClientRequestResults["thread/read"];
+        void observeThreadSnapshotTitle(titles, snapshot.thread).catch(
+          (error: unknown) => {
+            console.warn(
+              "Could not observe Thread snapshot for ZenX title",
+              error,
+            );
+          },
+        );
+      }
+      return result;
     },
   );
   ipcMain.handle(
@@ -711,6 +775,15 @@ function installProtocolIpc(
   });
   manager.onNotification((method, params) => {
     void observeCompletedUserMessageTitle(titles, method, params);
+    if (method === "thread/started") {
+      const event = params as ServerNotificationParams["thread/started"];
+      void observeDiscoveredThreadTitle(
+        titles,
+        async (threadId) =>
+          (await manager.request("thread/resume", { threadId })).thread,
+        event.thread,
+      );
+    }
     if (method === "thread/name/updated") {
       const event = params as ServerNotificationParams["thread/name/updated"];
       void titles
@@ -794,6 +867,7 @@ function installFailedProtocolIpc(message: string): void {
     ipcChannels.imageAttachmentsPick,
     ipcChannels.imageAttachmentsImport,
     ipcChannels.imageAttachmentsRead,
+    ipcChannels.imageLocalRead,
     ipcChannels.threadAttachmentsRead,
     ipcChannels.threadUsageRead,
     ipcChannels.projectThreadStart,
@@ -827,10 +901,9 @@ function readThreadSummaryListOptions(value: unknown): { archived?: boolean } {
     : {};
 }
 
-function readProjectThreadStartOptions(value: unknown): {
-  model?: string;
-  effort?: string;
-} {
+function readProjectThreadStartOptions(
+  value: unknown,
+): import("./project-projection.js").ProjectThreadStartOptions {
   if (value === undefined) return {};
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("Invalid Project Thread start options");
@@ -839,32 +912,73 @@ function readProjectThreadStartOptions(value: unknown): {
   if (
     entries.some(
       ([key, entry]) =>
-        (key !== "model" && key !== "effort") ||
+        (key !== "model" && key !== "effort" && key !== "sandbox") ||
         typeof entry !== "string" ||
         entry.trim().length === 0,
     )
   ) {
     throw new Error("Invalid Project Thread start options");
   }
-  const options = value as { model?: string; effort?: string };
+  const options =
+    value as import("./project-projection.js").ProjectThreadStartOptions;
+  if (
+    options.sandbox !== undefined &&
+    !["read-only", "workspace-write", "danger-full-access"].includes(
+      options.sandbox,
+    )
+  )
+    throw new Error("Invalid file permission mode");
   if (options.effort !== undefined && options.model === undefined) {
     throw new Error("Project Thread reasoning effort requires a model");
   }
   return {
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.effort === undefined ? {} : { effort: options.effort }),
+    ...(options.sandbox === undefined ? {} : { sandbox: options.sandbox }),
   };
 }
 
 function installSettingsIpc(
   settings: ZenXSettingsService,
   directoryBrowser: ZenXDirectoryBrowser,
-  restartHost: () => Promise<void>,
+  startHostIfNeeded: () => Promise<void>,
   refreshProjects: () => Promise<void>,
 ): void {
   ipcMain.handle(
+    ipcChannels.settingsReconcile,
+    async (_event, retry: unknown) => {
+      if (typeof retry !== "boolean") throw new Error("Invalid retry");
+      await settings.reconcileConfiguration(retry);
+      return settings.publicSettings();
+    },
+  );
+  ipcMain.handle(
     ipcChannels.settingsGet,
     async () => await settings.publicSettings(),
+  );
+  ipcMain.handle(
+    ipcChannels.workspaceEdit,
+    async (
+      _event,
+      workspace: unknown,
+      name: unknown,
+      nextWorkspace: unknown,
+    ) => {
+      if (
+        typeof workspace !== "string" ||
+        typeof name !== "string" ||
+        typeof nextWorkspace !== "string"
+      )
+        throw new Error("Invalid project edit");
+      const requiresRestart = await settings.editWorkspace(
+        workspace,
+        name,
+        nextWorkspace,
+      );
+      await refreshProjects();
+      if (requiresRestart) await startHostIfNeeded();
+      return await settings.publicSettings();
+    },
   );
   ipcMain.handle(
     ipcChannels.workspaceAdd,
@@ -872,7 +986,7 @@ function installSettingsIpc(
       if (typeof workspace !== "string") throw new Error("Invalid workspace");
       const requiresRestart = await settings.addWorkspace(workspace);
       await refreshProjects();
-      if (requiresRestart) await restartHost();
+      if (requiresRestart) await startHostIfNeeded();
       return await settings.publicSettings();
     },
   );
@@ -882,7 +996,7 @@ function installSettingsIpc(
       if (typeof workspace !== "string") throw new Error("Invalid workspace");
       const requiresRestart = await settings.removeWorkspace(workspace);
       await refreshProjects();
-      if (requiresRestart) await restartHost();
+      if (requiresRestart) await startHostIfNeeded();
       return await settings.publicSettings();
     },
   );
@@ -892,7 +1006,7 @@ function installSettingsIpc(
       if (typeof workspace !== "string") throw new Error("Invalid workspace");
       const requiresRestart = await settings.setDefaultWorkspace(workspace);
       await refreshProjects();
-      if (requiresRestart) await restartHost();
+      if (requiresRestart) await startHostIfNeeded();
       return await settings.publicSettings();
     },
   );
@@ -939,7 +1053,17 @@ function installSettingsIpc(
       if (apiKey !== undefined && typeof apiKey !== "string") {
         throw new Error("Invalid API key");
       }
+      requireConfigurationRevision(update.baseRevision);
+      const before = (await settings.publicSettings()).profile;
       await settings.save(update, apiKey);
+      const after = (await settings.publicSettings()).profile;
+      if (
+        !apiKey &&
+        JSON.stringify({ ...before, composerSendMode: undefined }) ===
+          JSON.stringify({ ...after, composerSendMode: undefined })
+      ) {
+        return await settings.publicSettings();
+      }
       const foregroundPolicyChanged =
         capabilityService?.setForegroundRequiredAllowed(
           update.computerForegroundControlEnabled === true,
@@ -948,18 +1072,24 @@ function installSettingsIpc(
         await appServerManager?.refreshCapabilitiesAfterCommit();
       }
       await refreshProjects();
-      await restartHost();
+      await startHostIfNeeded();
       return await settings.publicSettings();
     },
   );
   ipcMain.handle(
     ipcChannels.providerAdd,
-    async (_event, provider: ZenXProviderProfile, apiKey?: unknown) => {
+    async (
+      _event,
+      provider: ZenXProviderProfile,
+      apiKey?: unknown,
+      baseRevision?: number,
+    ) => {
       if (apiKey !== undefined && typeof apiKey !== "string") {
         throw new Error("Invalid API key");
       }
-      await settings.addProviderProfile(provider, apiKey);
-      await restartHost();
+      requireConfigurationRevision(baseRevision);
+      await settings.addProviderProfile(provider, apiKey, baseRevision);
+      await startHostIfNeeded();
       return await settings.publicSettings();
     },
   );
@@ -977,8 +1107,9 @@ function installSettingsIpc(
       if (options?.apiKey !== undefined && typeof options.apiKey !== "string") {
         throw new Error("Invalid API key");
       }
+      requireConfigurationRevision(options?.baseRevision);
       await settings.editProviderProfile(providerProfileId, provider, options);
-      await restartHost();
+      await startHostIfNeeded();
       return await settings.publicSettings();
     },
   );
@@ -992,12 +1123,12 @@ function installSettingsIpc(
       if (typeof providerProfileId !== "string") {
         throw new Error("Invalid Provider profile id");
       }
-      return await deleteProviderProfileWithHostRestart(
-        settings,
+      requireConfigurationRevision(replacements?.baseRevision);
+      await settings.deleteProviderProfile(
         providerProfileId,
         replacements ?? {},
-        restartHost,
       );
+      return await settings.publicSettings();
     },
   );
   ipcMain.handle(
@@ -1074,6 +1205,7 @@ async function syncProjectProjection(
     profile.workspaces,
     profile.workspace,
     profile.lastUsedWorkspace,
+    profile.projectNames,
   );
 }
 
@@ -1086,12 +1218,18 @@ function installCapabilityIpc(
     capabilities,
     ipcChannels.browserLiveEvent,
   );
-  ipcMain.handle(ipcChannels.browserLiveSubscribe, (event) => {
-    browserLive.subscribe(event.sender);
-  });
-  ipcMain.handle(ipcChannels.browserLiveUnsubscribe, (event) => {
-    browserLive.unsubscribe(event.sender);
-  });
+  ipcMain.handle(
+    ipcChannels.browserLiveSubscribe,
+    (event, subscriptionId, request) => {
+      browserLive.subscribe(event.sender, subscriptionId, request);
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.browserLiveUnsubscribe,
+    (event, subscriptionId) => {
+      browserLive.unsubscribe(event.sender, subscriptionId);
+    },
+  );
   ipcMain.handle(ipcChannels.marketplaceGet, async () => {
     const builtIns = capabilities.marketplaceBuiltIns();
     try {
@@ -1270,4 +1408,11 @@ function isApprovalDecision(value: unknown): value is ApprovalDecision {
     value === "decline" ||
     value === "cancel"
   );
+}
+
+function requireConfigurationRevision(value: unknown): void {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+    throw new Error(
+      "Configuration revision is required; reload settings before applying changes",
+    );
 }

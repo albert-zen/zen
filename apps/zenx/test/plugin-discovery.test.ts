@@ -46,10 +46,10 @@ test("ordinary discovery history progressively exposes one plugin and routes its
   ).done;
 
   assert.deepEqual(model.toolNamesBySample, [
-    ["shell", "zenx_plugin"],
-    ["shell", "zenx_plugin"],
-    ["shell", "zenx_plugin", "fixture_echo"],
-    ["shell", "zenx_plugin", "fixture_echo"],
+    ["wait", "shell", "zenx_plugin"],
+    ["wait", "shell", "zenx_plugin"],
+    ["wait", "shell", "zenx_plugin", "fixture_echo"],
+    ["wait", "shell", "zenx_plugin", "fixture_echo"],
   ]);
   assert.deepEqual(model.toolsBySample[2]?.at(-1), {
     name: "fixture_echo",
@@ -116,11 +116,11 @@ test("one discovery snapshot synchronizes direct schemas and the run_code SDK on
   ).done;
 
   assert.deepEqual(model.toolNamesBySample, [
-    ["shell", "zenx_plugin", "run_code"],
-    ["shell", "zenx_plugin", "fixture_echo", "run_code"],
-    ["shell", "zenx_plugin", "fixture_echo", "run_code"],
-    ["shell", "zenx_plugin", "run_code"],
-    ["shell", "zenx_plugin", "run_code"],
+    ["wait", "shell", "zenx_plugin", "run_code"],
+    ["wait", "shell", "zenx_plugin", "fixture_echo", "run_code"],
+    ["wait", "shell", "zenx_plugin", "fixture_echo", "run_code"],
+    ["wait", "shell", "zenx_plugin", "run_code"],
+    ["wait", "shell", "zenx_plugin", "run_code"],
   ]);
   assert.equal(model.runCodeDescriptions.length, 5);
   assert.doesNotMatch(model.runCodeDescriptions[0]!, /\n  fixture_echo\(/u);
@@ -165,6 +165,7 @@ test("disclosure is rebuilt from journal history and current availability gates 
     await resumedServer.startTurn(thread.id, "after restart")
   ).done;
   assert.deepEqual(resumedModel.toolNames, [
+    "wait",
     "shell",
     "zenx_plugin",
     "fixture_echo",
@@ -175,7 +176,7 @@ test("disclosure is rebuilt from journal history and current availability gates 
     fixture.projection
       .definitions((await resumedServer.readThread(thread.id)).items)
       .map((tool) => tool.name),
-    ["shell", "zenx_plugin"],
+    ["wait", "shell", "zenx_plugin"],
   );
   const discovery = await fixture.discovery.execute({
     callId: "discover-disabled",
@@ -193,7 +194,7 @@ test("disclosure is rebuilt from journal history and current availability gates 
     fixture.projection
       .definitions((await resumedServer.readThread(thread.id)).items)
       .map((tool) => tool.name),
-    ["shell", "zenx_plugin"],
+    ["wait", "shell", "zenx_plugin"],
   );
   assert.deepEqual(
     JSON.parse(
@@ -248,7 +249,7 @@ test("reading one plugin never exposes another available plugin", async () => {
 
   assert.deepEqual(
     fixture.projection.definitions(items).map((tool) => tool.name),
-    ["shell", "zenx_plugin", "fixture_echo"],
+    ["wait", "shell", "zenx_plugin", "fixture_echo"],
   );
   await fixture.close();
 });
@@ -286,7 +287,7 @@ test("malformed, failed, discover, and mismatched read history do not disclose",
   for (const items of [base, malformed, failed, mismatched]) {
     assert.deepEqual(
       fixture.projection.definitions(items).map((tool) => tool.name),
-      ["shell", "zenx_plugin"],
+      ["wait", "shell", "zenx_plugin"],
     );
   }
   await fixture.close();

@@ -84,16 +84,13 @@ export class ZenXHostToolBundle implements ToolBundle {
     const invocationId = `${process.pid}:${invocation.callId}:${String(Date.now())}`;
     return await new Promise<ToolExecutionResult>((resolve, reject) => {
       const abort = (): void => {
-        this.#state.pending.delete(invocationId);
         this.#send({
           type: "capability/cancel",
           invocationId,
           generationToken: this.#generationToken,
         });
-        reject(
-          invocation.signal.reason ??
-            new DOMException("The operation was aborted", "AbortError"),
-        );
+        // Sending cancellation does not confirm that the provider stopped.
+        // Keep the pending result so the task can observe actual completion.
       };
       this.#state.pending.set(invocationId, {
         resolve,
@@ -112,6 +109,9 @@ export class ZenXHostToolBundle implements ToolBundle {
           name: invocation.name,
           arguments: invocation.arguments,
           cwd: invocation.cwd,
+          ...(invocation.threadId === undefined
+            ? {}
+            : { threadId: invocation.threadId }),
         },
       });
     });
@@ -170,7 +170,6 @@ export class ZenXHostToolBundle implements ToolBundle {
 export function createZenXHostToolEnvironment(options: {
   capabilities: ZenXCapabilityHostSnapshot & { generationToken?: string };
   blockedEnvironmentVariables?: readonly string[];
-  redactedValues?: readonly string[];
   send: (event: HostEvent) => void;
   toolOutputSpool: ToolOutputSpool;
 }): {
@@ -189,14 +188,13 @@ export function createZenXHostToolEnvironment(options: {
     send: options.send,
     state: invocationState,
   });
+  const shellRuntime = new ShellToolRuntime({
+    blockedEnvironmentVariables: options.blockedEnvironmentVariables,
+    toolOutputSpool: options.toolOutputSpool,
+  });
   const toolEnvironment = new ToolEnvironment({
-    runtimes: [
-      new ShellToolRuntime({
-        blockedEnvironmentVariables: options.blockedEnvironmentVariables,
-        redactedValues: options.redactedValues,
-        toolOutputSpool: options.toolOutputSpool,
-      }),
-    ],
+    runtimes: [shellRuntime],
+    toolOutputSpool: options.toolOutputSpool,
     bundles: [capabilityBundle],
   });
   let capabilities = structuredClone(options.capabilities);
@@ -250,6 +248,7 @@ export function createZenXHostToolEnvironment(options: {
     },
     currentGenerationToken: () => currentBundle.generationToken,
     close: async (reason = "ZenX capability bridge closed") => {
+      await toolEnvironment.close();
       capabilityBundle.close(reason);
       const retiring = [...bundles].map(async (bundle) => {
         await bundle.retire();

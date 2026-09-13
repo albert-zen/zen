@@ -1,5 +1,6 @@
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { assertWritablePaths } from "./sandbox.js";
 
 import type { ModelTool } from "./model.js";
 import type {
@@ -72,10 +73,11 @@ type PlannedOperation =
 /** Exact single-tool runtime for Codex-style patch text. */
 export class ApplyPatchToolRuntime implements ToolRuntime {
   readonly name = "apply_patch";
+  readonly enforcesSandbox = true;
   readonly specification: ModelTool = {
     name: this.name,
     description:
-      "Apply the supported Codex-style patch subset to files relative to the thread working directory.",
+      "Apply the supported Codex-style patch subset to files relative to the thread working directory. Each modifying hunk must match exactly one location; expand its context when a match is missing or ambiguous. All hunks are preflighted before any file is written.",
     inputSchema: {
       type: "object",
       properties: {
@@ -115,6 +117,15 @@ export class ApplyPatchToolRuntime implements ToolRuntime {
         hunks,
         invocation.cwd,
         invocation.signal,
+      );
+      await assertWritablePaths(
+        invocation.sandbox ?? "danger-full-access",
+        invocation.cwd,
+        operations.flatMap((operation) =>
+          operation.kind === "move"
+            ? [operation.sourcePath, operation.destinationPath]
+            : [operation.path],
+        ),
       );
       return await commitPatch(operations, invocation.signal);
     } catch (error) {
@@ -326,46 +337,67 @@ function applyUpdate(
   const normalized = source.replace(/\r\n/gu, "\n");
   const lines = normalized.split("\n");
   if (lines.at(-1) === "") lines.pop();
-  let cursor = 0;
   for (const chunk of chunks) {
+    let searchStart = 0;
     if (chunk.context !== undefined) {
-      const contextIndex = findSequence(lines, [chunk.context], cursor, false);
-      if (contextIndex === -1) {
+      const contextIndex = findUniqueSequence(lines, [chunk.context], 0, false);
+      if (contextIndex.kind === "missing") {
         throw new Error(
           `Failed to find context '${chunk.context}' in ${displayPath}`,
         );
       }
-      cursor = contextIndex + 1;
+      if (contextIndex.kind === "ambiguous") {
+        throw new Error(
+          `Found multiple matches for context '${chunk.context}' in ${displayPath}; expand the hunk context`,
+        );
+      }
+      searchStart = contextIndex.index + 1;
     }
     const start =
       chunk.oldLines.length === 0
-        ? lines.length
-        : findSequence(lines, chunk.oldLines, cursor, chunk.endOfFile);
-    if (start === -1) {
+        ? { kind: "found" as const, index: lines.length }
+        : findUniqueSequence(
+            lines,
+            chunk.oldLines,
+            searchStart,
+            chunk.endOfFile,
+          );
+    if (start.kind === "missing") {
       throw new Error(
         `Failed to find expected lines in ${displayPath}:\n${chunk.oldLines.join("\n")}`,
       );
     }
-    lines.splice(start, chunk.oldLines.length, ...chunk.newLines);
-    cursor = start + chunk.newLines.length;
+    if (start.kind === "ambiguous") {
+      throw new Error(
+        `Found multiple matches for expected lines in ${displayPath}; expand the hunk context:\n${chunk.oldLines.join("\n")}`,
+      );
+    }
+    lines.splice(start.index, chunk.oldLines.length, ...chunk.newLines);
   }
   return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
 }
 
-function findSequence(
+function findUniqueSequence(
   lines: readonly string[],
   sequence: readonly string[],
   start: number,
   endOfFile: boolean,
-): number {
+):
+  | { kind: "missing" }
+  | { kind: "ambiguous" }
+  | { kind: "found"; index: number } {
   const last = lines.length - sequence.length;
+  let match: number | undefined;
   for (let index = start; index <= last; index += 1) {
     if (endOfFile && index !== last) continue;
     if (sequence.every((line, offset) => lines[index + offset] === line)) {
-      return index;
+      if (match !== undefined) return { kind: "ambiguous" };
+      match = index;
     }
   }
-  return -1;
+  return match === undefined
+    ? { kind: "missing" }
+    : { kind: "found", index: match };
 }
 
 async function commitPatch(

@@ -53,7 +53,11 @@ import type {
 import type { ModelUsageProjection } from "../../../../src/model-usage.js";
 import type { AttachmentRef } from "../../../../src/attachment.js";
 import type { MarketplaceCatalogLoadSnapshot } from "../marketplace.js";
-import type { BrowserLiveObservationEvent } from "../main/capabilities/browser-provider.js";
+import type {
+  BrowserThreadRequest,
+  BrowserThreadEvent,
+} from "../main/capabilities/browser-thread-observation.js";
+import type { BrowserObservationEnvelope } from "../main/browser-live-observation-ipc.js";
 
 contextBridge.exposeInMainWorld("zenx", {
   platform: process.platform,
@@ -128,6 +132,11 @@ contextBridge.exposeInMainWorld("zenx", {
       await ipcRenderer.invoke(ipcChannels.threadSummariesList, options),
   },
   imageAttachments: {
+    readLocal: async (
+      source: string,
+      cwd?: string,
+    ): Promise<{ bytes: Uint8Array; mediaType: string }> =>
+      await ipcRenderer.invoke(ipcChannels.imageLocalRead, source, cwd),
     pick: async (): Promise<ZenXImageDraft[]> =>
       await ipcRenderer.invoke(ipcChannels.imageAttachmentsPick),
     import: async (
@@ -152,7 +161,7 @@ contextBridge.exposeInMainWorld("zenx", {
       await ipcRenderer.invoke(ipcChannels.projectsGet, options),
     startThread: async (
       workspace: string,
-      selection?: { model?: string; effort?: string },
+      selection?: import("../main/project-projection.js").ProjectThreadStartOptions,
     ): Promise<ClientRequestResults["thread/start"]> =>
       await ipcRenderer.invoke(
         ipcChannels.projectThreadStart,
@@ -161,6 +170,10 @@ contextBridge.exposeInMainWorld("zenx", {
       ),
   },
   settings: {
+    safeRestart: async (): Promise<PublicHostSettings> =>
+      ipcRenderer.invoke(ipcChannels.settingsSafeRestart),
+    reconcile: async (retry: boolean): Promise<PublicHostSettings> =>
+      ipcRenderer.invoke(ipcChannels.settingsReconcile, retry),
     get: async (): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.settingsGet),
     save: async (
@@ -171,8 +184,14 @@ contextBridge.exposeInMainWorld("zenx", {
     addProvider: async (
       provider: ZenXProviderProfile,
       apiKey?: string,
+      baseRevision?: number,
     ): Promise<PublicHostSettings> =>
-      await ipcRenderer.invoke(ipcChannels.providerAdd, provider, apiKey),
+      await ipcRenderer.invoke(
+        ipcChannels.providerAdd,
+        provider,
+        apiKey,
+        baseRevision,
+      ),
     editProvider: async (
       providerProfileId: string,
       provider: ZenXProviderProfile,
@@ -205,6 +224,17 @@ contextBridge.exposeInMainWorld("zenx", {
         ipcChannels.providerImageProbe,
         providerProfileId,
         modelId,
+      ),
+    editWorkspace: async (
+      workspace: string,
+      name: string,
+      nextWorkspace: string,
+    ): Promise<PublicHostSettings> =>
+      await ipcRenderer.invoke(
+        ipcChannels.workspaceEdit,
+        workspace,
+        name,
+        nextWorkspace,
       ),
     addWorkspace: async (workspace: string): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.workspaceAdd, workspace),
@@ -273,30 +303,38 @@ contextBridge.exposeInMainWorld("zenx", {
   },
   browserObservation: {
     subscribe: (
-      listener: (event: BrowserLiveObservationEvent) => void,
+      request: BrowserThreadRequest,
+      listener: (event: BrowserThreadEvent) => void,
     ): (() => void) => {
       let active = true;
+      const subscriptionId = crypto.randomUUID();
       const wrapped = (
         _event: Electron.IpcRendererEvent,
-        value: BrowserLiveObservationEvent,
+        value: BrowserObservationEnvelope,
       ) => {
-        if (active) listener(value);
+        if (active && value.subscriptionId === subscriptionId)
+          listener(value.event);
       };
       ipcRenderer.on(ipcChannels.browserLiveEvent, wrapped);
-      void ipcRenderer.invoke(ipcChannels.browserLiveSubscribe).catch(() => {
-        if (active) {
-          listener({
-            type: "status",
-            status: "failed",
-            message: "The live browser view could not be connected.",
-          });
-        }
-      });
+      void ipcRenderer
+        .invoke(ipcChannels.browserLiveSubscribe, subscriptionId, request)
+        .catch(() => {
+          if (active) {
+            listener({
+              type: "status",
+              status: "failed",
+              message: "The live browser view could not be connected.",
+            });
+          }
+        });
       return () => {
         if (!active) return;
         active = false;
         ipcRenderer.off(ipcChannels.browserLiveEvent, wrapped);
-        void ipcRenderer.invoke(ipcChannels.browserLiveUnsubscribe);
+        void ipcRenderer.invoke(
+          ipcChannels.browserLiveUnsubscribe,
+          subscriptionId,
+        );
       };
     },
   },

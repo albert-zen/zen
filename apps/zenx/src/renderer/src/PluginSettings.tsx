@@ -19,11 +19,14 @@ type InventoryFilter = "all" | "installed" | "built-in";
 type PluginOperationResult =
   ZenXPluginSnapshot | ZenXPluginMutationResult | void | null;
 
-export function PluginSettings() {
+export function PluginSettings({
+  onFeedback,
+}: {
+  onFeedback?(message: string | null): void;
+}) {
   const [plugins, setPlugins] = useState<ZenXPluginSnapshot | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -48,7 +51,7 @@ export function PluginSettings() {
   ) => {
     setBusy(key);
     setError(null);
-    setNotice(null);
+    onFeedback?.(null);
     try {
       const result = await operation();
       if (result === null) return;
@@ -56,13 +59,17 @@ export function PluginSettings() {
         result !== undefined && "snapshot" in result ? result.snapshot : result;
       if (next !== undefined) setPlugins(next);
       setConfirmation(null);
-      setNotice(
+      if (
         result !== undefined &&
-          "capabilityRefresh" in result &&
-          result.capabilityRefresh.status === "failed"
-          ? `${success} Agent capability refresh failed: ${result.capabilityRefresh.message}`
-          : success,
-      );
+        "capabilityRefresh" in result &&
+        result.capabilityRefresh.status === "failed"
+      ) {
+        setError(
+          `${success} Agent capability refresh failed: ${result.capabilityRefresh.message}`,
+        );
+      } else {
+        onFeedback?.(success);
+      }
     } catch (reason) {
       setError(describeError(reason));
     } finally {
@@ -88,11 +95,6 @@ export function PluginSettings() {
         setConfirmation={setConfirmation}
         run={run}
       />
-      {notice ? (
-        <div className="settings-success" role="status">
-          {notice}
-        </div>
-      ) : null}
       {error ? (
         <div className="settings-error" role="alert">
           <Icon name="warning" />

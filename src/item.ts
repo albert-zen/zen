@@ -1,9 +1,18 @@
 import {
+  MAX_AUDIO_BYTES,
   MAX_IMAGE_BYTES,
   MAX_IMAGE_DIMENSION,
   MAX_IMAGE_PIXELS,
   type AttachmentRef,
 } from "./attachment.js";
+
+/** Original UTF-8 text budget for the fixed repository instruction snapshot. */
+export const MAX_WORKSPACE_INSTRUCTION_BYTES = 128 * 1024;
+
+export interface WorkspaceInstructionFile {
+  path: string;
+  text: string;
+}
 
 export type ItemType =
   | "thread_metadata"
@@ -13,12 +22,14 @@ export type ItemType =
   | "turn_completed"
   | "turn_aborted"
   | "turn_replacement_requested"
+  | "user_message_queued"
   | "user_message"
   | "agent_message"
   | "model_usage"
   | "reasoning"
   | "tool_call"
   | "tool_result"
+  | "code_state"
   | "failure";
 
 const CANONICAL_ITEM_TYPES = {
@@ -29,12 +40,14 @@ const CANONICAL_ITEM_TYPES = {
   turn_completed: true,
   turn_aborted: true,
   turn_replacement_requested: true,
+  user_message_queued: true,
   user_message: true,
   agent_message: true,
   model_usage: true,
   reasoning: true,
   tool_call: true,
   tool_result: true,
+  code_state: true,
   failure: true,
 } as const satisfies Record<ItemType, true>;
 
@@ -49,6 +62,8 @@ export interface ItemBase {
 interface ThreadMetadataItemBase extends ItemBase {
   type: "thread_metadata";
   cwd: string;
+  /** Only new Threads opt in; existing journals are never retroactively loaded. */
+  workspaceInstructionPolicy?: "repo-root-on-first-message";
   sandbox: SandboxMode;
   approvalPolicy: ApprovalPolicy;
 }
@@ -91,12 +106,27 @@ export interface ProviderThreadConfigurationChangedItem extends ItemBase {
   };
 }
 
+export interface ThreadPermissionConfiguration {
+  sandbox: SandboxMode;
+  approvalPolicy: ApprovalPolicy;
+}
+export interface ThreadPermissionsChangedItem extends ItemBase {
+  type: "thread_configuration_changed";
+  permissions: {
+    from: ThreadPermissionConfiguration;
+    to: ThreadPermissionConfiguration;
+  };
+}
 export type ThreadConfigurationChangedItem =
-  LegacyThreadConfigurationChangedItem | ProviderThreadConfigurationChangedItem;
+  | LegacyThreadConfigurationChangedItem
+  | ProviderThreadConfigurationChangedItem
+  | ThreadPermissionsChangedItem;
 
 export interface TurnStartedItem extends ItemBase {
   type: "turn_started";
   turnId: string;
+  /** First-message repository snapshot; absent on later and historical Turns. */
+  workspaceInstructions?: WorkspaceInstructionFile[];
   /** Frozen provider selection used by this Turn; absent on legacy Items. */
   selection?: CanonicalProviderSelection;
 }
@@ -143,7 +173,13 @@ export interface ImageUserInputPart {
   attachment: AttachmentRef;
 }
 
-export type UserInputPart = TextUserInputPart | ImageUserInputPart;
+export interface AudioUserInputPart {
+  type: "audio";
+  attachment: AttachmentRef;
+}
+
+export type UserInputPart =
+  TextUserInputPart | ImageUserInputPart | AudioUserInputPart;
 export type UserInput = readonly UserInputPart[];
 
 interface UserMessageItemBase extends ItemBase {
@@ -195,6 +231,8 @@ export type ReasoningItem =
       type: "reasoning";
       turnId: string;
       reasoningContent: string;
+      /** Observed public trace from an interrupted model sample; never replayed. */
+      incomplete?: true;
       summary?: string;
       contentVisibility: "public" | "opaque";
       /** Stable provider identity retained only when its adapter requires replay. */
@@ -208,6 +246,7 @@ export type ReasoningItem =
       reasoningContent?: never;
       contentVisibility?: never;
       providerItemId?: never;
+      incomplete?: never;
     });
 
 export interface ToolCallItem extends ItemBase {
@@ -233,6 +272,8 @@ export interface ToolResultItem extends ItemBase {
   /** Optional provider-neutral data for product rendering; absent on legacy Items. */
   contentType?: string;
   structuredContent?: JsonValue;
+  /** Provider-neutral content returned to the model by a trusted builtin tool. */
+  modelContent?: UserInput;
 }
 
 export type JsonPrimitive = string | number | boolean | null;
@@ -246,22 +287,62 @@ export interface FailureItem extends ItemBase {
   message: string;
 }
 
-export interface ContextCompactionItem extends ItemBase {
+interface ContextCompactionItemBase extends ItemBase {
+  /** Rules reread when this compaction was committed; [] clears prior rules. */
+  workspaceInstructions?: WorkspaceInstructionFile[];
   type: "context_compaction";
   coveredThroughItemId: string;
   summary: string;
   retainedItemIds: string[];
+  algorithmVersion: string;
+}
+
+/** Existing journals omit provenance; current generated writers identify it. */
+export interface ProviderGeneratedContextCompactionItem extends ContextCompactionItemBase {
+  provenance?: "provider_generated";
+  turnId?: never;
+  callId?: never;
+  sourceModelResponseId?: never;
   providerProfileId: string;
   modelId: string;
   reasoningEffort: string | null;
-  algorithmVersion: string;
   tokenUsage: {
     inputTokens: number;
     outputTokens: number;
   };
 }
 
+export interface AgenticContextCompactionItem extends ContextCompactionItemBase {
+  provenance: "agentic";
+  turnId: string;
+  callId: string;
+  sourceModelResponseId: string;
+  providerProfileId?: never;
+  modelId?: never;
+  reasoningEffort?: never;
+  tokenUsage?: never;
+}
+
+export type ContextCompactionItem =
+  ProviderGeneratedContextCompactionItem | AgenticContextCompactionItem;
+
+export interface QueuedUserMessageItem extends ItemBase {
+  type: "user_message_queued";
+  clientId: string;
+  input: UserInput;
+}
+
+export interface CodeStateItem extends ItemBase {
+  type: "code_state";
+  turnId: string;
+  callId: string;
+  key: string;
+  value: JsonValue;
+}
+
 export type CanonicalItem =
+  | CodeStateItem
+  | QueuedUserMessageItem
   | ThreadMetadataItem
   | ThreadConfigurationChangedItem
   | ContextCompactionItem
@@ -277,7 +358,8 @@ export type CanonicalItem =
   | ToolResultItem
   | FailureItem;
 
-export type SandboxMode = "danger-full-access";
+export type SandboxMode =
+  "read-only" | "workspace-write" | "danger-full-access";
 export type ApprovalPolicy = "always" | "never";
 export type ApprovalDecision =
   "accept" | "acceptForSession" | "decline" | "cancel";
@@ -292,7 +374,7 @@ export function normalizeUserInput(input: string | UserInput): UserInput {
     if (part.type === "text") {
       if (part.text.length === 0) throw new Error("Text input cannot be empty");
     } else if (part.attachment.type !== "attachment") {
-      throw new Error("Image input must contain an AttachmentRef");
+      throw new Error("Media input must contain an AttachmentRef");
     }
   }
   return structuredClone(normalized);
@@ -319,7 +401,9 @@ export function previewFromUserInput(input: UserInput): string {
     ? text
     : input.some((part) => part.type === "image")
       ? "[Image]"
-      : "";
+      : input.some((part) => part.type === "audio")
+        ? "[Audio]"
+        : "";
 }
 
 export function previewFromUserMessage(item: UserMessageItem): string {
@@ -336,7 +420,7 @@ export function sameUserInput(left: UserInput, right: UserInput): boolean {
         return candidate.type === "text" && part.text === candidate.text;
       }
       return (
-        candidate.type === "image" &&
+        candidate.type !== "text" &&
         part.attachment.sha256 === candidate.attachment.sha256 &&
         part.attachment.mediaType === candidate.attachment.mediaType &&
         part.attachment.byteLength === candidate.attachment.byteLength &&
@@ -359,13 +443,40 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
   }
   const type = rawType as ItemType;
 
+  if (type === "turn_started" || type === "context_compaction") {
+    if (item.workspaceInstructions !== undefined) {
+      if (!Array.isArray(item.workspaceInstructions)) {
+        throw new Error("workspaceInstructions must be an array");
+      }
+      let instructionBytes = 0;
+      for (const entry of item.workspaceInstructions) {
+        const file = requireRecord(entry, "workspace instruction file");
+        requireNonEmptyString(file.path, "workspace instruction path");
+        if (typeof file.text !== "string") {
+          throw new Error("workspace instruction text must be a string");
+        }
+        instructionBytes += Buffer.byteLength(file.text, "utf8");
+        if (instructionBytes > MAX_WORKSPACE_INSTRUCTION_BYTES) {
+          throw new Error("Snapshot exceeds the workspace instruction budget");
+        }
+      }
+    }
+  }
+
   switch (type) {
     case "thread_metadata":
       requireNoTurnId(item);
       requireNonEmptyString(item.cwd, "thread_metadata.cwd");
+      if (item.workspaceInstructionPolicy !== undefined) {
+        requireEnum(
+          item.workspaceInstructionPolicy,
+          ["repo-root-on-first-message"],
+          "thread_metadata.workspaceInstructionPolicy",
+        );
+      }
       requireEnum(
         item.sandbox,
-        ["danger-full-access"],
+        ["read-only", "workspace-write", "danger-full-access"],
         "thread_metadata.sandbox",
       );
       requireEnum(
@@ -388,6 +499,25 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       break;
     case "thread_configuration_changed":
       requireNoTurnId(item);
+      if (hasOwn(item, "permissions")) {
+        if (hasOwn(item, "model") || hasOwn(item, "selection"))
+          throw new Error("Permission changes cannot include model selection");
+        const change = requireRecord(item.permissions, "permissions");
+        for (const key of ["from", "to"]) {
+          const value = requireRecord(change[key], `permissions.${key}`);
+          requireEnum(
+            value.sandbox,
+            ["read-only", "workspace-write", "danger-full-access"],
+            "permissions.sandbox",
+          );
+          requireEnum(
+            value.approvalPolicy,
+            ["always", "never"],
+            "permissions.approvalPolicy",
+          );
+        }
+        break;
+      }
       requireExactlyOneShape(
         item,
         ["model"],
@@ -429,37 +559,64 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       }
       break;
     case "context_compaction": {
-      requireNoTurnId(item);
-      for (const key of [
-        "coveredThroughItemId",
-        "summary",
-        "providerProfileId",
-        "modelId",
-        "reasoningEffort",
-        "algorithmVersion",
-      ]) {
-        if (key === "reasoningEffort") {
-          requireReasoningEffort(item[key], `context_compaction.${key}`);
-        } else {
-          requireNonEmptyString(item[key], `context_compaction.${key}`);
-        }
-      }
+      requireNonEmptyString(
+        item.coveredThroughItemId,
+        "context_compaction.coveredThroughItemId",
+      );
+      requireNonEmptyString(item.summary, "context_compaction.summary");
+      requireNonEmptyString(
+        item.algorithmVersion,
+        "context_compaction.algorithmVersion",
+      );
       requireStringArray(
         item.retainedItemIds,
         "context_compaction.retainedItemIds",
       );
-      const usage = requireRecord(
-        item.tokenUsage,
-        "context_compaction.tokenUsage",
-      );
-      requireTokenCount(
-        usage.inputTokens,
-        "context_compaction.tokenUsage.inputTokens",
-      );
-      requireTokenCount(
-        usage.outputTokens,
-        "context_compaction.tokenUsage.outputTokens",
-      );
+      if (item.provenance === "agentic") {
+        requireTurnId(item, type);
+        requireNonEmptyString(item.callId, "context_compaction.callId");
+        requireNonEmptyString(
+          item.sourceModelResponseId,
+          "context_compaction.sourceModelResponseId",
+        );
+        rejectPresent(
+          item,
+          ["providerProfileId", "modelId", "reasoningEffort", "tokenUsage"],
+          type,
+        );
+      } else {
+        if (
+          item.provenance !== undefined &&
+          item.provenance !== "provider_generated"
+        ) {
+          throw new Error(
+            "context_compaction.provenance has an unsupported value",
+          );
+        }
+        requireNoTurnId(item);
+        requireNonEmptyString(
+          item.providerProfileId,
+          "context_compaction.providerProfileId",
+        );
+        requireNonEmptyString(item.modelId, "context_compaction.modelId");
+        requireReasoningEffort(
+          item.reasoningEffort,
+          "context_compaction.reasoningEffort",
+        );
+        rejectPresent(item, ["callId", "sourceModelResponseId"], type);
+        const usage = requireRecord(
+          item.tokenUsage,
+          "context_compaction.tokenUsage",
+        );
+        requireTokenCount(
+          usage.inputTokens,
+          "context_compaction.tokenUsage.inputTokens",
+        );
+        requireTokenCount(
+          usage.outputTokens,
+          "context_compaction.tokenUsage.outputTokens",
+        );
+      }
       break;
     }
     case "turn_started":
@@ -491,6 +648,10 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       if (hasOwn(item, "text"))
         requireNonEmptyString(item.text, `${type}.text`);
       else validateUserInput(item.input, `${type}.input`);
+      break;
+    case "user_message_queued":
+      requireNonEmptyString(item.clientId, `${type}.clientId`);
+      validateUserInput(item.input, `${type}.input`);
       break;
     case "user_message":
       requireTurnId(item, type);
@@ -524,6 +685,9 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       break;
     case "reasoning":
       requireTurnId(item, type);
+      if (item.incomplete !== undefined && item.incomplete !== true) {
+        throw new Error("reasoning.incomplete must be true when present");
+      }
       if (hasOwn(item, "reasoningContent")) {
         requireString(item.reasoningContent, `${type}.reasoningContent`);
         requireOptionalString(item.summary, `${type}.summary`);
@@ -538,7 +702,11 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         );
       } else {
         requireString(item.summary, `${type}.summary`);
-        rejectPresent(item, ["contentVisibility", "providerItemId"], type);
+        rejectPresent(
+          item,
+          ["contentVisibility", "providerItemId", "incomplete"],
+          type,
+        );
       }
       break;
     case "tool_call":
@@ -575,8 +743,17 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         requireNonEmptyString(item.contentType, `${type}.contentType`);
         validateJsonValue(item.structuredContent, `${type}.structuredContent`);
       }
+      if (item.modelContent !== undefined) {
+        validateUserInput(item.modelContent, `${type}.modelContent`);
+      }
       break;
     }
+    case "code_state":
+      requireTurnId(item, type);
+      requireNonEmptyString(item.callId, `${type}.callId`);
+      requireNonEmptyString(item.key, `${type}.key`);
+      validateJsonValue(item.value, `${type}.value`);
+      break;
     case "failure":
       requireTurnId(item, type);
       requireNonEmptyString(item.code, `${type}.code`);
@@ -671,7 +848,7 @@ function requireReasoningEffort(value: unknown, name: string): void {
   requireNonEmptyString(value, name);
 }
 
-function validateUserInput(value: unknown, name: string): void {
+export function validateUserInput(value: unknown, name: string): void {
   if (!Array.isArray(value) || value.length === 0) {
     throw new Error(`${name} must be a non-empty array`);
   }
@@ -679,10 +856,11 @@ function validateUserInput(value: unknown, name: string): void {
     const part = requireRecord(rawPart, `${name}[${String(index)}]`);
     if (part.type === "text") {
       requireNonEmptyString(part.text, `${name}[${String(index)}].text`);
-    } else if (part.type === "image") {
+    } else if (part.type === "image" || part.type === "audio") {
       validateAttachmentRef(
         part.attachment,
         `${name}[${String(index)}].attachment`,
+        part.type,
       );
     } else {
       throw new Error(`${name}[${String(index)}] has an unsupported type`);
@@ -690,7 +868,11 @@ function validateUserInput(value: unknown, name: string): void {
   }
 }
 
-function validateAttachmentRef(value: unknown, name: string): void {
+function validateAttachmentRef(
+  value: unknown,
+  name: string,
+  kind: "image" | "audio",
+): void {
   const ref = requireRecord(value, name);
   requireEnum(ref.type, ["attachment"], `${name}.type`);
   const sha256 = requireNonEmptyString(ref.sha256, `${name}.sha256`);
@@ -698,15 +880,23 @@ function validateAttachmentRef(value: unknown, name: string): void {
     throw new Error(`${name}.sha256 is invalid`);
   requireEnum(
     ref.mediaType,
-    ["image/png", "image/jpeg", "image/gif", "image/webp"],
+    kind === "image"
+      ? ["image/png", "image/jpeg", "image/gif", "image/webp"]
+      : ["audio/wav", "audio/mpeg"],
     `${name}.mediaType`,
   );
   requireSafeInteger(ref.byteLength, `${name}.byteLength`);
   if (
     (ref.byteLength as number) <= 0 ||
-    (ref.byteLength as number) > MAX_IMAGE_BYTES
+    (ref.byteLength as number) >
+      (kind === "image" ? MAX_IMAGE_BYTES : MAX_AUDIO_BYTES)
   ) {
     throw new Error(`${name}.byteLength is outside the supported range`);
+  }
+  if (kind === "audio") {
+    if (ref.width !== undefined || ref.height !== undefined)
+      throw new Error(`${name} audio must not have image dimensions`);
+    return;
   }
   for (const dimension of ["width", "height"] as const) {
     requireSafeInteger(ref[dimension], `${name}.${dimension}`);

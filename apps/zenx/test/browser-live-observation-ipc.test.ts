@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { BrowserLiveObservationEvent } from "../src/main/capabilities/browser-provider.js";
+import type { BrowserThreadEvent as BrowserLiveObservationEvent } from "../src/main/capabilities/browser-thread-observation.js";
+import type { BrowserObservationEnvelope } from "../src/main/browser-live-observation-ipc.js";
 import { BrowserLiveObservationIpcBridge } from "../src/main/browser-live-observation-ipc.js";
 
 class FakeRenderer {
   destroyed = false;
   readonly sent: Array<{
     channel: string;
-    event: BrowserLiveObservationEvent;
+    event: BrowserObservationEnvelope;
   }> = [];
   readonly #destroyedListeners = new Set<() => void>();
 
@@ -16,7 +17,7 @@ class FakeRenderer {
     return this.destroyed;
   }
 
-  send(channel: string, event: BrowserLiveObservationEvent): void {
+  send(channel: string, event: BrowserObservationEnvelope): void {
     this.sent.push({ channel, event });
   }
 
@@ -43,7 +44,7 @@ test("browser live observation is scoped to the subscribing renderer and cleans 
   let stops = 0;
   const bridge = new BrowserLiveObservationIpcBridge(
     {
-      observeBrowserLive(listener) {
+      observeBrowserLive(_request, listener) {
         listeners.add(listener);
         listener({
           type: "status",
@@ -60,7 +61,10 @@ test("browser live observation is scoped to the subscribing renderer and cleans 
   const first = new FakeRenderer();
   const second = new FakeRenderer();
 
-  bridge.subscribe(first);
+  bridge.subscribe(first, "first-" + stops, {
+    threadId: "thread-a",
+    frames: true,
+  });
   assert.equal(first.sent.length, 1);
   assert.equal(second.sent.length, 0);
   for (const listener of listeners) {
@@ -78,15 +82,40 @@ test("browser live observation is scoped to the subscribing renderer and cleans 
   assert.equal(first.sent.length, 2);
   assert.equal(second.sent.length, 0);
 
-  bridge.subscribe(first);
+  bridge.subscribe(first, "first-" + stops, {
+    threadId: "thread-a",
+    frames: true,
+  });
   assert.equal(stops, 1);
   assert.equal(listeners.size, 1);
   bridge.unsubscribe(first);
   assert.equal(stops, 2);
   assert.equal(listeners.size, 0);
 
-  bridge.subscribe(second);
+  bridge.subscribe(second, "second", { threadId: "thread-b", frames: true });
   second.destroy();
   assert.equal(stops, 3);
   assert.equal(listeners.size, 0);
+});
+
+test("switching threads fences late IPC frames and stale unsubscribe requests", () => {
+  const callbacks: Array<(event: BrowserLiveObservationEvent) => void> = [];
+  const bridge = new BrowserLiveObservationIpcBridge(
+    {
+      observeBrowserLive(_request, listener) {
+        callbacks.push(listener);
+        return () => {};
+      },
+    },
+    "frames",
+  );
+  const renderer = new FakeRenderer();
+  bridge.subscribe(renderer, "a", { threadId: "thread-a", frames: true });
+  bridge.subscribe(renderer, "b", { threadId: "thread-b", frames: true });
+  callbacks[0]!({ type: "status", status: "live", message: "late A" });
+  bridge.unsubscribe(renderer, "a");
+  callbacks[1]!({ type: "status", status: "live", message: "current B" });
+  assert.equal(renderer.sent.length, 1);
+  assert.equal(renderer.sent[0]!.event.subscriptionId, "b");
+  bridge.close();
 });

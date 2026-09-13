@@ -16,6 +16,8 @@ export interface SelectedThreadSettings {
   model: string;
   modelProvider: string;
   reasoningEffort: string | null;
+  permissionMode: import("../../protocol-client/types.js").FilePermissionMode;
+  approvalPolicy: "on-request" | "never";
 }
 
 export type ModelOption = Omit<
@@ -48,6 +50,8 @@ export function settingsFromSnapshot(
     model: snapshot.model,
     modelProvider: snapshot.modelProvider,
     reasoningEffort: snapshot.reasoningEffort,
+    permissionMode: permissionModeFromPolicy(snapshot.sandbox),
+    approvalPolicy: snapshot.approvalPolicy,
   };
 }
 
@@ -62,6 +66,8 @@ export function applySettingsMirror(
         model: settings.model,
         modelProvider: settings.modelProvider,
         reasoningEffort: settings.effort,
+        permissionMode: permissionModeFromPolicy(settings.sandboxPolicy),
+        approvalPolicy: settings.approvalPolicy,
       }
     : current;
 }
@@ -110,28 +116,26 @@ export function groupedModelOptions(
   models: readonly ModelSummary[],
   providerProfiles: readonly ZenXProviderProfile[],
 ): ProviderModelGroup[] {
-  const available = new Map(
-    models.filter((model) => !model.hidden).map((model) => [model.id, model]),
+  const profiles = new Map(
+    providerProfiles.map((profile) => [profile.providerProfileId, profile]),
   );
-  return providerProfiles.flatMap((provider) => {
-    const providerModels = provider.models.flatMap((model) => {
-      const key = encodeModelKey({
-        providerProfileId: provider.providerProfileId,
-        modelId: model.id,
-      });
-      const option = available.get(key);
-      return option === undefined ? [] : [option];
-    });
-    return providerModels.length === 0
-      ? []
-      : [
-          {
-            providerProfileId: provider.providerProfileId,
-            displayName: provider.displayName,
-            models: providerModels,
-          },
-        ];
-  });
+  const groups = new Map<string, ProviderModelGroup>();
+  for (const model of models) {
+    if (model.hidden) continue;
+    const { providerProfileId } = decodeModelKey(model.id);
+    let group = groups.get(providerProfileId);
+    if (group === undefined) {
+      group = {
+        providerProfileId,
+        displayName:
+          profiles.get(providerProfileId)?.displayName ?? providerProfileId,
+        models: [],
+      };
+      groups.set(providerProfileId, group);
+    }
+    group.models.push(model);
+  }
+  return [...groups.values()];
 }
 
 export function reasoningOptions(
@@ -153,9 +157,30 @@ export function canSendWithModel(
   );
 }
 
+export function hasValidReasoningSelection(
+  models: readonly ModelSummary[],
+  settings: Pick<SelectedThreadSettings, "model" | "reasoningEffort">,
+): boolean {
+  const model = models.find(
+    (candidate) => candidate.id === settings.model && !candidate.hidden,
+  );
+  if (model === undefined) return false;
+  if (model.supportedReasoningEfforts.length === 0) return true;
+  return (
+    settings.reasoningEffort !== null &&
+    model.supportedReasoningEfforts.some(
+      (candidate) => candidate.reasoningEffort === settings.reasoningEffort,
+    )
+  );
+}
+
 export function imageCapabilityMessage(
   providerProfiles: readonly ZenXProviderProfile[],
-  settings: SelectedThreadSettings | null,
+  settings: Omit<
+    SelectedThreadSettings,
+    "permissionMode" | "approvalPolicy"
+  > | null,
+  publishedModels?: readonly ModelSummary[],
 ): string | null {
   if (settings === null) return "Choose a model before sending images.";
   let identity: ReturnType<typeof decodeModelKey>;
@@ -168,16 +193,28 @@ export function imageCapabilityMessage(
     (entry) => entry.providerProfileId === identity.providerProfileId,
   );
   const model = profile?.models.find((entry) => entry.id === identity.modelId);
-  const label = model?.displayName ?? identity.modelId;
-  if (model?.inputModalities === null || model === undefined) return null;
-  return model.inputModalities.includes("image")
+  const published = publishedModels?.find(
+    (entry) => entry.id === settings.model,
+  );
+  const label =
+    published?.displayName ?? model?.displayName ?? identity.modelId;
+  const modalities =
+    publishedModels === undefined
+      ? model?.inputModalities
+      : published?.inputModalities;
+  if (modalities == null) return null;
+  return modalities.includes("image")
     ? null
     : `“${label}” does not support image input. Remove the images or choose a model with image support.`;
 }
 
 export function imageCapabilityNotice(
   providerProfiles: readonly ZenXProviderProfile[],
-  settings: SelectedThreadSettings | null,
+  settings: Omit<
+    SelectedThreadSettings,
+    "permissionMode" | "approvalPolicy"
+  > | null,
+  publishedModels?: readonly ModelSummary[],
 ): string | null {
   if (settings === null) return null;
   let identity: ReturnType<typeof decodeModelKey>;
@@ -189,8 +226,16 @@ export function imageCapabilityNotice(
   const model = providerProfiles
     .find((entry) => entry.providerProfileId === identity.providerProfileId)
     ?.models.find((entry) => entry.id === identity.modelId);
-  if (model !== undefined && model.inputModalities !== null) return null;
-  const label = model?.displayName ?? identity.modelId;
+  const published = publishedModels?.find(
+    (entry) => entry.id === settings.model,
+  );
+  const modalities =
+    publishedModels === undefined
+      ? model?.inputModalities
+      : published?.inputModalities;
+  if (modalities != null) return null;
+  const label =
+    published?.displayName ?? model?.displayName ?? identity.modelId;
   return `Image input capability for “${label}” is unknown. You can try sending now, test it in Models & providers, or set it manually.`;
 }
 
@@ -207,4 +252,14 @@ export function reasoningChangeRequest(
   effort: string,
 ): ClientRequestParams["thread/settings/update"] {
   return { threadId, model, effort };
+}
+
+export function permissionModeFromPolicy(
+  policy: ThreadSettingsSnapshot["sandbox"],
+): SelectedThreadSettings["permissionMode"] {
+  return policy.type === "readOnly"
+    ? "read-only"
+    : policy.type === "workspaceWrite"
+      ? "workspace-write"
+      : "danger-full-access";
 }

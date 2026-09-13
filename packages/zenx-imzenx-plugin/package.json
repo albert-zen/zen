@@ -1,0 +1,26 @@
+{
+  "name": "@zenx/imzenx-plugin",
+  "version": "1.0.0",
+  "description": "Connect IM conversations to the same local ZenX App Server",
+  "type": "module",
+  "files": [
+    "dist",
+    "python",
+    "zenx.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/stage-python.mjs",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "validate": "npm run build && node ../zenx-plugin-sdk/dist/cli.js validate .",
+    "pack": "npm run build && node ../zenx-plugin-sdk/dist/cli.js pack ."
+  },
+  "devDependencies": {
+    "@zenx/plugin-sdk": "0.1.0",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.2"
+  },
+  "zenx": {
+    "plugin": "./zenx.plugin.json"
+  }
+}

@@ -513,3 +513,51 @@ function deferred<T>(): {
   });
   return { promise, resolve, reject };
 }
+
+test("project display names do not move existing conversations when the configured folder changes", async () => {
+  const projection = new ZenXProjectProjection(
+    "linux",
+    async (candidate) => candidate,
+  );
+  await projection.updateConfiguration(["/new"], "/new", null, {
+    "/new": "Named project",
+  });
+  const snapshot = await projection.project([{ id: "existing", cwd: "/old" }]);
+  const current = snapshot.projects.find(
+    (project) => project.workspace === "/new",
+  )!;
+  assert.equal(current.name, "Named project");
+  assert.deepEqual(current.threadIds, []);
+  assert.deepEqual(
+    snapshot.projects.find((project) => project.workspace === "/old")
+      ?.threadIds,
+    ["existing"],
+  );
+  const starts: string[] = [];
+  await startConfiguredProjectThread(projection, "/new", async ({ cwd }) =>
+    starts.push(cwd),
+  );
+  assert.deepEqual(starts, ["/new"]);
+});
+
+test("ZenX file presets supply both file scope and approval policy to Thread start", async () => {
+  const projection = new ZenXProjectProjection("win32");
+  await projection.updateConfiguration(["C:\\Work"], "C:\\Work");
+  for (const sandbox of [
+    "read-only",
+    "workspace-write",
+    "danger-full-access",
+  ] as const) {
+    const params = await startConfiguredProjectThread(
+      projection,
+      "C:\\Work",
+      async (value) => value,
+      { sandbox },
+    );
+    assert.deepEqual(params, {
+      cwd: "C:\\Work",
+      sandbox,
+      approvalPolicy: sandbox === "danger-full-access" ? "never" : "on-request",
+    });
+  }
+});

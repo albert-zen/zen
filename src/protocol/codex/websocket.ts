@@ -5,6 +5,8 @@ import { WebSocket, WebSocketServer } from "ws";
 import type { ZenAppServer } from "../../app-server.js";
 import { CodexConnection } from "./connection.js";
 import type { JsonRpcMessage } from "./wire.js";
+import { NativeConnection } from "../native/connection.js";
+import { NativeRecoveryProjection } from "../native/recovery.js";
 
 export interface CodexWebSocketServer {
   url: string;
@@ -16,6 +18,7 @@ export async function serveCodexWebSocket(options: {
   zenHome: string;
   listen: string;
   bearerToken?: string;
+  processEpoch?: string;
 }): Promise<CodexWebSocketServer> {
   const endpoint = new URL(options.listen);
   if (endpoint.protocol !== "ws:") {
@@ -54,6 +57,12 @@ export async function serveCodexWebSocket(options: {
     },
   });
   const connections = new Set<CodexConnection>();
+  const nativeConnections = new Set<NativeConnection>();
+  const nativeProjection = new NativeRecoveryProjection(options.appServer, {
+    ...(options.processEpoch === undefined
+      ? {}
+      : { processEpoch: options.processEpoch }),
+  });
 
   server.on("connection", (socket) => {
     const connection = new CodexConnection({
@@ -65,7 +74,16 @@ export async function serveCodexWebSocket(options: {
         }
       },
     });
+    const nativeConnection = new NativeConnection({
+      projection: nativeProjection,
+      send: (message) => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify(message));
+        }
+      },
+    });
     connections.add(connection);
+    nativeConnections.add(nativeConnection);
 
     socket.on("message", (data, isBinary) => {
       if (isBinary) {
@@ -84,11 +102,30 @@ export async function serveCodexWebSocket(options: {
         );
         return;
       }
-      void connection.receive(message);
+      if (NativeConnection.handles(message))
+        void nativeConnection.receive(message);
+      else {
+        void connection.receive(message).then(() => {
+          if (
+            "method" in message &&
+            message.method === "thread/unsubscribe" &&
+            typeof message.params === "object" &&
+            message.params !== null &&
+            typeof (message.params as { threadId?: unknown }).threadId ===
+              "string"
+          ) {
+            nativeConnection.unsubscribe(
+              (message.params as { threadId: string }).threadId,
+            );
+          }
+        });
+      }
     });
     socket.once("close", () => {
       connection.close("WebSocket closed");
+      nativeConnection.close();
       connections.delete(connection);
+      nativeConnections.delete(nativeConnection);
     });
   });
 
@@ -107,6 +144,8 @@ export async function serveCodexWebSocket(options: {
       for (const connection of connections) {
         connection.close("Server stopped");
       }
+      for (const connection of nativeConnections) connection.close();
+      nativeProjection.close();
       for (const client of server.clients) {
         client.close(1001, "Server stopped");
       }

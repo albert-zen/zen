@@ -1,3 +1,4 @@
+import { registerImZenXUi } from "./imzenx-ui.js";
 import { useEffect, useState } from "react";
 
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
@@ -13,6 +14,7 @@ import { registerBundledBrowserUi } from "./bundled-browser-ui.js";
 export const pluginUiRegistry = createPluginUiRegistry();
 registerBundledAutomationUi(pluginUiRegistry);
 registerBundledBrowserUi(pluginUiRegistry);
+registerImZenXUi(pluginUiRegistry);
 
 export function PluginProductPage({
   snapshot,

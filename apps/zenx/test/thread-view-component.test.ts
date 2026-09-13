@@ -239,11 +239,11 @@ test("running empty composer exposes Stop without locking the editor", () => {
   assert.match(html, /aria-label="Stop"/u);
 });
 
-test("running draft exposes Steer and Interrupt and send", () => {
+test("running draft defaults to Queue with a Soft steer alternative", () => {
   const composer = editComposer(emptyComposerState(), "change direction");
   const html = render(true, [], composer);
-  assert.match(html, />Steer</u);
-  assert.match(html, /aria-label="Interrupt and send"/u);
+  assert.match(html, />Soft steer</u);
+  assert.match(html, /aria-label="Queue message"/u);
   assert.doesNotMatch(html, /Interrupt without sending the draft/u);
 });
 
@@ -1352,3 +1352,300 @@ function commandItem(id: string, value: string): ThreadItem {
     durationMs: null,
   };
 }
+
+test("failed turn opens received trace and preserves the error without a final answer", () => {
+  const failed = turnWithItems("failed", [
+    user("request"),
+    reasoning("Observed trace"),
+    agent("Partial answer"),
+  ]);
+  failed.error = {
+    message: "invalid tool call id",
+    codexErrorInfo: null,
+    additionalDetails: null,
+  };
+  const document = new JSDOM(renderTurns([failed])).window.document;
+  assert.equal(
+    document.querySelector(".turn-toggle")?.getAttribute("aria-expanded"),
+    "true",
+  );
+  assert.match(
+    document.querySelector(".turn-history")?.textContent ?? "",
+    /Partial answer/u,
+  );
+  assert.match(
+    document.querySelector(".turn-history")?.textContent ?? "",
+    /Observed trace/u,
+  );
+  assert.equal(document.querySelector(".turn-final"), null);
+  assert.equal(
+    document.querySelector(".turn-terminal")?.textContent,
+    "invalid tool call id",
+  );
+});
+
+test("keyboard modifiers and send button honor all running send modes", async () => {
+  await withDom(async (root) => {
+    for (const [mode, normal, alternate] of [
+      ["queue", "queue", "steer"],
+      ["soft", "steer", "queue"],
+      ["hard", "replace", "queue"],
+    ] as const) {
+      const intents: string[] = [];
+      await act(async () =>
+        root.render(
+          createElement(ThreadView, {
+            composerSendMode: mode,
+            approvals: [],
+            composer: editComposer(emptyComposerState(), "follow up"),
+            thread: thread([turnWithItems("inProgress", [])]),
+            onDraftChange: () => undefined,
+            onInterrupt: noop,
+            onRespondToApproval: noop,
+            onSubmit: async (intent) => {
+              intents.push(intent);
+            },
+          }),
+        ),
+      );
+      const textarea = document.querySelector("textarea")!;
+      await act(async () => {
+        textarea.focus();
+        textarea.dispatchEvent(
+          new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+        );
+      });
+      await act(async () => {
+        textarea.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            key: "Enter",
+            metaKey: true,
+            bubbles: true,
+          }),
+        );
+      });
+      await act(async () => {
+        textarea.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            key: "Enter",
+            ctrlKey: true,
+            bubbles: true,
+          }),
+        );
+      });
+      await act(async () => requiredButton(".action-orb").click());
+      await act(async () => {
+        textarea.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            key: "Enter",
+            shiftKey: true,
+            bubbles: true,
+          }),
+        );
+      });
+      assert.deepEqual(intents, [normal, alternate, alternate, normal]);
+    }
+  });
+});
+
+test("yielded shell work is labelled Started or Waiting rather than Done", async () => {
+  await withDom(async (root) => {
+    const base = commandItem("shell-start", "npm run dev");
+    assert.equal(base.type, "commandExecution");
+    if (base.type !== "commandExecution") return;
+    const running = {
+      ...base,
+      toolName: "shell",
+      contentType: "application/vnd.zen.tool-task+json",
+      structuredContent: {
+        status: "running",
+        task_id: "session-one",
+        exit_code: null,
+      },
+      aggregatedOutput: "Command is still running",
+    };
+    await renderInteractive(root, turnWithItems("inProgress", [running]));
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".trace-toggle")?.click(),
+    );
+    assert.equal(
+      document.querySelector(".tool-status")?.textContent,
+      "Started",
+    );
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [{ ...running, toolName: "wait" }]),
+    );
+    assert.equal(
+      document.querySelector(".tool-status")?.textContent,
+      "Waiting",
+    );
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        {
+          ...running,
+          toolName: "wait",
+          status: "failed",
+          exitCode: 124,
+          structuredContent: {
+            status: "timed_out",
+            task_id: "session-one",
+            exit_code: 124,
+          },
+        },
+      ]),
+    );
+    assert.equal(
+      document.querySelector(".tool-status")?.textContent,
+      "Timed out",
+    );
+  });
+});
+
+test("generic tool task observations distinguish waiting and unconfirmed cancellation", async () => {
+  await withDom(async (root) => {
+    const base = commandItem("image-task", "generate image");
+    if (base.type !== "commandExecution") throw new Error("missing command");
+    const cases = [
+      ["image_generate", "running", "Started"],
+      ["wait", "running", "Waiting"],
+      ["wait", "cancel_requested", "Cancelling"],
+      ["wait", "cancellation_unconfirmed", "Cancellation unconfirmed"],
+      ["wait", "cancelled", "Cancelled"],
+      ["wait", "timed_out", "Timed out"],
+      ["wait", "failed", "Failed"],
+      ["wait", "completed", "Done"],
+    ] as const;
+    for (const [toolName, status, expected] of cases) {
+      await renderInteractive(
+        root,
+        turnWithItems("inProgress", [
+          {
+            ...base,
+            toolName,
+            contentType: "application/vnd.zen.tool-task+json",
+            structuredContent: {
+              status,
+              task_id: "task-image",
+              exit_code: null,
+            },
+            aggregatedOutput: "Existing partial output",
+          },
+        ]),
+      );
+      if (!document.querySelector(".tool-status")) {
+        await act(async () =>
+          document.querySelector<HTMLButtonElement>(".trace-toggle")?.click(),
+        );
+      }
+      assert.equal(
+        document.querySelector(".tool-status")?.textContent,
+        expected,
+      );
+    }
+  });
+});
+
+test("Think reserves the status column and uses live or interrupted state without Done", async () => {
+  await withDom(async (root) => {
+    const item = {
+      ...reasoningItem("thinking-status", ["Thought"], ["Retained thought"]),
+      status: "inProgress",
+    };
+    await openReasoningRow(root, item as ReturnType<typeof reasoningItem>);
+    assert.ok(
+      document.querySelector('.trace-item-status [aria-label="Thinking"]'),
+    );
+    assert.ok(document.querySelector(".trace-item-chevron"));
+    assert.doesNotMatch(
+      requiredElement(".trace-item-toggle").textContent ?? "",
+      /Done/,
+    );
+  });
+});
+
+test("partial canonical reasoning remains visibly interrupted after reopening", () => {
+  const item = projectCompletedItem({
+    id: "partial-thought",
+    threadId: "t",
+    turnId: "r",
+    createdAt: "2026-09-08T00:00:00.000Z",
+    type: "reasoning",
+    reasoningContent: "partial",
+    contentVisibility: "public",
+    incomplete: true,
+  });
+  assert.ok(item?.type === "reasoning");
+  assert.equal((item as { status?: string }).status, "interrupted");
+});
+
+test("tool image thumbnails are a display projection beside unchanged call and output", async () => {
+  await withDom(async (root) => {
+    const value = commandItem(
+      "view-call",
+      'view_image {"path":"/tmp/image.png"}',
+    );
+    assert.equal(value.type, "commandExecution");
+    if (value.type !== "commandExecution") return;
+    value.aggregatedOutput = "Viewed image /tmp/image.png";
+    const original = JSON.stringify(value);
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: emptyComposerState(),
+          thread: thread([turnWithItems("inProgress", [value])]),
+          threadAttachments: {
+            "view-call": [
+              {
+                type: "attachment",
+                sha256: "f".repeat(64),
+                mediaType: "image/png",
+                byteLength: 68,
+                width: 1,
+                height: 1,
+              },
+            ],
+          },
+          onDraftChange: () => {},
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      ),
+    );
+    await act(async () => requiredButton(".trace-item-toggle").click());
+    assert.ok(document.querySelector('[aria-label="Tool images"]'));
+    assert.ok(document.querySelector('[aria-label="Preview Tool image 1"]'));
+    assert.equal(
+      document.querySelector(".trace-command")?.textContent,
+      value.command,
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /Viewed image \/tmp\/image.png/,
+    );
+    assert.equal(JSON.stringify(value), original);
+  });
+});
+
+test("running duration ticks from turn start and stops on completion", async (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 22_000 });
+  await withDom(async (root) => {
+    await renderInteractive(root, turnWithItems("inProgress", []));
+    assert.equal(
+      requiredElement(".turn-running-label").textContent,
+      "Working for 12s",
+    );
+    await act(async () => t.mock.timers.tick(2_000));
+    assert.equal(
+      requiredElement(".turn-running-label").textContent,
+      "Working for 14s",
+    );
+    await renderInteractive(root, turnWithItems("completed", [], 14_000));
+    assert.equal(document.querySelector(".turn-running-label"), null);
+    await act(async () => t.mock.timers.tick(2_000));
+    assert.match(requiredElement(".turn-toggle").textContent ?? "", /14s/u);
+  });
+});

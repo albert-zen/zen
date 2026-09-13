@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { ChildProcess } from "node:child_process";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -37,7 +38,41 @@ function managerFor(directory: string): AppServerManager {
   });
 }
 
-test("startup timeout terminates an exact child that ignores graceful shutdown and TERM", async () => {
+test("startup timeout terminates an exact child that ignores graceful shutdown and TERM", async (t) => {
+  // Observe real IPC/signals at the parent boundary; child callbacks may not
+  // run before KILL on a busy runner. These spies still call the real methods.
+  const shutdownChecks = new Map<number, () => void>();
+  const emit = ChildProcess.prototype.emit;
+  t.mock.method(
+    ChildProcess.prototype,
+    "emit",
+    function (this: ChildProcess, event: string | symbol, ...args: unknown[]) {
+      if (event === "spawn" && this.send !== undefined) {
+        const sent = t.mock.method(this, "send");
+        shutdownChecks.set(this.pid!, () =>
+          assert(
+            sent.mock.calls.some(
+              (call) =>
+                (call.arguments[0] as { type?: string })?.type === "shutdown",
+            ),
+          ),
+        );
+      }
+      return Reflect.apply(emit, this, [event, ...args]);
+    },
+  );
+  const killed = t.mock.method(ChildProcess.prototype, "kill");
+  const assertShutdown = (pid: number): void => {
+    const check = shutdownChecks.get(pid);
+    assert(check, "exact child was observed spawning");
+    check();
+    assert.deepEqual(
+      killed.mock.calls
+        .filter((call) => (call.this as ChildProcess).pid === pid)
+        .map((call) => call.arguments[0]),
+      ["SIGTERM", "SIGKILL"],
+    );
+  };
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-start-timeout-"),
   );
@@ -49,7 +84,12 @@ test("startup timeout terminates an exact child that ignores graceful shutdown a
 const marker = process.env.ZENX_STARTUP_MARKER;
 const mark = (value) => fs.appendFileSync(marker, value + "\\n");
 process.on("message", (message) => {
-  if (message?.type === "shutdown") mark("shutdown");
+  if (message?.type === "shutdown") {
+    mark("shutdown");
+    // Reproduce delayed signal handlers without changing the parent deadlines.
+    const until = Date.now() + 200;
+    while (Date.now() < until) {}
+  }
 });
 process.on("SIGTERM", () => mark("SIGTERM"));
 mark("started");
@@ -80,11 +120,7 @@ setInterval(() => {}, 1_000);
     const processId = manager.processId!;
     await assert.rejects(startup, /Timed out starting Zen App Server/u);
     assert.equal(manager.processId, undefined);
-    assert.deepEqual((await readFile(marker, "utf8")).trim().split("\n"), [
-      "started",
-      "shutdown",
-      "SIGTERM",
-    ]);
+    assertShutdown(processId);
     assert.throws(
       () => process.kill(processId, 0),
       (error: unknown) =>
@@ -106,11 +142,7 @@ setInterval(() => {}, 1_000);
       /exited during startup|startup was cancelled/u,
     );
     await stopping;
-    assert.deepEqual((await readFile(marker, "utf8")).trim().split("\n"), [
-      "started",
-      "shutdown",
-      "SIGTERM",
-    ]);
+    assertShutdown(cancelledProcessId);
     assert.throws(
       () => process.kill(cancelledProcessId, 0),
       (error: unknown) =>
@@ -185,6 +217,84 @@ test("hosts a real App Server and removes its private token on shutdown", async 
     }
     await manager.stop();
     await assert.rejects(stat(tokenFile), { code: "ENOENT" });
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("publishes runtime configuration in place and reports restart-only domains honestly", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-config-host-"));
+  const initialConfig = {
+    cwd: process.cwd(),
+    dataDirectory: path.join(directory, "data-a"),
+    configurationRevision: 7,
+    model: "fake",
+    models: ["fake"],
+    approvalPolicy: "never" as const,
+    provider: { type: "fake" as const },
+  };
+  const manager = new AppServerManager({
+    entryPath: path.resolve("src/main/app-server-host.ts"),
+    tokenFile: path.join(directory, "runtime", "app-server.token"),
+    hostConfig: initialConfig,
+    execArgv: ["--import", "tsx"],
+    startupTimeoutMs: 10_000,
+  });
+  try {
+    await manager.start();
+    const processId = manager.processId;
+    const processEpoch = manager.processEpoch;
+    assert.deepEqual(await manager.currentConfiguration(), {
+      processEpoch,
+      revision: 7,
+      pendingRestart: [],
+    });
+
+    const nextConfig = {
+      ...initialConfig,
+      dataDirectory: path.join(directory, "data-b"),
+      configurationRevision: 8,
+      model: "fake-next",
+      models: ["fake", "fake-next"],
+    };
+    const candidate = await manager.prepareConfiguration(nextConfig, 8);
+    assert.equal(candidate.processEpoch, processEpoch);
+    assert.deepEqual(candidate.pendingRestart, ["dataDirectory"]);
+    const published = await manager.publishConfiguration(candidate);
+    assert.deepEqual(published, {
+      processEpoch,
+      revision: 8,
+      pendingRestart: ["dataDirectory"],
+    });
+    assert.deepEqual(await manager.publishConfiguration(candidate), published);
+    await assert.rejects(
+      manager.publishConfiguration({ ...candidate, revision: 9 }),
+      /candidate does not match/u,
+    );
+    assert.equal(manager.processId, processId);
+    const started = await manager.request("thread/start", {});
+    const summary = (await manager.listThreadSummaries()).find(
+      (entry) => entry.threadId === started.thread.id,
+    );
+    assert(summary !== undefined);
+    assert("currentMetadata" in summary);
+    assert("modelId" in summary.currentMetadata);
+    assert.equal(summary.currentMetadata.modelId, "fake-next");
+
+    const replacement = await manager.safeRestart(nextConfig);
+    assert.deepEqual(replacement, { status: "restarted" });
+    assert.notEqual(manager.processId, processId);
+    assert.notEqual(manager.processEpoch, processEpoch);
+    assert.deepEqual(await manager.currentConfiguration(), {
+      processEpoch: manager.processEpoch,
+      revision: 8,
+      pendingRestart: [],
+    });
+    await assert.rejects(
+      manager.publishConfiguration(candidate),
+      /another process epoch/u,
+    );
   } finally {
     await manager.stop();
     await rm(directory, { recursive: true, force: true });

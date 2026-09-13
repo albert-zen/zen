@@ -215,8 +215,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
   ): Promise<BrowserInspection> {
     const { session, tab } = this.#requireTab(sessionId, tabId);
     return await this.#enqueue(session, signal, async (revision) => {
-      await this.#select(session, tab, signal);
-      const beforeSnapshot = await this.#currentPage(session, tab, signal);
+      const beforeSnapshot = await this.#select(session, tab, signal);
       const observationDocumentVersion = tab.documentVersion;
       const snapshot = await this.#snapshot(session, signal);
       const observationId = randomUUID();
@@ -228,7 +227,11 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
       const nodes: PlaywrightAriaNode[] = [];
       walkAriaSnapshot(snapshot, (node) => {
         appendVisibleText(visible, node);
-        if (node.ref !== undefined && nodes.length < MAX_PLAYWRIGHT_TARGETS) {
+        if (
+          node.ref !== undefined &&
+          playwrightNodeCanClick(node) &&
+          nodes.length < MAX_PLAYWRIGHT_TARGETS
+        ) {
           nodes.push(node);
         }
       });
@@ -276,11 +279,8 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
         );
       }
       this.#assertSession(session, revision, signal);
-      const summary = await this.#summary(sessionId, session, tab, signal);
-      const finalPage = await this.#currentPage(session, tab, signal);
       if (
-        pageIdentity(beforeSnapshot) !== pageIdentity(finalPage) ||
-        pageIdentity(beforeScreenshot) !== pageIdentity(finalPage) ||
+        pageIdentity(beforeSnapshot) !== pageIdentity(afterScreenshot) ||
         tab.documentVersion !== observationDocumentVersion
       ) {
         await this.#artifacts.removeArtifact(
@@ -298,7 +298,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
         targets,
       };
       return {
-        ...summary,
+        ...pageSummary(sessionId, tab.tabId, afterScreenshot),
         observationId,
         documentVersion: observationDocumentVersion,
         visibleText: visible.join("\n").slice(0, MAX_PLAYWRIGHT_VISIBLE_TEXT),
@@ -322,13 +322,13 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
   ): Promise<BrowserTabSummary> {
     const { session, tab } = this.#requireTab(sessionId, tabId);
     return await this.#enqueue(session, signal, async (revision) => {
+      await this.#select(session, tab, signal);
       const target = requireObservedTarget(
         tab,
         observationId,
         targetId,
         "click",
       );
-      await this.#select(session, tab, signal);
       await this.#revalidateTarget(session, target, "click", signal);
       this.#invalidate(tab);
       await this.#run(session, ["click", target.ref], signal);
@@ -348,13 +348,13 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
   ): Promise<BrowserTabSummary> {
     const { session, tab } = this.#requireTab(sessionId, tabId);
     return await this.#enqueue(session, signal, async (revision) => {
+      await this.#select(session, tab, signal);
       const target = requireObservedTarget(
         tab,
         observationId,
         targetId,
         "type",
       );
-      await this.#select(session, tab, signal);
       await this.#revalidateTarget(session, target, "type", signal);
       this.#invalidate(tab);
       await this.#run(session, ["fill", target.ref, text], signal);
@@ -483,7 +483,8 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     observationId: string,
     signal?: AbortSignal,
   ): Promise<BrowserScreenshotArtifact> {
-    await this.#select(session, tab, signal);
+    // inspect already verified the selected page and brackets this capture with
+    // document checks inside the same serialized session operation.
     const response = await this.#run(
       session,
       [
@@ -745,7 +746,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     session: PlaywrightSessionState,
     tab: PlaywrightTabState,
     signal?: AbortSignal,
-  ): Promise<void> {
+  ): Promise<PlaywrightPageState> {
     const pages = await this.#pageStates(session, signal);
     this.#reconcileTabs(session, pages);
     if (session.tabs.get(tab.tabKey) !== tab) {
@@ -758,6 +759,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
         "Playwright selected page is not the requested tab; retry",
       );
     }
+    return current;
   }
 
   async #summary(
@@ -979,19 +981,6 @@ function playwrightNodeActions(
   dom: PlaywrightDomMetadata,
 ): Array<"click" | "type"> {
   if (node.disabled === true) return [];
-  const clickRoles = new Set([
-    "button",
-    "checkbox",
-    "combobox",
-    "link",
-    "menuitem",
-    "option",
-    "radio",
-    "switch",
-    "tab",
-    "searchbox",
-    "textbox",
-  ]);
   const typeRoles = new Set(["combobox", "searchbox", "textbox"]);
   const nonTypeableInput = new Set([
     "button",
@@ -1004,14 +993,32 @@ function playwrightNodeActions(
     "submit",
   ]);
   return [
-    ...(clickRoles.has(node.role) || node.cursor === "pointer"
-      ? (["click"] as const)
-      : []),
+    ...(playwrightNodeCanClick(node) ? (["click"] as const) : []),
     ...(typeRoles.has(node.role) &&
     !(dom.tag === "input" && nonTypeableInput.has(dom.type.toLowerCase()))
       ? (["type"] as const)
       : []),
   ];
+}
+
+function playwrightNodeCanClick(node: PlaywrightAriaNode): boolean {
+  return (
+    node.disabled !== true &&
+    (node.cursor === "pointer" ||
+      [
+        "button",
+        "checkbox",
+        "combobox",
+        "link",
+        "menuitem",
+        "option",
+        "radio",
+        "switch",
+        "tab",
+        "searchbox",
+        "textbox",
+      ].includes(node.role))
+  );
 }
 
 function isPlaywrightDomMetadata(

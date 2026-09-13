@@ -132,12 +132,12 @@ test("Settings saves global model routing by Provider profile identity", async (
     },
   });
   try {
-    await waitFor(() => exactButton("Apply & restart"));
+    await waitFor(() => exactButton("Apply"));
     assert.equal(document.querySelector(".page-header-actions"), null);
     assert.equal(exactButton("Done"), undefined);
     assert.equal(exactButton("Save and restart host"), undefined);
 
-    const apply = exactButton("Apply & restart");
+    const apply = exactButton("Apply");
     assert.ok(apply);
     assert.equal(apply.disabled, true);
     const defaultModel = labeledSelect("Default model");
@@ -157,12 +157,160 @@ test("Settings saves global model routing by Provider profile identity", async (
       providerProfileId: "profile-beta",
       modelId: "shared-model",
     });
-    assert.match(document.body.textContent ?? "", /local host restarted/u);
+    assert.match(document.body.textContent ?? "", /Settings saved/u);
     assert.equal(apply.disabled, true);
   } finally {
     await unmount(harness);
   }
 });
+
+test("Save feedback is transient, does not move focus, and clears on navigation", async (t) => {
+  const harness = await mountSettings("models");
+  try {
+    await waitFor(() => exactButton("Apply"));
+    const control = labeledSelect("Default model");
+    assert.ok(control);
+    await changeControl(control, control.options[1]!.value);
+    const apply = exactButtonRequired("Apply");
+    apply.focus();
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    await click(apply);
+    assert.equal(
+      document.querySelector(".settings-toast")?.textContent,
+      "Settings saved",
+    );
+    assert.equal(document.querySelector(".settings-success"), null);
+    assert.equal(document.activeElement, apply);
+    await act(async () => t.mock.timers.tick(4000));
+    assert.equal(document.querySelector(".settings-toast"), null);
+    await changeControl(control, control.options[0]!.value);
+    await click(apply);
+    assert.ok(document.querySelector(".settings-toast"));
+    await click(exactButtonRequired("General"));
+    assert.equal(document.querySelector(".settings-toast"), null);
+  } finally {
+    t.mock.timers.reset();
+    await unmount(harness);
+  }
+});
+
+for (const status of ["unchanged", "pending-restart", "unconfirmed"] as const) {
+  test(`Save ${status} does not show a success toast`, async () => {
+    const harness = await mountSettings("models", {
+      save: async (profile) => ({
+        ...settings,
+        profile: { ...settings.profile, ...profile },
+        configuration: {
+          status,
+          revision: 1,
+          pendingRestart: status === "pending-restart" ? ["maxToolRounds"] : [],
+        },
+      }),
+    });
+    try {
+      await waitFor(() => exactButton("Apply"));
+      const control = labeledSelect("Default model");
+      assert.ok(control);
+      await changeControl(control, control.options[1]!.value);
+      await click(exactButtonRequired("Apply"));
+      assert.equal(document.querySelector(".settings-toast"), null);
+      assert.equal(document.querySelector(".settings-success"), null);
+      if (status === "pending-restart") assert.ok(exactButton("Safe restart"));
+      if (status === "unconfirmed")
+        assert.ok(exactButton("Check application status"));
+      if (status === "unchanged")
+        assert.doesNotMatch(document.body.textContent ?? "", /No changes/u);
+    } finally {
+      await unmount(harness);
+    }
+  });
+}
+
+test("A save completed after leaving its section does not show a stale toast", async () => {
+  let finish!: (value: PublicHostSettings) => void;
+  const harness = await mountSettings("models", {
+    save: () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  });
+  try {
+    const control = labeledSelect("Default model")!;
+    await changeControl(control, control.options[1]!.value);
+    await click(exactButtonRequired("Apply"));
+    await click(exactButtonRequired("General"));
+    await click(exactButtonRequired("Models & provider"));
+    await act(async () => finish(settings));
+    assert.equal(document.querySelector(".settings-toast"), null);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Repeated successful saves restart the toast lifetime", async (t) => {
+  const harness = await mountSettings("models");
+  try {
+    const control = labeledSelect("Default model")!;
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    await changeControl(control, control.options[1]!.value);
+    await click(exactButtonRequired("Apply"));
+    await act(async () => t.mock.timers.tick(3000));
+    await changeControl(control, control.options[0]!.value);
+    await click(exactButtonRequired("Apply"));
+    await act(async () => t.mock.timers.tick(1000));
+    assert.ok(document.querySelector(".settings-toast"));
+    await act(async () => t.mock.timers.tick(3000));
+    assert.equal(document.querySelector(".settings-toast"), null);
+  } finally {
+    t.mock.timers.reset();
+    await unmount(harness);
+  }
+});
+
+for (const action of [
+  "Check application status",
+  "Retry applying saved settings",
+  "Safe restart",
+]) {
+  test(`${action} clears an earlier error after success`, async () => {
+    let attempts = 0;
+    const reconcile = async () => {
+      if (++attempts === 1) throw new Error("Temporary apply failure");
+      return {
+        ...settings,
+        configuration: {
+          status: "applied" as const,
+          revision: 1,
+          pendingRestart: [],
+        },
+      };
+    };
+    const harness = await mountSettings("models", {
+      initialSettings: {
+        ...settings,
+        configuration: {
+          status: action === "Safe restart" ? "pending-restart" : "unconfirmed",
+          revision: 1,
+          pendingRestart: action === "Safe restart" ? ["maxToolRounds"] : [],
+        },
+      },
+      reconcile,
+      safeRestart: reconcile,
+    });
+    try {
+      await click(exactButtonRequired(action));
+      assert.match(
+        document.querySelector('[role="alert"]')?.textContent ?? "",
+        /Temporary apply failure/u,
+      );
+      await click(exactButtonRequired(action));
+      assert.equal(document.querySelector('[role="alert"]'), null);
+      assert.ok(document.querySelector(".settings-toast"));
+    } finally {
+      await unmount(harness);
+    }
+  });
+}
 
 test("Models lists every profile and keeps duplicate model IDs distinguishable and keyboard reachable", async () => {
   const harness = await mountSettings("models", {
@@ -242,11 +390,20 @@ test("Provider discovery starts text-only and manual overrides persist", async (
     await waitFor(() => labeledButton("Edit Alpha"));
     await click(labeledButtonRequired("Edit Alpha"));
     await click(exactButtonRequired("Get available models"));
+    const choice = await waitFor(() =>
+      document.querySelector<HTMLInputElement>(
+        'input[aria-label="Select alpha-vision"]',
+      ),
+    );
+    assert.equal(labelControl<HTMLInputElement>("Model 3", "input"), undefined);
+    assert.equal(choice.checked, false);
+    await click(choice);
+    await click(exactButtonRequired("Add selected models (1)"));
     await waitFor(() => labelControl<HTMLInputElement>("Model 3", "input"));
     assert.equal(requiredInput("Model 3").value, "alpha-vision");
     assert.match(
       document.body.textContent ?? "",
-      /text only · reasoning not configured · text · context required/u,
+      /no reasoning strength control · text · context required/u,
     );
     assert.equal(
       Array.from(labeledSelect("Default model")?.options ?? []).some(
@@ -272,7 +429,7 @@ test("Provider discovery starts text-only and manual overrides persist", async (
       "low, high",
     );
     await changeControl(
-      requiredInput("Model 3 default reasoning effort"),
+      labeledSelect("Model 3 default reasoning effort")!,
       "high",
     );
     await changeControl(modalities, "text-image");
@@ -287,6 +444,7 @@ test("Provider discovery starts text-only and manual overrides persist", async (
     );
     assert.deepEqual(configured, {
       ...discovered,
+      reasoningConfiguration: "manual",
       supportedReasoningEfforts: ["low", "high"],
       defaultReasoningEffort: "high",
       inputModalities: ["text", "image"],
@@ -413,7 +571,7 @@ test("Add custom provider submits an opaque identity, credential, and repeatable
   }
 });
 
-test("Add reconciles an applied provider when host restart rejects", async () => {
+test("Add displays the server unconfirmed result without inferring failure", async () => {
   let authoritative = settings;
   let calls = 0;
   const harness = await mountSettings("models", {
@@ -428,7 +586,14 @@ test("Add reconciles an applied provider when host restart rejects", async () =>
           providerProfiles: [...settings.profile.providerProfiles, provider],
         },
       };
-      throw new Error("host restart failed after add");
+      return {
+        ...authoritative,
+        configuration: {
+          status: "unconfirmed",
+          revision: 1,
+          pendingRestart: [],
+        },
+      };
     },
   });
   try {
@@ -456,8 +621,8 @@ test("Add reconciles an applied provider when host restart rejects", async () =>
       null,
     );
     assert.match(
-      document.querySelector('[role="alert"]')?.textContent ?? "",
-      /host restart failed after add/u,
+      document.body.textContent ?? "",
+      /application not yet confirmed/u,
     );
     assert.doesNotMatch(
       document.body.textContent ?? "",
@@ -671,7 +836,7 @@ test("Edit keeps a blank saved credential and replaces only the edited profile k
   }
 });
 
-test("Edit reconciles an applied provider when host restart rejects", async () => {
+test("Edit displays the server unconfirmed result without inferring failure", async () => {
   let authoritative = multiProviderSettings;
   let calls = 0;
   const harness = await mountSettings("models", {
@@ -689,7 +854,14 @@ test("Edit reconciles an applied provider when host restart rejects", async () =
           ),
         },
       };
-      throw new Error("host restart failed after edit");
+      return {
+        ...authoritative,
+        configuration: {
+          status: "unconfirmed",
+          revision: 1,
+          pendingRestart: [],
+        },
+      };
     },
   });
   try {
@@ -703,8 +875,8 @@ test("Edit reconciles an applied provider when host restart rejects", async () =
     );
     assert.equal(document.querySelector('[aria-label="Edit Alpha"]'), null);
     assert.match(
-      document.querySelector('[role="alert"]')?.textContent ?? "",
-      /host restart failed after edit/u,
+      document.body.textContent ?? "",
+      /application not yet confirmed/u,
     );
   } finally {
     await unmount(harness);
@@ -759,6 +931,7 @@ test("Delete submits required default and title replacements atomically without 
     assert.deepEqual(deletion, {
       id: "profile-alpha",
       replacements: {
+        baseRevision: 0,
         defaultModel: {
           providerProfileId: "profile-beta",
           modelId: "shared-model",
@@ -804,14 +977,14 @@ test("Delete removes an unreferenced Provider without replacement selections", a
     await waitFor(() => deletion);
     assert.deepEqual(deletion, {
       id: "profile-local",
-      replacements: undefined,
+      replacements: { baseRevision: 0 },
     });
   } finally {
     await unmount(harness);
   }
 });
 
-test("Delete reports a generic finalization failure after its mutation committed", async () => {
+test("Delete displays a saved but unconfirmed server result", async () => {
   let authoritative = multiProviderSettings;
   let calls = 0;
   const harness = await mountSettings("models", {
@@ -829,7 +1002,14 @@ test("Delete reports a generic finalization failure after its mutation committed
             ),
         },
       };
-      throw new Error("subscription credential cleanup failed after delete");
+      return {
+        ...authoritative,
+        configuration: {
+          status: "unconfirmed",
+          revision: 1,
+          pendingRestart: [],
+        },
+      };
     },
   });
   try {
@@ -844,12 +1024,12 @@ test("Delete reports a generic finalization failure after its mutation committed
       null,
     );
     assert.match(
-      document.querySelector('[role="alert"]')?.textContent ?? "",
-      /subscription credential cleanup failed after delete/u,
+      document.body.textContent ?? "",
+      /application not yet confirmed/u,
     );
     assert.match(
       document.body.textContent ?? "",
-      /saved, but finalization failed/u,
+      /application not yet confirmed/u,
     );
     assert.doesNotMatch(
       document.body.textContent ?? "",
@@ -909,7 +1089,7 @@ test("Validation and mutation failures keep the provider editor recoverable", as
     assert.equal(requiredInput("Display name").value, "Recoverable");
     await click(exactButtonRequired("Add provider"));
     await waitFor(() => attempts === 2);
-    assert.match(document.body.textContent ?? "", /Provider added/u);
+    assert.match(document.body.textContent ?? "", /Settings saved/u);
   } finally {
     await unmount(harness);
   }
@@ -988,7 +1168,7 @@ test("Appearance is an independent Settings section and persists the complete pr
     assert.equal(system.checked, false);
     assert.equal(dark.checked, false);
     assert.equal(saved.length, 0);
-    assert.equal(exactButton("Apply & restart"), undefined);
+    assert.equal(exactButton("Apply"), undefined);
 
     const cobaltLight = appearanceChoice("light-preset", "cobalt");
     const emberDark = appearanceChoice("dark-preset", "ember");
@@ -1077,6 +1257,7 @@ test("every Settings tab remains keyboard reachable after narrow-screen reflow",
         "Plugins",
         "Appearance",
         "General",
+        "Context compaction",
         "Archived threads",
       ],
     );
@@ -1095,10 +1276,10 @@ test("every Settings tab remains keyboard reachable after narrow-screen reflow",
       document.activeElement?.textContent?.trim(),
       "Archived threads",
     );
-    assert.equal(tabs[5]?.getAttribute("aria-selected"), "true");
+    assert.equal(tabs.at(-1)?.getAttribute("aria-selected"), "true");
 
     await act(async () => {
-      tabs[5]?.dispatchEvent(
+      tabs.at(-1)?.dispatchEvent(
         new harness.dom.window.KeyboardEvent("keydown", {
           bubbles: true,
           key: "Home",
@@ -1142,11 +1323,11 @@ test("General exposes an optional maximum tool round setting", async () => {
       document.getElementById("max-tool-rounds-error")?.textContent ?? "",
       /whole number of 1 or more/u,
     );
-    assert.equal(exactButtonRequired("Apply & restart").disabled, true);
+    assert.equal(exactButtonRequired("Apply").disabled, true);
 
     await changeControl(maximum, "12");
     assert.equal(maximum.hasAttribute("aria-invalid"), false);
-    const apply = exactButtonRequired("Apply & restart");
+    const apply = exactButtonRequired("Apply");
     assert.equal(apply.disabled, false);
     await click(apply);
 
@@ -1187,7 +1368,7 @@ test("General exposes and saves the Host-owned tool presentation mode", async ()
     );
 
     await changeControl(presentation, "direct");
-    await click(exactButtonRequired("Apply & restart"));
+    await click(exactButtonRequired("Apply"));
     assert.equal(saved[0]?.toolPresentation, "direct");
   } finally {
     await unmount(harness);
@@ -1220,11 +1401,11 @@ test("General requires an explicit risk-labeled opt-in for foreground computer t
 
     await click(control);
     assert.equal(control.getAttribute("aria-checked"), "true");
-    await click(exactButtonRequired("Apply & restart"));
+    await click(exactButtonRequired("Apply"));
     assert.equal(saved[0]?.computerForegroundControlEnabled, true);
 
     await click(control);
-    await click(exactButtonRequired("Apply & restart"));
+    await click(exactButtonRequired("Apply"));
     assert.equal(saved[1]?.computerForegroundControlEnabled, false);
   } finally {
     await unmount(harness);
@@ -1242,6 +1423,8 @@ async function mountSettings(
   options: {
     nativeBackdrop?: boolean;
     initialSettings?: PublicHostSettings;
+    reconcile?(): Promise<PublicHostSettings>;
+    safeRestart?(): Promise<PublicHostSettings>;
     get?(): Promise<PublicHostSettings>;
     save?(
       profile: ZenXSettingsUpdate,
@@ -1303,6 +1486,8 @@ async function mountSettings(
     nativeBackdrop: options.nativeBackdrop ?? true,
     settings: {
       get: options.get ?? (async () => initialSettings),
+      reconcile: options.reconcile,
+      safeRestart: options.safeRestart,
       save:
         options.save ??
         (async (profile: ZenXSettingsUpdate) => ({
@@ -1406,10 +1591,9 @@ function labeledButtonRequired(label: string): HTMLButtonElement {
   return button;
 }
 
-function labelControl<T extends HTMLInputElement | HTMLSelectElement>(
-  label: string,
-  selector: string,
-): T | undefined {
+function labelControl<
+  T extends HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement,
+>(label: string, selector: string): T | undefined {
   return (
     Array.from(document.querySelectorAll<HTMLLabelElement>("label"))
       .find(
@@ -1430,7 +1614,7 @@ function labeledSelect(label: string): HTMLSelectElement | undefined {
   return labelControl<HTMLSelectElement>(label, "select");
 }
 
-async function click(button: HTMLButtonElement): Promise<void> {
+async function click(button: HTMLElement): Promise<void> {
   await act(async () => {
     button.click();
     await Promise.resolve();
@@ -1438,7 +1622,7 @@ async function click(button: HTMLButtonElement): Promise<void> {
 }
 
 async function changeControl(
-  control: HTMLInputElement | HTMLSelectElement,
+  control: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement,
   value: string,
 ): Promise<void> {
   await act(async () => {
@@ -1505,4 +1689,367 @@ function archivedSummary(): NativeThreadSummary {
     preview: "",
     status: "idle",
   };
+}
+
+test("discovery selection preserves edits, supports search and cancel, and adds only selected models", async () => {
+  let saves = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: multiProviderSettings,
+    discoverProvider: async () => ({
+      providerProfileId: "profile-alpha",
+      models: [
+        ...multiProviderSettings.profile.providerProfiles[0]!.models,
+        model("candidate-a"),
+        model("candidate-b"),
+      ],
+    }),
+    editProvider: async () => {
+      saves += 1;
+      return multiProviderSettings;
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await changeControl(requiredInput("Model 2"), "unsaved-local-model");
+    await click(exactButtonRequired("Get available models"));
+    await waitFor(() =>
+      document.querySelector('[aria-label="Available models"]'),
+    );
+    assert.equal(requiredInput("Model 2").value, "unsaved-local-model");
+    assert.equal(exactButtonRequired("Add selected models (0)").disabled, true);
+    assert.equal(
+      document.querySelector<HTMLInputElement>(
+        'input[aria-label="Select shared-model"]',
+      )?.disabled,
+      true,
+    );
+    await click(exactButtonRequired("Cancel selection"));
+    assert.equal(labelControl("Model 3", "input"), undefined);
+    assert.equal(requiredInput("Model 2").value, "unsaved-local-model");
+    await click(exactButtonRequired("Get available models"));
+    await waitFor(() =>
+      document.querySelector('[aria-label="Available models"]'),
+    );
+    await changeControl(
+      requiredInput("Search available models"),
+      "candidate-b",
+    );
+    assert.equal(
+      document.querySelector('input[aria-label="Select candidate-a"]'),
+      null,
+    );
+    const candidate = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Select candidate-b"]',
+    );
+    assert.ok(candidate);
+    await click(candidate);
+    await click(exactButtonRequired("Add selected models (1)"));
+    assert.equal(requiredInput("Model 3").value, "candidate-b");
+    assert.equal(labelControl("Model 4", "input"), undefined);
+    assert.equal(requiredInput("Model 2").value, "unsaved-local-model");
+    assert.equal(saves, 0);
+    await click(exactButtonRequired("Cancel"));
+    assert.equal(saves, 0);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Context compaction has a dedicated tab and saves selectable retention and prompt", async () => {
+  let saved: ZenXSettingsUpdate | undefined;
+  const harness = await mountSettings("compaction", {
+    save: async (update) => {
+      saved = update;
+      return { ...settings, profile: { ...settings.profile, ...update } };
+    },
+  });
+  try {
+    await waitFor(() => labeledSelect("Retention mode"));
+    await changeControl(labeledSelect("Retention mode")!, "recent-items");
+    await click(exactButtonRequired("Last 10 items"));
+    await click(
+      document.querySelector<HTMLInputElement>(
+        'input[aria-label="Preserve all user messages"]',
+      )!,
+    );
+    await changeControl(labeledSelect("Agent final messages")!, "recent");
+    await changeControl(requiredInput("Number of final messages"), "7");
+    await changeControl(requiredInput("Compaction trigger (%)"), "85");
+    await changeControl(requiredInput("Post-compaction budget (%)"), "60");
+    const prompt = labelControl<HTMLTextAreaElement>(
+      "Compaction prompt",
+      "textarea",
+    );
+    assert.ok(prompt);
+    await changeControl(
+      prompt,
+      "Preserve user goals and exact decisions. Return only a summary.",
+    );
+    await click(exactButtonRequired("Apply"));
+    await waitFor(() => saved);
+    assert.deepEqual(saved?.contextCompaction, {
+      triggerPercent: 85,
+      targetPercent: 60,
+      retention: {
+        mode: "recent-items",
+        recentItemCount: 10,
+        preserveUserMessages: true,
+        finalMessages: "recent",
+        finalMessageCount: 7,
+      },
+      summaryInstruction:
+        "Preserve user goals and exact decisions. Return only a summary.",
+    });
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Compaction rejects invalid budgets and supports selected-only retention and restoring defaults", async () => {
+  let saves = 0;
+  const harness = await mountSettings("compaction", {
+    save: async (update) => {
+      saves += 1;
+      return { ...settings, profile: { ...settings.profile, ...update } };
+    },
+  });
+  try {
+    await waitFor(() => labeledSelect("Retention mode"));
+    await changeControl(requiredInput("Post-compaction budget (%)"), "95");
+    assert.equal(exactButtonRequired("Apply").disabled, true);
+    assert.ok(document.querySelector('[role="alert"]'));
+    assert.equal(saves, 0);
+    await changeControl(requiredInput("Post-compaction budget (%)"), "50");
+    await changeControl(labeledSelect("Retention mode")!, "selected-items");
+    assert.equal(labelControl("Number of recent items", "input"), undefined);
+    await changeControl(labeledSelect("Agent final messages")!, "all");
+    assert.equal(labelControl("Number of final messages", "input"), undefined);
+    const prompt = labelControl<HTMLTextAreaElement>(
+      "Compaction prompt",
+      "textarea",
+    )!;
+    const defaultPrompt = prompt.value;
+    await changeControl(prompt, "custom");
+    await click(exactButtonRequired("Restore default prompt"));
+    assert.equal(
+      labelControl<HTMLTextAreaElement>("Compaction prompt", "textarea")!.value,
+      defaultPrompt,
+    );
+    assert.equal(labeledSelect("Retention mode")?.value, "selected-items");
+    await click(exactButtonRequired("Reset all compaction settings"));
+    assert.equal(labeledSelect("Retention mode")?.value, "budget");
+    assert.equal(requiredInput("Post-compaction budget (%)").value, "80");
+    assert.equal(saves, 0);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Agentic compaction is opt-in, saves alongside automatic settings, and resets off", async () => {
+  let saved: ZenXSettingsUpdate | undefined;
+  const harness = await mountSettings("compaction", {
+    save: async (update) => {
+      saved = update;
+      return { ...settings, profile: { ...settings.profile, ...update } };
+    },
+  });
+  try {
+    await waitFor(() => labeledSelect("Retention mode"));
+    const toggle = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Enable Agentic compaction (experimental)"]',
+    );
+    assert.ok(toggle, "the experimental feature has a labeled opt-in control");
+    assert.equal(toggle.checked, false);
+    await click(toggle);
+    await changeControl(requiredInput("Compaction trigger (%)"), "85");
+    await click(exactButtonRequired("Apply"));
+    await waitFor(() => saved);
+    assert.deepEqual(saved?.contextCompaction, {
+      agenticEnabled: true,
+      triggerPercent: 85,
+    });
+    await click(exactButtonRequired("Reset all compaction settings"));
+    assert.equal(toggle.checked, false);
+    await click(exactButtonRequired("Apply"));
+    await waitFor(() => saved?.contextCompaction === undefined);
+    assert.equal(saved?.contextCompaction, undefined);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("manual reasoning fills real defaults, preserves custom values across modes and rejects empty drafts", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.providerProfiles[0]!.models[0]!.supportedReasoningEfforts =
+    [];
+  initial.profile.providerProfiles[0]!.models[0]!.defaultReasoningEffort = null;
+  let saved: ZenXProviderProfile | undefined;
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    editProvider: async (_id, provider) => {
+      saved = provider;
+      return initial;
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await changeControl(
+      labeledSelect("Model 1 reasoning metadata")!,
+      "configured",
+    );
+    assert.equal(
+      requiredInput("Model 1 reasoning efforts").value,
+      "low, medium, high",
+    );
+    assert.equal(
+      labeledSelect("Model 1 default reasoning effort")!.value,
+      "medium",
+    );
+    await changeControl(
+      requiredInput("Model 1 reasoning efforts"),
+      "minimal, deep",
+    );
+    await changeControl(
+      labeledSelect("Model 1 default reasoning effort")!,
+      "deep",
+    );
+    await changeControl(
+      labeledSelect("Model 1 reasoning metadata")!,
+      "unknown",
+    );
+    await changeControl(
+      labeledSelect("Model 1 reasoning metadata")!,
+      "configured",
+    );
+    assert.equal(
+      requiredInput("Model 1 reasoning efforts").value,
+      "minimal, deep",
+    );
+    assert.equal(
+      labeledSelect("Model 1 default reasoning effort")!.value,
+      "deep",
+    );
+    await changeControl(requiredInput("Model 1 reasoning efforts"), "");
+    await click(exactButtonRequired("Save provider"));
+    assert.equal(saved, undefined);
+    assert.match(
+      document.body.textContent ?? "",
+      /requires supported efforts and a valid default/,
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("subscription discovery refreshes existing model metadata in the saved draft and preserves manual overrides", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.providerProfiles[0] = {
+    providerProfileId: "profile-alpha",
+    type: "openai-subscription",
+    displayName: "Alpha",
+    models: [
+      model("shared-model"),
+      { ...model("alpha-only"), source: "manual" },
+    ],
+  };
+  const official = {
+    ...model("shared-model"),
+    contextWindow: 300_000,
+    source: "discovered" as const,
+  };
+  let edited: ZenXProviderProfile | undefined;
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    discoverProvider: async () => ({
+      providerProfileId: "profile-alpha",
+      source: "remote",
+      models: [official, { ...official, id: "alpha-only" }],
+    }),
+    editProvider: async (_id, provider) => {
+      edited = provider;
+      return initial;
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Get available models"));
+    await click(exactButtonRequired("Save provider"));
+    assert.equal(edited?.models[0]?.contextWindow, 300_000);
+    assert.equal(edited?.models[0]?.source, "discovered");
+    assert.equal(edited?.models[1]?.contextWindow, 32_768);
+    assert.equal(edited?.models[1]?.source, "manual");
+  } finally {
+    await unmount(harness);
+  }
+});
+
+for (const completeAfterNavigation of [false, true]) {
+  test(`Plugin feedback coordinates parent errors; departed completion=${completeAfterNavigation}`, async () => {
+    const harness = await mountSettings("models", {
+      save: async () => {
+        throw new Error("model save failed");
+      },
+    });
+    try {
+      const control = labeledSelect("Default model")!;
+      await changeControl(control, control.options[1]!.value);
+      await click(exactButtonRequired("Apply"));
+      const empty = {
+        plugins: [],
+        bundles: [],
+        surfaces: [],
+        sidebar: [],
+        pages: [],
+        subroutes: [],
+        settings: [],
+        panels: [],
+        commands: [],
+        menus: [],
+        resultRenderers: [],
+      };
+      const result = {
+        canceled: false,
+        snapshot: empty,
+        capabilityRefresh: { status: "applied" },
+      };
+      let finish!: (value: typeof result) => void;
+      Object.assign(window.zenx, {
+        marketplace: { get: async () => ({ entries: [] }) },
+        plugins: {
+          get: async () => empty,
+          onChange: () => () => {},
+          selectTarball: () =>
+            completeAfterNavigation
+              ? new Promise((resolve) => {
+                  finish = resolve;
+                })
+              : Promise.resolve(result),
+        },
+      });
+      await click(exactButtonRequired("Plugins"));
+      await click(exactButtonRequired("Install from source…"));
+      await click(exactButtonRequired("Choose tarball…"));
+      if (completeAfterNavigation) {
+        await click(exactButtonRequired("Models & provider"));
+        await click(exactButtonRequired("Apply"));
+        await act(async () => finish(result));
+        assert.match(
+          document.querySelector('[role="alert"]')?.textContent ?? "",
+          /model save failed/,
+        );
+        assert.equal(document.querySelector(".settings-toast"), null);
+      } else {
+        assert.match(
+          document.querySelector(".settings-toast")?.textContent ?? "",
+          /installed and enabled/,
+        );
+        assert.equal(document.querySelector('[role="alert"]'), null);
+      }
+    } finally {
+      await unmount(harness);
+    }
+  });
 }

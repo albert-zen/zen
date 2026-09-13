@@ -1,3 +1,6 @@
+import type { WorkspaceInstructionFile } from "./item.js";
+import { deduplicateMediaContent } from "./model-content.js";
+import { TOOL_TASK_CONTENT_TYPE } from "./tool-task.js";
 import {
   contentFromUserMessage,
   textFromUserInput,
@@ -7,6 +10,8 @@ import {
 } from "./item.js";
 import {
   CONTEXT_COMPACTION_SUMMARY_PREFIX,
+  isAgenticContextCompaction,
+  itemsAfterLatestAgenticCompaction,
   latestCompaction,
 } from "./context-compaction.js";
 
@@ -35,6 +40,7 @@ export interface ToolResultModelMessage {
   callId: string;
   text: string;
   exitCode: number;
+  modelContent?: UserInput;
 }
 
 export interface ReasoningModelMessage {
@@ -69,6 +75,8 @@ export interface ModelRequest {
 }
 
 export interface ModelTool {
+  /** Optional source-language presentation; canonical arguments remain JSON. */
+  rawSource?: { language: "javascript"; argument: "code" };
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
@@ -119,6 +127,43 @@ export interface ModelAdapter {
 export function compileModelMessages(
   items: readonly CanonicalItem[],
   targetSelection?: CanonicalProviderSelection,
+  workspaceInstructions?: readonly WorkspaceInstructionFile[],
+): ModelMessage[] {
+  const snapshot = items.findLast(
+    (item) =>
+      (item.type === "turn_started" || item.type === "context_compaction") &&
+      item.workspaceInstructions !== undefined,
+  );
+  const files =
+    workspaceInstructions ??
+    (snapshot?.type === "turn_started" ||
+    snapshot?.type === "context_compaction"
+      ? snapshot.workspaceInstructions
+      : undefined);
+  return [
+    ...compileWorkspaceInstructionMessages(files),
+    ...compileConversationMessages(items, targetSelection),
+  ];
+}
+
+export function compileWorkspaceInstructionMessages(
+  files: readonly WorkspaceInstructionFile[] | undefined,
+): ModelMessage[] {
+  if (files === undefined || files.length === 0) return [];
+  return [
+    {
+      role: "user",
+      text: [
+        "Repository instructions loaded at the first message or after the latest context compaction. Direct user requests take precedence. Source paths identify the files read.",
+        ...files.map((file) => `AGENTS.md source: ${file.path}\n${file.text}`),
+      ].join("\n\n"),
+    },
+  ];
+}
+
+function compileConversationMessages(
+  items: readonly CanonicalItem[],
+  targetSelection?: CanonicalProviderSelection,
 ): ModelMessage[] {
   const turnSelections = new Map<string, CanonicalProviderSelection>();
   for (const item of items) {
@@ -150,14 +195,36 @@ export function compileModelMessages(
     }
     return item;
   });
+  const afterBoundary = isAgenticContextCompaction(compaction)
+    ? itemsAfterLatestAgenticCompaction(items)
+    : items.slice(boundaryIndex + 1);
+  const policyItem = items
+    .slice(0, boundaryIndex + 1)
+    .findLast(
+      (item) =>
+        item.type === "thread_metadata" ||
+        (item.type === "thread_configuration_changed" && "permissions" in item),
+    );
+  const policy =
+    policyItem?.type === "thread_metadata"
+      ? policyItem.sandbox
+      : policyItem?.type === "thread_configuration_changed" &&
+          "permissions" in policyItem
+        ? policyItem.permissions.to.sandbox
+        : undefined;
   return [
     ...compileCanonicalModelMessages(retained, targetSelection, turnSelections),
     {
       role: "user",
       text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${compaction.summary}`,
     },
+    ...(policy !== undefined &&
+    (policy !== "danger-full-access" ||
+      policyItem?.type === "thread_configuration_changed")
+      ? [{ role: "user" as const, text: filePermissionContext(policy) }]
+      : []),
     ...compileCanonicalModelMessages(
-      items.slice(boundaryIndex + 1),
+      afterBoundary,
       targetSelection,
       turnSelections,
     ),
@@ -239,9 +306,13 @@ function compileCanonicalModelMessages(
           callId: item.callId,
           text: item.output,
           exitCode: item.exitCode,
+          ...(item.modelContent === undefined
+            ? {}
+            : { modelContent: item.modelContent }),
         });
         break;
       case "reasoning": {
+        if (item.incomplete === true) break;
         const producingSelection = turnSelections.get(item.turnId);
         if (
           targetSelection !== undefined &&
@@ -270,12 +341,25 @@ function compileCanonicalModelMessages(
           text: `[failure: ${item.message}]`,
         });
         break;
+      case "thread_metadata":
+        if (item.sandbox !== "danger-full-access")
+          messages.push({
+            role: "user",
+            text: filePermissionContext(item.sandbox),
+          });
+        break;
+      case "thread_configuration_changed":
+        if ("permissions" in item)
+          messages.push({
+            role: "user",
+            text: filePermissionContext(item.permissions.to.sandbox),
+          });
+        break;
       case "context_compaction":
       case "model_usage":
-      case "thread_configuration_changed":
-      case "thread_metadata":
       case "turn_aborted":
       case "turn_completed":
+      case "user_message_queued":
       case "turn_replacement_requested":
       case "turn_started":
         break;
@@ -287,18 +371,102 @@ function compileCanonicalModelMessages(
 function withoutNestedToolLifecycle(
   items: readonly CanonicalItem[],
 ): readonly CanonicalItem[] {
-  const nestedCalls = new Set<string>();
+  const nestedCalls = new Map<string, string>();
   for (const item of items) {
     if (item.type === "tool_call" && item.parentCallId !== undefined) {
-      nestedCalls.add(`${item.turnId}\0${item.callId}`);
+      nestedCalls.set(
+        `${item.turnId}\0${item.callId}`,
+        `${item.turnId}\0${item.parentCallId}`,
+      );
     }
   }
   if (nestedCalls.size === 0) return items;
-  return items.filter((item) => {
-    if (item.type === "tool_call") return item.parentCallId === undefined;
-    if (item.type !== "tool_result") return true;
-    return !nestedCalls.has(`${item.turnId}\0${item.callId}`);
-  });
+  // A yielded program can explicitly emit a child's media on a later wait.
+  // Do not also lift that same media back into its original parent receipt.
+  const explicitMedia = new Set<string>();
+  for (const item of items) {
+    if (
+      item.type !== "tool_result" ||
+      nestedCalls.has(`${item.turnId}\0${item.callId}`)
+    )
+      continue;
+    for (const part of item.modelContent ?? []) {
+      if (part.type !== "text")
+        explicitMedia.add(
+          `${item.turnId}\0${part.type}\0${part.attachment.sha256}`,
+        );
+    }
+  }
+  const modelContentByParent = new Map<string, UserInput>();
+  for (const item of items) {
+    if (item.type !== "tool_result") continue;
+    let parent = nestedCalls.get(`${item.turnId}\0${item.callId}`);
+    if (parent === undefined) continue;
+    let content = item.modelContent ?? [];
+    const state = item.structuredContent;
+    if (
+      item.contentType === TOOL_TASK_CONTENT_TYPE &&
+      state !== null &&
+      typeof state === "object" &&
+      !Array.isArray(state) &&
+      "status" in state &&
+      ["running", "cancel_requested", "cancellation_unconfirmed"].includes(
+        String(state.status),
+      )
+    ) {
+      // A cancelled program cannot explicitly forward a still-live child's
+      // receipt. Keep its output and wait handle visible to the next sample.
+      content = [
+        ...content,
+        {
+          type: "text",
+          text: `Nested tool ${item.callId} remains observable:\n${item.output}`,
+        },
+      ];
+    }
+    if (content.length === 0) continue;
+    const ancestors = new Set<string>();
+    while (nestedCalls.has(parent) && !ancestors.has(parent)) {
+      ancestors.add(parent);
+      parent = nestedCalls.get(parent)!;
+    }
+    modelContentByParent.set(parent, [
+      ...(modelContentByParent.get(parent) ?? []),
+      ...content.filter(
+        (part) =>
+          part.type === "text" ||
+          !explicitMedia.has(
+            `${item.turnId}\0${part.type}\0${part.attachment.sha256}`,
+          ),
+      ),
+    ]);
+  }
+  const projected: CanonicalItem[] = [];
+  for (const item of items) {
+    if (item.type === "tool_call") {
+      if (item.parentCallId === undefined) projected.push(item);
+      continue;
+    }
+    if (item.type !== "tool_result") {
+      projected.push(item);
+      continue;
+    }
+    const key = `${item.turnId}\0${item.callId}`;
+    if (nestedCalls.has(key)) continue;
+    const nestedContent = modelContentByParent.get(key);
+    projected.push(
+      nestedContent === undefined
+        ? item
+        : {
+            ...item,
+            modelContent: deduplicateMediaContent([
+              ...(item.modelContent ?? []),
+              ...nestedContent,
+            ]),
+          },
+    );
+  }
+  return projected;
 }
 
 /**
@@ -505,4 +673,12 @@ async function* streamWords(
     yield { type: "text_delta", delta: part };
     await Promise.resolve();
   }
+}
+
+function filePermissionContext(
+  sandbox: import("./item.js").SandboxMode,
+): string {
+  if (sandbox === "danger-full-access")
+    return "File permission mode: Full Access. File operations may run without approval.";
+  return `File permission mode: ${sandbox === "read-only" ? "Read Only: no automatic file writes" : "Workspace Write: write only within the thread working directory"}. Shell enforces the file policy; apply_patch rejects disallowed paths. Use shell sandbox_permissions: require_escalated to request one-time approval when broader file access is needed. run_code and plugin tools require one-time approval because their execution is not file-sandboxed. Network access is unchanged.`;
 }

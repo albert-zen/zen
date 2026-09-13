@@ -3,10 +3,15 @@ import type { MarketplaceBuiltInEntry } from "../marketplace.js";
 import type { ZenXTrustedProfilePluginLoader } from "./plugin-profile.js";
 
 export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
+  imzenx: {
+    pluginId: "imzenx",
+    packageName: "@zenx/imzenx-plugin",
+    tarball: "zenx-imzenx-plugin-1.0.0.tgz",
+  },
   browser: {
     pluginId: "browser",
     packageName: "@zenx/browser-plugin",
-    tarball: "zenx-browser-plugin-electron-1.0.0.tgz",
+    tarball: "zenx-browser-plugin-electron-1.0.1.tgz",
   },
   computer: {
     pluginId: "computer",
@@ -26,6 +31,14 @@ export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
 });
 
 export const FIRST_PARTY_MARKETPLACE_ENTRIES = Object.freeze([
+  {
+    pluginId: "imzenx",
+    packageName: FIRST_PARTY_PLUGIN_PACKAGES.imzenx.packageName,
+    name: "IMZenX",
+    description:
+      "Connect IM conversations to your local ZenX Agent with shared Thread subscriptions.",
+    icon: "users",
+  },
   {
     pluginId: "browser",
     packageName: FIRST_PARTY_PLUGIN_PACKAGES.browser.packageName,
@@ -75,11 +88,11 @@ export function firstPartyProviderTarball(
 ): string {
   if (pluginId === "browser") {
     if (providerId === "electron-dedicated-browser")
-      return "zenx-browser-plugin-electron-1.0.0.tgz";
+      return "zenx-browser-plugin-electron-1.0.1.tgz";
     if (providerId === "playwright-cli")
-      return "zenx-browser-plugin-playwright-1.0.0.tgz";
+      return "zenx-browser-plugin-playwright-1.0.1.tgz";
     if (providerId === "user-browser-cdp")
-      return "zenx-browser-plugin-user-session-1.0.0.tgz";
+      return "zenx-browser-plugin-user-session-1.0.1.tgz";
   }
   if (pluginId === "computer") {
     if (providerId === "macos-desktop")

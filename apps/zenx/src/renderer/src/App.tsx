@@ -1,4 +1,7 @@
+import { BrowserThreadPanel } from "./browser-thread-panel.js";
+import type { FilePermissionMode } from "../../protocol-client/types.js";
 import {
+  default as React,
   useCallback,
   useEffect,
   useId,
@@ -9,6 +12,7 @@ import {
 } from "react";
 
 import type { AttachmentRef } from "../../../../../src/attachment.js";
+import type { EffectiveThreadConfiguration } from "../../../../../src/thread.js";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
 import type {
@@ -35,7 +39,10 @@ import type {
   ServerNotificationParams,
   Thread,
 } from "../../protocol-client/index.js";
-import { decodeModelKey } from "../../../../../src/protocol/codex/model-key.js";
+import {
+  decodeModelKey,
+  encodeModelKey,
+} from "../../../../../src/protocol/codex/model-key.js";
 import {
   addApprovalRequest,
   markApprovalResponding,
@@ -59,12 +66,15 @@ import {
   type ComposerSubmission,
 } from "./composer-state.js";
 import { Icon } from "./icons.js";
+import { ProjectEditor } from "./ProjectEditor.js";
 import { DirectoryPicker } from "./DirectoryPicker.js";
 import {
   applySettingsMirror,
   canSendWithModel,
+  hasValidReasoningSelection,
   canChangeThreadModel,
   modelChangeRequest,
+  permissionModeFromPolicy,
   imageCapabilityMessage,
   imageCapabilityNotice,
   reasoningChangeRequest,
@@ -92,7 +102,12 @@ import {
   writeSidebarMode,
   type SidebarMode,
 } from "./thread-list.js";
-import { applyThreadViewNotification } from "./thread-view-state.js";
+import {
+  applyNativeThreadEvent,
+  applyThreadViewNotification,
+  markThreadViewAwaitingRecovery,
+  projectNativeRecovery,
+} from "./thread-view-state.js";
 import { ThreadView } from "./ThreadView.js";
 import { ZenXBrand } from "./ZenXBrand.js";
 
@@ -101,6 +116,7 @@ const MODEL_CATALOG_LOADING = "Models are still loading. Try again.";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "zenx.sidebar-collapsed";
 
 interface NewThreadDraft {
+  permissionMode?: FilePermissionMode;
   id: string;
   workspace: string | null;
   composer: ComposerState;
@@ -118,21 +134,56 @@ interface ThreadProjectionCacheEntry {
   thread: Thread;
   settings: SelectedThreadSettings;
   activeTurnNotifications: BufferedProtocolNotification[];
+  processEpoch: string | null;
+  watermark: number;
 }
 
 function replayThreadProjection(
   thread: Thread,
   settings: SelectedThreadSettings,
   notifications: readonly BufferedProtocolNotification[],
+  recovery: { processEpoch: string | null; watermark: number } | null = null,
 ): ThreadProjectionCacheEntry {
   let projectedThread = thread;
   let projectedSettings = settings;
+  let processEpoch = recovery?.processEpoch ?? null;
+  let watermark = recovery?.watermark ?? 0;
+  const replayed: BufferedProtocolNotification[] = [];
   for (const notification of notifications) {
-    projectedThread = applyThreadViewNotification(
-      projectedThread,
-      notification.method,
-      notification.params,
-    );
+    if (notification.method === "zen/thread/event") {
+      const event = notification.params;
+      if (
+        (processEpoch !== null && event.processEpoch !== processEpoch) ||
+        event.watermark <= watermark
+      )
+        continue;
+      processEpoch = event.processEpoch;
+      watermark = event.watermark;
+    } else if (
+      processEpoch !== null &&
+      isLegacyTurnProjectionNotification(notification.method)
+    ) {
+      continue;
+    }
+    replayed.push(notification);
+    projectedThread =
+      notification.method === "zen/thread/event"
+        ? applyNativeThreadEvent(projectedThread, notification.params.event)
+        : applyThreadViewNotification(
+            projectedThread,
+            notification.method,
+            notification.params,
+          );
+    if (
+      notification.method === "zen/thread/event" &&
+      notification.params.event.type === "thread_settings_updated" &&
+      notification.params.event.threadId === projectedSettings.threadId
+    ) {
+      projectedSettings = settingsFromSnapshot(
+        projectedSettings.threadId,
+        nativeSettingsSnapshot(notification.params.event.settings),
+      );
+    }
     if (notification.method === "thread/settings/updated") {
       const event =
         notification.params as ServerNotificationParams["thread/settings/updated"];
@@ -147,7 +198,9 @@ function replayThreadProjection(
   return {
     thread: projectedThread,
     settings: projectedSettings,
-    activeTurnNotifications: activeTurnNotificationTail(notifications),
+    activeTurnNotifications: activeTurnNotificationTail(replayed),
+    processEpoch,
+    watermark,
   };
 }
 
@@ -162,6 +215,9 @@ function retainsActiveTurnNotification(
   method: ServerNotificationMethod,
 ): boolean {
   return (
+    method === "zen/thread/event" ||
+    method === "thread/queue/updated" ||
+    method === "thread/settings/updated" ||
     method === "turn/started" ||
     method === "item/started" ||
     method === "item/agentMessage/delta" ||
@@ -173,14 +229,76 @@ function retainsActiveTurnNotification(
   );
 }
 
+function isLegacyTurnProjectionNotification(
+  method: ServerNotificationMethod,
+): boolean {
+  return (
+    method === "turn/started" ||
+    method === "turn/completed" ||
+    method === "item/started" ||
+    method === "item/agentMessage/delta" ||
+    method === "item/reasoning/summaryPartAdded" ||
+    method === "item/reasoning/summaryTextDelta" ||
+    method === "item/reasoning/textDelta" ||
+    method === "item/commandExecution/outputDelta" ||
+    method === "item/completed"
+  );
+}
+
+function nativeSettingsSnapshot(
+  snapshot: EffectiveThreadConfiguration,
+): import("../../protocol-client/types.js").ThreadSettingsSnapshot {
+  return {
+    model: encodeModelKey(snapshot),
+    modelProvider: snapshot.providerProfileId,
+    serviceTier: null,
+    cwd: snapshot.cwd,
+    instructionSources: [],
+    approvalPolicy:
+      snapshot.approvalPolicy === "never" ? "never" : "on-request",
+    approvalsReviewer: "user",
+    sandbox:
+      snapshot.sandbox === "danger-full-access"
+        ? { type: "dangerFullAccess" }
+        : snapshot.sandbox === "read-only"
+          ? { type: "readOnly" }
+          : {
+              type: "workspaceWrite",
+              writableRoots: [],
+              networkAccess: false,
+              excludeTmpdirEnvVar: false,
+              excludeSlashTmp: false,
+            },
+    reasoningEffort: snapshot.reasoningEffort,
+  };
+}
+
 function activeTurnNotificationTail(
   notifications: readonly BufferedProtocolNotification[],
 ): BufferedProtocolNotification[] {
   const tail: BufferedProtocolNotification[] = [];
   for (const notification of notifications) {
-    if (notification.method === "turn/completed") {
-      tail.length = 0;
+    if (
+      notification.method === "turn/completed" ||
+      (notification.method === "zen/thread/event" &&
+        notification.params.event.type === "turn_completed")
+    ) {
+      const independent = tail.filter(
+        (entry) =>
+          entry.method === "thread/queue/updated" ||
+          entry.method === "thread/settings/updated",
+      );
+      tail.splice(0, tail.length, ...independent);
     } else if (retainsActiveTurnNotification(notification.method)) {
+      if (
+        notification.method === "thread/queue/updated" ||
+        notification.method === "thread/settings/updated"
+      ) {
+        const previous = tail.findIndex(
+          (entry) => entry.method === notification.method,
+        );
+        if (previous !== -1) tail.splice(previous, 1);
+      }
       tail.push(notification);
     }
   }
@@ -195,9 +313,29 @@ function updateThreadProjectionCache(
   if (threadId === null) return undefined;
   const current = cache.get(threadId);
   if (current === undefined) return undefined;
-  const updated = replayThreadProjection(current.thread, current.settings, [
-    notification,
-  ]);
+  if (
+    notification.method === "zen/thread/event" &&
+    (notification.params.processEpoch !== current.processEpoch ||
+      notification.params.watermark <= current.watermark)
+  )
+    return current;
+  if (
+    current.processEpoch !== null &&
+    isLegacyTurnProjectionNotification(notification.method)
+  )
+    return current;
+  const updated = replayThreadProjection(
+    current.thread,
+    current.settings,
+    [notification],
+    {
+      processEpoch: current.processEpoch,
+      watermark:
+        notification.method === "zen/thread/event"
+          ? notification.params.watermark - 1
+          : current.watermark,
+    },
+  );
   const activeTurnNotifications = activeTurnNotificationTail([
     ...current.activeTurnNotifications,
     notification,
@@ -239,6 +377,7 @@ export function App() {
   const threadUsageLoadEpoch = useRef(0);
   const threadSummaryLoadEpoch = useRef(0);
   const projectLoadEpoch = useRef(0);
+  const modelCatalogLoadEpoch = useRef(0);
   const projectsRef = useRef<ZenXProjectProjectionSnapshot>({
     projects: [],
     unavailableThreadIds: [],
@@ -250,6 +389,9 @@ export function App() {
   const pinnedThreadIdsRef = useRef<string[]>([]);
   const sidebarOrderRef = useRef<ZenXSidebarOrder>(EMPTY_SIDEBAR_ORDER);
   const profilePreferenceQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const [composerSendMode, setComposerSendMode] = useState<
+    "queue" | "soft" | "hard"
+  >("queue");
   const [page, setPage] = useState<ProductPage>("agent");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -261,8 +403,29 @@ export function App() {
       return false;
     }
   });
+  useEffect(() => {
+    let active = true;
+    void window.zenx.settings
+      .get()
+      .then((value) => {
+        if (active)
+          setComposerSendMode(value.profile.composerSendMode ?? "queue");
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [page]);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [browserPanels, setBrowserPanels] = useState<Record<string, boolean>>(
+    {},
+  );
+  const editingProjectFocusWorkspace = useRef<string | null>(null);
+  const [editingProject, setEditingProject] = useState<{
+    workspace: string;
+    name: string;
+  } | null>(null);
   const [projectPickerIntent, setProjectPickerIntent] = useState<
     "add-project" | "new-thread" | null
   >(null);
@@ -314,6 +477,8 @@ export function App() {
   const [selectedSettings, setSelectedSettings] =
     useState<SelectedThreadSettings | null>(null);
   const [switchingModel, setSwitchingModel] = useState(false);
+  const [switchingPermission, setSwitchingPermission] = useState(false);
+  const [permissionError, setPermissionError] = useState<string | null>(null);
   const [modelUpdateError, setModelUpdateError] = useState<string | null>(null);
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>(() => {
     try {
@@ -357,6 +522,7 @@ export function App() {
 
   const confirmSidebarOrder = (order: ZenXSidebarOrder) => {
     const confirmed = {
+      ...order,
       projectKeys: [...order.projectKeys],
       threadIdsByProject: Object.fromEntries(
         Object.entries(order.threadIdsByProject).map(
@@ -546,8 +712,7 @@ export function App() {
     discardRecoverableDraft();
     const epoch = ++selectionEpoch.current;
     const cached = threadProjectionCacheRef.current.get(threadId);
-    pendingResumeProjectionRef.current =
-      cached === undefined ? { epoch, threadId, notifications: [] } : null;
+    pendingResumeProjectionRef.current = { epoch, threadId, notifications: [] };
     confirmNewThreadDraft(null);
     const usageEpoch = ++threadUsageLoadEpoch.current;
     selectedThreadIdRef.current = threadId;
@@ -566,7 +731,7 @@ export function App() {
     setThreadError(null);
     void loadComposerCatalog();
     try {
-      const result = await window.zenx.protocol.request("thread/resume", {
+      const result = await window.zenx.protocol.request("zen/thread/resume", {
         threadId,
       });
       if (selectionEpoch.current !== epoch) return;
@@ -579,9 +744,13 @@ export function App() {
       if (pending?.epoch === epoch && pending.threadId === threadId)
         pendingResumeProjectionRef.current = null;
       const projected = replayThreadProjection(
-        result.thread,
-        settingsFromSnapshot(result.thread.id, result),
+        projectNativeRecovery(result),
+        settingsFromSnapshot(threadId, nativeSettingsSnapshot(result.thread)),
         notifications,
+        {
+          processEpoch: result.processEpoch,
+          watermark: result.watermark,
+        },
       );
       threadProjectionCacheRef.current.set(threadId, projected);
       setThreadDetail(projected.thread);
@@ -632,10 +801,12 @@ export function App() {
   };
 
   const loadComposerCatalog = async () => {
+    const epoch = ++modelCatalogLoadEpoch.current;
     const [result, settings] = await Promise.allSettled([
       window.zenx.protocol.request("model/list", {}),
       window.zenx.settings.get(),
     ]);
+    if (modelCatalogLoadEpoch.current !== epoch) return;
     if (settings.status === "fulfilled")
       setProviderProfiles(settings.value.profile.providerProfiles);
     try {
@@ -655,25 +826,25 @@ export function App() {
   useEffect(() => {
     let active = true;
     const loadModels = async () => {
+      const epoch = ++modelCatalogLoadEpoch.current;
       const [result, settings] = await Promise.allSettled([
         window.zenx.protocol.request("model/list", {}),
         window.zenx.settings.get(),
       ]);
-      if (active && settings.status === "fulfilled")
+      if (!active || modelCatalogLoadEpoch.current !== epoch) return;
+      if (settings.status === "fulfilled")
         setProviderProfiles(settings.value.profile.providerProfiles);
       try {
         if (settings.status === "rejected") throw settings.reason;
         if (result.status === "rejected") throw result.reason;
         validateModelCatalog(result.value.data);
-        if (active) {
-          setModels(result.value.data);
-          setModelCatalogError(null);
-          setModelUpdateError((current) =>
-            current === MODEL_CATALOG_LOADING ? null : current,
-          );
-        }
+        setModels(result.value.data);
+        setModelCatalogError(null);
+        setModelUpdateError((current) =>
+          current === MODEL_CATALOG_LOADING ? null : current,
+        );
       } catch (error) {
-        if (active) setModelCatalogError(describeError(error));
+        setModelCatalogError(describeError(error));
       }
     };
     const replaceApprovalSnapshot = async () => {
@@ -712,12 +883,36 @@ export function App() {
         if (status.reconnected && selectedThreadIdRef.current !== null) {
           void resumeThread(selectedThreadIdRef.current, true);
         }
+      } else if (status.type === "reconnecting") {
+        invalidateThreadSelection();
+        modelCatalogLoadEpoch.current += 1;
+        const selectedId = selectedThreadIdRef.current;
+        const selectedCache =
+          selectedId === null
+            ? undefined
+            : threadProjectionCacheRef.current.get(selectedId);
+        threadProjectionCacheRef.current.clear();
+        if (selectedId !== null) {
+          if (selectedCache !== undefined) {
+            const awaiting = {
+              ...selectedCache,
+              thread: markThreadViewAwaitingRecovery(selectedCache.thread),
+              activeTurnNotifications: [],
+            };
+            setThreadDetail(awaiting.thread);
+          }
+        }
       }
     });
     const disposeNotifications = window.zenx.protocol.onNotification(
       (method, params) => {
         if (!active) return;
+        if (method === "model/catalog/updated") {
+          void loadModels();
+          return;
+        }
         if (
+          method === "zen/thread/event" ||
           method.startsWith("thread/") ||
           method.startsWith("turn/") ||
           method === "item/completed"
@@ -748,6 +943,34 @@ export function App() {
           setThreadDetail(cached.thread);
           setSelectedSettings(cached.settings);
         }
+        if (method === "zen/thread/event") {
+          const projected =
+            params as ServerNotificationParams["zen/thread/event"];
+          if (
+            projected.event.type === "item_completed" ||
+            projected.event.type === "turn_completed"
+          ) {
+            if (selectedThreadIdRef.current === projected.threadId)
+              refreshThreadUsage(projected.threadId);
+          }
+          if (
+            projected.event.type === "item_completed" &&
+            projected.event.item.type === "user_message" &&
+            selectedThreadIdRef.current === projected.threadId
+          ) {
+            void window.zenx.imageAttachments
+              .forThread(projected.threadId)
+              .then((attachments) => {
+                if (selectedThreadIdRef.current === projected.threadId)
+                  setThreadAttachments(attachments);
+              })
+              .catch((error: unknown) =>
+                setRequestError(
+                  `Thread images could not be loaded: ${describeError(error)}`,
+                ),
+              );
+          }
+        }
         if (method === "item/completed" || method === "turn/completed") {
           const event = params as { threadId: string };
           if (selectedThreadIdRef.current === event.threadId)
@@ -756,7 +979,9 @@ export function App() {
         if (method === "item/completed") {
           const event = params as ServerNotificationParams["item/completed"];
           if (
-            event.item.type === "userMessage" &&
+            (event.item.type === "userMessage" ||
+              (event.item.type === "commandExecution" &&
+                event.item.toolName === "view_image")) &&
             selectedThreadIdRef.current === event.threadId
           ) {
             void window.zenx.imageAttachments
@@ -1045,6 +1270,14 @@ export function App() {
         input,
         clientUserMessageId: submission.clientUserMessageId,
       });
+    } else if (submission.intent === "queue") {
+      if (archivingThreadIdsRef.current.has(threadId))
+        throw new Error("This Thread is being archived.");
+      await window.zenx.protocol.request("turn/queue", {
+        threadId,
+        input,
+        clientUserMessageId: submission.clientUserMessageId,
+      });
     } else if (submission.intent === "steer") {
       if (submission.expectedTurnId === null)
         throw new Error("The active turn changed before steering");
@@ -1101,6 +1334,7 @@ export function App() {
       const capabilityError = imageCapabilityMessage(
         providerProfiles,
         draftSettings,
+        models,
       );
       if (capabilityError !== null) {
         setModelUpdateError(capabilityError);
@@ -1113,6 +1347,12 @@ export function App() {
     }
     if (!canSendWithModel(models, draftSettings.model)) {
       setModelUpdateError("Choose an available model before sending.");
+      return;
+    }
+    if (!hasValidReasoningSelection(models, draftSettings)) {
+      setModelUpdateError(
+        "Choose an available reasoning effort before sending.",
+      );
       return;
     }
     const startedComposer = beginComposerSubmission(
@@ -1136,6 +1376,7 @@ export function App() {
     try {
       await window.zenx.settings.addWorkspace(workspace);
       const result = await window.zenx.projects.startThread(workspace, {
+        sandbox: current.permissionMode ?? "danger-full-access",
         model: draftSettings.model,
         ...(draftSettings.reasoningEffort === null
           ? {}
@@ -1146,6 +1387,8 @@ export function App() {
         thread: result.thread,
         settings: settingsFromSnapshot(createdThreadId, result),
         activeTurnNotifications: [],
+        processEpoch: null,
+        watermark: 0,
       };
       threadProjectionCacheRef.current.set(createdThreadId, createdProjection);
       setOptimisticSummary(optimisticThreadSummary(result, submission.text));
@@ -1270,6 +1513,7 @@ export function App() {
       const capabilityError = imageCapabilityMessage(
         providerProfiles,
         selectedSettings,
+        models,
       );
       if (capabilityError !== null) {
         setModelUpdateError(capabilityError);
@@ -1291,6 +1535,16 @@ export function App() {
           providerProfiles,
           selectedSettings,
         ) ?? "Choose an available model before sending.",
+      );
+      return;
+    }
+    if (
+      intent !== "steer" &&
+      selectedSettings !== null &&
+      !hasValidReasoningSelection(models, selectedSettings)
+    ) {
+      setModelUpdateError(
+        "Choose an available reasoning effort before sending.",
       );
       return;
     }
@@ -1349,6 +1603,28 @@ export function App() {
     } catch (error) {
       setApprovals((current) => restoreApprovalPending(current, requestId));
       throw error;
+    }
+  };
+
+  useEffect(() => {
+    setPermissionError(null);
+  }, [selectedThreadId]);
+
+  const changePermission = async (sandbox: FilePermissionMode) => {
+    const threadId = threadDetail?.id;
+    if (!threadId) return;
+    setSwitchingPermission(true);
+    setPermissionError(null);
+    try {
+      await window.zenx.protocol.request("thread/permissions/update", {
+        threadId,
+        sandbox,
+      });
+    } catch (error) {
+      if (selectedThreadIdRef.current === threadId)
+        setPermissionError(describeError(error));
+    } finally {
+      setSwitchingPermission(false);
     }
   };
 
@@ -1604,6 +1880,20 @@ export function App() {
           <ConversationTitleBar
             onOpenSidebar={() => setSidebarOpen(true)}
             onOpenWorkspace={() => setWorkspaceOpen(true)}
+            browserEnabled={
+              pluginSnapshot?.plugins.some(
+                (plugin) =>
+                  plugin.id === "browser" && plugin.enabled && plugin.available,
+              ) ?? false
+            }
+            browserOpen={browserPanels[selectedSummary.threadId] === true}
+            onToggleBrowser={() =>
+              setBrowserPanels((current) => ({
+                ...current,
+                [selectedSummary.threadId]:
+                  current[selectedSummary.threadId] !== true,
+              }))
+            }
             onRename={renameSelectedThread}
             onRetryTitle={retrySelectedTitle}
             selectedSummary={selectedSummary}
@@ -1676,6 +1966,10 @@ export function App() {
             .then(async () => await loadProjects())
             .catch((error: unknown) => setRequestError(describeError(error)));
         }}
+        onEditProject={(workspace, name) => {
+          editingProjectFocusWorkspace.current = workspace;
+          setEditingProject({ workspace, name });
+        }}
         onSetDefaultProject={(workspace) => {
           void window.zenx.settings
             .addWorkspace(workspace)
@@ -1699,9 +1993,19 @@ export function App() {
         pendingApprovalThreadIds={pendingThreadIds}
         pluginContributions={pluginContributions}
         selectedPage={selectedSidebarPage}
-        selectedThreadId={selectedThreadId}
+        selectedThreadId={page === "agent" ? selectedThreadId : null}
         serverStatus={serverStatus}
         projects={projects}
+        onChangeProjectPinned={(key) =>
+          queueSidebarOrderMutation((current) => ({
+            ...current,
+            pinnedProjectKeys: current.pinnedProjectKeys?.includes(key)
+              ? current.pinnedProjectKeys.filter(
+                  (candidate) => candidate !== key,
+                )
+              : [...(current.pinnedProjectKeys ?? []), key],
+          }))
+        }
         sidebarOrder={sidebarOrder}
         pinnedThreads={pinnedSummaries}
         threadError={threadListErrors.active}
@@ -1772,6 +2076,7 @@ export function App() {
           />
         ) : (
           <AgentSurface
+            composerSendMode={composerSendMode}
             approvals={approvals}
             pluginSnapshot={pluginSnapshot}
             composerStates={composerStates}
@@ -1883,6 +2188,12 @@ export function App() {
               });
             }}
             onModelChange={(model) => void changeModel(model)}
+            onPermissionChange={(mode) => void changePermission(mode)}
+            onNewThreadPermissionChange={(permissionMode) =>
+              updateNewThreadDraft((draft) => ({ ...draft, permissionMode }))
+            }
+            permissionError={permissionError}
+            switchingPermission={switchingPermission}
             onReasoningChange={(effort) => void changeReasoning(effort)}
             onOpenSidebar={() => setSidebarOpen(true)}
             onRespondToApproval={respondToApproval}
@@ -1900,6 +2211,32 @@ export function App() {
             threadLoading={threadLoading}
           />
         )}
+        {page === "agent" &&
+        newThreadDraft === null &&
+        threadDetail !== null &&
+        selectedThreadId === threadDetail.id &&
+        pluginSnapshot?.plugins.some(
+          (plugin) =>
+            plugin.id === "browser" && plugin.enabled && plugin.available,
+        ) ? (
+          <BrowserThreadPanel
+            key={threadDetail.id}
+            threadId={threadDetail.id}
+            title={
+              selectedSummary === null
+                ? "Current thread"
+                : threadTitle(selectedSummary)
+            }
+            open={browserPanels[threadDetail.id]}
+            onOpenChange={(open) =>
+              setBrowserPanels((current) => ({
+                ...current,
+                [threadDetail.id]: open,
+              }))
+            }
+            providerRevision={pluginSnapshot}
+          />
+        ) : null}
       </main>
 
       {workspaceOpen && threadDetail !== null ? (
@@ -1907,6 +2244,51 @@ export function App() {
           onClose={() => setWorkspaceOpen(false)}
           settings={selectedSettings}
           thread={threadDetail}
+        />
+      ) : null}
+      {editingProject !== null ? (
+        <ProjectEditor
+          workspace={editingProject.workspace}
+          name={editingProject.name}
+          isDefault={projects.projects.some(
+            (project) =>
+              project.workspace === editingProject.workspace &&
+              project.isDefault,
+          )}
+          hostBusy={activeSummaries.some((summary) =>
+            threadHasActiveTurn(summary, threadDetail),
+          )}
+          onClose={() => {
+            const key = projectsRef.current.projects.find(
+              (project) =>
+                project.workspace ===
+                (editingProjectFocusWorkspace.current ??
+                  editingProject.workspace),
+            )?.key;
+            setEditingProject(null);
+            requestAnimationFrame(() => {
+              const target =
+                document.getElementById(
+                  `project-more-trigger-${encodeURIComponent(key ?? "")}`,
+                ) ?? document.getElementById("sidebar-thread-list-heading");
+              target?.focus();
+            });
+          }}
+          onSave={async (name, folder) => {
+            await window.zenx.settings.editWorkspace(
+              editingProject.workspace,
+              name,
+              folder,
+            );
+            editingProjectFocusWorkspace.current = folder;
+            await loadProjects();
+          }}
+          onRemove={async () => {
+            await window.zenx.settings.removeWorkspace(
+              editingProject.workspace,
+            );
+            await loadProjects();
+          }}
         />
       ) : null}
       {projectPickerIntent !== null ? (
@@ -1976,6 +2358,9 @@ function WindowTitleBar({
 }
 
 function ConversationTitleBar({
+  browserEnabled,
+  browserOpen,
+  onToggleBrowser,
   onOpenSidebar,
   onOpenWorkspace,
   onRename,
@@ -1984,6 +2369,9 @@ function ConversationTitleBar({
   threadDetail,
   titleProjection,
 }: {
+  browserEnabled: boolean;
+  browserOpen: boolean;
+  onToggleBrowser(): void;
   onOpenSidebar(): void;
   onOpenWorkspace(): void;
   onRename(title: string): Promise<void>;
@@ -2019,6 +2407,22 @@ function ConversationTitleBar({
         </div>
       </div>
       <div className="top-actions">
+        {browserEnabled ? (
+          <button
+            id="thread-browser-toggle"
+            className="icon-button"
+            type="button"
+            aria-label={
+              browserOpen ? "Close browser panel" : "Open browser panel"
+            }
+            title="Browser"
+            aria-expanded={browserOpen}
+            disabled={threadDetail === null}
+            onClick={onToggleBrowser}
+          >
+            <Icon name="layers" />
+          </button>
+        ) : null}
         <button
           className="icon-button"
           type="button"
@@ -2064,6 +2468,7 @@ function PageTitleBar({
 }
 
 function AgentSurface({
+  composerSendMode,
   approvals,
   pluginSnapshot,
   composerStates,
@@ -2090,6 +2495,10 @@ function AgentSurface({
   onAddNewThreadProject,
   onInterrupt,
   onModelChange,
+  onPermissionChange,
+  onNewThreadPermissionChange,
+  permissionError,
+  switchingPermission,
   onReasoningChange,
   onOpenSidebar,
   onRespondToApproval,
@@ -2104,6 +2513,7 @@ function AgentSurface({
   threadError,
   threadLoading,
 }: {
+  composerSendMode: "queue" | "soft" | "hard";
   approvals: ApprovalCardState[];
   pluginSnapshot: ZenXPluginSnapshot | null;
   composerStates: Record<string, ComposerState>;
@@ -2131,6 +2541,10 @@ function AgentSurface({
   onNewThreadProjectChange(workspace: string): void;
   onAddNewThreadProject(): void;
   onInterrupt(turnId: string): Promise<void>;
+  onPermissionChange(mode: FilePermissionMode): void;
+  onNewThreadPermissionChange(mode: FilePermissionMode): void;
+  permissionError: string | null;
+  switchingPermission: boolean;
   onModelChange(model: string): void;
   onReasoningChange(effort: string): void;
   onOpenSidebar(): void;
@@ -2251,10 +2665,12 @@ function AgentSurface({
           imageCapabilityError={imageCapabilityMessage(
             providerProfiles,
             draftSettings,
+            models,
           )}
           imageCapabilityNotice={imageCapabilityNotice(
             providerProfiles,
             draftSettings,
+            models,
           )}
           modelDisabled={
             newThreadDraft.composer.submission?.status === "pending"
@@ -2264,7 +2680,8 @@ function AgentSurface({
           }
           models={models}
           providerProfiles={providerProfiles}
-          permissionLabel={null}
+          permissionMode={newThreadDraft.permissionMode ?? "danger-full-access"}
+          onPermissionChange={onNewThreadPermissionChange}
           selectedModel={draftSettings?.model}
           selectedReasoningEffort={draftSettings?.reasoningEffort}
           thread={null}
@@ -2282,6 +2699,12 @@ function AgentSurface({
       ) : selectedSummary === null || threadDetail === null ? null : (
         <>
           <ThreadView
+            composerSendMode={composerSendMode}
+            onResumeQueue={async () => {
+              await window.zenx.protocol.request("turn/queue/resume", {
+                threadId: threadDetail.id,
+              });
+            }}
             approvals={approvals.filter(
               (approval) => approval.params.threadId === threadDetail.id,
             )}
@@ -2290,10 +2713,12 @@ function AgentSurface({
             imageCapabilityError={imageCapabilityMessage(
               providerProfiles,
               selectedSettings,
+              models,
             )}
             imageCapabilityNotice={imageCapabilityNotice(
               providerProfiles,
               selectedSettings,
+              models,
             )}
             modelDisabled={!canChangeThreadModel(threadDetail)}
             modelError={
@@ -2308,11 +2733,19 @@ function AgentSurface({
             models={models}
             providerProfiles={providerProfiles}
             permissionLabel={
-              selectedSummary.status !== "systemError" &&
-              selectedSummary.currentMetadata.approvalPolicy === "never"
-                ? "Full access"
-                : "Approval required"
+              selectedSettings === null
+                ? null
+                : selectedSettings.permissionMode === "danger-full-access" &&
+                    selectedSettings.approvalPolicy === "on-request"
+                  ? "Approval required"
+                  : "File permissions"
             }
+            permissionMode={
+              selectedSettings?.permissionMode ?? "danger-full-access"
+            }
+            permissionError={permissionError}
+            switchingPermission={switchingPermission}
+            onPermissionChange={onPermissionChange}
             selectedModel={selectedSettings?.model}
             selectedReasoningEffort={selectedSettings?.reasoningEffort}
             switchingModel={switchingModel}
@@ -2957,6 +3390,8 @@ function defaultDraftSettings(
   }
   return {
     threadId: "",
+    permissionMode: "danger-full-access",
+    approvalPolicy: "never",
     model: model.id,
     modelProvider,
     reasoningEffort: model.defaultReasoningEffort,
@@ -2985,6 +3420,8 @@ function draftSettingsForModel(
     : model.defaultReasoningEffort;
   return {
     threadId: "",
+    permissionMode: "danger-full-access",
+    approvalPolicy: "never",
     model: model.id,
     modelProvider,
     reasoningEffort,
@@ -3003,6 +3440,7 @@ export function optimisticThreadSummary(
     modelProvider: string;
     cwd: string;
     approvalPolicy: "never" | "on-request";
+    sandbox: import("../../protocol-client/types.js").FileSandboxPolicy;
   },
   preview: string,
 ): NativeThreadSummary {
@@ -3012,7 +3450,7 @@ export function optimisticThreadSummary(
       model: result.model,
       provider: result.modelProvider,
       cwd: result.cwd,
-      sandbox: "danger-full-access",
+      sandbox: permissionModeFromPolicy(result.sandbox),
       approvalPolicy:
         result.approvalPolicy === "on-request" ? "always" : "never",
     },
@@ -3050,11 +3488,13 @@ function projectDisplayLabel(
   workspace: string,
   projects: readonly ZenXProjectProjectionEntry[],
 ): string {
-  const leaf = projectLabel(workspace);
+  const leaf =
+    projects.find((project) => project.workspace === workspace)?.name ??
+    projectLabel(workspace);
   const ambiguous = projects.some(
     (project) =>
       project.workspace !== workspace &&
-      projectLabel(project.workspace) === leaf,
+      (project.name ?? projectLabel(project.workspace)) === leaf,
   );
   if (!ambiguous) return leaf;
   const normalized = workspace.replace(/[\\/]+$/u, "");

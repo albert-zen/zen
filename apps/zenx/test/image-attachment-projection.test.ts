@@ -110,3 +110,53 @@ test("projects canonical user-message attachments in message and image order", (
   assert.equal(JSON.stringify(projection).includes("base64"), false);
   assert.equal(JSON.stringify(projection).includes("/tmp/"), false);
 });
+
+test("projects existing tool image content by call item without rewriting raw tool text", () => {
+  const base = {
+    threadId: "t",
+    turnId: "turn",
+    createdAt: "2026-09-08T00:00:00Z",
+  };
+  const items: ThreadSnapshot["items"] = [
+    {
+      ...base,
+      id: "call",
+      type: "tool_call",
+      callId: "c",
+      name: "view_image",
+      arguments: { path: "/tmp/image.png" },
+    },
+    {
+      ...base,
+      id: "result",
+      type: "tool_result",
+      callId: "c",
+      output: "Viewed image /tmp/image.png",
+      exitCode: 0,
+      modelContent: [{ type: "image", attachment: attachment("a") }],
+    },
+    {
+      ...base,
+      turnId: "next",
+      id: "call-next",
+      type: "tool_call",
+      callId: "c",
+      name: "view_image",
+      arguments: { path: "/tmp/other.png" },
+    },
+    {
+      ...base,
+      turnId: "next",
+      id: "result-next",
+      type: "tool_result",
+      callId: "c",
+      output: "/tmp/other.png",
+      exitCode: 0,
+    },
+  ];
+  const original = JSON.stringify(items);
+  assert.deepEqual(projectThreadAttachments({ items } as ThreadSnapshot), {
+    call: [attachment("a")],
+  });
+  assert.equal(JSON.stringify(items), original);
+});

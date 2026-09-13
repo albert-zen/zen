@@ -17,9 +17,10 @@ const run = promisify(execFile);
 const repositoryRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 
 const expected = [
-  ["@zenx/browser-plugin", "zenx-browser-plugin-electron-1.0.0.tgz"],
-  ["@zenx/browser-plugin", "zenx-browser-plugin-playwright-1.0.0.tgz"],
-  ["@zenx/browser-plugin", "zenx-browser-plugin-user-session-1.0.0.tgz"],
+  ["@zenx/imzenx-plugin", "zenx-imzenx-plugin-1.0.0.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-electron-1.0.1.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-playwright-1.0.1.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-user-session-1.0.1.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-macos-1.0.0.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-peekaboo-1.0.0.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-win32-1.1.0.tgz"],
@@ -30,16 +31,16 @@ const expected = [
 
 const providerVariants = new Map([
   [
-    "zenx-browser-plugin-electron-1.0.0.tgz",
-    ["browser", "1.0.0", "electron-dedicated-browser", 8],
+    "zenx-browser-plugin-electron-1.0.1.tgz",
+    ["browser", "1.0.1", "electron-dedicated-browser", 8],
   ],
   [
-    "zenx-browser-plugin-playwright-1.0.0.tgz",
-    ["browser", "1.0.0", "playwright-cli", 8],
+    "zenx-browser-plugin-playwright-1.0.1.tgz",
+    ["browser", "1.0.1", "playwright-cli", 8],
   ],
   [
-    "zenx-browser-plugin-user-session-1.0.0.tgz",
-    ["browser", "1.0.0", "user-browser-cdp", 8],
+    "zenx-browser-plugin-user-session-1.0.1.tgz",
+    ["browser", "1.0.1", "user-browser-cdp", 8],
   ],
   [
     "zenx-computer-plugin-macos-1.0.0.tgz",
@@ -102,12 +103,21 @@ test("all first-party plugins validate and pack as self-contained ordinary npm t
       );
       const files = listed[0]?.files?.map((entry) => entry.path).sort();
       assert.equal(listed[0]?.name, packageName);
-      assert.deepEqual(files, [
-        "README.md",
-        "dist/runtime.js",
-        "package.json",
-        "zenx.plugin.json",
-      ]);
+      if (packageName === "@zenx/imzenx-plugin") {
+        assert(files.includes("python/src/imzen/zenx.py"));
+        assert(files.includes("python/uv.lock"));
+        assert(
+          !files.some(
+            (file) => file.includes(".venv") || file.includes("__pycache__"),
+          ),
+        );
+      } else
+        assert.deepEqual(files, [
+          "README.md",
+          "dist/runtime.js",
+          "package.json",
+          "zenx.plugin.json",
+        ]);
       const expectedVariant = providerVariants.get(filename);
       if (expectedVariant !== undefined) {
         const manifest = JSON.parse(
@@ -196,9 +206,9 @@ test("Host provider selection maps every real manifest variant deterministically
       firstPartyProviderTarball("computer", "microsoft-winapp-cli"),
     ],
     [
-      "zenx-browser-plugin-electron-1.0.0.tgz",
-      "zenx-browser-plugin-playwright-1.0.0.tgz",
-      "zenx-browser-plugin-user-session-1.0.0.tgz",
+      "zenx-browser-plugin-electron-1.0.1.tgz",
+      "zenx-browser-plugin-playwright-1.0.1.tgz",
+      "zenx-browser-plugin-user-session-1.0.1.tgz",
       "zenx-computer-plugin-macos-1.0.0.tgz",
       "zenx-computer-plugin-peekaboo-1.0.0.tgz",
       "zenx-computer-plugin-win32-1.1.0.tgz",

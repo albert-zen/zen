@@ -95,6 +95,7 @@ test("Peekaboo accepts an applicationId-only target without an undefined CLI arg
 });
 
 class FakePeekabooRunner implements ExternalProviderProcessRunner {
+  crowded = false;
   readonly calls: string[][] = [];
   changeIdentity = false;
   #seeCount = 0;
@@ -113,6 +114,14 @@ class FakePeekabooRunner implements ExternalProviderProcessRunner {
             application_name: "Fixture",
             window_title: "Fixture",
             ui_elements: [
+              ...(this.crowded
+                ? Array.from({ length: 32 }, (_, index) => ({
+                    id: `L${index}`,
+                    role: "AXStaticText",
+                    label: `Text ${index}`,
+                    is_actionable: false,
+                  }))
+                : []),
               {
                 id: "B1",
                 role: "AXButton",
@@ -141,3 +150,30 @@ class FakePeekabooRunner implements ExternalProviderProcessRunner {
     };
   }
 }
+
+test("Peekaboo keeps actionable controls and readable context in a crowded inspection", async () => {
+  const runner = new FakePeekabooRunner();
+  runner.crowded = true;
+  const backend = new PeekabooComputerBackend({
+    executable: "/opt/peekaboo",
+    runner,
+  });
+  try {
+    const inspection = await backend.inspect(target);
+    const button = inspection.controls.find(({ title }) => title === "Run");
+    assert.ok(button, "button after static labels must remain actionable");
+    assert.equal(inspection.controls.length, 32);
+    assert.equal(inspection.truncated, true);
+    assert.ok(inspection.controls.some(({ title }) => title === "Text 0"));
+    const label = inspection.controls.find(({ title }) => title === "Text 0")!;
+    assert.deepEqual(label.actions, []);
+    await assert.rejects(
+      backend.setValue(target, label.selector, "value"),
+      /foreground_required|support/u,
+    );
+    await backend.press(target, button.selector);
+    assert.ok(runner.calls.some((args) => args[0] === "click"));
+  } finally {
+    await backend.close();
+  }
+});

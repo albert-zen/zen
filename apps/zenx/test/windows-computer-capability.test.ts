@@ -391,6 +391,7 @@ test("WinApp process runner enforces cancellation, timeout, and output bounds", 
 });
 
 class FixtureWinAppRunner implements WinAppCliRunner {
+  crowded = false;
   readonly commands: string[][] = [];
   ambiguous = false;
   buttonX = 10;
@@ -428,7 +429,9 @@ class FixtureWinAppRunner implements WinAppCliRunner {
         return output(JSON.stringify({ elements: [] }));
       }
       return output(
-        JSON.stringify(fixtureInspection(this.buttonX, this.secureField)),
+        JSON.stringify(
+          fixtureInspection(this.buttonX, this.secureField, this.crowded),
+        ),
       );
     }
     if (args[1] === "invoke") {
@@ -505,7 +508,7 @@ function fixtureCliSchema(version: string) {
   };
 }
 
-function fixtureInspection(buttonX = 10, secureField = false) {
+function fixtureInspection(buttonX = 10, secureField = false, crowded = false) {
   return {
     depth: 8,
     interactive: false,
@@ -517,6 +520,14 @@ function fixtureInspection(buttonX = 10, secureField = false) {
         title: "Fixture Window",
         elementCount: 3,
         elements: [
+          ...(crowded
+            ? Array.from({ length: 32 }, (_, index) => ({
+                type: "Text",
+                name: `Text ${index}`,
+                selector: `label-${index}`,
+                isEnabled: true,
+              }))
+            : []),
           {
             type: "Button",
             name: "Save",
@@ -575,3 +586,21 @@ function invocation(arguments_: Record<string, unknown>) {
     signal: new AbortController().signal,
   };
 }
+
+test("Windows inspection retains actionable controls after static UIA nodes", async () => {
+  const runner = new FixtureWinAppRunner();
+  runner.crowded = true;
+  const backend = new WinAppCliComputerBackend({ platform: "win32", runner });
+  try {
+    const inspection = await backend.inspect(target);
+    const button = inspection.controls.find(({ title }) => title === "Save");
+    assert.ok(button, "button after static UIA nodes must remain actionable");
+    assert.equal(inspection.controls.length, 32);
+    assert.equal(inspection.truncated, true);
+    assert.ok(inspection.controls.some(({ title }) => title === "Text 0"));
+    await backend.press(target, button.selector);
+    assert.ok(runner.commands.some((args) => args[1] === "invoke"));
+  } finally {
+    await backend.close();
+  }
+});

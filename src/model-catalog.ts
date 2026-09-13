@@ -9,7 +9,7 @@ export const MODEL_CATALOG_SOURCES = [
 ] as const;
 
 export type ModelCatalogSource = (typeof MODEL_CATALOG_SOURCES)[number];
-export type ModelInputModality = "text" | "image";
+export type ModelInputModality = "text" | "image" | "audio";
 
 export interface ModelCatalogEntryInput {
   id: string;
@@ -179,7 +179,11 @@ function normalizeInputModalities(
   modalities: readonly ModelInputModality[] | null,
 ): readonly ModelInputModality[] | null {
   if (modalities === null) return null;
-  if (modalities.some((value) => value !== "text" && value !== "image")) {
+  if (
+    modalities.some(
+      (value) => value !== "text" && value !== "image" && value !== "audio",
+    )
+  ) {
     throw new Error("Model input modalities contain an unsupported value");
   }
   if (new Set(modalities).size !== modalities.length) {

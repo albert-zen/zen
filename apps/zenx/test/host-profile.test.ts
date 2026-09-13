@@ -39,6 +39,7 @@ const profile: ZenXHostProfile = {
   lastUsedWorkspace: null,
   approvalPolicy: "always",
   toolPresentation: "both",
+  composerSendMode: "queue",
   pinnedThreadIds: [],
   sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
 };
@@ -644,6 +645,129 @@ test("concurrent profile stores use independent atomic staging files", async () 
       ["qwen3", "deepseek-r1"].includes(persisted.defaultModel.modelId),
     );
     assert.deepEqual(await readdir(directory), ["host-profile.json"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("composer send modes persist and reject unknown modes", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-send-mode-"));
+  try {
+    const store = new ZenXHostProfileStore(
+      path.join(directory, "profile.json"),
+    );
+    for (const composerSendMode of ["queue", "soft", "hard"] as const) {
+      await store.write({ ...profile, composerSendMode });
+      assert.equal(
+        (await store.read(profile)).composerSendMode,
+        composerSendMode,
+      );
+    }
+    assert.throws(
+      () => validateHostProfile({ ...profile, composerSendMode: "invalid" }),
+      /send mode/u,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("compaction retention settings persist without requiring a custom prompt and reach the Host", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-compaction-settings-"),
+  );
+  try {
+    const config = {
+      triggerPercent: 90,
+      targetPercent: 60,
+      retention: {
+        mode: "recent-items" as const,
+        recentItemCount: 20,
+        preserveUserMessages: true,
+        finalMessages: "recent" as const,
+        finalMessageCount: 10,
+      },
+    };
+    const store = new ZenXHostProfileStore(
+      path.join(directory, "profile.json"),
+    );
+    await store.write({ ...profile, contextCompaction: config });
+    const loaded = await store.read(profile);
+    assert.deepEqual(loaded?.contextCompaction, config);
+    assert.deepEqual(
+      hostConfigFromProfile(loaded!, {
+        dataDirectory: directory,
+        subscriptionProfilePath: path.join(directory, "auth"),
+        fallbackWorkspace: directory,
+        apiKeys: { local: "test-key" },
+      }).contextCompaction,
+      config,
+    );
+    assert.throws(() =>
+      validateHostProfile({
+        ...profile,
+        contextCompaction: { ...config, targetPercent: 95 },
+      }),
+    );
+    assert.throws(() =>
+      validateHostProfile({
+        ...profile,
+        contextCompaction: {
+          retention: { mode: "recent-items", recentItemCount: 0 },
+        },
+      }),
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("project names preserve Windows case-insensitive workspace identity", () => {
+  const configured = validateHostProfile(
+    {
+      ...profile,
+      workspace: "C:\\Work",
+      workspaces: ["C:\\Work"],
+      lastUsedWorkspace: null,
+      projectNames: { "c:\\work": "Renamed" },
+    },
+    "win32",
+  );
+  assert.deepEqual(configured.projectNames, { "C:\\Work": "Renamed" });
+});
+
+test("Agentic compaction opt-in persists, reaches Host configuration, and validates its type", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-agentic-settings-"),
+  );
+  try {
+    const store = new ZenXHostProfileStore(
+      path.join(directory, "profile.json"),
+    );
+    assert.equal(profile.contextCompaction?.agenticEnabled, undefined);
+    for (const agenticEnabled of [true, false]) {
+      const contextCompaction = { agenticEnabled, triggerPercent: 90 };
+      await store.write({ ...profile, contextCompaction });
+      const loaded = await store.read(profile);
+      assert.deepEqual(loaded?.contextCompaction, contextCompaction);
+      assert.deepEqual(
+        hostConfigFromProfile(loaded!, {
+          dataDirectory: directory,
+          subscriptionProfilePath: path.join(directory, "auth"),
+          fallbackWorkspace: directory,
+          apiKeys: { local: "test-key" },
+        }).contextCompaction,
+        contextCompaction,
+      );
+    }
+    assert.throws(
+      () =>
+        validateHostProfile({
+          ...profile,
+          contextCompaction: { agenticEnabled: "true" },
+        }),
+      /agenticEnabled/u,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

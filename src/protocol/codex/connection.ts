@@ -252,7 +252,12 @@ export class CodexConnection {
         }
         const approvalPolicy = readApprovalPolicy(params.approvalPolicy);
         readApprovalsReviewer(params.approvalsReviewer);
-        if (sandbox !== undefined && sandbox !== "danger-full-access") {
+        if (
+          sandbox !== undefined &&
+          sandbox !== "danger-full-access" &&
+          sandbox !== "read-only" &&
+          sandbox !== "workspace-write"
+        ) {
           throw new InvalidParamsError(`Unsupported sandbox mode: ${sandbox}`);
         }
         const snapshot = await this.#appServer.startThread({
@@ -260,9 +265,7 @@ export class CodexConnection {
           ...(model === undefined
             ? {}
             : { selection: this.#selectionForWireModel(model, effort) }),
-          ...(sandbox === undefined
-            ? {}
-            : { sandbox: "danger-full-access" as const }),
+          ...(sandbox === undefined ? {} : { sandbox }),
           ...(approvalPolicy === undefined ? {} : { approvalPolicy }),
         });
         this.#subscribedThreads.add(snapshot.id);
@@ -271,7 +274,6 @@ export class CodexConnection {
           id: request.id,
           result: { thread, ...threadSettings(snapshot) },
         });
-        this.#send({ method: "thread/started", params: { thread } });
         return;
       }
       case "thread/resume": {
@@ -372,6 +374,22 @@ export class CodexConnection {
             thread: projectThread(snapshot, { includeTurns: false }),
           },
         });
+        return;
+      }
+      case "thread/permissions/update": {
+        rejectUnsupportedValues(params, ["threadId", "sandbox"]);
+        const sandbox = params.sandbox;
+        if (
+          sandbox !== "read-only" &&
+          sandbox !== "workspace-write" &&
+          sandbox !== "danger-full-access"
+        )
+          throw new InvalidParamsError("Unknown file permission mode");
+        await this.#appServer.setThreadPermissions(
+          requiredString(params, "threadId"),
+          sandbox,
+        );
+        this.#send({ id: request.id, result: {} });
         return;
       }
       case "thread/settings/update": {
@@ -538,6 +556,38 @@ export class CodexConnection {
         });
         return;
       }
+      case "turn/queue": {
+        rejectUnsupportedValues(params, [
+          "threadId",
+          "input",
+          "clientUserMessageId",
+        ]);
+        const threadId = requiredString(params, "threadId");
+        const input = await readUserInput(params.input, this.#appServer);
+        this.#subscribedThreads.add(threadId);
+        await this.#appServer.queueMessage(
+          threadId,
+          input,
+          requiredString(params, "clientUserMessageId"),
+          {
+            requestApproval: async (approval) =>
+              await this.#requestApproval(approval),
+          },
+        );
+        this.#send({ id: request.id, result: {} });
+        return;
+      }
+      case "turn/queue/resume": {
+        rejectUnsupportedValues(params, ["threadId"]);
+        const threadId = requiredString(params, "threadId");
+        await this.#appServer.readThread(threadId);
+        await this.#appServer.resumeQueue(threadId, {
+          requestApproval: async (approval) =>
+            await this.#requestApproval(approval),
+        });
+        this.#send({ id: request.id, result: {} });
+        return;
+      }
       case "turn/steer": {
         rejectUnsupportedValues(params, [
           "threadId",
@@ -687,6 +737,16 @@ export class CodexConnection {
   }
 
   async #projectEvent(event: AppServerEvent): Promise<void> {
+    if (event.type === "model_catalog_updated") return;
+    if (event.type === "thread_started") {
+      this.#send({
+        method: "thread/started",
+        params: {
+          thread: projectThread(event.thread, { includeTurns: false }),
+        },
+      });
+      return;
+    }
     if (event.type === "thread_archived_updated") {
       this.#send({
         method: event.archived ? "thread/archived" : "thread/unarchived",
@@ -832,6 +892,22 @@ export class CodexConnection {
       return;
     }
     if (event.type === "item_completed") {
+      if (
+        event.item.type === "user_message_queued" ||
+        (event.item.type === "user_message" &&
+          event.item.clientId !== undefined)
+      ) {
+        const snapshot = await this.#appServer.readThread(event.item.threadId);
+        this.#send({
+          method: "thread/queue/updated",
+          params: {
+            threadId: snapshot.id,
+            queuedMessages:
+              projectThread(snapshot, { includeTurns: false }).queuedMessages ??
+              [],
+          },
+        });
+      }
       if (event.item.type === "reasoning" && event.item.turnId !== undefined) {
         this.#reasoningSummaryParts.delete(
           reasoningItemKey(
@@ -972,7 +1048,10 @@ export class CodexConnection {
     // The command item must be visible before its approval request, matching Codex.
     await this.#eventChain;
     request.signal.throwIfAborted();
-    if (this.#acceptedCommandThreads.has(request.threadId)) {
+    if (
+      request.scope !== "once" &&
+      this.#acceptedCommandThreads.has(request.threadId)
+    ) {
       return "acceptForSession";
     }
     const requestId = `approval_${String(this.#nextServerRequest++)}`;
@@ -990,6 +1069,9 @@ export class CodexConnection {
             environmentId: null,
             reason: null,
             command: request.command,
+            ...(request.scope === undefined
+              ? {}
+              : { approvalScope: request.scope }),
             ...(request.toolName === undefined
               ? {}
               : { toolName: request.toolName }),
@@ -1014,7 +1096,7 @@ export class CodexConnection {
     if (!isRecord(response) || !isApprovalDecision(response.decision)) {
       throw new Error("Client returned an invalid approval decision");
     }
-    if (response.decision === "acceptForSession") {
+    if (request.scope !== "once" && response.decision === "acceptForSession") {
       this.#acceptedCommandThreads.add(request.threadId);
     }
     return response.decision;
@@ -1098,9 +1180,11 @@ export class CodexConnection {
 
   #sendErrorNotification(error: unknown, event: AppServerEvent): void {
     if (
+      event.type === "thread_started" ||
       event.type === "thread_name_updated" ||
       event.type === "thread_settings_updated" ||
-      event.type === "thread_archived_updated"
+      event.type === "thread_archived_updated" ||
+      event.type === "model_catalog_updated"
     ) {
       console.warn(`Could not project ${event.type} notification`, error);
       return;
@@ -1150,6 +1234,7 @@ export class CodexConnection {
 }
 
 function eventThreadId(event: AppServerEvent): string {
+  if (event.type === "model_catalog_updated") return "";
   return event.type === "item_completed" ? event.item.threadId : event.threadId;
 }
 
@@ -1158,6 +1243,8 @@ function eventRepresentedInSnapshot(
   snapshot: ThreadSnapshot,
 ): boolean {
   switch (event.type) {
+    case "thread_started":
+      return snapshot.id === event.threadId;
     case "thread_archived_updated":
       return snapshot.archived === event.archived;
     case "thread_name_updated":
@@ -1189,6 +1276,7 @@ function eventRepresentedInSnapshot(
     case "reasoning_content_delta":
       return snapshot.items.some((item) => item.id === event.itemId);
     case "token_usage":
+    case "model_catalog_updated":
       return true;
   }
 }
@@ -1414,20 +1502,43 @@ function readApprovalsReviewer(value: unknown): "user" | undefined {
   );
 }
 
-function readSandboxPolicy(value: unknown): "danger-full-access" | undefined {
-  if (value === undefined || value === null) {
-    return undefined;
+function readSandboxPolicy(
+  value: unknown,
+): ThreadSnapshot["sandbox"] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (isRecord(value)) {
+    if (
+      value.type === "dangerFullAccess" &&
+      Object.keys(value).every((key) => key === "type")
+    )
+      return "danger-full-access";
+    if (
+      value.type === "readOnly" &&
+      Object.keys(value).every((key) => key === "type")
+    )
+      return "read-only";
+    if (
+      value.type === "workspaceWrite" &&
+      Array.isArray(value.writableRoots) &&
+      value.writableRoots.length === 0 &&
+      value.networkAccess === true &&
+      value.excludeTmpdirEnvVar === true &&
+      value.excludeSlashTmp === true &&
+      Object.keys(value).every((key) =>
+        [
+          "type",
+          "writableRoots",
+          "networkAccess",
+          "excludeTmpdirEnvVar",
+          "excludeSlashTmp",
+        ].includes(key),
+      )
+    )
+      return "workspace-write";
   }
-  if (
-    !isRecord(value) ||
-    value.type !== "dangerFullAccess" ||
-    Object.keys(value).some((key) => key !== "type")
-  ) {
-    throw new InvalidParamsError(
-      "Unsupported sandbox policy; Zen currently supports dangerFullAccess only",
-    );
-  }
-  return "danger-full-access";
+  throw new InvalidParamsError(
+    "Unsupported sandbox policy; only the exact Zen file permission presets are supported",
+  );
 }
 
 async function readUserInput(
@@ -1533,7 +1644,12 @@ function validateMatchingThreadConfiguration(
   }
 
   const sandbox = optionalString(params.sandbox);
-  if (sandbox !== undefined && sandbox !== "danger-full-access") {
+  if (
+    sandbox !== undefined &&
+    sandbox !== "danger-full-access" &&
+    sandbox !== "read-only" &&
+    sandbox !== "workspace-write"
+  ) {
     throw new InvalidParamsError(`Unsupported sandbox mode: ${sandbox}`);
   }
   if (sandbox !== undefined && sandbox !== snapshot.sandbox) {

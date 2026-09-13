@@ -268,7 +268,8 @@ test("an Agent drives the complete bounded tracer bullet through App Server wire
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-control-agent-"),
   );
-  const workspace = path.resolve(os.tmpdir(), "zenx-agent-workspace");
+  const workspace = path.join(directory, "workspace");
+  await mkdir(workspace);
   const requestPort = new MutableAppServerRequestPort();
   const capabilities = await grantedSelfControl(directory, requestPort);
   const tools = capabilityTools(capabilities);

@@ -16,6 +16,9 @@ import {
 import {
   isHostEvent,
   type HostCommand,
+  type HostConfigurationCandidate,
+  type HostConfigurationCurrent,
+  type HostEvent,
   type ZenXHostConfig,
 } from "./host-messages.js";
 import type {
@@ -31,6 +34,7 @@ import type {
 import type { ZenXThreadAttachmentProjection } from "./image-attachments.js";
 import type { ModelUsageProjection } from "../../../../src/model-usage.js";
 import type { CanonicalItem, UserInput } from "../../../../src/item.js";
+import type { HostActivitySnapshot } from "../../../../src/app-server.js";
 import { AppServerConnectionPublisher } from "./app-server-connection.js";
 import {
   observeOwnedChild,
@@ -57,6 +61,7 @@ export interface AppServerManagerOptions {
   recoveryDelaysMs?: readonly number[];
   capabilityHost?: ZenXCapabilityHost;
   capabilityReplacementTimeoutMs?: number;
+  configurationControlTimeoutMs?: number;
   shutdownGraceMs?: number;
   terminationGraceMs?: number;
 }
@@ -152,6 +157,28 @@ export class AppServerManager {
     string,
     { resolve(generationToken: string): void; reject(error: Error): void }
   >();
+  readonly #pendingConfigurationRequests = new Map<
+    string,
+    {
+      expectedType:
+        | "configuration/prepared"
+        | "configuration/published"
+        | "configuration/discarded"
+        | "configuration/current";
+      resolve(event: HostEvent): void;
+      reject(error: Error): void;
+    }
+  >();
+  readonly #pendingMaintenanceRequests = new Map<
+    string,
+    {
+      resolve(result: {
+        accepted: boolean;
+        activity: HostActivitySnapshot;
+      }): void;
+      reject(error: Error): void;
+    }
+  >();
   readonly #pendingPluginTurns = new Map<
     string,
     {
@@ -180,6 +207,8 @@ export class AppServerManager {
   #nextCapabilityReplacementRequest = 1;
   #nextCapabilityCurrentRequest = 1;
   #nextPluginTurnRequest = 1;
+  #nextConfigurationRequest = 1;
+  #nextMaintenanceRequest = 1;
   #capabilityRestartTail: Promise<void> = Promise.resolve();
   #pluginRefreshTail: Promise<void> = Promise.resolve();
   #uncertainCapabilityReplacement: UncertainCapabilityReplacement | undefined;
@@ -187,6 +216,7 @@ export class AppServerManager {
   #bearerToken: string | undefined;
   #authorityUrl: string | undefined;
   #publishedCapabilitySnapshot: ZenXCapabilityGenerationSnapshot | undefined;
+  #processEpoch: string | undefined;
 
   constructor(options: AppServerManagerOptions) {
     this.#options = options;
@@ -198,6 +228,10 @@ export class AppServerManager {
 
   get processId(): number | undefined {
     return this.#child?.pid;
+  }
+
+  get processEpoch(): string | undefined {
+    return this.#processEpoch;
   }
 
   reportStartupError(error: unknown): void {
@@ -301,7 +335,7 @@ export class AppServerManager {
     let capabilities: ZenXCapabilityGenerationSnapshot | undefined;
     try {
       capabilities = this.#captureCapabilitySnapshot();
-      const url = await waitForReady(
+      const ready = await waitForReady(
         child,
         this.#options.startupTimeoutMs ?? 10_000,
         {
@@ -312,6 +346,7 @@ export class AppServerManager {
           capabilities,
         },
       );
+      const url = ready.url;
       assertCanPublish?.("start");
       if (this.#authorityUrl !== undefined && url !== this.#authorityUrl) {
         throw new Error("Zen App Server changed its published authority");
@@ -334,6 +369,7 @@ export class AppServerManager {
         throw new Error("Zen App Server startup was cancelled");
       }
       this.#client = client;
+      this.#processEpoch = ready.processEpoch;
       this.#publishedCapabilitySnapshot = structuredClone(capabilities);
       this.#forwardNotifications(client);
       assertCanPublish?.("descriptor");
@@ -369,6 +405,7 @@ export class AppServerManager {
       const client = this.#client;
       this.#client = undefined;
       this.#publishedCapabilitySnapshot = undefined;
+      this.#processEpoch = undefined;
       const cleanup = await Promise.allSettled([
         Promise.resolve().then(() => client?.close()),
         stopOwnedAppServerChild(child, childObservation, {
@@ -403,15 +440,100 @@ export class AppServerManager {
     await this.start();
   }
 
+  async safeRestart(
+    hostConfig: ZenXHostConfig,
+  ): Promise<
+    { status: "restarted" } | { status: "busy"; activity: HostActivitySnapshot }
+  > {
+    const maintenance = await this.#tryBeginHostMaintenance();
+    if (!maintenance.accepted) {
+      return { status: "busy", activity: maintenance.activity };
+    }
+    const processEpoch = this.#processEpoch;
+    try {
+      await this.restart(hostConfig);
+      return { status: "restarted" };
+    } catch (error) {
+      if (this.#processEpoch === processEpoch) {
+        this.#endHostMaintenance(maintenance.maintenanceToken);
+      }
+      throw error;
+    }
+  }
+
   async restartCapabilities(): Promise<void> {
-    const restart = this.#capabilityRestartTail.then(
-      async () => await this.restart(this.#options.hostConfig),
-    );
+    const restart = this.#capabilityRestartTail.then(async () => {
+      const result = await this.safeRestart(this.#options.hostConfig);
+      if (result.status === "busy") {
+        throw new Error("Zen App Server is busy and cannot restart safely");
+      }
+    });
     this.#capabilityRestartTail = restart.then(
       () => undefined,
       () => undefined,
     );
     await restart;
+  }
+
+  async #tryBeginHostMaintenance(): Promise<{
+    accepted: boolean;
+    activity: HostActivitySnapshot;
+    maintenanceToken: string;
+  }> {
+    const child = this.#child;
+    if (
+      this.#status.type !== "ready" ||
+      child === undefined ||
+      !child.connected
+    ) {
+      const detail =
+        this.#status.type === "error" ? `: ${this.#status.message}` : "";
+      throw new Error(`Zen App Server is not ready${detail}`);
+    }
+    const requestId = `maintenance-${String(this.#nextMaintenanceRequest++)}`;
+    const timeoutMs = this.#configurationControlTimeout();
+    return await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (!this.#pendingMaintenanceRequests.delete(requestId)) return;
+        this.#endHostMaintenance(requestId);
+        reject(
+          new Error(
+            `Host maintenance admission timed out after ${String(timeoutMs)}ms`,
+          ),
+        );
+      }, timeoutMs);
+      const pending = {
+        resolve: (result: {
+          accepted: boolean;
+          activity: HostActivitySnapshot;
+        }) => {
+          clearTimeout(timer);
+          resolve({ ...result, maintenanceToken: requestId });
+        },
+        reject: (error: Error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      };
+      this.#pendingMaintenanceRequests.set(requestId, pending);
+      child.send(
+        { type: "maintenance/try-begin", requestId } satisfies HostCommand,
+        (error) => {
+          if (error === null) return;
+          if (!this.#pendingMaintenanceRequests.delete(requestId)) return;
+          pending.reject(error);
+        },
+      );
+    });
+  }
+
+  #endHostMaintenance(maintenanceToken: string): void {
+    const child = this.#child;
+    if (child === undefined || !child.connected) return;
+    child.send({
+      type: "maintenance/end",
+      maintenanceToken,
+    } satisfies HostCommand);
   }
 
   async refreshCapabilitiesAfterCommit(): Promise<ZenXPostCommitCapabilityRefresh> {
@@ -553,6 +675,165 @@ export class AppServerManager {
         }
       }
       return { status: "failed", message: failure.message };
+    }
+  }
+
+  async prepareConfiguration(
+    config: ZenXHostConfig,
+    revision: number,
+  ): Promise<HostConfigurationCandidate> {
+    return await this.#sendConfigurationRequest(
+      "configuration/prepared",
+      (requestId) => ({
+        type: "configuration/prepare",
+        requestId,
+        candidateToken: requestId,
+        config,
+        revision,
+      }),
+      (event) => {
+        if (event.type !== "configuration/prepared") {
+          throw new Error("Unexpected Host configuration response");
+        }
+        if (event.error !== undefined) throw new Error(event.error);
+        return event.candidate!;
+      },
+      (requestId) => {
+        const processEpoch = this.#processEpoch;
+        if (processEpoch === undefined) return;
+        const child = this.#child;
+        if (child === undefined || !child.connected) return;
+        child.send({
+          type: "configuration/discard",
+          requestId: `discard-${requestId}`,
+          candidate: {
+            processEpoch,
+            candidateToken: requestId,
+            revision,
+            pendingRestart: [],
+          },
+        } satisfies HostCommand);
+      },
+    );
+  }
+
+  async publishConfiguration(
+    candidate: HostConfigurationCandidate,
+  ): Promise<HostConfigurationCurrent> {
+    this.#assertCurrentProcessCandidate(candidate);
+    return await this.#sendConfigurationRequest(
+      "configuration/published",
+      (requestId) => ({
+        type: "configuration/publish",
+        requestId,
+        candidate,
+      }),
+      (event) => {
+        if (event.type !== "configuration/published") {
+          throw new Error("Unexpected Host configuration response");
+        }
+        if (event.error !== undefined) throw new Error(event.error);
+        return event.current!;
+      },
+    );
+  }
+
+  async discardConfiguration(
+    candidate: HostConfigurationCandidate,
+  ): Promise<void> {
+    this.#assertCurrentProcessCandidate(candidate);
+    await this.#sendConfigurationRequest(
+      "configuration/discarded",
+      (requestId) => ({
+        type: "configuration/discard",
+        requestId,
+        candidate,
+      }),
+      (event) => {
+        if (event.type !== "configuration/discarded") {
+          throw new Error("Unexpected Host configuration response");
+        }
+        if (event.error !== undefined) throw new Error(event.error);
+      },
+    );
+  }
+
+  async currentConfiguration(): Promise<HostConfigurationCurrent> {
+    return await this.#sendConfigurationRequest(
+      "configuration/current",
+      (requestId) => ({ type: "configuration/current", requestId }),
+      (event) => {
+        if (event.type !== "configuration/current") {
+          throw new Error("Unexpected Host configuration response");
+        }
+        if (event.error !== undefined) throw new Error(event.error);
+        return event.current!;
+      },
+    );
+  }
+
+  async #sendConfigurationRequest<T>(
+    expectedType:
+      | "configuration/prepared"
+      | "configuration/published"
+      | "configuration/discarded"
+      | "configuration/current",
+    command: (requestId: string) => HostCommand,
+    read: (event: HostEvent) => T,
+    onTimeout?: (requestId: string) => void,
+  ): Promise<T> {
+    const child = this.#child;
+    if (
+      this.#status.type !== "ready" ||
+      child === undefined ||
+      !child.connected ||
+      this.#processEpoch === undefined
+    ) {
+      const detail =
+        this.#status.type === "error" ? `: ${this.#status.message}` : "";
+      throw new Error(`Zen App Server is not ready${detail}`);
+    }
+    const requestId = `configuration-${String(this.#nextConfigurationRequest++)}`;
+    const timeoutMs = this.#configurationControlTimeout();
+    return await new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (!this.#pendingConfigurationRequests.delete(requestId)) return;
+        onTimeout?.(requestId);
+        reject(
+          new Error(
+            `Host configuration ${expectedType.slice("configuration/".length)} timed out after ${String(timeoutMs)}ms`,
+          ),
+        );
+      }, timeoutMs);
+      const pending = {
+        expectedType,
+        resolve: (event: HostEvent) => {
+          clearTimeout(timer);
+          try {
+            resolve(read(event));
+          } catch (error) {
+            reject(asError(error));
+          }
+        },
+        reject: (error: Error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      };
+      this.#pendingConfigurationRequests.set(requestId, pending);
+      child.send(command(requestId), (error) => {
+        if (error === null) return;
+        if (!this.#pendingConfigurationRequests.delete(requestId)) return;
+        pending.reject(error);
+      });
+    });
+  }
+
+  #assertCurrentProcessCandidate(candidate: HostConfigurationCandidate): void {
+    if (candidate.processEpoch !== this.#processEpoch) {
+      throw new Error(
+        "Host configuration candidate belongs to another process epoch",
+      );
     }
   }
 
@@ -790,6 +1071,12 @@ export class AppServerManager {
     this.#rejectPendingCapabilityCurrentRequests(
       new Error("Zen App Server host stopped"),
     );
+    this.#rejectPendingConfigurationRequests(
+      new Error("Zen App Server host stopped during configuration control"),
+    );
+    this.#rejectPendingMaintenanceRequests(
+      new Error("Zen App Server host stopped during maintenance admission"),
+    );
     this.#uncertainCapabilityReplacement = undefined;
     this.#rejectPendingPluginTurns(new Error("Zen App Server host stopped"));
     await this.#cancelAndSettleCapabilityInvocations();
@@ -799,6 +1086,7 @@ export class AppServerManager {
       failures.push(asError(error));
     }
     this.#client = undefined;
+    this.#processEpoch = undefined;
     this.#publishedCapabilitySnapshot = undefined;
     const child = this.#child;
     const observation = this.#childObservation;
@@ -889,6 +1177,8 @@ export class AppServerManager {
       },
     );
     for (const method of [
+      "zen/thread/event",
+      "model/catalog/updated",
       "thread/started",
       "thread/name/updated",
       "thread/archived",
@@ -972,12 +1262,19 @@ export class AppServerManager {
     this.#rejectPendingCapabilityCurrentRequests(
       new Error("Zen App Server stopped before confirming capabilities"),
     );
+    this.#rejectPendingConfigurationRequests(
+      new Error("Zen App Server stopped before confirming configuration"),
+    );
+    this.#rejectPendingMaintenanceRequests(
+      new Error("Zen App Server stopped before confirming maintenance"),
+    );
     this.#uncertainCapabilityReplacement = undefined;
     this.#rejectPendingPluginTurns(
       new Error("Zen App Server stopped before completing plugin Turn"),
     );
     this.#client?.close();
     this.#client = undefined;
+    this.#processEpoch = undefined;
     for (const failure of this.#releaseAllCapabilityGenerations()) {
       console.error(
         `[ZenX App Server] Failed to release a capability generation: ${failure.message}`,
@@ -1058,6 +1355,40 @@ export class AppServerManager {
     child.on("message", (message: unknown) => {
       if (this.#child !== child) return;
       const hostEvent = isHostEvent(message) ? message : undefined;
+      if (
+        hostEvent?.type === "configuration/prepared" ||
+        hostEvent?.type === "configuration/published" ||
+        hostEvent?.type === "configuration/discarded" ||
+        hostEvent?.type === "configuration/current"
+      ) {
+        const pending = this.#pendingConfigurationRequests.get(
+          hostEvent.requestId,
+        );
+        if (pending !== undefined) {
+          this.#pendingConfigurationRequests.delete(hostEvent.requestId);
+          if (pending.expectedType !== hostEvent.type) {
+            pending.reject(
+              new Error("Host configuration response operation mismatch"),
+            );
+          } else {
+            pending.resolve(hostEvent);
+          }
+        }
+        return;
+      }
+      if (hostEvent?.type === "maintenance/result") {
+        const pending = this.#pendingMaintenanceRequests.get(
+          hostEvent.requestId,
+        );
+        if (pending !== undefined) {
+          this.#pendingMaintenanceRequests.delete(hostEvent.requestId);
+          pending.resolve({
+            accepted: hostEvent.accepted,
+            activity: hostEvent.activity,
+          });
+        }
+        return;
+      }
       if (hostEvent?.type === "thread-summary/result") {
         const pending = this.#pendingThreadSummaryRequests.get(
           hostEvent.requestId,
@@ -1199,6 +1530,24 @@ export class AppServerManager {
             this.#pendingCapabilityReplacements.delete(threadSummaryRequestId);
             replacementPending.reject(
               new Error("Malformed capability replacement response"),
+            );
+          }
+          const configurationPending = this.#pendingConfigurationRequests.get(
+            threadSummaryRequestId,
+          );
+          if (configurationPending !== undefined) {
+            this.#pendingConfigurationRequests.delete(threadSummaryRequestId);
+            configurationPending.reject(
+              new Error("Malformed Host configuration response"),
+            );
+          }
+          const maintenancePending = this.#pendingMaintenanceRequests.get(
+            threadSummaryRequestId,
+          );
+          if (maintenancePending !== undefined) {
+            this.#pendingMaintenanceRequests.delete(threadSummaryRequestId);
+            maintenancePending.reject(
+              new Error("Malformed Host maintenance response"),
             );
           }
         }
@@ -1350,6 +1699,30 @@ export class AppServerManager {
       pending.reject(error);
     }
     this.#pendingPluginTurns.clear();
+  }
+
+  #rejectPendingConfigurationRequests(error: Error): void {
+    for (const pending of this.#pendingConfigurationRequests.values()) {
+      pending.reject(error);
+    }
+    this.#pendingConfigurationRequests.clear();
+  }
+
+  #rejectPendingMaintenanceRequests(error: Error): void {
+    for (const pending of this.#pendingMaintenanceRequests.values()) {
+      pending.reject(error);
+    }
+    this.#pendingMaintenanceRequests.clear();
+  }
+
+  #configurationControlTimeout(): number {
+    const timeoutMs = this.#options.configurationControlTimeoutMs ?? 5_000;
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+      throw new Error(
+        "Host configuration control timeout must be a positive integer",
+      );
+    }
+    return timeoutMs;
   }
 
   #capabilityReplacementTimeout(): number {
@@ -1547,7 +1920,7 @@ async function waitForReady(
   child: ChildProcess,
   timeoutMs: number,
   command: HostCommand,
-): Promise<string> {
+): Promise<{ url: string; processEpoch: string }> {
   return await new Promise((resolve, reject) => {
     const timer = setTimeout(
       () => reject(new Error("Timed out starting Zen App Server")),
@@ -1563,8 +1936,9 @@ async function waitForReady(
       if (!isHostEvent(message)) return;
       if (message.type !== "ready" && message.type !== "error") return;
       cleanup();
-      if (message.type === "ready") resolve(message.url);
-      else reject(new Error(message.message));
+      if (message.type === "ready") {
+        resolve({ url: message.url, processEpoch: message.processEpoch });
+      } else reject(new Error(message.message));
     };
     const onExit = (
       code: number | null,

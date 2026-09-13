@@ -35,7 +35,11 @@ export interface ProcessPluginDefinition {
 export interface ProcessPluginInvocationContext {
   readonly id: string;
   readonly tool: string;
-  readonly context: Readonly<{ callId: string; cwd: string }>;
+  readonly context: Readonly<{
+    callId: string;
+    cwd: string;
+    threadId?: string;
+  }>;
   readonly signal: AbortSignal;
 }
 

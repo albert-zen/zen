@@ -376,6 +376,11 @@ mentions, and named signal conditions. A hit persists an auditable occurrence
 with a stable client message ID, then starts a normal App Server Turn. Failures
 remain visible and are never silently retried.
 
+Timer registrations follow successfully saved definitions. Updating an unrelated
+Trigger leaves existing timers in place; a failed cancel or delete leaves the
+original timer scheduled. Changing a timer's due date invalidates callbacks from
+its previous schedule, including callbacks already waiting for a save to finish.
+
 The bundled `zenx-triggers` and `zenx-rooms` v2 Plugin Packages expose their
 own namespaced ordinary tools for Trigger
 list/create/update/cancel/delete and Room list/create/rename/delete/member/post
@@ -523,6 +528,22 @@ WebSocket are restricted to the same numeric loopback authority.
 The default `ZENX_BROWSER_MODE=isolated` continues to select Playwright CLI or
 the bundled ephemeral Electron/CDP provider. This implementation does not claim
 parity with any proprietary browser automation product.
+
+Browser observation belongs to the selected thread's right panel. The thread
+header opens or closes it; wide windows open it once when the thread acquires a
+Browser page, while narrow windows require an explicit open. Closing the panel
+stops frame delivery and preserves the task and browser pages. The panel can
+follow the Agent, select one of that thread's pages, resize, or expand; Escape
+restores an expanded view. Returning from the narrow view preserves the chat draft.
+Trusted invocation `threadId` scopes the model's logical `sessionId` to a distinct
+provider session. Calls without that identity never attach to the selected thread.
+These mappings survive empty tab lists until explicit session/provider closure.
+User-browser CDP supports one live panel per provider at a time; opening another
+live view explicitly marks the previous observer unavailable. Playwright and
+Electron show the latest timestamped Agent inspection screenshot, labeled as
+non-live. Thread/provider changes discard old subscription events and images.
+The Browser 1.0.1 bundled package removes the global sidebar contribution; its
+legacy route explains the thread-panel entry point.
 
 The computer contract is platform-neutral: tools describe semantic observation,
 press/value/capture operations and their interaction impact, while a platform
@@ -718,6 +739,27 @@ npm --workspace apps/zenx run smoke:windows-user-browser
 npm --workspace apps/zenx run smoke:providers
 ```
 
+`check` prepares the first-party tarballs once for the test and build phases.
+Preparation compiles each source package once, then independently stages and packs
+all provider variants. Rooms and other lifecycle tests copy these tarballs into
+private fixtures; dedicated packaging tests still build real packages, including
+from clean SDK output. No artifacts are reused across preparation invocations.
+The attached-browser connection/attachment tests and document/action tests run in
+separate files with private CDP servers, allowing file-level parallelism while
+preserving real timeout and late-response coverage.
+
+For a focused edit, run the relevant test file directly after preparation:
+
+```sh
+npm --workspace apps/zenx run prepare:first-party-plugins
+npm --workspace apps/zenx exec -- tsx --test test/app-server-connection.test.ts
+```
+
+Repeat only the second command while editing Host tests. Repeat preparation when
+plugin or SDK sources change. `npm --workspace apps/zenx test` always prepares
+fresh artifacts; `test:prepared` deliberately requires that preparation already
+matches the checkout. Full checks and platform smokes remain the integration gates.
+
 The automated integration suite runs the timer → wakeup → App Server Turn →
 streamed response → history chain, explicit cyclic/self relay and cancellation,
 bounded source snapshots, two-member Room routing, strict persisted-state
@@ -773,3 +815,18 @@ and a real timer wakeup card.
 Still requiring user verification: a real OpenAI subscription OAuth grant, a
 real compatible-provider key/model, and multi-person Room wording in production
 work. Those flows are intentionally not claimed complete by the smoke fixture.
+
+### Sidebar preferences and shortcuts
+
+Project, Projects and Plugin spaces disclosures remember their local expanded state across parent toggles and app restarts. Project menus offer Pin project / Unpin project; pinned projects stay above other projects while keeping the saved ordering inside each group. Reordering does not move projects across the pin boundary.
+
+- macOS: Cmd+1–9 switches to the corresponding selectable thread in the expanded sidebar, top to bottom; Cmd+N opens a new thread draft.
+- Windows/Linux: Ctrl+1–9 and Ctrl+N provide the same actions.
+
+Pinned threads come first, collapsed project threads do not consume a number, and missing numbers do nothing. New thread uses the same recent-project/chooser behavior as its sidebar button. Shortcuts also work from the composer, but leave dialogs, menus, composition and additional modifiers alone.
+
+### Images in conversations
+
+Markdown images render inline and open a full-window preview when clicked. PNG/JPEG/GIF/WebP data URLs, HTTP(S) image URLs, absolute local paths, file URLs, and paths relative to the current thread workspace are supported. Local files are read only for display, validated as images, and never imported into the journal. Missing or unsupported images show a placeholder. Escape, the close button or the backdrop closes the preview.
+
+Tool image content already returned by `view_image` appears in its expanded tool detail with the same preview. Tool commands, arguments and output text remain unchanged; a plain path alone remains text.

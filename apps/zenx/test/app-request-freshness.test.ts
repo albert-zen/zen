@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { JSDOM } from "jsdom";
-import { act, createElement } from "react";
+import * as React from "react";
 import { createRoot } from "react-dom/client";
 
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
@@ -16,8 +16,12 @@ import type {
   Thread,
 } from "../src/protocol-client/index.js";
 import { App } from "../src/renderer/src/App.js";
+import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
+import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
+const { act, createElement } = React;
+Object.assign(globalThis, { React });
 
-test("ignores an older Thread summary response after a newer refresh", async () => {
+test("ignores older Thread summary and model catalog responses after newer refreshes", async () => {
   const dom = new JSDOM(
     "<!doctype html><html><body><div id=root></div></body></html>",
     { url: "http://localhost" },
@@ -25,12 +29,23 @@ test("ignores an older Thread summary response after a newer refresh", async () 
   const previousGlobals = {
     document: globalThis.document,
     HTMLElement: globalThis.HTMLElement,
+    MouseEvent: globalThis.MouseEvent,
     Node: globalThis.Node,
     window: globalThis.window,
   };
   const requests: Array<ReturnType<typeof deferred<NativeThreadSummary[]>>> =
     [];
+  const modelRequests: Array<
+    ReturnType<typeof deferred<{ data: ReturnType<typeof wireModel>[] }>>
+  > = [];
+  let deferCatalog = false;
   let notifyStatus: ((status: AppServerHostStatus) => void) | undefined;
+  let notify:
+    | (<M extends ServerNotificationMethod>(
+        method: M,
+        params: ServerNotificationParams[M],
+      ) => void)
+    | undefined;
   const never = new Promise<AppServerHostStatus>(() => undefined);
   const zenx = {
     platform: "darwin",
@@ -38,7 +53,12 @@ test("ignores an older Thread summary response after a newer refresh", async () 
       getStatus: async () => await never,
       getPendingApprovals: async () => [],
       request: async (method: string) => {
-        if (method === "model/list") return { data: [] };
+        if (method === "model/list") {
+          if (!deferCatalog) return { data: [wireModel("baseline-model")] };
+          const request = deferred<{ data: ReturnType<typeof wireModel>[] }>();
+          modelRequests.push(request);
+          return await request.promise;
+        }
         throw new Error(`Unexpected protocol request: ${method}`);
       },
       respondToApproval: async () => undefined,
@@ -48,7 +68,15 @@ test("ignores an older Thread summary response after a newer refresh", async () 
         notifyStatus = listener;
         return () => undefined;
       },
-      onNotification: () => () => undefined,
+      onNotification: (
+        listener: <M extends ServerNotificationMethod>(
+          method: M,
+          params: ServerNotificationParams[M],
+        ) => void,
+      ) => {
+        notify = listener;
+        return () => undefined;
+      },
     },
     threads: {
       list: () => {
@@ -59,14 +87,26 @@ test("ignores an older Thread summary response after a newer refresh", async () 
     },
     projects: {
       get: async () => ({
-        projects: [],
+        projects: [
+          {
+            key: "/work/zen",
+            workspace: "/work/zen",
+            configured: true,
+            isDefault: true,
+            threadIds: [],
+          },
+        ],
         unavailableThreadIds: [],
-        lastUsedWorkspace: null,
+        lastUsedWorkspace: "/work/zen",
       }),
     },
     settings: {
       get: async () => ({
-        profile: { onboardingComplete: true, pinnedThreadIds: [] },
+        profile: {
+          onboardingComplete: true,
+          pinnedThreadIds: [],
+          providerProfiles: [],
+        },
       }),
     },
     titles: {
@@ -89,6 +129,7 @@ test("ignores an older Thread summary response after a newer refresh", async () 
   Object.assign(globalThis, {
     document: dom.window.document,
     HTMLElement: dom.window.HTMLElement,
+    MouseEvent: dom.window.MouseEvent,
     Node: dom.window.Node,
     window: dom.window,
     IS_REACT_ACT_ENVIRONMENT: true,
@@ -102,10 +143,59 @@ test("ignores an older Thread summary response after a newer refresh", async () 
   try {
     await act(async () => root.render(createElement(App)));
     assert.ok(notifyStatus);
+    assert.ok(notify);
     await act(async () => {
       notifyStatus?.({ type: "ready", reconnected: false });
       await Promise.resolve();
+      await Promise.resolve();
     });
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    deferCatalog = true;
+    assert.equal(modelRequests.length, 0);
+    await act(async () => {
+      notify?.("model/catalog/updated", {
+        processEpoch: "catalog-epoch",
+        revision: 1,
+      });
+      await Promise.resolve();
+      notify?.("model/catalog/updated", {
+        processEpoch: "catalog-epoch",
+        revision: 2,
+      });
+      await Promise.resolve();
+    });
+    assert.equal(modelRequests.length, 2);
+    await act(async () => {
+      modelRequests[1]?.resolve({ data: [wireModel("new-model")] });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '.composer-model-trigger[aria-label^="Model and reasoning"]',
+        )
+        ?.click(),
+    );
+    await act(async () =>
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>(
+          ".composer-selection-menu button",
+        ),
+      )
+        .find((button) => button.textContent?.includes("Model"))
+        ?.click(),
+    );
+    assert.match(document.body.textContent ?? "", /new-model/u);
+    await act(async () => {
+      modelRequests[0]?.resolve({ data: [wireModel("old-model")] });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.match(document.body.textContent ?? "", /new-model/u);
+    assert.doesNotMatch(document.body.textContent ?? "", /old-model/u);
     await act(async () => {
       notifyStatus?.({ type: "ready", reconnected: true });
       await Promise.resolve();
@@ -172,14 +262,9 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
       request: async (method: string, params?: unknown) => {
         if (method === "model/list")
           return { data: [wireModel("fake")], nextCursor: null };
-        if (method === "thread/resume") {
+        if (method === "zen/thread/resume") {
           const threadId = (params as { threadId: string }).threadId;
-          return {
-            thread: resumedThread(threadId),
-            model: "fake",
-            modelProvider: "fake",
-            reasoningEffort: "medium",
-          };
+          return nativeRecoveryForThread(resumedThread(threadId));
         }
         throw new Error(`Unexpected protocol request: ${method}`);
       },
@@ -448,8 +533,9 @@ function failedTurn(
 }
 
 function wireModel(id: string) {
+  const wireId = encodeModelKey({ providerProfileId: "fake", modelId: id });
   return {
-    id,
+    id: wireId,
     model: id,
     upgrade: null,
     upgradeInfo: null,

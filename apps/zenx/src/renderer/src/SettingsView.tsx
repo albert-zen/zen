@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { normalizeContextCompactionConfig } from "../../../../../src/context-compaction.js";
+import { ContextCompactionPanel } from "./ContextCompactionPanel.js";
 
 import { builtInModelCatalogPreset } from "../../../../cli/src/model-presets.js";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
@@ -30,13 +32,19 @@ import {
   type AppearancePreset,
 } from "./appearance.js";
 import { PluginSettings } from "./PluginSettings.js";
-import { Icon } from "./icons.js";
+import { Icon, type IconName } from "./icons.js";
 import { ProviderLogo, providerLogoKindForIdentity } from "./ProviderLogo.js";
 import { threadModelIdentity, threadTitle } from "./thread-list.js";
 import { PluginSettingsSurfaces } from "./PluginProductPage.js";
 
 export type SettingsTab =
-  "account" | "models" | "plugins" | "appearance" | "general" | "archived";
+  | "account"
+  | "models"
+  | "plugins"
+  | "appearance"
+  | "general"
+  | "compaction"
+  | "archived";
 
 export function SettingsView({
   archivedError,
@@ -65,7 +73,16 @@ export function SettingsView({
   const [draft, setDraft] = useState<ZenXHostProfile | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
+  const [status, setStatusState] = useState<{ message: string } | null>(null);
+  const feedbackScope = useRef({ tab, version: 0 });
+  if (feedbackScope.current.tab !== tab) {
+    feedbackScope.current = { tab, version: feedbackScope.current.version + 1 };
+  }
+  const feedbackVersion = feedbackScope.current.version;
+  const setStatus = (message: string | null) => {
+    if (feedbackScope.current.version !== feedbackVersion) return;
+    setStatusState(message === null ? null : { message });
+  };
   const [manualCode, setManualCode] = useState(false);
   const navRef = useRef<HTMLElement>(null);
 
@@ -88,13 +105,23 @@ export function SettingsView({
     };
   }, []);
 
+  useEffect(() => {
+    if (status === null) return;
+    const timer = setTimeout(() => setStatusState(null), 4000);
+    return () => clearTimeout(timer);
+  }, [status]);
+
+  useEffect(() => setStatusState(null), [tab]);
+
   const save = async () => {
     if (draft === null) return;
     setBusy("save");
     setError(null);
     setStatus(null);
     try {
+      normalizeContextCompactionConfig(draft.contextCompaction);
       const value = await window.zenx.settings.save({
+        baseRevision: draft.revision ?? 0,
         onboardingComplete: true,
         computerForegroundControlEnabled:
           draft.computerForegroundControlEnabled === true,
@@ -103,11 +130,13 @@ export function SettingsView({
         titleModel: draft.titleModel,
         approvalPolicy: draft.approvalPolicy,
         toolPresentation: draft.toolPresentation ?? "both",
+        composerSendMode: draft.composerSendMode ?? "queue",
         maxToolRounds: draft.maxToolRounds,
+        contextCompaction: draft.contextCompaction,
       });
       setSettings(value);
       setDraft(value.profile);
-      setStatus("Changes applied · local host restarted");
+      setStatus(configurationSaveToast(value));
     } catch (reason) {
       setError(describeError(reason));
     } finally {
@@ -127,17 +156,28 @@ export function SettingsView({
       </section>
     );
   }
+  let compactionError: string | null = null;
+  try {
+    normalizeContextCompactionConfig(draft.contextCompaction);
+  } catch (reason) {
+    compactionError = describeError(reason);
+  }
   const hostDirty = JSON.stringify(draft) !== JSON.stringify(settings.profile);
+  const sendModeOnly =
+    hostDirty &&
+    JSON.stringify({ ...draft, composerSendMode: undefined }) ===
+      JSON.stringify({ ...settings.profile, composerSendMode: undefined });
   const tabs: Array<{
     id: SettingsTab;
     label: string;
-    icon: "users" | "layers" | "trigger" | "moon" | "settings" | "archive";
+    icon: IconName;
   }> = [
     { id: "account", label: "Account", icon: "users" },
-    { id: "models", label: "Models & provider", icon: "layers" },
+    { id: "models", label: "Models & provider", icon: "chip" },
     { id: "plugins", label: "Plugins", icon: "trigger" },
     { id: "appearance", label: "Appearance", icon: "moon" },
     { id: "general", label: "General", icon: "settings" },
+    { id: "compaction", label: "Context compaction", icon: "compress" },
     { id: "archived", label: "Archived threads", icon: "archive" },
   ];
   return (
@@ -158,7 +198,7 @@ export function SettingsView({
             </button>
             <div>
               <h1>Settings</h1>
-              <p>Account, appearance, models, plugins, and local host</p>
+              <p>Make ZenX your own</p>
             </div>
           </div>
         </header>
@@ -239,7 +279,6 @@ export function SettingsView({
                 setError={setError}
                 setSettings={setSettings}
                 setStatus={setStatus}
-                status={status}
               />
             ) : null}
             {tab === "plugins" ? (
@@ -251,7 +290,14 @@ export function SettingsView({
                     Uninstall keeps plugin data until you explicitly delete it.
                   </p>
                 </header>
-                <PluginSettings />
+                <PluginSettings
+                  onFeedback={(message) => {
+                    if (feedbackScope.current.version !== feedbackVersion)
+                      return;
+                    setError(null);
+                    setStatus(message);
+                  }}
+                />
                 {pluginSnapshot === null ? null : (
                   <PluginSettingsSurfaces snapshot={pluginSnapshot} />
                 )}
@@ -260,6 +306,19 @@ export function SettingsView({
             {tab === "appearance" ? <AppearancePanel /> : null}
             {tab === "general" ? (
               <GeneralPanel draft={draft} setDraft={setDraft} />
+            ) : null}
+            {tab === "compaction" ? (
+              <ContextCompactionPanel
+                config={draft.contextCompaction}
+                onChange={(contextCompaction) =>
+                  setDraft({ ...draft, contextCompaction })
+                }
+              />
+            ) : null}
+            {compactionError !== null ? (
+              <div className="settings-error" role="alert">
+                {compactionError}
+              </div>
             ) : null}
             {tab === "archived" ? (
               <ArchivedThreadsPanel
@@ -270,10 +329,89 @@ export function SettingsView({
                 threads={archivedThreads}
               />
             ) : null}
-            {tab === "models" || tab === "general" ? (
+            {settings.configuration?.status === "unconfirmed" ? (
+              <div className="settings-note" role="status">
+                <p>{configurationSaveMessage(settings)}</p>
+                <button
+                  type="button"
+                  className="quiet-button"
+                  disabled={busy !== null}
+                  onClick={() => {
+                    setBusy("configuration-check");
+                    setError(null);
+                    setStatus(null);
+                    void window.zenx.settings
+                      .reconcile(false)
+                      .then((value) => {
+                        setSettings(value);
+                        setStatus(configurationSaveToast(value));
+                      })
+                      .catch((reason) => setError(describeError(reason)))
+                      .finally(() => setBusy(null));
+                  }}
+                >
+                  Check application status
+                </button>
+                <button
+                  type="button"
+                  className="quiet-button"
+                  disabled={busy !== null}
+                  onClick={() => {
+                    setBusy("configuration-retry");
+                    setError(null);
+                    setStatus(null);
+                    void window.zenx.settings
+                      .reconcile(true)
+                      .then((value) => {
+                        setSettings(value);
+                        setStatus(configurationSaveToast(value));
+                      })
+                      .catch((reason) => setError(describeError(reason)))
+                      .finally(() => setBusy(null));
+                  }}
+                >
+                  Retry applying saved settings
+                </button>
+              </div>
+            ) : null}
+            {settings.configuration?.pendingRestart.length ? (
+              <div className="settings-note" role="status">
+                <p>
+                  Saved · {settings.configuration.pendingRestart.join(", ")}{" "}
+                  takes effect next launch
+                </p>
+                <button
+                  type="button"
+                  className="quiet-button"
+                  disabled={busy !== null}
+                  onClick={() => {
+                    setBusy("safe-restart");
+                    setError(null);
+                    setStatus(null);
+                    void window.zenx.settings
+                      .safeRestart()
+                      .then((value) => {
+                        setSettings(value);
+                        setDraft(value.profile);
+                        setStatus(configurationSaveToast(value));
+                      })
+                      .catch((reason) => setError(describeError(reason)))
+                      .finally(() => setBusy(null));
+                  }}
+                >
+                  Safe restart
+                </button>
+              </div>
+            ) : null}
+            {tab === "models" || tab === "general" || tab === "compaction" ? (
               <SettingsApplyBar
                 busy={busy === "save"}
+                disabled={
+                  compactionError !== null ||
+                  settings.configuration?.status === "unconfirmed"
+                }
                 dirty={hostDirty}
+                requiresRestart={!sendModeOnly}
                 onApply={() => void save()}
               />
             ) : null}
@@ -283,14 +421,21 @@ export function SettingsView({
                 {error}
               </div>
             ) : null}
-            {status && tab !== "models" ? (
-              <div className="settings-success" role="status">
-                <Icon name="check" />
-                {status}
-              </div>
-            ) : null}
           </div>
         </div>
+      </div>
+      <div
+        className="settings-toast-region"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {status && !error ? (
+          <div className="settings-toast">
+            <Icon name="check" />
+            <span>{status.message}</span>
+          </div>
+        ) : null}
       </div>
     </section>
   );
@@ -300,7 +445,11 @@ export function SettingsApplyBar({
   busy,
   dirty,
   onApply,
+  requiresRestart = true,
+  disabled = false,
 }: {
+  disabled?: boolean;
+  requiresRestart?: boolean;
   busy: boolean;
   dirty: boolean;
   onApply(): void;
@@ -308,20 +457,28 @@ export function SettingsApplyBar({
   return (
     <div className={`settings-apply-bar${dirty ? " dirty" : ""}`}>
       <div>
-        <strong>Local host configuration</strong>
+        <strong>{requiresRestart ? "App settings" : "Message sending"}</strong>
         <span>
           {dirty
-            ? "Apply these changes when you are ready. ZenX will restart the local host."
-            : "No unapplied host changes."}
+            ? requiresRestart
+              ? "Apply these changes. Running turns keep their current configuration."
+              : "Apply this sending preference without interrupting the running turn."
+            : "Your settings are up to date."}
         </span>
       </div>
       <button
         className={dirty ? "primary-button" : "quiet-button"}
         type="button"
-        disabled={!dirty || busy}
+        disabled={!dirty || busy || disabled}
         onClick={onApply}
       >
-        {busy ? "Applying & restarting…" : "Apply & restart"}
+        {requiresRestart
+          ? busy
+            ? "Applying…"
+            : "Apply"
+          : busy
+            ? "Applying…"
+            : "Apply"}
       </button>
     </div>
   );
@@ -554,7 +711,6 @@ function ModelsPanel({
   setError,
   setSettings,
   setStatus,
-  status,
 }: {
   busy: string | null;
   draft: ZenXHostProfile;
@@ -565,12 +721,12 @@ function ModelsPanel({
   setError(value: string | null): void;
   setSettings(value: PublicHostSettings): void;
   setStatus(value: string | null): void;
-  status: string | null;
 }) {
   const [showAddChoices, setShowAddChoices] = useState(false);
   const [editor, setEditor] = useState<{
     mode: "add" | "edit";
     provider: ZenXProviderProfile;
+    baseRevision: number;
   } | null>(null);
   const [deletingProviderId, setDeletingProviderId] = useState<string | null>(
     null,
@@ -595,7 +751,7 @@ function ModelsPanel({
         : value.profile.titleModel,
     });
     setError(null);
-    setStatus(message);
+    setStatus(configurationSaveToast(value));
   };
 
   const runMutation = async (
@@ -614,12 +770,15 @@ function ModelsPanel({
       const originalError = describeError(reason);
       try {
         const authoritative = await window.zenx.settings.get();
-        if (committed(authoritative)) {
+        if (
+          authoritative.configuration &&
+          (authoritative.profile.revision ?? 0) >
+            (settings.profile.revision ?? 0) &&
+          committed(authoritative)
+        ) {
           setSettings(authoritative);
           setDraft(authoritative.profile);
-          setStatus(
-            `${message.replace(/ · local host restarted$/u, "")} · saved, but finalization failed`,
-          );
+          setStatus(configurationSaveToast(authoritative));
           setError(
             `Settings were saved, but finalization failed: ${originalError}`,
           );
@@ -664,7 +823,11 @@ function ModelsPanel({
             };
     setShowAddChoices(false);
     setDeletingProviderId(null);
-    setEditor({ mode: "add", provider });
+    setEditor({
+      mode: "add",
+      provider,
+      baseRevision: settings.profile.revision ?? 0,
+    });
     setError(null);
     setStatus(null);
   };
@@ -673,6 +836,7 @@ function ModelsPanel({
     setShowAddChoices(false);
     setDeletingProviderId(null);
     setEditor({
+      baseRevision: settings.profile.revision ?? 0,
       mode: "add",
       provider: {
         providerProfileId: preset.providerProfileId,
@@ -695,8 +859,7 @@ function ModelsPanel({
       <header>
         <h2>Models & providers</h2>
         <p>
-          Manage independent Provider profiles and choose which profile owns
-          each global model role.
+          Connect your providers and choose the models you want to work with.
         </p>
       </header>
       {error === null ? null : (
@@ -705,19 +868,12 @@ function ModelsPanel({
           {error}
         </div>
       )}
-      {status === null ? null : (
-        <div className="settings-success" role="status">
-          <Icon name="check" />
-          {status}
-        </div>
-      )}
       <div className="page-card settings-card model-routing-card">
         <div className="settings-card-head">
           <div>
-            <h3>Global model routing</h3>
+            <h3>Default models</h3>
             <p>
-              Provider identity is part of each selection, including when two
-              profiles use the same model ID.
+              Choose a model for new conversations and another for naming them.
             </p>
           </div>
           <span className="status-muted">New work</span>
@@ -737,8 +893,8 @@ function ModelsPanel({
           />
         </div>
         <p className="settings-note">
-          Existing Threads keep their ZAS-authoritative selection until you
-          change it explicitly in the Composer.
+          Existing conversations keep their model. You can change it from the
+          message box at any time.
         </p>
       </div>
       <section
@@ -748,7 +904,7 @@ function ModelsPanel({
         <div className="provider-section-head">
           <div>
             <h3 id="provider-list-title">Provider profiles</h3>
-            <p>Credentials and model IDs stay scoped to one profile.</p>
+            <p>Manage each connection and its available models.</p>
           </div>
           {editor === null ? (
             <div className="provider-section-actions">
@@ -862,17 +1018,20 @@ function ModelsPanel({
             onSubmit={async (provider, apiKey, replacements) => {
               const success = await runMutation(
                 editor.mode === "add" ? "provider-add" : "provider-edit",
-                editor.mode === "add"
-                  ? "Provider added · local host restarted"
-                  : "Provider saved · local host restarted",
+                editor.mode === "add" ? "Provider added" : "Provider saved",
                 async () =>
                   editor.mode === "add"
-                    ? await window.zenx.settings.addProvider(provider, apiKey)
+                    ? await window.zenx.settings.addProvider(
+                        provider,
+                        apiKey,
+                        editor.baseRevision,
+                      )
                     : await window.zenx.settings.editProvider(
                         editor.provider.providerProfileId,
                         provider,
                         {
                           ...replacements,
+                          baseRevision: editor.baseRevision,
                           ...(apiKey === undefined ? {} : { apiKey }),
                         },
                       ),
@@ -909,7 +1068,11 @@ function ModelsPanel({
                 setStatus(null);
               }}
               onEdit={() => {
-                setEditor({ mode: "edit", provider });
+                setEditor({
+                  mode: "edit",
+                  provider,
+                  baseRevision: settings.profile.revision ?? 0,
+                });
                 setDeletingProviderId(null);
                 setShowAddChoices(false);
                 setError(null);
@@ -929,11 +1092,14 @@ function ModelsPanel({
             onDelete={async (replacements) => {
               const success = await runMutation(
                 "provider-delete",
-                "Provider deleted · local host restarted",
+                "Provider deleted",
                 async () =>
                   await window.zenx.settings.deleteProvider(
                     deletingProvider.providerProfileId,
-                    replacements,
+                    {
+                      ...replacements,
+                      baseRevision: settings.profile.revision ?? 0,
+                    },
                   ),
                 (authoritative) => {
                   const deleted = authoritative.profile.providerProfiles.some(
@@ -1060,6 +1226,13 @@ function ProviderEditor({
     initialProvider.models.map((model) => ({ ...model })),
   );
   const [discovering, setDiscovering] = useState(false);
+  const [availableModels, setAvailableModels] = useState<
+    ZenXModelCatalogEntry[] | null
+  >(null);
+  const [selectedAvailableModels, setSelectedAvailableModels] = useState<
+    string[]
+  >([]);
+  const [modelSearch, setModelSearch] = useState("");
   const [probingModel, setProbingModel] = useState<string | null>(null);
   const [catalogStatus, setCatalogStatus] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
@@ -1231,19 +1404,26 @@ function ProviderEditor({
           <legend>Model catalog</legend>
           <div className="model-catalog-head">
             <p>
-              Model IDs are Provider-scoped. New and discovered models start in
-              text-only mode; configure or detect optional capabilities before
-              enabling them.
+              Model IDs are Provider-scoped. OpenAI subscription metadata comes
+              from the official Codex catalog; compatible Providers use their
+              standard model endpoint.
             </p>
-            {provider.type === "openai-compatible" && mode === "edit" ? (
+            {(provider.type === "openai-compatible" ||
+              provider.type === "openai-subscription") &&
+            mode === "edit" ? (
               <button
                 className="quiet-button"
                 type="button"
-                disabled={discovering || !hasApiKey}
+                disabled={
+                  discovering ||
+                  (provider.type === "openai-compatible" && !hasApiKey)
+                }
                 title={
-                  hasApiKey
-                    ? "Fetch model IDs from this Provider"
-                    : "Save an API key before discovery"
+                  provider.type === "openai-subscription"
+                    ? "Fetch the official Codex model catalog"
+                    : hasApiKey
+                      ? "Fetch model IDs from this Provider"
+                      : "Save an API key before discovery"
                 }
                 onClick={() => {
                   setDiscovering(true);
@@ -1252,9 +1432,29 @@ function ProviderEditor({
                   void window.zenx.settings
                     .discoverProvider(provider.providerProfileId)
                     .then((snapshot) => {
-                      setModels(snapshot.models.map((model) => ({ ...model })));
+                      setAvailableModels(snapshot.models);
+                      if (provider.type === "openai-subscription") {
+                        setModels((current) =>
+                          current.map((model) => {
+                            if (model.source === "manual") return model;
+                            const discovered = snapshot.models.find(
+                              (entry) => entry.id === model.id,
+                            );
+                            return discovered === undefined
+                              ? model
+                              : { ...discovered };
+                          }),
+                        );
+                      }
+                      setSelectedAvailableModels([]);
+                      setModelSearch("");
                       setCatalogStatus(
-                        `Found ${snapshot.models.length} configured and available models`,
+                        snapshot.warning ??
+                          (snapshot.source === "cache"
+                            ? "Official catalog is unchanged; using the local cache."
+                            : snapshot.source === "remote"
+                              ? "Official metadata updated in the draft. Save provider to apply."
+                              : null),
                       );
                     })
                     .catch((reason: unknown) =>
@@ -1271,6 +1471,104 @@ function ProviderEditor({
             <p className="model-catalog-status" role="status">
               {catalogStatus}
             </p>
+          )}
+          {availableModels === null ? null : (
+            <section
+              className="available-model-picker"
+              aria-label="Available models"
+            >
+              <h4>Choose models to add</h4>
+              <p className="settings-note">
+                {provider.type === "openai-subscription"
+                  ? "Choose additional models. Official metadata is updated in the draft; manual settings are preserved. Save provider to apply."
+                  : "Select the models you want. Existing models and their settings stay unchanged."}
+              </p>
+              <label className="field">
+                <span>Search available models</span>
+                <input
+                  type="search"
+                  value={modelSearch}
+                  onChange={(event) => setModelSearch(event.target.value)}
+                />
+              </label>
+              <div className="available-model-list">
+                {availableModels
+                  .filter((model) =>
+                    model.id
+                      .toLowerCase()
+                      .includes(modelSearch.trim().toLowerCase()),
+                  )
+                  .map((model) => {
+                    const exists = models.some(
+                      (entry) => entry.id === model.id,
+                    );
+                    return (
+                      <label className="available-model-option" key={model.id}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${model.id}`}
+                          disabled={exists}
+                          checked={
+                            exists || selectedAvailableModels.includes(model.id)
+                          }
+                          onChange={(event) =>
+                            setSelectedAvailableModels((current) =>
+                              event.target.checked
+                                ? [...current, model.id]
+                                : current.filter((id) => id !== model.id),
+                            )
+                          }
+                        />
+                        <span>{model.id}</span>
+                        {exists ? <small>Already added</small> : null}
+                      </label>
+                    );
+                  })}
+                {availableModels.every(
+                  (model) =>
+                    !model.id
+                      .toLowerCase()
+                      .includes(modelSearch.trim().toLowerCase()),
+                ) ? (
+                  <p className="settings-note">No matching models.</p>
+                ) : null}
+              </div>
+              <div className="available-model-actions">
+                <button
+                  type="button"
+                  className="quiet-button"
+                  onClick={() => {
+                    setAvailableModels(null);
+                    setSelectedAvailableModels([]);
+                  }}
+                >
+                  Cancel selection
+                </button>
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={selectedAvailableModels.length === 0}
+                  onClick={() => {
+                    const additions = availableModels.filter(
+                      (entry) =>
+                        selectedAvailableModels.includes(entry.id) &&
+                        !models.some((model) => model.id === entry.id),
+                    );
+                    setModels((current) => [
+                      ...current,
+                      ...additions.map((model) => ({ ...model })),
+                    ]);
+                    setAvailableModels(null);
+                    setSelectedAvailableModels([]);
+                    setCatalogStatus(
+                      `Added ${additions.length} models to the draft. Save provider to apply.`,
+                    );
+                  }}
+                >
+                  Add selected models ({selectedAvailableModels.length})
+                </button>
+              </div>
+            </section>
           )}
           {models.map((model, index) => (
             <div className="provider-model-row" key={index}>
@@ -1395,8 +1693,8 @@ function ProviderEditor({
           <button className="primary-button" type="submit" disabled={busy}>
             {busy
               ? mode === "add"
-                ? "Adding & restarting…"
-                : "Saving & restarting…"
+                ? "Adding…"
+                : "Saving…"
               : mode === "add"
                 ? "Add provider"
                 : "Save provider"}
@@ -1421,6 +1719,10 @@ function ModelCapabilityEditor({
   probing?: boolean;
 }) {
   const [configuringReasoning, setConfiguringReasoning] = useState(false);
+  const savedReasoning = useRef<Pick<
+    ZenXModelCatalogEntry,
+    "supportedReasoningEfforts" | "defaultReasoningEffort"
+  > | null>(null);
   const manual = (
     update: Partial<ZenXModelCatalogEntry>,
   ): ZenXModelCatalogEntry => ({ ...model, ...update, source: "manual" });
@@ -1452,30 +1754,45 @@ function ModelCapabilityEditor({
             value={reasoningMode}
             onChange={(event) => {
               const mode = event.target.value;
+              if (model.supportedReasoningEfforts?.length)
+                savedReasoning.current = {
+                  supportedReasoningEfforts: model.supportedReasoningEfforts,
+                  defaultReasoningEffort: model.defaultReasoningEffort,
+                };
               setConfiguringReasoning(mode === "configured");
               onChange(
                 manual(
                   mode === "unknown"
                     ? {
+                        reasoningConfiguration: undefined,
                         supportedReasoningEfforts: null,
                         defaultReasoningEffort: null,
                       }
                     : mode === "text-only"
                       ? {
+                          reasoningConfiguration: undefined,
                           supportedReasoningEfforts: [],
                           defaultReasoningEffort: null,
                         }
                       : {
-                          supportedReasoningEfforts:
-                            model.supportedReasoningEfforts ?? [],
+                          reasoningConfiguration: "manual",
+                          supportedReasoningEfforts: savedReasoning.current
+                            ?.supportedReasoningEfforts ?? [
+                            "low",
+                            "medium",
+                            "high",
+                          ],
+                          defaultReasoningEffort:
+                            savedReasoning.current?.defaultReasoningEffort ??
+                            "medium",
                         },
                 ),
               );
             }}
           >
             <option value="unknown">Unknown</option>
-            <option value="text-only">Text only (no reasoning control)</option>
-            <option value="configured">Configured</option>
+            <option value="text-only">No reasoning strength control</option>
+            <option value="configured">Manual configuration</option>
           </select>
         </label>
         {onProbe === undefined ? null : (
@@ -1497,24 +1814,42 @@ function ModelCapabilityEditor({
               onChange={(value) =>
                 onChange(
                   manual({
+                    reasoningConfiguration: "manual",
                     supportedReasoningEfforts: commaSeparatedValues(value),
                   }),
                 )
               }
             />
-            <Field
-              label={`Model ${index + 1} default reasoning effort`}
-              placeholder="None"
-              value={model.defaultReasoningEffort ?? ""}
-              onChange={(value) =>
-                onChange(
-                  manual({
-                    defaultReasoningEffort:
-                      value.trim().length === 0 ? null : value,
-                  }),
-                )
-              }
-            />
+            <label className="field">
+              <span>{`Model ${index + 1} default reasoning effort`}</span>
+              <select
+                aria-label={`Model ${index + 1} default reasoning effort`}
+                value={model.defaultReasoningEffort ?? ""}
+                onChange={(event) =>
+                  onChange(
+                    manual({
+                      defaultReasoningEffort: event.target.value || null,
+                    }),
+                  )
+                }
+              >
+                <option value="">Choose a default</option>
+                {(model.supportedReasoningEfforts ?? []).map((effort) => (
+                  <option key={effort} value={effort}>
+                    {effort}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {!model.supportedReasoningEfforts?.length ||
+            !model.supportedReasoningEfforts.includes(
+              model.defaultReasoningEffort ?? "",
+            ) ? (
+              <p className="settings-error" role="alert">
+                Enter at least one supported effort and choose its default
+                before applying.
+              </p>
+            ) : null}
           </>
         ) : null}
         <label className="field">
@@ -1689,7 +2024,7 @@ function DeleteProviderPanel({
             );
           }}
         >
-          {busy ? "Deleting & restarting…" : "Delete provider"}
+          {busy ? "Deleting…" : "Delete provider"}
         </button>
       </div>
     </section>
@@ -1777,6 +2112,17 @@ function validateProviderEditor(
   ) {
     return "Model IDs must be unique within this Provider profile";
   }
+  if (
+    provider.models.some(
+      (model) =>
+        model.reasoningConfiguration === "manual" &&
+        (!model.supportedReasoningEfforts?.length ||
+          !model.supportedReasoningEfforts.includes(
+            model.defaultReasoningEffort ?? "",
+          )),
+    )
+  )
+    return "Manual reasoning configuration requires supported efforts and a valid default";
   const missingContext = provider.models.find(
     (model) =>
       model.contextWindow === null ||
@@ -2102,7 +2448,7 @@ function GeneralPanel({
     <>
       <header>
         <h2>General</h2>
-        <p>Local workspace defaults and Zen App Server behavior.</p>
+        <p>Choose how ZenX works with you and your projects.</p>
       </header>
       <div className="page-card settings-card">
         <div className="settings-card-head">
@@ -2141,8 +2487,8 @@ function GeneralPanel({
         </div>
         <p className="settings-note">
           Off by default. Browser automation and background-safe Computer tools
-          do not need this permission. Apply and restart to change which tools
-          agents can use.
+          do not need this permission. Apply to change which tools agents can
+          use.
         </p>
       </div>
       <div className="page-card settings-card">
@@ -2171,6 +2517,29 @@ function GeneralPanel({
               <option value="never">Full access</option>
             </select>
           </label>
+          <label className="field">
+            <span>Send during a running turn</span>
+            <select
+              value={draft.composerSendMode ?? "queue"}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  composerSendMode: event.target.value as
+                    "queue" | "soft" | "hard",
+                })
+              }
+              aria-describedby="composer-send-help"
+            >
+              <option value="queue">Queue</option>
+              <option value="soft">Soft steer</option>
+              <option value="hard">Hard steer (interrupt and send)</option>
+            </select>
+          </label>
+          <p id="composer-send-help" className="settings-note">
+            Enter and the send button use this choice. Cmd/Ctrl+Enter uses soft
+            steer when Queue is selected, and Queue when either steer mode is
+            selected. Shift+Enter adds a new line.
+          </p>
           <label className="field">
             <span>Tool presentation</span>
             <select
@@ -2251,8 +2620,9 @@ function GeneralPanel({
           <div>
             <strong>Zen App Server</strong>
             <span>
-              Applying changes restarts the local host with these defaults.
-              Existing Thread settings remain authoritative.
+              Runtime defaults apply to new turns. Running turns keep their
+              admitted configuration. Existing Thread settings remain
+              authoritative.
             </span>
           </div>
           <span className="status-good">Local</span>
@@ -2401,7 +2771,7 @@ function modelCapabilitySummary(model: ZenXModelCatalogEntry): string {
     model.supportedReasoningEfforts === null
       ? "reasoning unknown"
       : model.supportedReasoningEfforts.length === 0
-        ? "text only · reasoning not configured"
+        ? "no reasoning strength control"
         : model.supportedReasoningEfforts.join(" / ");
   const modalities =
     model.inputModalities === null
@@ -2471,4 +2841,26 @@ function ManualCode() {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function configurationSaveMessage(value: PublicHostSettings): string {
+  const result = value.configuration;
+  if (!result) return "Settings saved";
+  switch (result.status) {
+    case "unchanged":
+      return "No changes";
+    case "applied":
+      return "Changes applied · running turns keep their current configuration";
+    case "pending-restart":
+      return `Saved · ${result.pendingRestart.join(", ")} takes effect next launch`;
+    case "unconfirmed":
+      return "Saved · application not yet confirmed. Check application status before saving more changes.";
+  }
+}
+
+// Actionable configuration states already have persistent notices and controls.
+function configurationSaveToast(value: PublicHostSettings): string | null {
+  if (value.configuration && value.configuration.status !== "applied")
+    return null;
+  return "Settings saved";
 }

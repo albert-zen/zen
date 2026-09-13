@@ -27,20 +27,25 @@ const pluginSdkCli = path.join(
 export const ZENX_ROOMS_TARBALL = "zenx-rooms-plugin-1.0.0.tgz";
 export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
-    "@zenx/browser-plugin",
-    "zenx-browser-plugin",
-    "zenx-browser-plugin-electron-1.0.0.tgz",
+    "@zenx/imzenx-plugin",
+    "zenx-imzenx-plugin",
+    "zenx-imzenx-plugin-1.0.0.tgz",
   ),
   plugin(
     "@zenx/browser-plugin",
     "zenx-browser-plugin",
-    "zenx-browser-plugin-playwright-1.0.0.tgz",
+    "zenx-browser-plugin-electron-1.0.1.tgz",
+  ),
+  plugin(
+    "@zenx/browser-plugin",
+    "zenx-browser-plugin",
+    "zenx-browser-plugin-playwright-1.0.1.tgz",
     "variants/playwright.zenx.plugin.json",
   ),
   plugin(
     "@zenx/browser-plugin",
     "zenx-browser-plugin",
-    "zenx-browser-plugin-user-session-1.0.0.tgz",
+    "zenx-browser-plugin-user-session-1.0.1.tgz",
     "variants/user-session.zenx.plugin.json",
   ),
   plugin(
@@ -80,7 +85,13 @@ function plugin(packageName, directory, tarball, manifest) {
 export async function packZenXFirstPartyPlugins(options) {
   await preparePluginSdk();
   const packed = [];
+  const builtPackages = new Set();
   for (const definition of FIRST_PARTY_PLUGINS) {
+    // Variants change only the staged manifest, not the compiled runtime.
+    if (!builtPackages.has(definition.packageName)) {
+      await runNpm(["run", "build", "--workspace", definition.packageName]);
+      builtPackages.add(definition.packageName);
+    }
     packed.push(await packFirstPartyPlugin(definition, options));
   }
   return packed;
@@ -88,6 +99,7 @@ export async function packZenXFirstPartyPlugins(options) {
 
 export async function packZenXRoomsPlugin(options) {
   await preparePluginSdk();
+  await runNpm(["run", "build", "--workspace", "@zenx/rooms-plugin"]);
   return (
     await packFirstPartyPlugin(
       FIRST_PARTY_PLUGINS.find(
@@ -101,7 +113,6 @@ export async function packZenXRoomsPlugin(options) {
 async function packFirstPartyPlugin(definition, options) {
   const pluginsDirectory = path.resolve(options.outputDirectory, "plugins");
   await mkdir(pluginsDirectory, { recursive: true, mode: 0o700 });
-  await runNpm(["run", "build", "--workspace", definition.packageName]);
   const staging = await mkdtemp(
     firstPartyPluginStagingPrefix(pluginsDirectory),
   );

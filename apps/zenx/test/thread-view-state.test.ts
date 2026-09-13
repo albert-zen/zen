@@ -6,8 +6,12 @@ import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import { threadHasActiveTurn } from "../src/renderer/src/thread-list.js";
 import {
   activeTurn,
+  applyNativeThreadEvent,
   applyThreadViewNotification,
+  markThreadViewAwaitingRecovery,
+  projectNativeRecovery,
 } from "../src/renderer/src/thread-view-state.js";
+import type { NativeThreadRecoverySnapshot } from "../../../src/protocol/native/recovery.js";
 
 test("keeps interrupted history from thread/resume as terminal history", () => {
   const interrupted = turn("turn-old", "interrupted", [
@@ -67,6 +71,117 @@ test("streams agent text in memory and replaces it with the completed item", () 
   assert.equal(current.status.type, "idle");
 });
 
+test("native recovery keeps an active partial response once without reviving old epochs", () => {
+  const metadata = {
+    id: "metadata-1",
+    type: "thread_metadata" as const,
+    threadId: "thread-1",
+    createdAt: new Date(10_000).toISOString(),
+    cwd: "/workspace",
+    providerProfileId: "fake",
+    modelId: "fake",
+    reasoningEffort: null,
+    sandbox: "danger-full-access" as const,
+    approvalPolicy: "never" as const,
+  };
+  const started = {
+    id: "turn-start-1",
+    type: "turn_started" as const,
+    threadId: "thread-1",
+    turnId: "turn-live",
+    createdAt: new Date(11_000).toISOString(),
+    selection: {
+      providerProfileId: "fake",
+      modelId: "fake",
+      reasoningEffort: null,
+    },
+  };
+  const recovery: NativeThreadRecoverySnapshot = {
+    processEpoch: "current",
+    threadId: "thread-1",
+    watermark: 4,
+    thread: {
+      id: "thread-1",
+      items: [metadata, started],
+      turns: [
+        {
+          id: "turn-live",
+          status: "inProgress",
+          items: [started],
+          selection: started.selection,
+          model: "fake",
+        },
+      ],
+      cwd: "/workspace",
+      providerProfileId: "fake",
+      modelId: "fake",
+      reasoningEffort: null,
+      model: "fake",
+      provider: "fake",
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+      archived: false,
+    },
+    events: [
+      {
+        processEpoch: "old",
+        threadId: "thread-1",
+        watermark: 99,
+        event: {
+          type: "item_delta",
+          threadId: "thread-1",
+          turnId: "turn-live",
+          itemId: "agent-live",
+          delta: "duplicate ",
+        },
+      },
+      {
+        processEpoch: "current",
+        threadId: "thread-1",
+        watermark: 2,
+        event: {
+          type: "item_started",
+          threadId: "thread-1",
+          turnId: "turn-live",
+          itemId: "agent-live",
+          itemType: "agent_message",
+        },
+      },
+      {
+        processEpoch: "current",
+        threadId: "thread-1",
+        watermark: 3,
+        event: {
+          type: "item_delta",
+          threadId: "thread-1",
+          turnId: "turn-live",
+          itemId: "agent-live",
+          delta: "partial ",
+        },
+      },
+      {
+        processEpoch: "current",
+        threadId: "thread-1",
+        watermark: 4,
+        event: {
+          type: "item_delta",
+          threadId: "thread-1",
+          turnId: "turn-live",
+          itemId: "agent-live",
+          delta: "answer",
+        },
+      },
+    ],
+  };
+
+  const projected = projectNativeRecovery(recovery);
+  assert.equal(agentText(projected), "partial answer");
+  assert.equal(activeTurn(projected)?.id, "turn-live");
+  const awaiting = markThreadViewAwaitingRecovery(projected);
+  assert.equal(activeTurn(awaiting), null);
+  assert.equal(agentText(awaiting), "partial answer");
+});
+
 test("streams reasoning summary and content in memory before canonical completion", () => {
   const running = turn("turn-reasoning", "inProgress");
   let current = thread([running]);
@@ -113,6 +228,7 @@ test("streams reasoning summary and content in memory before canonical completio
     id: "reasoning-1",
     summary: ["checked the plan"],
     content: ["public thought"],
+    status: "inProgress",
   });
 
   current = applyThreadViewNotification(current, "item/completed", {
@@ -309,3 +425,75 @@ function commandOutput(value: Thread): string | null | undefined {
 function reasoningValue(value: Thread): ThreadItem | undefined {
   return value.turns[0]?.items.find((item) => item.type === "reasoning");
 }
+
+test("reasoning follows its own lifecycle and terminal turns settle unfinished thinking", () => {
+  const running = turn("thinking", "inProgress");
+  let value = thread([running]);
+  value = applyThreadViewNotification(value, "item/started", {
+    threadId: value.id,
+    turnId: running.id,
+    item: reasoningItem("r"),
+    startedAtMs: 1,
+  });
+  assert.equal(
+    (reasoningValue(value) as { status?: string }).status,
+    "inProgress",
+  );
+  value = applyThreadViewNotification(value, "turn/completed", {
+    threadId: value.id,
+    turn: turn(running.id, "interrupted"),
+  });
+  assert.equal(
+    (reasoningValue(value) as { status?: string }).status,
+    "interrupted",
+  );
+});
+
+test("native completion replaces live reasoning without duplicates", () => {
+  let current = thread([turn("turn-1", "inProgress")]);
+  current = applyNativeThreadEvent(current, {
+    type: "item_started",
+    threadId: current.id,
+    turnId: "turn-1",
+    itemId: "reasoning-1",
+    itemType: "reasoning",
+  });
+  const item = {
+    id: "reasoning-1",
+    threadId: current.id,
+    turnId: "turn-1",
+    createdAt: "2026-09-09T11:25:22Z",
+    type: "reasoning" as const,
+    reasoningContent: "finished",
+    contentVisibility: "public" as const,
+  };
+  current = applyNativeThreadEvent(current, { type: "item_completed", item });
+  current = applyNativeThreadEvent(current, { type: "item_completed", item });
+  assert.equal(current.turns[0]!.items.length, 1);
+  const completed = current.turns[0]!.items[0]!;
+  assert.equal(completed.type, "reasoning");
+  if (completed.type === "reasoning") {
+    assert.notEqual(completed.status, "inProgress");
+    assert.deepEqual(completed.content, ["finished"]);
+  }
+});
+
+test("replayed native tool call preserves its completed result", () => {
+  const current = thread([
+    turn("turn-1", "inProgress", [commandItem("tool-1", "completed", "done")]),
+  ]);
+  const next = applyNativeThreadEvent(current, {
+    type: "item_completed",
+    item: {
+      id: "tool-1",
+      threadId: current.id,
+      turnId: "turn-1",
+      createdAt: "2026-09-09T11:25:22Z",
+      type: "tool_call",
+      callId: "call-1",
+      name: "shell",
+      arguments: { command: "echo done" },
+    },
+  });
+  assert.deepEqual(next, current);
+});

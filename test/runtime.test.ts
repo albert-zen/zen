@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { pendingQueuedMessages } from "../src/input-queue.js";
 import { shellPrintCommand } from "./fixtures.js";
 
 import { type AppServerEvent, ZenAppServer } from "../src/app-server.js";
@@ -100,7 +101,7 @@ function createServer(
       ? {}
       : { threadSummaryProjection: options.threadSummaryProjection }),
     defaults: {
-      cwd: process.cwd(),
+      cwd: os.tmpdir(),
       providerProfileId: model.provider,
       modelId: modelCatalog.defaultModel().id,
       reasoningEffort:
@@ -493,7 +494,13 @@ test("derives each turn model from append-only configuration changes", async () 
   assert.deepEqual(
     changed.items
       .filter((item) => item.type === "thread_configuration_changed")
-      .map((item) => ("selection" in item ? item.selection : item.model)),
+      .map((item) =>
+        "selection" in item
+          ? item.selection
+          : "model" in item
+            ? item.model
+            : item.permissions,
+      ),
     [
       {
         from: {
@@ -1432,7 +1439,7 @@ test("streams one correlated reasoning lifecycle and journals one complete item"
   }
 });
 
-test("failed reasoning streams leave no incomplete canonical reasoning", async () => {
+test("failed reasoning streams preserve an incomplete canonical trace", async () => {
   const model: ModelAdapter = {
     provider: "reasoning-stream-failure",
     async *stream(): AsyncIterable<ModelEvent> {
@@ -1455,17 +1462,27 @@ test("failed reasoning streams leave no incomplete canonical reasoning", async (
 
   const snapshot = await server.readThread(thread.id);
   assert.equal(
-    snapshot.items.some((item) => item.type === "reasoning"),
-    false,
+    snapshot.items.some(
+      (item) => item.type === "reasoning" && item.incomplete === true,
+    ),
+    true,
   );
   assert(events.some((event) => event.type === "reasoning_content_delta"));
+  const partial = snapshot.items.find((item) => item.type === "reasoning");
+  assert.equal(partial?.reasoningContent, "transient only");
+  assert.equal(
+    compileModelMessages(snapshot.items).some(
+      (message) => message.role === "reasoning",
+    ),
+    false,
+  );
   assert.equal(
     snapshot.items.find((item) => item.type === "failure")?.message,
     "reasoning stream failed",
   );
 });
 
-test("aborted reasoning streams leave no incomplete canonical reasoning", async () => {
+test("aborted reasoning streams preserve the public summary", async () => {
   const streamed = testDeferred<void>();
   const model: ModelAdapter = {
     provider: "reasoning-stream-abort",
@@ -1496,13 +1513,15 @@ test("aborted reasoning streams leave no incomplete canonical reasoning", async 
 
   const snapshot = await server.readThread(thread.id);
   assert.equal(
-    snapshot.items.some((item) => item.type === "reasoning"),
-    false,
+    snapshot.items.some(
+      (item) => item.type === "reasoning" && item.incomplete === true,
+    ),
+    true,
   );
   assert.equal(snapshot.turns[0]?.status, "interrupted");
 });
 
-test("partial model deltas are not canonicalized when the model ends incomplete", async () => {
+test("partial model text is retained when the model ends incomplete", async () => {
   const incompleteModel: ModelAdapter = {
     provider: "incomplete-test",
     async *stream(): AsyncIterable<ModelEvent> {
@@ -1525,8 +1544,12 @@ test("partial model deltas are not canonicalized when the model ends incomplete"
   const snapshot = await server.readThread(thread.id);
   assert(events.some((event) => event.type === "item_delta"));
   assert.equal(
-    snapshot.items.some((item) => item.type === "agent_message"),
-    false,
+    snapshot.items.some(
+      (item) =>
+        item.type === "agent_message" &&
+        item.text === "transient partial answer",
+    ),
+    true,
   );
   assert.equal(
     snapshot.items.find((item) => item.type === "failure")?.message,
@@ -1747,7 +1770,7 @@ test("declined shell call is explicit and is not executed", async () => {
   assertEveryToolCallHasOneResult(snapshot.items);
 });
 
-test("explicit shell redaction removes caller-designated values", async () => {
+test("shell preserves output values while excluding blocked environment variables", async () => {
   const providerKey = "sk-provider-key-must-not-enter-the-thread";
   const blockedPath = "/provider-secret/path";
   const temporaryDirectory = await mkdtemp(
@@ -1762,7 +1785,6 @@ test("explicit shell redaction removes caller-designated values", async () => {
         PATH: blockedPath,
       },
       blockedEnvironmentVariables: ["OPENAI_API_KEY", "PATH"],
-      redactedValues: [providerKey, blockedPath],
     });
     const server = createServer({ tools: executor });
     const thread = await server.startThread();
@@ -1785,9 +1807,8 @@ test("explicit shell redaction removes caller-designated values", async () => {
     assert(result?.type === "tool_result");
     assert.equal(result.exitCode, 0);
     assert(result.output.includes("KEY=|PATH="));
-    assert.equal(result.output.match(/\[REDACTED\]/gu)?.length, 4);
-    assert(!JSON.stringify(snapshot.items).includes(providerKey));
-    assert(!JSON.stringify(snapshot.items).includes(blockedPath));
+    assert.equal(result.output.split(providerKey).length - 1, 2);
+    assert.equal(result.output.split(blockedPath).length - 1, 2);
     assertEveryToolCallHasOneResult(snapshot.items);
   } finally {
     await rm(temporaryDirectory, { recursive: true });
@@ -3003,3 +3024,161 @@ async function testWithin<T>(promise: Promise<T>, label: string): Promise<T> {
     }
   }
 }
+
+test("failed sample trace survives journal reload without executing a queued tool", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-failed-trace-"));
+  const model: ModelAdapter = {
+    provider: "failed-trace",
+    async *stream(): AsyncIterable<ModelEvent> {
+      yield {
+        type: "reasoning_content_delta",
+        reasoningId: "r",
+        delta: "observed reasoning",
+      };
+      yield { type: "text_delta", delta: "observed answer" };
+      yield {
+        type: "tool_call",
+        callId: "queued",
+        name: "shell",
+        arguments: { command: "must not execute" },
+      };
+      throw new Error("invalid tool call id");
+    },
+  };
+  try {
+    const server = createServer({
+      model,
+      journal: new JsonlThreadJournal(directory),
+    });
+    const thread = await server.startThread();
+    await (
+      await server.startTurn(thread.id, "request")
+    ).done;
+    const reloaded = createServer({
+      model,
+      journal: new JsonlThreadJournal(directory),
+    });
+    const snapshot = await reloaded.readThread(thread.id);
+    assert.equal(snapshot.turns[0]?.status, "failed");
+    assert.equal(
+      snapshot.items.find((item) => item.type === "reasoning")
+        ?.reasoningContent,
+      "observed reasoning",
+    );
+    assert.equal(
+      snapshot.items.find((item) => item.type === "agent_message")?.text,
+      "observed answer",
+    );
+    assert.equal(
+      snapshot.items.some(
+        (item) => item.type === "tool_call" || item.type === "tool_result",
+      ),
+      false,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("queued input waits for the active turn and drains in FIFO order", async () => {
+  const release = testDeferred<void>();
+  const entered = testDeferred<void>();
+  const finished = testDeferred<void>();
+  let calls = 0;
+  const model: ModelAdapter = {
+    provider: "queue-test",
+    async *stream(): AsyncIterable<ModelEvent> {
+      calls += 1;
+      if (calls === 1) {
+        entered.resolve();
+        await release.promise;
+      }
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const server = createServer({ model });
+  let completions = 0;
+  server.subscribe((event) => {
+    if (event.type === "turn_completed" && ++completions === 3)
+      finished.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  await server.queueMessage(thread.id, "second", "queue-2");
+  await server.queueMessage(thread.id, "third", "queue-3");
+  await server.queueMessage(thread.id, "second", "queue-2");
+  assert.equal(calls, 1);
+  release.resolve();
+  await first.done;
+  await finished.promise;
+  const snapshot = await server.readThread(thread.id);
+  assert.deepEqual(
+    snapshot.items
+      .filter((item) => item.type === "user_message")
+      .map(textFromUserMessage),
+    ["first", "second", "third"],
+  );
+});
+
+test("queued input survives restart and pauses after interruption until explicit resume", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-queue-reload-"));
+  try {
+    const started = testDeferred<void>();
+    const model: ModelAdapter = {
+      provider: "blocked",
+      async *stream(request) {
+        started.resolve();
+        await new Promise<void>((_resolve, reject) =>
+          request.signal.addEventListener(
+            "abort",
+            () => reject(request.signal.reason),
+            { once: true },
+          ),
+        );
+        yield { type: "text_delta" as const, delta: "unreachable" };
+      },
+    };
+    const server = createServer({
+      model,
+      journal: new JsonlThreadJournal(directory),
+    });
+    const thread = await server.startThread();
+    const turn = await server.startTurn(thread.id, "first");
+    await started.promise;
+    await server.queueMessage(thread.id, "queued", "queued-client");
+    await server.interruptTurn(thread.id, turn.id);
+    await turn.done;
+    const reloaded = createServer({
+      journal: new JsonlThreadJournal(directory),
+      model: {
+        provider: "blocked",
+        async *stream() {
+          yield { type: "text_delta" as const, delta: "done" };
+        },
+      },
+    });
+    assert.equal(
+      pendingQueuedMessages((await reloaded.readThread(thread.id)).items)
+        .length,
+      1,
+    );
+    const done = testDeferred<void>();
+    reloaded.subscribe((event) => {
+      if (event.type === "turn_completed") done.resolve();
+    });
+    reloaded.resumeQueue(thread.id);
+    await done.promise;
+    const snapshot = await reloaded.readThread(thread.id);
+    assert.equal(pendingQueuedMessages(snapshot.items).length, 0);
+    assert.equal(
+      snapshot.items.filter(
+        (item) =>
+          item.type === "user_message" && item.clientId === "queued-client",
+      ).length,
+      1,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

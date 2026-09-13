@@ -1,6 +1,6 @@
 {
   "id": "browser",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A dedicated ephemeral ZenX browser session with bounded DOM inspection and narrow navigation and interaction tools.",
   "provider": {
     "id": "electron-dedicated-browser",
@@ -249,14 +249,6 @@
         "surfaceId": "browser-page"
       }
     ],
-    "sidebar": [
-      {
-        "id": "browser",
-        "label": "Browser",
-        "icon": "layers",
-        "pageId": "browser",
-        "order": 5
-      }
-    ]
+    "sidebar": []
   }
 }

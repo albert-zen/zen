@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { JSDOM } from "jsdom";
-import { act, createElement } from "react";
+import * as React from "react";
 import { createRoot } from "react-dom/client";
 
 import type { ModelUsageProjection } from "../../../src/model-usage.js";
@@ -21,6 +21,10 @@ import type {
   Thread,
 } from "../src/protocol-client/index.js";
 import { App } from "../src/renderer/src/App.js";
+import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
+import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
+const { act, createElement } = React;
+Object.assign(globalThis, { React });
 
 test("resume commits canonical state before auxiliary reads and replays catch-up events", async () => {
   const resumeResponse = deferred<ReturnType<typeof resumed>>();
@@ -28,7 +32,7 @@ test("resume commits canonical state before auxiliary reads and replays catch-up
   let notify: NotificationListener | undefined;
   const harness = await mountApp({
     request: async (method) => {
-      if (method === "thread/resume") return await resumeResponse.promise;
+      if (method === "zen/thread/resume") return await resumeResponse.promise;
       throw new Error(`Unexpected protocol request: ${method}`);
     },
     attachments: async () => {
@@ -52,22 +56,28 @@ test("resume commits canonical state before auxiliary reads and replays catch-up
 
     await act(async () => {
       resumeResponse.resolve(resumed(thread()));
-      notify?.("turn/started", {
-        threadId: "thread-1",
-        turn: runningTurn(),
-      });
-      notify?.("item/completed", {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          id: "agent-catch-up",
-          type: "agentMessage",
-          text: "Catch-up after resume",
-          phase: "final_answer",
-          memoryCitation: null,
-        },
-        completedAtMs: 20_000,
-      });
+      notify?.(
+        "zen/thread/event",
+        nativeEvent(1, {
+          type: "turn_started",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        }),
+      );
+      notify?.(
+        "zen/thread/event",
+        nativeEvent(2, {
+          type: "item_completed",
+          item: {
+            id: "agent-catch-up",
+            type: "agent_message",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            createdAt: new Date(20_000).toISOString(),
+            text: "Catch-up after resume",
+          },
+        }),
+      );
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -114,11 +124,16 @@ test("keeps an inactive Thread's streaming projection when returning to it", asy
   const resumeCalls: string[] = [];
   const harness = await mountApp({
     request: async (method, params) => {
-      if (method !== "thread/resume")
+      if (method !== "zen/thread/resume")
         throw new Error(`Unexpected protocol request: ${method}`);
       const threadId = (params as { threadId: string }).threadId;
       resumeCalls.push(threadId);
-      return resumed(thread(threadId));
+      const priorThreadOneResumes = resumeCalls.filter(
+        (candidate) => candidate === "thread-1",
+      ).length;
+      return threadId === "thread-1" && priorThreadOneResumes === 2
+        ? nativeRecoveryForThread(streamingThread(), { watermark: 4 })
+        : resumed(thread(threadId));
     },
     onNotification: (listener) => {
       notify = listener;
@@ -144,28 +159,34 @@ test("keeps an inactive Thread's streaming projection when returning to it", asy
     await waitFor(() => resumeCalls.includes("thread-1"));
     assert.ok(notify);
     await act(async () => {
-      notify?.("turn/started", {
-        threadId: "thread-1",
-        turn: runningTurn(),
-      });
-      notify?.("item/started", {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          id: "streamed-item",
-          type: "agentMessage",
-          text: "",
-          phase: "final_answer",
-          memoryCitation: null,
-        },
-        startedAtMs: 10_000,
-      });
-      notify?.("item/agentMessage/delta", {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "streamed-item",
-        delta: "Initial stream",
-      });
+      notify?.(
+        "zen/thread/event",
+        nativeEvent(1, {
+          type: "turn_started",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        }),
+      );
+      notify?.(
+        "zen/thread/event",
+        nativeEvent(2, {
+          type: "item_started",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "streamed-item",
+          itemType: "agent_message",
+        }),
+      );
+      notify?.(
+        "zen/thread/event",
+        nativeEvent(3, {
+          type: "item_delta",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "streamed-item",
+          delta: "Initial stream",
+        }),
+      );
     });
     assert.match(document.body.textContent ?? "", /Initial stream/u);
 
@@ -177,12 +198,16 @@ test("keeps an inactive Thread's streaming projection when returning to it", asy
     await act(async () => threadTwo.click());
     await waitFor(() => resumeCalls.includes("thread-2"));
     await act(async () => {
-      notify?.("item/agentMessage/delta", {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "streamed-item",
-        delta: " continues while away",
-      });
+      notify?.(
+        "zen/thread/event",
+        nativeEvent(4, {
+          type: "item_delta",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "streamed-item",
+          delta: " continues while away",
+        }),
+      );
     });
 
     await act(async () => threadOne.click());
@@ -194,10 +219,92 @@ test("keeps an inactive Thread's streaming projection when returning to it", asy
       document.body.textContent ?? "",
       /Initial stream continues while away/u,
     );
+    assert.equal(
+      document.querySelector<HTMLElement>(".agent-copy")?.textContent,
+      "Initial stream continues while away",
+    );
   } finally {
     await harness.unmount();
   }
 });
+
+for (const recoveredEpoch of ["old-host", "new-host"] as const) {
+  test(`disconnect invalidates a background cache before ${recoveredEpoch === "old-host" ? "same-epoch" : "new-epoch"} recovery`, async () => {
+    let status: ((value: AppServerHostStatus) => void) | undefined;
+    const backgroundRecovery = deferred<ReturnType<typeof resumed>>();
+    const resumeCalls = new Map<string, number>();
+    const harness = await mountApp({
+      request: async (method, params) => {
+        if (method !== "zen/thread/resume")
+          throw new Error(`Unexpected protocol request: ${method}`);
+        const threadId = (params as { threadId: string }).threadId;
+        const call = (resumeCalls.get(threadId) ?? 0) + 1;
+        resumeCalls.set(threadId, call);
+        if (threadId === "thread-2" && call === 1) {
+          return nativeRecoveryForThread(
+            threadWithAgentMessage("thread-2", "Old partial", true),
+            { processEpoch: "old-host", watermark: 3 },
+          );
+        }
+        if (threadId === "thread-2") return await backgroundRecovery.promise;
+        return nativeRecoveryForThread(thread("thread-1"), {
+          processEpoch: recoveredEpoch,
+        });
+      },
+      onStatus: (listener) => {
+        status = listener;
+        return () => {
+          status = undefined;
+        };
+      },
+      threads: async (archived) =>
+        archived
+          ? []
+          : [
+              summary("thread-1", "Thread one"),
+              summary("thread-2", "Thread two"),
+            ],
+    });
+    try {
+      const row = (name: string) =>
+        Array.from(
+          document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+        ).find((candidate) => candidate.textContent?.includes(name));
+      await act(async () => row("Thread two")?.click());
+      await waitFor(() =>
+        (document.body.textContent ?? "").includes("Old partial"),
+      );
+      await act(async () => row("Thread one")?.click());
+      await waitFor(() => resumeCalls.get("thread-1") === 1);
+      assert.ok(status);
+      await act(async () => {
+        status?.({ type: "reconnecting", attempt: 1, delayMs: 0 });
+        status?.({ type: "ready", reconnected: true });
+        await Promise.resolve();
+      });
+      await waitFor(() => resumeCalls.get("thread-1") === 2);
+      await act(async () => row("Thread two")?.click());
+      await waitFor(() => resumeCalls.get("thread-2") === 2);
+      assert.match(document.body.textContent ?? "", /Loading conversation/u);
+      assert.doesNotMatch(document.body.textContent ?? "", /Old partial/u);
+
+      await act(async () => {
+        backgroundRecovery.resolve(
+          nativeRecoveryForThread(
+            threadWithAgentMessage("thread-2", "Completed while away", false),
+            { processEpoch: recoveredEpoch, watermark: 8 },
+          ),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      assert.match(document.body.textContent ?? "", /Completed while away/u);
+      assert.doesNotMatch(document.body.textContent ?? "", /Old partial/u);
+    } finally {
+      await harness.unmount();
+    }
+  });
+}
 
 test("failed ready approval snapshot drops stale cards and replays live requests", async () => {
   const nextSnapshot = deferred<ApprovalRequestEvent[]>();
@@ -210,7 +317,7 @@ test("failed ready approval snapshot drops stale cards and replays live requests
   const resolvedApproval = approval("resolved-ui-id", "resolved command");
   const harness = await mountApp({
     request: async (method) => {
-      if (method === "thread/resume") return resumed(thread());
+      if (method === "zen/thread/resume") return resumed(thread());
       throw new Error(`Unexpected protocol request: ${method}`);
     },
     getPendingApprovals: async () => {
@@ -281,7 +388,7 @@ test("a late resume response from the previous Host generation cannot replace th
   let status: ((value: AppServerHostStatus) => void) | undefined;
   const harness = await mountApp({
     request: async (method) => {
-      if (method === "thread/resume") {
+      if (method === "zen/thread/resume") {
         const response = responses[resumeCalls++];
         assert.ok(response);
         return await response.promise;
@@ -304,6 +411,13 @@ test("a late resume response from the previous Host generation cannot replace th
     assert.ok(status);
     await act(async () => {
       status?.({ type: "reconnecting", attempt: 1, delayMs: 0 });
+      responses[0]!.resolve(resumed(threadWithMessage("stale generation")));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.doesNotMatch(document.body.textContent ?? "", /stale generation/u);
+
+    await act(async () => {
       status?.({ type: "ready", reconnected: true });
       await Promise.resolve();
     });
@@ -316,11 +430,6 @@ test("a late resume response from the previous Host generation cannot replace th
     });
     assert.match(document.body.textContent ?? "", /current generation/u);
 
-    await act(async () => {
-      responses[0]!.resolve(resumed(threadWithMessage("stale generation")));
-      await Promise.resolve();
-      await Promise.resolve();
-    });
     assert.match(document.body.textContent ?? "", /current generation/u);
     assert.doesNotMatch(document.body.textContent ?? "", /stale generation/u);
   } finally {
@@ -340,7 +449,7 @@ test("a successor ready snapshot inherits live approval events when it fails", a
   const live = approval("live-generation-id", "live command");
   const harness = await mountApp({
     request: async (method) => {
-      if (method === "thread/resume") return resumed(thread());
+      if (method === "zen/thread/resume") return resumed(thread());
       throw new Error(`Unexpected protocol request: ${method}`);
     },
     getPendingApprovals: async () => {
@@ -674,24 +783,75 @@ function threadWithMessage(text: string): Thread {
   };
 }
 
-function resumed(value: Thread) {
+function streamingThread(): Thread {
   return {
-    thread: value,
-    model: "fake",
-    modelProvider: "fake",
-    approvalPolicy: "never" as const,
-    approvalsReviewer: "user" as const,
-    cwd: value.cwd,
-    instructionSources: [],
-    reasoningEffort: "medium",
-    sandbox: { type: "dangerFullAccess" as const },
-    serviceTier: null,
+    ...thread("thread-1"),
+    status: { type: "active", activeFlags: [] },
+    turns: [
+      {
+        ...runningTurn(),
+        items: [
+          {
+            id: "streamed-item",
+            type: "agentMessage",
+            text: "Initial stream continues while away",
+            phase: "final_answer",
+            memoryCitation: null,
+          },
+        ],
+      },
+    ],
   };
 }
 
-function model() {
+function threadWithAgentMessage(
+  threadId: string,
+  text: string,
+  active: boolean,
+): Thread {
   return {
-    id: "fake",
+    ...thread(threadId),
+    status: active ? { type: "active", activeFlags: [] } : { type: "idle" },
+    turns: [
+      {
+        ...runningTurn(),
+        status: active ? "inProgress" : "completed",
+        completedAt: active ? null : 20,
+        durationMs: active ? null : 10,
+        items: [
+          {
+            id: "background-agent",
+            type: "agentMessage",
+            text,
+            phase: "final_answer",
+            memoryCitation: null,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function nativeEvent(
+  watermark: number,
+  event: ServerNotificationParams["zen/thread/event"]["event"],
+): ServerNotificationParams["zen/thread/event"] {
+  return {
+    processEpoch: "test-process-epoch",
+    threadId: "thread-1",
+    watermark,
+    event,
+  };
+}
+
+function resumed(value: Thread) {
+  return nativeRecoveryForThread(value);
+}
+
+function model() {
+  const id = encodeModelKey({ providerProfileId: "fake", modelId: "fake" });
+  return {
+    id,
     model: "fake",
     upgrade: null,
     upgradeInfo: null,

@@ -29,6 +29,10 @@ test("Thread menu manages keyboard focus through close and row removal", async (
     window: dom.window,
     IS_REACT_ACT_ENVIRONMENT: true,
   });
+  Object.assign(dom.window.HTMLElement.prototype, {
+    attachEvent: () => undefined,
+    detachEvent: () => undefined,
+  });
   const container = document.getElementById("root");
   assert.ok(container);
   const root = createRoot(container);
@@ -37,6 +41,21 @@ test("Thread menu manages keyboard focus through close and row removal", async (
     await act(async () => root.render(createElement(TestSidebar)));
     const trigger = requiredElement<HTMLButtonElement>(".thread-menu-trigger");
     const threadRow = requiredElement<HTMLButtonElement>(".thread-row");
+    let anchorLeft = 220;
+    let menuWidth = 210;
+    trigger.getBoundingClientRect = () =>
+      rect({ left: anchorLeft, top: 520, width: 36, height: 36 });
+    const getBoundingClientRect =
+      dom.window.HTMLElement.prototype.getBoundingClientRect;
+    dom.window.HTMLElement.prototype.getBoundingClientRect = function () {
+      return this.classList.contains("thread-item-menu")
+        ? rect({ left: 0, top: 0, width: menuWidth, height: 140 })
+        : getBoundingClientRect.call(this);
+    };
+    Object.defineProperties(dom.window, {
+      innerHeight: { configurable: true, value: 600 },
+      innerWidth: { configurable: true, value: 800 },
+    });
 
     threadRow.focus();
     await act(async () => {
@@ -53,6 +72,11 @@ test("Thread menu manages keyboard focus through close and row removal", async (
     assert.equal(document.querySelector('[role="menu"]'), null);
 
     await act(async () => trigger.click());
+    const menu = requiredElement<HTMLElement>(".thread-item-menu");
+    assert.equal(menu.parentElement, document.body);
+    assert.equal(menu.dataset.placement, "right");
+    assert.equal(menu.style.left, "262px");
+    assert.equal(menu.style.top, "452px");
     assert.equal(document.activeElement?.textContent?.trim(), "Rename");
     let menuPresentWhenTriggerFocusRestored: boolean | undefined;
     const focusTrigger = trigger.focus.bind(trigger);
@@ -115,11 +139,43 @@ test("Thread menu manages keyboard focus through close and row removal", async (
     assert.equal(menuPresentWhenTriggerFocusRestored, false);
     assert.equal(document.querySelector('[role="menu"]'), null);
 
+    anchorLeft = 5;
+    menuWidth = 164;
+    Object.defineProperty(dom.window, "innerWidth", {
+      configurable: true,
+      value: 180,
+    });
     await act(async () => trigger.click());
+    const narrowMenu = requiredElement<HTMLElement>(".thread-item-menu");
+    assert.equal(narrowMenu.dataset.placement, "right");
+    assert.equal(narrowMenu.style.left, "8px");
     await act(async () => {
       document
         .getElementById("outside")
         ?.dispatchEvent(new dom.window.Event("pointerdown", { bubbles: true }));
+      await Promise.resolve();
+    });
+    assert.equal(document.activeElement, trigger);
+    assert.equal(document.querySelector('[role="menu"]'), null);
+
+    await act(async () => trigger.click());
+    const rename = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent?.includes("Rename"));
+    assert.ok(rename);
+    await act(async () => rename.click());
+    const renameInput = requiredElement<HTMLInputElement>(
+      ".thread-menu-rename input",
+    );
+    assert.equal(document.activeElement, renameInput);
+    await act(async () => {
+      renameInput.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "Escape",
+        }),
+      );
       await Promise.resolve();
     });
     assert.equal(document.activeElement, trigger);
@@ -214,5 +270,29 @@ function activeSummary(): NativeThreadSummary {
     updatedAt: new Date(2_000).toISOString(),
     preview: "Thread preview",
     status: "idle",
+  };
+}
+
+function rect({
+  left,
+  top,
+  width,
+  height,
+}: {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}): DOMRect {
+  return {
+    bottom: top + height,
+    height,
+    left,
+    right: left + width,
+    top,
+    width,
+    x: left,
+    y: top,
+    toJSON: () => ({}),
   };
 }

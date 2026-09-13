@@ -5,7 +5,11 @@ import path from "node:path";
 import test from "node:test";
 
 import { ZenXThreadTitleCoordinator } from "../src/main/thread-title-coordinator.js";
-import { observeCompletedUserMessageTitle } from "../src/main/thread-title-notification.js";
+import {
+  observeCompletedUserMessageTitle,
+  observeDiscoveredThreadTitle,
+  observeThreadSnapshotTitle,
+} from "../src/main/thread-title-notification.js";
 import { ZenXThreadTitleStore } from "../src/main/thread-title-store.js";
 import type { ThreadTitleInference } from "../src/main/thread-title-types.js";
 import type { ServerNotificationParams } from "../src/protocol-client/index.js";
@@ -114,6 +118,82 @@ test("observer bounds canonical text and logs failures without rejecting", async
   );
   assert.equal(observed[0]?.length, 2_000);
   assert.match(warnings[0] ?? "", /metadata unavailable/u);
+});
+
+test("discovery catches a first message committed before resume, without changing native names", async () => {
+  const observed: string[] = [];
+  const titles = {
+    observe: async (_id: string, input: string) => {
+      observed.push(input);
+    },
+  };
+  const snapshot = {
+    id: "im-race",
+    name: null,
+    turns: [
+      {
+        items: [
+          completedUserMessage("im-race", "first canonical IM input").item,
+        ],
+      },
+    ],
+  } as unknown as import("../src/protocol-client/index.js").Thread;
+  await observeDiscoveredThreadTitle(titles, async () => snapshot, {
+    ...snapshot,
+    turns: [],
+  });
+  assert.deepEqual(observed, ["first canonical IM input"]);
+  observed.length = 0;
+  await observeThreadSnapshotTitle(titles, {
+    ...snapshot,
+    name: "User-owned native name",
+  });
+  assert.deepEqual(observed, []);
+});
+
+test("opening an unnamed existing IM thread stages its first meaningful canonical input", async () => {
+  await withCoordinator(async ({ titles, inference }) => {
+    const snapshot = {
+      id: "im-existing",
+      name: null,
+      turns: [
+        { items: [completedUserMessage("im-existing", " ").item] },
+        {
+          items: [
+            completedUserMessage("im-existing", "Original QQ request").item,
+          ],
+        },
+      ],
+    } as unknown as import("../src/protocol-client/index.js").Thread;
+    await observeThreadSnapshotTitle(titles, snapshot);
+    assert.equal(
+      titles.snapshot()["im-existing"]?.source,
+      "Original QQ request",
+    );
+    await titles.rename("im-existing", "User title");
+    await observeThreadSnapshotTitle(titles, snapshot);
+    assert.equal(titles.snapshot()["im-existing"]?.title, "User title");
+    assert.equal(inference.calls, 1);
+    inference.resolve("Late title");
+    await titles.stop();
+  });
+});
+
+test("discovery failures are reported without breaking global notifications", async () => {
+  const warnings: string[] = [];
+  await observeDiscoveredThreadTitle(
+    {
+      observe: async () => {
+        assert.fail("No snapshot should be observed");
+      },
+    },
+    async () => {
+      throw new Error("Thread unavailable");
+    },
+    { id: "gone" } as import("../src/protocol-client/index.js").Thread,
+    (warning) => warnings.push(warning),
+  );
+  assert.match(warnings[0] ?? "", /Thread unavailable/);
 });
 
 function completedUserMessage(
