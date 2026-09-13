@@ -57,6 +57,7 @@ declare global {
   interface Window {
     zenx: {
       platform: NodeJS.Platform;
+      nativeBackdrop: boolean;
       protocol: {
         getStatus(): Promise<AppServerHostStatus>;
         getPendingApprovals(): Promise<ApprovalRequestEvent[]>;

@@ -57,6 +57,7 @@ import type { BrowserLiveObservationEvent } from "../main/capabilities/browser-p
 
 contextBridge.exposeInMainWorld("zenx", {
   platform: process.platform,
+  nativeBackdrop: process.argv.includes("--zenx-native-backdrop=true"),
   protocol: {
     getStatus: async (): Promise<AppServerHostStatus> =>
       await ipcRenderer.invoke(ipcChannels.getStatus),

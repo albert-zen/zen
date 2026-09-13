@@ -157,7 +157,9 @@
 - **ZenXAppearancePreference** — ZenX renderer 在本机 app profile 保存 System / Light / Dark
   模式、分别选择的 Light/Dark 内置 preset、accent、contrast 与 Sidebar material，并在首屏前把
   解析结果投影为同一套组件消费的根级语义色彩 token；它不进入 Core、Thread、Project、host
-  restart 或 canonical ItemList。
+  restart 或 canonical ItemList。窗口材质由 `windowBackdropOptions` 按系统能力选择 Windows
+  Acrylic / macOS Vibrancy，preload 只读暴露支持情况；透明偏好通过 CSS 显露原生背景，
+  不重建窗口，不支持的平台禁用开关并保留实色。
 - **ZenXThreadPinProjection** — ZenXHostProfile 按本机 threadId 顺序持久化 Sidebar Pin，
   renderer 只把仍存在的 active Thread 投影到独立 Pinned section；Pin 不同步、不进入
   canonical ItemList，也不改变 Runtime、调度或 Inbox 优先级。

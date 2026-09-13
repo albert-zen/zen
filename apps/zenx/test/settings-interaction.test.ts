@@ -1042,6 +1042,24 @@ test("Appearance is an independent Settings section and persists the complete pr
   }
 });
 
+test("Appearance disables desktop translucency when native material is unavailable", async () => {
+  const harness = await mountSettings("appearance", { nativeBackdrop: false });
+  try {
+    await waitFor(() => appearanceChoice("sidebar-translucency", "on"));
+    const control = appearanceChoice("sidebar-translucency", "on")!;
+    assert.equal(control.disabled, true);
+    assert.equal(control.checked, false);
+    assert.match(
+      document.body.textContent ?? "",
+      /Requires macOS or Windows 11 22H2 or later/,
+    );
+    await act(async () => control.click());
+    assert.equal(control.checked, false);
+  } finally {
+    await unmount(harness);
+  }
+});
+
 test("every Settings tab remains keyboard reachable after narrow-screen reflow", async () => {
   const harness = await mountSettings("appearance");
   try {
@@ -1222,6 +1240,7 @@ interface Harness {
 async function mountSettings(
   initialTab: SettingsTab,
   options: {
+    nativeBackdrop?: boolean;
     initialSettings?: PublicHostSettings;
     get?(): Promise<PublicHostSettings>;
     save?(
@@ -1281,6 +1300,7 @@ async function mountSettings(
   });
   const initialSettings = options.initialSettings ?? settings;
   const zenx = {
+    nativeBackdrop: options.nativeBackdrop ?? true,
     settings: {
       get: options.get ?? (async () => initialSettings),
       save:

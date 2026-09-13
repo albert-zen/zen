@@ -9,6 +9,8 @@ import {
   shell,
 } from "electron";
 import { join, resolve } from "node:path";
+import { release } from "node:os";
+import { windowBackdropOptions } from "./window-appearance.js";
 import { FileAttachmentStore } from "../../../../src/attachment.js";
 
 import { isAllowedZenXExternalUrl } from "../external-link-policy.js";
@@ -128,13 +130,14 @@ const externalZasAcceptancePath = externalZasAcceptanceConfigPath(
 );
 
 function createWindow(): BrowserWindow {
+  const backdrop = windowBackdropOptions(process.platform, release());
   const window = new BrowserWindow({
     width: 1280,
     height: 820,
     minWidth: 360,
     minHeight: 560,
     show: false,
-    backgroundColor: "#0b0d10",
+    ...backdrop,
     title: "ZenX",
     titleBarStyle: "hidden",
     titleBarOverlay: {
@@ -143,6 +146,9 @@ function createWindow(): BrowserWindow {
       height: 44,
     },
     webPreferences: {
+      additionalArguments: [
+        `--zenx-native-backdrop=${Boolean(backdrop.vibrancy || backdrop.backgroundMaterial)}`,
+      ],
       preload: join(__dirname, "../preload/index.cjs"),
       contextIsolation: true,
       nodeIntegration: false,

@@ -2036,15 +2036,26 @@ function AppearancePanel() {
           </fieldset>
           <label className="appearance-switch-row">
             <span>
-              <strong>Translucent sidebar</strong>
-              <small>Layer the sidebar material over the window canvas.</small>
+              <strong id="sidebar-translucency-label">
+                Translucent sidebar
+              </strong>
+              <small id="sidebar-translucency-description">
+                {window.zenx.nativeBackdrop
+                  ? "Let the desktop show through a frosted sidebar."
+                  : "Requires macOS or Windows 11 22H2 or later."}
+              </small>
             </span>
             <input
               type="checkbox"
               role="switch"
+              aria-labelledby="sidebar-translucency-label"
+              aria-describedby="sidebar-translucency-description"
+              disabled={!window.zenx.nativeBackdrop}
               name="sidebar-translucency"
               value="on"
-              checked={appearance.translucentSidebar}
+              checked={
+                window.zenx.nativeBackdrop && appearance.translucentSidebar
+              }
               onChange={(event) =>
                 updateAppearance({ translucentSidebar: event.target.checked })
               }

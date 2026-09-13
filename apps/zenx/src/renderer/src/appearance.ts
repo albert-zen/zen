@@ -108,6 +108,9 @@ export function applyResolvedAppearance(
   appearance: ResolvedAppearance,
 ): void {
   const root = document.documentElement;
+  root.dataset.nativeBackdrop = String(
+    document.defaultView?.zenx?.nativeBackdrop === true,
+  );
   root.dataset.appearance = appearance.mode;
   root.dataset.themePreset = appearance.preset;
   root.dataset.accent = appearance.accent;

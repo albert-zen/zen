@@ -353,6 +353,6 @@
   --color-text-disabled: #737b8a;
 }
 
-:root[data-sidebar-translucency="on"] {
+:root[data-native-backdrop="true"][data-sidebar-translucency="on"] {
   --color-surface-sidebar-active: var(--color-surface-sidebar-translucent);
 }
