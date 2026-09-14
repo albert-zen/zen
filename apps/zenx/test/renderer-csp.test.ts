@@ -165,7 +165,7 @@ test("allows only the hashed pre-paint appearance bootstrap", async () => {
   assert.equal(dom.window.document.documentElement.dataset.contrast, "high");
   assert.equal(
     dom.window.document.documentElement.dataset.sidebarTranslucency,
-    "on",
+    undefined,
   );
   assert.equal(dom.window.document.documentElement.style.colorScheme, "light");
   assert.equal(

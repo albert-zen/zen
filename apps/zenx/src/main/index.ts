@@ -11,7 +11,6 @@ import {
   shell,
 } from "electron";
 import { join, resolve } from "node:path";
-import { release } from "node:os";
 import { windowBackdropOptions } from "./window-appearance.js";
 import { FileAttachmentStore } from "../../../../src/attachment.js";
 
@@ -161,7 +160,7 @@ function loadStartupPage(window: BrowserWindow): void {
 }
 
 function createWindow(): BrowserWindow {
-  const backdrop = windowBackdropOptions(process.platform, release());
+  const backdrop = windowBackdropOptions();
   const window = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -178,7 +177,6 @@ function createWindow(): BrowserWindow {
     },
     webPreferences: {
       additionalArguments: [
-        `--zenx-native-backdrop=${Boolean(backdrop.vibrancy || backdrop.backgroundMaterial)}`,
       ],
       preload: join(__dirname, "../preload/index.cjs"),
       contextIsolation: true,

@@ -261,7 +261,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
   Thread 选择保持 ZAS 权威且不由 Settings 自动切换。
 - Settings → Appearance 是独立分区，提供 System / Light / Dark，并让 Light 与 Dark 分别记住
   Graphite、Cobalt、Ember 三套 Zen 内置 preset；accent 提供 Azure、Iris、Jade，contrast 提供
-  Standard / High，Sidebar material 可在 opaque / translucent 间即时切换。它是 renderer-local
+  Standard / High，标题栏、品牌区和 Sidebar 统一使用实色背景，不提供透明开关或原生毛玻璃。它是 renderer-local
   app-profile preference，所有改动立即生效、持久化且不触发 host restart；System 实时跟随操作系统，
   Reset 恢复 System、Graphite、Azure、Standard 与 opaque Sidebar。解析后的模式、当前 preset 和控制值
   必须在首屏前写入根文档，并经同一套语义 token 同时驱动 shell、Sidebar、内容区、紧凑 live preview、

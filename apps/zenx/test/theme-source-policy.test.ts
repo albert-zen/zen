@@ -105,7 +105,6 @@ test("Appearance v1 has three presets per mode and root seams for every live con
     "themePreset",
     "accent",
     "contrast",
-    "sidebarTranslucency",
   ]) {
     assert.match(appearance, new RegExp(`dataset\\.${dataset}\\s*=`, "u"));
   }
@@ -114,7 +113,6 @@ test("Appearance v1 has three presets per mode and root seams for every live con
     "data-theme-preset",
     "data-accent",
     "data-contrast",
-    "data-sidebar-translucency",
   ]) {
     assert.match(index, new RegExp(attribute, "u"));
   }

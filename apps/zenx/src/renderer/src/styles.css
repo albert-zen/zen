@@ -356,7 +356,7 @@ select:focus-visible {
   overflow: visible;
   background: linear-gradient(
     to right,
-    var(--color-surface-sidebar-active) 0 var(--titlebar-brand-track),
+    var(--color-surface-sidebar) 0 var(--titlebar-brand-track),
     var(--color-surface-main) var(--titlebar-brand-track) 100%
   );
   -webkit-app-region: drag;
@@ -374,7 +374,7 @@ select:focus-visible {
   overflow: hidden;
   border-right: 0;
   border-bottom: 1px solid var(--color-border-subtle);
-  background: var(--color-surface-sidebar-active);
+  background: var(--color-surface-sidebar);
 }
 .window-titlebar-product .brand {
   flex: 0 0 auto;
@@ -449,7 +449,7 @@ select:focus-visible {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--color-surface-sidebar-active);
+  background: var(--color-surface-sidebar);
   border-right: 0;
   grid-column: 1;
   grid-row: 2;
@@ -459,22 +459,6 @@ select:focus-visible {
 }
 :root[data-platform="darwin"] .sidebar {
   padding-top: var(--product-row-height);
-}
-/* Every ancestor must expose the native material; a translucent child over
-   an opaque canvas cannot reveal the desktop. The content paints itself. */
-:root[data-native-backdrop="true"][data-sidebar-translucency="on"],
-:root[data-native-backdrop="true"][data-sidebar-translucency="on"] body,
-:root[data-native-backdrop="true"][data-sidebar-translucency="on"] #root,
-:root[data-native-backdrop="true"][data-sidebar-translucency="on"] .app-shell {
-  background: transparent;
-}
-:root[data-native-backdrop="true"][data-sidebar-translucency="on"]
-  .window-titlebar {
-  background: linear-gradient(
-    to right,
-    transparent 0 var(--titlebar-brand-track),
-    var(--color-surface-main) var(--titlebar-brand-track) 100%
-  );
 }
 .app-shell.sidebar-collapsed .sidebar {
   visibility: hidden;
@@ -3549,7 +3533,7 @@ select:focus-visible {
   gap: 8px;
   padding: 16px 12px;
   border-right: 1px solid var(--color-border-subtle);
-  background: var(--color-surface-sidebar-active);
+  background: var(--color-surface-sidebar);
 }
 .appearance-preview-sidebar span,
 .appearance-preview-content > span {
@@ -3716,8 +3700,7 @@ select:focus-visible {
   display: grid;
   border-top: 1px solid var(--color-border-subtle);
 }
-.appearance-control-row,
-.appearance-switch-row {
+.appearance-control-row {
   min-height: 50px;
   display: grid;
   grid-template-columns: 116px minmax(0, 1fr);
@@ -3765,23 +3748,6 @@ select:focus-visible {
 }
 .accent-chip.jade > i {
   background: var(--color-accent-option-jade);
-}
-.appearance-switch-row {
-  grid-template-columns: minmax(0, 1fr) auto;
-  cursor: pointer;
-}
-.appearance-switch-row > span {
-  display: grid;
-  gap: 3px;
-}
-.appearance-switch-row strong {
-  color: var(--color-text-secondary);
-  font-size: 10px;
-  font-weight: 600;
-}
-.appearance-switch-row small {
-  color: var(--color-text-muted);
-  font-size: 9px;
 }
 .appearance-card-footer {
   min-height: 46px;

@@ -17,7 +17,6 @@ export interface AppearancePreference {
   darkPreset: AppearancePreset;
   accent: AppearanceAccent;
   contrast: AppearanceContrast;
-  translucentSidebar: boolean;
 }
 
 export interface ResolvedAppearance {
@@ -25,7 +24,6 @@ export interface ResolvedAppearance {
   preset: AppearancePreset;
   accent: AppearanceAccent;
   contrast: AppearanceContrast;
-  translucentSidebar: boolean;
 }
 
 export const DEFAULT_APPEARANCE_PREFERENCE: Readonly<AppearancePreference> =
@@ -35,7 +33,6 @@ export const DEFAULT_APPEARANCE_PREFERENCE: Readonly<AppearancePreference> =
     darkPreset: "graphite",
     accent: "azure",
     contrast: "standard",
-    translucentSidebar: false,
   });
 
 export interface AppearanceController {
@@ -80,7 +77,6 @@ export function normalizeAppearancePreference(
     darkPreset: oneOf(value.darkPreset, APPEARANCE_PRESETS, "graphite"),
     accent: oneOf(value.accent, APPEARANCE_ACCENTS, "azure"),
     contrast: oneOf(value.contrast, APPEARANCE_CONTRASTS, "standard"),
-    translucentSidebar: value.translucentSidebar === true,
   };
 }
 
@@ -99,7 +95,6 @@ export function resolveAppearance(
     preset: mode === "light" ? preference.lightPreset : preference.darkPreset,
     accent: preference.accent,
     contrast: preference.contrast,
-    translucentSidebar: preference.translucentSidebar,
   };
 }
 
@@ -108,16 +103,10 @@ export function applyResolvedAppearance(
   appearance: ResolvedAppearance,
 ): void {
   const root = document.documentElement;
-  root.dataset.nativeBackdrop = String(
-    document.defaultView?.zenx?.nativeBackdrop === true,
-  );
   root.dataset.appearance = appearance.mode;
   root.dataset.themePreset = appearance.preset;
   root.dataset.accent = appearance.accent;
   root.dataset.contrast = appearance.contrast;
-  root.dataset.sidebarTranslucency = appearance.translucentSidebar
-    ? "on"
-    : "off";
   root.style.colorScheme = appearance.mode;
   document
     .querySelector<HTMLMetaElement>('meta[name="color-scheme"]')

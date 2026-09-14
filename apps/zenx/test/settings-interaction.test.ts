@@ -1161,7 +1161,6 @@ test("Appearance is an independent Settings section and persists the complete pr
         darkPreset: "graphite",
         accent: "azure",
         contrast: "standard",
-        translucentSidebar: false,
       },
     );
     assert.equal(light.checked, true);
@@ -1174,24 +1173,17 @@ test("Appearance is an independent Settings section and persists the complete pr
     const emberDark = appearanceChoice("dark-preset", "ember");
     const jade = appearanceChoice("appearance-accent", "jade");
     const highContrast = appearanceChoice("appearance-contrast", "high");
-    const translucent = document.querySelector<HTMLButtonElement>(
-      '[name="sidebar-translucency"]',
-    );
     assert.ok(cobaltLight);
     assert.ok(emberDark);
     assert.ok(jade);
     assert.ok(highContrast);
-    assert.ok(translucent);
-    assert.equal(translucent.getAttribute("role"), "switch");
     await act(async () => cobaltLight.click());
     await act(async () => emberDark.click());
     await act(async () => jade.click());
     await act(async () => highContrast.click());
-    await act(async () => translucent.click());
     assert.equal(document.documentElement.dataset.themePreset, "cobalt");
     assert.equal(document.documentElement.dataset.accent, "jade");
     assert.equal(document.documentElement.dataset.contrast, "high");
-    assert.equal(document.documentElement.dataset.sidebarTranslucency, "on");
     const preview = document.querySelector(
       '[aria-label="Live appearance preview"]',
     );
@@ -1206,7 +1198,6 @@ test("Appearance is an independent Settings section and persists the complete pr
         darkPreset: "ember",
         accent: "jade",
         contrast: "high",
-        translucentSidebar: true,
       },
     );
 
@@ -1217,29 +1208,21 @@ test("Appearance is an independent Settings section and persists the complete pr
     assert.equal(document.documentElement.dataset.themePreset, "graphite");
     assert.equal(document.documentElement.dataset.accent, "azure");
     assert.equal(document.documentElement.dataset.contrast, "standard");
-    assert.equal(document.documentElement.dataset.sidebarTranslucency, "off");
     assert.equal(appearanceModeRadio("system")?.checked, true);
   } finally {
     await unmount(harness);
   }
 });
 
-test("Appearance disables desktop translucency when native material is unavailable", async () => {
-  const harness = await mountSettings("appearance", { nativeBackdrop: false });
+test("Appearance offers opaque themes without a translucency control", async () => {
+  const harness = await mountSettings("appearance");
   try {
-    const control = await waitFor(() =>
-      document.querySelector<HTMLButtonElement>(
-        '[name="sidebar-translucency"]',
-      ),
-    );
-    assert.equal(control.disabled, true);
-    assert.equal(control.getAttribute("aria-checked"), "false");
-    assert.match(
+    await waitFor(() => appearanceModeRadio("light"));
+    assert.equal(document.querySelector('[name="sidebar-translucency"]'), null);
+    assert.doesNotMatch(
       document.body.textContent ?? "",
-      /Requires macOS or Windows 11 22H2 or later/,
+      /Translucent sidebar|window material/u,
     );
-    await act(async () => control.click());
-    assert.equal(control.getAttribute("aria-checked"), "false");
   } finally {
     await unmount(harness);
   }
@@ -1426,7 +1409,6 @@ interface Harness {
 async function mountSettings(
   initialTab: SettingsTab,
   options: {
-    nativeBackdrop?: boolean;
     initialSettings?: PublicHostSettings;
     reconcile?(): Promise<PublicHostSettings>;
     safeRestart?(): Promise<PublicHostSettings>;
@@ -1488,7 +1470,6 @@ async function mountSettings(
   });
   const initialSettings = options.initialSettings ?? settings;
   const zenx = {
-    nativeBackdrop: options.nativeBackdrop ?? true,
     settings: {
       get: options.get ?? (async () => initialSettings),
       reconcile: options.reconcile,

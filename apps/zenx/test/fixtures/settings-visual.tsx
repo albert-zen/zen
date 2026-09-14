@@ -113,7 +113,6 @@ if (params.has("quota")) {
 }
 Object.defineProperty(window, "zenx", {
   value: {
-    nativeBackdrop: params.get("backdrop") === "available",
     settings: {
       get: async () => previewSettings,
       readSubscriptionUsage: async () => {

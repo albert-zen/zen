@@ -195,7 +195,7 @@
   Provider 稳定 identity、显示名与正式 base URL，renderer 只消费这份连接数据创建
   host-owned profile，五家 Provider 继续复用同一个 adapter 与 discovery 边界。
 - **ZenXAppearancePreference** — ZenX renderer 在本机 app profile 保存 System / Light / Dark
-  模式、分别选择的 Light/Dark 内置 preset、accent、contrast 与 Sidebar material，并在首屏前把
+  模式、分别选择的 Light/Dark 内置 preset、accent 与 contrast（窗口和 Sidebar 始终使用实色），并在首屏前把
   解析结果投影为同一套组件消费的根级语义色彩 token；它不进入 Core、Thread、Project、host
   restart 或 canonical ItemList。窗口材质由 `windowBackdropOptions` 按系统能力选择 Windows
   Acrylic / macOS Vibrancy，preload 只读暴露支持情况；透明偏好通过 CSS 显露原生背景，

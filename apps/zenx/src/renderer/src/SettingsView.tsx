@@ -2319,7 +2319,7 @@ function AppearancePanel() {
     <>
       <header>
         <h2>Appearance</h2>
-        <p>Theme, color, contrast, and window material.</p>
+        <p>Theme, color, and contrast.</p>
       </header>
       <div className="page-card settings-card appearance-settings-card">
         <div className="settings-card-head">
@@ -2416,36 +2416,6 @@ function AppearancePanel() {
               ))}
             </div>
           </fieldset>
-          <div className="appearance-switch-row">
-            <span>
-              <strong id="sidebar-translucency-label">
-                Translucent sidebar
-              </strong>
-              <small id="sidebar-translucency-description">
-                {window.zenx.nativeBackdrop
-                  ? "Frost the docked sidebar over your desktop."
-                  : "Requires macOS or Windows 11 22H2 or later."}
-              </small>
-            </span>
-            <button
-              className="plugin-switch"
-              type="button"
-              role="switch"
-              aria-labelledby="sidebar-translucency-label"
-              aria-describedby="sidebar-translucency-description"
-              disabled={!window.zenx.nativeBackdrop}
-              name="sidebar-translucency"
-              value="on"
-              aria-checked={Boolean(
-                window.zenx.nativeBackdrop && appearance.translucentSidebar,
-              )}
-              onClick={() =>
-                updateAppearance({
-                  translucentSidebar: !appearance.translucentSidebar,
-                })
-              }
-            />
-          </div>
         </div>
         <div className="appearance-card-footer">
           <p className="settings-note">

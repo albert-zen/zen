@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="dark light" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'sha256-4gbgSLbbtDxd/f27nkALuDaQPcByMgkyNzeUzXEww5E='; style-src 'self'; img-src 'self' data: blob: https: http:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:* ws://localhost:* http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'none'; form-action 'none'"
+      content="default-src 'self'; script-src 'self' 'sha256-SXQi2PkQI9m0iKD9OUle0nkVB9CPZOGt8uJIxGyo3iQ='; style-src 'self'; img-src 'self' data: blob: https: http:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:* ws://localhost:* http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
     <script>
       (() => {
@@ -20,7 +20,6 @@
           darkPreset: "graphite",
           accent: "azure",
           contrast: "standard",
-          translucentSidebar: false,
         };
         let preference = defaults;
         try {
@@ -43,7 +42,6 @@
               contrast: contrasts.includes(parsed?.contrast)
                 ? parsed.contrast
                 : defaults.contrast,
-              translucentSidebar: parsed?.translucentSidebar === true,
             };
           }
         } catch {}
@@ -60,10 +58,6 @@
         root.setAttribute("data-theme-preset", preset);
         root.setAttribute("data-accent", preference.accent);
         root.setAttribute("data-contrast", preference.contrast);
-        root.setAttribute(
-          "data-sidebar-translucency",
-          preference.translucentSidebar ? "on" : "off",
-        );
         root.style.colorScheme = mode;
         document
           .querySelector('meta[name="color-scheme"]')

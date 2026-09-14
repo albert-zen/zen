@@ -10,7 +10,7 @@ versionless JSON value stored at `zenx.appearance` contains:
 
 - `mode`: `system | light | dark`;
 - independent `lightPreset` and `darkPreset` values;
-- `accent`, `contrast`, and `translucentSidebar` controls.
+- `accent` and `contrast` controls.
 
 Legacy string values (`system`, `light`, or `dark`) migrate in memory to the v1
 defaults. Invalid or unavailable storage falls back to System, Graphite for both
@@ -18,8 +18,7 @@ modes, Azure, Standard contrast, and an opaque Sidebar.
 
 The hashed inline bootstrap in `index.html` validates and resolves the same
 value before the renderer module loads. It writes `data-appearance`,
-`data-theme-preset`, `data-accent`, `data-contrast`, and
-`data-sidebar-translucency` on the root, along with native `color-scheme`.
+`data-theme-preset`, `data-accent`, and `data-contrast` on the root, along with native `color-scheme`.
 System follows `prefers-color-scheme` changes live. The controller uses the same
 projection after React mounts, so reload and relaunch do not flash the default
 palette.
@@ -37,11 +36,10 @@ presets persist independently.
 
 Azure, Iris, and Jade remap accent, focus, selected boundary, and on-accent text
 roles. High contrast strengthens muted text and boundaries without changing
-component CSS. Translucent Sidebar remaps the shared Sidebar surface role and
-adds the renderer material treatment; opaque remains the default.
+component CSS. Titlebar, brand row, and Sidebar share the same opaque surface.
+Native window materials are disabled; old `translucentSidebar` values are ignored.
 
-The independent Settings → Appearance section exposes native radio,
-checkbox/switch, and button semantics,
+The independent Settings → Appearance section exposes native radio and button semantics,
 a compact live preview, and Reset. Every change applies immediately and persists
 without an App Server restart.
 
@@ -56,7 +54,7 @@ canonical roles cover:
 - accent and status: `--color-accent*`, `--color-status-*`;
 - overlay and shadow colors: `--color-overlay*`, `--color-shadow*`.
 
-Preset, accent, contrast, and material selectors only remap these roles. The
+Preset, accent and contrast selectors only remap these roles. The
 shell, titlebar, Sidebar, main content, Composer, form controls, buttons, and live
 preview consume the same semantic seam. Component code does not select palette
 values or carry raw colors.
@@ -72,7 +70,7 @@ are not a second token system.
 Automated checks exercise every Light/Dark × preset × accent × contrast
 combination. Normal text keeps at least 4.5:1 contrast on shell, Sidebar, and
 content surfaces; control boundaries and focus rings keep at least 3:1; accent
-text keeps at least 4.5:1. Mode, preset, accent, contrast, and material controls
+text keeps at least 4.5:1. Mode, preset, accent and contrast controls
 retain native checked/switch state, visible labels, and `:focus-visible`; color
 is not the only state signal.
 

@@ -19,7 +19,6 @@ const desiredPreference = {
   darkPreset: "ember",
   accent: "jade",
   contrast: "high",
-  translucentSidebar: true,
 } as const;
 
 const defaultPreference = {
@@ -28,7 +27,6 @@ const defaultPreference = {
   darkPreset: "graphite",
   accent: "azure",
   contrast: "standard",
-  translucentSidebar: false,
 } as const;
 
 test("resolves explicit and system appearance preferences", () => {
@@ -59,7 +57,6 @@ test("reads the versioned Appearance v1 profile and preserves legacy mode values
     darkPreset: "graphite",
     accent: "azure",
     contrast: "standard",
-    translucentSidebar: false,
   });
   assert.deepEqual(readAppearancePreference(storageWith("unexpected")), {
     mode: "system",
@@ -67,7 +64,6 @@ test("reads the versioned Appearance v1 profile and preserves legacy mode values
     darkPreset: "graphite",
     accent: "azure",
     contrast: "standard",
-    translucentSidebar: false,
   });
 });
 
@@ -80,7 +76,6 @@ test("applies the root attribute, CSS color-scheme, and native-control meta", ()
     preset: "graphite",
     accent: "azure",
     contrast: "standard",
-    translucentSidebar: false,
   } as unknown as ResolvedAppearance);
   assert.equal(dom.window.document.documentElement.dataset.appearance, "light");
   assert.equal(dom.window.document.documentElement.style.colorScheme, "light");
@@ -93,7 +88,7 @@ test("applies the root attribute, CSS color-scheme, and native-control meta", ()
   dom.window.close();
 });
 
-test("applies the resolved preset, accent, contrast, and sidebar material before components render", () => {
+test("applies the resolved preset, accent and contrast before components render", () => {
   const dom = new JSDOM(
     '<!doctype html><html><head><meta name="color-scheme" content="dark light"></head></html>',
   );
@@ -102,14 +97,12 @@ test("applies the resolved preset, accent, contrast, and sidebar material before
     preset: "ember",
     accent: "jade",
     contrast: "high",
-    translucentSidebar: true,
   } as unknown as ResolvedAppearance);
   const root = dom.window.document.documentElement;
   assert.equal(root.dataset.appearance, "dark");
   assert.equal(root.dataset.themePreset, "ember");
   assert.equal(root.dataset.accent, "jade");
   assert.equal(root.dataset.contrast, "high");
-  assert.equal(root.dataset.sidebarTranslucency, "on");
   assert.equal(root.style.colorScheme, "dark");
   dom.window.close();
 });
@@ -120,14 +113,12 @@ test("resolves the independently saved Light and Dark presets", () => {
     preset: "cobalt",
     accent: "jade",
     contrast: "high",
-    translucentSidebar: true,
   });
   assert.deepEqual(resolveAppearance(desiredPreference, true), {
     mode: "dark",
     preset: "ember",
     accent: "jade",
     contrast: "high",
-    translucentSidebar: true,
   });
 });
 
@@ -474,3 +465,13 @@ function relativeLuminance(hex: string): number {
   });
   return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
 }
+
+test("old translucency preferences are discarded while theme choices survive", () => {
+  const result = readAppearancePreference(
+    storageWith(
+      JSON.stringify({ ...desiredPreference, translucentSidebar: true }),
+    ),
+  );
+  assert.deepEqual(result, desiredPreference);
+  assert.equal("translucentSidebar" in result, false);
+});

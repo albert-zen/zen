@@ -4,8 +4,6 @@
   /* Canonical semantic colors for the migrated v0 slice. */
   --color-canvas: #090a0c;
   --color-surface-sidebar: #111216;
-  --color-surface-sidebar-translucent: rgb(17 18 22 / 78%);
-  --color-surface-sidebar-active: var(--color-surface-sidebar);
   --color-surface-main: #0d0e11;
   --color-surface: #15171c;
   --color-surface-elevated: #1a1c22;
@@ -119,7 +117,6 @@
   color-scheme: light;
   --color-canvas: #e8eaf1;
   --color-surface-sidebar: #eff1f6;
-  --color-surface-sidebar-translucent: rgb(239 241 246 / 78%);
   --color-surface-main: #f5f6fa;
   --color-surface: #fbfcff;
   --color-surface-elevated: #f0f2f8;
@@ -179,18 +176,15 @@
 /* Presets remap semantic roles; components never select a palette directly. */
 :root[data-appearance="dark"][data-theme-preset="graphite"] {
   --color-surface-sidebar: #111216;
-  --color-surface-sidebar-translucent: rgb(17 18 22 / 78%);
 }
 
 :root[data-appearance="light"][data-theme-preset="graphite"] {
   --color-surface-sidebar: #eff1f6;
-  --color-surface-sidebar-translucent: rgb(239 241 246 / 78%);
 }
 
 :root[data-appearance="dark"][data-theme-preset="cobalt"] {
   --color-canvas: #07111d;
   --color-surface-sidebar: #0b1724;
-  --color-surface-sidebar-translucent: rgb(11 23 36 / 78%);
   --color-surface-main: #09131f;
   --color-surface: #101d2b;
   --color-surface-elevated: #152536;
@@ -217,7 +211,6 @@
 :root[data-appearance="light"][data-theme-preset="cobalt"] {
   --color-canvas: #e5edf5;
   --color-surface-sidebar: #edf4fa;
-  --color-surface-sidebar-translucent: rgb(237 244 250 / 78%);
   --color-surface-main: #f4f8fc;
   --color-surface: #fbfdff;
   --color-surface-elevated: #edf3f9;
@@ -244,7 +237,6 @@
 :root[data-appearance="dark"][data-theme-preset="ember"] {
   --color-canvas: #120d09;
   --color-surface-sidebar: #1a120d;
-  --color-surface-sidebar-translucent: rgb(26 18 13 / 78%);
   --color-surface-main: #140f0c;
   --color-surface: #1e1612;
   --color-surface-elevated: #261c17;
@@ -271,7 +263,6 @@
 :root[data-appearance="light"][data-theme-preset="ember"] {
   --color-canvas: #f1e9df;
   --color-surface-sidebar: #f7f0e7;
-  --color-surface-sidebar-translucent: rgb(247 240 231 / 78%);
   --color-surface-main: #fcf8f3;
   --color-surface: #fffaf5;
   --color-surface-elevated: #f6eee5;
@@ -351,8 +342,4 @@
   --color-border-control: #667187;
   --color-text-muted: #4f5665;
   --color-text-disabled: #737b8a;
-}
-
-:root[data-native-backdrop="true"][data-sidebar-translucency="on"] {
-  --color-surface-sidebar-active: var(--color-surface-sidebar-translucent);
 }
