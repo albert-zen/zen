@@ -4828,7 +4828,7 @@ select:focus-visible {
     position: absolute;
     inset: var(--titlebar-height) auto 0 0;
     width: min(286px, calc(100% - 44px));
-    /* This drawer overlays content rather than the desktop material. */
+    /* The drawer uses the same opaque Sidebar surface. */
     background: var(--color-surface-sidebar);
     transform: translateX(-102%);
     box-shadow: 18px 0 60px var(--shadow-color-strong);
