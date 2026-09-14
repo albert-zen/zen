@@ -195,8 +195,8 @@ createRoot(document.getElementById("root")!).render(
       <p>Drag project titles or thread rows. Alt + Up / Down also reorders.</p>
       <button
         onClick={() =>
-          (document.documentElement.dataset.theme =
-            document.documentElement.dataset.theme === "dark"
+          (document.documentElement.dataset.appearance =
+            document.documentElement.dataset.appearance === "dark"
               ? "light"
               : "dark")
         }
