@@ -100,12 +100,7 @@ test("Appearance v1 has three presets per mode and root seams for every live con
       );
     }
   }
-  for (const dataset of [
-    "appearance",
-    "themePreset",
-    "accent",
-    "contrast",
-  ]) {
+  for (const dataset of ["appearance", "themePreset", "accent", "contrast"]) {
     assert.match(appearance, new RegExp(`dataset\\.${dataset}\\s*=`, "u"));
   }
   for (const attribute of [
