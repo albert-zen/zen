@@ -321,6 +321,65 @@ test("native drag reorders Projects globally and Threads inside one Project", as
   });
 });
 
+test("expanded Project header determines the drop edge and shows the exact insertion boundary", async () => {
+  await withDom(async (root) => {
+    await act(async () => root.render(createElement(OrderingSidebar)));
+    const source = requiredElement<HTMLElement>(
+      '[data-project-key="/work/a"] .project-toggle',
+    );
+    const target = requiredElement<HTMLElement>('[data-project-key="/work/b"]');
+    const header = requiredElement<HTMLElement>(
+      '[data-project-key="/work/b"] .project-header',
+    );
+    target.getBoundingClientRect = () => ({ top: 100, height: 300 }) as DOMRect;
+    header.getBoundingClientRect = () => ({ top: 100, height: 36 }) as DOMRect;
+    const transfer = dragData();
+    await act(async () =>
+      source.dispatchEvent(dragEvent("dragstart", transfer)),
+    );
+    await act(async () =>
+      header.dispatchEvent(dragEvent("dragover", transfer, 130)),
+    );
+    assert.equal(target.dataset.dropPlacement, "after");
+    assert.deepEqual(projectKeys(), ["/work/a", "/work/b"]);
+    await act(async () =>
+      header.dispatchEvent(dragEvent("drop", transfer, 130)),
+    );
+    assert.deepEqual(projectKeys(), ["/work/b", "/work/a"]);
+    assert.equal(document.querySelector("[data-drop-placement]"), null);
+  });
+});
+
+test("Thread insertion line follows both row edges and clears on leave or cancel", async () => {
+  await withDom(async (root) => {
+    await act(async () => root.render(createElement(OrderingSidebar)));
+    const source = requiredElement<HTMLElement>('[data-thread-id="idle"]');
+    const target = requiredElement<HTMLElement>('[data-thread-id="active"]');
+    target.getBoundingClientRect = () => ({ top: 100, height: 40 }) as DOMRect;
+    const transfer = dragData();
+    await act(async () =>
+      source.dispatchEvent(dragEvent("dragstart", transfer)),
+    );
+    await act(async () =>
+      target.dispatchEvent(dragEvent("dragover", transfer, 105)),
+    );
+    assert.equal(target.dataset.dropPlacement, "before");
+    await act(async () =>
+      target.dispatchEvent(dragEvent("dragover", transfer, 135)),
+    );
+    assert.equal(target.dataset.dropPlacement, "after");
+    await act(async () =>
+      target.dispatchEvent(dragEvent("dragleave", transfer)),
+    );
+    assert.equal(document.querySelector("[data-drop-placement]"), null);
+    await act(async () =>
+      target.dispatchEvent(dragEvent("dragover", transfer, 105)),
+    );
+    await act(async () => source.dispatchEvent(dragEvent("dragend", transfer)));
+    assert.equal(document.querySelector("[data-drop-placement]"), null);
+  });
+});
+
 function OrderingSidebar() {
   const [order, setOrder] = useState<ZenXSidebarOrder>({
     projectKeys: [],
@@ -505,10 +564,14 @@ function dragData() {
   };
 }
 
-function dragEvent(type: string, dataTransfer: ReturnType<typeof dragData>) {
+function dragEvent(
+  type: string,
+  dataTransfer: ReturnType<typeof dragData>,
+  clientY = 0,
+) {
   const event = new window.Event(type, { bubbles: true, cancelable: true });
   Object.defineProperties(event, {
-    clientY: { value: 0 },
+    clientY: { value: clientY },
     dataTransfer: { value: dataTransfer },
   });
   return event;

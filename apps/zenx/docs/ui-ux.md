@@ -134,9 +134,10 @@ New thread 可保留独立 row；它相对 Plugin spaces / Projects 的精确视
 - Escape 只在菜单或弹层确实打开时关闭并归还焦点，不得在无菜单时抢走当前焦点。
 - Thread title、ellipsis 与状态在紧凑宽度下不得重叠。异步 summary/read 结果必须有 freshness fence，旧结果不能覆盖较新的 Thread 选择。
 - 当前菜单不暴露未定义的永久 Delete；未来是否提供以及它的产品合同仍为 **TBD**。
-- Projects mode 中每个 Project header 与 owning Project 内的非 Pinned Thread row 提供轻量 reorder handle。handle 默认隐藏，只在 row/header hover、focus-within 或自身 focus 时出现，不占据默认视觉注意力；窄 Sidebar 仍保留完整可点击区域且不得造成 title/action overlap。
-- Pointer drag 可以全局重排 Project；Thread drag 只接受同一 owning Project 内的 drop。跨 Project drop 不产生 mutation，也不改变 cwd、selection、Pin、active Turn、menu、disclosure 或 archive semantics。
-- 每个 reorder handle 都是可聚焦 button，并以 Arrow Up / Arrow Down 执行等价移动；移动完成或保存失败后，焦点确定性返回同一个被移动对象的 handle。键盘路径与 pointer 路径使用同一 Settings mutation 与 reconciliation 规则。
+- Projects mode 中 Project 标题与 owning Project 内的非 Pinned Thread row 可直接拖动；标题按钮显式启用 native draggable，行内动作按钮不启动排序。
+- Project 按标题上下半区判断 before/after，插入线画在整个 Project group 的前/后边界；展开的线程数量不影响标题命中。Thread 按自身行的上下半区判断，插入线画在对应行边界。两层复用主题 accent 的亮线，拖动期间列表位置保持稳定，松手后才保存顺序；离开目标、取消或结束拖动立即清除提示。
+- Project 在相同置顶状态的项目间排序；跨置顶分区不显示可投放提示、不产生 mutation。Thread 只接受同一 owning Project 内的 drop，不改变 cwd、selection、Pin、active Turn、menu、disclosure 或 archive semantics。
+- 聚焦 Project 标题或 Thread row 后可用 Alt+Arrow Up / Alt+Arrow Down 等价移动；完成或保存失败后，焦点返回同一对象。键盘与 pointer 路径使用同一 Settings mutation 与 reconciliation 规则。
 
 ### 4.2 Turn 状态与 disclosure
 

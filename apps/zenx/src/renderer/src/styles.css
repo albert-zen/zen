@@ -756,6 +756,35 @@ select:focus-visible {
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
+.project-group {
+  position: relative;
+}
+.project-group[data-drop-placement]::after,
+.thread-row-shell[data-drop-placement]::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--color-surface-sidebar);
+  pointer-events: none;
+  z-index: 3;
+}
+.project-group[data-drop-placement="before"]::after {
+  top: -3px;
+}
+.project-group[data-drop-placement="after"]::after {
+  bottom: -3px;
+}
+.thread-row-shell[data-drop-placement="before"]::after {
+  top: -1px;
+}
+.thread-row-shell[data-drop-placement="after"]::after {
+  bottom: -1px;
+}
+
 .project-header {
   position: relative;
   width: 100%;

@@ -661,6 +661,19 @@ function ProjectsView({
   watchingThreadIds: ReadonlySet<string>;
   pinnedThreadIds: ReadonlySet<string>;
 }) {
+  const [dropTarget, setDropTarget] = useState<{
+    kind: "project" | "thread";
+    key: string;
+    placement: SidebarOrderPlacement;
+  } | null>(null);
+  const clearDropTarget = () => setDropTarget(null);
+  const leaveDropTarget = (event: ReactDragEvent<HTMLElement>) => {
+    if (
+      !(event.relatedTarget instanceof Node) ||
+      !event.currentTarget.contains(event.relatedTarget)
+    )
+      clearDropTarget();
+  };
   const projectDrag = useRef<string | null>(null);
   const threadDrag = useRef<{ projectKey: string; threadId: string } | null>(
     null,
@@ -705,27 +718,53 @@ function ProjectsView({
           ? undefined
           : {
               controlId: sidebarOrderControlId("project", group.key),
+              placement:
+                dropTarget?.kind === "project" && dropTarget.key === group.key
+                  ? dropTarget.placement
+                  : undefined,
+              onDragLeave: leaveDropTarget,
               onDragStart: (event) => {
                 projectDrag.current = group.key;
+                clearDropTarget();
                 event.dataTransfer.effectAllowed = "move";
                 event.dataTransfer.setData("text/plain", group.key);
               },
               onDragEnd: () => {
                 projectDrag.current = null;
+                clearDropTarget();
               },
               onDragOver: (event) => {
                 if (
                   projectDrag.current === null ||
-                  projectDrag.current === group.key
+                  projectDrag.current === group.key ||
+                  (sidebarOrder.pinnedProjectKeys?.includes(
+                    projectDrag.current,
+                  ) ?? false) !==
+                    (sidebarOrder.pinnedProjectKeys?.includes(group.key) ??
+                      false)
                 )
                   return;
                 event.preventDefault();
                 event.dataTransfer.dropEffect = "move";
+                setDropTarget({
+                  kind: "project",
+                  key: group.key,
+                  placement: projectDropPlacement(event),
+                });
               },
               onDrop: (event) => {
                 const sourceKey = projectDrag.current;
                 projectDrag.current = null;
-                if (sourceKey === null || sourceKey === group.key) return;
+                clearDropTarget();
+                if (
+                  sourceKey === null ||
+                  sourceKey === group.key ||
+                  (sidebarOrder.pinnedProjectKeys?.includes(sourceKey) ??
+                    false) !==
+                    (sidebarOrder.pinnedProjectKeys?.includes(group.key) ??
+                      false)
+                )
+                  return;
                 event.preventDefault();
                 void reorderAndRestoreFocus(
                   sidebarOrderControlId("project", sourceKey),
@@ -733,7 +772,7 @@ function ProjectsView({
                     onReorderProject(
                       sourceKey,
                       group.key,
-                      dropPlacement(event),
+                      projectDropPlacement(event),
                     ),
                   onSidebarOrderAttempt,
                   onSidebarOrderError,
@@ -768,13 +807,22 @@ function ProjectsView({
         onReorderThread === undefined || group.key === "__unavailable__"
           ? undefined
           : {
+              targetId:
+                dropTarget?.kind === "thread" ? dropTarget.key : undefined,
+              placement:
+                dropTarget?.kind === "thread"
+                  ? dropTarget.placement
+                  : undefined,
+              onDragLeave: leaveDropTarget,
               onDragStart: (threadId, event) => {
                 threadDrag.current = { projectKey: group.key, threadId };
+                clearDropTarget();
                 event.dataTransfer.effectAllowed = "move";
                 event.dataTransfer.setData("text/plain", threadId);
               },
               onDragEnd: () => {
                 threadDrag.current = null;
+                clearDropTarget();
               },
               onDragOver: (targetThreadId, event) => {
                 const source = threadDrag.current;
@@ -786,10 +834,17 @@ function ProjectsView({
                   return;
                 event.preventDefault();
                 event.dataTransfer.dropEffect = "move";
+                event.stopPropagation();
+                setDropTarget({
+                  kind: "thread",
+                  key: targetThreadId,
+                  placement: dropPlacement(event),
+                });
               },
               onDrop: (targetThreadId, event) => {
                 const source = threadDrag.current;
                 threadDrag.current = null;
+                clearDropTarget();
                 if (
                   source === null ||
                   source.projectKey !== group.key ||
@@ -847,6 +902,8 @@ function projectLabelForSidebar(workspace: string): string {
 }
 
 interface ProjectReorderHandlers {
+  placement?: SidebarOrderPlacement;
+  onDragLeave(event: ReactDragEvent<HTMLElement>): void;
   controlId: string;
   onDragStart(event: ReactDragEvent<HTMLDivElement>): void;
   onDragEnd(): void;
@@ -856,6 +913,9 @@ interface ProjectReorderHandlers {
 }
 
 interface ThreadReorderHandlers {
+  targetId?: string;
+  placement?: SidebarOrderPlacement;
+  onDragLeave(event: ReactDragEvent<HTMLElement>): void;
   onDragStart(threadId: string, event: ReactDragEvent<HTMLDivElement>): void;
   onDragEnd(): void;
   onDragOver(threadId: string, event: ReactDragEvent<HTMLDivElement>): void;
@@ -985,6 +1045,8 @@ function ProjectRows({
     <section
       className="project-group"
       data-project-key={group.key}
+      data-drop-placement={projectReorder?.placement}
+      onDragLeave={projectReorder?.onDragLeave}
       onDragOver={projectReorder?.onDragOver}
       onDrop={projectReorder?.onDrop}
     >
@@ -1007,6 +1069,7 @@ function ProjectRows({
       >
         <button
           className="project-toggle"
+          draggable={projectReorder !== undefined}
           type="button"
           id={projectReorder?.controlId}
           aria-expanded={open}
@@ -1197,6 +1260,11 @@ function ProjectRows({
                 ? undefined
                 : {
                     controlId: sidebarOrderControlId("thread", thread.threadId),
+                    placement:
+                      threadReorder.targetId === thread.threadId
+                        ? threadReorder.placement
+                        : undefined,
+                    onDragLeave: threadReorder.onDragLeave,
                     onDragStart: (event) =>
                       threadReorder.onDragStart(thread.threadId, event),
                     onDragEnd: threadReorder.onDragEnd,
@@ -1220,6 +1288,8 @@ function ProjectRows({
 }
 
 interface ThreadRowReorderHandlers {
+  placement?: SidebarOrderPlacement;
+  onDragLeave(event: ReactDragEvent<HTMLElement>): void;
   controlId: string;
   onDragStart(event: ReactDragEvent<HTMLDivElement>): void;
   onDragEnd(): void;
@@ -1362,6 +1432,8 @@ function ThreadRow({
       ref={rowRef}
       className={`thread-row-shell${reorder === undefined ? "" : " reorderable"}`}
       data-thread-id={thread.threadId}
+      data-drop-placement={reorder?.placement}
+      onDragLeave={reorder?.onDragLeave}
       draggable={reorder !== undefined}
       onDragStart={(event) => {
         if (
@@ -1798,6 +1870,17 @@ function sidebarOrderControlId(
   identifier: string,
 ): string {
   return `sidebar-${kind}-order-${encodeURIComponent(identifier)}`;
+}
+
+// A project's children can be arbitrarily tall; its header is the sorting hitbox.
+function projectDropPlacement(
+  event: ReactDragEvent<HTMLElement>,
+): SidebarOrderPlacement {
+  const header = event.currentTarget.querySelector(".project-header");
+  const bounds = (header ?? event.currentTarget).getBoundingClientRect();
+  return bounds.height > 0 && event.clientY >= bounds.top + bounds.height / 2
+    ? "after"
+    : "before";
 }
 
 function dropPlacement<T extends HTMLElement>(
