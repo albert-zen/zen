@@ -1,3 +1,4 @@
+import { SubscriptionUsageCard } from "./SubscriptionUsageCard.js";
 import { RtkSettingsCard } from "./RtkSettingsCard.js";
 import { useEffect, useRef, useState } from "react";
 import { normalizeContextCompactionConfig } from "../../../../../src/context-compaction.js";
@@ -714,6 +715,11 @@ function AccountPanel({
         </div>
         {manualCode ? <ManualCode /> : null}
       </div>
+      <SubscriptionUsageCard
+        providerProfileId={settings.subscriptionProviderProfileId}
+        accountId={settings.subscription.accountId}
+        authenticated={settings.subscription.authenticated}
+      />
       <div className="page-card settings-card">
         <div className="settings-row">
           <div>
@@ -2410,7 +2416,7 @@ function AppearancePanel() {
               ))}
             </div>
           </fieldset>
-          <label className="appearance-switch-row">
+          <div className="appearance-switch-row">
             <span>
               <strong id="sidebar-translucency-label">
                 Translucent sidebar
@@ -2421,22 +2427,25 @@ function AppearancePanel() {
                   : "Requires macOS or Windows 11 22H2 or later."}
               </small>
             </span>
-            <input
-              type="checkbox"
+            <button
+              className="plugin-switch"
+              type="button"
               role="switch"
               aria-labelledby="sidebar-translucency-label"
               aria-describedby="sidebar-translucency-description"
               disabled={!window.zenx.nativeBackdrop}
               name="sidebar-translucency"
               value="on"
-              checked={
-                window.zenx.nativeBackdrop && appearance.translucentSidebar
-              }
-              onChange={(event) =>
-                updateAppearance({ translucentSidebar: event.target.checked })
+              aria-checked={Boolean(
+                window.zenx.nativeBackdrop && appearance.translucentSidebar,
+              )}
+              onClick={() =>
+                updateAppearance({
+                  translucentSidebar: !appearance.translucentSidebar,
+                })
               }
             />
-          </label>
+          </div>
         </div>
         <div className="appearance-card-footer">
           <p className="settings-note">
@@ -2548,8 +2557,9 @@ function GeneralPanel({
             </select>
           </label>
           <label className="field">
-            <span>Send during a running turn</span>
+            <span id="composer-send-label">Send during a running turn</span>
             <select
+              aria-labelledby="composer-send-label"
               value={draft.composerSendMode ?? "queue"}
               onChange={(event) =>
                 setDraft({
@@ -2564,15 +2574,17 @@ function GeneralPanel({
               <option value="soft">Soft steer</option>
               <option value="hard">Hard steer (interrupt and send)</option>
             </select>
+            <small id="composer-send-help" className="settings-note">
+              Enter and the send button use this choice. Cmd/Ctrl+Enter uses
+              soft steer when Queue is selected, and Queue when either steer
+              mode is selected. Shift+Enter adds a new line.
+            </small>
           </label>
-          <p id="composer-send-help" className="settings-note">
-            Enter and the send button use this choice. Cmd/Ctrl+Enter uses soft
-            steer when Queue is selected, and Queue when either steer mode is
-            selected. Shift+Enter adds a new line.
-          </p>
+
           <label className="field">
-            <span>Tool presentation</span>
+            <span id="tool-presentation-label">Tool presentation</span>
             <select
+              aria-labelledby="tool-presentation-label"
               aria-describedby="tool-presentation-help"
               value={draft.toolPresentation ?? "both"}
               onChange={(event) =>
@@ -2587,10 +2599,17 @@ function GeneralPanel({
               <option value="direct">Direct tools only</option>
               <option value="code">Code only</option>
             </select>
+            <small id="tool-presentation-help" className="settings-note">
+              Both is the default. Code runs shell-equivalent erasable
+              TypeScript through the same tools and history. Direct is the
+              rollback path and does not delete providers or rewrite existing
+              Threads.
+            </small>
           </label>
           <label className="field">
-            <span>Maximum tool rounds</span>
+            <span id="max-tool-rounds-label">Maximum tool rounds</span>
             <input
+              aria-labelledby="max-tool-rounds-label"
               type="number"
               min="1"
               step="1"
@@ -2631,17 +2650,13 @@ function GeneralPanel({
                 {maximumError}
               </small>
             )}
+            <small id="max-tool-rounds-help" className="settings-note">
+              Leave blank for unlimited. A finite maximum stops a Turn that
+              keeps requesting tools after that many model rounds.
+            </small>
           </label>
         </div>
-        <p id="max-tool-rounds-help" className="settings-note">
-          Leave blank for unlimited. A finite maximum stops a Turn that keeps
-          requesting tools after that many model rounds.
-        </p>
-        <p id="tool-presentation-help" className="settings-note">
-          Both is the default. Code runs shell-equivalent erasable TypeScript
-          through the same tools and history. Direct is the rollback path and
-          does not delete providers or rewrite existing Threads.
-        </p>
+
         <p className="settings-note">
           Add, remove, and select Projects from the Projects sidebar. Folder
           selection always uses the ZenX directory picker.

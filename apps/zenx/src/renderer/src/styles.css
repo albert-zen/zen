@@ -3092,6 +3092,9 @@ select:focus-visible {
   padding-top: 18px;
   border-top: 1px solid var(--border-soft);
 }
+.settings-panel .form-grid {
+  align-items: start;
+}
 .settings-panel .field {
   gap: 9px;
   font-size: 12px;
@@ -3107,6 +3110,45 @@ select:focus-visible {
 .settings-panel .field input,
 .settings-panel .field select {
   min-height: 40px;
+}
+.settings-panel select:not([multiple]) {
+  appearance: none;
+  padding-right: 34px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-3) 50%),
+    linear-gradient(135deg, var(--text-3) 50%, transparent 50%);
+  background-position:
+    calc(100% - 17px) 50%,
+    calc(100% - 13px) 50%;
+  background-size: 4px 4px;
+  background-repeat: no-repeat;
+}
+.settings-panel select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.settings-panel select option {
+  background: var(--surface);
+  color: var(--text);
+}
+.settings-panel :is(select, input, textarea, .plugin-switch):focus-visible {
+  outline: 2px solid var(--border-accent);
+  outline-offset: 2px;
+}
+.settings-panel input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+.settings-panel .plugin-switch:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.settings-panel .plugin-switch:hover:not(:disabled)::before {
+  border-color: var(--text-3);
+}
+@media (prefers-reduced-motion: reduce) {
+  .plugin-switch::after {
+    transition: none;
+  }
 }
 .settings-panel .field small,
 .settings-panel .settings-note {
@@ -3742,56 +3784,6 @@ select:focus-visible {
   color: var(--color-text-muted);
   font-size: 9px;
 }
-.appearance-switch-row input {
-  appearance: none;
-  position: relative;
-  flex-shrink: 0;
-  width: 44px;
-  height: 24px;
-  margin: 0;
-  border: 1px solid var(--color-border-control);
-  border-radius: 999px;
-  background: var(--color-surface-inset);
-  cursor: pointer;
-  transition:
-    background-color 160ms ease,
-    border-color 160ms ease;
-}
-.appearance-switch-row input::before {
-  content: "";
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--color-text-secondary);
-  transition: transform 160ms ease;
-}
-.appearance-switch-row input:checked {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-}
-.appearance-switch-row input:checked::before {
-  transform: translateX(20px);
-  background: var(--color-text-on-accent);
-}
-.appearance-switch-row input:focus-visible {
-  filter: brightness(0.9);
-}
-.appearance-switch-row:has(input:disabled),
-.appearance-switch-row input:disabled {
-  cursor: not-allowed;
-}
-.appearance-switch-row input:disabled {
-  opacity: 0.45;
-}
-@media (prefers-reduced-motion: reduce) {
-  .appearance-switch-row input,
-  .appearance-switch-row input::before {
-    transition: none;
-  }
-}
 .appearance-card-footer {
   min-height: 46px;
   display: flex;
@@ -4332,6 +4324,7 @@ select:focus-visible {
 }
 .plugin-switch {
   position: relative;
+  flex-shrink: 0;
   width: 52px;
   height: 44px;
   padding: 0;
@@ -6133,9 +6126,6 @@ select:focus-visible {
 .rtk-settings-state > span {
   color: var(--text-secondary);
 }
-.rtk-settings-card .plugin-switch {
-  flex-shrink: 0;
-}
 
 .composer-command-status {
   margin: 0;
@@ -6146,4 +6136,94 @@ select:focus-visible {
 }
 .composer-command-status.is-error {
   color: var(--danger);
+}
+
+/* Subscription windows are a current account observation, separate from trace usage. */
+.subscription-usage-card {
+  display: grid;
+  gap: 18px;
+}
+.subscription-usage-card .settings-card-head {
+  margin-bottom: 0;
+}
+.quota-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+.quota-limits {
+  display: grid;
+  gap: 18px;
+}
+.quota-limit + .quota-limit {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 18px;
+}
+.quota-limit h4 {
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.quota-windows {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+.quota-window {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+.quota-window-label,
+.quota-reset {
+  color: var(--text-3);
+  font-size: 11px;
+}
+.quota-amount {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 5px 10px;
+}
+.quota-amount strong {
+  color: var(--text-1);
+  font-size: 16px;
+  font-weight: 600;
+}
+.quota-amount span {
+  color: var(--text-3);
+  font-size: 11px;
+}
+.quota-window progress,
+.quota-unknown-bar {
+  appearance: none;
+  width: 100%;
+  height: 5px;
+  border: 0;
+  border-radius: 99px;
+  overflow: hidden;
+  background: var(--surface-3);
+}
+.quota-window progress::-webkit-progress-bar {
+  background: var(--surface-3);
+}
+.quota-window progress::-webkit-progress-value {
+  background: var(--accent);
+  border-radius: 99px;
+}
+.quota-window progress::-moz-progress-bar {
+  background: var(--accent);
+  border-radius: 99px;
+}
+.settings-card .quota-error {
+  color: var(--danger);
+}
+@media (max-width: 600px) {
+  .quota-windows {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
 }

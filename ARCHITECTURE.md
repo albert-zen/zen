@@ -143,6 +143,7 @@
 - **ModelCatalogPreset** — 宿主版本化维护的内建 catalog 数据层，只记录仓库已确认的
   Provider/model metadata；手工配置始终覆盖 discovery，OpenAI-compatible discovery 只补充
   Unknown capability，而 OpenAI subscription 的官方目录替换非手工 preset metadata，失败时 preset 才作为兜底。
+- **ZenX Subscription Quota Projection** — ZenX Host 使用当前订阅 profile 的凭证租约读取官方账户额度窗口，经 typed IPC 提供有界临时读模型；账户/请求变化使迟到结果失效，未知保持 null，不进入 Core、journal、配置或持久缓存。
 - **OpenAI Subscription Model Cache** — ZenX Host 按 ChatGPT account id 保存官方 Codex
   `/models` 的最近一次成功投影与 ETag；它只作为可替换的模型发现缓存，远端失败时依次退回
   同账户缓存和内建 preset，不保存 credential，也不成为 Provider 或 Thread 权威状态。

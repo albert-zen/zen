@@ -1,3 +1,4 @@
+import type { SubscriptionUsage } from "../../main/subscription-usage.js";
 import type { AppServerHostStatus } from "../../main/app-server-manager.js";
 import type {
   ApprovalDecision,
@@ -157,6 +158,9 @@ declare global {
         setSidebarOrder(order: ZenXSidebarOrder): Promise<PublicHostSettings>;
         getDirectoryBrowser(): Promise<DirectoryBrowserSnapshot>;
         listDirectory(directory: string): Promise<DirectoryListing>;
+        readSubscriptionUsage(
+          providerProfileId: string,
+        ): Promise<SubscriptionUsage>;
         loginSubscription(): Promise<PublicHostSettings>;
         submitManualCode(code: string): Promise<void>;
         logoutSubscription(): Promise<PublicHostSettings>;

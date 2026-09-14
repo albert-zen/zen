@@ -1,3 +1,4 @@
+import type { SubscriptionUsage } from "../main/subscription-usage.js";
 import { contextBridge, ipcRenderer } from "electron";
 
 import type { AppServerHostStatus } from "../main/app-server-manager.js";
@@ -258,6 +259,13 @@ contextBridge.exposeInMainWorld("zenx", {
       await ipcRenderer.invoke(ipcChannels.directorySnapshot),
     listDirectory: async (directory: string): Promise<DirectoryListing> =>
       await ipcRenderer.invoke(ipcChannels.directoryList, directory),
+    readSubscriptionUsage: async (
+      providerProfileId: string,
+    ): Promise<SubscriptionUsage> =>
+      await ipcRenderer.invoke(
+        ipcChannels.subscriptionUsage,
+        providerProfileId,
+      ),
     loginSubscription: async (): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.subscriptionLogin),
     submitManualCode: async (code: string): Promise<void> =>

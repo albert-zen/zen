@@ -100,18 +100,80 @@ let previewSettings: PublicHostSettings = {
       ? { available: false, reason: "Available on Apple silicon Macs only." }
       : { available: true },
 };
+if (params.has("quota")) {
+  previewSettings = {
+    ...previewSettings,
+    subscriptionProviderProfileId: "preview-subscription",
+    subscription: {
+      authenticated: params.get("quota") !== "signed-out",
+      expired: false,
+      accountId: "preview-account",
+    },
+  };
+}
 Object.defineProperty(window, "zenx", {
   value: {
+    nativeBackdrop: params.get("backdrop") === "available",
     settings: {
       get: async () => previewSettings,
+      readSubscriptionUsage: async () => {
+        if (params.get("quota") === "loading")
+          return await new Promise(() => {});
+        if (params.get("quota") === "error")
+          throw new Error("Preview quota unavailable");
+        return {
+          accountId: "preview-account",
+          fetchedAt: Date.now(),
+          planType: params.get("quota") === "pro" ? "pro" : "plus",
+          limits: [
+            {
+              id: "codex",
+              name: "Codex",
+              primary:
+                params.get("quota") === "pro"
+                  ? null
+                  : {
+                      usedPercent:
+                        params.get("quota") === "unknown" ? null : 25,
+                      windowDurationSeconds: 18000,
+                      resetsAt:
+                        params.get("quota") === "unknown"
+                          ? null
+                          : Math.floor(Date.now() / 1000) + 7200,
+                    },
+              secondary: {
+                usedPercent: 62,
+                windowDurationSeconds: 604800,
+                resetsAt: Math.floor(Date.now() / 1000) + 259200,
+              },
+            },
+            {
+              id: "other",
+              name: "Other models",
+              primary: null,
+              secondary: null,
+            },
+          ],
+        };
+      },
       save: async (profile: object) => {
+        if (params.get("save") === "error")
+          throw new Error("Could not save settings. Please try again.");
+        if (params.get("save") === "busy")
+          return new Promise<PublicHostSettings>(() => {});
+        const nextProfile = { ...previewSettings.profile, ...profile };
+        const pendingRestart =
+          nextProfile.experimentalRtkEnabled !==
+          settings.profile.experimentalRtkEnabled
+            ? ["experimentalRtk"]
+            : [];
         previewSettings = {
           ...previewSettings,
-          profile: { ...previewSettings.profile, ...profile },
+          profile: nextProfile,
           configuration: {
-            status: "pending-restart",
+            status: pendingRestart.length ? "pending-restart" : "applied",
             revision: 1,
-            pendingRestart: ["experimentalRtk"],
+            pendingRestart,
           },
         };
         return previewSettings;

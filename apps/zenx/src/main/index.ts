@@ -1169,6 +1169,14 @@ function installSettingsIpc(
       );
     },
   );
+  ipcMain.handle(
+    ipcChannels.subscriptionUsage,
+    async (_event, providerProfileId: unknown) => {
+      if (typeof providerProfileId !== "string")
+        throw new Error("Invalid quota account");
+      return await settings.readSubscriptionUsage(providerProfileId);
+    },
+  );
   ipcMain.handle(ipcChannels.subscriptionLogin, async () => {
     await settings.login(
       (url) => {

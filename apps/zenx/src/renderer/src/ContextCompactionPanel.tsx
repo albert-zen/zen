@@ -30,18 +30,22 @@ export function ContextCompactionPanel({
         aria-label="Agentic compaction experiment"
       >
         <h3>Agentic compaction · Experimental</h3>
-        <label className="compaction-checkbox">
-          <input
-            type="checkbox"
+        <div className="settings-row">
+          <div>
+            <strong>Enable Agentic compaction</strong>
+          </div>
+          <button
+            className="plugin-switch"
+            type="button"
+            role="switch"
             aria-label="Enable Agentic compaction (experimental)"
             aria-describedby="agentic-compaction-description"
-            checked={config?.agenticEnabled ?? false}
-            onChange={(event) =>
-              onChange({ ...config, agenticEnabled: event.target.checked })
+            aria-checked={config?.agenticEnabled ?? false}
+            onClick={() =>
+              onChange({ ...config, agenticEnabled: !config?.agenticEnabled })
             }
           />
-          <span>Enable Agentic compaction</span>
-        </label>
+        </div>
         <p id="agentic-compaction-description" className="settings-note">
           Let the agent choose when to replace its working context during a
           task. It writes continuation notes, saves details to files, and reads

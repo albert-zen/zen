@@ -1174,7 +1174,9 @@ test("Appearance is an independent Settings section and persists the complete pr
     const emberDark = appearanceChoice("dark-preset", "ember");
     const jade = appearanceChoice("appearance-accent", "jade");
     const highContrast = appearanceChoice("appearance-contrast", "high");
-    const translucent = appearanceChoice("sidebar-translucency", "on");
+    const translucent = document.querySelector<HTMLButtonElement>(
+      '[name="sidebar-translucency"]',
+    );
     assert.ok(cobaltLight);
     assert.ok(emberDark);
     assert.ok(jade);
@@ -1225,16 +1227,19 @@ test("Appearance is an independent Settings section and persists the complete pr
 test("Appearance disables desktop translucency when native material is unavailable", async () => {
   const harness = await mountSettings("appearance", { nativeBackdrop: false });
   try {
-    await waitFor(() => appearanceChoice("sidebar-translucency", "on"));
-    const control = appearanceChoice("sidebar-translucency", "on")!;
+    const control = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[name="sidebar-translucency"]',
+      ),
+    );
     assert.equal(control.disabled, true);
-    assert.equal(control.checked, false);
+    assert.equal(control.getAttribute("aria-checked"), "false");
     assert.match(
       document.body.textContent ?? "",
       /Requires macOS or Windows 11 22H2 or later/,
     );
     await act(async () => control.click());
-    assert.equal(control.checked, false);
+    assert.equal(control.getAttribute("aria-checked"), "false");
   } finally {
     await unmount(harness);
   }
@@ -1856,12 +1861,18 @@ test("Agentic compaction is opt-in, saves alongside automatic settings, and rese
   });
   try {
     await waitFor(() => labeledSelect("Retention mode"));
-    const toggle = document.querySelector<HTMLInputElement>(
-      'input[aria-label="Enable Agentic compaction (experimental)"]',
+    const toggle = document.querySelector<HTMLButtonElement>(
+      'button[role="switch"][aria-label="Enable Agentic compaction (experimental)"]',
     );
     assert.ok(toggle, "the experimental feature has a labeled opt-in control");
-    assert.equal(toggle.checked, false);
+    assert.equal(toggle.getAttribute("aria-checked"), "false");
     await click(toggle);
+    assert.equal(toggle.getAttribute("aria-checked"), "true");
+    assert.equal(
+      (() => saved)(),
+      undefined,
+      "toggle changes remain a draft until Apply",
+    );
     await changeControl(requiredInput("Compaction trigger (%)"), "85");
     await click(exactButtonRequired("Apply"));
     await waitFor(() => saved);
@@ -1870,7 +1881,7 @@ test("Agentic compaction is opt-in, saves alongside automatic settings, and rese
       triggerPercent: 85,
     });
     await click(exactButtonRequired("Reset all compaction settings"));
-    assert.equal(toggle.checked, false);
+    assert.equal(toggle.getAttribute("aria-checked"), "false");
     await click(exactButtonRequired("Apply"));
     await waitFor(() => saved?.contextCompaction === undefined);
     assert.equal(saved?.contextCompaction, undefined);
@@ -2139,5 +2150,36 @@ test("unavailable RTK cannot be enabled and its saved preference can still be di
     } finally {
       await unmount(harness);
     }
+  }
+});
+
+test("Agentic switch retains its unsaved state after save failure and can return off", async () => {
+  const harness = await mountSettings("compaction", {
+    save: async () => {
+      throw new Error("Compaction settings save failed");
+    },
+  });
+  try {
+    const toggle = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        'button[role="switch"][aria-label="Enable Agentic compaction (experimental)"]',
+      ),
+    );
+    await click(toggle);
+    await click(exactButtonRequired("Apply"));
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /Compaction settings save failed/,
+    );
+    assert.equal(toggle.getAttribute("aria-checked"), "true");
+    await click(toggle);
+    assert.equal(toggle.getAttribute("aria-checked"), "false");
+    assert.equal(
+      toggle.getAttribute("aria-label"),
+      "Enable Agentic compaction (experimental)",
+    );
+    assert.equal(document.querySelector(".settings-toast"), null);
+  } finally {
+    await unmount(harness);
   }
 });

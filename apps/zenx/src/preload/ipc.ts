@@ -34,6 +34,7 @@ export const ipcChannels = {
   sidebarOrderSet: "zenx:settings:sidebar-order-set",
   directorySnapshot: "zenx:directory:snapshot",
   directoryList: "zenx:directory:list",
+  subscriptionUsage: "zenx:settings:subscription-usage",
   subscriptionLogin: "zenx:settings:subscription-login",
   subscriptionManualCode: "zenx:settings:subscription-manual-code",
   subscriptionManualRequested: "zenx:settings:subscription-manual-requested",

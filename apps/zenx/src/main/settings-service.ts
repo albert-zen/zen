@@ -1,3 +1,8 @@
+import {
+  readSubscriptionUsage,
+  SubscriptionQuotaError,
+  type SubscriptionUsage,
+} from "./subscription-usage.js";
 import { inspectRtkResource, rtkExecutable } from "./rtk-resource.js";
 import { RTK_EXPERIMENT_SHA256 } from "../../../../src/shell-output-filter.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -262,6 +267,7 @@ export class ZenXSettingsService {
   #profile: ZenXHostProfile | undefined;
   #profileOperations: Promise<void> = Promise.resolve();
   #loginInProgress = false;
+  #subscriptionGeneration = 0;
   #manualCode:
     | {
         resolve(value: string): void;
@@ -1299,6 +1305,7 @@ export class ZenXSettingsService {
     if (this.#loginInProgress)
       throw new Error("OpenAI login is already in progress");
     this.#loginInProgress = true;
+    this.#subscriptionGeneration++;
     try {
       await this.#activeSubscription().login({
         notifyAuthUrl: openBrowser,
@@ -1339,7 +1346,103 @@ export class ZenXSettingsService {
     waiter.resolve(value);
   }
 
+  async readSubscriptionUsage(
+    providerProfileId: string,
+  ): Promise<SubscriptionUsage> {
+    try {
+      const release = this.#beginAuxiliaryOperation();
+      let fetch: ProviderFetch | undefined;
+      try {
+        const generation = this.#subscriptionGeneration;
+        if (this.#loginInProgress)
+          throw new SubscriptionQuotaError(
+            "Quota account is signing in. Try again after login.",
+          );
+        const target =
+          await this.#captureSubscriptionDiscovery(providerProfileId);
+        if (!target)
+          throw new SubscriptionQuotaError(
+            "Quota requires a ChatGPT subscription account.",
+          );
+        const subscription = this.#subscriptionForProfile(providerProfileId);
+        const status = await subscription.status();
+        if (!status.authenticated || !status.accountId)
+          throw new SubscriptionQuotaError(
+            "Sign in to query your subscription quota.",
+          );
+        const accountId = status.accountId;
+        const signal = AbortSignal.timeout(20_000);
+        const assertCurrent = async () => {
+          signal.throwIfAborted();
+          await this.#assertSubscriptionDiscoveryCurrent(target);
+          const current = await subscription.status();
+          if (
+            generation !== this.#subscriptionGeneration ||
+            this.#loginInProgress ||
+            !current.authenticated ||
+            current.accountId !== accountId
+          )
+            throw new SubscriptionQuotaError(
+              "Quota account changed. Refresh to try again.",
+            );
+        };
+        if (!subscription.acquireAccessLease)
+          throw new SubscriptionQuotaError(
+            "Quota authentication is unavailable. Sign in again.",
+          );
+        let lease = await subscription.acquireAccessLease(signal);
+        await assertCurrent();
+        fetch = this.#providerFetchFactory(undefined);
+        const query = async () => {
+          if (extractChatGptAccountId(lease.accessToken) !== accountId)
+            throw new SubscriptionQuotaError(
+              "Quota account changed. Refresh to try again.",
+            );
+          return await readSubscriptionUsage({
+            accessToken: lease.accessToken,
+            fetch,
+            signal: lease.signal
+              ? AbortSignal.any([signal, lease.signal])
+              : signal,
+          });
+        };
+        let result: SubscriptionUsage;
+        try {
+          result = await query();
+        } catch (error) {
+          if (
+            !(error instanceof SubscriptionQuotaError) ||
+            error.status !== 401 ||
+            !subscription.renewAccessLease
+          )
+            throw error;
+          await assertCurrent();
+          lease = await subscription.renewAccessLease(
+            lease.accessToken,
+            signal,
+          );
+          await assertCurrent();
+          result = await query();
+        }
+        await assertCurrent();
+        return result;
+      } finally {
+        try {
+          await fetch?.close?.();
+        } finally {
+          await release();
+        }
+      }
+    } catch (error) {
+      if (error instanceof SubscriptionQuotaError) throw error;
+      throw new SubscriptionQuotaError(
+        "Quota query failed. Check your account and connection, then refresh.",
+      );
+    }
+  }
+
   async logout(): Promise<void> {
+    this.#subscriptionGeneration++;
     await this.#activeSubscription().logout();
   }
 
