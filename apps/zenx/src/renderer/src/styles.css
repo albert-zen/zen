@@ -1858,6 +1858,17 @@ select:focus-visible {
       calc((100% - var(--conversation-width)) / 2)
     )
     18px;
+  pointer-events: none;
+}
+.bottom-zone > * {
+  pointer-events: auto;
+}
+.bottom-zone::before {
+  content: "";
+  position: absolute;
+  inset: 0 var(--conversation-gutter) 0 0;
+  z-index: -1;
+  pointer-events: none;
   background: linear-gradient(
     180deg,
     transparent,
