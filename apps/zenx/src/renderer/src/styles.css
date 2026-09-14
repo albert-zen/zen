@@ -3132,8 +3132,7 @@ select:focus-visible {
   color: var(--text);
 }
 .settings-panel :is(select, input, textarea, .plugin-switch):focus-visible {
-  outline: 2px solid var(--border-accent);
-  outline-offset: 2px;
+  border-color: var(--border-focus);
 }
 .settings-panel input[type="checkbox"] {
   accent-color: var(--accent);
