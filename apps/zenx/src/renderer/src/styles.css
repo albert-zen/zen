@@ -6104,3 +6104,46 @@ select:focus-visible {
     right: 12px;
   }
 }
+
+.rtk-settings-card .settings-row {
+  align-items: flex-start;
+}
+.rtk-settings-card .settings-row > div {
+  min-width: 0;
+}
+.rtk-settings-card h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+}
+.rtk-experiment-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.rtk-settings-state {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.rtk-settings-state > span {
+  color: var(--text-secondary);
+}
+.rtk-settings-card .plugin-switch {
+  flex-shrink: 0;
+}
+
+.composer-command-status {
+  margin: 0;
+  padding: 0 14px 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.composer-command-status.is-error {
+  color: var(--danger);
+}

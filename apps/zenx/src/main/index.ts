@@ -238,6 +238,7 @@ async function bootstrapZenX(): Promise<void> {
     return automationService;
   };
   settingsService = new ZenXSettingsService({
+    rtkResourcesDirectory: resourcesDirectory,
     userDataDirectory,
     zenDataDirectory,
     vault: new ZenXCredentialVault(

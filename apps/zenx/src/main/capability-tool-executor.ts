@@ -1,3 +1,4 @@
+import { RtkShellOutputFilter } from "../../../../src/shell-output-filter.js";
 import type {
   ToolBundle,
   ToolExecutionResult,
@@ -168,6 +169,7 @@ export class ZenXHostToolBundle implements ToolBundle {
 }
 
 export function createZenXHostToolEnvironment(options: {
+  experimentalRtk?: { executable: string; sha256: string };
   capabilities: ZenXCapabilityHostSnapshot & { generationToken?: string };
   blockedEnvironmentVariables?: readonly string[];
   send: (event: HostEvent) => void;
@@ -191,6 +193,10 @@ export function createZenXHostToolEnvironment(options: {
   const shellRuntime = new ShellToolRuntime({
     blockedEnvironmentVariables: options.blockedEnvironmentVariables,
     toolOutputSpool: options.toolOutputSpool,
+    experimentalOutputFilter:
+      options.experimentalRtk === undefined
+        ? undefined
+        : new RtkShellOutputFilter(options.experimentalRtk),
   });
   const toolEnvironment = new ToolEnvironment({
     runtimes: [shellRuntime],

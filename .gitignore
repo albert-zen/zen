@@ -16,3 +16,6 @@ node_modules/
 *.py[cod]
 
 /packages/zenx-imzenx-plugin/python/
+
+apps/zenx/resources/rtk/
+apps/zenx/resources/.rtk-build-*/

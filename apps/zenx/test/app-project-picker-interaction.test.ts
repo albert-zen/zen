@@ -3361,3 +3361,100 @@ test("Settings and thread navigation are mutually exclusive, including return to
     await unmountApp(harness);
   }
 });
+
+test("/compact calls only the compact endpoint, preserves edits while pending, and reports success inline", async () => {
+  const methods: string[] = [];
+  const response = deferred<{ compactionItemId: string }>();
+  const harness = await mountThreadApp({
+    request: async (method, params) => {
+      methods.push(method);
+      if (method === "zen/thread/resume") return resumed(liveThread());
+      if (method === "thread/compact") {
+        assert.deepEqual(params, { threadId: "thread-1" });
+        return await response.promise;
+      }
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    const textarea = await selectedComposer();
+    await setTextareaValue(textarea, "/compact");
+    await invokePrimarySubmit(exactButtonByAria("Compact context"), 2);
+    assert.equal(methods.filter((m) => m === "thread/compact").length, 1);
+    assert.match(document.body.textContent!, /Compacting context/);
+    await setTextareaValue(textarea, "Keep this later draft");
+    await act(async () => {
+      response.resolve({ compactionItemId: "compact-1" });
+      await response.promise;
+    });
+    await waitFor(() =>
+      document.body.textContent?.includes("Context compacted."),
+    );
+    assert.equal(textarea.value, "Keep this later draft");
+    assert.equal(
+      methods.some((m) => /^turn\//u.test(m)),
+      false,
+    );
+    assert.equal(document.querySelector(".settings-toast"), null);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+for (const mode of ["queue", "soft", "hard"] as const) {
+  test(`/compact during a running reply does not ${mode} or interrupt`, async () => {
+    const methods: string[] = [];
+    const harness = await mountThreadApp({
+      composerSendMode: mode,
+      request: async (method) => {
+        methods.push(method);
+        if (method === "zen/thread/resume") return resumed(runningThread());
+        throw new Error(`Unexpected ${method}`);
+      },
+    });
+    try {
+      const textarea = await selectedComposer();
+      await setTextareaValue(textarea, "/compact");
+      await invokePrimarySubmit(exactButtonByAria("Compact context"));
+      assert.match(document.body.textContent!, /Wait for the current reply/);
+      assert.equal(textarea.value, "/compact");
+      assert.equal(methods.includes("thread/compact"), false);
+      assert.equal(
+        methods.some((m) => /^turn\//u.test(m)),
+        false,
+      );
+    } finally {
+      await unmountApp(harness);
+    }
+  });
+}
+
+test("/compact in a new draft reports no conversation without creating an empty thread", async () => {
+  const methods: string[] = [];
+  const harness = await mountApp(oneProject(), {
+    request: async (method) => {
+      methods.push(method);
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    const textarea = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(textarea, "/compact");
+    await invokePrimarySubmit(exactButtonByAria("Compact context"));
+    assert.match(document.body.textContent!, /no conversation to compact/);
+    assert.equal(textarea.value, "/compact");
+    assert.equal(methods.includes("thread/start"), false);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+function exactButtonByAria(label: string): HTMLButtonElement {
+  const button = document.querySelector<HTMLButtonElement>(
+    `button[aria-label="${label}"]`,
+  );
+  assert(button);
+  return button;
+}

@@ -2,6 +2,8 @@
 
 ## 核心概念
 
+- **实验 Shell 输出展示** — 默认关闭的 Host 执行依赖仅在直接模型调用中对已保存在有界原始 spool 的输出做固定版本 RTK 过滤，过滤事实与原文回读凭据随既有工具结果写入 ItemList，程序化嵌套调用保持原始返回语义。
+
 - **Host 配置快照** — Host 将已准备的 Provider 目录、默认选择与执行参数作为一致的瞬时快照发布，新根执行只从当前快照取得依赖，配置文件仍是唯一持久配置权威。
 - **Provider 执行依赖持有** — 一次 Turn 或 Host 辅助模型请求对 adapter、模型元数据及 transport 的瞬时引用在真正执行结束后释放，退役资源待最后一个引用结束后关闭，不进入 journal。
 - **Host 配置候选** — prepare 产生绑定 processEpoch 与 revision 的瞬时候选，publish/discard 幂等且进程退出即丢弃；候选不成为持久配置权威。
@@ -169,6 +171,8 @@
 - **IMZen Gateway state file** — SDK SQLite repository 持久化 inbound/outbound
   幂等 claim 等可重建 bridge state，使 `side_effect_started` 在进程重启后仍不被
   重新授权；它不是 Zen Thread、transcript、queue 或 Agent state。
+- **ZenX 手动压缩命令** — 输入框在普通提交前将独立 `/compact` 路由到已有 `thread/compact`，仅保存按任务归属的瞬时反馈，成功才清理同一草稿；不生成 user message、Turn、排队或第二套压缩策略，压缩与最新 AGENTS 规则仍由同一个 canonical Item 确定。
+- **ZenX RTK 实验设置** — General 保存默认关闭的进程级输出展示偏好，Host 只装载应用自带且平台与 hash 验证通过的固定 RTK；Apply 与安全重启复用配置 revision 机制，运行中调用及历史 Items 不受开关变化影响，缺失资源明确显示不可用。
 - **ZenXHostProfile** — ZenX 主进程用 v3 配置以稳定 `providerProfileId` 持久化多个 Provider
   连接及各自的结构化 ModelCatalog，并把默认/标题模型保存为
   `providerProfileId / modelId` 引用；workspace、审批默认值、`direct | code | both`

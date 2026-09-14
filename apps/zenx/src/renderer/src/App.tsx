@@ -1,3 +1,4 @@
+import { handleCompactCommand, isCompactCommand } from "./compact-command.js";
 import { BrowserThreadPanel } from "./browser-thread-panel.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
 import {
@@ -1314,6 +1315,19 @@ export function App() {
     if (intent !== "start" || expectedTurnId !== null) return;
     const current = newThreadDraftRef.current;
     if (current === null) return;
+    if (
+      isCompactCommand(current.composer.draft.text) ||
+      current.composer.compaction?.status === "pending"
+    ) {
+      await handleCompactCommand({
+        threadId: null,
+        active: false,
+        read: () => current.composer,
+        update: (change) => updateNewThreadComposer(current.id, change),
+        compact: async () => {},
+      });
+      return;
+    }
     if (current.workspace === null) {
       setModelUpdateError("Choose a Project before sending.");
       return;
@@ -1509,6 +1523,22 @@ export function App() {
       return;
     const threadId = threadDetail.id;
     const current = composerStatesRef.current[threadId] ?? emptyComposerState();
+    if (
+      isCompactCommand(current.draft.text) ||
+      current.compaction?.status === "pending"
+    ) {
+      await handleCompactCommand({
+        threadId,
+        active:
+          expectedTurnId !== null ||
+          threadDetail.turns.some((turn) => turn.status === "inProgress"),
+        read: () => composerStatesRef.current[threadId] ?? emptyComposerState(),
+        update: (change) => updateComposer(threadId, change),
+        compact: (id) =>
+          window.zenx.protocol.request("thread/compact", { threadId: id }),
+      });
+      return;
+    }
     if (current.draft.images.length > 0) {
       const capabilityError = imageCapabilityMessage(
         providerProfiles,

@@ -1,3 +1,4 @@
+import { isCompactCommand } from "./compact-command.js";
 import { createPortal } from "react-dom";
 import {
   useEffect,
@@ -165,10 +166,15 @@ export function ThreadView({
   const pendingApprovals = approvals.filter(
     (approval) => approval.status === "pending",
   );
-  const submitting = composer.submission?.status === "pending";
+  const compactRequested = isCompactCommand(composer.draft.text);
+  const submitting =
+    composer.submission?.status === "pending" ||
+    composer.compaction?.status === "pending";
   const hasDraft = composerDraftHasContent(composer.draft);
   const blockedByImageCapability =
-    composer.draft.images.length > 0 && imageCapabilityError !== null;
+    !compactRequested &&
+    composer.draft.images.length > 0 &&
+    imageCapabilityError !== null;
 
   useEffect(() => {
     const scroll = scrollRef.current;
@@ -270,8 +276,11 @@ export function ThreadView({
         : intent === "replace"
           ? "Interrupt and send"
           : "Send";
-  const primaryLabel =
-    primaryMode === "stop" ? "Stop" : intentLabel(sendIntent);
+  const primaryLabel = compactRequested
+    ? "Compact context"
+    : primaryMode === "stop"
+      ? "Stop"
+      : intentLabel(sendIntent);
   const primary = () => {
     if (primaryMode === "stop") void interrupt();
     else submit(sendIntent);
@@ -567,6 +576,20 @@ export function ThreadView({
               </button>
             </div>
           </div>
+          {composer.compaction ? (
+            <p
+              className={
+                composer.compaction.status === "failed"
+                  ? "composer-command-status is-error"
+                  : "composer-command-status"
+              }
+              role={
+                composer.compaction.status === "failed" ? "alert" : "status"
+              }
+            >
+              {composer.compaction.message}
+            </p>
+          ) : null}
           {composer.submission?.status === "failed" ||
           interruptError !== null ||
           attachmentError !== null ||

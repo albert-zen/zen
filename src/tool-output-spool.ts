@@ -37,6 +37,8 @@ export interface ToolOutputCaptureMetadata {
 
 export interface ToolOutputCaptureFinishOptions {
   sourceTruncated?: boolean;
+  /** Keep a readback file even when a different presentation fits in memory. */
+  retainFile?: boolean;
 }
 
 /**
@@ -243,7 +245,10 @@ export class ToolOutputCapture {
     }
     const oversized = this.#capturedBytes > this.#previewBytes;
     let requiresReceipt =
-      oversized || this.#sourceTruncated || this.#fileUnavailable;
+      oversized ||
+      options.retainFile === true ||
+      this.#sourceTruncated ||
+      this.#fileUnavailable;
     if (!requiresReceipt || this.#fileUnavailable) {
       try {
         await rm(this.#filePath, { force: true });
@@ -262,7 +267,7 @@ export class ToolOutputCapture {
       sourceTruncated: this.#sourceTruncated || this.#fileUnavailable,
       head: decodeHead(Buffer.concat(this.#head), this.#headLimit),
       tail: decodeTail(Buffer.concat(this.#tail), this.#tailLimit),
-      ...(requiresReceipt
+      ...(oversized || this.#sourceTruncated || this.#fileUnavailable
         ? {}
         : { output: Buffer.concat(this.#small).toString("utf8") }),
     };

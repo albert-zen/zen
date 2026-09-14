@@ -575,3 +575,75 @@ function normalizeEvent(value: unknown): unknown {
     ),
   ) as unknown;
 }
+
+test("typed manual compaction appends one reset with refreshed AGENTS rules and no new Turn", async () => {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-manual-compact-"),
+  );
+  await promisify(execFile)("git", ["init", directory]);
+  await writeFile(path.join(directory, "AGENTS.md"), "FIRST_RULES");
+  const appServer = createHostedAppServer({
+    cwd: directory,
+    dataDirectory: directory,
+    model: "fake",
+    models: ["fake"],
+    approvalPolicy: "never",
+    provider: { type: "fake" },
+    toolPresentation: "direct",
+    journal: new InMemoryThreadJournal(),
+  });
+  const server = await serveCodexWebSocket({
+    appServer,
+    zenHome: directory,
+    listen: "ws://127.0.0.1:0",
+    bearerToken: "compact-test",
+  });
+  const client = await ZenXProtocolClient.connect(
+    clientOptions(server.url, "compact-test", { bearerToken: "compact-test" }),
+  );
+  try {
+    const { thread } = await client.request("thread/start", {});
+    await assert.rejects(
+      client.request("thread/compact", { threadId: thread.id }),
+      /eligible completed Turn boundary/,
+    );
+    await (
+      await appServer.startTurn(thread.id, "Remember the current work.")
+    ).done;
+    const before = await appServer.readThread(thread.id);
+    await writeFile(path.join(directory, "AGENTS.md"), "LATEST_RULES");
+    const result = await client.request("thread/compact", {
+      threadId: thread.id,
+    });
+    const after = await appServer.readThread(thread.id);
+    const compaction = after.items.find(
+      (item) => item.id === result.compactionItemId,
+    );
+    assert(compaction?.type === "context_compaction");
+    assert.equal(compaction.workspaceInstructions?.[0]?.text, "LATEST_RULES");
+    assert.equal(after.turns.length, before.turns.length);
+    assert.equal(
+      after.items.filter((item) => item.type === "context_compaction").length,
+      1,
+    );
+    assert.equal(
+      after.items.filter((item) => item.type === "user_message").length,
+      before.items.filter((item) => item.type === "user_message").length,
+    );
+    await assert.rejects(
+      client.request("thread/compact", { threadId: thread.id }),
+      /already|boundary/,
+    );
+    const recovery = await client.request("zen/thread/resume", {
+      threadId: thread.id,
+    });
+    assert.match(JSON.stringify(recovery), /LATEST_RULES/);
+  } finally {
+    client.close();
+    await server.close();
+    await appServer.closeHostResources();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

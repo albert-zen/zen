@@ -92,19 +92,41 @@ const multiProviderSettings: PublicHostSettings = {
   apiKeyProviderProfileIds: ["profile-alpha", "profile-beta"],
 };
 
+const params = new URLSearchParams(location.search);
+let previewSettings: PublicHostSettings = {
+  ...multiProviderSettings,
+  rtk:
+    params.get("rtk") === "unavailable"
+      ? { available: false, reason: "Available on Apple silicon Macs only." }
+      : { available: true },
+};
 Object.defineProperty(window, "zenx", {
   value: {
     settings: {
-      get: async () => multiProviderSettings,
-      save: async (profile: object) => ({
-        ...multiProviderSettings,
-        profile: { ...multiProviderSettings.profile, ...profile },
-      }),
+      get: async () => previewSettings,
+      save: async (profile: object) => {
+        previewSettings = {
+          ...previewSettings,
+          profile: { ...previewSettings.profile, ...profile },
+          configuration: {
+            status: "pending-restart",
+            revision: 1,
+            pendingRestart: ["experimentalRtk"],
+          },
+        };
+        return previewSettings;
+      },
+      safeRestart: async () => {
+        previewSettings = {
+          ...previewSettings,
+          configuration: { status: "applied", revision: 1, pendingRestart: [] },
+        };
+        return previewSettings;
+      },
       onManualCodeRequested: () => () => {},
     },
   },
 });
-const params = new URLSearchParams(location.search);
 document.documentElement.dataset.appearance = params.get("theme") ?? "light";
 function Preview() {
   const [tab, setTab] = useState<SettingsTab>(

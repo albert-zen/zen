@@ -5,11 +5,11 @@
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
-    "predev": "npm run prepare:first-party-plugins",
+    "predev": "npm run prepare:first-party-plugins && npm run prepare:rtk",
     "dev": "electron-vite dev",
     "prepare:plugin-sdk": "npm run build --workspace @zenx/plugin-sdk",
     "prepare:first-party-plugins": "node ./scripts/pack-first-party-plugins.mjs ./resources",
-    "prebuild": "npm run prepare:first-party-plugins",
+    "prebuild": "npm run prepare:first-party-plugins && npm run prepare:rtk",
     "build": "electron-vite build",
     "build:prepared": "electron-vite build",
     "brand:generate": "node ./scripts/generate-brand-assets.mjs",
@@ -33,7 +33,8 @@
     "smoke:windows-user-browser": "tsx src/main/user-browser-smoke.ts",
     "smoke:providers": "npm run build && electron ./out/main/provider-smoke.js",
     "check": "npm run brand:check && npm run typecheck && npm run prepare:first-party-plugins && npm run test:prepared && npm run build:prepared",
-    "test:imzenx": "tsx --test integration/imzenx-sync.test.ts"
+    "test:imzenx": "tsx --test integration/imzenx-sync.test.ts",
+    "prepare:rtk": "node ./scripts/prepare-rtk.mjs"
   },
   "dependencies": {
     "@zenx/plugin-sdk": "0.1.0",
