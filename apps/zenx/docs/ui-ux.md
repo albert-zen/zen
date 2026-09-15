@@ -138,7 +138,7 @@ New thread 可保留独立 row；它相对 Plugin spaces / Projects 的精确视
 - Project 按标题上下半区判断 before/after，插入线画在整个 Project group 的前/后边界；展开的线程数量不影响标题命中。Thread 按自身行的上下半区判断，插入线画在对应行边界。两层复用主题 accent 的亮线，线程排序期间列表位置保持稳定，松手后才保存顺序；离开目标、取消或结束拖动立即清除提示。
 - Project 在相同置顶状态的项目间排序；跨置顶分区不显示可投放提示、不产生 mutation。Thread 只接受同一 owning Project 内的 drop，不改变 cwd、selection、Pin、active Turn、menu、disclosure 或 archive semantics。
 - 拖动项目时暂时隐藏其子列表，保持组件实例与保存的展开偏好，结束或取消后恢复；标题的 aria-expanded 同步临时视觉状态。拖动线程不折叠 Project。
-- 拖动来源变淡，预览使用文件夹/对话气泡图标区分项目和线程，保留来源行尺寸及鼠标抓取坐标，避免拖起时跳到光标右侧；长标题省略。指针靠近 Sidebar 滚动区上/下边缘时按接近程度连续滚动，移回中央或移出区域停止。drop、dragend、Escape、失焦与卸载统一释放临时状态和滚动动画。
+- 拖动来源变淡，项目预览保留文件夹图标；线程预览复用原行的标题及厂商图标/模型名称两行样式，不添加线程图标，保留来源行尺寸及鼠标抓取坐标，避免拖起时跳到光标右侧；长标题省略。指针靠近 Sidebar 滚动区上/下边缘时按接近程度连续滚动，移回中央或移出区域停止。drop、dragend、Escape、失焦与卸载统一释放临时状态和滚动动画。
 - 当前不新增菜单上移/下移（用户明确低优先级）；保留既有键盘排序。
 - 聚焦 Project 标题或 Thread row 后可用 Alt+Arrow Up / Alt+Arrow Down 等价移动；完成或保存失败后，焦点返回同一对象。键盘与 pointer 路径使用同一 Settings mutation 与 reconciliation 规则。
 
