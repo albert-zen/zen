@@ -204,6 +204,7 @@
   canonical ItemList，也不改变 Runtime、调度或 Inbox 优先级。
 - **ZenXImagePresentation** — Renderer 将 Markdown 图片源与既有 tool modelContent 附件投影为缩略图和共享全窗口预览；本地 Markdown 图片经只读、格式/大小受限的 IPC 读取，工具原文、路径和 journal 不变，不导入新的持久化附件。
 - **ZenXSidebarExpansionPreference** — Renderer 在本机 app origin 按区域与 canonical Project key 保存折叠选择；父区关闭、页面切换与重启不重置子区选择，不进入 Core 或 Host restart。数字线程快捷键只按当前展开的可选择线程行顺序投影。
+- **ZenXSidebarDrag** — Renderer 的单次原生拖动拥有临时预览、来源反馈与边缘滚动；结束、取消或卸载时统一释放，不持久化临时折叠，不改变 Thread 或排序权威。
 - **ZenXSidebarOrderPreference** — ZenXHostProfile 按 canonical Project key 与 owning
   Project 分区的 threadId preference list 持久化本机 Sidebar 顺序；未知项按稳定投影追加、
   移除项忽略；同一偏好可保存 pinnedProjectKeys，将置顶项目稳定排在项目列表前部而保留原排序，且排序不改变 cwd、Project identity、Thread state 或 canonical ItemList。

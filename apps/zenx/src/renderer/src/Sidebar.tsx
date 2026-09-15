@@ -33,6 +33,8 @@ import {
   type SidebarOrderPlacement,
 } from "./thread-list.js";
 
+import { startSidebarDrag } from "./sidebar-drag.js";
+
 import { useSidebarExpansion } from "./sidebar-expansion.js";
 
 interface SidebarProps {
@@ -674,6 +676,35 @@ function ProjectsView({
     )
       clearDropTarget();
   };
+  const [dragging, setDragging] = useState<{
+    kind: "project" | "thread";
+    key: string;
+  } | null>(null);
+  const dragCleanup = useRef<(() => void) | null>(null);
+  useEffect(() => () => dragCleanup.current?.(), []);
+  const beginDrag = (
+    kind: "project" | "thread",
+    key: string,
+    label: string,
+    event: ReactDragEvent<HTMLElement>,
+  ) => {
+    dragCleanup.current?.();
+    projectDrag.current = kind === "project" ? key : null;
+    if (kind === "project") threadDrag.current = null;
+    setDragging({ kind, key });
+    clearDropTarget();
+    dragCleanup.current = startSidebarDrag(
+      event.currentTarget,
+      event.dataTransfer,
+      label,
+      () => {
+        projectDrag.current = null;
+        threadDrag.current = null;
+        setDragging(null);
+        clearDropTarget();
+      },
+    );
+  };
   const projectDrag = useRef<string | null>(null);
   const threadDrag = useRef<{ projectKey: string; threadId: string } | null>(
     null,
@@ -718,14 +749,15 @@ function ProjectsView({
           ? undefined
           : {
               controlId: sidebarOrderControlId("project", group.key),
+              dragging:
+                dragging?.kind === "project" && dragging.key === group.key,
               placement:
                 dropTarget?.kind === "project" && dropTarget.key === group.key
                   ? dropTarget.placement
                   : undefined,
               onDragLeave: leaveDropTarget,
               onDragStart: (event) => {
-                projectDrag.current = group.key;
-                clearDropTarget();
+                beginDrag("project", group.key, group.label, event);
                 event.dataTransfer.effectAllowed = "move";
                 event.dataTransfer.setData("text/plain", group.key);
               },
@@ -814,7 +846,19 @@ function ProjectsView({
                   ? dropTarget.placement
                   : undefined,
               onDragLeave: leaveDropTarget,
+              draggingId:
+                dragging?.kind === "thread" ? dragging.key : undefined,
               onDragStart: (threadId, event) => {
+                beginDrag(
+                  "thread",
+                  threadId,
+                  threadTitle(
+                    group.threads.find(
+                      (thread) => thread.threadId === threadId,
+                    )!,
+                  ),
+                  event,
+                );
                 threadDrag.current = { projectKey: group.key, threadId };
                 clearDropTarget();
                 event.dataTransfer.effectAllowed = "move";
@@ -902,6 +946,7 @@ function projectLabelForSidebar(workspace: string): string {
 }
 
 interface ProjectReorderHandlers {
+  dragging: boolean;
   placement?: SidebarOrderPlacement;
   onDragLeave(event: ReactDragEvent<HTMLElement>): void;
   controlId: string;
@@ -913,6 +958,7 @@ interface ProjectReorderHandlers {
 }
 
 interface ThreadReorderHandlers {
+  draggingId?: string;
   targetId?: string;
   placement?: SidebarOrderPlacement;
   onDragLeave(event: ReactDragEvent<HTMLElement>): void;
@@ -1045,6 +1091,7 @@ function ProjectRows({
     <section
       className="project-group"
       data-project-key={group.key}
+      data-dragging={projectReorder?.dragging || undefined}
       data-drop-placement={projectReorder?.placement}
       onDragLeave={projectReorder?.onDragLeave}
       onDragOver={projectReorder?.onDragOver}
@@ -1072,7 +1119,7 @@ function ProjectRows({
           draggable={projectReorder !== undefined}
           type="button"
           id={projectReorder?.controlId}
-          aria-expanded={open}
+          aria-expanded={open && !projectReorder?.dragging}
           aria-keyshortcuts={
             projectReorder === undefined
               ? undefined
@@ -1260,6 +1307,7 @@ function ProjectRows({
                 ? undefined
                 : {
                     controlId: sidebarOrderControlId("thread", thread.threadId),
+                    dragging: threadReorder.draggingId === thread.threadId,
                     placement:
                       threadReorder.targetId === thread.threadId
                         ? threadReorder.placement
@@ -1288,6 +1336,7 @@ function ProjectRows({
 }
 
 interface ThreadRowReorderHandlers {
+  dragging: boolean;
   placement?: SidebarOrderPlacement;
   onDragLeave(event: ReactDragEvent<HTMLElement>): void;
   controlId: string;
@@ -1432,6 +1481,7 @@ function ThreadRow({
       ref={rowRef}
       className={`thread-row-shell${reorder === undefined ? "" : " reorderable"}`}
       data-thread-id={thread.threadId}
+      data-dragging={reorder?.dragging || undefined}
       data-drop-placement={reorder?.placement}
       onDragLeave={reorder?.onDragLeave}
       draggable={reorder !== undefined}

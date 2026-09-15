@@ -6232,3 +6232,29 @@ select:focus-visible {
     gap: 20px;
   }
 }
+
+/* Keep row instances mounted while a dragged project's children are hidden. */
+.project-group[data-dragging="true"] > :not(.project-header) {
+  display: none;
+}
+.project-group[data-dragging="true"] > .project-header,
+.thread-row-shell[data-dragging="true"] {
+  opacity: 0.4;
+}
+.sidebar-drag-preview {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 10000;
+  max-width: 240px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-control);
+  border-radius: 8px;
+  background: var(--color-surface-elevated);
+  color: var(--text-1);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}

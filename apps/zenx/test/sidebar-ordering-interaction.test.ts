@@ -380,6 +380,89 @@ test("Thread insertion line follows both row edges and clears on leave or cancel
   });
 });
 
+test("Project drag temporarily collapses without losing rows or saved disclosure", async () => {
+  await withDom(async (root) => {
+    await act(async () => root.render(createElement(OrderingSidebar)));
+    const source = requiredElement<HTMLElement>(
+      '[data-project-key="/work/a"] .project-toggle',
+    );
+    const row = requiredElement<HTMLElement>('[data-thread-id="active"]');
+    const saved = window.localStorage.length;
+    const transfer = dragData();
+    await act(async () =>
+      source.dispatchEvent(dragEvent("dragstart", transfer)),
+    );
+    assert.equal(source.getAttribute("aria-expanded"), "false");
+    assert.ok(
+      document.querySelector(
+        '[data-project-key="/work/a"][data-dragging="true"]',
+      ),
+    );
+    assert.equal(document.querySelector('[data-thread-id="active"]'), row);
+    assert.equal(window.localStorage.length, saved);
+    await act(async () =>
+      document.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    assert.equal(source.getAttribute("aria-expanded"), "true");
+    assert.equal(document.querySelector('[data-dragging="true"]'), null);
+  });
+});
+
+test("edge scrolling continues under a stationary pointer and stops outside or on cancel", async () => {
+  await withDom(async (root) => {
+    let nextFrame: FrameRequestCallback | undefined;
+    window.requestAnimationFrame = (callback) => {
+      nextFrame = callback;
+      return 1;
+    };
+    window.cancelAnimationFrame = () => {
+      nextFrame = undefined;
+    };
+    await act(async () => root.render(createElement(OrderingSidebar)));
+    const source = requiredElement<HTMLElement>('[data-thread-id="idle"]');
+    const target = requiredElement<HTMLElement>('[data-thread-id="active"]');
+    const scroller = requiredElement<HTMLElement>(".sidebar-scroll");
+    scroller.getBoundingClientRect = () =>
+      ({ top: 100, bottom: 500, left: 0, right: 250 }) as DOMRect;
+    scroller.scrollTop = 100;
+    const transfer = dragData();
+    await act(async () =>
+      source.dispatchEvent(dragEvent("dragstart", transfer)),
+    );
+    await act(async () =>
+      target.dispatchEvent(dragEvent("dragover", transfer, 495)),
+    );
+    nextFrame!(100);
+    nextFrame!(116);
+    nextFrame!(132);
+    assert.ok(
+      scroller.scrollTop > 110,
+      "keeps scrolling even without additional dragover events",
+    );
+    await act(async () =>
+      target.dispatchEvent(dragEvent("dragover", transfer, 300)),
+    );
+    const middle = scroller.scrollTop;
+    nextFrame!(148);
+    assert.equal(scroller.scrollTop, middle);
+    await act(async () =>
+      target.dispatchEvent(dragEvent("dragover", transfer, 105)),
+    );
+    nextFrame!(164);
+    assert.ok(scroller.scrollTop < middle);
+    await act(async () =>
+      document.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape" }),
+      ),
+    );
+    assert.equal(nextFrame, undefined);
+    assert.equal(document.querySelector(".sidebar-drag-preview"), null);
+    assert.equal(document.querySelector('[data-dragging="true"]'), null);
+  });
+});
+
 function OrderingSidebar() {
   const [order, setOrder] = useState<ZenXSidebarOrder>({
     projectKeys: [],
@@ -572,6 +655,7 @@ function dragEvent(
   const event = new window.Event(type, { bubbles: true, cancelable: true });
   Object.defineProperties(event, {
     clientY: { value: clientY },
+    clientX: { value: 50 },
     dataTransfer: { value: dataTransfer },
   });
   return event;
