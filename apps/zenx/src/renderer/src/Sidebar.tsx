@@ -697,6 +697,8 @@ function ProjectsView({
       event.currentTarget,
       event.dataTransfer,
       label,
+      kind,
+      event,
       () => {
         projectDrag.current = null;
         threadDrag.current = null;

@@ -6242,11 +6242,14 @@ select:focus-visible {
   opacity: 0.4;
 }
 .sidebar-drag-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
   position: fixed;
   top: 0;
   left: 0;
   z-index: 10000;
-  max-width: 240px;
   padding: 8px 12px;
   border: 1px solid var(--border-control);
   border-radius: 8px;
@@ -6257,4 +6260,14 @@ select:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   pointer-events: none;
+}
+.sidebar-drag-preview svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+.sidebar-drag-preview span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

@@ -3,14 +3,43 @@ export function startSidebarDrag(
   source: HTMLElement,
   transfer: DataTransfer,
   label: string,
+  kind: "project" | "thread",
+  grab: { clientX: number; clientY: number },
   onFinish: () => void,
 ): () => void {
   const scroller = source.closest<HTMLElement>(".sidebar-scroll");
   const preview = document.createElement("div");
   preview.className = "sidebar-drag-preview";
-  preview.textContent = label;
+  preview.setAttribute("aria-hidden", "true");
+  const bounds = source.getBoundingClientRect();
+  // Keep the original row footprint and pointer hotspot: no jump on pickup.
+  preview.style.width = `${bounds.width}px`;
+  preview.style.height = `${bounds.height}px`;
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  icon.setAttribute("viewBox", "0 0 16 16");
+  icon.setAttribute("fill", "none");
+  icon.setAttribute("stroke", "currentColor");
+  icon.setAttribute("stroke-width", "1.5");
+  icon.setAttribute("stroke-linecap", "round");
+  icon.setAttribute("stroke-linejoin", "round");
+  icon.dataset.kind = kind;
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute(
+    "d",
+    kind === "project"
+      ? "M1.8 4.2C1.8 3.5 2.3 3 3 3h3l1.4 1.6H13c.7 0 1.2.5 1.2 1.2v6c0 .7-.5 1.2-1.2 1.2H3c-.7 0-1.2-.5-1.2-1.2V4.2Z"
+      : "M14 7.5a6 5.5 0 0 1-6 5.5 7 7 0 0 1-2.5-.5L2 14l.8-3A5.2 5.2 0 0 1 2 7.5a6 5.5 0 0 1 12 0Z",
+  );
+  icon.append(path);
+  const title = document.createElement("span");
+  title.textContent = label;
+  preview.append(icon, title);
   document.body.append(preview);
-  transfer.setDragImage?.(preview, -12, -8);
+  transfer.setDragImage?.(
+    preview,
+    grab.clientX - bounds.left,
+    grab.clientY - bounds.top,
+  );
   let pointer: { x: number; y: number } | null = null;
   let frame: number | undefined;
   let previousTime = 0;

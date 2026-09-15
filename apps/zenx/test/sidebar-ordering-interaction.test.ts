@@ -380,6 +380,43 @@ test("Thread insertion line follows both row edges and clears on leave or cancel
   });
 });
 
+test("Drag preview distinguishes item types and preserves the grab point", async () => {
+  await withDom(async (root) => {
+    await act(async () => root.render(createElement(OrderingSidebar)));
+    for (const [kind, selector] of [
+      ["project", '[data-project-key="/work/a"] .project-toggle'],
+      ["thread", '[data-thread-id="idle"]'],
+    ] as const) {
+      const source = requiredElement<HTMLElement>(selector);
+      (
+        source.closest<HTMLElement>(".project-header") ?? source
+      ).getBoundingClientRect = () =>
+        ({ left: 10, top: 100, width: 280, height: 64 }) as DOMRect;
+      let captured: { image: HTMLElement; x: number; y: number } | undefined;
+      const transfer = {
+        ...dragData(),
+        setDragImage(image: HTMLElement, x: number, y: number) {
+          captured = { image, x, y };
+        },
+      };
+      await act(async () =>
+        source.dispatchEvent(dragEvent("dragstart", transfer, 145)),
+      );
+      assert.ok(captured);
+      assert.equal(captured.x, 40);
+      assert.equal(captured.y, 45);
+      assert.equal(captured.image.style.width, "280px");
+      assert.equal(captured.image.style.height, "64px");
+      assert.equal(captured.image.querySelector("svg")?.dataset.kind, kind);
+      assert.ok(captured.image.querySelector("span")?.textContent);
+      await act(async () =>
+        source.dispatchEvent(dragEvent("dragend", transfer)),
+      );
+      assert.equal(document.querySelector(".sidebar-drag-preview"), null);
+    }
+  });
+});
+
 test("Project drag temporarily collapses without losing rows or saved disclosure", async () => {
   await withDom(async (root) => {
     await act(async () => root.render(createElement(OrderingSidebar)));
