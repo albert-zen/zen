@@ -635,15 +635,14 @@ function RunningTurnLabel({ startedAt }: { startedAt: number | null }) {
     const timer = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(timer);
   }, []);
-  const seconds =
-    startedAt === null
-      ? null
-      : Math.max(0, Math.floor(now / 1_000 - startedAt));
+  const duration = startedAt === null ? null : now - startedAt * 1_000;
   return (
     <div className="turn-running-label" role="status" aria-label="Working">
       <span className="mini-spinner" aria-hidden="true" />
       <span aria-hidden="true">
-        {seconds === null ? "Working" : `Working for ${seconds}s`}
+        {duration === null
+          ? "Working"
+          : `Working for ${formatDuration(duration)}`}
       </span>
     </div>
   );
@@ -1403,11 +1402,11 @@ function formatCompletedAt(seconds: number): string {
 }
 
 function formatDuration(milliseconds: number): string {
-  if (milliseconds < 1_000) return `${milliseconds}ms`;
-  const seconds = Math.round(milliseconds / 1_000);
-  return seconds < 60
-    ? `${seconds}s`
-    : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${seconds % 60}s`;
 }
 
 function commandStatus(
