@@ -1630,6 +1630,35 @@ test("tool image thumbnails are a display projection beside unchanged call and o
   });
 });
 
+test("running and completed durations share second, minute and hour formatting", async (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 10_000 });
+  await withDom(async (root) => {
+    for (const [duration, label] of [
+      [0, "0s"],
+      [999, "0s"],
+      [59_999, "59s"],
+      [60_000, "1m 0s"],
+      [61_000, "1m 1s"],
+      [3_599_999, "59m 59s"],
+      [3_600_000, "1h 0m 0s"],
+      [3_723_000, "1h 2m 3s"],
+      [90_061_000, "25h 1m 1s"],
+    ] as const) {
+      t.mock.timers.setTime(10_000 + duration);
+      await renderInteractive(root, turnWithItems("inProgress", []));
+      assert.equal(
+        requiredElement(".turn-running-label").textContent,
+        `Working for ${label}`,
+      );
+      await renderInteractive(root, turnWithItems("completed", [], duration));
+      assert.equal(
+        requiredElement(".turn-toggle").textContent,
+        `Worked for ${label}`,
+      );
+    }
+  });
+});
+
 test("running duration ticks from turn start and stops on completion", async (t) => {
   t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 22_000 });
   await withDom(async (root) => {
@@ -1643,9 +1672,22 @@ test("running duration ticks from turn start and stops on completion", async (t)
       requiredElement(".turn-running-label").textContent,
       "Working for 14s",
     );
-    await renderInteractive(root, turnWithItems("completed", [], 14_000));
+    await act(async () => t.mock.timers.tick(46_000));
+    assert.equal(
+      requiredElement(".turn-running-label").textContent,
+      "Working for 1m 0s",
+    );
+    await act(async () => t.mock.timers.tick(3_540_000));
+    assert.equal(
+      requiredElement(".turn-running-label").textContent,
+      "Working for 1h 0m 0s",
+    );
+    await renderInteractive(root, turnWithItems("completed", [], 3_600_000));
     assert.equal(document.querySelector(".turn-running-label"), null);
     await act(async () => t.mock.timers.tick(2_000));
-    assert.match(requiredElement(".turn-toggle").textContent ?? "", /14s/u);
+    assert.equal(
+      requiredElement(".turn-toggle").textContent,
+      "Worked for 1h 0m 0s",
+    );
   });
 });
