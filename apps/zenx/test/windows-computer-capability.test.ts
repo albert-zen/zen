@@ -229,6 +229,51 @@ test("Windows provider captures only the exact HWND through WGC-default screensh
   }
 });
 
+test("Windows provider trims only trailing transparent screenshot padding", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-winapp-test-"));
+  try {
+    const runner = new FixtureWinAppRunner();
+    const bitmap = Buffer.alloc(1280 * 720 * 4);
+    for (let y = 20; y < 380; y += 1) {
+      for (let x = 10; x < 650; x += 1) {
+        bitmap[(y * 1280 + x) * 4 + 3] = 255;
+      }
+    }
+    let crop: { x: number; y: number; width: number; height: number } | undefined;
+    const backend = new WinAppCliComputerBackend({
+      artifactDirectory: directory,
+      platform: "win32",
+      runner,
+      loadScreenshotImage: () => ({
+        getSize: () => ({ width: 1280, height: 720 }),
+        toBitmap: () => bitmap,
+        crop: (bounds) => {
+          crop = bounds;
+          return {
+            getSize: () => ({ width: bounds.width, height: bounds.height }),
+            toBitmap: () => Buffer.alloc(bounds.width * bounds.height * 4),
+            crop: () => {
+              throw new Error("unexpected nested crop");
+            },
+            toPNG: () => Buffer.from("trimmed"),
+          };
+        },
+        toPNG: () => Buffer.from("original"),
+      }),
+    });
+
+    const result = await backend.screenshot(target);
+
+    assert.deepEqual(crop, { x: 0, y: 0, width: 650, height: 380 });
+    assert.equal(result.width, 650);
+    assert.equal(result.height, 380);
+    assert.equal(result.bytes, 7);
+    await backend.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("Windows provider confirms a screenshot through its real file identity", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-winapp-test-"));
   const artifactDirectory = path.join(directory, "artifacts");
