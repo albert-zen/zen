@@ -45,6 +45,10 @@ export interface ComputerInspection {
 }
 
 export interface ZenXComputerBackend {
+  listWindows?(
+    query: string | undefined,
+    signal?: AbortSignal,
+  ): Promise<ComputerWindowList>;
   inspect(
     target: ComputerTarget,
     signal?: AbortSignal,
@@ -89,6 +93,31 @@ export interface ZenXComputerBackend {
   close(): Promise<void> | void;
 }
 
+export interface ComputerWindowList {
+  windows: Array<{ target: ComputerTarget; applicationName: string }>;
+  truncated: boolean;
+}
+
+export function selectComputerWindows(
+  targets: ComputerInspection["target"][],
+  query?: string,
+): ComputerWindowList {
+  const matching = targets.filter(
+    (target) =>
+      target.windowTitle !== undefined &&
+      (query === undefined ||
+        `${target.pid} ${target.applicationName} ${target.windowTitle}`
+          .toLocaleLowerCase()
+          .includes(query.toLocaleLowerCase())),
+  );
+  return {
+    windows: matching
+      .slice(0, 32)
+      .map(({ applicationName, ...target }) => ({ target, applicationName })),
+    truncated: matching.length > 32,
+  };
+}
+
 export type ComputerKey =
   | "enter"
   | "escape"
@@ -129,12 +158,13 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
   runtime: { type: "bundled", entry: "zenx/computer" },
   mainDocument:
-    "Use Computer for bounded semantic desktop inspection and explicitly labeled interaction.",
+    "Start with computer_list_windows to find open windows and running applications. If truncated, narrow with query. Pass a returned target unchanged to computer_inspect before acting; prefer background-safe semantic controls.",
   provider: {
     id: "macos-desktop",
     platforms: ["darwin"],
     interactionModes: ["background_safe", "foreground_required"],
     capabilities: [
+      "window.list",
       "accessibility.inspect",
       "semantic.press",
       "semantic.set_value",
@@ -175,6 +205,19 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
     },
   ],
   tools: [
+    {
+      name: "computer_list_windows",
+      description:
+        "List up to 32 open desktop windows and their running applications without activating them. Pass a case-insensitive query matching application name, PID, or title to narrow truncated results. Copy a returned target directly into computer_inspect; this is not a catalog of installed apps.",
+      inputSchema: objectSchema(
+        { query: { type: "string", minLength: 1, maxLength: 256 } },
+        [],
+      ),
+      permissions: ["computer.accessibility.inspect"],
+      interactionMode: "background_safe",
+      capabilities: ["window.list", "no_global_input"],
+      maxOutputBytes: 1024 * 1024,
+    },
     {
       name: "computer_inspect",
       description:
@@ -256,6 +299,17 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
   }
 
   async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
+    invocation.signal.throwIfAborted();
+    if (toolName === "computer_list_windows") {
+      const query = optionalString(invocation.arguments, "query");
+      if (query !== undefined && query.length > 256)
+        throw new Error("query is limited to 256 characters");
+      if (this.#backend.listWindows === undefined)
+        throw new Error(
+          "This Computer provider does not support window discovery",
+        );
+      return await this.#backend.listWindows(query, invocation.signal);
+    }
     if (toolName.startsWith("computer_foreground_")) {
       return await this.#invokeForeground(toolName, invocation);
     }
@@ -508,6 +562,22 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     this.#artifactDirectory = artifactDirectory;
     this.#accessibility = new MacAccessibilityDriver(artifactDirectory);
     this.#foregroundInput = new MacForegroundInputDriver(artifactDirectory);
+  }
+
+  async listWindows(
+    query?: string,
+    signal?: AbortSignal,
+  ): Promise<ComputerWindowList> {
+    requireMacOs();
+    signal?.throwIfAborted();
+    const targets = (await this.#accessibility.run(
+      {
+        operation: "listWindows",
+      },
+      signal,
+    )) as ComputerInspection["target"][];
+    signal?.throwIfAborted();
+    return selectComputerWindows(targets, query);
   }
 
   async inspect(target: ComputerTarget): Promise<ComputerInspection> {
@@ -779,13 +849,18 @@ class MacAccessibilityDriver {
     this.#directory = directory;
   }
 
-  async run(request: Record<string, unknown>): Promise<unknown> {
+  async run(
+    request: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    signal?.throwIfAborted();
     const executable = await (this.#executable ??= this.#compile());
     const output = await runProcess(
       executable,
       [],
       10_000,
       JSON.stringify(request),
+      signal,
     );
     try {
       return JSON.parse(output) as unknown;
@@ -906,6 +981,24 @@ if operation == "desktopContext" {
 }
 guard AXIsProcessTrusted() else {
   fail("macOS Accessibility permission is required for background-safe computer operations")
+}
+if operation == "listWindows" {
+  var targets: [[String: Any]] = []
+  for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
+    let element = AXUIElementCreateApplication(app.processIdentifier)
+    for window in elementArrayAttribute(element, kAXWindowsAttribute) {
+      var target: [String: Any] = [
+        "pid": Int(app.processIdentifier),
+        "applicationName": app.localizedName ?? "",
+        "windowTitle": textAttribute(window, kAXTitleAttribute)
+      ]
+      if let bundleId = app.bundleIdentifier { target["bundleId"] = bundleId }
+      targets.append(target)
+    }
+  }
+  guard let output = try? JSONSerialization.data(withJSONObject: targets) else { fail("could not encode windows") }
+  FileHandle.standardOutput.write(output)
+  exit(0)
 }
 let targetRequest = dictionary(request["target"], "target")
 
@@ -1236,7 +1329,10 @@ function requiredTarget(arguments_: Record<string, unknown>): ComputerTarget {
   const pid = optionalPositiveInteger(raw, "pid");
   const applicationId = optionalString(raw, "applicationId");
   const bundleId = optionalString(raw, "bundleId");
-  const windowTitle = optionalString(raw, "windowTitle");
+  const windowTitle =
+    raw.windowTitle === undefined
+      ? undefined
+      : requiredString(raw, "windowTitle", true);
   if (
     pid === undefined &&
     applicationId === undefined &&
@@ -1244,8 +1340,8 @@ function requiredTarget(arguments_: Record<string, unknown>): ComputerTarget {
   ) {
     throw new Error("target requires pid, applicationId, or bundleId");
   }
-  if (windowTitle !== undefined && windowTitle.length > 256) {
-    throw new Error("target.windowTitle is limited to 256 characters");
+  if (windowTitle !== undefined && windowTitle.length > 4096) {
+    throw new Error("target.windowTitle is limited to 4096 characters");
   }
   if (applicationId !== undefined && applicationId.length > 256) {
     throw new Error("target.applicationId is limited to 256 characters");

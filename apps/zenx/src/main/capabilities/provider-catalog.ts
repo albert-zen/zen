@@ -772,6 +772,8 @@ function playwrightBrowserManifest(): ZenXPluginManifestV2 {
 function peekabooComputerManifest(): ZenXPluginManifestV2 {
   return {
     ...structuredClone(computerCapabilityManifest),
+    mainDocument:
+      "Use Computer to inspect an exact native window before acting, prefer background-safe semantic controls, and use explicitly labeled foreground takeover only when necessary. This Peekaboo variant does not expose computer_list_windows.",
     description:
       "Peekaboo 3.x background-first macOS automation with bounded snapshots, explicit permissions, and foreground input only through labeled takeover tools.",
     provider: {
@@ -786,14 +788,16 @@ function peekabooComputerManifest(): ZenXPluginManifestV2 {
         "foreground.global_input",
       ],
     },
-    tools: computerCapabilityManifest.tools.map((tool) => ({
-      ...structuredClone(tool),
-      permissions:
-        tool.name === "computer_inspect"
-          ? [...tool.permissions, "computer.window.capture"]
-          : [...tool.permissions],
-      capabilities: ["peekaboo_cli", ...tool.capabilities],
-    })),
+    tools: computerCapabilityManifest.tools
+      .filter((tool) => tool.name !== "computer_list_windows")
+      .map((tool) => ({
+        ...structuredClone(tool),
+        permissions:
+          tool.name === "computer_inspect"
+            ? [...tool.permissions, "computer.window.capture"]
+            : [...tool.permissions],
+        capabilities: ["peekaboo_cli", ...tool.capabilities],
+      })),
   };
 }
 

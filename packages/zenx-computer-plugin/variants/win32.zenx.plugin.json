@@ -7,6 +7,7 @@
     "platforms": ["win32"],
     "interactionModes": ["background_safe"],
     "capabilities": [
+      "window.list",
       "uia.inspect",
       "uia.invoke",
       "uia.set_value",
@@ -43,6 +44,26 @@
     }
   ],
   "tools": [
+    {
+      "name": "computer_list_windows",
+      "description": "List up to 32 open desktop windows and their running applications without activating them. Pass a case-insensitive query matching application name, PID, or title to narrow truncated results. Copy a returned target directly into computer_inspect; this is not a catalog of installed apps.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.accessibility.inspect"],
+      "interactionMode": "background_safe",
+      "capabilities": ["window.list", "no_global_input"],
+      "maxOutputBytes": 1048576
+    },
     {
       "name": "computer_inspect",
       "description": "Inspect at most 32 semantic UI Automation controls in one exact Windows HWND without activating it or reading sibling windows. target.windowTitle is required.",
@@ -260,5 +281,5 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "Use Computer to inspect an exact native window before acting, prefer background-safe semantic controls, and use explicitly labeled foreground takeover only when necessary."
+  "mainDocument": "Start with computer_list_windows to find open windows and running applications. If truncated, narrow with query. Pass a returned target unchanged to computer_inspect before acting, prefer background-safe semantic controls, and use explicitly labeled foreground takeover only where available."
 }

@@ -44,7 +44,7 @@ const providerVariants = new Map([
   ],
   [
     "zenx-computer-plugin-macos-1.0.0.tgz",
-    ["computer", "1.0.0", "macos-desktop", 7],
+    ["computer", "1.0.0", "macos-desktop", 8],
   ],
   [
     "zenx-computer-plugin-peekaboo-1.0.0.tgz",
@@ -52,7 +52,7 @@ const providerVariants = new Map([
   ],
   [
     "zenx-computer-plugin-win32-1.1.0.tgz",
-    ["computer", "1.1.0", "microsoft-winapp-cli", 4],
+    ["computer", "1.1.0", "microsoft-winapp-cli", 5],
   ],
 ]);
 
@@ -129,6 +129,12 @@ test("all first-party plugins validate and pack as self-contained ordinary npm t
             ])
           ).stdout,
         );
+        if (filename.includes("computer-plugin")) {
+          assert.equal(
+            manifest.tools.some(({ name }) => name === "computer_list_windows"),
+            !filename.includes("peekaboo"),
+          );
+        }
         assert.deepEqual(
           [
             manifest.id,

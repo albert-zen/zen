@@ -17,6 +17,8 @@ import {
   type ComputerTarget,
   MAX_COMPUTER_INSPECTION_CONTROLS,
   selectComputerInspectionControls,
+  selectComputerWindows,
+  type ComputerWindowList,
   type ZenXComputerBackend,
 } from "./computer-provider.js";
 import type { ZenXPluginManifestV2 } from "./types.js";
@@ -38,6 +40,7 @@ export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
     platforms: ["win32"],
     interactionModes: ["background_safe"],
     capabilities: [
+      "window.list",
       "uia.inspect",
       "uia.invoke",
       "uia.set_value",
@@ -68,6 +71,8 @@ export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
     .filter((tool) => tool.interactionMode === "background_safe")
     .map((tool) => {
       switch (tool.name) {
+        case "computer_list_windows":
+          return tool;
         case "computer_inspect":
           return {
             ...tool,
@@ -89,13 +94,15 @@ export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
               "Set the supplied text on one opaque editable control through Windows UI Automation. The provider revalidates selector, semantics, geometry, and action; host/model policy owns credential decisions.",
             capabilities: ["uia.set_value", "app_targeted", "no_global_input"],
           };
-        default:
+        case "computer_screenshot":
           return {
             ...tool,
             description:
               "Capture one exact Windows HWND through WinApp CLI's default WGC/PrintWindow path to a private five-minute PNG artifact. Returns metadata/path, never pixels in the Thread journal.",
             capabilities: ["wgc.capture", "app_targeted", "no_global_input"],
           };
+        default:
+          return tool;
       }
     }),
 };
@@ -552,6 +559,23 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     await rm(this.#artifactDirectory, { recursive: true, force: true });
   }
 
+  async listWindows(
+    query?: string,
+    signal?: AbortSignal,
+  ): Promise<ComputerWindowList> {
+    const result = await this.#json<unknown>(
+      ["ui", "list-windows", "--json"],
+      10_000,
+      signal,
+    );
+    if (!Array.isArray(result))
+      throw new Error("WinApp CLI list-windows returned an invalid JSON shape");
+    return selectComputerWindows(
+      result.map(parseWindow).map(resolvedTarget),
+      query,
+    );
+  }
+
   async #resolveWindow(
     target: ComputerTarget,
     signal?: AbortSignal,
@@ -583,7 +607,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       );
     if (matches.length === 0) {
       throw new Error(
-        "The exact Windows app/window target was not found; run computer_inspect again with a current pid/applicationId and windowTitle",
+        "The exact Windows app/window target was not found; run computer_list_windows to obtain a current target",
       );
     }
     if (matches.length > 1) {
@@ -1095,9 +1119,7 @@ function parseWindow(value: unknown): WinAppWindow {
     hwnd: normalizeHwnd(record.hwnd, "window hwnd"),
     processId: positiveInteger(record.processId, "window processId"),
     processName: requiredBoundedString(record.processName, "processName", 256),
-    ...(typeof record.title === "string"
-      ? { title: boundedText(record.title, 256) }
-      : {}),
+    ...(typeof record.title === "string" ? { title: record.title } : {}),
     width: nonNegativeInteger(record.width, "window width"),
     height: nonNegativeInteger(record.height, "window height"),
   };

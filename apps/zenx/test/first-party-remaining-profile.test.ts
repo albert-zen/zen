@@ -184,10 +184,22 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
     );
     stopA();
     stopB();
+    assert.ok(
+      service
+        .hostSnapshot()
+        .definitions.some((tool) => tool.name === "computer_list_windows"),
+    );
+    const discovered = (await call(service, "computer_list_windows", {})) as {
+      windows: Array<{ target: { pid: number; windowTitle: string } }>;
+    };
+    assert.deepEqual(discovered.windows[0]?.target, {
+      pid: 1,
+      windowTitle: "Fixture",
+    });
     assert.equal(
       (
         (await call(service, "computer_inspect", {
-          target: { pid: 1, windowTitle: "Fixture" },
+          target: discovered.windows[0]!.target,
         })) as { observationId: string }
       ).observationId,
       "computer-observation",
@@ -1133,6 +1145,15 @@ function computerBackend(
 ): ZenXComputerBackend {
   const target = { pid: 1, applicationName: "Fixture", windowTitle: "Fixture" };
   return {
+    listWindows: async () => ({
+      windows: [
+        {
+          target: { pid: 1, windowTitle: "Fixture" },
+          applicationName: "Fixture",
+        },
+      ],
+      truncated: false,
+    }),
     inspect: async () => ({
       platform: "darwin",
       observationId: "computer-observation",
