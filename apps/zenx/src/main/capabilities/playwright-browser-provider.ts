@@ -402,7 +402,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
       );
       await this.#revalidateTarget(session, target, "select", signal);
       this.#invalidate(tab);
-      const code = `async page => { const locator = page.locator('aria-ref=' + ${JSON.stringify(target.ref)}); const requested = ${JSON.stringify(option)}; const expectedOptions = ${JSON.stringify(target.options ?? null)}; const selectedValue = await locator.evaluate((element, { requested, expectedOptions }) => { if (!(element instanceof HTMLSelectElement) || element.disabled) throw new Error('Browser target is not a selectable native control'); if (expectedOptions === null || element.options.length > 100) throw new Error('Browser options were not completely observed'); const options = [...element.options].map(option => ({ value: option.value.slice(0, 512), label: (option.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 512), selected: option.selected, disabled: option.disabled })); if (JSON.stringify(options) !== JSON.stringify(expectedOptions)) throw new Error('Browser options changed; inspect again'); const byValue = options.filter(candidate => candidate.value === requested && !candidate.disabled); const byLabel = options.filter(candidate => candidate.label === requested && !candidate.disabled); const matches = byValue.length > 0 ? byValue : byLabel; if (matches.length !== 1) throw new Error(matches.length === 0 ? 'Browser option missing' : 'Browser option ambiguous'); return matches[0].value; }, { requested, expectedOptions }); await locator.selectOption(selectedValue); }`;
+      const code = playwrightSelectActionCode(target, option);
       await this.#run(session, ["run-code", code], signal);
       this.#assertSession(session, revision, signal);
       return await this.#summary(sessionId, session, tab, signal);
@@ -1133,6 +1133,11 @@ function isPlaywrightDomMetadata(
     return false;
   }
   const entry = value as Record<string, unknown>;
+  const coherentSelectMetadata =
+    entry.tag !== "select" ||
+    (Array.isArray(entry.options) &&
+      typeof entry.optionsTruncated === "boolean" &&
+      (entry.optionsTruncated !== true || entry.options.length === 100));
   return (
     typeof entry.ref === "string" &&
     entry.count === 1 &&
@@ -1160,8 +1165,16 @@ function isPlaywrightDomMetadata(
             typeof candidate.selected === "boolean" &&
             typeof candidate.disabled === "boolean"
           );
-        })))
+        }))) &&
+    coherentSelectMetadata
   );
+}
+
+export function playwrightSelectActionCode(
+  target: Pick<BrowserTargetFingerprint, "options"> & { ref: string },
+  option: string,
+): string {
+  return `async page => { const locator = page.locator('aria-ref=' + ${JSON.stringify(target.ref)}); const requested = ${JSON.stringify(option)}; const expectedOptions = ${JSON.stringify(target.options ?? null)}; await locator.evaluate((element, { requested, expectedOptions }) => { if (!(element instanceof HTMLSelectElement) || element.disabled) throw new Error('Browser target is not a selectable native control'); if (expectedOptions === null || element.options.length > 100) throw new Error('Browser options were not completely observed'); const options = [...element.options].map(option => ({ value: option.value.slice(0, 512), label: (option.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 512), selected: option.selected, disabled: option.disabled })); if (JSON.stringify(options) !== JSON.stringify(expectedOptions)) throw new Error('Browser options changed; inspect again'); const byValue = options.filter(candidate => candidate.value === requested && !candidate.disabled); const byLabel = options.filter(candidate => candidate.label === requested && !candidate.disabled); const matches = byValue.length > 0 ? byValue : byLabel; if (matches.length !== 1) throw new Error(matches.length === 0 ? 'Browser option missing' : 'Browser option ambiguous'); const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set; if (setter === undefined) throw new Error('Browser select value setter unavailable'); setter.call(element, matches[0].value); element.dispatchEvent(new Event('input', { bubbles: true })); element.dispatchEvent(new Event('change', { bubbles: true })); }, { requested, expectedOptions }); }`;
 }
 
 function isMissingPlaywrightDomMetadata(value: unknown): boolean {

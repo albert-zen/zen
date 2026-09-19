@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { JSDOM } from "jsdom";
 
 import type {
   ExternalProviderProcessResult,
   ExternalProviderProcessRunner,
 } from "../src/main/capabilities/external-provider.js";
-import { PlaywrightCliBrowserBackend } from "../src/main/capabilities/playwright-browser-provider.js";
+import {
+  PlaywrightCliBrowserBackend,
+  playwrightSelectActionCode,
+} from "../src/main/capabilities/playwright-browser-provider.js";
 
 test("Playwright page scroll rejects stale observations and dispatches one bounded page mutation", async () => {
   const runner = new FakePlaywrightRunner();
@@ -236,7 +240,9 @@ test("Playwright inspection only advertises type for editable comboboxes", async
     );
     assert.ok(
       runner.calls.some(
-        (args) => args[2] === "run-code" && args[3]?.includes("selectOption"),
+        (args) =>
+          args[2] === "run-code" &&
+          args[3]?.includes("HTMLSelectElement.prototype"),
       ),
     );
     assert.deepEqual(
@@ -246,6 +252,79 @@ test("Playwright inspection only advertises type for editable comboboxes", async
   } finally {
     await backend.close();
   }
+});
+
+test("Playwright native select validates and mutates in one page callback", async () => {
+  const dom = new JSDOM(
+    `<select><option value="standard">Standard</option><option value="express">Express</option></select>`,
+    { runScripts: "outside-only" },
+  );
+  try {
+    const select = dom.window.document.querySelector("select")!;
+    const events: string[] = [];
+    select.addEventListener("input", () => events.push("input"));
+    select.addEventListener("change", () => events.push("change"));
+    let evaluateCalls = 0;
+    const page = {
+      locator(selector: string) {
+        assert.equal(selector, "aria-ref=e5");
+        return {
+          async evaluate(
+            callback: (element: HTMLSelectElement, argument: unknown) => void,
+            argument: unknown,
+          ) {
+            evaluateCalls += 1;
+            callback(select, argument);
+          },
+        };
+      },
+    };
+    const action = dom.window.eval(
+      `(${playwrightSelectActionCode(
+        {
+          ref: "e5",
+          options: [
+            {
+              value: "standard",
+              label: "Standard",
+              selected: true,
+              disabled: false,
+            },
+            {
+              value: "express",
+              label: "Express",
+              selected: false,
+              disabled: false,
+            },
+          ],
+        },
+        "Express",
+      )})`,
+    ) as (page: unknown) => Promise<void>;
+    await action(page);
+    assert.equal(evaluateCalls, 1);
+    assert.equal(select.value, "express");
+    assert.deepEqual(events, ["input", "change"]);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("Playwright rejects select metadata without options completeness", async () => {
+  const runner = new FakePlaywrightRunner();
+  runner.includeComboboxes = true;
+  runner.omitSelectOptions = true;
+  const backend = new PlaywrightCliBrowserBackend({
+    executable: "/opt/playwright-cli",
+    runner,
+    cwd: "/tmp/zenx-playwright",
+  });
+  const opened = await backend.open("preferences", "https://example.com/");
+  await assert.rejects(
+    backend.inspect("preferences", opened.tabId),
+    /invalid DOM metadata entry/u,
+  );
+  await backend.close();
 });
 
 test("Playwright rejects select options changed after inspection", async () => {
@@ -275,7 +354,9 @@ test("Playwright rejects select options changed after inspection", async () => {
     );
     assert.equal(
       runner.calls.filter(
-        (args) => args[2] === "run-code" && args[3]?.includes("selectOption"),
+        (args) =>
+          args[2] === "run-code" &&
+          args[3]?.includes("HTMLSelectElement.prototype"),
       ).length,
       0,
     );
@@ -341,6 +422,7 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
   changeIdentity = false;
   includeComboboxes = false;
   changeSelectOptions = false;
+  omitSelectOptions = false;
   abortNextSnapshot = false;
   delayedCloseFinished: Promise<void> = Promise.resolve();
   #snapshotCount = 0;
@@ -405,30 +487,35 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
                     dom("e5", {
                       tag: "select",
                       value: "standard",
-                      options: [
-                        {
-                          value: "standard",
-                          label: "Standard",
-                          selected: true,
-                          disabled: false,
-                        },
-                        {
-                          value: "express",
-                          label: "Express",
-                          selected: false,
-                          disabled: false,
-                        },
-                        ...(this.changeSelectOptions
-                          ? [
+                      ...(this.omitSelectOptions
+                        ? {}
+                        : {
+                            optionsTruncated: false,
+                            options: [
                               {
-                                value: "same-day",
-                                label: "Same day",
+                                value: "standard",
+                                label: "Standard",
+                                selected: true,
+                                disabled: false,
+                              },
+                              {
+                                value: "express",
+                                label: "Express",
                                 selected: false,
                                 disabled: false,
                               },
-                            ]
-                          : []),
-                      ],
+                              ...(this.changeSelectOptions
+                                ? [
+                                    {
+                                      value: "same-day",
+                                      label: "Same day",
+                                      selected: false,
+                                      disabled: false,
+                                    },
+                                  ]
+                                : []),
+                            ],
+                          }),
                     }),
                     dom("e6", { tag: "input", type: "search" }),
                     dom("e7", { tag: "div" }),
@@ -548,6 +635,7 @@ function dom(
     autocomplete?: string;
     visible?: boolean;
     value?: string;
+    optionsTruncated?: boolean;
     options?: Array<{
       value: string;
       label: string;
@@ -567,6 +655,9 @@ function dom(
     autocomplete: options.autocomplete ?? "",
     href: "",
     ...(options.value === undefined ? {} : { value: options.value }),
+    ...(options.optionsTruncated === undefined
+      ? {}
+      : { optionsTruncated: options.optionsTruncated }),
     ...(options.options === undefined ? {} : { options: options.options }),
   };
 }
