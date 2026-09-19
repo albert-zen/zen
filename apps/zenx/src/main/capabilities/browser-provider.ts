@@ -170,7 +170,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
   runtime: { type: "bundled", entry: "zenx/browser" },
   mainDocument:
-    "Use Browser for bounded tab inspection, navigation, and page interaction.",
+    "Use Browser for bounded tab inspection, navigation, and page interaction. Prefer observe:true on open, navigate, click, type, select and scroll to return fresh targets with the action, avoiding a separate inspect call. If actionCompleted:true includes observationError, inspect again without repeating the completed action.",
   provider: {
     id: "electron-dedicated-browser",
     platforms: ["darwin", "win32", "linux"],
@@ -250,21 +250,30 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       description:
         "Open an http(s) URL in a hidden tab in an explicit ephemeral ZenX browser session. Returns the new tabId without activating an app window.",
       inputSchema: objectSchema(
-        { sessionId: stringSchema(), url: stringSchema() },
+        {
+          sessionId: stringSchema(),
+          url: stringSchema(),
+          observe: observationOption(),
+        },
         ["sessionId", "url"],
       ),
-      permissions: ["browser.navigate"],
+      permissions: ["browser.navigate", "browser.tabs.read"],
       interactionMode: "background_safe",
       capabilities: ["dedicated_profile", "cdp", "dom.navigate"],
+      maxOutputBytes: 12 * 1024,
     },
     {
       name: "browser_navigate",
       description:
         "Navigate one explicit ZenX browser session/tab target to an http(s) URL.",
-      inputSchema: browserTargetSchema({ url: stringSchema() }, ["url"]),
-      permissions: ["browser.navigate"],
+      inputSchema: browserTargetSchema(
+        { url: stringSchema(), observe: observationOption() },
+        ["url"],
+      ),
+      permissions: ["browser.navigate", "browser.tabs.read"],
       interactionMode: "background_safe",
       capabilities: ["dedicated_profile", "cdp", "dom.navigate"],
+      maxOutputBytes: 12 * 1024,
     },
     {
       name: "browser_inspect",
@@ -281,12 +290,17 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       description:
         "Click one visible, clickable opaque target from the latest browser_inspect observation. Stale, forged, hidden, or changed targets fail closed.",
       inputSchema: browserTargetSchema(
-        { observationId: stringSchema(), targetId: stringSchema() },
+        {
+          observationId: stringSchema(),
+          targetId: stringSchema(),
+          observe: observationOption(),
+        },
         ["observationId", "targetId"],
       ),
-      permissions: ["browser.interact"],
+      permissions: ["browser.interact", "browser.tabs.read"],
       interactionMode: "background_safe",
       capabilities: ["dedicated_profile", "cdp", "dom.click"],
+      maxOutputBytes: 12 * 1024,
     },
     {
       name: "browser_type",
@@ -294,6 +308,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
         "Replace the value in one visible, typeable opaque target from the latest browser_inspect observation, optionally submitting its form. Text is dispatched as an ordinary tool argument regardless of field metadata.",
       inputSchema: browserTargetSchema(
         {
+          observe: observationOption(),
           observationId: stringSchema(),
           targetId: stringSchema(),
           text: stringSchema(),
@@ -301,9 +316,10 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
         },
         ["observationId", "targetId", "text"],
       ),
-      permissions: ["browser.interact"],
+      permissions: ["browser.interact", "browser.tabs.read"],
       interactionMode: "background_safe",
       capabilities: ["dedicated_profile", "cdp", "dom.set_value"],
+      maxOutputBytes: 12 * 1024,
     },
     {
       name: "browser_select",
@@ -311,15 +327,17 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
         "Select one native option by exact value or unique exact visible label in a visible select target from the latest browser_inspect observation. Consumes the observation and fails closed if the target or option changed.",
       inputSchema: browserTargetSchema(
         {
+          observe: observationOption(),
           observationId: stringSchema(),
           targetId: stringSchema(),
           option: stringSchema(),
         },
         ["observationId", "targetId", "option"],
       ),
-      permissions: ["browser.interact"],
+      permissions: ["browser.interact", "browser.tabs.read"],
       interactionMode: "background_safe",
       capabilities: ["dedicated_profile", "cdp", "dom.select_option"],
+      maxOutputBytes: 12 * 1024,
     },
     {
       name: "browser_scroll",
@@ -327,15 +345,17 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
         "Scroll the page viewport in one explicit tab using the latest browser_inspect observation. Direction is up/down/left/right and pixels is an integer from 1 to 2000. Consumes the observation; inspect again before interacting. Nested scrolling containers are not supported.",
       inputSchema: browserTargetSchema(
         {
+          observe: observationOption(),
           observationId: stringSchema(),
           direction: { type: "string", enum: ["up", "down", "left", "right"] },
           pixels: { type: "integer", minimum: 1, maximum: 2000 },
         },
         ["observationId", "direction", "pixels"],
       ),
-      permissions: ["browser.interact"],
+      permissions: ["browser.interact", "browser.tabs.read"],
       interactionMode: "background_safe",
       capabilities: ["dedicated_profile", "cdp", "dom.scroll"],
+      maxOutputBytes: 12 * 1024,
     },
     {
       name: "browser_close",
@@ -358,6 +378,23 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
   ],
 };
 
+function observationOption() {
+  return {
+    type: "boolean",
+    description:
+      "Return a fresh full observation and new target IDs after the action; prefer true to avoid a separate browser_inspect call. Defaults to false.",
+  };
+}
+
+const BROWSER_OBSERVABLE_ACTIONS = new Set([
+  "browser_open",
+  "browser_navigate",
+  "browser_click",
+  "browser_type",
+  "browser_select",
+  "browser_scroll",
+]);
+
 export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
   readonly manifest: ZenXPluginManifestV2;
   readonly #backend: ZenXBrowserBackend;
@@ -374,13 +411,13 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
 
   async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
     if (invocation.threadId === undefined)
-      return await this.#invoke(toolName, invocation);
+      return await this.#invokeAndObserve(toolName, invocation);
     const publicSessionId = requiredTargetId(invocation.arguments, "sessionId");
     const session = this.#threadObservation.session(
       invocation.threadId,
       publicSessionId,
     );
-    const result = await this.#invoke(toolName, {
+    const result = await this.#invokeAndObserve(toolName, {
       ...invocation,
       arguments: {
         ...invocation.arguments,
@@ -407,6 +444,35 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
     listener: BrowserThreadListener,
   ): () => void {
     return this.#threadObservation.observe(request, listener);
+  }
+
+  async #invokeAndObserve(
+    toolName: string,
+    invocation: ToolInvocation,
+  ): Promise<unknown> {
+    const observe = optionalBoolean(invocation.arguments, "observe") ?? false;
+    const result = await this.#invoke(toolName, invocation);
+    if (!observe || !BROWSER_OBSERVABLE_ACTIONS.has(toolName)) return result;
+    const action = result as BrowserTabSummary;
+    try {
+      invocation.signal.throwIfAborted();
+      return await this.#backend.inspect(
+        action.sessionId,
+        action.tabId,
+        invocation.signal,
+      );
+    } catch (error) {
+      // The mutation already completed. Never turn a failed follow-up read into
+      // an invitation to retry the action (which could submit the form twice).
+      return {
+        ...action,
+        actionCompleted: true,
+        observationError:
+          error instanceof Error ? error.message : String(error),
+        nextAction:
+          "The action completed. Call browser_inspect for a fresh observation; do not repeat the action.",
+      };
+    }
   }
 
   async #invoke(

@@ -70,19 +70,24 @@
           },
           "url": {
             "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh full observation and new target IDs after the action; prefer true to avoid a separate browser_inspect call. Defaults to false."
           }
         },
         "required": ["sessionId", "url"],
         "additionalProperties": false
       },
-      "permissions": ["browser.navigate"],
+      "permissions": ["browser.navigate", "browser.tabs.read"],
       "interactionMode": "background_safe",
       "capabilities": [
         "user_session",
         "authenticated_state_in_place",
         "cdp",
         "dom.navigate"
-      ]
+      ],
+      "maxOutputBytes": 12288
     },
     {
       "name": "browser_navigate",
@@ -98,19 +103,24 @@
           },
           "url": {
             "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh full observation and new target IDs after the action; prefer true to avoid a separate browser_inspect call. Defaults to false."
           }
         },
         "required": ["sessionId", "tabId", "url"],
         "additionalProperties": false
       },
-      "permissions": ["browser.navigate"],
+      "permissions": ["browser.navigate", "browser.tabs.read"],
       "interactionMode": "background_safe",
       "capabilities": [
         "user_session",
         "authenticated_state_in_place",
         "cdp",
         "dom.navigate"
-      ]
+      ],
+      "maxOutputBytes": 12288
     },
     {
       "name": "browser_inspect",
@@ -155,19 +165,24 @@
           },
           "targetId": {
             "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh full observation and new target IDs after the action; prefer true to avoid a separate browser_inspect call. Defaults to false."
           }
         },
         "required": ["sessionId", "tabId", "observationId", "targetId"],
         "additionalProperties": false
       },
-      "permissions": ["browser.interact"],
+      "permissions": ["browser.interact", "browser.tabs.read"],
       "interactionMode": "background_safe",
       "capabilities": [
         "user_session",
         "authenticated_state_in_place",
         "cdp",
         "dom.click"
-      ]
+      ],
+      "maxOutputBytes": 12288
     },
     {
       "name": "browser_type",
@@ -192,19 +207,24 @@
           },
           "submit": {
             "type": "boolean"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh full observation and new target IDs after the action; prefer true to avoid a separate browser_inspect call. Defaults to false."
           }
         },
         "required": ["sessionId", "tabId", "observationId", "targetId", "text"],
         "additionalProperties": false
       },
-      "permissions": ["browser.interact"],
+      "permissions": ["browser.interact", "browser.tabs.read"],
       "interactionMode": "background_safe",
       "capabilities": [
         "user_session",
         "authenticated_state_in_place",
         "cdp",
         "dom.set_value"
-      ]
+      ],
+      "maxOutputBytes": 12288
     },
     {
       "name": "browser_select",
@@ -212,11 +232,25 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "sessionId": { "type": "string" },
-          "tabId": { "type": "string" },
-          "observationId": { "type": "string" },
-          "targetId": { "type": "string" },
-          "option": { "type": "string" }
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "option": {
+            "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh full observation and new target IDs after the action; prefer true to avoid a separate browser_inspect call. Defaults to false."
+          }
         },
         "required": [
           "sessionId",
@@ -227,14 +261,15 @@
         ],
         "additionalProperties": false
       },
-      "permissions": ["browser.interact"],
+      "permissions": ["browser.interact", "browser.tabs.read"],
       "interactionMode": "background_safe",
       "capabilities": [
         "user_session",
         "authenticated_state_in_place",
         "cdp",
         "dom.select_option"
-      ]
+      ],
+      "maxOutputBytes": 12288
     },
     {
       "name": "browser_scroll",
@@ -259,6 +294,10 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 2000
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh full observation and new target IDs after the action; prefer true to avoid a separate browser_inspect call. Defaults to false."
           }
         },
         "required": [
@@ -270,14 +309,15 @@
         ],
         "additionalProperties": false
       },
-      "permissions": ["browser.interact"],
+      "permissions": ["browser.interact", "browser.tabs.read"],
       "interactionMode": "background_safe",
       "capabilities": [
         "user_session",
         "authenticated_state_in_place",
         "cdp",
         "dom.scroll"
-      ]
+      ],
+      "maxOutputBytes": 12288
     },
     {
       "name": "browser_close",
@@ -334,7 +374,7 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "Use Browser for targeted, inspect-before-act web automation in the selected ZenX browser provider.",
+  "mainDocument": "Use Browser for targeted, inspect-before-act web automation in the selected ZenX browser provider. Prefer observe:true on open, navigate, click, type, select and scroll to return fresh targets with the action, avoiding a separate inspect call. If actionCompleted:true includes observationError, inspect again without repeating the completed action.",
   "ui": {
     "bundles": [
       {

@@ -2,6 +2,15 @@
 
 First-party Browser package distributed with ZenX and installed through the ordinary plugin profile.
 
+Prefer `observe: true` on `browser_open`, `browser_navigate`, `browser_click`,
+`browser_type`, `browser_select` and `browser_scroll`. These calls return a fresh
+inspection, including new target IDs and a screenshot, with the action result.
+This avoids a separate model call to inspect after every action. Omitting the
+option preserves the summary-only response. If a follow-up inspection fails,
+the result explicitly includes `actionCompleted: true` and `observationError`;
+inspect again rather than repeating the completed action. Action failures still
+fail normally and are never retried automatically.
+
 Version 1.0.3 adds native `browser_select`, current non-password control state,
 bounded select options, and contenteditable typing. `browser_scroll` requires an explicit `sessionId`, `tabId`,
 latest `observationId`, direction (`up`, `down`, `left`, `right`), and integer

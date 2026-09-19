@@ -21,6 +21,99 @@ import {
   type ZenXBrowserBackend,
 } from "../src/main/capabilities/browser-provider.js";
 
+test("Browser can return a fresh observation with an action without another model call", async () => {
+  const calls: string[] = [];
+  const capability = new BrowserZenXCapabilityPackage(browserBackend(calls));
+  const result = (await capability.invoke(
+    "browser_type",
+    invocation({
+      sessionId: "research",
+      tabId: "tab-1",
+      observationId: "old-observation",
+      targetId: "target-query",
+      text: "hello",
+      observe: true,
+    }),
+  )) as BrowserInspection;
+  assert.deepEqual(calls, [
+    "type:research:tab-1:old-observation:target-query:5:false",
+    "inspect:research:tab-1",
+  ]);
+  assert.equal(result.observationId, "observation-1");
+  assert.ok(result.targets.some((target) => target.targetId === "target-go"));
+});
+
+test("follow-up observation failure preserves a completed action and does not replay it", async () => {
+  const calls: string[] = [];
+  const backend = browserBackend(calls);
+  backend.inspect = async () => {
+    throw new Error("Page still navigating");
+  };
+  const capability = new BrowserZenXCapabilityPackage(backend);
+  const args = {
+    sessionId: "research",
+    tabId: "tab-1",
+    observationId: "old",
+    targetId: "save",
+    observe: true,
+  };
+  const result = (await capability.invoke(
+    "browser_click",
+    invocation(args),
+  )) as Record<string, unknown>;
+  assert.equal(result.actionCompleted, true);
+  assert.equal(result.observationError, "Page still navigating");
+  assert.match(String(result.nextAction), /do not repeat/);
+  assert.deepEqual(calls, ["click:research:tab-1:old:save"]);
+  await assert.rejects(
+    capability.invoke("browser_click", invocation({ ...args, observe: "yes" })),
+    /boolean/,
+  );
+  assert.equal(calls.length, 1, "invalid observe must reject before mutation");
+  backend.click = async () => {
+    throw new Error("Stale target");
+  };
+  await assert.rejects(
+    capability.invoke("browser_click", invocation(args)),
+    /Stale target/,
+  );
+});
+
+test("combined observations retain the public thread session identity", async () => {
+  const calls: string[] = [];
+  const backend = browserBackend(calls);
+  const inspect = backend.inspect;
+  backend.open = async (sessionId, url) => ({
+    sessionId,
+    tabId: "tab-1",
+    title: "Fixture",
+    url,
+    loading: false,
+  });
+  backend.inspect = async (sessionId, tabId, signal) => ({
+    ...(await inspect(sessionId, tabId, signal)),
+    sessionId,
+  });
+  const capability = new BrowserZenXCapabilityPackage(backend);
+  const result = (await capability.invoke("browser_open", {
+    ...invocation({
+      sessionId: "research",
+      url: "https://example.com/",
+      observe: true,
+    }),
+    threadId: "thread-one",
+  })) as BrowserInspection;
+  assert.equal(result.sessionId, "research");
+  assert.equal(result.observationId, "observation-1");
+  assert.ok(calls[0]?.startsWith("inspect:"));
+  assert.notEqual(
+    calls[0],
+    "inspect:research:tab-1",
+    "backend receives the thread's private provider session",
+  );
+  await capability.close();
+});
+
 test("browser scroll validates a bounded direction and requires a current observation", async () => {
   const calls: string[] = [];
   const backend = browserBackend(calls);
