@@ -266,6 +266,32 @@ test("DOM inspection exposes bounded control state and native select and rich-te
         },
       ],
     );
+    const speedElement = dom.window.document.querySelector(
+      "#speed",
+    ) as HTMLSelectElement;
+    const inserted = dom.window.document.createElement("option");
+    inserted.value = "secret";
+    inserted.textContent = "Secret";
+    speedElement.append(inserted);
+    assert.equal(
+      (
+        dom.window.eval(browserActionScript(select, "select", "secret")) as {
+          reason: string;
+        }
+      ).reason,
+      "options-changed",
+    );
+    inserted.remove();
+    speedElement.options[1]!.disabled = true;
+    assert.equal(
+      (
+        dom.window.eval(browserActionScript(select, "select", "Express")) as {
+          reason: string;
+        }
+      ).reason,
+      "options-changed",
+    );
+    speedElement.options[1]!.disabled = false;
     assert.equal(
       (
         dom.window.eval(browserActionScript(select, "select", "Express")) as {
@@ -274,10 +300,7 @@ test("DOM inspection exposes bounded control state and native select and rich-te
       ).ok,
       true,
     );
-    assert.equal(
-      (dom.window.document.querySelector("#speed") as HTMLSelectElement).value,
-      "express",
-    );
+    assert.equal(speedElement.value, "express");
     assert.equal(
       targets.find(({ name }) => name === "Email updates")?.checked,
       true,
@@ -301,6 +324,24 @@ test("DOM inspection exposes bounded control state and native select and rich-te
       targets.find(({ name }) => name === "Password")?.value,
       undefined,
     );
+    const oversized = dom.window.document.createElement("select");
+    oversized.id = "oversized";
+    oversized.setAttribute("aria-label", "Oversized");
+    for (let index = 0; index < 101; index += 1) {
+      const option = dom.window.document.createElement("option");
+      option.value = String(index);
+      option.textContent = String(index);
+      oversized.append(option);
+    }
+    dom.window.document.body.append(oversized);
+    const refreshed = (
+      dom.window.eval(browserInspectScript) as {
+        targets: BrowserTargetFingerprint[];
+      }
+    ).targets.find(({ name }) => name === "Oversized")!;
+    assert.equal(refreshed.options?.length, 100);
+    assert.equal(refreshed.optionsTruncated, true);
+    assert.deepEqual(Array.from(refreshed.actions), ["click"]);
   } finally {
     dom.window.close();
   }

@@ -767,6 +767,9 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
             : {
                 options: fingerprint.options.map((option) => ({ ...option })),
               }),
+          ...(fingerprint.optionsTruncated === undefined
+            ? {}
+            : { optionsTruncated: fingerprint.optionsTruncated }),
         };
       });
       const summary = await this.#summary(sessionId, tabId);
@@ -3760,6 +3763,8 @@ function requireFingerprint(value: unknown): BrowserTargetFingerprint {
     (target.value !== undefined && typeof target.value !== "string") ||
     (target.checked !== undefined && typeof target.checked !== "boolean") ||
     (target.selected !== undefined && typeof target.selected !== "boolean") ||
+    (target.optionsTruncated !== undefined &&
+      typeof target.optionsTruncated !== "boolean") ||
     (target.options !== undefined &&
       (!Array.isArray(target.options) ||
         target.options.length > 100 ||
@@ -3790,6 +3795,9 @@ function requireFingerprint(value: unknown): BrowserTargetFingerprint {
     ...(target.value === undefined ? {} : { value: target.value }),
     ...(target.checked === undefined ? {} : { checked: target.checked }),
     ...(target.selected === undefined ? {} : { selected: target.selected }),
+    ...(target.optionsTruncated === undefined
+      ? {}
+      : { optionsTruncated: target.optionsTruncated }),
     ...(target.options === undefined
       ? {}
       : {

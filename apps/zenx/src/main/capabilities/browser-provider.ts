@@ -44,6 +44,7 @@ export interface BrowserInspection extends BrowserTabSummary {
     checked?: boolean;
     selected?: boolean;
     options?: BrowserSelectOption[];
+    optionsTruncated?: boolean;
   }>;
 }
 
@@ -604,6 +605,7 @@ export interface BrowserTargetFingerprint {
   checked?: boolean;
   selected?: boolean;
   options?: BrowserSelectOption[];
+  optionsTruncated?: boolean;
 }
 
 export interface BrowserObservation {
@@ -1056,6 +1058,9 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
         ...(target.options === undefined
           ? {}
           : { options: target.options.map((option) => ({ ...option })) }),
+        ...(target.optionsTruncated === undefined
+          ? {}
+          : { optionsTruncated: target.optionsTruncated }),
       };
     });
     tab.observation = {
@@ -1471,7 +1476,7 @@ export const browserInspectScript = `(() => {
       const actions = [];
       if (clickable(element)) actions.push("click");
       if (typeable(element)) actions.push("type");
-      if (element instanceof HTMLSelectElement && !element.disabled) actions.push("select");
+      if (element instanceof HTMLSelectElement && !element.disabled && element.options.length <= 100) actions.push("select");
       const value = element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement || (element instanceof HTMLInputElement && element.type.toLowerCase() !== "password") ? element.value : element instanceof HTMLElement && element.matches('[contenteditable]:not([contenteditable="false"])') ? element.textContent ?? "" : undefined;
       const checked = element instanceof HTMLInputElement && ["checkbox", "radio"].includes(element.type.toLowerCase()) ? element.checked : element.getAttribute("aria-checked") === "true" ? true : element.getAttribute("aria-checked") === "false" ? false : undefined;
       const selected = element.getAttribute("aria-selected") === "true" ? true : element.getAttribute("aria-selected") === "false" ? false : element instanceof HTMLOptionElement ? element.selected : undefined;
@@ -1490,6 +1495,7 @@ export const browserInspectScript = `(() => {
         ...(checked === undefined ? {} : { checked }),
         ...(selected === undefined ? {} : { selected }),
         ...(element instanceof HTMLSelectElement ? { options: [...element.options].slice(0, 100).map(option => ({ value: option.value.slice(0, 512), label: (option.textContent ?? "").replace(/\\s+/g, " ").trim().slice(0, 512), selected: option.selected, disabled: option.disabled })) } : {}),
+        ...(element instanceof HTMLSelectElement ? { optionsTruncated: element.options.length > 100 } : {}),
       };
     }),
   };
@@ -1517,7 +1523,9 @@ export function browserActionScript(
     const selector = ${JSON.stringify(target.selector)};
     const action = ${JSON.stringify(action)};
     const nextValue = ${JSON.stringify(text)};
-    const shouldSubmit = ${JSON.stringify(submit)};
+  const shouldSubmit = ${JSON.stringify(submit)};
+  const expectedOptions = ${JSON.stringify(target.options ?? null)};
+  const expectedOptionsTruncated = ${JSON.stringify(target.optionsTruncated ?? false)};
     const candidates = [...document.querySelectorAll(selector)];
     if (candidates.length !== 1) return { ok: false, reason: candidates.length === 0 ? "missing" : "ambiguous" };
     const element = candidates[0];
@@ -1543,8 +1551,11 @@ export function browserActionScript(
     }
     if (action === "select") {
       if (!(element instanceof HTMLSelectElement) || element.disabled) return { ok: false, reason: "not-selectable" };
-      const byValue = [...element.options].filter(option => option.value === nextValue && !option.disabled);
-      const byLabel = [...element.options].filter(option => (option.textContent ?? "").replace(/\\s+/g, " ").trim() === nextValue && !option.disabled);
+      if (expectedOptions === null || expectedOptionsTruncated || element.options.length > 100) return { ok: false, reason: "options-unobserved" };
+      const currentOptions = [...element.options].map(option => ({ value: option.value.slice(0, 512), label: (option.textContent ?? "").replace(/\\s+/g, " ").trim().slice(0, 512), selected: option.selected, disabled: option.disabled }));
+      if (JSON.stringify(currentOptions) !== JSON.stringify(expectedOptions)) return { ok: false, reason: "options-changed" };
+      const byValue = currentOptions.filter(option => option.value === nextValue && !option.disabled);
+      const byLabel = currentOptions.filter(option => option.label === nextValue && !option.disabled);
       const matches = byValue.length > 0 ? byValue : byLabel;
       if (matches.length !== 1) return { ok: false, reason: matches.length === 0 ? "option-missing" : "option-ambiguous" };
       const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;

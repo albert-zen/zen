@@ -95,6 +95,7 @@ interface PlaywrightDomMetadata {
   checked?: boolean;
   selected?: boolean;
   options?: BrowserTargetFingerprint["options"];
+  optionsTruncated?: boolean;
 }
 
 export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
@@ -322,6 +323,9 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
           ...(target.options === undefined
             ? {}
             : { options: target.options.map((option) => ({ ...option })) }),
+          ...(target.optionsTruncated === undefined
+            ? {}
+            : { optionsTruncated: target.optionsTruncated }),
         })),
         screenshot,
       };
@@ -398,7 +402,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
       );
       await this.#revalidateTarget(session, target, "select", signal);
       this.#invalidate(tab);
-      const code = `async page => { const locator = page.locator('aria-ref=' + ${JSON.stringify(target.ref)}); const requested = ${JSON.stringify(option)}; const selectedValue = await locator.evaluate((element, requested) => { if (!(element instanceof HTMLSelectElement) || element.disabled) throw new Error('Browser target is not a selectable native control'); const options = [...element.options].map(option => ({ value: option.value, label: (option.textContent || '').replace(/\\s+/g, ' ').trim(), disabled: option.disabled })); const byValue = options.filter(candidate => candidate.value === requested && !candidate.disabled); const byLabel = options.filter(candidate => candidate.label === requested && !candidate.disabled); const matches = byValue.length > 0 ? byValue : byLabel; if (matches.length !== 1) throw new Error(matches.length === 0 ? 'Browser option missing' : 'Browser option ambiguous'); return matches[0].value; }, requested); await locator.selectOption(selectedValue); }`;
+      const code = `async page => { const locator = page.locator('aria-ref=' + ${JSON.stringify(target.ref)}); const requested = ${JSON.stringify(option)}; const expectedOptions = ${JSON.stringify(target.options ?? null)}; const selectedValue = await locator.evaluate((element, { requested, expectedOptions }) => { if (!(element instanceof HTMLSelectElement) || element.disabled) throw new Error('Browser target is not a selectable native control'); if (expectedOptions === null || element.options.length > 100) throw new Error('Browser options were not completely observed'); const options = [...element.options].map(option => ({ value: option.value.slice(0, 512), label: (option.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 512), selected: option.selected, disabled: option.disabled })); if (JSON.stringify(options) !== JSON.stringify(expectedOptions)) throw new Error('Browser options changed; inspect again'); const byValue = options.filter(candidate => candidate.value === requested && !candidate.disabled); const byLabel = options.filter(candidate => candidate.label === requested && !candidate.disabled); const matches = byValue.length > 0 ? byValue : byLabel; if (matches.length !== 1) throw new Error(matches.length === 0 ? 'Browser option missing' : 'Browser option ambiguous'); return matches[0].value; }, { requested, expectedOptions }); await locator.selectOption(selectedValue); }`;
       await this.#run(session, ["run-code", code], signal);
       this.#assertSession(session, revision, signal);
       return await this.#summary(sessionId, session, tab, signal);
@@ -725,7 +729,12 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
       !fingerprint.actions.every((candidate) =>
         target.actions.includes(candidate),
       ) ||
-      !fingerprint.actions.includes(action)
+      !fingerprint.actions.includes(action) ||
+      (action === "select" &&
+        (target.optionsTruncated === true ||
+          fingerprint.optionsTruncated === true ||
+          JSON.stringify(fingerprint.options) !==
+            JSON.stringify(target.options)))
     ) {
       throw new Error(
         "Playwright target identity, visibility, or actions changed; inspect again",
@@ -754,7 +763,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
         ...((element instanceof HTMLInputElement && element.type.toLowerCase() === 'password') ? {} : ('value' in element && typeof element.value === 'string') ? { value: element.value.slice(0, 512) } : element instanceof HTMLElement && element.matches('[contenteditable]:not([contenteditable="false"])') ? { value: (element.textContent || '').slice(0, 512) } : {}),
         ...(('checked' in element && typeof element.checked === 'boolean') ? { checked: element.checked } : element.getAttribute('aria-checked') === 'true' ? { checked: true } : element.getAttribute('aria-checked') === 'false' ? { checked: false } : {}),
         ...(element.getAttribute('aria-selected') === 'true' ? { selected: true } : element.getAttribute('aria-selected') === 'false' ? { selected: false } : {}),
-        ...(element instanceof HTMLSelectElement ? { options: [...element.options].slice(0, 100).map(option => ({ value: option.value.slice(0, 512), label: (option.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 512), selected: option.selected, disabled: option.disabled })) } : {})
+        ...(element instanceof HTMLSelectElement ? { options: [...element.options].slice(0, 100).map(option => ({ value: option.value.slice(0, 512), label: (option.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 512), selected: option.selected, disabled: option.disabled })), optionsTruncated: element.options.length > 100 } : {})
       }));
       return { ref, count, visible, ...attributes };
     }))`;
@@ -1062,6 +1071,9 @@ function playwrightTargetFingerprint(
     ...(dom.options === undefined
       ? {}
       : { options: dom.options.map((option) => ({ ...option })) }),
+    ...(dom.optionsTruncated === undefined
+      ? {}
+      : { optionsTruncated: dom.optionsTruncated }),
   };
 }
 
@@ -1088,7 +1100,9 @@ function playwrightNodeActions(
     !(dom.tag === "input" && nonTypeableInput.has(dom.type.toLowerCase()))
       ? (["type"] as const)
       : []),
-    ...(dom.tag === "select" ? (["select"] as const) : []),
+    ...(dom.tag === "select" && dom.optionsTruncated !== true
+      ? (["select"] as const)
+      : []),
   ];
 }
 
@@ -1132,6 +1146,8 @@ function isPlaywrightDomMetadata(
     (entry.value === undefined || typeof entry.value === "string") &&
     (entry.checked === undefined || typeof entry.checked === "boolean") &&
     (entry.selected === undefined || typeof entry.selected === "boolean") &&
+    (entry.optionsTruncated === undefined ||
+      typeof entry.optionsTruncated === "boolean") &&
     (entry.options === undefined ||
       (Array.isArray(entry.options) &&
         entry.options.length <= 100 &&

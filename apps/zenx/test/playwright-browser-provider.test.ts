@@ -248,6 +248,42 @@ test("Playwright inspection only advertises type for editable comboboxes", async
   }
 });
 
+test("Playwright rejects select options changed after inspection", async () => {
+  const runner = new FakePlaywrightRunner();
+  runner.includeComboboxes = true;
+  const backend = new PlaywrightCliBrowserBackend({
+    executable: "/opt/playwright-cli",
+    runner,
+    cwd: "/tmp/zenx-playwright",
+  });
+  try {
+    const opened = await backend.open("preferences", "https://example.com/");
+    const inspected = await backend.inspect("preferences", opened.tabId);
+    const speed = inspected.targets.find(
+      ({ name }) => name === "Delivery speed",
+    )!;
+    runner.changeSelectOptions = true;
+    await assert.rejects(
+      backend.select(
+        "preferences",
+        opened.tabId,
+        inspected.observationId,
+        speed.targetId,
+        "Express",
+      ),
+      /changed|inspect again/u,
+    );
+    assert.equal(
+      runner.calls.filter(
+        (args) => args[2] === "run-code" && args[3]?.includes("selectOption"),
+      ).length,
+      0,
+    );
+  } finally {
+    await backend.close();
+  }
+});
+
 test("Playwright cancellation invalidates the session before immediate reuse", async () => {
   const runner = new FakePlaywrightRunner();
   const backend = new PlaywrightCliBrowserBackend({
@@ -304,6 +340,7 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
   invalidPages = false;
   changeIdentity = false;
   includeComboboxes = false;
+  changeSelectOptions = false;
   abortNextSnapshot = false;
   delayedCloseFinished: Promise<void> = Promise.resolve();
   #snapshotCount = 0;
@@ -381,6 +418,16 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
                           selected: false,
                           disabled: false,
                         },
+                        ...(this.changeSelectOptions
+                          ? [
+                              {
+                                value: "same-day",
+                                label: "Same day",
+                                selected: false,
+                                disabled: false,
+                              },
+                            ]
+                          : []),
                       ],
                     }),
                     dom("e6", { tag: "input", type: "search" }),
