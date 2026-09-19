@@ -1508,6 +1508,8 @@ test("generic tool task observations distinguish waiting and unconfirmed cancell
     const base = commandItem("image-task", "generate image");
     if (base.type !== "commandExecution") throw new Error("missing command");
     const cases = [
+      ["browser_click", "queued", "Queued"],
+      ["wait", "queued", "Queued"],
       ["image_generate", "running", "Started"],
       ["wait", "running", "Waiting"],
       ["wait", "cancel_requested", "Cancelling"],

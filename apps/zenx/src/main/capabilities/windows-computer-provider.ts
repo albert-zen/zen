@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, realpath, rm, stat } from "node:fs/promises";
+import { mkdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -17,6 +17,8 @@ import {
   type ComputerTarget,
   MAX_COMPUTER_INSPECTION_CONTROLS,
   selectComputerInspectionControls,
+  selectComputerWindows,
+  type ComputerWindowList,
   type ZenXComputerBackend,
 } from "./computer-provider.js";
 import type { ZenXPluginManifestV2 } from "./types.js";
@@ -30,7 +32,7 @@ export const MINIMUM_WINAPP_CLI_VERSION = "0.3.1";
 
 export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
   ...structuredClone(computerCapabilityManifest),
-  version: "1.1.0",
+  version: "1.1.1",
   description:
     "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and WGC capture stay background-safe; unsupported global input never silently substitutes for them.",
   provider: {
@@ -38,6 +40,7 @@ export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
     platforms: ["win32"],
     interactionModes: ["background_safe"],
     capabilities: [
+      "window.list",
       "uia.inspect",
       "uia.invoke",
       "uia.set_value",
@@ -68,6 +71,8 @@ export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
     .filter((tool) => tool.interactionMode === "background_safe")
     .map((tool) => {
       switch (tool.name) {
+        case "computer_list_windows":
+          return tool;
         case "computer_inspect":
           return {
             ...tool,
@@ -89,13 +94,15 @@ export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
               "Set the supplied text on one opaque editable control through Windows UI Automation. The provider revalidates selector, semantics, geometry, and action; host/model policy owns credential decisions.",
             capabilities: ["uia.set_value", "app_targeted", "no_global_input"],
           };
-        default:
+        case "computer_screenshot":
           return {
             ...tool,
             description:
               "Capture one exact Windows HWND through WinApp CLI's default WGC/PrintWindow path to a private five-minute PNG artifact. Returns metadata/path, never pixels in the Thread journal.",
             capabilities: ["wgc.capture", "app_targeted", "no_global_input"],
           };
+        default:
+          return tool;
       }
     }),
 };
@@ -185,6 +192,22 @@ interface WinAppScreenshotEnvelope {
   hwnd?: unknown;
 }
 
+interface WinAppScreenshotImage {
+  getSize(): { width: number; height: number };
+  toBitmap(): Buffer;
+  crop(bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }): WinAppScreenshotImage;
+  toPNG(): Buffer;
+}
+
+type WinAppScreenshotImageLoader = (
+  artifactPath: string,
+) => WinAppScreenshotImage | Promise<WinAppScreenshotImage>;
+
 export class SpawnWinAppCliRunner implements WinAppCliRunner {
   async run(
     executable: string,
@@ -206,6 +229,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
   readonly #runtimeExecutable?: string;
   readonly #bindBeforeSpawn?: () => Promise<() => Promise<void>>;
   readonly #verifyExecutable?: () => Promise<void>;
+  readonly #loadScreenshotImage?: WinAppScreenshotImageLoader;
 
   constructor(
     options: {
@@ -217,6 +241,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       runtimeExecutable?: string;
       bindBeforeSpawn?: () => Promise<() => Promise<void>>;
       verifyExecutable?: () => Promise<void>;
+      loadScreenshotImage?: WinAppScreenshotImageLoader;
     } = {},
   ) {
     this.#artifactDirectory =
@@ -229,6 +254,8 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     this.#runtimeExecutable = options.runtimeExecutable;
     this.#bindBeforeSpawn = options.bindBeforeSpawn;
     this.#verifyExecutable = options.verifyExecutable;
+    this.#loadScreenshotImage =
+      options.loadScreenshotImage ?? defaultScreenshotImageLoader();
   }
 
   async diagnose(signal?: AbortSignal): Promise<WinAppCliDiagnostic> {
@@ -515,7 +542,24 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
         `WinApp CLI screenshot did not confirm the explicitly targeted window and artifact path (HWND confirmed: ${String(hwndConfirmed)}; artifact confirmed: ${String(artifactConfirmed)})`,
       );
     }
-    const metadata = await stat(artifactPath);
+    let dimensions: { width: number; height: number };
+    let metadata: Awaited<ReturnType<typeof stat>>;
+    try {
+      signal?.throwIfAborted();
+      dimensions = await trimTrailingTransparentScreenshotPadding(
+        artifactPath,
+        {
+          width: positiveInteger(result.width, "screenshot width"),
+          height: positiveInteger(result.height, "screenshot height"),
+        },
+        this.#loadScreenshotImage,
+      );
+      metadata = await stat(artifactPath);
+      signal?.throwIfAborted();
+    } catch (error) {
+      await rm(artifactPath, { force: true });
+      throw error;
+    }
     const expiresAt = new Date(Date.now() + 5 * 60_000);
     const timer = setTimeout(() => {
       this.#expiryTimers.delete(timer);
@@ -526,8 +570,8 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     return {
       artifactPath,
       target: resolvedTarget(window),
-      width: positiveInteger(result.width, "screenshot width"),
-      height: positiveInteger(result.height, "screenshot height"),
+      width: dimensions.width,
+      height: dimensions.height,
       bytes: metadata.size,
       expiresAt: expiresAt.toISOString(),
     };
@@ -550,6 +594,23 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     for (const timer of this.#expiryTimers) clearTimeout(timer);
     this.#expiryTimers.clear();
     await rm(this.#artifactDirectory, { recursive: true, force: true });
+  }
+
+  async listWindows(
+    query?: string,
+    signal?: AbortSignal,
+  ): Promise<ComputerWindowList> {
+    const result = await this.#json<unknown>(
+      ["ui", "list-windows", "--json"],
+      10_000,
+      signal,
+    );
+    if (!Array.isArray(result))
+      throw new Error("WinApp CLI list-windows returned an invalid JSON shape");
+    return selectComputerWindows(
+      result.map(parseWindow).map(resolvedTarget),
+      query,
+    );
   }
 
   async #resolveWindow(
@@ -583,7 +644,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       );
     if (matches.length === 0) {
       throw new Error(
-        "The exact Windows app/window target was not found; run computer_inspect again with a current pid/applicationId and windowTitle",
+        "The exact Windows app/window target was not found; run computer_list_windows to obtain a current target",
       );
     }
     if (matches.length > 1) {
@@ -687,7 +748,6 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     args: readonly string[],
     options: WinAppCliRunOptions,
   ): Promise<WinAppCliRunResult> {
-    await this.#verifyExecutable?.();
     return await this.#runner.run(this.#command, args, {
       ...options,
       runtimeExecutable: this.#runtimeExecutable,
@@ -885,6 +945,81 @@ function isEditableElement(element: WinAppElement): boolean {
   return /(?:edit|textbox|document|combobox|spinner|slider)/iu.test(
     `${winAppControlType(element) ?? ""} ${element.className ?? ""}`,
   );
+}
+
+function defaultScreenshotImageLoader():
+  WinAppScreenshotImageLoader | undefined {
+  if (process.versions.electron === undefined) return undefined;
+  return async (artifactPath) => {
+    const { nativeImage } = await import("electron");
+    return nativeImage.createFromPath(artifactPath);
+  };
+}
+
+async function trimTrailingTransparentScreenshotPadding(
+  artifactPath: string,
+  dimensions: { width: number; height: number },
+  loadImage: WinAppScreenshotImageLoader | undefined,
+): Promise<{ width: number; height: number }> {
+  if (loadImage === undefined) return dimensions;
+  const image = await loadImage(artifactPath);
+  const imageSize = image.getSize();
+  if (
+    imageSize.width !== dimensions.width ||
+    imageSize.height !== dimensions.height
+  ) {
+    throw new Error(
+      "WinApp CLI screenshot dimensions do not match the captured PNG",
+    );
+  }
+  const bitmap = image.toBitmap();
+  const expectedBytes = dimensions.width * dimensions.height * 4;
+  if (bitmap.byteLength !== expectedBytes) {
+    throw new Error("WinApp CLI screenshot bitmap has an invalid byte length");
+  }
+  let maximumOpaqueX = -1;
+  let maximumOpaqueY = -1;
+  for (
+    let pixel = 0;
+    pixel < dimensions.width * dimensions.height;
+    pixel += 1
+  ) {
+    if (bitmap[pixel * 4 + 3] === 0) continue;
+    maximumOpaqueX = Math.max(maximumOpaqueX, pixel % dimensions.width);
+    maximumOpaqueY = Math.max(
+      maximumOpaqueY,
+      Math.floor(pixel / dimensions.width),
+    );
+  }
+  if (maximumOpaqueX < 0 || maximumOpaqueY < 0) return dimensions;
+  const croppedDimensions = {
+    width: maximumOpaqueX + 1,
+    height: maximumOpaqueY + 1,
+  };
+  if (
+    croppedDimensions.width === dimensions.width &&
+    croppedDimensions.height === dimensions.height
+  ) {
+    return dimensions;
+  }
+  const cropped = image.crop({
+    x: 0,
+    y: 0,
+    ...croppedDimensions,
+  });
+  const croppedSize = cropped.getSize();
+  if (
+    croppedSize.width !== croppedDimensions.width ||
+    croppedSize.height !== croppedDimensions.height
+  ) {
+    throw new Error("WinApp CLI screenshot crop returned invalid dimensions");
+  }
+  const png = cropped.toPNG();
+  if (png.byteLength === 0) {
+    throw new Error("WinApp CLI screenshot crop returned an empty PNG");
+  }
+  await writeFile(artifactPath, png);
+  return croppedDimensions;
 }
 
 function requiredProviderSelector(
@@ -1095,9 +1230,7 @@ function parseWindow(value: unknown): WinAppWindow {
     hwnd: normalizeHwnd(record.hwnd, "window hwnd"),
     processId: positiveInteger(record.processId, "window processId"),
     processName: requiredBoundedString(record.processName, "processName", 256),
-    ...(typeof record.title === "string"
-      ? { title: boundedText(record.title, 256) }
-      : {}),
+    ...(typeof record.title === "string" ? { title: record.title } : {}),
     width: nonNegativeInteger(record.width, "window width"),
     height: nonNegativeInteger(record.height, "window height"),
   };

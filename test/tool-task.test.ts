@@ -41,6 +41,353 @@ test("ordinary slow tool yields and unified wait returns its result", async () =
   );
   await env.close();
 });
+
+test("opt-in resource wait creates caller-owned tasks and dispatches conflicts FIFO", async () => {
+  const releases = [deferred<void>(), deferred<void>(), deferred<void>()];
+  const started: string[] = [];
+  const browser: ToolRuntime = {
+    name: "browser",
+    specification: {
+      name: "browser",
+      description: "browser",
+      inputSchema: { type: "object" },
+    },
+    taskPolicy: { resourceQueue: "fifo" },
+    resourceClaims: () => [{ key: "browser:session:a", access: "exclusive" }],
+    async execute(call) {
+      const label = String(call.arguments.label);
+      started.push(label);
+      await releases[Number(label) - 1]!.promise;
+      return { output: label, exitCode: 0 };
+    },
+  };
+  const env = new ToolEnvironment({
+    runtimes: [browser],
+    taskOptions: { yieldTimeMs: 1 },
+  });
+  try {
+    const first = await env.execute(
+      env.prepare(invocation("browser", { label: "1" })),
+    );
+    const second = await env.execute(
+      env.prepare(invocation("browser", { label: "2" })),
+    );
+    const third = await env.execute(
+      env.prepare(invocation("browser", { label: "3" })),
+    );
+    assert.deepEqual(started, ["1"]);
+    assert.equal(data(second).status, "queued");
+    assert.equal(data(third).status, "queued");
+    assert.equal(
+      (second.structuredContent as { resource_scope: string }).resource_scope,
+      "claims",
+    );
+
+    releases[0]!.resolve();
+    await env.waitRuntime.execute(
+      invocation("wait", { task_id: data(first).task_id, yield_time_ms: 100 }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(started, ["1", "2"]);
+
+    releases[1]!.resolve();
+    await env.waitRuntime.execute(
+      invocation("wait", { task_id: data(second).task_id, yield_time_ms: 100 }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(started, ["1", "2", "3"]);
+    releases[2]!.resolve();
+  } finally {
+    for (const release of releases) release.resolve();
+    await env.close();
+  }
+});
+
+test("exclusive waiters block later conflicting shared work without blocking unrelated resources", async () => {
+  const releasePage = deferred<void>();
+  const releaseClose = deferred<void>();
+  const started: string[] = [];
+  const browser: ToolRuntime = {
+    name: "browser",
+    specification: {
+      name: "browser",
+      description: "browser",
+      inputSchema: { type: "object" },
+    },
+    taskPolicy: { resourceQueue: "fifo", resourceScope: "runtime" },
+    resourceClaims(call) {
+      const operation = String(call.arguments.operation);
+      if (operation === "close-a")
+        return [{ key: "session:a", access: "exclusive" }];
+      if (operation === "list-a")
+        return [{ key: "session:a", access: "shared" }];
+      const session = operation.endsWith("a") ? "a" : "b";
+      return [
+        { key: `session:${session}`, access: "shared" },
+        { key: `page:${session}:1`, access: "exclusive" },
+      ];
+    },
+    async execute(call) {
+      const operation = String(call.arguments.operation);
+      started.push(operation);
+      if (operation === "page-a") await releasePage.promise;
+      if (operation === "close-a") await releaseClose.promise;
+      return { output: operation, exitCode: 0 };
+    },
+  };
+  const env = new ToolEnvironment({
+    runtimes: [browser],
+    taskOptions: { yieldTimeMs: 1 },
+  });
+  try {
+    const pageA = await env.execute(
+      env.prepare(invocation("browser", { operation: "page-a" })),
+    );
+    const closeA = await env.execute(
+      env.prepare(invocation("browser", { operation: "close-a" })),
+    );
+    const listA = await env.execute(
+      env.prepare(invocation("browser", { operation: "list-a" })),
+    );
+    const pageB = await env.execute(
+      env.prepare(invocation("browser", { operation: "page-b" })),
+    );
+    assert.equal(pageB.output, "page-b");
+    assert.deepEqual(started, ["page-a", "page-b"]);
+    assert.equal(data(closeA).status, "queued");
+    assert.equal(data(listA).status, "queued");
+
+    releasePage.resolve();
+    await env.waitRuntime.execute(
+      invocation("wait", { task_id: data(pageA).task_id, yield_time_ms: 100 }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(started, ["page-a", "page-b", "close-a"]);
+
+    releaseClose.resolve();
+    await env.waitRuntime.execute(
+      invocation("wait", { task_id: data(closeA).task_id, yield_time_ms: 100 }),
+    );
+    const listed = await env.waitRuntime.execute(
+      invocation("wait", { task_id: data(listA).task_id, yield_time_ms: 100 }),
+    );
+    assert.equal(data(listed).status, "completed");
+    assert.deepEqual(started, ["page-a", "page-b", "close-a", "list-a"]);
+  } finally {
+    releasePage.resolve();
+    releaseClose.resolve();
+    await env.close();
+  }
+});
+
+test("queued cancellation stays thread-owned and never dispatches the body", async () => {
+  const release = deferred<void>();
+  const started: string[] = [];
+  const browser: ToolRuntime = {
+    ...tool("browser", async (call) => {
+      started.push(String(call.arguments.label));
+      await release.promise;
+      return done;
+    }),
+    taskPolicy: { resourceQueue: "fifo" },
+    resourceClaims: () => [{ key: "session:a", access: "exclusive" }],
+  };
+  const env = new ToolEnvironment({
+    runtimes: [browser],
+    taskOptions: { yieldTimeMs: 1 },
+  });
+  try {
+    const holder = await env.execute(
+      env.prepare(invocation("browser", { label: "holder" })),
+    );
+    const queued = await env.execute(
+      env.prepare(invocation("browser", { label: "cancelled" })),
+    );
+    assert.equal(data(queued).status, "queued");
+    await assert.rejects(
+      env.waitRuntime.execute({
+        ...invocation("wait", { task_id: data(queued).task_id }),
+        threadId: "other-thread",
+      }),
+      /not found for this thread/u,
+    );
+    const cancelled = await env.waitRuntime.execute(
+      invocation("wait", { task_id: data(queued).task_id, terminate: true }),
+    );
+    assert.equal(data(cancelled).status, "cancelled");
+    assert.deepEqual(started, ["holder"]);
+
+    release.resolve();
+    await env.waitRuntime.execute(
+      invocation("wait", { task_id: data(holder).task_id, yield_time_ms: 100 }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(started, ["holder"]);
+  } finally {
+    release.resolve();
+    await env.close();
+  }
+});
+
+test("queued execution timeout settles without dispatching and frees its lease", async () => {
+  const release = deferred<void>();
+  const started: string[] = [];
+  let leases = 0;
+  const browser: ToolRuntime = {
+    ...tool("browser", async (call) => {
+      started.push(String(call.arguments.label));
+      await release.promise;
+      return done;
+    }),
+    taskPolicy: { resourceQueue: "fifo" },
+    resourceClaims: () => [{ key: "session:a", access: "exclusive" }],
+  };
+  const env = new ToolEnvironment({
+    bundles: [
+      {
+        identity: { kind: "external", id: "browser" },
+        tools: [browser],
+        retainPreparedInvocation() {
+          leases++;
+          return () => {
+            leases--;
+          };
+        },
+      },
+    ],
+    taskOptions: { yieldTimeMs: 1, timeoutMs: 1_000 },
+  });
+  try {
+    const holder = await env.execute(
+      env.prepare(invocation("browser", { label: "holder" })),
+    );
+    const queued = await env.execute(
+      env.prepare({
+        ...invocation("browser", { label: "timed-out" }),
+        task: { timeoutMs: 10 },
+      }),
+    );
+    const timedOut = await env.waitRuntime.execute(
+      invocation("wait", { task_id: data(queued).task_id, yield_time_ms: 100 }),
+    );
+    assert.equal(data(timedOut).status, "timed_out");
+    assert.equal(timedOut.exitCode, 124);
+    assert.deepEqual(started, ["holder"]);
+    assert.equal(leases, 1);
+
+    release.resolve();
+    await env.waitRuntime.execute(
+      invocation("wait", { task_id: data(holder).task_id, yield_time_ms: 100 }),
+    );
+    assert.equal(leases, 0);
+  } finally {
+    release.resolve();
+    await env.close();
+  }
+});
+
+test("unconfirmed cancellation keeps dynamic claims fenced until real completion", async () => {
+  const firstResult = deferred<typeof done>();
+  const releaseSecond = deferred<void>();
+  const started: string[] = [];
+  const browser: ToolRuntime = {
+    ...tool("browser", async (call) => {
+      const label = String(call.arguments.label);
+      started.push(label);
+      if (label === "first") return await firstResult.promise;
+      await releaseSecond.promise;
+      return done;
+    }),
+    taskPolicy: { resourceQueue: "fifo" },
+    resourceClaims: () => [{ key: "page:a", access: "exclusive" }],
+  };
+  const env = new ToolEnvironment({
+    runtimes: [browser],
+    taskOptions: { yieldTimeMs: 1 },
+  });
+  try {
+    const first = await env.execute(
+      env.prepare(invocation("browser", { label: "first" })),
+    );
+    const second = await env.execute(
+      env.prepare(invocation("browser", { label: "second" })),
+    );
+    const cancelling = await env.waitRuntime.execute(
+      invocation("wait", {
+        task_id: data(first).task_id,
+        terminate: true,
+        yield_time_ms: 1,
+      }),
+    );
+    assert.equal(data(cancelling).status, "cancellation_unconfirmed");
+    const stillQueued = await env.waitRuntime.execute(
+      invocation("wait", {
+        task_id: data(second).task_id,
+        yield_time_ms: 2,
+      }),
+    );
+    assert.equal(data(stillQueued).status, "queued");
+    assert.deepEqual(started, ["first"]);
+
+    firstResult.resolve(done);
+    await env.waitRuntime.execute(
+      invocation("wait", { task_id: data(first).task_id, yield_time_ms: 100 }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(started, ["first", "second"]);
+    releaseSecond.resolve();
+  } finally {
+    firstResult.resolve(done);
+    releaseSecond.resolve();
+    await env.close();
+  }
+});
+
+test("opt-in tasks wait for execution capacity while existing tools still reject", async () => {
+  const release = deferred<void>();
+  const started: string[] = [];
+  const queued = tool(
+    "queued",
+    async (call) => {
+      started.push(String(call.arguments.label));
+      if (call.arguments.label === "first") await release.promise;
+      return done;
+    },
+    { resourceQueue: "fifo", resourceScope: "independent" },
+  );
+  const rejecting = tool("rejecting", async () => done, {
+    resourceScope: "independent",
+  });
+  const env = new ToolEnvironment({
+    runtimes: [queued, rejecting],
+    taskOptions: { yieldTimeMs: 1, maxRunningTasks: 1 },
+  });
+  try {
+    const first = await env.execute(
+      env.prepare(invocation("queued", { label: "first" })),
+    );
+    const second = await env.execute(
+      env.prepare(invocation("queued", { label: "second" })),
+    );
+    assert.equal(data(second).status, "queued");
+    await assert.rejects(
+      env.execute(env.prepare(invocation("rejecting"))),
+      /capacity/u,
+    );
+    release.resolve();
+    await env.waitRuntime.execute(
+      invocation("wait", { task_id: data(first).task_id, yield_time_ms: 100 }),
+    );
+    const completed = await env.waitRuntime.execute(
+      invocation("wait", { task_id: data(second).task_id, yield_time_ms: 100 }),
+    );
+    assert.equal(data(completed).status, "completed");
+    assert.deepEqual(started, ["first", "second"]);
+  } finally {
+    release.resolve();
+    await env.close();
+  }
+});
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;

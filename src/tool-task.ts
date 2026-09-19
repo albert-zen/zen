@@ -21,8 +21,15 @@ export interface ToolTaskPolicy {
   timingArguments?: { yieldTimeMs?: string; timeoutMs?: string };
   /** Independent processes may coexist; otherwise the retained owner stays fenced. */
   resourceScope?: "independent" | "runtime" | "bundle";
+  /** Opt in to bounded FIFO waiting when execution capacity or a resource is busy. */
+  resourceQueue?: "fifo";
   /** Only adapters which confirm the underlying operation has stopped may opt in. */
   cancellation?: "confirmed-on-settle" | "unconfirmed";
+}
+export interface ToolResourceClaim {
+  /** Host-owned identity compared with JavaScript Map key equality. */
+  readonly key: unknown;
+  readonly access: "shared" | "exclusive";
 }
 export interface ToolTaskOptions {
   yieldTimeMs?: number;
@@ -37,6 +44,7 @@ export interface ToolTaskOptions {
 export const TOOL_TASK_CONTENT_TYPE = "application/vnd.zen.tool-task+json";
 export const MAX_TOOL_YIELD_TIME_MS = 180000;
 type Status =
+  | "queued"
   | "running"
   | "completed"
   | "failed"
@@ -48,7 +56,11 @@ type Status =
 /** Host-local executions, output windows, cancellation evidence and retained resources. */
 export class ToolTaskManager {
   readonly #tasks = new Map<string, Task>();
-  readonly #resources = new Map<unknown, Task>();
+  readonly #resources = new Map<
+    unknown,
+    Map<Task, ToolResourceClaim["access"]>
+  >();
+  readonly #queue: { task: Task; claims: readonly ToolResourceClaim[] }[] = [];
   readonly #options: Required<Omit<ToolTaskOptions, "toolOutputSpool">> &
     Pick<ToolTaskOptions, "toolOutputSpool">;
   #closed = false;
@@ -104,7 +116,11 @@ export class ToolTaskManager {
     runtime: ToolRuntime,
     invocation: ToolInvocation,
     execute: (invocation: ToolInvocation) => Promise<ToolExecutionResult>,
-    options: { resourceKey?: unknown; release?: () => void } = {},
+    options: {
+      resourceKey?: unknown;
+      resourceClaims?: readonly ToolResourceClaim[];
+      release?: () => void;
+    } = {},
   ): Promise<ToolExecutionResult> {
     if (this.#closed) throw new Error("Tool task manager is closed");
     invocation.signal.throwIfAborted();
@@ -112,23 +128,28 @@ export class ToolTaskManager {
       throw new Error(
         `Tool task limit reached (${this.#options.maxTasks}); wait for or cancel an existing task`,
       );
-    if (
-      !("executeComposite" in runtime) &&
-      [...this.#tasks.values()].filter(
-        (task) => !task.terminal && !task.coordinator,
-      ).length >= this.#options.maxRunningTasks
-    )
-      throw new Error(
-        "Tool execution capacity is busy; wait for or cancel an existing task",
-      );
-    if (
-      options.resourceKey !== undefined &&
-      this.#resources.has(options.resourceKey)
-    )
-      throw new Error(
-        "Tool resource is busy with a running or unconfirmed task; use wait before starting a conflicting operation",
-      );
     const policy = runtime.taskPolicy;
+    const claims = normalizeResourceClaims(
+      options.resourceClaims ??
+        (options.resourceKey === undefined
+          ? []
+          : [{ key: options.resourceKey, access: "exclusive" }]),
+    );
+    const capacityBusy = this.#capacityBusy(runtime);
+    const resourceBusy = !this.#claimsAvailable(claims);
+    const queuedConflict = this.#queue.some((entry) =>
+      claimsConflict(entry.claims, claims),
+    );
+    if (policy?.resourceQueue !== "fifo") {
+      if (capacityBusy)
+        throw new Error(
+          "Tool execution capacity is busy; wait for or cancel an existing task",
+        );
+      if (resourceBusy || queuedConflict)
+        throw new Error(
+          "Tool resource is busy with a running or unconfirmed task; use wait before starting a conflicting operation",
+        );
+    }
     const timing = invocation.task;
     const yieldMs = integer(
       timing?.yieldTimeMs ??
@@ -152,40 +173,34 @@ export class ToolTaskManager {
     );
     // Observe the task's own signal so parent abort, terminate and deadline
     // cancellation all bound the guest wait without changing normal awaits.
-    let executionSignal!: AbortSignal;
-    const task = new Task(
-      runtime,
-      invocation,
-      (call) => {
-        executionSignal = call.signal;
-        return execute(call);
+    let task!: Task;
+    task = new Task(runtime, invocation, execute, {
+      ...this.#options,
+      timeoutMs,
+      onRelease: () => {
+        this.#releaseClaims(task);
+        this.#removeQueued(task);
+        options.release?.();
+        this.#dispatchQueued();
       },
-      {
-        ...this.#options,
-        timeoutMs,
-        onRelease: () => {
-          if (
-            options.resourceKey !== undefined &&
-            this.#resources.get(options.resourceKey) === task
-          )
-            this.#resources.delete(options.resourceKey);
-          options.release?.();
-        },
-        onExpire: () => this.#tasks.delete(task.id),
-      },
-    );
+      onExpire: () => this.#tasks.delete(task.id),
+    });
     this.#tasks.set(task.id, task);
-    if (options.resourceKey !== undefined)
-      this.#resources.set(options.resourceKey, task);
     this.#invocations.add(invocation);
     const releaseObservation = task.acquireObservation();
     try {
-      task.start();
+      task.arm();
+      if (!capacityBusy && !resourceBusy && !queuedConflict) {
+        this.#dispatch(task, claims);
+      } else {
+        this.#queue.push({ task, claims });
+        this.#dispatchQueued();
+      }
       if (invocation.task?.waitForCompletion) {
         await new Promise<void>((resolve) => {
           let timer: NodeJS.Timeout | undefined;
           const done = () => {
-            executionSignal.removeEventListener("abort", abort);
+            task.executionSignal.removeEventListener("abort", abort);
             if (timer !== undefined) clearTimeout(timer);
             resolve();
           };
@@ -195,8 +210,8 @@ export class ToolTaskManager {
               Math.min(300, this.#options.shutdownWaitMs),
             );
           };
-          executionSignal.addEventListener("abort", abort, { once: true });
-          if (executionSignal.aborted) abort();
+          task.executionSignal.addEventListener("abort", abort, { once: true });
+          if (task.executionSignal.aborted) abort();
           void task.completion.then(done);
         });
       } else await task.observe(yieldMs, true);
@@ -278,7 +293,76 @@ export class ToolTaskManager {
     );
     for (const task of tasks) await task.shutdown();
     this.#tasks.clear();
+    this.#queue.splice(0);
     this.#resources.clear();
+  }
+
+  #capacityBusy(runtime: ToolRuntime): boolean {
+    return (
+      !("executeComposite" in runtime) &&
+      [...this.#tasks.values()].filter(
+        (task) => task.dispatched && !task.terminal && !task.coordinator,
+      ).length >= this.#options.maxRunningTasks
+    );
+  }
+
+  #claimsAvailable(claims: readonly ToolResourceClaim[]): boolean {
+    return claims.every((claim) => {
+      const owners = this.#resources.get(claim.key);
+      if (owners === undefined) return true;
+      return [...owners.values()].every(
+        (access) => access === "shared" && claim.access === "shared",
+      );
+    });
+  }
+
+  #dispatch(task: Task, claims: readonly ToolResourceClaim[]): void {
+    if (this.#closed || task.terminal) return;
+    for (const claim of claims) {
+      let owners = this.#resources.get(claim.key);
+      if (owners === undefined) {
+        owners = new Map();
+        this.#resources.set(claim.key, owners);
+      }
+      owners.set(task, claim.access);
+    }
+    task.dispatch();
+  }
+
+  #dispatchQueued(): void {
+    if (this.#closed) return;
+    for (let index = 0; index < this.#queue.length;) {
+      const entry = this.#queue[index]!;
+      if (entry.task.terminal) {
+        this.#queue.splice(index, 1);
+        continue;
+      }
+      const blockedByEarlierConflict = this.#queue
+        .slice(0, index)
+        .some((earlier) => claimsConflict(earlier.claims, entry.claims));
+      if (
+        !blockedByEarlierConflict &&
+        !this.#capacityBusy(entry.task.runtime) &&
+        this.#claimsAvailable(entry.claims)
+      ) {
+        this.#queue.splice(index, 1);
+        this.#dispatch(entry.task, entry.claims);
+        continue;
+      }
+      index++;
+    }
+  }
+
+  #releaseClaims(task: Task): void {
+    for (const [key, owners] of this.#resources) {
+      owners.delete(task);
+      if (owners.size === 0) this.#resources.delete(key);
+    }
+  }
+
+  #removeQueued(task: Task): void {
+    const index = this.#queue.findIndex((entry) => entry.task === task);
+    if (index !== -1) this.#queue.splice(index, 1);
   }
 }
 
@@ -305,6 +389,7 @@ class Task {
   #result: ToolExecutionResult | undefined;
   #error: unknown;
   #settled = false;
+  #dispatched = false;
   #cancelReason: "timeout" | "cancel" | undefined;
   #deadline: NodeJS.Timeout | undefined;
   #expiry: NodeJS.Timeout | undefined;
@@ -338,6 +423,15 @@ class Task {
   get coordinator() {
     return "executeComposite" in this.#runtime;
   }
+  get runtime() {
+    return this.#runtime;
+  }
+  get dispatched() {
+    return this.#dispatched;
+  }
+  get executionSignal() {
+    return this.#controller.signal;
+  }
   get observed() {
     return this.#observed;
   }
@@ -361,6 +455,8 @@ class Task {
   }
   get status(): Status {
     if (this.#cancelReason !== undefined) {
+      if (this.#settled && !this.#dispatched)
+        return this.#cancelReason === "timeout" ? "timed_out" : "cancelled";
       if (
         this.#settled &&
         this.#runtime.taskPolicy?.cancellation === "confirmed-on-settle"
@@ -377,7 +473,9 @@ class Task {
         : "cancellation_unconfirmed";
     }
     return !this.#settled
-      ? "running"
+      ? this.#dispatched
+        ? "running"
+        : "queued"
       : this.#error !== undefined || this.#result?.exitCode !== 0
         ? "failed"
         : "completed";
@@ -390,7 +488,7 @@ class Task {
       this.status,
     );
   }
-  start() {
+  arm() {
     this.#invocation.signal.addEventListener("abort", this.#abort, {
       once: true,
     });
@@ -399,29 +497,40 @@ class Task {
       this.#options.timeoutMs,
     );
     this.#deadline.unref();
-    Promise.resolve(
-      this.#execute({
-        ...this.#invocation,
-        signal: this.#controller.signal,
-        taskContext: {
-          onModelContent: (content) => {
-            if (this.#closed) return;
-            validateUserInput(content, "$modelContent");
-            this.#modelContent.push(...structuredClone(content));
-            this.#notify();
+    if (this.#invocation.signal.aborted) this.cancel(false);
+  }
+  dispatch() {
+    if (this.#settled || this.#dispatched) return;
+    this.#dispatched = true;
+    let execution: Promise<ToolExecutionResult>;
+    try {
+      execution = Promise.resolve(
+        this.#execute({
+          ...this.#invocation,
+          signal: this.#controller.signal,
+          taskContext: {
+            onModelContent: (content) => {
+              if (this.#closed) return;
+              validateUserInput(content, "$modelContent");
+              this.#modelContent.push(...structuredClone(content));
+              this.#notify();
+            },
+            requestYield: () => {
+              this.#yieldRequested = true;
+              this.#notify();
+            },
+            onOutput: (text) => {
+              if (this.#closed) return;
+              this.#window.write(text);
+              this.#notify();
+            },
           },
-          requestYield: () => {
-            this.#yieldRequested = true;
-            this.#notify();
-          },
-          onOutput: (text) => {
-            if (this.#closed) return;
-            this.#window.write(text);
-            this.#notify();
-          },
-        },
-      }),
-    )
+        }),
+      );
+    } catch (error) {
+      execution = Promise.reject(error);
+    }
+    execution
       .then(
         (result) => {
           this.#result = result;
@@ -441,7 +550,6 @@ class Task {
         this.#notify();
         this.#complete();
       });
-    if (this.#invocation.signal.aborted) this.cancel(false);
   }
   cancel(timeout: boolean) {
     if (this.terminal || this.#cancelReason !== undefined) return;
@@ -453,6 +561,13 @@ class Task {
           : "Tool execution cancellation requested",
       ),
     );
+    if (!this.#dispatched) {
+      this.#settled = true;
+      if (this.#deadline !== undefined) clearTimeout(this.#deadline);
+      this.#invocation.signal.removeEventListener("abort", this.#abort);
+      this.#release();
+      this.#complete();
+    }
     this.#notify();
   }
   async observe(ms: number, cancelRequested = false): Promise<void> {
@@ -583,10 +698,12 @@ class Task {
         ? "confirmable"
         : "best_effort";
     const resourceScope =
-      this.#runtime.taskPolicy?.resourceScope ??
-      (this.#runtime.executionMode === "parallel_safe"
-        ? "independent"
-        : "bundle");
+      this.#runtime.resourceClaims !== undefined
+        ? "claims"
+        : (this.#runtime.taskPolicy?.resourceScope ??
+          (this.#runtime.executionMode === "parallel_safe"
+            ? "independent"
+            : "bundle"));
     const control = `\n[tool task ${status}]\ntask_id: ${this.id}\ntool_name: ${this.#runtime.name}\ntimeout_ms: ${this.#options.timeoutMs}\ncancellation: ${cancellation}\nresource_scope: ${resourceScope}\nlifetime: host_instance${terminal ? `\nexit_code: ${exitCode}` : ""}${status === "cancellation_unconfirmed" ? "\nCancellation is unconfirmed; the underlying operation may still be running." : ""}`;
     return attachToolOutputCapture(
       {
@@ -662,7 +779,7 @@ export class ToolWaitRuntime implements ToolRuntime {
     this.specification = {
       name: this.name,
       description:
-        "Tools, including run_code programs, automatically return task_id when they exceed their yield time; no separate background mode is required. wait returns when the task completes or yield_time_ms expires, with output produced since the previous receipt. Expiry does not stop the task; its execution deadline remains separate. Program-side await tools.* waits for the actual result. terminate requests cancellation; receipts report confirmable or best_effort cancellation and resource_scope. Running bundle/runtime resources stay busy; independent tasks can coexist. Only cancelled/timed_out confirm cancellation. Tasks belong to this Host instance and do not resume after restart.",
+        "Tools, including run_code programs, automatically return task_id when they are queued or exceed their yield time; no separate background mode is required. wait returns when the task completes or yield_time_ms expires, with output produced since the previous receipt. Expiry does not stop the task; its execution deadline remains separate. Program-side await tools.* waits for the actual result. terminate requests cancellation; receipts report queued/running state, confirmable or best_effort cancellation, and resource_scope without exposing resource keys. Running claims/bundle/runtime resources stay busy; independent tasks can coexist. Only cancelled/timed_out confirm cancellation. Tasks belong to this Host instance and do not resume after restart.",
       inputSchema: {
         type: "object",
         properties: {
@@ -703,5 +820,48 @@ function finalResult(result: ToolExecutionResult): boolean {
     "status" in data &&
     typeof data.status === "string" &&
     ["completed", "failed", "timed_out", "cancelled"].includes(data.status)
+  );
+}
+
+function normalizeResourceClaims(
+  claims: readonly ToolResourceClaim[],
+): readonly ToolResourceClaim[] {
+  const normalized = new Map<unknown, ToolResourceClaim["access"]>();
+  for (const claim of claims) {
+    if (claim.key === undefined)
+      throw new Error("Tool resource claim key must not be undefined");
+    if (claim.access !== "shared" && claim.access !== "exclusive")
+      throw new Error("Tool resource claim access must be shared or exclusive");
+    const previous = normalized.get(claim.key);
+    normalized.set(
+      claim.key,
+      previous === "exclusive" || claim.access === "exclusive"
+        ? "exclusive"
+        : "shared",
+    );
+  }
+  return [...normalized].map(([key, access]) => ({ key, access }));
+}
+
+function claimsConflict(
+  left: readonly ToolResourceClaim[],
+  right: readonly ToolResourceClaim[],
+): boolean {
+  return left.some((a) =>
+    right.some(
+      (b) =>
+        sameMapKey(a.key, b.key) &&
+        (a.access === "exclusive" || b.access === "exclusive"),
+    ),
+  );
+}
+
+function sameMapKey(left: unknown, right: unknown): boolean {
+  return (
+    left === right ||
+    (typeof left === "number" &&
+      typeof right === "number" &&
+      Number.isNaN(left) &&
+      Number.isNaN(right))
   );
 }

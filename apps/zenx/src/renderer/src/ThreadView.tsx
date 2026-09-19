@@ -1420,6 +1420,7 @@ function commandStatus(
     !Array.isArray(data) &&
     "status" in data
   ) {
+    if (data.status === "queued") return "Queued";
     if (data.status === "running")
       return item.toolName === "wait" ? "Waiting" : "Started";
     if (data.status === "cancel_requested") return "Cancelling";

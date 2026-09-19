@@ -25,6 +25,33 @@ const target = {
   windowTitle: "Fixture Window",
 };
 
+test("public Computer discovery returns targets usable for inspection without prior target knowledge", async () => {
+  const runner = new FixtureWinAppRunner();
+  const capability = new ComputerZenXCapabilityPackage(
+    new WinAppCliComputerBackend({ platform: "win32", runner }),
+    windowsComputerCapabilityManifest,
+  );
+  assert.ok(
+    capability.manifest.tools.some(
+      (tool) => tool.name === "computer_list_windows",
+    ),
+  );
+  const result = (await capability.invoke(
+    "computer_list_windows",
+    invocation({}),
+  )) as {
+    windows: Array<{ target: typeof target }>;
+    truncated: boolean;
+  };
+  assert.equal(result.truncated, false);
+  assert.deepEqual(result.windows[0]?.target, target);
+  await capability.invoke(
+    "computer_inspect",
+    invocation({ target: result.windows[0]!.target }),
+  );
+  assert.deepEqual(runner.commands[0], ["ui", "list-windows", "--json"]);
+});
+
 test("Windows provider maps WinApp JSON into opaque bounded UIA controls", async () => {
   const runner = new FixtureWinAppRunner();
   const backend = new WinAppCliComputerBackend({
@@ -86,6 +113,92 @@ test("Windows provider maps WinApp JSON into opaque bounded UIA controls", async
   ]);
 });
 
+test("verifies each WinApp process launch once at the runner boundary", async () => {
+  const fixture = new FixtureWinAppRunner();
+  let verifications = 0;
+  const runner: WinAppCliRunner = {
+    run: async (executable, args, options) => {
+      await options.verifyBeforeSpawn?.();
+      return await fixture.run(executable, args, {
+        ...options,
+        verifyBeforeSpawn: undefined,
+      });
+    },
+  };
+  const backend = new WinAppCliComputerBackend({
+    platform: "win32",
+    runner,
+    verifyExecutable: async () => {
+      verifications += 1;
+    },
+  });
+
+  await backend.inspect(target);
+
+  assert.equal(fixture.commands.length, 2);
+  assert.equal(verifications, 2);
+});
+
+test("discovery narrows a truncated desktop and preserves sibling windows and exact long or empty titles", async () => {
+  const runner = new FixtureWinAppRunner();
+  runner.windows = Array.from({ length: 40 }, (_, index) => ({
+    ...fixtureWindow(),
+    hwnd: String(9001 + index),
+    title: `Document ${index}`,
+  }));
+  const capability = new ComputerZenXCapabilityPackage(
+    new WinAppCliComputerBackend({ platform: "win32", runner }),
+    windowsComputerCapabilityManifest,
+  );
+  const listed = (await capability.invoke(
+    "computer_list_windows",
+    invocation({}),
+  )) as { windows: unknown[]; truncated: boolean };
+  assert.equal(listed.windows.length, 32);
+  assert.equal(listed.truncated, true);
+  const narrowed = (await capability.invoke(
+    "computer_list_windows",
+    invocation({ query: "DOCUMENT 39" }),
+  )) as { windows: Array<{ target: typeof target }>; truncated: boolean };
+  assert.equal(narrowed.windows[0]?.target.windowTitle, "Document 39");
+  assert.equal(narrowed.truncated, false);
+  for (const title of ["Long title ".repeat(40), ""]) {
+    runner.windows = [{ ...fixtureWindow(), title }];
+    const discovery = (await capability.invoke(
+      "computer_list_windows",
+      invocation({}),
+    )) as { windows: Array<{ target: typeof target }> };
+    assert.equal(discovery.windows[0]?.target.windowTitle, title);
+    await capability.invoke(
+      "computer_inspect",
+      invocation({ target: discovery.windows[0]!.target }),
+    );
+  }
+});
+
+test("discovery reports invalid native results and respects cancellation before dispatch", async () => {
+  const runner = new FixtureWinAppRunner();
+  const capability = new ComputerZenXCapabilityPackage(
+    new WinAppCliComputerBackend({ platform: "win32", runner }),
+    windowsComputerCapabilityManifest,
+  );
+  runner.schemaProbeOutput = '{"bad":true}';
+  await assert.rejects(
+    capability.invoke("computer_list_windows", invocation({})),
+    /invalid JSON shape/u,
+  );
+  const calls = runner.commands.length;
+  const cancelled = {
+    ...invocation({}),
+    signal: AbortSignal.abort(new Error("cancel discovery")),
+  };
+  await assert.rejects(
+    capability.invoke("computer_list_windows", cancelled),
+    /cancel discovery/u,
+  );
+  assert.equal(runner.commands.length, calls);
+});
+
 test("Windows provider captures only the exact HWND through WGC-default screenshot", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-winapp-test-"));
   try {
@@ -110,6 +223,52 @@ test("Windows provider captures only the exact HWND through WGC-default screensh
     ]);
     assert.equal(screenshotCommand.includes("--capture-screen"), false);
     assert.equal(screenshotCommand.includes("--focus"), false);
+    await backend.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Windows provider trims only trailing transparent screenshot padding", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-winapp-test-"));
+  try {
+    const runner = new FixtureWinAppRunner();
+    const bitmap = Buffer.alloc(1280 * 720 * 4);
+    for (let y = 20; y < 380; y += 1) {
+      for (let x = 10; x < 650; x += 1) {
+        bitmap[(y * 1280 + x) * 4 + 3] = 255;
+      }
+    }
+    let crop:
+      { x: number; y: number; width: number; height: number } | undefined;
+    const backend = new WinAppCliComputerBackend({
+      artifactDirectory: directory,
+      platform: "win32",
+      runner,
+      loadScreenshotImage: () => ({
+        getSize: () => ({ width: 1280, height: 720 }),
+        toBitmap: () => bitmap,
+        crop: (bounds) => {
+          crop = bounds;
+          return {
+            getSize: () => ({ width: bounds.width, height: bounds.height }),
+            toBitmap: () => Buffer.alloc(bounds.width * bounds.height * 4),
+            crop: () => {
+              throw new Error("unexpected nested crop");
+            },
+            toPNG: () => Buffer.from("trimmed"),
+          };
+        },
+        toPNG: () => Buffer.from("original"),
+      }),
+    });
+
+    const result = await backend.screenshot(target);
+
+    assert.deepEqual(crop, { x: 0, y: 0, width: 650, height: 380 });
+    assert.equal(result.width, 650);
+    assert.equal(result.height, 380);
+    assert.equal(result.bytes, 7);
     await backend.close();
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -391,6 +550,7 @@ test("WinApp process runner enforces cancellation, timeout, and output bounds", 
 });
 
 class FixtureWinAppRunner implements WinAppCliRunner {
+  windows: ReturnType<typeof fixtureWindow>[] | undefined;
   crowded = false;
   readonly commands: string[][] = [];
   ambiguous = false;
@@ -420,7 +580,7 @@ class FixtureWinAppRunner implements WinAppCliRunner {
       if (!args.includes("--app") && this.schemaProbeOutput !== undefined) {
         return output(this.schemaProbeOutput);
       }
-      const windows = [fixtureWindow()];
+      const windows = this.windows ?? [fixtureWindow()];
       if (this.ambiguous) windows.push(fixtureWindow());
       return output(JSON.stringify(windows));
     }

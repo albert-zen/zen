@@ -13,6 +13,167 @@ import {
 import type { HostEvent } from "../src/main/host-messages.js";
 import { shellPrintCommand } from "./fixtures/shell-command.js";
 
+test("simultaneous threads with the same model call id retain separate bridge results", async (t) => {
+  t.mock.method(Date, "now", () => 1234);
+  const events: HostEvent[] = [];
+  const bundle = new ZenXHostToolBundle({
+    capabilities: { definitions: [tool("fixture_inspect", "Inspect")] },
+    send: (event) => events.push(event),
+  });
+  const runtime = bundle.tools[0]!;
+  const invoke = (threadId: string) =>
+    runtime.execute({
+      callId: "call-1",
+      threadId,
+      name: runtime.name,
+      arguments: {},
+      cwd: process.cwd(),
+      signal: new AbortController().signal,
+    });
+  const first = invoke("one");
+  const second = invoke("two");
+  try {
+    const requests = events.filter(
+      (event) => event.type === "capability/invoke",
+    );
+    assert.equal(requests.length, 2);
+    assert.notEqual(requests[0]!.invocationId, requests[1]!.invocationId);
+    for (const request of requests)
+      bundle.handleResult({
+        type: "capability/result",
+        invocationId: request.invocationId,
+        generationToken: request.generationToken,
+        output: request.invocation.threadId,
+        exitCode: 0,
+      });
+    assert.equal((await first).output, "one");
+    assert.equal((await second).output, "two");
+  } finally {
+    // On a failed uniqueness assertion the old implementation has overwritten
+    // one pending entry; observe both promises without waiting for that orphan.
+    void first.catch(() => undefined);
+    void second.catch(() => undefined);
+    bundle.close();
+  }
+});
+
+test("hosted browser pages progress independently while same-page calls queue", async () => {
+  const spool = new ToolOutputSpool();
+  const events: HostEvent[] = [];
+  const definitions = [
+    "browser_inspect",
+    "browser_click",
+    "browser_close_session",
+    "computer_inspect",
+  ].map((name) => tool(name, name));
+  const composition = createZenXHostToolEnvironment({
+    capabilities: {
+      definitions,
+      plugins: [
+        {
+          id: "browser",
+          name: "Browser",
+          description: "Browser",
+          status: "enabled",
+          mainDocument: "Browser",
+          tools: definitions.slice(0, 3),
+        },
+        {
+          id: "computer",
+          name: "Computer",
+          description: "Computer",
+          status: "enabled",
+          mainDocument: "Computer",
+          tools: definitions.slice(3),
+        },
+      ],
+    },
+    send: (event) => events.push(event),
+    toolOutputSpool: spool,
+  });
+  const call = async (
+    callId: string,
+    name: string,
+    tabId: string,
+    threadId = "one",
+  ) =>
+    await composition.toolEnvironment.execute(
+      composition.toolEnvironment.prepare({
+        callId,
+        name,
+        arguments: { sessionId: "work", tabId },
+        threadId,
+        cwd: process.cwd(),
+        signal: new AbortController().signal,
+        task: { yieldTimeMs: 1 },
+      }),
+    );
+  const invoked = () =>
+    events.flatMap((event) =>
+      event.type === "capability/invoke" ? [event.invocation.callId] : [],
+    );
+  const settle = (callId: string) => {
+    const event = events.find(
+      (event) =>
+        event.type === "capability/invoke" &&
+        event.invocation.callId === callId,
+    );
+    if (event?.type !== "capability/invoke")
+      throw new Error(`No invocation ${callId}`);
+    composition.capabilityBundle.handleResult({
+      type: "capability/result",
+      invocationId: event.invocationId,
+      generationToken: event.generationToken,
+      output: callId,
+      exitCode: 0,
+    });
+  };
+  try {
+    await call("a", "browser_inspect", "page-a");
+    await call("b", "browser_inspect", "page-b");
+    await call("other-thread", "browser_inspect", "page-a", "two");
+    await call("desktop", "computer_inspect", "");
+    const queued = await call("a-next", "browser_click", "page-a");
+    assert.deepEqual(invoked(), ["a", "b", "other-thread", "desktop"]);
+    assert.equal(queued.contentType, "application/vnd.zen.tool-task+json");
+    const taskId = (queued.structuredContent as { task_id: string }).task_id;
+    assert.ok(taskId);
+    await call("session-close", "browser_close_session", "");
+    await call("after-close", "browser_inspect", "page-c");
+    assert.deepEqual(invoked(), ["a", "b", "other-thread", "desktop"]);
+    settle("a");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.ok(invoked().includes("a-next"));
+    assert.ok(!invoked().includes("session-close"));
+    assert.ok(!invoked().includes("after-close"));
+    settle("a-next");
+    settle("b");
+    settle("other-thread");
+    settle("desktop");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.ok(invoked().includes("session-close"));
+    assert.ok(!invoked().includes("after-close"));
+    settle("session-close");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.ok(invoked().includes("after-close"));
+    settle("after-close");
+    const result = await composition.toolEnvironment.execute(
+      composition.toolEnvironment.prepare({
+        callId: "wait",
+        name: "wait",
+        arguments: { task_id: taskId, yield_time_ms: 100 },
+        threadId: "one",
+        cwd: process.cwd(),
+        signal: new AbortController().signal,
+      }),
+    );
+    assert.match(result.output, /a-next/);
+  } finally {
+    await composition.close();
+    await spool.close();
+  }
+});
+
 test("real ZenX host composition preserves builtin and capability bundle identities", async (t) => {
   const toolOutputSpool = new ToolOutputSpool();
   t.after(async () => await toolOutputSpool.close());

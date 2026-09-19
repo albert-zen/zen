@@ -34,24 +34,24 @@ export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
     "@zenx/browser-plugin",
     "zenx-browser-plugin",
-    "zenx-browser-plugin-electron-1.0.1.tgz",
+    "zenx-browser-plugin-electron-1.0.3.tgz",
   ),
   plugin(
     "@zenx/browser-plugin",
     "zenx-browser-plugin",
-    "zenx-browser-plugin-playwright-1.0.1.tgz",
+    "zenx-browser-plugin-playwright-1.0.3.tgz",
     "variants/playwright.zenx.plugin.json",
   ),
   plugin(
     "@zenx/browser-plugin",
     "zenx-browser-plugin",
-    "zenx-browser-plugin-user-session-1.0.1.tgz",
+    "zenx-browser-plugin-user-session-1.0.3.tgz",
     "variants/user-session.zenx.plugin.json",
   ),
   plugin(
     "@zenx/computer-plugin",
     "zenx-computer-plugin",
-    "zenx-computer-plugin-macos-1.0.0.tgz",
+    "zenx-computer-plugin-macos-1.0.1.tgz",
   ),
   plugin(
     "@zenx/computer-plugin",
@@ -62,7 +62,7 @@ export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
     "@zenx/computer-plugin",
     "zenx-computer-plugin",
-    "zenx-computer-plugin-win32-1.1.0.tgz",
+    "zenx-computer-plugin-win32-1.1.1.tgz",
     "variants/win32.zenx.plugin.json",
   ),
   plugin("@zenx/rooms-plugin", "zenx-rooms-plugin", ZENX_ROOMS_TARBALL),

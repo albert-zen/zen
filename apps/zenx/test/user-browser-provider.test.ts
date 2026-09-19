@@ -23,7 +23,44 @@ import {
   validateUserBrowserVersion,
   windowsBrowserExecutableCandidates,
 } from "../src/main/capabilities/user-browser-provider.js";
-import type { ZenXBrowserBackend } from "../src/main/capabilities/browser-provider.js";
+import type {
+  BrowserTargetFingerprint,
+  ZenXBrowserBackend,
+} from "../src/main/capabilities/browser-provider.js";
+
+test("user browser scroll consumes observations and guards document identity before dispatch", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  try {
+    await backend.listTabs("work");
+    const inspected = await backend.inspect("work", "target-1");
+    await assert.rejects(
+      backend.scroll("work", "target-1", "forged", "down", 600),
+      /stale or unknown/,
+    );
+    await backend.scroll(
+      "work",
+      "target-1",
+      inspected.observationId,
+      "down",
+      600,
+    );
+    assert.equal(client.actionCount, 1);
+    await assert.rejects(
+      backend.scroll("work", "target-1", inspected.observationId, "down", 600),
+      /stale or unknown/,
+    );
+    const next = await backend.inspect("work", "target-1");
+    client.documentToken = "changed-without-event";
+    await assert.rejects(
+      backend.scroll("work", "target-1", next.observationId, "up", 400),
+      /document changed/,
+    );
+    assert.equal(client.actionCount, 1);
+  } finally {
+    await backend.close();
+  }
+});
 
 test("CDP lifecycle contract invalidates history, reload, activation, and top-frame navigation", () => {
   for (const method of [
@@ -288,6 +325,51 @@ test("user browser mode inherits visible authenticated state without exposing se
     ),
     false,
   );
+});
+
+test("user browser projects current control state and dispatches native select", async () => {
+  const client = new FakeUserBrowserClient();
+  client.inspectionTarget = {
+    selector: "#speed",
+    tag: "select",
+    role: "combobox",
+    name: "Delivery speed",
+    type: "",
+    id: "speed",
+    fieldName: "",
+    autocomplete: "",
+    href: "",
+    actions: ["click", "select"],
+    value: "standard",
+    options: [
+      {
+        value: "standard",
+        label: "Standard",
+        selected: true,
+        disabled: false,
+      },
+      {
+        value: "express",
+        label: "Express",
+        selected: false,
+        disabled: false,
+      },
+    ],
+  };
+  const backend = new UserBrowserCdpBackend(client);
+  await backend.listTabs("work");
+  const inspection = await backend.inspect("work", "target-1");
+  const target = inspection.targets[0]!;
+  assert.equal(target.value, "standard");
+  assert.equal(target.options?.[1]?.label, "Express");
+  await backend.select(
+    "work",
+    "target-1",
+    inspection.observationId,
+    target.targetId,
+    "Express",
+  );
+  assert.equal(client.actionCount, 1);
 });
 
 test("attached browser rejects malformed screenshot data explicitly", async () => {
@@ -2158,7 +2240,7 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
   nextCreatedTarget = 2;
   identityChangePhase?: "during-evaluate" | "post-confirmation";
   invalidateInspection = false;
-  inspectionTarget = {
+  inspectionTarget: BrowserTargetFingerprint = {
     selector: "#continue",
     tag: "button",
     role: "button",
@@ -2168,7 +2250,7 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     fieldName: "",
     autocomplete: "",
     href: "",
-    actions: ["click"] as Array<"click" | "type">,
+    actions: ["click"],
   };
   readonly #actionStarted = deferred<void>();
   #heldAction = deferred<void>();
@@ -2402,7 +2484,10 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     ) {
       throw new UserBrowserDocumentChangedBeforeDispatchError();
     }
-    if (!expression.includes("const expected =")) {
+    if (
+      !expression.includes("const expected =") &&
+      !expression.includes("window.scrollBy")
+    ) {
       if (this.holdInspections) {
         this.#inspectionStarted.resolve();
         await this.#heldInspection.promise;

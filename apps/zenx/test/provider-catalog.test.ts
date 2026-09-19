@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -20,6 +20,11 @@ import {
   BrowserZenXCapabilityPackage,
   type ZenXBrowserBackend,
 } from "../src/main/capabilities/browser-provider.js";
+import type {
+  WinAppCliRunner,
+  WinAppCliRunOptions,
+  WinAppCliRunResult,
+} from "../src/main/capabilities/windows-computer-provider.js";
 import { hashBundledDirectoryAsset } from "../src/main/capabilities/provider-provisioning.js";
 
 test("requested user-session mode never falls back to an isolated provider", async () => {
@@ -226,8 +231,78 @@ test("packaged Playwright launches the verified bundled Chromium explicitly", as
       runner.launchEnvironment?.PLAYWRIGHT_BROWSERS_PATH,
       path.join(providers, "playwright-browsers"),
     );
+    assert.equal(runner.launchVerifyBeforeSpawn, undefined);
+    assert.equal(typeof runner.launchBindBeforeSpawn, "function");
     await selection.backend.close();
   } finally {
+    await rm(resourcesDirectory, { recursive: true, force: true });
+  }
+});
+
+test("packaged WinApp uses its verified launch binding as the single integrity check", async () => {
+  const resourcesDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-bundled-winapp-launch-"),
+  );
+  try {
+    const providers = path.join(resourcesDirectory, "providers");
+    const providerExecutable = path.join(providers, "winapp-cli.js");
+    const runtimeExecutable = path.join(providers, "runtime", "node");
+    const nativeExecutable = path.join(providers, "winapp", "winapp.exe");
+    await mkdir(path.dirname(runtimeExecutable), { recursive: true });
+    await mkdir(path.dirname(nativeExecutable), { recursive: true });
+    await writeFile(providerExecutable, "provider fixture");
+    await writeFile(runtimeExecutable, "runtime fixture");
+    await writeFile(nativeExecutable, "native fixture");
+    const sha256 = (value: string) =>
+      createHash("sha256").update(value).digest("hex");
+    const manifestBytes = Buffer.from(
+      `${JSON.stringify({
+        schemaVersion: 1,
+        providers: {
+          "microsoft-winapp-cli": {
+            executable: path.relative(providers, providerExecutable),
+            version: "0.3.1",
+            sha256: sha256("provider fixture"),
+            platforms: ["win32"],
+            runtime: {
+              path: path.relative(providers, runtimeExecutable),
+              sha256: sha256("runtime fixture"),
+              version: "22.23.2",
+            },
+            assets: [
+              {
+                path: path.relative(providers, nativeExecutable),
+                sha256: sha256("native fixture"),
+              },
+            ],
+          },
+        },
+      })}\n`,
+    );
+    await writeFile(path.join(providers, "manifest.json"), manifestBytes);
+    const runner = new BundledWinAppLaunchRunner();
+
+    const selection = await selectComputerProvider({
+      userDataDirectory: path.join(resourcesDirectory, "user-data"),
+      resourcesDirectory,
+      bundledProvidersOnly: true,
+      bundledManifestSha256: createHash("sha256")
+        .update(manifestBytes)
+        .digest("hex"),
+      platform: "win32",
+      winAppRunner: runner,
+    });
+
+    assert.ok(selection.backend, JSON.stringify(selection.diagnostics));
+    assert.equal(selection.diagnostics[0]?.status, "selected");
+    assert.equal(runner.launches, 3);
+    assert.equal(runner.bindings, 3);
+    assert.equal(runner.verificationCallbacks, 0);
+    await selection.backend.close();
+  } finally {
+    // The real launch binding makes its provider directory read-only on POSIX.
+    // Restore only this disposable fixture's parent before removing its files.
+    await chmod(path.join(resourcesDirectory, "providers"), 0o755);
     await rm(resourcesDirectory, { recursive: true, force: true });
   }
 });
@@ -392,11 +467,18 @@ class ScriptedRunner implements ExternalProviderProcessRunner {
 class BundledBrowserLaunchRunner implements ExternalProviderProcessRunner {
   launchArguments?: string[];
   launchEnvironment?: NodeJS.ProcessEnv;
+  launchVerifyBeforeSpawn?: () => Promise<void>;
+  launchBindBeforeSpawn?: () => Promise<unknown>;
 
   async run(
     _executable: string,
     args: readonly string[],
-    options: { timeoutMs: number; environment?: NodeJS.ProcessEnv },
+    options: {
+      timeoutMs: number;
+      environment?: NodeJS.ProcessEnv;
+      verifyBeforeSpawn?: () => Promise<void>;
+      bindBeforeSpawn?: () => Promise<unknown>;
+    },
   ): Promise<ExternalProviderProcessResult> {
     if (args.includes("--version")) {
       return {
@@ -420,7 +502,56 @@ class BundledBrowserLaunchRunner implements ExternalProviderProcessRunner {
     }
     this.launchArguments = [...args];
     this.launchEnvironment = options.environment;
+    this.launchVerifyBeforeSpawn = options.verifyBeforeSpawn;
+    this.launchBindBeforeSpawn = options.bindBeforeSpawn;
     throw new Error("captured bundled browser launch");
+  }
+}
+
+class BundledWinAppLaunchRunner implements WinAppCliRunner {
+  launches = 0;
+  bindings = 0;
+  verificationCallbacks = 0;
+
+  async run(
+    _executable: string,
+    args: readonly string[],
+    options: WinAppCliRunOptions,
+  ): Promise<WinAppCliRunResult> {
+    this.launches += 1;
+    if (options.verifyBeforeSpawn !== undefined)
+      this.verificationCallbacks += 1;
+    const release = await options.bindBeforeSpawn?.();
+    if (release !== undefined) this.bindings += 1;
+    await release?.();
+    if (args[0] === "--version")
+      return { stdout: "winapp 0.3.1\n", stderr: "" };
+    if (args[0] === "--cli-schema") {
+      return {
+        stdout: JSON.stringify({
+          name: "winapp",
+          version: "0.3.1",
+          schemaVersion: "1.0",
+          subcommands: {
+            ui: {
+              subcommands: Object.fromEntries(
+                [
+                  "inspect",
+                  "invoke",
+                  "list-windows",
+                  "screenshot",
+                  "set-value",
+                  "wait-for",
+                ].map((name) => [name, { description: name }]),
+              ),
+            },
+          },
+        }),
+        stderr: "",
+      };
+    }
+    assert.deepEqual(args, ["ui", "list-windows", "--json"]);
+    return { stdout: "[]", stderr: "" };
   }
 }
 

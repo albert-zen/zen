@@ -5,6 +5,7 @@ import type { ToolInvocation } from "../../../../src/tool.js";
 import {
   ComputerZenXCapabilityPackage,
   type ComputerInspection,
+  type ComputerWindowList,
 } from "./capabilities/computer-provider.js";
 import {
   windowsComputerCapabilityManifest,
@@ -12,7 +13,7 @@ import {
 } from "./capabilities/windows-computer-provider.js";
 
 const arguments_ = parseArguments(process.argv.slice(2));
-const target = {
+const expectedTarget = {
   pid: requiredPositiveInteger(arguments_.pid, "--pid"),
   windowTitle: requiredString(arguments_.title, "--title"),
 };
@@ -33,6 +34,24 @@ const computer = new ComputerZenXCapabilityPackage(
 try {
   const diagnostic = await backend.diagnose(controller.signal);
   if (!diagnostic.ready) throw new Error(diagnostic.message);
+
+  const discovered = await execute<ComputerWindowList>(
+    computer,
+    "computer_list_windows",
+    { query: expectedTarget.windowTitle },
+    controller.signal,
+  );
+  const fixtureWindows = discovered.windows.filter(
+    ({ target }) =>
+      target.pid === expectedTarget.pid &&
+      target.windowTitle === expectedTarget.windowTitle,
+  );
+  if (discovered.truncated || fixtureWindows.length !== 1) {
+    throw new Error(
+      "ZenX discovery did not uniquely identify the fixture window",
+    );
+  }
+  const target = fixtureWindows[0]!.target;
 
   const first = await execute<ComputerInspection>(
     computer,
@@ -102,7 +121,7 @@ try {
   }
 
   console.log(
-    `ZenX WinApp adapter smoke passed with WinApp CLI ${diagnostic.version}: inspect -> opaque observation -> set_value with bounded UIA assertion -> re-inspect -> scoped screenshot.`,
+    `ZenX WinApp adapter smoke passed with WinApp CLI ${diagnostic.version}: list_windows -> exact target -> inspect -> opaque observation -> set_value with bounded UIA assertion -> re-inspect -> scoped screenshot.`,
   );
 } finally {
   clearTimeout(timeout);

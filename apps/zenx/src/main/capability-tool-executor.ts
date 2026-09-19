@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { RtkShellOutputFilter } from "../../../../src/shell-output-filter.js";
 import type {
   ToolBundle,
@@ -48,6 +49,12 @@ export class ZenXHostToolBundle implements ToolBundle {
     this.tools = options.capabilities.definitions.map((definition) => ({
       name: definition.name,
       specification: structuredClone(definition),
+      ...hostedResourcePolicy(
+        definition.name,
+        options.capabilities.plugins?.find((plugin) =>
+          plugin.tools.some((tool) => tool.name === definition.name),
+        )?.id,
+      ),
       execute: async (invocation: ToolInvocation) =>
         await this.#execute(definition.name, invocation),
     }));
@@ -82,7 +89,7 @@ export class ZenXHostToolBundle implements ToolBundle {
       );
     }
     invocation.signal.throwIfAborted();
-    const invocationId = `${process.pid}:${invocation.callId}:${String(Date.now())}`;
+    const invocationId = randomUUID();
     return await new Promise<ToolExecutionResult>((resolve, reject) => {
       const abort = (): void => {
         this.#send({
@@ -166,6 +173,91 @@ export class ZenXHostToolBundle implements ToolBundle {
     for (const resolve of this.#drainWaiters) resolve();
     this.#drainWaiters.clear();
   }
+}
+
+// Resource identities follow provider ownership, not the capability transport.
+// BrowserThreadObservation namespaces public sessions by thread; tab IDs then
+// identify one page within that session. Keep keys stable across generations so
+// retiring calls remain fenced while a new snapshot is published.
+function hostedResourcePolicy(toolName: string, pluginId: string | undefined) {
+  const browserPageTools = new Set([
+    "browser_navigate",
+    "browser_inspect",
+    "browser_click",
+    "browser_type",
+    "browser_scroll",
+    "browser_select",
+    "browser_fill",
+    "browser_close",
+  ]);
+  if (
+    pluginId === "browser" &&
+    (browserPageTools.has(toolName) ||
+      ["browser_open", "browser_list_tabs", "browser_close_session"].includes(
+        toolName,
+      ))
+  ) {
+    return {
+      executionMode: "parallel_safe" as const,
+      taskPolicy: { resourceQueue: "fifo" as const, yieldTimeMs: 30_000 },
+      resourceClaims: (invocation: ToolInvocation) => {
+        const sessionId = invocation.arguments.sessionId;
+        const tabId = invocation.arguments.tabId;
+        // Invalid arguments still reach normal schema/provider validation under
+        // an exclusive fallback; malformed calls must not bypass a live fence.
+        if (
+          typeof sessionId !== "string" ||
+          (browserPageTools.has(toolName) && typeof tabId !== "string")
+        )
+          return [
+            { key: "zenx:browser:invalid", access: "exclusive" as const },
+          ];
+        const session = [
+          "zenx-browser",
+          invocation.threadId ?? null,
+          sessionId,
+        ];
+        return browserPageTools.has(toolName)
+          ? [
+              { key: JSON.stringify(session), access: "shared" as const },
+              {
+                key: JSON.stringify([...session, tabId]),
+                access: "exclusive" as const,
+              },
+            ]
+          : [
+              {
+                key: JSON.stringify(session),
+                access:
+                  toolName === "browser_list_tabs"
+                    ? ("shared" as const)
+                    : ("exclusive" as const),
+              },
+            ];
+      },
+    };
+  }
+  if (pluginId === "computer") {
+    return {
+      taskPolicy: { resourceQueue: "fifo" as const, yieldTimeMs: 30_000 },
+      resourceClaims: () => [
+        { key: "zenx:desktop", access: "exclusive" as const },
+      ],
+    };
+  }
+  // Unknown plugins retain exclusive execution, but do not block an unrelated
+  // plugin merely because both use the same IPC bridge.
+  return pluginId === undefined
+    ? {}
+    : {
+        taskPolicy: { resourceQueue: "fifo" as const },
+        resourceClaims: () => [
+          {
+            key: JSON.stringify(["zenx-plugin", pluginId]),
+            access: "exclusive" as const,
+          },
+        ],
+      };
 }
 
 export function createZenXHostToolEnvironment(options: {

@@ -951,7 +951,10 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       }
       const selected = source ?? {
         mode: stored!.mode,
-        packageSpec: stored!.packageSpec,
+        packageSpec:
+          stored!.mode === "bundled"
+            ? this.#builtInPackageDefinition(pluginId).tarballPath
+            : stored!.packageSpec,
       };
       return await this.#mutatePluginPackage(
         selected.mode === "bundled"

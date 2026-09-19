@@ -1,12 +1,13 @@
 {
   "id": "computer",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Negotiated macOS desktop operations: targeted accessibility actions where supported and explicitly labeled, cancellable foreground takeover as the reliable baseline.",
   "provider": {
     "id": "macos-desktop",
     "platforms": ["darwin"],
     "interactionModes": ["background_safe", "foreground_required"],
     "capabilities": [
+      "window.list",
       "accessibility.inspect",
       "semantic.press",
       "semantic.set_value",
@@ -43,6 +44,26 @@
     }
   ],
   "tools": [
+    {
+      "name": "computer_list_windows",
+      "description": "List up to 32 open desktop windows and their running applications without activating them. Pass a case-insensitive query matching application name, PID, or title to narrow truncated results. Copy a returned target directly into computer_inspect; this is not a catalog of installed apps.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.accessibility.inspect"],
+      "interactionMode": "background_safe",
+      "capabilities": ["window.list", "no_global_input"],
+      "maxOutputBytes": 1048576
+    },
     {
       "name": "computer_inspect",
       "description": "Inspect at most 32 semantic accessibility controls in one exact app window target without activating it or reading sibling windows. target.windowTitle is required.",
@@ -333,5 +354,5 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "Use Computer to inspect an exact native window before acting, prefer background-safe semantic controls, and use explicitly labeled foreground takeover only when necessary."
+  "mainDocument": "Start with computer_list_windows to find open windows and running applications. If truncated, narrow with query. Pass a returned target unchanged to computer_inspect before acting, prefer background-safe semantic controls, and use explicitly labeled foreground takeover only where available."
 }

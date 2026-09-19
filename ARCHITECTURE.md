@@ -40,6 +40,8 @@
 - **Tool Execution Mode** — Tool Runtime 对执行 body 只声明 `parallel_safe` 或 `exclusive`；未声明按 `exclusive`，builtin shell 的独立进程声明 `parallel_safe`，该分类不是权限或资源 scope。
 - **ToolTaskManager** — ToolEnvironment 统一拥有普通工具的 Host-local 执行、按 Thread 隔离的 task_id、增量输出与 wait；交回时间（默认 10 秒、最高 180 秒）和执行超时（默认 10 分钟）分开，快速结果原样返回，任务不参与 journal 重建。
 - **ToolTaskPolicy** — 具体工具只声明取消确认能力、资源作用域和可选 timingArguments 字段映射；默认未知取消保留 owner fence 与执行容量直到真实完成或 Host 关闭，shell 在进程组停止后确认取消，composite 由同一任务管理器持有并协调嵌套调用，本身不占子工具容量。
+- **Tool Resource Claims** — Runtime 可为一次调用声明瞬时共享或独占资源，统一任务管理器原子取得全部声明；显式启用排队的调用以自身 Thread 的 task_id 等待，冲突资源按到达顺序执行，互不相关的资源仍可并行，取消或超时的待执行调用不派发，已经派发的未知取消继续保留资源直到真实结束。
+- **ZenX Hosted Resource Ownership** — Browser 执行按真实的 Thread/session 隔离和页面身份协调，会话关闭独占整个会话；Computer 保留共享桌面的独占操作边界，其他插件各自独占插件资源，IPC transport 不充当所有插件共同的资源锁；这些资源只存在于 Host 生命周期内，不改变 Thread 权威或观察投影。
 - **ToolWaitRuntime** — 内建且保留名称的 wait 仅观察或请求取消同 Thread 已获准任务，只在任务完成或本次 wait 到期时返回自上次领取后的增量输出，到期不停止底层执行；它不重新授权、不占执行体容量，取消请求、无法确认取消和已停止是不同状态，Host 关闭有界清理临时资源；每个任务同时只有一个增量输出消费者，并发取消可返回不消费输出的状态，活动观察持有结果保留期。
 - **ToolTaskBounds** — 同一 Environment 默认最多 8 个尚未确认结束的执行体、64 个含待领取结果的任务，已完成结果保留 5 分钟；交回不释放 prepared bundle lease 或资源 fence，完成/关闭才释放，达到容量时立即告知模型等待现有任务。
 - **Tool Execution Status** — AgentRuntime 为每条新 `tool_result` 记录 `completed`、`failed` 或 `declined` 的 provider-neutral canonical 事实，Tool Runtime 只返回结果内容和 exit code，不能决定审批语义。
@@ -247,6 +249,8 @@
 - **ZenXCapabilityObservation** — ZenX provider 用短时、目标域绑定的 opaque ID 连接 observe→act，执行前按语义指纹
   重验且在导航、关闭、新观察或动作后失效；它是产品侧瞬时状态，不进入 Zen Core 或 durable journal。
   Browser 在候选截断前排除无动作节点；Computer 各后端共用有界选择，优先保留可用语义动作，再以剩余名额保留文字上下文，返回仍按原观察顺序。
+  Browser observations additionally project bounded current non-password control state and native select options; mutations consume the prior observation, and an explicitly requested follow-up observation is a new fail-closed inspect result.
+
 - **ZenXUserBrowserAttachmentEpoch** — ZenX user-browser provider 用实际 CDP sessionId、target、逻辑 session owner 与
   attach attempt/incarnation 关联一次瞬时 attachment ownership，并在移除任何映射前把无法证明闭合的生命周期证据
   单调提升为有界 session taint；target 只在发布点原子授予一个逻辑 session/incarnation，且每次操作与清理都重验该
@@ -259,6 +263,7 @@
 - **ZenXWinAppCliComputerProvider** — ZenX Windows 产品层把 Microsoft WinApp CLI 的 HWND/UIA/WGC JSON
   投影为既有的有界 opaque observation 与 background-safe computer tools；外部 CLI 的安装、版本和进程生命周期
   不进入 Zen Core，缺失或协议错误只显式诊断且绝不降级成全局输入注入。
+  只读窗口发现返回所属应用与可直接传给现有定向工具的精确 target；列表截断与查询过滤不改变目标身份。
 - **ZenXCapabilityProviderCatalog** — ZenX 产品层探测并诊断可选的成熟外部执行后端，按显式优先级选择
   Playwright、Peekaboo、WinApp 或适用平台的 bundled fallback；版本、权限与可用性只属于 host 配置和瞬时诊断，不进入 Zen Core。
 - **ZenXBrowserScreenshotArtifactStore** — ZenX provider 为一次最新 Browser observation 写入有界、短时、可清理的 PNG
@@ -272,6 +277,7 @@
   或 durable plugin data，也不成为第二个 runtime/coordinator。
 - **ZenXBundledProviderProvisioning** — 打包 provider 只能由应用资源中的版本与 SHA-256 固定清单解析，实际执行的 browser payload 以有界目录摘要在选择与启动前重验，仅排除清单明确列出的非可执行 host-validation 状态；缺失、离线或校验失败只产生可诊断的 unavailable 状态，不改写 Core 会话语义。
 - **ZenXPlaywrightSessionFence** — Playwright provider 在一个瞬时 CLI session 内串行执行操作，并用稳定 tab/document identity 与 lifecycle revision 围住选择、观察、截图、摘要和关闭；该 fence 不进入 Core 或 durable journal。
+  Browser 页面滚动同样绑定显式 tab 和最新 observation，执行有界视口滚动并消耗该观察；DOM inspect/action 使用相同的控件名称识别规则。
 - **ZenXProviderLaunchVerification** — 外部 provider 在实际 spawn 前再次验证绑定的 canonical executable、browser payload、shim companion、manifest digest 与 pinned semantic version；失败只产生显式诊断，不自动改用未验证资产。
 - **ZenXPackagedProviderSmoke** — ZenX 构建验证用真实 resources/providers manifest、asset hash、version pin 与 bundled-only catalog path 检查离线 packaged provisioning；它是一次性测试流程，不是运行时 coordinator 或 durable state。
 - **VerifiedArtifactAcquisition** — ZenX release assembly 只以 artifact name、URL、SHA-256、deadline 与 cache location 取得 digest-addressed immutable file，并在内部以 per-digest 跨进程 transaction 收口 proxy-aware bounded transport、stream size、partial cleanup、no-follow cache revalidation 与 atomic publication；它不成为运行时下载器或第二条 packaging pipeline。

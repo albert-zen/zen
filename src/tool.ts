@@ -2,8 +2,14 @@ import {
   MAX_TOOL_YIELD_TIME_MS,
   ToolTaskManager,
   ToolWaitRuntime,
+  type ToolResourceClaim,
   type ToolTaskOptions,
   type ToolTaskPolicy,
+} from "./tool-task.js";
+export type {
+  ToolResourceClaim,
+  ToolTaskOptions,
+  ToolTaskPolicy,
 } from "./tool-task.js";
 import { createHash } from "node:crypto";
 import { open, readFile } from "node:fs/promises";
@@ -90,6 +96,8 @@ export interface ToolRuntime {
   /** Host builtin enforces invocation.sandbox before producing file effects. */
   readonly enforcesSandbox?: boolean;
   readonly taskPolicy?: ToolTaskPolicy;
+  /** Invocation-specific Host resource claims, acquired atomically before execute. */
+  resourceClaims?(invocation: ToolInvocation): readonly ToolResourceClaim[];
   /** Known model modalities required before this tool body may execute. */
   readonly requiredModelInputModalities?: readonly string[];
   execute(invocation: ToolInvocation): Promise<ToolExecutionResult>;
@@ -650,13 +658,20 @@ export class ToolEnvironment {
           : scope === "runtime"
             ? runtime
             : bundleIdentityKey(prepared.owner);
+      const resourceClaims = isCompositeToolRuntime(runtime)
+        ? []
+        : (runtime.resourceClaims?.(prepared.invocation) ??
+          (key === undefined ? [] : [{ key, access: "exclusive" as const }]));
       retained = true;
       try {
         return await this.taskManager.run(
           runtime,
           prepared.invocation,
           execute,
-          { resourceKey: key, release: () => this.#releasePrepared(prepared) },
+          {
+            resourceClaims,
+            release: () => this.#releasePrepared(prepared),
+          },
         );
       } catch (error) {
         // Admission/validation can fail before the task acquires its lease.
