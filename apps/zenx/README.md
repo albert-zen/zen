@@ -739,6 +739,20 @@ npm --workspace apps/zenx run smoke:windows-user-browser
 npm --workspace apps/zenx run smoke:providers
 ```
 
+Reusable browser/computer task prompts and offline fixtures are documented in
+[the evaluation guide](evals/browser-computer/README.md). Browser 1.0.2 adds
+observation-bound page scrolling to all three backends and associated form labels
+to Electron/CDP inspection. After starting the fixture, verify the actual tool
+path against B1/B2 with either provider:
+
+```sh
+npx tsx apps/zenx/scripts/browser-interaction-smoke.ts playwright <packaged-resources/providers> <fixture-base-url>
+npx tsx apps/zenx/scripts/browser-interaction-smoke.ts cdp <local-cdp-endpoint> <fixture-base-url>
+```
+
+Run these commands from the repository root. These deterministic checks verify
+tool behavior; model comparisons use the task prompts and scoring instructions.
+
 `check` prepares the first-party tarballs once for the test and build phases.
 Preparation compiles each source package once, then independently stages and packs
 all provider variants. Rooms and other lifecycle tests copy these tarballs into

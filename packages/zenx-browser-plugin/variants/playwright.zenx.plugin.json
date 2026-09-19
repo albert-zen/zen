@@ -1,6 +1,6 @@
 {
   "id": "browser",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "description": "A cross-platform isolated Playwright CLI browser session with bounded ARIA inspection and native auto-waiting actions.",
   "provider": {
     "id": "playwright-cli",
@@ -31,7 +31,7 @@
     {
       "id": "browser.interact",
       "title": "Interact with pages",
-      "description": "Click and type into an explicitly targeted visible page element.",
+      "description": "Click, type, or select an option in an explicitly targeted visible page element, or scroll the page viewport.",
       "scope": "browser-session"
     }
   ],
@@ -70,19 +70,24 @@
           },
           "url": {
             "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh full observation and new target IDs after the action; prefer true to avoid a separate browser_inspect call. Defaults to false."
           }
         },
         "required": ["sessionId", "url"],
         "additionalProperties": false
       },
-      "permissions": ["browser.navigate"],
+      "permissions": ["browser.navigate", "browser.tabs.read"],
       "interactionMode": "isolated",
       "capabilities": [
         "playwright_cli",
         "headless",
         "browser_context",
         "dom.navigate"
-      ]
+      ],
+      "maxOutputBytes": 12288
     },
     {
       "name": "browser_navigate",
@@ -98,23 +103,28 @@
           },
           "url": {
             "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh full observation and new target IDs after the action; prefer true to avoid a separate browser_inspect call. Defaults to false."
           }
         },
         "required": ["sessionId", "tabId", "url"],
         "additionalProperties": false
       },
-      "permissions": ["browser.navigate"],
+      "permissions": ["browser.navigate", "browser.tabs.read"],
       "interactionMode": "isolated",
       "capabilities": [
         "playwright_cli",
         "headless",
         "browser_context",
         "dom.navigate"
-      ]
+      ],
+      "maxOutputBytes": 12288
     },
     {
       "name": "browser_inspect",
-      "description": "Create the latest bounded observation for one ZenX browser tab and return opaque target IDs for visible controls. Existing input values are not returned.",
+      "description": "Create the latest bounded observation for one ZenX browser tab and return opaque target IDs, current non-password control state, and bounded native select options for visible controls.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -155,19 +165,24 @@
           },
           "targetId": {
             "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh full observation and new target IDs after the action; prefer true to avoid a separate browser_inspect call. Defaults to false."
           }
         },
         "required": ["sessionId", "tabId", "observationId", "targetId"],
         "additionalProperties": false
       },
-      "permissions": ["browser.interact"],
+      "permissions": ["browser.interact", "browser.tabs.read"],
       "interactionMode": "isolated",
       "capabilities": [
         "playwright_cli",
         "headless",
         "browser_context",
         "dom.click"
-      ]
+      ],
+      "maxOutputBytes": 12288
     },
     {
       "name": "browser_type",
@@ -192,19 +207,117 @@
           },
           "submit": {
             "type": "boolean"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh full observation and new target IDs after the action; prefer true to avoid a separate browser_inspect call. Defaults to false."
           }
         },
         "required": ["sessionId", "tabId", "observationId", "targetId", "text"],
         "additionalProperties": false
       },
-      "permissions": ["browser.interact"],
+      "permissions": ["browser.interact", "browser.tabs.read"],
       "interactionMode": "isolated",
       "capabilities": [
         "playwright_cli",
         "headless",
         "browser_context",
         "dom.set_value"
-      ]
+      ],
+      "maxOutputBytes": 12288
+    },
+    {
+      "name": "browser_select",
+      "description": "Select one native option by exact value or unique exact visible label in a visible select target from the latest browser_inspect observation. Consumes the observation and fails closed if the target or option changed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "option": {
+            "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh full observation and new target IDs after the action; prefer true to avoid a separate browser_inspect call. Defaults to false."
+          }
+        },
+        "required": [
+          "sessionId",
+          "tabId",
+          "observationId",
+          "targetId",
+          "option"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.interact", "browser.tabs.read"],
+      "interactionMode": "isolated",
+      "capabilities": [
+        "playwright_cli",
+        "headless",
+        "browser_context",
+        "dom.select_option"
+      ],
+      "maxOutputBytes": 12288
+    },
+    {
+      "name": "browser_scroll",
+      "description": "Scroll the page viewport in one explicit tab using the latest browser_inspect observation. Direction is up/down/left/right and pixels is an integer from 1 to 2000. Consumes the observation; inspect again before interacting. Nested scrolling containers are not supported.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "direction": {
+            "type": "string",
+            "enum": ["up", "down", "left", "right"]
+          },
+          "pixels": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh full observation and new target IDs after the action; prefer true to avoid a separate browser_inspect call. Defaults to false."
+          }
+        },
+        "required": [
+          "sessionId",
+          "tabId",
+          "observationId",
+          "direction",
+          "pixels"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.interact", "browser.tabs.read"],
+      "interactionMode": "isolated",
+      "capabilities": [
+        "playwright_cli",
+        "headless",
+        "browser_context",
+        "dom.scroll"
+      ],
+      "maxOutputBytes": 12288
     },
     {
       "name": "browser_close",
@@ -263,7 +376,7 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "Use Browser for targeted, inspect-before-act web automation in the selected ZenX browser provider.",
+  "mainDocument": "Use Browser for targeted, inspect-before-act web automation in the selected ZenX browser provider. Prefer observe:true on open, navigate, click, type, select and scroll to return fresh targets with the action, avoiding a separate inspect call. If actionCompleted:true includes observationError, inspect again without repeating the completed action.",
   "ui": {
     "bundles": [
       {

@@ -18,12 +18,12 @@ const repositoryRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 
 const expected = [
   ["@zenx/imzenx-plugin", "zenx-imzenx-plugin-1.0.0.tgz"],
-  ["@zenx/browser-plugin", "zenx-browser-plugin-electron-1.0.1.tgz"],
-  ["@zenx/browser-plugin", "zenx-browser-plugin-playwright-1.0.1.tgz"],
-  ["@zenx/browser-plugin", "zenx-browser-plugin-user-session-1.0.1.tgz"],
-  ["@zenx/computer-plugin", "zenx-computer-plugin-macos-1.0.0.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-electron-1.0.3.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-playwright-1.0.3.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-user-session-1.0.3.tgz"],
+  ["@zenx/computer-plugin", "zenx-computer-plugin-macos-1.0.1.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-peekaboo-1.0.0.tgz"],
-  ["@zenx/computer-plugin", "zenx-computer-plugin-win32-1.1.0.tgz"],
+  ["@zenx/computer-plugin", "zenx-computer-plugin-win32-1.1.1.tgz"],
   ["@zenx/rooms-plugin", "zenx-rooms-plugin-1.0.0.tgz"],
   ["@zenx/self-control-plugin", "zenx-self-control-plugin-1.0.0.tgz"],
   ["@zenx/triggers-plugin", "zenx-triggers-plugin-1.0.0.tgz"],
@@ -31,28 +31,28 @@ const expected = [
 
 const providerVariants = new Map([
   [
-    "zenx-browser-plugin-electron-1.0.1.tgz",
-    ["browser", "1.0.1", "electron-dedicated-browser", 8],
+    "zenx-browser-plugin-electron-1.0.3.tgz",
+    ["browser", "1.0.3", "electron-dedicated-browser", 10],
   ],
   [
-    "zenx-browser-plugin-playwright-1.0.1.tgz",
-    ["browser", "1.0.1", "playwright-cli", 8],
+    "zenx-browser-plugin-playwright-1.0.3.tgz",
+    ["browser", "1.0.3", "playwright-cli", 10],
   ],
   [
-    "zenx-browser-plugin-user-session-1.0.1.tgz",
-    ["browser", "1.0.1", "user-browser-cdp", 8],
+    "zenx-browser-plugin-user-session-1.0.3.tgz",
+    ["browser", "1.0.3", "user-browser-cdp", 10],
   ],
   [
-    "zenx-computer-plugin-macos-1.0.0.tgz",
-    ["computer", "1.0.0", "macos-desktop", 7],
+    "zenx-computer-plugin-macos-1.0.1.tgz",
+    ["computer", "1.0.1", "macos-desktop", 8],
   ],
   [
     "zenx-computer-plugin-peekaboo-1.0.0.tgz",
     ["computer", "1.0.0", "peekaboo-cli", 7],
   ],
   [
-    "zenx-computer-plugin-win32-1.1.0.tgz",
-    ["computer", "1.1.0", "microsoft-winapp-cli", 4],
+    "zenx-computer-plugin-win32-1.1.1.tgz",
+    ["computer", "1.1.1", "microsoft-winapp-cli", 5],
   ],
 ]);
 
@@ -129,6 +129,12 @@ test("all first-party plugins validate and pack as self-contained ordinary npm t
             ])
           ).stdout,
         );
+        if (filename.includes("computer-plugin")) {
+          assert.equal(
+            manifest.tools.some(({ name }) => name === "computer_list_windows"),
+            !filename.includes("peekaboo"),
+          );
+        }
         assert.deepEqual(
           [
             manifest.id,
@@ -206,12 +212,12 @@ test("Host provider selection maps every real manifest variant deterministically
       firstPartyProviderTarball("computer", "microsoft-winapp-cli"),
     ],
     [
-      "zenx-browser-plugin-electron-1.0.1.tgz",
-      "zenx-browser-plugin-playwright-1.0.1.tgz",
-      "zenx-browser-plugin-user-session-1.0.1.tgz",
-      "zenx-computer-plugin-macos-1.0.0.tgz",
+      "zenx-browser-plugin-electron-1.0.3.tgz",
+      "zenx-browser-plugin-playwright-1.0.3.tgz",
+      "zenx-browser-plugin-user-session-1.0.3.tgz",
+      "zenx-computer-plugin-macos-1.0.1.tgz",
       "zenx-computer-plugin-peekaboo-1.0.0.tgz",
-      "zenx-computer-plugin-win32-1.1.0.tgz",
+      "zenx-computer-plugin-win32-1.1.1.tgz",
     ],
   );
   assert.throws(

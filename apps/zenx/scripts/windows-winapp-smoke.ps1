@@ -27,6 +27,10 @@ $editor.AccessibleName = "ZenX smoke editor"
 $editor.Multiline = $true
 $editor.SetBounds(24, 24, 560, 220)
 $form.Controls.Add($editor)
+# The helper console stays hidden; explicitly show only the test fixture.
+$form.Show()
+$form.Hide()
+$form.Show()
 [System.Windows.Forms.Application]::Run($form)
 '@ | Set-Content -LiteralPath $fixtureScript -Encoding UTF8
   $fixture = Start-Process powershell.exe -ArgumentList @(
@@ -35,7 +39,7 @@ $form.Controls.Add($editor)
     "-STA",
     "-File", ('"' + $fixtureScript + '"'),
     "-Title", ('"' + $fixtureTitle + '"')
-  ) -PassThru
+  ) -WindowStyle Hidden -PassThru
   $deadline = [DateTime]::UtcNow.AddSeconds(15)
   do {
     Start-Sleep -Milliseconds 250

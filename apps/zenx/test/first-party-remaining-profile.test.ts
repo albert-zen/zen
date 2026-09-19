@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 import { ZenXCapabilityService } from "../src/main/capability-service.js";
 import { ZenXTriggersCapabilityPackage } from "../src/main/capabilities/automation-control-package.js";
@@ -43,6 +45,99 @@ async function copyPreparedFirstPartyPlugins(
     recursive: true,
   });
 }
+
+test("updating an old bundled Computer profile uses the current resource and exposes discovery", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-computer-update-"));
+  const resources = path.join(root, "resources");
+  const staging = path.join(root, "old-package");
+  const run = promisify(execFile);
+  let service!: ZenXCapabilityService;
+  try {
+    await copyPreparedFirstPartyPlugins(resources);
+    await mkdir(staging);
+    const currentTarball = path.join(
+      resources,
+      "plugins",
+      "zenx-computer-plugin-macos-1.0.1.tgz",
+    );
+    const oldTarball = path.join(
+      resources,
+      "plugins",
+      "zenx-computer-plugin-macos-1.0.0.tgz",
+    );
+    await run("tar", ["-xf", currentTarball, "-C", staging]);
+    for (const filename of ["package.json", "zenx.plugin.json"]) {
+      const file = path.join(staging, "package", filename);
+      const data = JSON.parse(await readFile(file, "utf8"));
+      data.version = "1.0.0";
+      if (data.tools)
+        data.tools = data.tools.filter(
+          (tool: { name: string }) => tool.name !== "computer_list_windows",
+        );
+      await writeFile(file, JSON.stringify(data));
+    }
+    await run("tar", ["-czf", oldTarball, "-C", staging, "package"]);
+    service = new ZenXCapabilityService({
+      userDataDirectory: path.join(root, "profile"),
+      resourcesDirectory: resources,
+      pnpmCliPath: pnpmCli,
+      bundledProvidersOnly: true,
+      computerBackend: computerBackend(),
+      providerCatalogOptions: { platform: "darwin" },
+      trustedProfileLoaders: {
+        computer: createDelegatingFirstPartyProfileLoader(() =>
+          service.computerProfilePackage(),
+        ),
+      },
+    });
+    await service.initialize();
+    await service.installBundledPluginPackage(oldTarball, {
+      pluginId: "computer",
+      packageName: "@zenx/computer-plugin",
+    });
+    assert.equal(
+      service
+        .pluginSnapshot()
+        .plugins.find((plugin) => plugin.id === "computer")?.version,
+      "1.0.0",
+    );
+    assert.equal(
+      service
+        .hostSnapshot()
+        .definitions.some((tool) => tool.name === "computer_list_windows"),
+      false,
+    );
+    await rm(oldTarball);
+    await service.updatePluginPackage("computer");
+    const updated = service
+      .pluginSnapshot()
+      .plugins.find((plugin) => plugin.id === "computer");
+    assert.equal(updated?.version, "1.0.1");
+    assert.equal(
+      path.basename(updated?.profileSource?.packageSpec ?? ""),
+      path.basename(currentTarball),
+    );
+    assert.ok(
+      service
+        .hostSnapshot()
+        .definitions.some((tool) => tool.name === "computer_list_windows"),
+    );
+    const discovered = (await call(service, "computer_list_windows", {})) as {
+      windows: Array<{ target: Record<string, unknown> }>;
+    };
+    assert.equal(
+      (
+        (await call(service, "computer_inspect", {
+          target: discovered.windows[0]!.target,
+        })) as { observationId: string }
+      ).observationId,
+      "computer-observation",
+    );
+  } finally {
+    await service?.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("remaining first-party tarballs install, invoke, cycle lifecycle, and restart offline", async () => {
   const root = await mkdtemp(
@@ -184,10 +279,22 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
     );
     stopA();
     stopB();
+    assert.ok(
+      service
+        .hostSnapshot()
+        .definitions.some((tool) => tool.name === "computer_list_windows"),
+    );
+    const discovered = (await call(service, "computer_list_windows", {})) as {
+      windows: Array<{ target: { pid: number; windowTitle: string } }>;
+    };
+    assert.deepEqual(discovered.windows[0]?.target, {
+      pid: 1,
+      windowTitle: "Fixture",
+    });
     assert.equal(
       (
         (await call(service, "computer_inspect", {
-          target: { pid: 1, windowTitle: "Fixture" },
+          target: discovered.windows[0]!.target,
         })) as { observationId: string }
       ).observationId,
       "computer-observation",
@@ -257,7 +364,7 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       path.join(
         resources,
         "plugins",
-        "zenx-browser-plugin-playwright-1.0.1.tgz",
+        "zenx-browser-plugin-playwright-1.0.3.tgz",
       ),
       { pluginId: "browser", packageName: "@zenx/browser-plugin" },
       playwrightCandidate,
@@ -289,7 +396,7 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       browserBackend("electron"),
     );
     await service.replaceBundledProviderVariant(
-      path.join(resources, "plugins", "zenx-browser-plugin-electron-1.0.1.tgz"),
+      path.join(resources, "plugins", "zenx-browser-plugin-electron-1.0.3.tgz"),
       { pluginId: "browser", packageName: "@zenx/browser-plugin" },
       electronCandidate,
     );
@@ -417,7 +524,7 @@ test("an uninstalled Browser reinstalls the current Host-selected App Resource v
     assert.equal(browser?.lifecycle, "enabled");
     assert.equal(
       path.basename(browser?.profileSource?.packageSpec ?? ""),
-      "zenx-browser-plugin-electron-1.0.1.tgz",
+      "zenx-browser-plugin-electron-1.0.3.tgz",
     );
     assert.equal(
       (
@@ -479,7 +586,7 @@ test("provider variant admission and Catalog failures retain the old backend and
   const electronTarball = path.join(
     resources,
     "plugins",
-    "zenx-browser-plugin-electron-1.0.1.tgz",
+    "zenx-browser-plugin-electron-1.0.3.tgz",
   );
   try {
     await service.initialize();
@@ -487,7 +594,7 @@ test("provider variant admission and Catalog failures retain the old backend and
       path.join(
         resources,
         "plugins",
-        "zenx-browser-plugin-user-session-1.0.1.tgz",
+        "zenx-browser-plugin-user-session-1.0.3.tgz",
       ),
       { pluginId: "browser", packageName: "@zenx/browser-plugin" },
     );
@@ -536,13 +643,13 @@ test("restart keeps a committed Browser backend isolated from a different curren
         name: "user-session-to-electron",
         initialMode: "user-session",
         selectedMode: "isolated",
-        initialTarball: "zenx-browser-plugin-user-session-1.0.1.tgz",
+        initialTarball: "zenx-browser-plugin-user-session-1.0.3.tgz",
       },
       {
         name: "electron-to-user-session",
         initialMode: "isolated",
         selectedMode: "user-session",
-        initialTarball: "zenx-browser-plugin-electron-1.0.1.tgz",
+        initialTarball: "zenx-browser-plugin-electron-1.0.3.tgz",
       },
     ] as const) {
       for (const outcome of [
@@ -791,8 +898,8 @@ test("profile-managed Computer remains absent on Linux and unavailable Windows p
                 resources,
                 "plugins",
                 platform === "win32"
-                  ? "zenx-computer-plugin-win32-1.1.0.tgz"
-                  : "zenx-computer-plugin-macos-1.0.0.tgz",
+                  ? "zenx-computer-plugin-win32-1.1.1.tgz"
+                  : "zenx-computer-plugin-macos-1.0.1.tgz",
               ),
               { pluginId: "computer", packageName: "@zenx/computer-plugin" },
             ),
@@ -1133,6 +1240,15 @@ function computerBackend(
 ): ZenXComputerBackend {
   const target = { pid: 1, applicationName: "Fixture", windowTitle: "Fixture" };
   return {
+    listWindows: async () => ({
+      windows: [
+        {
+          target: { pid: 1, windowTitle: "Fixture" },
+          applicationName: "Fixture",
+        },
+      ],
+      truncated: false,
+    }),
     inspect: async () => ({
       platform: "darwin",
       observationId: "computer-observation",

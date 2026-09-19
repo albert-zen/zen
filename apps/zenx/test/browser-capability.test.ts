@@ -3,6 +3,7 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 
 import {
+  browserScrollScript,
   assertBrowserTabCapacity,
   BrowserZenXCapabilityPackage,
   browserInspectScript,
@@ -19,6 +20,332 @@ import {
   type BrowserTargetFingerprint,
   type ZenXBrowserBackend,
 } from "../src/main/capabilities/browser-provider.js";
+
+test("Browser can return a fresh observation with an action without another model call", async () => {
+  const calls: string[] = [];
+  const capability = new BrowserZenXCapabilityPackage(browserBackend(calls));
+  const result = (await capability.invoke(
+    "browser_type",
+    invocation({
+      sessionId: "research",
+      tabId: "tab-1",
+      observationId: "old-observation",
+      targetId: "target-query",
+      text: "hello",
+      observe: true,
+    }),
+  )) as BrowserInspection;
+  assert.deepEqual(calls, [
+    "type:research:tab-1:old-observation:target-query:5:false",
+    "inspect:research:tab-1",
+  ]);
+  assert.equal(result.observationId, "observation-1");
+  assert.ok(result.targets.some((target) => target.targetId === "target-go"));
+});
+
+test("follow-up observation failure preserves a completed action and does not replay it", async () => {
+  const calls: string[] = [];
+  const backend = browserBackend(calls);
+  backend.inspect = async () => {
+    throw new Error("Page still navigating");
+  };
+  const capability = new BrowserZenXCapabilityPackage(backend);
+  const args = {
+    sessionId: "research",
+    tabId: "tab-1",
+    observationId: "old",
+    targetId: "save",
+    observe: true,
+  };
+  const result = (await capability.invoke(
+    "browser_click",
+    invocation(args),
+  )) as Record<string, unknown>;
+  assert.equal(result.actionCompleted, true);
+  assert.equal(result.observationError, "Page still navigating");
+  assert.match(String(result.nextAction), /do not repeat/);
+  assert.deepEqual(calls, ["click:research:tab-1:old:save"]);
+  await assert.rejects(
+    capability.invoke("browser_click", invocation({ ...args, observe: "yes" })),
+    /boolean/,
+  );
+  assert.equal(calls.length, 1, "invalid observe must reject before mutation");
+  backend.click = async () => {
+    throw new Error("Stale target");
+  };
+  await assert.rejects(
+    capability.invoke("browser_click", invocation(args)),
+    /Stale target/,
+  );
+});
+
+test("combined observations retain the public thread session identity", async () => {
+  const calls: string[] = [];
+  const backend = browserBackend(calls);
+  const inspect = backend.inspect;
+  backend.open = async (sessionId, url) => ({
+    sessionId,
+    tabId: "tab-1",
+    title: "Fixture",
+    url,
+    loading: false,
+  });
+  backend.inspect = async (sessionId, tabId, signal) => ({
+    ...(await inspect(sessionId, tabId, signal)),
+    sessionId,
+  });
+  const capability = new BrowserZenXCapabilityPackage(backend);
+  const result = (await capability.invoke("browser_open", {
+    ...invocation({
+      sessionId: "research",
+      url: "https://example.com/",
+      observe: true,
+    }),
+    threadId: "thread-one",
+  })) as BrowserInspection;
+  assert.equal(result.sessionId, "research");
+  assert.equal(result.observationId, "observation-1");
+  assert.ok(calls[0]?.startsWith("inspect:"));
+  assert.notEqual(
+    calls[0],
+    "inspect:research:tab-1",
+    "backend receives the thread's private provider session",
+  );
+  await capability.close();
+});
+
+test("browser scroll validates a bounded direction and requires a current observation", async () => {
+  const calls: string[] = [];
+  const backend = browserBackend(calls);
+  backend.scroll = async (...args) => {
+    calls.push(JSON.stringify(args.slice(0, 5)));
+    return (await backend.listTabs("research"))[0]!;
+  };
+  const capability = new BrowserZenXCapabilityPackage(backend);
+  const args = {
+    sessionId: "research",
+    tabId: "tab-1",
+    observationId: "obs",
+    direction: "down",
+    pixels: 600,
+  };
+  await capability.invoke("browser_scroll", invocation(args));
+  assert.equal(
+    calls[0],
+    JSON.stringify(["research", "tab-1", "obs", "down", 600]),
+  );
+  for (const invalid of [
+    { pixels: 0 },
+    { pixels: 2001 },
+    { pixels: 1.5 },
+    { direction: "diagonal" },
+    { observationId: "" },
+  ]) {
+    await assert.rejects(
+      capability.invoke("browser_scroll", invocation({ ...args, ...invalid })),
+    );
+  }
+  const dom = new JSDOM("<body/>", { runScripts: "outside-only" });
+  try {
+    let movement: unknown;
+    dom.window.scrollBy = ((options: unknown) => {
+      movement = options;
+    }) as typeof dom.window.scrollBy;
+    assert.equal(
+      (dom.window.eval(browserScrollScript("down", 600)) as { ok: boolean }).ok,
+      true,
+    );
+    assert.equal(
+      JSON.stringify(movement),
+      JSON.stringify({ left: 0, top: 600, behavior: "instant" }),
+    );
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("DOM names honor associated labels and aria-labelledby and are revalidated on action", () => {
+  const dom = new JSDOM(
+    `<style>* { opacity: 1 }</style><label for="email">Email address</label><input id="email" placeholder="hint"><span id="first">Primary</span><span id="second">contact</span><input id="contact" aria-labelledby="first second" aria-label="fallback"><label>Notes<textarea></textarea></label>`,
+    { runScripts: "outside-only" },
+  );
+  try {
+    dom.window.CSS = {
+      escape: (value: string) => value,
+    } as typeof dom.window.CSS;
+    dom.window.HTMLElement.prototype.getBoundingClientRect = () => ({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      width: 100,
+      height: 20,
+      right: 100,
+      bottom: 20,
+      toJSON() {
+        return {};
+      },
+    });
+    const targets = (
+      dom.window.eval(browserInspectScript) as {
+        targets: BrowserTargetFingerprint[];
+      }
+    ).targets;
+    assert.deepEqual(
+      Array.from(targets, ({ name }) => name),
+      ["Email address", "Primary contact", "Notes"],
+    );
+    assert.equal(
+      (
+        dom.window.eval(browserActionScript(targets[0]!, "type", "sample")) as {
+          ok: boolean;
+        }
+      ).ok,
+      true,
+    );
+    dom.window.document.querySelector("#first")!.textContent = "Changed";
+    assert.equal(
+      (
+        dom.window.eval(browserActionScript(targets[1]!, "type", "sample")) as {
+          reason: string;
+        }
+      ).reason,
+      "identity-changed",
+    );
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("DOM inspection exposes bounded control state and native select and rich-text actions", () => {
+  const dom = new JSDOM(
+    `<style>* { opacity: 1 }</style><label>Delivery speed <select id="speed"><option value="standard">Standard</option><option value="express">Express</option></select></label><label><input id="updates" type="checkbox" checked>Email updates</label><label id="note-label">Delivery note</label><div id="note" role="textbox" aria-labelledby="note-label" contenteditable="true">old</div><input id="password" aria-label="Password" type="password" value="secret">`,
+    { runScripts: "outside-only" },
+  );
+  try {
+    dom.window.CSS = {
+      escape: (value: string) => value,
+    } as typeof dom.window.CSS;
+    dom.window.HTMLElement.prototype.getBoundingClientRect = () => ({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      width: 100,
+      height: 20,
+      right: 100,
+      bottom: 20,
+      toJSON() {
+        return {};
+      },
+    });
+    const targets = (
+      dom.window.eval(browserInspectScript) as {
+        targets: BrowserTargetFingerprint[];
+      }
+    ).targets;
+    const select = targets.find(({ name }) => name === "Delivery speed")!;
+    assert.deepEqual(Array.from(select.actions), ["click", "select"]);
+    assert.equal(select.value, "standard");
+    assert.deepEqual(
+      select.options === undefined
+        ? undefined
+        : Array.from(select.options, (option) => ({ ...option })),
+      [
+        {
+          value: "standard",
+          label: "Standard",
+          selected: true,
+          disabled: false,
+        },
+        {
+          value: "express",
+          label: "Express",
+          selected: false,
+          disabled: false,
+        },
+      ],
+    );
+    const speedElement = dom.window.document.querySelector(
+      "#speed",
+    ) as HTMLSelectElement;
+    const inserted = dom.window.document.createElement("option");
+    inserted.value = "secret";
+    inserted.textContent = "Secret";
+    speedElement.append(inserted);
+    assert.equal(
+      (
+        dom.window.eval(browserActionScript(select, "select", "secret")) as {
+          reason: string;
+        }
+      ).reason,
+      "options-changed",
+    );
+    inserted.remove();
+    speedElement.options[1]!.disabled = true;
+    assert.equal(
+      (
+        dom.window.eval(browserActionScript(select, "select", "Express")) as {
+          reason: string;
+        }
+      ).reason,
+      "options-changed",
+    );
+    speedElement.options[1]!.disabled = false;
+    assert.equal(
+      (
+        dom.window.eval(browserActionScript(select, "select", "Express")) as {
+          ok: boolean;
+        }
+      ).ok,
+      true,
+    );
+    assert.equal(speedElement.value, "express");
+    assert.equal(
+      targets.find(({ name }) => name === "Email updates")?.checked,
+      true,
+    );
+    const note = targets.find(({ name }) => name === "Delivery note")!;
+    assert.deepEqual(Array.from(note.actions), ["type"]);
+    assert.equal(note.value, "old");
+    assert.equal(
+      (
+        dom.window.eval(browserActionScript(note, "type", "门口轻放")) as {
+          ok: boolean;
+        }
+      ).ok,
+      true,
+    );
+    assert.equal(
+      dom.window.document.querySelector("#note")?.textContent,
+      "门口轻放",
+    );
+    assert.equal(
+      targets.find(({ name }) => name === "Password")?.value,
+      undefined,
+    );
+    const oversized = dom.window.document.createElement("select");
+    oversized.id = "oversized";
+    oversized.setAttribute("aria-label", "Oversized");
+    for (let index = 0; index < 101; index += 1) {
+      const option = dom.window.document.createElement("option");
+      option.value = String(index);
+      option.textContent = String(index);
+      oversized.append(option);
+    }
+    dom.window.document.body.append(oversized);
+    const refreshed = (
+      dom.window.eval(browserInspectScript) as {
+        targets: BrowserTargetFingerprint[];
+      }
+    ).targets.find(({ name }) => name === "Oversized")!;
+    assert.equal(refreshed.options?.length, 100);
+    assert.equal(refreshed.optionsTruncated, true);
+    assert.deepEqual(Array.from(refreshed.actions), ["click"]);
+  } finally {
+    dom.window.close();
+  }
+});
 
 test("browser URL projection uniformly removes credentials, query, and hash", () => {
   assert.equal(
