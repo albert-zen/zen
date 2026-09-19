@@ -48,6 +48,7 @@ test("ignores older Thread summary and model catalog responses after newer refre
     | undefined;
   const never = new Promise<AppServerHostStatus>(() => undefined);
   const zenx = {
+    panels: { onOpen: () => () => undefined },
     platform: "darwin",
     protocol: {
       getStatus: async () => await never,
@@ -252,6 +253,7 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
     summary("thread-b", "Thread B"),
   ];
   const zenx = {
+    panels: { onOpen: () => () => undefined },
     platform: "darwin",
     protocol: {
       getStatus: async (): Promise<AppServerHostStatus> => ({

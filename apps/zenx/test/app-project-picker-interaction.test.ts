@@ -2763,6 +2763,7 @@ async function mountApp(
   currentSettings.profile.composerSendMode =
     options.composerSendMode ?? "queue";
   const zenx = {
+    panels: { onOpen: () => () => undefined },
     platform: "darwin",
     protocol: {
       getStatus: async () =>

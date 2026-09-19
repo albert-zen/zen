@@ -6448,7 +6448,7 @@ select:focus-visible {
   font-size: 12px;
 }
 .file-source {
-  font-family: var(--font-mono, monospace);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 13px;
   line-height: 1.6;
   tab-size: 4;

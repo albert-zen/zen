@@ -553,6 +553,7 @@ async function mountApp(options: MountOptions) {
     detachEvent: { value: () => undefined },
   });
   const zenx = {
+    panels: { onOpen: () => () => undefined },
     platform: "darwin",
     protocol: {
       getStatus: async (): Promise<AppServerHostStatus> => ({

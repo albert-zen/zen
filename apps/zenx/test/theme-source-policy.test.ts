@@ -17,6 +17,7 @@ const consumption = /var\((--[a-z0-9_-]+)/giu;
 const dynamicProductTokens = new Set([
   "--zenx-brand-asset",
   "--bottom-zone-height",
+  "--auxiliary-width", // AuxiliaryPanel owns user-resized width.
   "--browser-panel-width", // BrowserThreadPanel owns user-resized width.
 ]);
 

@@ -164,8 +164,10 @@ function IsolatedPluginSurface({
   );
   useEffect(() => {
     const receive = (event: MessageEvent) => {
+      const requestWindow = frame.current?.contentWindow;
       if (
-        event.source !== frame.current?.contentWindow ||
+        !requestWindow ||
+        event.source !== requestWindow ||
         !isUiRequest(event.data, channel)
       )
         return;
@@ -178,8 +180,9 @@ function IsolatedPluginSurface({
                 sdk.navigation.navigate(String(event.data.input)),
               );
       void operation.then(
-        (value) =>
-          frame.current?.contentWindow?.postMessage(
+        (value) => {
+          if (frame.current?.contentWindow !== requestWindow) return;
+          requestWindow.postMessage(
             {
               channel,
               type: "zenx-plugin-ui:result",
@@ -187,9 +190,11 @@ function IsolatedPluginSurface({
               value,
             },
             "*",
-          ),
-        (error: unknown) =>
-          frame.current?.contentWindow?.postMessage(
+          );
+        },
+        (error: unknown) => {
+          if (frame.current?.contentWindow !== requestWindow) return;
+          requestWindow.postMessage(
             {
               channel,
               type: "zenx-plugin-ui:error",
@@ -197,7 +202,8 @@ function IsolatedPluginSurface({
               message: error instanceof Error ? error.message : String(error),
             },
             "*",
-          ),
+          );
+        },
       );
     };
     window.addEventListener("message", receive);
