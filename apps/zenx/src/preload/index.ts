@@ -62,6 +62,29 @@ import type { BrowserObservationEnvelope } from "../main/browser-live-observatio
 
 contextBridge.exposeInMainWorld("zenx", {
   platform: process.platform,
+  workspaceFiles: {
+    list: async (threadId: string, path: string) =>
+      await ipcRenderer.invoke(ipcChannels.workspaceFilesList, threadId, path),
+    read: async (threadId: string, path: string) =>
+      await ipcRenderer.invoke(ipcChannels.workspaceFilesRead, threadId, path),
+  },
+  panels: {
+    onOpen: (
+      listener: (request: {
+        pluginId: string;
+        panelId: string;
+        threadId: string;
+      }) => void,
+    ) => {
+      const receive = (
+        _event: Electron.IpcRendererEvent,
+        request: { pluginId: string; panelId: string; threadId: string },
+      ) => listener(request);
+      ipcRenderer.on(ipcChannels.pluginPanelOpen, receive);
+      return () =>
+        ipcRenderer.removeListener(ipcChannels.pluginPanelOpen, receive);
+    },
+  },
   protocol: {
     getStatus: async (): Promise<AppServerHostStatus> =>
       await ipcRenderer.invoke(ipcChannels.getStatus),

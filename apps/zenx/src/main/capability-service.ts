@@ -77,6 +77,21 @@ import {
 
 export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #registry: ZenXPluginCatalog;
+  readonly #panelListeners = new Set<
+    (request: { pluginId: string; panelId: string; threadId: string }) => void
+  >();
+  onPanelOpen(
+    listener: (request: {
+      pluginId: string;
+      panelId: string;
+      threadId: string;
+    }) => void,
+  ): () => void {
+    this.#panelListeners.add(listener);
+    return () => {
+      this.#panelListeners.delete(listener);
+    };
+  }
   readonly #pluginToolEnvironment: ToolEnvironment;
   readonly #pluginRuntimeSupervisor: PluginRuntimeSupervisor;
   readonly #userDataDirectory: string;
@@ -1331,6 +1346,23 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
 
   #pluginUiPort(pluginId: string): PluginHostUiPort {
     return Object.freeze({
+      openPanel: async (input: { panelId: string; threadId: string }) => {
+        const panel = this.#registry
+          .pluginSnapshot()
+          .panels.find(
+            (p) => p.pluginId === pluginId && p.id === input.panelId,
+          );
+        if (!panel)
+          throw new Error(`Unknown plugin panel: ${pluginId}:${input.panelId}`);
+        if (!this.#appServerPort) throw new Error("App Server is unavailable");
+        await this.#appServerPort.request("thread/read", {
+          threadId: input.threadId,
+        });
+        if (this.#panelListeners.size === 0)
+          throw new Error("No panel UI is connected");
+        for (const listener of this.#panelListeners)
+          listener({ pluginId, ...input });
+      },
       executeCommand: async (commandId: string, input?: unknown) => {
         const command = this.#registry
           .pluginSnapshot()

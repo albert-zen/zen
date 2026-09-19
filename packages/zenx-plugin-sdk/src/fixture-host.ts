@@ -58,6 +58,11 @@ export function createFixturePluginHost(
       }),
     }),
     ui: Object.freeze({
+      panels: Object.freeze({
+        open: async () => {
+          throw new Error("Fixture Host panels are unavailable");
+        },
+      }),
       handles: Object.freeze({
         read: async (handleId: string) => {
           if (!(handleId in handles)) {

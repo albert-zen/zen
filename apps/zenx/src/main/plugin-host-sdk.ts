@@ -51,6 +51,9 @@ export interface ZenXPluginHostSdkV1 {
     };
   };
   readonly ui: {
+    readonly panels: {
+      open(input: { panelId: string; threadId: string }): Promise<void>;
+    };
     readonly handles: {
       read(handleId: string): Promise<unknown>;
     };
@@ -66,6 +69,7 @@ export interface ZenXPluginHostSdkV1 {
 }
 
 export type PluginHostSdkRequest =
+  | { operation: "ui.panels.open"; panelId: string; threadId: string }
   | { operation: "query.projects.list" }
   | { operation: "storage.get" }
   | { operation: "storage.set"; value: PluginStorageValue }
@@ -82,6 +86,9 @@ export async function executePluginHostSdkRequest(
   request: PluginHostSdkRequest,
 ): Promise<unknown> {
   switch (request.operation) {
+    case "ui.panels.open":
+      await sdk.ui.panels.open(request);
+      return null;
     case "query.projects.list":
       return await sdk.query.projects.list();
     case "storage.get":
@@ -107,6 +114,21 @@ export function validatePluginHostSdkRequest(
   if (!isRecord(value) || typeof value.operation !== "string")
     throw new Error("Plugin Host SDK request is invalid");
   switch (value.operation) {
+    case "ui.panels.open":
+      if (
+        typeof value.panelId !== "string" ||
+        !value.panelId ||
+        value.panelId.length > 256 ||
+        typeof value.threadId !== "string" ||
+        !value.threadId ||
+        value.threadId.length > 512
+      )
+        throw new Error("Plugin panel request is invalid");
+      return {
+        operation: value.operation,
+        panelId: value.panelId,
+        threadId: value.threadId,
+      };
     case "query.projects.list":
     case "storage.get":
       return { operation: value.operation };
@@ -147,6 +169,7 @@ export function validatePluginHostSdkRequest(
 }
 
 export interface PluginHostUiPort {
+  openPanel?(input: { panelId: string; threadId: string }): Promise<void>;
   readHandle(handleId: string): Promise<unknown>;
   executeCommand(commandId: string, input?: unknown): Promise<unknown>;
 }
@@ -196,6 +219,17 @@ export async function createZenXPluginHostSdk(
       }),
     }),
     ui: Object.freeze({
+      panels: Object.freeze({
+        open: async (input: { panelId: string; threadId: string }) => {
+          const request = validatePluginHostSdkRequest({
+            ...input,
+            operation: "ui.panels.open",
+          });
+          if (request.operation !== "ui.panels.open" || !ui.openPanel)
+            throw new Error("Plugin panels are unavailable");
+          await ui.openPanel(request);
+        },
+      }),
       handles: Object.freeze({
         read: async (handleId: string) => await ui.readHandle(handleId),
       }),

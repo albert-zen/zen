@@ -210,7 +210,7 @@ function PluginMenu({
   );
 }
 
-function useAppearance(): "light" | "dark" {
+export function useAppearance(): "light" | "dark" {
   const read = () =>
     document.documentElement.dataset.appearance === "dark" ? "dark" : "light";
   const [theme, setTheme] = useState<"light" | "dark">(read);

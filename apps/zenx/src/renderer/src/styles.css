@@ -6281,3 +6281,204 @@ select:focus-visible {
 .sidebar-drag-preview-thread > .thread-row {
   height: 100%;
 }
+
+/* Shared Thread auxiliary views: local UI state only. */
+.workspace:has(> .auxiliary-panel[data-open="true"]) {
+  display: flex;
+  position: relative;
+  overflow: hidden;
+}
+.workspace:has(> .auxiliary-panel[data-open="true"]) > .agent-surface {
+  flex: 1;
+  min-width: 0;
+  width: 0;
+}
+.auxiliary-panel {
+  position: relative;
+  flex: 0 1 var(--auxiliary-width, 520px);
+  width: var(--auxiliary-width, 520px);
+  min-width: 360px;
+  max-width: 55%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border-control);
+  background: var(--color-surface-main);
+  color: var(--color-text-primary);
+}
+.auxiliary-panel[data-open="false"] {
+  display: none;
+}
+.auxiliary-heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-control);
+}
+.auxiliary-heading [role="tablist"] {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+}
+.auxiliary-heading [role="tab"] {
+  flex-shrink: 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--color-text-secondary);
+  padding: 12px 10px;
+  cursor: pointer;
+}
+.auxiliary-heading [aria-selected="true"] {
+  color: var(--color-text-primary);
+  border-bottom-color: currentColor;
+}
+.auxiliary-heading .icon-button {
+  flex-shrink: 0;
+}
+.auxiliary-content {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  display: flex;
+}
+.auxiliary-content[hidden] {
+  display: none;
+}
+.auxiliary-plugin {
+  width: 100%;
+  min-height: 100%;
+  border: 0;
+}
+.browser-thread-panel.embedded {
+  flex: 1;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  border: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.browser-thread-panel.embedded > .browser-panel-heading,
+.browser-thread-panel.embedded > .browser-panel-resizer {
+  display: none;
+}
+.browser-thread-panel.embedded > .browser-panel-target {
+  padding-top: 10px;
+}
+.auxiliary-panel[data-expanded="true"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  max-width: none;
+  z-index: 3;
+}
+.auxiliary-panel[data-expanded="true"] > .browser-panel-resizer {
+  display: none;
+}
+.workspace:has(> .auxiliary-panel[data-open="true"][data-expanded="true"])
+  > .agent-surface {
+  visibility: hidden;
+}
+.workspace-files-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  width: 100%;
+  min-height: 0;
+}
+.file-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-control);
+}
+.file-toolbar > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.file-toolbar button {
+  flex-shrink: 0;
+  padding: 6px;
+  border: 1px solid var(--border-control);
+  border-radius: 5px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+.file-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 16px;
+}
+.file-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.file-list button {
+  width: 100%;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 4px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.file-list button:hover {
+  background: var(--color-surface-hover);
+}
+.file-list button > span:first-of-type {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.file-readonly {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+.file-source {
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  line-height: 1.6;
+  tab-size: 4;
+  overflow: auto;
+}
+.syntax-keyword {
+  color: var(--color-text-accent);
+  font-weight: 600;
+}
+.syntax-string {
+  color: var(--color-status-success);
+}
+.syntax-comment {
+  color: var(--color-text-secondary);
+}
+.syntax-number {
+  color: var(--color-status-warning);
+}
+@media (max-width: 1099px) {
+  .workspace:has(> .auxiliary-panel[data-open="true"]) > .agent-surface {
+    display: none;
+  }
+  .auxiliary-panel {
+    flex: 1;
+    min-width: 0;
+    width: 100%;
+    max-width: none;
+    border-left: 0;
+  }
+  .auxiliary-panel > .browser-panel-resizer {
+    display: none;
+  }
+}

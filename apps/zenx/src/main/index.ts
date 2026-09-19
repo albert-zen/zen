@@ -649,12 +649,28 @@ function desktopPlatform(platform: NodeJS.Platform): ZenXDesktopPlatform {
   throw new Error(`ZenX does not support desktop platform ${platform}`);
 }
 
+import { listWorkspaceFiles, readWorkspaceFile } from "./workspace-files.js";
+
 function installProtocolIpc(
   manager: AppServerManager,
   titles: ZenXThreadTitleCoordinator,
   projects: ZenXProjectProjection,
   attachments: FileAttachmentStore,
 ): void {
+  for (const [channel, read] of [
+    [ipcChannels.workspaceFilesList, listWorkspaceFiles],
+    [ipcChannels.workspaceFilesRead, readWorkspaceFile],
+  ] as const) {
+    ipcMain.handle(
+      channel,
+      async (_event, threadId: unknown, relative: unknown) => {
+        if (typeof threadId !== "string" || threadId.length === 0)
+          throw new Error("Invalid Thread file query");
+        const { thread } = await manager.request("thread/read", { threadId });
+        return await read(thread.cwd, relative);
+      },
+    );
+  }
   ipcMain.handle(ipcChannels.getStatus, () => manager.status);
   ipcMain.handle(
     ipcChannels.getPendingApprovals,
@@ -1374,6 +1390,15 @@ function installCapabilityIpc(
       return await capabilities.readPluginUiHandle(pluginId, request.handleId);
     },
   );
+  capabilities.onPanelOpen((request) => {
+    const windows = BrowserWindow.getAllWindows().filter(
+      (window) => !window.isDestroyed(),
+    );
+    if (windows.length === 0)
+      throw new Error("No ZenX window is available to show a panel");
+    for (const window of windows)
+      window.webContents.send(ipcChannels.pluginPanelOpen, request);
+  });
   capabilities.onChange((snapshot) => {
     for (const window of BrowserWindow.getAllWindows()) {
       window.webContents.send(ipcChannels.pluginsChanged, snapshot);

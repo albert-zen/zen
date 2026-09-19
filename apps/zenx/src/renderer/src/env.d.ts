@@ -61,6 +61,27 @@ declare global {
   interface Window {
     zenx: {
       platform: NodeJS.Platform;
+      workspaceFiles: {
+        list(
+          threadId: string,
+          path: string,
+        ): Promise<
+          import("../../main/workspace-files.js").WorkspaceFileListing
+        >;
+        read(
+          threadId: string,
+          path: string,
+        ): Promise<import("../../main/workspace-files.js").WorkspaceTextFile>;
+      };
+      panels: {
+        onOpen(
+          listener: (request: {
+            pluginId: string;
+            panelId: string;
+            threadId: string;
+          }) => void,
+        ): () => void;
+      };
       protocol: {
         getStatus(): Promise<AppServerHostStatus>;
         getPendingApprovals(): Promise<ApprovalRequestEvent[]>;
