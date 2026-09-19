@@ -164,8 +164,10 @@ function IsolatedPluginSurface({
   );
   useEffect(() => {
     const receive = (event: MessageEvent) => {
+      const requestWindow = frame.current?.contentWindow;
       if (
-        event.source !== frame.current?.contentWindow ||
+        !requestWindow ||
+        event.source !== requestWindow ||
         !isUiRequest(event.data, channel)
       )
         return;
@@ -178,8 +180,9 @@ function IsolatedPluginSurface({
                 sdk.navigation.navigate(String(event.data.input)),
               );
       void operation.then(
-        (value) =>
-          frame.current?.contentWindow?.postMessage(
+        (value) => {
+          if (frame.current?.contentWindow !== requestWindow) return;
+          requestWindow.postMessage(
             {
               channel,
               type: "zenx-plugin-ui:result",
@@ -187,9 +190,11 @@ function IsolatedPluginSurface({
               value,
             },
             "*",
-          ),
-        (error: unknown) =>
-          frame.current?.contentWindow?.postMessage(
+          );
+        },
+        (error: unknown) => {
+          if (frame.current?.contentWindow !== requestWindow) return;
+          requestWindow.postMessage(
             {
               channel,
               type: "zenx-plugin-ui:error",
@@ -197,25 +202,38 @@ function IsolatedPluginSurface({
               message: error instanceof Error ? error.message : String(error),
             },
             "*",
-          ),
+          );
+        },
       );
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
   }, [channel, sdk]);
+  const initialized = useRef(new WeakSet<HTMLIFrameElement>());
+  const html = isolatedDocument(bundleHtml, {
+    channel,
+    exportName,
+    pluginId: sdk.pluginId,
+    theme: sdk.theme,
+    context: sdk.context,
+  });
   return (
     <iframe
+      key={html}
       className={className}
       ref={frame}
       sandbox="allow-scripts"
       title={`${sdk.pluginId} plugin surface`}
-      srcDoc={isolatedDocument(bundleHtml, {
-        channel,
-        exportName,
-        pluginId: sdk.pluginId,
-        theme: sdk.theme,
-        context: sdk.context,
-      })}
+      src="./plugin-frame.html"
+      onLoad={(event) => {
+        const element = event.currentTarget;
+        if (initialized.current.has(element)) return;
+        initialized.current.add(element);
+        element.contentWindow?.postMessage(
+          { type: "zenx-plugin-ui:document", html },
+          "*",
+        );
+      }}
     />
   );
 }

@@ -12,12 +12,14 @@ export function BrowserThreadPanel({
   open,
   onOpenChange,
   providerRevision,
+  embedded = false,
 }: {
   threadId: string;
   title: string;
   open: boolean | undefined;
   onOpenChange(open: boolean): void;
   providerRevision: unknown;
+  embedded?: boolean;
 }) {
   const [targets, setTargets] = useState<BrowserThreadTarget[]>([]);
   const [targetId, setTargetId] = useState<string | undefined>(() =>
@@ -112,7 +114,7 @@ export function BrowserThreadPanel({
     document.getElementById("thread-browser-toggle")?.focus();
   };
   useEffect(() => {
-    if (!open) return;
+    if (!open || embedded) return;
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (expanded) {
@@ -135,7 +137,7 @@ export function BrowserThreadPanel({
   };
   return (
     <aside
-      className="browser-thread-panel"
+      className={`browser-thread-panel${embedded ? " embedded" : ""}`}
       aria-label={`Browser for ${title}`}
       data-expanded={expanded}
       style={{ "--browser-panel-width": `${width}px` } as React.CSSProperties}

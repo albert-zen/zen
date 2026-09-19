@@ -1,5 +1,6 @@
 import { handleCompactCommand, isCompactCommand } from "./compact-command.js";
-import { BrowserThreadPanel } from "./browser-thread-panel.js";
+import { useWorkspaceFileDrafts } from "./workspace-file-drafts.js";
+import { AuxiliaryPanel } from "./auxiliary-panel.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
 import {
   default as React,
@@ -84,11 +85,7 @@ import {
   type SelectedThreadSettings,
 } from "./model-settings.js";
 import { loadedPluginContributions } from "./plugin-contributions.js";
-import {
-  PluginAgentPanels,
-  PluginProductPage,
-  pluginUiRegistry,
-} from "./PluginProductPage.js";
+import { PluginProductPage, pluginUiRegistry } from "./PluginProductPage.js";
 import { SettingsView, type SettingsTab } from "./SettingsView.js";
 import { Sidebar } from "./Sidebar.js";
 import {
@@ -419,6 +416,22 @@ export function App() {
   }, [page]);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const fileDrafts = useWorkspaceFileDrafts();
+  const [panelTabs, setPanelTabs] = useState<Record<string, string>>({});
+  useEffect(
+    () =>
+      window.zenx.panels.onOpen((request) => {
+        setPanelTabs((current) => ({
+          ...current,
+          [request.threadId]: `plugin:${request.pluginId}:${request.panelId}`,
+        }));
+        setBrowserPanels((current) => ({
+          ...current,
+          [request.threadId]: true,
+        }));
+      }),
+    [],
+  );
   const [browserPanels, setBrowserPanels] = useState<Record<string, boolean>>(
     {},
   );
@@ -1910,12 +1923,7 @@ export function App() {
           <ConversationTitleBar
             onOpenSidebar={() => setSidebarOpen(true)}
             onOpenWorkspace={() => setWorkspaceOpen(true)}
-            browserEnabled={
-              pluginSnapshot?.plugins.some(
-                (plugin) =>
-                  plugin.id === "browser" && plugin.enabled && plugin.available,
-              ) ?? false
-            }
+            browserEnabled={true}
             browserOpen={browserPanels[selectedSummary.threadId] === true}
             onToggleBrowser={() =>
               setBrowserPanels((current) => ({
@@ -2244,12 +2252,10 @@ export function App() {
         {page === "agent" &&
         newThreadDraft === null &&
         threadDetail !== null &&
-        selectedThreadId === threadDetail.id &&
-        pluginSnapshot?.plugins.some(
-          (plugin) =>
-            plugin.id === "browser" && plugin.enabled && plugin.available,
-        ) ? (
-          <BrowserThreadPanel
+        selectedThreadId === threadDetail.id ? (
+          <AuxiliaryPanel
+            fileDrafts={fileDrafts}
+            workspacePath={threadDetail.cwd}
             key={threadDetail.id}
             threadId={threadDetail.id}
             title={
@@ -2264,7 +2270,14 @@ export function App() {
                 [threadDetail.id]: open,
               }))
             }
-            providerRevision={pluginSnapshot}
+            snapshot={pluginSnapshot}
+            selectedTab={panelTabs[threadDetail.id]}
+            onSelectTab={(tab) =>
+              setPanelTabs((current) => ({
+                ...current,
+                [threadDetail.id]: tab,
+              }))
+            }
           />
         ) : null}
       </main>
@@ -2442,10 +2455,8 @@ function ConversationTitleBar({
             id="thread-browser-toggle"
             className="icon-button"
             type="button"
-            aria-label={
-              browserOpen ? "Close browser panel" : "Open browser panel"
-            }
-            title="Browser"
+            aria-label={browserOpen ? "Close side panel" : "Open side panel"}
+            title="Browser, files and plugin panels"
             aria-expanded={browserOpen}
             disabled={threadDetail === null}
             onClick={onToggleBrowser}
@@ -2797,12 +2808,6 @@ function AgentSurface({
             onRespondToApproval={onRespondToApproval}
             onSubmit={onSubmit}
           />
-          {pluginSnapshot === null ? null : (
-            <PluginAgentPanels
-              snapshot={pluginSnapshot}
-              threadId={threadDetail.id}
-            />
-          )}
         </>
       )}
     </section>

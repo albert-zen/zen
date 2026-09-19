@@ -63,6 +63,9 @@ export interface ZenXPluginHostSdkV1 {
     };
   };
   readonly ui: {
+    readonly panels: {
+      open(input: { panelId: string; threadId: string }): Promise<void>;
+    };
     readonly handles: { read(handleId: string): Promise<unknown> };
     readonly commands: {
       execute(commandId: string, input?: unknown): Promise<unknown>;
@@ -88,6 +91,7 @@ export interface PluginUiSdkV1 {
 }
 
 export type PluginHostSdkRequest =
+  | { operation: "ui.panels.open"; panelId: string; threadId: string }
   | { operation: "query.projects.list" }
   | { operation: "storage.get" }
   | { operation: "storage.set"; value: PluginStorageValue }

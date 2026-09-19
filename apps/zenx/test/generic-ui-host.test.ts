@@ -258,7 +258,17 @@ test("isolated host uses sandboxed iframe without same-origin parent access", as
   const iframe = dom.window.document.querySelector("iframe")!;
   assert.equal(iframe.getAttribute("sandbox"), "allow-scripts");
   assert.doesNotMatch(iframe.getAttribute("sandbox")!, /allow-same-origin/u);
-  assert.match(iframe.srcdoc, /zenx-plugin-ui:init/u);
+  assert.ok(iframe.src.endsWith("/plugin-frame.html"));
+  let documentMessage: { type: string; html: string } | undefined;
+  iframe.contentWindow!.postMessage = (value) => {
+    documentMessage = value;
+  };
+  await act(async () => {
+    iframe.dispatchEvent(new dom.window.Event("load"));
+  });
+  assert.equal(documentMessage?.type, "zenx-plugin-ui:document");
+  assert.match(documentMessage!.html, /zenx-plugin-ui:init/u);
+  assert.match(documentMessage!.html, /<main>isolated<\/main>/u);
   await act(async () => root.unmount());
 });
 
@@ -526,4 +536,85 @@ test("manifest validation rejects dangling surfaces and commands deterministical
     registry.install(duplicateRenderer, "bundled"),
     /invalid result renderer/u,
   );
+});
+
+test("isolated UI drops old replies after replacing the document, even with reused request IDs", async () => {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const isolated = structuredClone(snapshot);
+  isolated.bundles[0] = {
+    ...isolated.bundles[0]!,
+    kind: "isolated",
+    entry: "<main>isolated</main>",
+  };
+  const root = createRoot(document.getElementById("root")!);
+  const pending: Array<(value: unknown) => void> = [];
+  const readHandle = () => new Promise((resolve) => pending.push(resolve));
+  const render = async (theme: "light" | "dark") => {
+    await act(async () =>
+      root.render(
+        React.createElement(GenericPluginUiHost, {
+          registry: createPluginUiRegistry(),
+          snapshot: isolated,
+          surfaceId: "overview",
+          pluginId: "workbench",
+          context: { threadId: "thread" },
+          theme,
+          executeCommand: async () => null,
+          readHandle,
+        }),
+      ),
+    );
+    const iframe = document.querySelector("iframe")!;
+    const messages: any[] = [];
+    iframe.contentWindow!.postMessage = (value) => {
+      messages.push(value);
+    };
+    await act(async () => {
+      iframe.dispatchEvent(new dom.window.Event("load"));
+    });
+    const channel = JSON.parse(
+      messages[0].html.match(/const init=(.*?);const deepFreeze/s)[1],
+    ).channel;
+    messages.length = 0;
+    await act(async () => {
+      window.dispatchEvent(
+        new dom.window.MessageEvent("message", {
+          source: iframe.contentWindow,
+          data: {
+            channel,
+            type: "zenx-plugin-ui:request",
+            requestId: "1",
+            operation: "handles.read",
+            id: "status",
+          },
+        }),
+      );
+    });
+    return messages;
+  };
+  try {
+    const oldMessages = await render("light");
+    const newMessages = await render("dark");
+    assert.equal(pending.length, 2);
+    await act(async () => {
+      pending[0]!({ stale: true });
+    });
+    assert.equal(newMessages.length, 0);
+    assert.equal(oldMessages.length, 0);
+    await act(async () => {
+      pending[1]!({ current: true });
+    });
+    assert.equal(newMessages.length, 1);
+    assert.deepEqual(newMessages[0]!.value, { current: true });
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
 });

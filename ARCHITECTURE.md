@@ -2,6 +2,10 @@
 
 ## 核心概念
 
+- **ZenX 人工浏览器** — 窗口拥有的 WebContentsView 标签按 Thread 分组，以独立持久 profile 承载用户网页操作；不注册为 Agent target，不共享执行锁或会话权威，Browser 区域通过独立“Agent”入口观察已有 Agent 页面。
+- **ZenX 文件草稿** — Renderer 在窗口生命周期内按 Thread/path 保存易失编辑草稿，独立于会话历史；Host 以读取版本检测外部冲突并原子替换现有 UTF-8 文件，人工编辑不作为 Agent 工具执行，不更改线程权限策略。
+- **ZenX 辅助右栏** — Host 将线程 Browser observation、cwd 文本预览与显式编辑保存与已注册 Plugin panel 放入统一 tab 容器，选择与打开请求仅为易失 UI 状态，不拥有会话执行或持久历史。
+
 - **实验 Shell 输出展示** — 默认关闭的 Host 执行依赖仅在直接模型调用中对已保存在有界原始 spool 的输出做固定版本 RTK 过滤，过滤事实与原文回读凭据随既有工具结果写入 ItemList，程序化嵌套调用保持原始返回语义。
 
 - **Host 配置快照** — Host 将已准备的 Provider 目录、默认选择与执行参数作为一致的瞬时快照发布，新根执行只从当前快照取得依赖，配置文件仍是唯一持久配置权威。

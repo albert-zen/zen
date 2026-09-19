@@ -1,3 +1,4 @@
+import { observeElectronPage } from "./browser-electron-observation.js";
 import {
   BrowserThreadObservation,
   type BrowserThreadRequest,
@@ -940,6 +941,26 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
   constructor(options: { artifactDirectory?: string } = {}) {
     this.#artifacts = new BrowserScreenshotArtifactStore(
       options.artifactDirectory,
+    );
+  }
+
+  observeTab(
+    sessionId: string,
+    tabId: string,
+    listener: BrowserLiveObservationListener,
+  ): () => void {
+    const tab = this.#requireTab(sessionId, tabId);
+    return observeElectronPage(
+      {
+        capture: async () => await tab.window.webContents.capturePage(),
+        current: () =>
+          this.#closing ||
+          this.#tabs.get(tabId) !== tab ||
+          tab.window.isDestroyed()
+            ? undefined
+            : tab.documentVersion,
+      },
+      listener,
     );
   }
 

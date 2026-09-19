@@ -1431,6 +1431,7 @@ function unavailableHostSdk(pluginId: string): ZenXPluginHostSdkV1 {
       threads: Object.freeze({ startTurn: unavailable }),
     }),
     ui: Object.freeze({
+      panels: Object.freeze({ open: unavailable }),
       handles: Object.freeze({ read: unavailable }),
       commands: Object.freeze({ execute: unavailable }),
     }),
