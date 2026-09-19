@@ -17,6 +17,10 @@ The comparison below is scoped to Windows exploration on 2026-09-19. Codex was t
 
 A richer reference tool list is not itself a reason to add dozens of tools. The first improvements address tasks that previously required a caller to already know a process/window title or to leave the browser interface to reach a lower-page control. Existing stale-target, cancellation, thread/session isolation and explicit failure behavior remain essential.
 
+ZenX's Playwright provider already exposes DOM-visible targets outside the viewport and can auto-scroll when clicking them. Explicit scrolling still enables reading long pages without clicking. Electron and attached CDP observations expose viewport-visible targets, so scrolling also unlocks discovery of lower-page controls. These provider differences are retained rather than removing a useful existing behavior.
+
+DeepSeek's native provider completed Unicode input and background UIA invocation in a disposable Windows editor and rejected a stale element token after re-observation. Its `verify_state` returned `satisfied` for the editable value but `unknown` for a static success label that appeared in the text snapshot. This supports keeping unverified outcomes distinct from failures and successes. Its 56-tool native catalog serialized to 106,551 characters in this installation; ZenX's progressive plugin discovery remains useful for controlling context cost.
+
 ## Acceptance and limits
 
 - `computer_list_windows` supplies a bounded inventory with a query for narrowing results. Each returned target can feed the existing inspect/capture/action workflow. Long and empty window titles must remain usable as exact identities; display truncation must not corrupt selectors.
