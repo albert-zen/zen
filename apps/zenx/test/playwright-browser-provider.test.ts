@@ -199,6 +199,34 @@ test("Playwright provider revalidates DOM identity and dispatches password fill 
   assert.equal(runner.calls.filter((args) => args.includes("click")).length, 0);
 });
 
+test("Playwright inspection only advertises type for editable comboboxes", async () => {
+  const runner = new FakePlaywrightRunner();
+  runner.includeComboboxes = true;
+  const backend = new PlaywrightCliBrowserBackend({
+    executable: "/opt/playwright-cli",
+    runner,
+    cwd: "/tmp/zenx-playwright",
+  });
+  try {
+    const opened = await backend.open("preferences", "https://example.com/");
+    const inspected = await backend.inspect("preferences", opened.tabId);
+    assert.deepEqual(
+      inspected.targets.find(({ name }) => name === "Delivery speed")?.actions,
+      ["click"],
+    );
+    assert.deepEqual(
+      inspected.targets.find(({ name }) => name === "Search cities")?.actions,
+      ["click", "type"],
+    );
+    assert.deepEqual(
+      inspected.targets.find(({ name }) => name === "Custom city")?.actions,
+      ["click", "type"],
+    );
+  } finally {
+    await backend.close();
+  }
+});
+
 test("Playwright cancellation invalidates the session before immediate reuse", async () => {
   const runner = new FakePlaywrightRunner();
   const backend = new PlaywrightCliBrowserBackend({
@@ -254,6 +282,7 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
   invalidSnapshot = false;
   invalidPages = false;
   changeIdentity = false;
+  includeComboboxes = false;
   abortNextSnapshot = false;
   delayedCloseFinished: Promise<void> = Promise.resolve();
   #snapshotCount = 0;
@@ -308,6 +337,13 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
                 autocomplete: "current-password",
               }),
               dom("e4", { tag: "button", visible: false }),
+              ...(this.includeComboboxes
+                ? [
+                    dom("e5", { tag: "select" }),
+                    dom("e6", { tag: "input", type: "search" }),
+                    dom("e7", { tag: "div" }),
+                  ]
+                : []),
             ]),
           }
         : args[3]?.includes("window.name")
@@ -388,6 +424,25 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
               { role: "textbox", name: "Query", ref: "e2" },
               { role: "textbox", name: "Password", ref: "e3" },
               { role: "button", name: "Hidden", ref: "e4" },
+              ...(this.includeComboboxes
+                ? [
+                    {
+                      role: "combobox",
+                      name: "Delivery speed",
+                      ref: "e5",
+                    },
+                    {
+                      role: "combobox",
+                      name: "Search cities",
+                      ref: "e6",
+                    },
+                    {
+                      role: "textbox",
+                      name: "Custom city",
+                      ref: "e7",
+                    },
+                  ]
+                : []),
             ],
           };
     }

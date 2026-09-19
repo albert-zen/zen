@@ -1029,7 +1029,8 @@ function playwrightNodeActions(
   ]);
   return [
     ...(playwrightNodeCanClick(node) ? (["click"] as const) : []),
-    ...(typeRoles.has(node.role) &&
+    ...(dom.tag !== "select" &&
+    typeRoles.has(node.role) &&
     !(dom.tag === "input" && nonTypeableInput.has(dom.type.toLowerCase()))
       ? (["type"] as const)
       : []),
