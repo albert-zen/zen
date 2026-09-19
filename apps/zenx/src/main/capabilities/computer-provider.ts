@@ -152,7 +152,7 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
   schemaVersion: 2,
   id: "computer",
   name: "Computer",
-  version: "1.0.0",
+  version: "1.0.1",
   description:
     "Negotiated macOS desktop operations: targeted accessibility actions where supported and explicitly labeled, cancellable foreground takeover as the reliable baseline.",
   compatibility: { zenx: ">=0.1.0 <0.2.0" },

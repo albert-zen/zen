@@ -21,3 +21,10 @@ Accessibility permission and the Swift compiler. The Peekaboo variant currently
 does not advertise window discovery; its existing targeted tools are unchanged.
 Windows discovery is verified through WinApp CLI 0.3.1; macOS requires an actual
 Mac for live verification.
+
+Discovery ships in the Windows 1.1.1 and bundled macOS 1.0.1 packages. Existing
+profiles keep their installed manifest until the user updates Computer in the
+plugin manager (or uninstalls and reinstalls it). A bundled update selects the
+current App Resources package for the selected provider, even when the previous
+version's tarball is no longer present; the ordinary profile transaction owns
+the replacement and preserves plugin data. Peekaboo remains at 1.0.0.

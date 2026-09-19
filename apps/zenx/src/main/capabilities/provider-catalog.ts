@@ -772,6 +772,7 @@ function playwrightBrowserManifest(): ZenXPluginManifestV2 {
 function peekabooComputerManifest(): ZenXPluginManifestV2 {
   return {
     ...structuredClone(computerCapabilityManifest),
+    version: "1.0.0",
     mainDocument:
       "Use Computer to inspect an exact native window before acting, prefer background-safe semantic controls, and use explicitly labeled foreground takeover only when necessary. This Peekaboo variant does not expose computer_list_windows.",
     description:

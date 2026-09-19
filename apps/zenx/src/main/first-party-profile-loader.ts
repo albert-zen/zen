@@ -16,7 +16,7 @@ export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
   computer: {
     pluginId: "computer",
     packageName: "@zenx/computer-plugin",
-    tarball: "zenx-computer-plugin-macos-1.0.0.tgz",
+    tarball: "zenx-computer-plugin-macos-1.0.1.tgz",
   },
   selfControl: {
     pluginId: "zenx-self-control",
@@ -96,9 +96,9 @@ export function firstPartyProviderTarball(
   }
   if (pluginId === "computer") {
     if (providerId === "macos-desktop")
-      return "zenx-computer-plugin-macos-1.0.0.tgz";
+      return "zenx-computer-plugin-macos-1.0.1.tgz";
     if (providerId === "microsoft-winapp-cli")
-      return "zenx-computer-plugin-win32-1.1.0.tgz";
+      return "zenx-computer-plugin-win32-1.1.1.tgz";
     if (providerId === "peekaboo-cli")
       return "zenx-computer-plugin-peekaboo-1.0.0.tgz";
   }

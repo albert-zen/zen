@@ -1,6 +1,6 @@
 {
   "id": "computer",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Negotiated macOS desktop operations: targeted accessibility actions where supported and explicitly labeled, cancellable foreground takeover as the reliable baseline.",
   "provider": {
     "id": "macos-desktop",
