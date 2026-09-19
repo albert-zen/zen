@@ -711,7 +711,6 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     args: readonly string[],
     options: WinAppCliRunOptions,
   ): Promise<WinAppCliRunResult> {
-    await this.#verifyExecutable?.();
     return await this.#runner.run(this.#command, args, {
       ...options,
       runtimeExecutable: this.#runtimeExecutable,

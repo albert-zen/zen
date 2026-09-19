@@ -113,6 +113,32 @@ test("Windows provider maps WinApp JSON into opaque bounded UIA controls", async
   ]);
 });
 
+test("verifies each WinApp process launch once at the runner boundary", async () => {
+  const fixture = new FixtureWinAppRunner();
+  let verifications = 0;
+  const runner: WinAppCliRunner = {
+    run: async (executable, args, options) => {
+      await options.verifyBeforeSpawn?.();
+      return await fixture.run(executable, args, {
+        ...options,
+        verifyBeforeSpawn: undefined,
+      });
+    },
+  };
+  const backend = new WinAppCliComputerBackend({
+    platform: "win32",
+    runner,
+    verifyExecutable: async () => {
+      verifications += 1;
+    },
+  });
+
+  await backend.inspect(target);
+
+  assert.equal(fixture.commands.length, 2);
+  assert.equal(verifications, 2);
+});
+
 test("discovery narrows a truncated desktop and preserves sibling windows and exact long or empty titles", async () => {
   const runner = new FixtureWinAppRunner();
   runner.windows = Array.from({ length: 40 }, (_, index) => ({

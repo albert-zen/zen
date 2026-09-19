@@ -279,9 +279,7 @@ export async function selectBrowserProvider(
           : {
               runtimeExecutable: bundled.provider.runtime?.path,
               bindBeforeSpawn: bundledInvocationBind,
-              verifyExecutable: bundledInvocationVerify,
               bindBrowserBeforeLaunch: bundledBind,
-              verifyBrowserBeforeLaunch: bundledInvocationVerify,
               browser: "chromium",
               processEnvironment: {
                 PLAYWRIGHT_BROWSERS_PATH: path.join(
@@ -481,11 +479,6 @@ export async function selectComputerProvider(
             runtimeExecutable: bundled.provider.runtime?.path,
             bindBeforeSpawn: async () =>
               await bindBundledProviderLaunch(bundled.provider!, {
-                resourcesDirectory: options.resourcesDirectory!,
-                platform,
-              }),
-            verifyExecutable: async () =>
-              await verifyBundledProvider(bundled.provider!, {
                 resourcesDirectory: options.resourcesDirectory!,
                 platform,
               }),
