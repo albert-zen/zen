@@ -239,7 +239,8 @@ test("Windows provider trims only trailing transparent screenshot padding", asyn
         bitmap[(y * 1280 + x) * 4 + 3] = 255;
       }
     }
-    let crop: { x: number; y: number; width: number; height: number } | undefined;
+    let crop:
+      { x: number; y: number; width: number; height: number } | undefined;
     const backend = new WinAppCliComputerBackend({
       artifactDirectory: directory,
       platform: "win32",

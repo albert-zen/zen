@@ -948,8 +948,7 @@ function isEditableElement(element: WinAppElement): boolean {
 }
 
 function defaultScreenshotImageLoader():
-  | WinAppScreenshotImageLoader
-  | undefined {
+  WinAppScreenshotImageLoader | undefined {
   if (process.versions.electron === undefined) return undefined;
   return async (artifactPath) => {
     const { nativeImage } = await import("electron");
@@ -980,7 +979,11 @@ async function trimTrailingTransparentScreenshotPadding(
   }
   let maximumOpaqueX = -1;
   let maximumOpaqueY = -1;
-  for (let pixel = 0; pixel < dimensions.width * dimensions.height; pixel += 1) {
+  for (
+    let pixel = 0;
+    pixel < dimensions.width * dimensions.height;
+    pixel += 1
+  ) {
     if (bitmap[pixel * 4 + 3] === 0) continue;
     maximumOpaqueX = Math.max(maximumOpaqueX, pixel % dimensions.width);
     maximumOpaqueY = Math.max(
