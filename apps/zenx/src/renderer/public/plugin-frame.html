@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+    />
+  </head>
+  <body>
+    <script>
+      // This separate document owns its policy. srcdoc would inherit the main UI's
+      // script-src restriction. The parent still enforces sandbox=allow-scripts.
+      addEventListener("message", function initialize(event) {
+        if (
+          event.source !== parent ||
+          event.data?.type !== "zenx-plugin-ui:document" ||
+          typeof event.data.html !== "string"
+        )
+          return;
+        removeEventListener("message", initialize);
+        document.open();
+        document.write(event.data.html);
+        document.close();
+      });
+    </script>
+  </body>
+</html>

@@ -131,7 +131,14 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
     assert.equal(document.activeElement, tab("Notes"));
     const frame = document.querySelector("iframe")!;
     assert.equal(frame.getAttribute("sandbox"), "allow-scripts");
-    assert.ok(frame.srcdoc.includes('"threadId":"thread-a"'));
+    let html = "";
+    frame.contentWindow!.postMessage = (value) => {
+      html = value.html;
+    };
+    await act(async () => {
+      frame.dispatchEvent(new dom.window.Event("load"));
+    });
+    assert.ok(html.includes('"threadId":"thread-a"'));
     await act(async () =>
       document
         .querySelector<HTMLButtonElement>('[aria-label="Close side panel"]')!

@@ -258,7 +258,17 @@ test("isolated host uses sandboxed iframe without same-origin parent access", as
   const iframe = dom.window.document.querySelector("iframe")!;
   assert.equal(iframe.getAttribute("sandbox"), "allow-scripts");
   assert.doesNotMatch(iframe.getAttribute("sandbox")!, /allow-same-origin/u);
-  assert.match(iframe.srcdoc, /zenx-plugin-ui:init/u);
+  assert.ok(iframe.src.endsWith("/plugin-frame.html"));
+  let documentMessage: { type: string; html: string } | undefined;
+  iframe.contentWindow!.postMessage = (value) => {
+    documentMessage = value;
+  };
+  await act(async () => {
+    iframe.dispatchEvent(new dom.window.Event("load"));
+  });
+  assert.equal(documentMessage?.type, "zenx-plugin-ui:document");
+  assert.match(documentMessage!.html, /zenx-plugin-ui:init/u);
+  assert.match(documentMessage!.html, /<main>isolated<\/main>/u);
   await act(async () => root.unmount());
 });
 

@@ -412,7 +412,7 @@ Plugin Spaces 标题是展开/收起按钮，默认展开；收起隐藏插件�
 - Thread 顶栏的侧栏按钮统一打开 Browser、Files 与插件 panel tabs；即使 Browser 插件未启用，Files 仍可用。原 workspace 信息抽屉保留。
 - Browser 跟随当前 Thread 的 Agent 目标，可手动选择该 Thread 的页面；用户浏览器与内置 Electron Browser 展示只读实时画面，Playwright 展示 Agent inspect 的临时截图。隐藏右栏、切换到其他 tab 或窗口不可见时停止订阅帧；右栏不会触发 inspect 或改变模型的 observationId。
 - 宽窗口可以调整右栏宽度或展开；窄窗口打开右栏时使用工作区全宽，关闭返回聊天。Tab 支持左右方向键、Home/End；Escape 还原展开或关闭右栏。
-- Files 从当前 Thread 的 cwd 浏览，只读 UTF-8 文本上限 1 MiB；目录最多显示 2,000 项并提示截断，不显示符号链接，不越过 cwd。Markdown 默认渲染，可切换 Source；常见代码扩展名提供基础词法高亮（超过 100,000 字符只显示纯文本）。Refresh 重新读取磁盘，不自动监视，不缓存文件为会话历史。
+- Files 从当前 Thread 的 cwd 浏览，只读 UTF-8 文本上限 1 MiB；目录最多显示 2,000 项并提示截断，不显示符号链接，拒绝解析时位于 cwd 外的路径。路径检查界定普通浏览范围，不构成防御本机进程并发替换文件树的 OS 沙箱。Markdown 默认渲染，可切换 Source；常见代码扩展名提供基础词法高亮（超过 100,000 字符只显示纯文本）。Refresh 重新读取磁盘，不自动监视，不缓存文件为会话历史。
 - 插件 `contributions.panels` 按 order 排列为右栏 tabs。内容继续使用 Generic UI Host：可信模块或隔离 iframe，不在聊天底部重复挂载；context 包含当前 threadId。插件卸载或停用后移除其 tab。
 - 插件通过 Host SDK `ui.panels.open({ panelId, threadId })` 请求展示自己声明的 panel。请求只改变易失 UI 选择，不切换当前 Thread，不创建 Turn；给后台 Thread 的请求在用户选择该 Thread 时展示。没有窗口或 panel 不可用时明确报错；成功表示已分发给窗口，不代表用户已看到或确认内容。
 - 当前范围不含文件写回、终端、完整人用浏览器及异步 Inbox 回答回流。

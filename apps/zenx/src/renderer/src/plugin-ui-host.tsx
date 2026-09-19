@@ -203,19 +203,31 @@ function IsolatedPluginSurface({
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
   }, [channel, sdk]);
+  const initialized = useRef(new WeakSet<HTMLIFrameElement>());
+  const html = isolatedDocument(bundleHtml, {
+    channel,
+    exportName,
+    pluginId: sdk.pluginId,
+    theme: sdk.theme,
+    context: sdk.context,
+  });
   return (
     <iframe
+      key={html}
       className={className}
       ref={frame}
       sandbox="allow-scripts"
       title={`${sdk.pluginId} plugin surface`}
-      srcDoc={isolatedDocument(bundleHtml, {
-        channel,
-        exportName,
-        pluginId: sdk.pluginId,
-        theme: sdk.theme,
-        context: sdk.context,
-      })}
+      src="./plugin-frame.html"
+      onLoad={(event) => {
+        const element = event.currentTarget;
+        if (initialized.current.has(element)) return;
+        initialized.current.add(element);
+        element.contentWindow?.postMessage(
+          { type: "zenx-plugin-ui:document", html },
+          "*",
+        );
+      }}
     />
   );
 }

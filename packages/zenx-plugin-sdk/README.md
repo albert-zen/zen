@@ -43,7 +43,9 @@ Declare a `contributions.panels` entry with `id`, `title`, `surfaceId`, and opti
 `order`, and a matching `ui.surfaces` / `ui.bundles` definition. ZenX places the
 surface beside Browser and Files in the selected Thread's right panel. The
 existing UI SDK supplies `context.threadId`, theme, handles, and commands;
-isolated HTML stays inside an `allow-scripts` sandbox. Panel selection is local,
+isolated HTML stays inside an `allow-scripts` sandbox. The separate Host-owned
+frame document supplies its own restrictive CSP so the parent renderer never
+needs to allow inline plugin scripts. Panel selection is local,
 transient UI state, not Thread history. A disabled/uninstalled plugin loses its tab.
 
 Bundled runtimes can request their own panel using the Host SDK:

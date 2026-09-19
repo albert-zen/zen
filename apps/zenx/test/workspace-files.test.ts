@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -38,6 +38,33 @@ test("viewer rejects traversal, binary data and oversized files without partial 
     await assert.rejects(readWorkspaceFile(root, "binary"), /text|binary/i);
     await assert.rejects(readWorkspaceFile(root, "large"), /large|MiB/i);
     await assert.rejects(readWorkspaceFile(root, "."), /regular file/i);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("viewer rejects a directory junction resolving outside cwd", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-files-junction-"));
+  try {
+    const workspace = path.join(root, "workspace");
+    const outside = path.join(root, "outside");
+    await mkdir(workspace);
+    await mkdir(outside);
+    await writeFile(path.join(outside, "secret.txt"), "not in this workspace");
+    await symlink(
+      outside,
+      path.join(workspace, "link"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    assert.deepEqual((await listWorkspaceFiles(workspace, ".")).entries, []);
+    await assert.rejects(
+      readWorkspaceFile(workspace, "link/secret.txt"),
+      /outside this workspace/,
+    );
+    await assert.rejects(
+      listWorkspaceFiles(workspace, "link"),
+      /outside this workspace/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
