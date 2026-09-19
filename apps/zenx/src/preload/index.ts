@@ -62,7 +62,59 @@ import type { BrowserObservationEnvelope } from "../main/browser-live-observatio
 
 contextBridge.exposeInMainWorld("zenx", {
   platform: process.platform,
+  workspaceBrowser: {
+    command: async (
+      threadId: string,
+      command: string,
+      tabId?: string,
+      url?: string,
+    ) =>
+      await ipcRenderer.invoke(
+        ipcChannels.workspaceBrowserCommand,
+        threadId,
+        command,
+        tabId,
+        url,
+      ),
+    mount: async (request: unknown) =>
+      await ipcRenderer.invoke(ipcChannels.workspaceBrowserMount, request),
+    onChanged: (listener: (value: unknown) => void) => {
+      const receive = (_event: Electron.IpcRendererEvent, value: unknown) =>
+        listener(value);
+      ipcRenderer.on(ipcChannels.workspaceBrowserChanged, receive);
+      return () =>
+        ipcRenderer.removeListener(
+          ipcChannels.workspaceBrowserChanged,
+          receive,
+        );
+    },
+    onFocusAddress: (listener: (threadId: string) => void) => {
+      const receive = (_event: Electron.IpcRendererEvent, threadId: string) =>
+        listener(threadId);
+      ipcRenderer.on(ipcChannels.workspaceBrowserFocusAddress, receive);
+      return () =>
+        ipcRenderer.removeListener(
+          ipcChannels.workspaceBrowserFocusAddress,
+          receive,
+        );
+    },
+  },
   workspaceFiles: {
+    setDirty: (dirty: boolean) =>
+      ipcRenderer.send(ipcChannels.workspaceFilesDirty, dirty),
+    save: async (
+      threadId: string,
+      path: string,
+      text: string,
+      revision: string,
+    ) =>
+      await ipcRenderer.invoke(
+        ipcChannels.workspaceFilesSave,
+        threadId,
+        path,
+        text,
+        revision,
+      ),
     list: async (threadId: string, path: string) =>
       await ipcRenderer.invoke(ipcChannels.workspaceFilesList, threadId, path),
     read: async (threadId: string, path: string) =>

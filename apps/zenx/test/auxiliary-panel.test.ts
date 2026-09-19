@@ -118,7 +118,9 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
         .click(),
     );
     assert.ok(
-      document.querySelector(".file-source")?.textContent?.includes("<script>"),
+      document
+        .querySelector<HTMLTextAreaElement>(".file-editor")
+        ?.value.includes("<script>"),
     );
     await act(async () =>
       tab("Files").dispatchEvent(

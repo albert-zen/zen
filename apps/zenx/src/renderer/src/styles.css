@@ -6482,3 +6482,172 @@ select:focus-visible {
     display: none;
   }
 }
+
+.file-breadcrumbs,
+.file-path-form,
+.file-open-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  min-width: 0;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.file-breadcrumbs button,
+.file-open-tabs button {
+  white-space: nowrap;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-open-tabs [aria-selected="true"] {
+  color: var(--color-text-accent);
+  border-bottom: 2px solid currentColor;
+}
+.file-path-form input {
+  flex: 1;
+  min-width: 0;
+}
+.file-toolbar {
+  flex-wrap: wrap;
+}
+.file-editor {
+  display: block;
+  width: 100%;
+  min-height: 320px;
+  height: 100%;
+  resize: vertical;
+  padding: 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: var(--color-surface-main);
+  color: var(--color-text-primary);
+  font:
+    13px/1.6 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
+  tab-size: 2;
+}
+.file-save-status {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+.file-discard {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 0;
+}
+.file-conflict {
+  margin-block: 10px;
+}
+
+.workspace-browser-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+.workspace-browser-tabs,
+.workspace-browser-address {
+  display: flex;
+  gap: 4px;
+  padding: 8px;
+  align-items: center;
+  min-width: 0;
+  flex-shrink: 0;
+}
+.workspace-browser-tabs {
+  overflow-x: auto;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.workspace-browser-tabs > button {
+  flex-shrink: 0;
+}
+.workspace-browser-tab {
+  display: flex;
+  flex-shrink: 0;
+}
+.workspace-browser-tab > button:first-child {
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.workspace-browser-tabs [aria-pressed="true"] {
+  color: var(--color-text-accent);
+  border-bottom: 2px solid currentColor;
+}
+.workspace-browser-address input {
+  min-width: 0;
+  flex: 1;
+}
+.workspace-browser-viewport {
+  min-height: 100px;
+  flex: 1;
+}
+.workspace-browser-owner {
+  margin: 0;
+  padding: 0 12px 8px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+.browser-ui-error {
+  padding: 8px 12px;
+  overflow-wrap: anywhere;
+}
+
+.file-open-tab {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.file-breadcrumbs button,
+.file-open-tab button,
+.file-path-form button,
+.workspace-browser-tabs button,
+.workspace-browser-address button,
+.file-discard button {
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.file-breadcrumbs button:hover:not(:disabled),
+.file-open-tab button:hover:not(:disabled),
+.file-path-form button:hover:not(:disabled),
+.workspace-browser-tabs button:hover:not(:disabled),
+.workspace-browser-address button:hover:not(:disabled),
+.file-discard button:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+.file-path-form input,
+.workspace-browser-address input {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: var(--color-surface-main);
+  color: var(--color-text-primary);
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 12px;
+}
+.file-editor {
+  height: max(260px, calc(100vh - 380px));
+}
+.file-breadcrumbs button:disabled {
+  opacity: 1;
+  color: var(--color-text-primary);
+  cursor: default;
+}
+.file-discard {
+  padding: 8px 12px;
+}

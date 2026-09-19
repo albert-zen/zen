@@ -61,7 +61,39 @@ declare global {
   interface Window {
     zenx: {
       platform: NodeJS.Platform;
+      workspaceBrowser: {
+        command(
+          threadId: string,
+          command: import("../../main/workspace-browser.js").WorkspaceBrowserCommand,
+          tabId?: string,
+          url?: string,
+        ): Promise<
+          import("../../main/workspace-browser.js").WorkspaceBrowserTab[]
+        >;
+        mount(request: {
+          threadId: string;
+          tabId?: string;
+          lease: string;
+          bounds?: { x: number; y: number; width: number; height: number };
+        }): Promise<void>;
+        onChanged(
+          listener: (value: {
+            threadId: string;
+            tabs: import("../../main/workspace-browser.js").WorkspaceBrowserTab[];
+          }) => void,
+        ): () => void;
+        onFocusAddress(listener: (threadId: string) => void): () => void;
+      };
       workspaceFiles: {
+        setDirty(dirty: boolean): void;
+        save(
+          threadId: string,
+          path: string,
+          text: string,
+          revision: string,
+        ): Promise<
+          import("../../main/workspace-files.js").WorkspaceFileSaveResult
+        >;
         list(
           threadId: string,
           path: string,

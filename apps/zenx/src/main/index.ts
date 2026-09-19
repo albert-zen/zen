@@ -1,3 +1,4 @@
+import { WorkspaceBrowser } from "./workspace-browser.js";
 import { createImZenXProfileLoader } from "./imzenx-profile-loader.js";
 import { readZenXConnectionDescriptor } from "../protocol-client/connection-descriptor.js";
 import {
@@ -99,6 +100,8 @@ let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
 let capabilityService: ZenXCapabilityService | undefined;
 let pluginDevControl: ZenXPluginDevControlServer | undefined;
+const workspaceBrowser = new WorkspaceBrowser();
+const dirtyFileWindows = new Set<number>();
 const projectProjection = new ZenXProjectProjection();
 const selfControlPort = new MutableAppServerRequestPort(projectProjection);
 let titleCoordinator: ZenXThreadTitleCoordinator | undefined;
@@ -183,6 +186,23 @@ function createWindow(): BrowserWindow {
     },
   });
 
+  window.on("closed", () => dirtyFileWindows.delete(window.id));
+  window.webContents.on("will-prevent-unload", (event) => {
+    if (hostLifecycle.quitting) {
+      event.preventDefault();
+      return;
+    }
+    const response = dialog.showMessageBoxSync(window, {
+      type: "warning",
+      buttons: ["Keep editing", "Leave window"],
+      defaultId: 0,
+      cancelId: 0,
+      message: "Leave with unsaved file edits?",
+      detail:
+        "Unsaved drafts will be lost. A save already in progress may still finish.",
+    });
+    if (response === 1) event.preventDefault();
+  });
   window.once("ready-to-show", () => {
     if (!hostLifecycle.quitting) window.show();
   });
@@ -550,6 +570,22 @@ void app
 
 app.on("before-quit", (event) => {
   if (!ownsSingleInstance) return;
+  if (
+    !hostLifecycle.quitting &&
+    dirtyFileWindows.size > 0 &&
+    dialog.showMessageBoxSync({
+      type: "warning",
+      buttons: ["Keep editing", "Quit"],
+      defaultId: 0,
+      cancelId: 0,
+      message: "Quit with unsaved file edits?",
+      detail:
+        "Unsaved drafts will be lost. A save already in progress may still finish.",
+    }) !== 1
+  ) {
+    event.preventDefault();
+    return;
+  }
   hostLifecycle.beforeQuit(() => event.preventDefault());
 });
 
@@ -649,7 +685,11 @@ function desktopPlatform(platform: NodeJS.Platform): ZenXDesktopPlatform {
   throw new Error(`ZenX does not support desktop platform ${platform}`);
 }
 
-import { listWorkspaceFiles, readWorkspaceFile } from "./workspace-files.js";
+import {
+  listWorkspaceFiles,
+  readWorkspaceFile,
+  saveWorkspaceFile,
+} from "./workspace-files.js";
 
 function installProtocolIpc(
   manager: AppServerManager,
@@ -671,6 +711,41 @@ function installProtocolIpc(
       },
     );
   }
+  ipcMain.handle(
+    ipcChannels.workspaceBrowserCommand,
+    (
+      event,
+      threadId: unknown,
+      command: unknown,
+      tabId: unknown,
+      url: unknown,
+    ) => workspaceBrowser.command(event.sender, threadId, command, tabId, url),
+  );
+  ipcMain.handle(ipcChannels.workspaceBrowserMount, (event, request: unknown) =>
+    workspaceBrowser.mount(event.sender, request),
+  );
+  ipcMain.on(ipcChannels.workspaceFilesDirty, (event, dirty: unknown) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (window) {
+      if (dirty === true) dirtyFileWindows.add(window.id);
+      else dirtyFileWindows.delete(window.id);
+    }
+  });
+  ipcMain.handle(
+    ipcChannels.workspaceFilesSave,
+    async (
+      _event,
+      threadId: unknown,
+      relative: unknown,
+      text: unknown,
+      revision: unknown,
+    ) => {
+      if (typeof threadId !== "string" || threadId.length === 0)
+        throw new Error("Invalid Thread file query");
+      const { thread } = await manager.request("thread/read", { threadId });
+      return await saveWorkspaceFile(thread.cwd, relative, text, revision);
+    },
+  );
   ipcMain.handle(ipcChannels.getStatus, () => manager.status);
   ipcMain.handle(
     ipcChannels.getPendingApprovals,

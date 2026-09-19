@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
-import { BrowserThreadPanel } from "./browser-thread-panel.js";
+import { WorkspaceBrowserPanel } from "./workspace-browser-panel.js";
 import { GenericPluginUiHost } from "./plugin-ui-host.js";
 import { pluginUiRegistry, useAppearance } from "./PluginProductPage.js";
+import { WorkspaceFileDrafts } from "./workspace-file-drafts.js";
 import { WorkspaceFilesPanel } from "./workspace-files-panel.js";
 import { Icon } from "./icons.js";
 
@@ -14,7 +15,11 @@ export function AuxiliaryPanel({
   snapshot,
   selectedTab,
   onSelectTab,
+  fileDrafts,
+  workspacePath,
 }: {
+  fileDrafts?: WorkspaceFileDrafts;
+  workspacePath?: string;
   threadId: string;
   title: string;
   open: boolean | undefined;
@@ -23,6 +28,7 @@ export function AuxiliaryPanel({
   selectedTab?: string;
   onSelectTab(tab: string): void;
 }) {
+  const [localDrafts] = useState(() => new WorkspaceFileDrafts());
   const theme = useAppearance();
   const [width, setWidth] = useState(520);
   const [expanded, setExpanded] = useState(false);
@@ -34,7 +40,7 @@ export function AuxiliaryPanel({
     (a, b) => (a.order ?? 0) - (b.order ?? 0) || a.key.localeCompare(b.key),
   );
   const tabs = [
-    ...(browser ? [{ id: "browser", title: "Browser" }] : []),
+    { id: "browser", title: "Browser" },
     { id: "files", title: "Files" },
     ...panels.map((p) => ({ id: `plugin:${p.key}`, title: p.title })),
   ];
@@ -159,7 +165,7 @@ export function AuxiliaryPanel({
           <Icon name="x" />
         </button>
       </header>
-      {browser ? (
+      {
         <div
           className="auxiliary-content"
           role="tabpanel"
@@ -167,16 +173,16 @@ export function AuxiliaryPanel({
           aria-labelledby="aux-tab-browser"
           hidden={active !== "browser"}
         >
-          <BrowserThreadPanel
+          <WorkspaceBrowserPanel
             threadId={threadId}
             title={title}
-            embedded
+            agentAvailable={browser}
             open={active === "browser" ? open : false}
             onOpenChange={onOpenChange}
-            providerRevision={snapshot}
+            snapshot={snapshot}
           />
         </div>
-      ) : null}
+      }
       <div
         className="auxiliary-content"
         role="tabpanel"
@@ -185,7 +191,12 @@ export function AuxiliaryPanel({
         hidden={active !== "files"}
       >
         {filesVisited || (open && active === "files") ? (
-          <WorkspaceFilesPanel key={threadId} threadId={threadId} />
+          <WorkspaceFilesPanel
+            key={threadId}
+            threadId={threadId}
+            drafts={fileDrafts ?? localDrafts}
+            workspacePath={workspacePath}
+          />
         ) : null}
       </div>
       {open && panel && snapshot ? (

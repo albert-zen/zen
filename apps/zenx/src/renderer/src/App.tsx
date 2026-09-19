@@ -1,4 +1,5 @@
 import { handleCompactCommand, isCompactCommand } from "./compact-command.js";
+import { useWorkspaceFileDrafts } from "./workspace-file-drafts.js";
 import { AuxiliaryPanel } from "./auxiliary-panel.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
 import {
@@ -415,6 +416,7 @@ export function App() {
   }, [page]);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const fileDrafts = useWorkspaceFileDrafts();
   const [panelTabs, setPanelTabs] = useState<Record<string, string>>({});
   useEffect(
     () =>
@@ -2252,6 +2254,8 @@ export function App() {
         threadDetail !== null &&
         selectedThreadId === threadDetail.id ? (
           <AuxiliaryPanel
+            fileDrafts={fileDrafts}
+            workspacePath={threadDetail.cwd}
             key={threadDetail.id}
             threadId={threadDetail.id}
             title={

@@ -1,4 +1,10 @@
 export const ipcChannels = {
+  workspaceBrowserCommand: "zenx:workspace-browser:command",
+  workspaceBrowserMount: "zenx:workspace-browser:mount",
+  workspaceBrowserChanged: "zenx:workspace-browser:changed",
+  workspaceBrowserFocusAddress: "zenx:workspace-browser:focus-address",
+  workspaceFilesDirty: "zenx:workspace-files:dirty",
+  workspaceFilesSave: "zenx:workspace-files:save",
   workspaceFilesList: "zenx:workspace-files:list",
   workspaceFilesRead: "zenx:workspace-files:read",
   pluginPanelOpen: "zenx:plugins:panel-open",
