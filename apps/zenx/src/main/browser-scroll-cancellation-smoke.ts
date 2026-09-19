@@ -51,12 +51,18 @@ export async function verifyElectronScrollCancellation(
     for (const fail of [false, true]) {
       debugger_.sendCommand = original;
       observation = await backend.inspect(opened.sessionId, opened.tabId);
-      const gate = Promise.withResolvers<void>();
-      const started = Promise.withResolvers<void>();
+      let release!: () => void;
+      let markStarted!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
       debugger_.sendCommand = async (...args) => {
         const result = await original(...args);
-        started.resolve();
-        await gate.promise;
+        markStarted();
+        await gate;
         if (fail) throw new Error("Simulated debugger acknowledgement failure");
         return result;
       };
@@ -80,7 +86,7 @@ export async function verifyElectronScrollCancellation(
           return error as unknown;
         },
       );
-      await started.promise;
+      await started;
       controller.abort();
       await new Promise((resolve) => setImmediate(resolve));
       assert.equal(
@@ -88,7 +94,7 @@ export async function verifyElectronScrollCancellation(
         false,
         "abort must not release a still-pending debugger call",
       );
-      gate.resolve();
+      release();
       const error = await outcome;
       assert.ok(error instanceof Error);
       assert.match(error.message, /outcome unknown.*inspect again/i);
