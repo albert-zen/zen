@@ -36,6 +36,8 @@
 - **Tool Execution Mode** — Tool Runtime 对执行 body 只声明 `parallel_safe` 或 `exclusive`；未声明按 `exclusive`，builtin shell 的独立进程声明 `parallel_safe`，该分类不是权限或资源 scope。
 - **ToolTaskManager** — ToolEnvironment 统一拥有普通工具的 Host-local 执行、按 Thread 隔离的 task_id、增量输出与 wait；交回时间（默认 10 秒、最高 180 秒）和执行超时（默认 10 分钟）分开，快速结果原样返回，任务不参与 journal 重建。
 - **ToolTaskPolicy** — 具体工具只声明取消确认能力、资源作用域和可选 timingArguments 字段映射；默认未知取消保留 owner fence 与执行容量直到真实完成或 Host 关闭，shell 在进程组停止后确认取消，composite 由同一任务管理器持有并协调嵌套调用，本身不占子工具容量。
+- **Tool Resource Claims** — Runtime 可为一次调用声明瞬时共享或独占资源，统一任务管理器原子取得全部声明；显式启用排队的调用以自身 Thread 的 task_id 等待，冲突资源按到达顺序执行，互不相关的资源仍可并行，取消或超时的待执行调用不派发，已经派发的未知取消继续保留资源直到真实结束。
+- **ZenX Hosted Resource Ownership** — Browser 执行按真实的 Thread/session 隔离和页面身份协调，会话关闭独占整个会话；Computer 保留共享桌面的独占操作边界，其他插件各自独占插件资源，IPC transport 不充当所有插件共同的资源锁；这些资源只存在于 Host 生命周期内，不改变 Thread 权威或观察投影。
 - **ToolWaitRuntime** — 内建且保留名称的 wait 仅观察或请求取消同 Thread 已获准任务，只在任务完成或本次 wait 到期时返回自上次领取后的增量输出，到期不停止底层执行；它不重新授权、不占执行体容量，取消请求、无法确认取消和已停止是不同状态，Host 关闭有界清理临时资源；每个任务同时只有一个增量输出消费者，并发取消可返回不消费输出的状态，活动观察持有结果保留期。
 - **ToolTaskBounds** — 同一 Environment 默认最多 8 个尚未确认结束的执行体、64 个含待领取结果的任务，已完成结果保留 5 分钟；交回不释放 prepared bundle lease 或资源 fence，完成/关闭才释放，达到容量时立即告知模型等待现有任务。
 - **Tool Execution Status** — AgentRuntime 为每条新 `tool_result` 记录 `completed`、`failed` 或 `declined` 的 provider-neutral canonical 事实，Tool Runtime 只返回结果内容和 exit code，不能决定审批语义。
