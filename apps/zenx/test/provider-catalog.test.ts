@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -300,6 +300,9 @@ test("packaged WinApp uses its verified launch binding as the single integrity c
     assert.equal(runner.verificationCallbacks, 0);
     await selection.backend.close();
   } finally {
+    // The real launch binding makes its provider directory read-only on POSIX.
+    // Restore only this disposable fixture's parent before removing its files.
+    await chmod(path.join(resourcesDirectory, "providers"), 0o755);
     await rm(resourcesDirectory, { recursive: true, force: true });
   }
 });
