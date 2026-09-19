@@ -197,8 +197,17 @@ test("isolated result renderer uses the ZP6 sandbox and receives the same bounde
   const frame = dom.window.document.querySelector("iframe")!;
   assert.equal(frame.getAttribute("sandbox"), "allow-scripts");
   assert.doesNotMatch(frame.getAttribute("sandbox")!, /allow-same-origin/u);
-  assert.match(frame.srcdoc, /fixture\\u002fcards|fixture\/cards/u);
-  assert.match(frame.srcdoc, /text fallback/u);
+  assert.ok(frame.src.endsWith("/plugin-frame.html"));
+  let documentMessage: { type: string; html: string } | undefined;
+  frame.contentWindow!.postMessage = (value) => {
+    documentMessage = value;
+  };
+  await act(async () => {
+    frame.dispatchEvent(new dom.window.Event("load"));
+  });
+  assert.equal(documentMessage?.type, "zenx-plugin-ui:document");
+  assert.match(documentMessage!.html, /fixture\\u002fcards|fixture\/cards/u);
+  assert.match(documentMessage!.html, /text fallback/u);
   await act(async () => root.unmount());
 });
 
