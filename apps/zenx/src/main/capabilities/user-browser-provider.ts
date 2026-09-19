@@ -5,6 +5,9 @@ import WebSocket from "ws";
 
 import {
   browserActionScript,
+  browserScrollScript,
+  assertBrowserObservation,
+  type BrowserScrollDirection,
   browserInspectScript,
   redactBrowserUrl,
   resolveBrowserObservedTarget,
@@ -849,6 +852,34 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     return operation;
   }
 
+  async scroll(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    direction: BrowserScrollDirection,
+    pixels: number,
+    signal?: AbortSignal,
+  ): Promise<BrowserTabSummary> {
+    throwIfAborted(signal);
+    const expression = browserScrollScript(direction, pixels);
+    const { session, tab } = this.#sessionTab(sessionId, tabId);
+    assertBrowserObservation(
+      tab.observation,
+      tab.documentVersion,
+      observationId,
+    );
+    const operation = this.#mutateObserved(
+      sessionId,
+      tabId,
+      session,
+      tab,
+      expression,
+      signal,
+    );
+    observeRejection(operation);
+    return await operation;
+  }
+
   async closeTab(sessionId: string, tabId: string): Promise<void> {
     const session = this.#requireSession(sessionId);
     this.#transferClientClosureProblem(session, [...session.targetIds]);
@@ -1064,6 +1095,24 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       targetId,
       action,
     );
+    return await this.#mutateObserved(
+      sessionId,
+      tabId,
+      session,
+      tab,
+      browserActionScript(target, action, text, submit),
+      signal,
+    );
+  }
+
+  async #mutateObserved(
+    sessionId: string,
+    tabId: string,
+    session: UserBrowserSession,
+    tab: UserBrowserTabState,
+    expression: string,
+    signal?: AbortSignal,
+  ): Promise<BrowserTabSummary> {
     const expectedDocumentIdentity = tab.documentIdentity;
     tab.observation = undefined;
     tab.documentIdentity = undefined;
@@ -1073,7 +1122,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       try {
         evaluation = await this.#client.evaluateDocument(
           tabId,
-          browserActionScript(target, action, text, submit),
+          expression,
           this.#attachmentOwner(session),
           expectedDocumentIdentity,
           signal,

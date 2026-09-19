@@ -25,6 +25,40 @@ import {
 } from "../src/main/capabilities/user-browser-provider.js";
 import type { ZenXBrowserBackend } from "../src/main/capabilities/browser-provider.js";
 
+test("user browser scroll consumes observations and guards document identity before dispatch", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  try {
+    await backend.listTabs("work");
+    const inspected = await backend.inspect("work", "target-1");
+    await assert.rejects(
+      backend.scroll("work", "target-1", "forged", "down", 600),
+      /stale or unknown/,
+    );
+    await backend.scroll(
+      "work",
+      "target-1",
+      inspected.observationId,
+      "down",
+      600,
+    );
+    assert.equal(client.actionCount, 1);
+    await assert.rejects(
+      backend.scroll("work", "target-1", inspected.observationId, "down", 600),
+      /stale or unknown/,
+    );
+    const next = await backend.inspect("work", "target-1");
+    client.documentToken = "changed-without-event";
+    await assert.rejects(
+      backend.scroll("work", "target-1", next.observationId, "up", 400),
+      /document changed/,
+    );
+    assert.equal(client.actionCount, 1);
+  } finally {
+    await backend.close();
+  }
+});
+
 test("CDP lifecycle contract invalidates history, reload, activation, and top-frame navigation", () => {
   for (const method of [
     "Page.navigatedWithinDocument",
@@ -2402,7 +2436,10 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     ) {
       throw new UserBrowserDocumentChangedBeforeDispatchError();
     }
-    if (!expression.includes("const expected =")) {
+    if (
+      !expression.includes("const expected =") &&
+      !expression.includes("window.scrollBy")
+    ) {
       if (this.holdInspections) {
         this.#inspectionStarted.resolve();
         await this.#heldInspection.promise;

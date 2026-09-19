@@ -1,6 +1,6 @@
 {
   "id": "browser",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A dedicated ephemeral ZenX browser session with bounded DOM inspection and narrow navigation and interaction tools.",
   "provider": {
     "id": "electron-dedicated-browser",
@@ -30,7 +30,7 @@
     {
       "id": "browser.interact",
       "title": "Interact with pages",
-      "description": "Click and type into an explicitly targeted visible page element.",
+      "description": "Click and type into an explicitly targeted visible page element, or scroll the page viewport.",
       "scope": "browser-session"
     }
   ],
@@ -174,6 +174,44 @@
       "permissions": ["browser.interact"],
       "interactionMode": "background_safe",
       "capabilities": ["dedicated_profile", "cdp", "dom.set_value"]
+    },
+    {
+      "name": "browser_scroll",
+      "description": "Scroll the page viewport in one explicit tab using the latest browser_inspect observation. Direction is up/down/left/right and pixels is an integer from 1 to 2000. Consumes the observation; inspect again before interacting. Nested scrolling containers are not supported.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "direction": {
+            "type": "string",
+            "enum": ["up", "down", "left", "right"]
+          },
+          "pixels": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000
+          }
+        },
+        "required": [
+          "sessionId",
+          "tabId",
+          "observationId",
+          "direction",
+          "pixels"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.interact"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp", "dom.scroll"]
     },
     {
       "name": "browser_close",

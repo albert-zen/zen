@@ -79,6 +79,14 @@ export type BrowserLiveObservationListener = (
 ) => void;
 
 export interface ZenXBrowserBackend {
+  scroll?(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    direction: BrowserScrollDirection,
+    pixels: number,
+    signal?: AbortSignal,
+  ): Promise<BrowserTabSummary>;
   observeTab?(
     sessionId: string,
     tabId: string,
@@ -136,7 +144,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
   schemaVersion: 2,
   id: "browser",
   name: "Browser",
-  version: "1.0.1",
+  version: "1.0.2",
   description:
     "A dedicated ephemeral ZenX browser session with bounded DOM inspection and narrow navigation and interaction tools.",
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
@@ -174,7 +182,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       id: "browser.interact",
       title: "Interact with pages",
       description:
-        "Click and type into an explicitly targeted visible page element.",
+        "Click and type into an explicitly targeted visible page element, or scroll the page viewport.",
       scope: "browser-session",
     },
   ],
@@ -276,6 +284,22 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       permissions: ["browser.interact"],
       interactionMode: "background_safe",
       capabilities: ["dedicated_profile", "cdp", "dom.set_value"],
+    },
+    {
+      name: "browser_scroll",
+      description:
+        "Scroll the page viewport in one explicit tab using the latest browser_inspect observation. Direction is up/down/left/right and pixels is an integer from 1 to 2000. Consumes the observation; inspect again before interacting. Nested scrolling containers are not supported.",
+      inputSchema: browserTargetSchema(
+        {
+          observationId: stringSchema(),
+          direction: { type: "string", enum: ["up", "down", "left", "right"] },
+          pixels: { type: "integer", minimum: 1, maximum: 2000 },
+        },
+        ["observationId", "direction", "pixels"],
+      ),
+      permissions: ["browser.interact"],
+      interactionMode: "background_safe",
+      capabilities: ["dedicated_profile", "cdp", "dom.scroll"],
     },
     {
       name: "browser_close",
@@ -394,6 +418,22 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
           optionalBoolean(invocation.arguments, "submit") ?? false,
           invocation.signal,
         );
+      case "browser_scroll": {
+        const { direction, pixels } = browserScrollArguments(
+          invocation.arguments.direction,
+          invocation.arguments.pixels,
+        );
+        if (this.#backend.scroll === undefined)
+          throw new Error("This browser backend does not support scrolling");
+        return await this.#backend.scroll(
+          sessionId,
+          requiredTargetId(invocation.arguments, "tabId"),
+          requiredTargetId(invocation.arguments, "observationId"),
+          direction,
+          pixels,
+          invocation.signal,
+        );
+      }
       case "browser_close": {
         const tabId = requiredTargetId(invocation.arguments, "tabId");
         await this.#backend.closeTab(sessionId, tabId, invocation.signal);
@@ -966,6 +1006,25 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     return summarizeTab(tab);
   }
 
+  async scroll(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    direction: BrowserScrollDirection,
+    pixels: number,
+  ): Promise<BrowserTabSummary> {
+    const expression = browserScrollScript(direction, pixels);
+    const tab = this.#requireTab(sessionId, tabId);
+    assertBrowserObservation(
+      tab.observation,
+      tab.documentVersion,
+      observationId,
+    );
+    tab.observation = undefined;
+    await evaluateInTab(tab, expression);
+    return summarizeTab(tab);
+  }
+
   async closeTab(sessionId: string, tabId: string): Promise<void> {
     const tab = this.#requireTab(sessionId, tabId);
     tab.observation = undefined;
@@ -1131,15 +1190,7 @@ export function resolveBrowserObservedTarget(
   targetId: string,
   action: "click" | "type",
 ): BrowserTargetFingerprint {
-  if (
-    observation === undefined ||
-    observation.id !== observationId ||
-    observation.documentVersion !== documentVersion
-  ) {
-    throw new Error(
-      "Browser observation is stale or unknown; inspect the current tab again",
-    );
-  }
+  assertBrowserObservation(observation, documentVersion, observationId);
   const target = observation.targets.get(targetId);
   if (target === undefined) {
     throw new Error("Browser target ID is forged, stale, or unknown");
@@ -1150,13 +1201,73 @@ export function resolveBrowserObservedTarget(
   return target;
 }
 
+export function assertBrowserObservation(
+  observation: BrowserObservation | undefined,
+  documentVersion: number,
+  observationId: string,
+): asserts observation is BrowserObservation {
+  if (
+    observation === undefined ||
+    observation.id !== observationId ||
+    observation.documentVersion !== documentVersion
+  ) {
+    throw new Error(
+      "Browser observation is stale or unknown; inspect the current tab again",
+    );
+  }
+}
+
+export type BrowserScrollDirection = "up" | "down" | "left" | "right";
+
+export function browserScrollArguments(
+  direction: unknown,
+  pixels: unknown,
+): { direction: BrowserScrollDirection; pixels: number } {
+  if (
+    direction !== "up" &&
+    direction !== "down" &&
+    direction !== "left" &&
+    direction !== "right"
+  )
+    throw new Error(
+      "Browser scroll direction must be up, down, left, or right",
+    );
+  if (
+    typeof pixels !== "number" ||
+    !Number.isInteger(pixels) ||
+    pixels < 1 ||
+    pixels > 2000
+  )
+    throw new Error("Browser scroll pixels must be an integer from 1 to 2000");
+  return { direction, pixels };
+}
+
+export function browserScrollScript(
+  direction: BrowserScrollDirection,
+  pixels: number,
+): string {
+  browserScrollArguments(direction, pixels);
+  const left =
+    direction === "left" ? -pixels : direction === "right" ? pixels : 0;
+  const top = direction === "up" ? -pixels : direction === "down" ? pixels : 0;
+  return `(() => { window.scrollBy({ left: ${left}, top: ${top}, behavior: "instant" }); return { ok: true }; })()`;
+}
+
+// Both observation and action use the same name so relabelled controls fail closed.
+const browserElementNameScript = `(element) => {
+  const text = (value) => (value ?? "").replace(/\\s+/g, " ").trim();
+  const referenced = (element.getAttribute("aria-labelledby") ?? "").split(/\\s+/).filter(Boolean).map(id => document.getElementById(id)).filter(Boolean).map(node => text(node.textContent)).join(" ");
+  const labels = element.labels ? [...element.labels].map(label => text(label.textContent)).join(" ") : "";
+  return (referenced || text(element.getAttribute("aria-label")) || labels || text(element.getAttribute("placeholder")) || text(element.textContent)).slice(0, 160);
+}`;
+
 export const browserInspectScript = `(() => {
   const visible = (element) => {
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
     return !element.hidden && style.visibility !== "hidden" && style.display !== "none" && Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth;
   };
-  const name = (element) => (element.getAttribute("aria-label") ?? element.getAttribute("placeholder") ?? element.textContent ?? "").replace(/\\s+/g, " ").trim().slice(0, 160);
+  const name = ${browserElementNameScript};
   const typeable = (element) => {
     if (element.hasAttribute("disabled") || element.hasAttribute("readonly")) return false;
     if (element instanceof HTMLTextAreaElement) return true;
@@ -1222,6 +1333,7 @@ export function browserActionScript(
     href: target.href,
   });
   return `(() => {
+    const name = ${browserElementNameScript};
     const expected = ${expected};
     const selector = ${JSON.stringify(target.selector)};
     const action = ${JSON.stringify(action)};
@@ -1237,7 +1349,7 @@ export function browserActionScript(
     const actual = {
       tag: element.tagName.toLowerCase(),
       role: element.getAttribute("role") ?? element.tagName.toLowerCase(),
-      name: (element.getAttribute("aria-label") ?? element.getAttribute("placeholder") ?? element.textContent ?? "").replace(/\\s+/g, " ").trim().slice(0, 160),
+      name: name(element),
       type: element instanceof HTMLInputElement ? element.type.toLowerCase() : "",
       id: element.id,
       fieldName: element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement ? element.name : "",

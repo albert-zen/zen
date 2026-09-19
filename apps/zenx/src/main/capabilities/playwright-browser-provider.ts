@@ -9,6 +9,9 @@ import type {
 } from "./browser-provider.js";
 import {
   BrowserScreenshotArtifactStore,
+  assertBrowserObservation,
+  browserScrollScript,
+  type BrowserScrollDirection,
   assertBrowserTabCapacity,
   MAX_BROWSER_TABS_GLOBAL,
   MAX_BROWSER_TABS_PER_SESSION,
@@ -359,6 +362,38 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
       this.#invalidate(tab);
       await this.#run(session, ["fill", target.ref, text], signal);
       if (submit) await this.#run(session, ["press", "Enter"], signal);
+      this.#assertSession(session, revision, signal);
+      return await this.#summary(sessionId, session, tab, signal);
+    });
+  }
+
+  async scroll(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    direction: BrowserScrollDirection,
+    pixels: number,
+    signal?: AbortSignal,
+  ): Promise<BrowserTabSummary> {
+    const expression = browserScrollScript(direction, pixels);
+    const { session, tab } = this.#requireTab(sessionId, tabId);
+    return await this.#enqueue(session, signal, async (revision) => {
+      await this.#select(session, tab, signal);
+      assertBrowserObservation(
+        tab.observation,
+        tab.documentVersion,
+        observationId,
+      );
+      const documentKey = tab.documentKey;
+      this.#invalidate(tab);
+      await this.#run(
+        session,
+        [
+          "run-code",
+          `async page => await page.evaluate(() => { if (globalThis.__zenx_document_key !== ${JSON.stringify(documentKey)}) throw new Error("Browser document changed; inspect again"); return ${expression}; })`,
+        ],
+        signal,
+      );
       this.#assertSession(session, revision, signal);
       return await this.#summary(sessionId, session, tab, signal);
     });

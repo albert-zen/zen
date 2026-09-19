@@ -3,6 +3,7 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 
 import {
+  browserScrollScript,
   assertBrowserTabCapacity,
   BrowserZenXCapabilityPackage,
   browserInspectScript,
@@ -19,6 +20,109 @@ import {
   type BrowserTargetFingerprint,
   type ZenXBrowserBackend,
 } from "../src/main/capabilities/browser-provider.js";
+
+test("browser scroll validates a bounded direction and requires a current observation", async () => {
+  const calls: string[] = [];
+  const backend = browserBackend(calls);
+  backend.scroll = async (...args) => {
+    calls.push(JSON.stringify(args.slice(0, 5)));
+    return (await backend.listTabs("research"))[0]!;
+  };
+  const capability = new BrowserZenXCapabilityPackage(backend);
+  const args = {
+    sessionId: "research",
+    tabId: "tab-1",
+    observationId: "obs",
+    direction: "down",
+    pixels: 600,
+  };
+  await capability.invoke("browser_scroll", invocation(args));
+  assert.equal(
+    calls[0],
+    JSON.stringify(["research", "tab-1", "obs", "down", 600]),
+  );
+  for (const invalid of [
+    { pixels: 0 },
+    { pixels: 2001 },
+    { pixels: 1.5 },
+    { direction: "diagonal" },
+    { observationId: "" },
+  ]) {
+    await assert.rejects(
+      capability.invoke("browser_scroll", invocation({ ...args, ...invalid })),
+    );
+  }
+  const dom = new JSDOM("<body/>", { runScripts: "outside-only" });
+  try {
+    let movement: unknown;
+    dom.window.scrollBy = ((options: unknown) => {
+      movement = options;
+    }) as typeof dom.window.scrollBy;
+    assert.equal(
+      (dom.window.eval(browserScrollScript("down", 600)) as { ok: boolean }).ok,
+      true,
+    );
+    assert.equal(
+      JSON.stringify(movement),
+      JSON.stringify({ left: 0, top: 600, behavior: "instant" }),
+    );
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("DOM names honor associated labels and aria-labelledby and are revalidated on action", () => {
+  const dom = new JSDOM(
+    `<style>* { opacity: 1 }</style><label for="email">Email address</label><input id="email" placeholder="hint"><span id="first">Primary</span><span id="second">contact</span><input id="contact" aria-labelledby="first second" aria-label="fallback"><label>Notes<textarea></textarea></label>`,
+    { runScripts: "outside-only" },
+  );
+  try {
+    dom.window.CSS = {
+      escape: (value: string) => value,
+    } as typeof dom.window.CSS;
+    dom.window.HTMLElement.prototype.getBoundingClientRect = () => ({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      width: 100,
+      height: 20,
+      right: 100,
+      bottom: 20,
+      toJSON() {
+        return {};
+      },
+    });
+    const targets = (
+      dom.window.eval(browserInspectScript) as {
+        targets: BrowserTargetFingerprint[];
+      }
+    ).targets;
+    assert.deepEqual(
+      Array.from(targets, ({ name }) => name),
+      ["Email address", "Primary contact", "Notes"],
+    );
+    assert.equal(
+      (
+        dom.window.eval(browserActionScript(targets[0]!, "type", "sample")) as {
+          ok: boolean;
+        }
+      ).ok,
+      true,
+    );
+    dom.window.document.querySelector("#first")!.textContent = "Changed";
+    assert.equal(
+      (
+        dom.window.eval(browserActionScript(targets[1]!, "type", "sample")) as {
+          reason: string;
+        }
+      ).reason,
+      "identity-changed",
+    );
+  } finally {
+    dom.window.close();
+  }
+});
 
 test("browser URL projection uniformly removes credentials, query, and hash", () => {
   assert.equal(

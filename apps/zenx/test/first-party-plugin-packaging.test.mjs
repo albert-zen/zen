@@ -18,9 +18,9 @@ const repositoryRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 
 const expected = [
   ["@zenx/imzenx-plugin", "zenx-imzenx-plugin-1.0.0.tgz"],
-  ["@zenx/browser-plugin", "zenx-browser-plugin-electron-1.0.1.tgz"],
-  ["@zenx/browser-plugin", "zenx-browser-plugin-playwright-1.0.1.tgz"],
-  ["@zenx/browser-plugin", "zenx-browser-plugin-user-session-1.0.1.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-electron-1.0.2.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-playwright-1.0.2.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-user-session-1.0.2.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-macos-1.0.0.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-peekaboo-1.0.0.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-win32-1.1.0.tgz"],
@@ -31,16 +31,16 @@ const expected = [
 
 const providerVariants = new Map([
   [
-    "zenx-browser-plugin-electron-1.0.1.tgz",
-    ["browser", "1.0.1", "electron-dedicated-browser", 8],
+    "zenx-browser-plugin-electron-1.0.2.tgz",
+    ["browser", "1.0.2", "electron-dedicated-browser", 9],
   ],
   [
-    "zenx-browser-plugin-playwright-1.0.1.tgz",
-    ["browser", "1.0.1", "playwright-cli", 8],
+    "zenx-browser-plugin-playwright-1.0.2.tgz",
+    ["browser", "1.0.2", "playwright-cli", 9],
   ],
   [
-    "zenx-browser-plugin-user-session-1.0.1.tgz",
-    ["browser", "1.0.1", "user-browser-cdp", 8],
+    "zenx-browser-plugin-user-session-1.0.2.tgz",
+    ["browser", "1.0.2", "user-browser-cdp", 9],
   ],
   [
     "zenx-computer-plugin-macos-1.0.0.tgz",
@@ -212,9 +212,9 @@ test("Host provider selection maps every real manifest variant deterministically
       firstPartyProviderTarball("computer", "microsoft-winapp-cli"),
     ],
     [
-      "zenx-browser-plugin-electron-1.0.1.tgz",
-      "zenx-browser-plugin-playwright-1.0.1.tgz",
-      "zenx-browser-plugin-user-session-1.0.1.tgz",
+      "zenx-browser-plugin-electron-1.0.2.tgz",
+      "zenx-browser-plugin-playwright-1.0.2.tgz",
+      "zenx-browser-plugin-user-session-1.0.2.tgz",
       "zenx-computer-plugin-macos-1.0.0.tgz",
       "zenx-computer-plugin-peekaboo-1.0.0.tgz",
       "zenx-computer-plugin-win32-1.1.0.tgz",

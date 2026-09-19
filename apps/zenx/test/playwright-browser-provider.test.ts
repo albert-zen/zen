@@ -7,6 +7,48 @@ import type {
 } from "../src/main/capabilities/external-provider.js";
 import { PlaywrightCliBrowserBackend } from "../src/main/capabilities/playwright-browser-provider.js";
 
+test("Playwright page scroll rejects stale observations and dispatches one bounded page mutation", async () => {
+  const runner = new FakePlaywrightRunner();
+  const backend = new PlaywrightCliBrowserBackend({
+    executable: "/opt/playwright-cli",
+    runner,
+    cwd: "/tmp/zenx-playwright",
+  });
+  try {
+    const tab = await backend.open("research", "https://example.com/");
+    const inspected = await backend.inspect("research", tab.tabId);
+    await assert.rejects(
+      backend.scroll("research", tab.tabId, "forged", "down", 600),
+      /stale or unknown/,
+    );
+    await backend.scroll(
+      "research",
+      tab.tabId,
+      inspected.observationId,
+      "down",
+      600,
+    );
+    await assert.rejects(
+      backend.scroll(
+        "research",
+        tab.tabId,
+        inspected.observationId,
+        "down",
+        600,
+      ),
+      /stale or unknown/,
+    );
+    const dispatched = runner.calls.filter((args) =>
+      args[3]?.includes("window.scrollBy"),
+    );
+    assert.equal(dispatched.length, 1);
+    assert.match(dispatched[0]![3]!, /top: 600/);
+    assert.match(dispatched[0]![3]!, /__zenx_document_key/);
+  } finally {
+    await backend.close();
+  }
+});
+
 test("Playwright provider runs an isolated JSON-only observe/action slice", async () => {
   const runner = new FakePlaywrightRunner();
   const browserPath = "/opt/verified-playwright-browsers";
