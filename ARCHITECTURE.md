@@ -255,6 +255,7 @@
 - **ZenXWinAppCliComputerProvider** — ZenX Windows 产品层把 Microsoft WinApp CLI 的 HWND/UIA/WGC JSON
   投影为既有的有界 opaque observation 与 background-safe computer tools；外部 CLI 的安装、版本和进程生命周期
   不进入 Zen Core，缺失或协议错误只显式诊断且绝不降级成全局输入注入。
+  只读窗口发现返回所属应用与可直接传给现有定向工具的精确 target；列表截断与查询过滤不改变目标身份。
 - **ZenXCapabilityProviderCatalog** — ZenX 产品层探测并诊断可选的成熟外部执行后端，按显式优先级选择
   Playwright、Peekaboo、WinApp 或适用平台的 bundled fallback；版本、权限与可用性只属于 host 配置和瞬时诊断，不进入 Zen Core。
 - **ZenXBrowserScreenshotArtifactStore** — ZenX provider 为一次最新 Browser observation 写入有界、短时、可清理的 PNG
@@ -268,6 +269,7 @@
   或 durable plugin data，也不成为第二个 runtime/coordinator。
 - **ZenXBundledProviderProvisioning** — 打包 provider 只能由应用资源中的版本与 SHA-256 固定清单解析，实际执行的 browser payload 以有界目录摘要在选择与启动前重验，仅排除清单明确列出的非可执行 host-validation 状态；缺失、离线或校验失败只产生可诊断的 unavailable 状态，不改写 Core 会话语义。
 - **ZenXPlaywrightSessionFence** — Playwright provider 在一个瞬时 CLI session 内串行执行操作，并用稳定 tab/document identity 与 lifecycle revision 围住选择、观察、截图、摘要和关闭；该 fence 不进入 Core 或 durable journal。
+  Browser 页面滚动同样绑定显式 tab 和最新 observation，执行有界视口滚动并消耗该观察；DOM inspect/action 使用相同的控件名称识别规则。
 - **ZenXProviderLaunchVerification** — 外部 provider 在实际 spawn 前再次验证绑定的 canonical executable、browser payload、shim companion、manifest digest 与 pinned semantic version；失败只产生显式诊断，不自动改用未验证资产。
 - **ZenXPackagedProviderSmoke** — ZenX 构建验证用真实 resources/providers manifest、asset hash、version pin 与 bundled-only catalog path 检查离线 packaged provisioning；它是一次性测试流程，不是运行时 coordinator 或 durable state。
 - **VerifiedArtifactAcquisition** — ZenX release assembly 只以 artifact name、URL、SHA-256、deadline 与 cache location 取得 digest-addressed immutable file，并在内部以 per-digest 跨进程 transaction 收口 proxy-aware bounded transport、stream size、partial cleanup、no-follow cache revalidation 与 atomic publication；它不成为运行时下载器或第二条 packaging pipeline。

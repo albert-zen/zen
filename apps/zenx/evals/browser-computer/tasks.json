@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "suite": "zenx-browser-computer-small-tasks",
+  "tasks": [
+    {
+      "id": "B1",
+      "route": "/form",
+      "prompt": "Open {baseUrl}/form. Fill Recipient with ZenX 测试 and City with 杭州, save the delivery, and verify the page confirms those values.",
+      "success": [
+        "Correct fields selected through observed labels",
+        "Exact Unicode values entered",
+        "PASS confirmation observed after saving"
+      ],
+      "failure": [
+        "Incorrect field/value",
+        "Only reports action without checking result"
+      ]
+    },
+    {
+      "id": "B2",
+      "route": "/scroll",
+      "prompt": "Open {baseUrl}/scroll. Scroll to the bottom, activate Finish task, and verify completion.",
+      "success": [
+        "Uses browser scrolling",
+        "Discovers bottom button from a fresh observation",
+        "PASS confirmation observed"
+      ],
+      "failure": [
+        "Uses shell, arbitrary page script or DOM mutation to bypass scrolling",
+        "Clicks from stale observation"
+      ]
+    },
+    {
+      "id": "B3",
+      "route": "/stale",
+      "prompt": "Open {baseUrl}/stale and inspect the controls. Click Refresh controls, inspect again, then click Confirm current and verify completion.",
+      "success": [
+        "Fresh observation after control replacement",
+        "Never activates Confirm old",
+        "PASS confirmation observed"
+      ],
+      "failure": [
+        "Reuses old control ID without observation",
+        "Treats stale rejection as completed action"
+      ]
+    },
+    {
+      "id": "B4",
+      "route": "/tabs",
+      "prompt": "Open {baseUrl}/tabs. Open Destination in a separate tab, read its code, return to the source tab and confirm source retained. Keep both tabs open for the evaluator.",
+      "success": [
+        "Reports ORCHID-42",
+        "Source and destination remain separate tabs",
+        "PASS source confirmation observed",
+        "No unrelated user tab touched"
+      ],
+      "failure": [
+        "Source overwritten or closed",
+        "Claims success based only on code"
+      ]
+    },
+    {
+      "id": "B5",
+      "route": "/disabled",
+      "prompt": "Open {baseUrl}/disabled. Submit using the available enabled action and verify the result.",
+      "success": ["Enabled control selected", "PASS confirmation observed"],
+      "failure": [
+        "Attempts disabled control",
+        "Enables disabled control via script"
+      ]
+    },
+    {
+      "id": "C1",
+      "prompt": "Use Computer tools to list currently open applications and windows. Identify the two evaluator-created ZenX Eval A and ZenX Eval B windows and inspect only B. Do not use shell or process listing to discover them.",
+      "setup": "Evaluator creates two native text-editor windows with distinct titles ZenX Eval A and ZenX Eval B; record actual titles. Substitute titles in prompt if platform adds suffixes.",
+      "success": [
+        "Computer discovery exposes both windows and owning apps",
+        "Inspects B using returned target identity",
+        "No input or change to A"
+      ],
+      "failure": [
+        "Guesses process/window identity",
+        "Inspects arbitrary first window",
+        "Shell discovery fallback counted as Computer success"
+      ]
+    },
+    {
+      "id": "C2",
+      "prompt": "In the evaluator-created ZenX Eval B editor, enter exactly ZenX evaluation — 中文输入, then inspect or capture the window to verify it. Leave A unchanged. Do not save or close either window.",
+      "setup": "Run C1 first; B must be a disposable empty editable document. Evaluator records screenshots of A and B before and after.",
+      "success": [
+        "Exact text visible in B",
+        "A unchanged",
+        "Result observed after input"
+      ],
+      "failure": ["Wrong window input", "Typing reported without verification"]
+    },
+    {
+      "id": "C3",
+      "prompt": "Refresh the desktop window list after the evaluator closes B. Report B as no longer available and do not send input to another window.",
+      "setup": "Evaluator closes only disposable B between C2 and C3. If provider offers opaque observation controls, also test reuse of the prior B selector via a deterministic provider regression, separately from model score.",
+      "success": [
+        "Fresh inventory excludes B",
+        "No stale input sent",
+        "Explicit unavailability reported"
+      ],
+      "failure": [
+        "Uses stale target or chooses A as replacement",
+        "Treats missing window as successful action"
+      ]
+    }
+  ]
+}
