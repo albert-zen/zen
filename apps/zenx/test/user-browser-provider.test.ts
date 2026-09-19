@@ -23,7 +23,10 @@ import {
   validateUserBrowserVersion,
   windowsBrowserExecutableCandidates,
 } from "../src/main/capabilities/user-browser-provider.js";
-import type { ZenXBrowserBackend } from "../src/main/capabilities/browser-provider.js";
+import type {
+  BrowserTargetFingerprint,
+  ZenXBrowserBackend,
+} from "../src/main/capabilities/browser-provider.js";
 
 test("user browser scroll consumes observations and guards document identity before dispatch", async () => {
   const client = new FakeUserBrowserClient();
@@ -322,6 +325,51 @@ test("user browser mode inherits visible authenticated state without exposing se
     ),
     false,
   );
+});
+
+test("user browser projects current control state and dispatches native select", async () => {
+  const client = new FakeUserBrowserClient();
+  client.inspectionTarget = {
+    selector: "#speed",
+    tag: "select",
+    role: "combobox",
+    name: "Delivery speed",
+    type: "",
+    id: "speed",
+    fieldName: "",
+    autocomplete: "",
+    href: "",
+    actions: ["click", "select"],
+    value: "standard",
+    options: [
+      {
+        value: "standard",
+        label: "Standard",
+        selected: true,
+        disabled: false,
+      },
+      {
+        value: "express",
+        label: "Express",
+        selected: false,
+        disabled: false,
+      },
+    ],
+  };
+  const backend = new UserBrowserCdpBackend(client);
+  await backend.listTabs("work");
+  const inspection = await backend.inspect("work", "target-1");
+  const target = inspection.targets[0]!;
+  assert.equal(target.value, "standard");
+  assert.equal(target.options?.[1]?.label, "Express");
+  await backend.select(
+    "work",
+    "target-1",
+    inspection.observationId,
+    target.targetId,
+    "Express",
+  );
+  assert.equal(client.actionCount, 1);
 });
 
 test("attached browser rejects malformed screenshot data explicitly", async () => {
@@ -2192,7 +2240,7 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
   nextCreatedTarget = 2;
   identityChangePhase?: "during-evaluate" | "post-confirmation";
   invalidateInspection = false;
-  inspectionTarget = {
+  inspectionTarget: BrowserTargetFingerprint = {
     selector: "#continue",
     tag: "button",
     role: "button",
@@ -2202,7 +2250,7 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     fieldName: "",
     autocomplete: "",
     href: "",
-    actions: ["click"] as Array<"click" | "type">,
+    actions: ["click"],
   };
   readonly #actionStarted = deferred<void>();
   #heldAction = deferred<void>();

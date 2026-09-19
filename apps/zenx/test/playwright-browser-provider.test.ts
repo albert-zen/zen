@@ -139,7 +139,11 @@ test("Playwright re-hashes the browser tree only before a browser launch", async
   const opened = await backend.open("research", "https://example.com/");
   await backend.inspect("research", opened.tabId);
   assert.equal(browserVerifications, 1);
-  assert.ok(invocationVerifications > 0);
+  assert.equal(invocationVerifications, runner.calls.length - 1);
+  assert.equal(
+    runner.calls.filter((args) => args[2] === "tab-select").length,
+    0,
+  );
   await backend.close();
 });
 
@@ -212,11 +216,28 @@ test("Playwright inspection only advertises type for editable comboboxes", async
     const inspected = await backend.inspect("preferences", opened.tabId);
     assert.deepEqual(
       inspected.targets.find(({ name }) => name === "Delivery speed")?.actions,
-      ["click"],
+      ["click", "select"],
     );
+    const speed = inspected.targets.find(
+      ({ name }) => name === "Delivery speed",
+    )!;
+    assert.equal(speed.value, "standard");
+    assert.equal(speed.options?.[1]?.label, "Express");
     assert.deepEqual(
       inspected.targets.find(({ name }) => name === "Search cities")?.actions,
       ["click", "type"],
+    );
+    await backend.select(
+      "preferences",
+      opened.tabId,
+      inspected.observationId,
+      speed.targetId,
+      "Express",
+    );
+    assert.ok(
+      runner.calls.some(
+        (args) => args[2] === "run-code" && args[3]?.includes("selectOption"),
+      ),
     );
     assert.deepEqual(
       inspected.targets.find(({ name }) => name === "Custom city")?.actions,
@@ -304,8 +325,13 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
   async run(
     _executable: string,
     args: readonly string[],
-    options: { timeoutMs: number; environment?: NodeJS.ProcessEnv },
+    options: {
+      timeoutMs: number;
+      environment?: NodeJS.ProcessEnv;
+      verifyBeforeSpawn?: () => Promise<void>;
+    },
   ): Promise<ExternalProviderProcessResult> {
+    await options.verifyBeforeSpawn?.();
     this.calls.push([...args]);
     this.environments.push(options.environment);
     const command = args[2];
@@ -339,7 +365,24 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
               dom("e4", { tag: "button", visible: false }),
               ...(this.includeComboboxes
                 ? [
-                    dom("e5", { tag: "select" }),
+                    dom("e5", {
+                      tag: "select",
+                      value: "standard",
+                      options: [
+                        {
+                          value: "standard",
+                          label: "Standard",
+                          selected: true,
+                          disabled: false,
+                        },
+                        {
+                          value: "express",
+                          label: "Express",
+                          selected: false,
+                          disabled: false,
+                        },
+                      ],
+                    }),
                     dom("e6", { tag: "input", type: "search" }),
                     dom("e7", { tag: "div" }),
                   ]
@@ -457,6 +500,13 @@ function dom(
     type?: string;
     autocomplete?: string;
     visible?: boolean;
+    value?: string;
+    options?: Array<{
+      value: string;
+      label: string;
+      selected: boolean;
+      disabled: boolean;
+    }>;
   },
 ) {
   return {
@@ -469,6 +519,8 @@ function dom(
     fieldName: "",
     autocomplete: options.autocomplete ?? "",
     href: "",
+    ...(options.value === undefined ? {} : { value: options.value }),
+    ...(options.options === undefined ? {} : { options: options.options }),
   };
 }
 

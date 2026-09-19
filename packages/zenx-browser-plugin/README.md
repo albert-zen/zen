@@ -2,7 +2,8 @@
 
 First-party Browser package distributed with ZenX and installed through the ordinary plugin profile.
 
-Version 1.0.2 adds `browser_scroll`: provide an explicit `sessionId`, `tabId`,
+Version 1.0.3 adds native `browser_select`, current non-password control state,
+bounded select options, and contenteditable typing. `browser_scroll` requires an explicit `sessionId`, `tabId`,
 latest `observationId`, direction (`up`, `down`, `left`, `right`), and integer
 `pixels` from 1 to 2000. It scrolls the page viewport and consumes the observation;
 inspect again before the next interaction. Nested scroll containers are not yet

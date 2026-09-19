@@ -39,9 +39,21 @@ export interface BrowserInspection extends BrowserTabSummary {
     targetId: string;
     role: string;
     name: string;
-    actions: Array<"click" | "type">;
+    actions: BrowserTargetAction[];
     value?: string;
+    checked?: boolean;
+    selected?: boolean;
+    options?: BrowserSelectOption[];
   }>;
+}
+
+export type BrowserTargetAction = "click" | "type" | "select";
+
+export interface BrowserSelectOption {
+  value: string;
+  label: string;
+  selected: boolean;
+  disabled: boolean;
 }
 
 export interface BrowserScreenshotArtifact {
@@ -128,6 +140,14 @@ export interface ZenXBrowserBackend {
     submit: boolean,
     signal?: AbortSignal,
   ): Promise<BrowserTabSummary>;
+  select?(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    targetId: string,
+    option: string,
+    signal?: AbortSignal,
+  ): Promise<BrowserTabSummary>;
   closeTab(
     sessionId: string,
     tabId: string,
@@ -144,7 +164,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
   schemaVersion: 2,
   id: "browser",
   name: "Browser",
-  version: "1.0.2",
+  version: "1.0.3",
   description:
     "A dedicated ephemeral ZenX browser session with bounded DOM inspection and narrow navigation and interaction tools.",
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
@@ -182,7 +202,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       id: "browser.interact",
       title: "Interact with pages",
       description:
-        "Click and type into an explicitly targeted visible page element, or scroll the page viewport.",
+        "Click, type, or select an option in an explicitly targeted visible page element, or scroll the page viewport.",
       scope: "browser-session",
     },
   ],
@@ -249,7 +269,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
     {
       name: "browser_inspect",
       description:
-        "Create the latest bounded observation for one ZenX browser tab and return opaque target IDs for visible controls. Existing input values are not returned.",
+        "Create the latest bounded observation for one ZenX browser tab and return opaque target IDs, current non-password control state, and bounded native select options for visible controls.",
       inputSchema: browserTargetSchema(),
       permissions: ["browser.tabs.read"],
       interactionMode: "background_safe",
@@ -284,6 +304,22 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       permissions: ["browser.interact"],
       interactionMode: "background_safe",
       capabilities: ["dedicated_profile", "cdp", "dom.set_value"],
+    },
+    {
+      name: "browser_select",
+      description:
+        "Select one native option by exact value or unique exact visible label in a visible select target from the latest browser_inspect observation. Consumes the observation and fails closed if the target or option changed.",
+      inputSchema: browserTargetSchema(
+        {
+          observationId: stringSchema(),
+          targetId: stringSchema(),
+          option: stringSchema(),
+        },
+        ["observationId", "targetId", "option"],
+      ),
+      permissions: ["browser.interact"],
+      interactionMode: "background_safe",
+      capabilities: ["dedicated_profile", "cdp", "dom.select_option"],
     },
     {
       name: "browser_scroll",
@@ -418,6 +454,19 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
           optionalBoolean(invocation.arguments, "submit") ?? false,
           invocation.signal,
         );
+      case "browser_select":
+        if (this.#backend.select === undefined)
+          throw new Error(
+            "This browser backend does not support native option selection",
+          );
+        return await this.#backend.select(
+          sessionId,
+          requiredTargetId(invocation.arguments, "tabId"),
+          requiredTargetId(invocation.arguments, "observationId"),
+          requiredTargetId(invocation.arguments, "targetId"),
+          requiredString(invocation.arguments, "option"),
+          invocation.signal,
+        );
       case "browser_scroll": {
         const { direction, pixels } = browserScrollArguments(
           invocation.arguments.direction,
@@ -484,8 +533,11 @@ export interface BrowserTargetFingerprint {
   fieldName: string;
   autocomplete: string;
   href: string;
-  actions: Array<"click" | "type">;
+  actions: BrowserTargetAction[];
   value?: string;
+  checked?: boolean;
+  selected?: boolean;
+  options?: BrowserSelectOption[];
 }
 
 export interface BrowserObservation {
@@ -933,6 +985,11 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
         name: target.name,
         actions: [...target.actions],
         ...(target.value === undefined ? {} : { value: target.value }),
+        ...(target.checked === undefined ? {} : { checked: target.checked }),
+        ...(target.selected === undefined ? {} : { selected: target.selected }),
+        ...(target.options === undefined
+          ? {}
+          : { options: target.options.map((option) => ({ ...option })) }),
       };
     });
     tab.observation = {
@@ -1000,6 +1057,34 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     if (!result.ok) {
       throw new Error(
         `Browser type target is stale or unsafe: ${result.reason}`,
+      );
+    }
+    await settlePage(tab.window);
+    return summarizeTab(tab);
+  }
+
+  async select(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    targetId: string,
+    option: string,
+  ): Promise<BrowserTabSummary> {
+    const tab = this.#requireTab(sessionId, tabId);
+    const target = this.#requireObservedTarget(
+      tab,
+      observationId,
+      targetId,
+      "select",
+    );
+    tab.observation = undefined;
+    const result = await evaluateInTab<{ ok: boolean; reason?: string }>(
+      tab,
+      browserActionScript(target, "select", option),
+    );
+    if (!result.ok) {
+      throw new Error(
+        `Browser select target is stale or unsafe: ${result.reason}`,
       );
     }
     await settlePage(tab.window);
@@ -1131,7 +1216,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     tab: BrowserTab,
     observationId: string,
     targetId: string,
-    action: "click" | "type",
+    action: BrowserTargetAction,
   ): BrowserTargetFingerprint {
     return resolveBrowserObservedTarget(
       tab.observation,
@@ -1207,7 +1292,7 @@ export function resolveBrowserObservedTarget(
   documentVersion: number,
   observationId: string,
   targetId: string,
-  action: "click" | "type",
+  action: BrowserTargetAction,
 ): BrowserTargetFingerprint {
   assertBrowserObservation(observation, documentVersion, observationId);
   const target = observation.targets.get(targetId);
@@ -1276,7 +1361,7 @@ export function browserScrollScript(
 const browserElementNameScript = `(element) => {
   const text = (value) => (value ?? "").replace(/\\s+/g, " ").trim();
   const referenced = (element.getAttribute("aria-labelledby") ?? "").split(/\\s+/).filter(Boolean).map(id => document.getElementById(id)).filter(Boolean).map(node => text(node.textContent)).join(" ");
-  const labels = element.labels ? [...element.labels].map(label => text(label.textContent)).join(" ") : "";
+  const labels = element.labels ? [...element.labels].map(label => { const copy = label.cloneNode(true); copy.querySelectorAll("input,textarea,select,button").forEach(control => control.remove()); return text(copy.textContent); }).join(" ") : "";
   return (referenced || text(element.getAttribute("aria-label")) || labels || text(element.getAttribute("placeholder")) || text(element.textContent)).slice(0, 160);
 }`;
 
@@ -1289,6 +1374,7 @@ export const browserInspectScript = `(() => {
   const name = ${browserElementNameScript};
   const typeable = (element) => {
     if (element.hasAttribute("disabled") || element.hasAttribute("readonly")) return false;
+    if (element instanceof HTMLElement && element.matches('[contenteditable]:not([contenteditable="false"])')) return true;
     if (element instanceof HTMLTextAreaElement) return true;
     if (!(element instanceof HTMLInputElement)) return false;
     return !["button", "checkbox", "file", "hidden", "image", "radio", "reset", "submit"].includes(element.type.toLowerCase());
@@ -1310,7 +1396,7 @@ export const browserInspectScript = `(() => {
     }
     return parts.join(" > ");
   };
-  const elements = [...document.querySelectorAll("a[href],button,input,textarea,select,[role=button],[tabindex]")]
+  const elements = [...document.querySelectorAll("a[href],button,input,textarea,select,[contenteditable=true],[role=button],[tabindex]")]
     .filter((element) => visible(element) && (clickable(element) || typeable(element)))
     .slice(0, 80);
   return {
@@ -1319,6 +1405,10 @@ export const browserInspectScript = `(() => {
       const actions = [];
       if (clickable(element)) actions.push("click");
       if (typeable(element)) actions.push("type");
+      if (element instanceof HTMLSelectElement && !element.disabled) actions.push("select");
+      const value = element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement || (element instanceof HTMLInputElement && element.type.toLowerCase() !== "password") ? element.value : element instanceof HTMLElement && element.matches('[contenteditable]:not([contenteditable="false"])') ? element.textContent ?? "" : undefined;
+      const checked = element instanceof HTMLInputElement && ["checkbox", "radio"].includes(element.type.toLowerCase()) ? element.checked : element.getAttribute("aria-checked") === "true" ? true : element.getAttribute("aria-checked") === "false" ? false : undefined;
+      const selected = element.getAttribute("aria-selected") === "true" ? true : element.getAttribute("aria-selected") === "false" ? false : element instanceof HTMLOptionElement ? element.selected : undefined;
       return {
         selector: selector(element),
         tag: element.tagName.toLowerCase(),
@@ -1330,6 +1420,10 @@ export const browserInspectScript = `(() => {
         autocomplete: element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement ? element.autocomplete : "",
         href: element instanceof HTMLAnchorElement ? element.getAttribute("href") ?? "" : "",
         actions,
+        ...(value === undefined ? {} : { value: value.slice(0, 512) }),
+        ...(checked === undefined ? {} : { checked }),
+        ...(selected === undefined ? {} : { selected }),
+        ...(element instanceof HTMLSelectElement ? { options: [...element.options].slice(0, 100).map(option => ({ value: option.value.slice(0, 512), label: (option.textContent ?? "").replace(/\\s+/g, " ").trim().slice(0, 512), selected: option.selected, disabled: option.disabled })) } : {}),
       };
     }),
   };
@@ -1337,7 +1431,7 @@ export const browserInspectScript = `(() => {
 
 export function browserActionScript(
   target: BrowserTargetFingerprint,
-  action: "click" | "type",
+  action: BrowserTargetAction,
   text = "",
   submit = false,
 ): string {
@@ -1381,8 +1475,28 @@ export function browserActionScript(
       element.click();
       return { ok: true };
     }
-    if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) || element.disabled || element.readOnly) return { ok: false, reason: "not-typeable" };
+    if (action === "select") {
+      if (!(element instanceof HTMLSelectElement) || element.disabled) return { ok: false, reason: "not-selectable" };
+      const byValue = [...element.options].filter(option => option.value === nextValue && !option.disabled);
+      const byLabel = [...element.options].filter(option => (option.textContent ?? "").replace(/\\s+/g, " ").trim() === nextValue && !option.disabled);
+      const matches = byValue.length > 0 ? byValue : byLabel;
+      if (matches.length !== 1) return { ok: false, reason: matches.length === 0 ? "option-missing" : "option-ambiguous" };
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+      if (setter === undefined) return { ok: false, reason: "value-setter-unavailable" };
+      setter.call(element, matches[0].value);
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+      return { ok: true };
+    }
+    if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || (element instanceof HTMLElement && element.matches('[contenteditable]:not([contenteditable="false"])'))) || element.hasAttribute("disabled") || element.hasAttribute("readonly")) return { ok: false, reason: "not-typeable" };
     if (element instanceof HTMLInputElement && ["button", "checkbox", "file", "hidden", "image", "radio", "reset", "submit"].includes(element.type.toLowerCase())) return { ok: false, reason: "not-typeable" };
+    if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) {
+      element.textContent = nextValue;
+      element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: nextValue }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+      if (shouldSubmit) element.closest("form")?.requestSubmit();
+      return { ok: true };
+    }
     const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
     if (setter === undefined) return { ok: false, reason: "value-setter-unavailable" };

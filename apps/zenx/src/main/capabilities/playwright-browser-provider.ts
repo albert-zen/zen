@@ -91,6 +91,10 @@ interface PlaywrightDomMetadata {
   fieldName: string;
   autocomplete: string;
   href: string;
+  value?: string;
+  checked?: boolean;
+  selected?: boolean;
+  options?: BrowserTargetFingerprint["options"];
 }
 
 export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
@@ -310,6 +314,14 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
           role: target.role,
           name: target.name,
           actions: [...target.actions],
+          ...(target.value === undefined ? {} : { value: target.value }),
+          ...(target.checked === undefined ? {} : { checked: target.checked }),
+          ...(target.selected === undefined
+            ? {}
+            : { selected: target.selected }),
+          ...(target.options === undefined
+            ? {}
+            : { options: target.options.map((option) => ({ ...option })) }),
         })),
         screenshot,
       };
@@ -362,6 +374,32 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
       this.#invalidate(tab);
       await this.#run(session, ["fill", target.ref, text], signal);
       if (submit) await this.#run(session, ["press", "Enter"], signal);
+      this.#assertSession(session, revision, signal);
+      return await this.#summary(sessionId, session, tab, signal);
+    });
+  }
+
+  async select(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    targetId: string,
+    option: string,
+    signal?: AbortSignal,
+  ): Promise<BrowserTabSummary> {
+    const { session, tab } = this.#requireTab(sessionId, tabId);
+    return await this.#enqueue(session, signal, async (revision) => {
+      await this.#select(session, tab, signal);
+      const target = requireObservedTarget(
+        tab,
+        observationId,
+        targetId,
+        "select",
+      );
+      await this.#revalidateTarget(session, target, "select", signal);
+      this.#invalidate(tab);
+      const code = `async page => { const locator = page.locator('aria-ref=' + ${JSON.stringify(target.ref)}); const options = await locator.locator('option').evaluateAll(nodes => nodes.map(node => ({ value: node.value, label: (node.textContent || '').replace(/\\s+/g, ' ').trim(), disabled: node.disabled }))); const requested = ${JSON.stringify(option)}; const byValue = options.filter(candidate => candidate.value === requested && !candidate.disabled); const byLabel = options.filter(candidate => candidate.label === requested && !candidate.disabled); const matches = byValue.length > 0 ? byValue : byLabel; if (matches.length !== 1) throw new Error(matches.length === 0 ? 'Browser option missing' : 'Browser option ambiguous'); await locator.selectOption(matches[0].value); }`;
+      await this.#run(session, ["run-code", code], signal);
       this.#assertSession(session, revision, signal);
       return await this.#summary(sessionId, session, tab, signal);
     });
@@ -468,7 +506,6 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
       const bindBeforeSpawn = launchesBrowser
         ? (this.#bindBrowserBeforeLaunch ?? this.#bindBeforeSpawn)
         : this.#bindBeforeSpawn;
-      await verifyBeforeSpawn?.();
       const result = await this.#runner.run(
         this.#executable,
         [
@@ -651,7 +688,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
       ref: string;
       disabled: boolean;
     },
-    action: "click" | "type",
+    action: BrowserTargetFingerprint["actions"][number],
     signal?: AbortSignal,
   ): Promise<void> {
     const snapshot = await this.#snapshot(session, signal);
@@ -713,7 +750,11 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
         id: element.id || '',
         fieldName: element.getAttribute('name') || '',
         autocomplete: element.getAttribute('autocomplete') || '',
-        href: element.getAttribute('href') || ''
+        href: element.getAttribute('href') || '',
+        ...((element instanceof HTMLInputElement && element.type.toLowerCase() === 'password') ? {} : ('value' in element && typeof element.value === 'string') ? { value: element.value.slice(0, 512) } : element instanceof HTMLElement && element.matches('[contenteditable]:not([contenteditable="false"])') ? { value: (element.textContent || '').slice(0, 512) } : {}),
+        ...(('checked' in element && typeof element.checked === 'boolean') ? { checked: element.checked } : element.getAttribute('aria-checked') === 'true' ? { checked: true } : element.getAttribute('aria-checked') === 'false' ? { checked: false } : {}),
+        ...(element.getAttribute('aria-selected') === 'true' ? { selected: true } : element.getAttribute('aria-selected') === 'false' ? { selected: false } : {}),
+        ...(element instanceof HTMLSelectElement ? { options: [...element.options].slice(0, 100).map(option => ({ value: option.value.slice(0, 512), label: (option.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 512), selected: option.selected, disabled: option.disabled })) } : {})
       }));
       return { ref, count, visible, ...attributes };
     }))`;
@@ -787,7 +828,14 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     if (session.tabs.get(tab.tabKey) !== tab) {
       throw new Error("Playwright tab identity changed; inspect again");
     }
-    await this.#run(session, ["tab-select", String(tab.index)], signal);
+    const requested = pages.find(
+      (candidate) => candidate.tabKey === tab.tabKey,
+    );
+    if (requested === undefined)
+      throw new Error("Playwright browser tab was closed");
+    if (!requested.current) {
+      await this.#run(session, ["tab-select", String(tab.index)], signal);
+    }
     const current = await this.#currentPage(session, tab, signal);
     if (!current.current || pageIdentity(current) !== tabIdentity(tab)) {
       throw new Error(
@@ -1008,13 +1056,19 @@ function playwrightTargetFingerprint(
     autocomplete: dom.autocomplete,
     href: dom.href || node.url || "",
     actions: playwrightNodeActions(node, dom),
+    ...(dom.value === undefined ? {} : { value: dom.value }),
+    ...(dom.checked === undefined ? {} : { checked: dom.checked }),
+    ...(dom.selected === undefined ? {} : { selected: dom.selected }),
+    ...(dom.options === undefined
+      ? {}
+      : { options: dom.options.map((option) => ({ ...option })) }),
   };
 }
 
 function playwrightNodeActions(
   node: PlaywrightAriaNode,
   dom: PlaywrightDomMetadata,
-): Array<"click" | "type"> {
+): BrowserTargetFingerprint["actions"] {
   if (node.disabled === true) return [];
   const typeRoles = new Set(["combobox", "searchbox", "textbox"]);
   const nonTypeableInput = new Set([
@@ -1034,6 +1088,7 @@ function playwrightNodeActions(
     !(dom.tag === "input" && nonTypeableInput.has(dom.type.toLowerCase()))
       ? (["type"] as const)
       : []),
+    ...(dom.tag === "select" ? (["select"] as const) : []),
   ];
 }
 
@@ -1073,7 +1128,23 @@ function isPlaywrightDomMetadata(
     typeof entry.id === "string" &&
     typeof entry.fieldName === "string" &&
     typeof entry.autocomplete === "string" &&
-    typeof entry.href === "string"
+    typeof entry.href === "string" &&
+    (entry.value === undefined || typeof entry.value === "string") &&
+    (entry.checked === undefined || typeof entry.checked === "boolean") &&
+    (entry.selected === undefined || typeof entry.selected === "boolean") &&
+    (entry.options === undefined ||
+      (Array.isArray(entry.options) &&
+        entry.options.length <= 100 &&
+        entry.options.every((option) => {
+          if (typeof option !== "object" || option === null) return false;
+          const candidate = option as Record<string, unknown>;
+          return (
+            typeof candidate.value === "string" &&
+            typeof candidate.label === "string" &&
+            typeof candidate.selected === "boolean" &&
+            typeof candidate.disabled === "boolean"
+          );
+        })))
   );
 }
 
@@ -1089,7 +1160,7 @@ function requireObservedTarget(
   tab: PlaywrightTabState,
   observationId: string,
   targetId: string,
-  action: "click" | "type",
+  action: BrowserTargetFingerprint["actions"][number],
 ): BrowserTargetFingerprint & { ref: string; disabled: boolean } {
   const observation = tab.observation;
   if (

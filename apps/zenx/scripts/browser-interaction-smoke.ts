@@ -157,6 +157,60 @@ try {
       initialTargetExposed,
     }),
   );
+  const preferences = (await invoke("browser_open", {
+    url: new URL("/preferences", fixtureUrl).href,
+  })) as BrowserTabSummary;
+  let preferencesObservation = await inspect(preferences.tabId);
+  const speed = preferencesObservation.targets.find(
+    (target) => target.name === "Delivery speed",
+  );
+  assert.ok(speed, "Expected the native Delivery speed select");
+  assert.equal(speed.value, "standard");
+  assert.ok(speed.options?.some((option) => option.label === "Express"));
+  await invoke("browser_select", {
+    tabId: preferences.tabId,
+    observationId: preferencesObservation.observationId,
+    targetId: speed.targetId,
+    option: "Express",
+  });
+  preferencesObservation = await inspect(preferences.tabId);
+  const updates = preferencesObservation.targets.find(
+    (target) => target.name === "Email updates",
+  );
+  assert.ok(updates, "Expected the Email updates checkbox");
+  assert.equal(updates.checked, false);
+  await invoke("browser_click", {
+    tabId: preferences.tabId,
+    observationId: preferencesObservation.observationId,
+    targetId: updates.targetId,
+  });
+  preferencesObservation = await inspect(preferences.tabId);
+  const note = preferencesObservation.targets.find(
+    (target) => target.name === "Delivery note",
+  );
+  assert.ok(note, "Expected the contenteditable Delivery note");
+  await invoke("browser_type", {
+    tabId: preferences.tabId,
+    observationId: preferencesObservation.observationId,
+    targetId: note.targetId,
+    text: "门口轻放",
+  });
+  preferencesObservation = await inspect(preferences.tabId);
+  const savePreferences = preferencesObservation.targets.find(
+    (target) => target.name === "Save preferences",
+  );
+  assert.ok(savePreferences);
+  await invoke("browser_click", {
+    tabId: preferences.tabId,
+    observationId: preferencesObservation.observationId,
+    targetId: savePreferences.targetId,
+  });
+  const savedPreferences = await inspect(preferences.tabId);
+  assert.match(
+    savedPreferences.visibleText,
+    /"speed":"express","updates":true,"note":"门口轻放"/u,
+  );
+  console.log(JSON.stringify({ mode, task: "B6", passed: true, calls }));
 } finally {
   await capability.close();
 }

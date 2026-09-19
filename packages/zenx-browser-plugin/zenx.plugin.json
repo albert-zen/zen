@@ -1,6 +1,6 @@
 {
   "id": "browser",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "A dedicated ephemeral ZenX browser session with bounded DOM inspection and narrow navigation and interaction tools.",
   "provider": {
     "id": "electron-dedicated-browser",
@@ -30,7 +30,7 @@
     {
       "id": "browser.interact",
       "title": "Interact with pages",
-      "description": "Click and type into an explicitly targeted visible page element, or scroll the page viewport.",
+      "description": "Click, type, or select an option in an explicitly targeted visible page element, or scroll the page viewport.",
       "scope": "browser-session"
     }
   ],
@@ -98,7 +98,7 @@
     },
     {
       "name": "browser_inspect",
-      "description": "Create the latest bounded observation for one ZenX browser tab and return opaque target IDs for visible controls. Existing input values are not returned.",
+      "description": "Create the latest bounded observation for one ZenX browser tab and return opaque target IDs, current non-password control state, and bounded native select options for visible controls.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -174,6 +174,31 @@
       "permissions": ["browser.interact"],
       "interactionMode": "background_safe",
       "capabilities": ["dedicated_profile", "cdp", "dom.set_value"]
+    },
+    {
+      "name": "browser_select",
+      "description": "Select one native option by exact value or unique exact visible label in a visible select target from the latest browser_inspect observation. Consumes the observation and fails closed if the target or option changed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": { "type": "string" },
+          "tabId": { "type": "string" },
+          "observationId": { "type": "string" },
+          "targetId": { "type": "string" },
+          "option": { "type": "string" }
+        },
+        "required": [
+          "sessionId",
+          "tabId",
+          "observationId",
+          "targetId",
+          "option"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.interact"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp", "dom.select_option"]
     },
     {
       "name": "browser_scroll",

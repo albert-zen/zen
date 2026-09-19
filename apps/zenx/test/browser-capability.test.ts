@@ -124,6 +124,95 @@ test("DOM names honor associated labels and aria-labelledby and are revalidated 
   }
 });
 
+test("DOM inspection exposes bounded control state and native select and rich-text actions", () => {
+  const dom = new JSDOM(
+    `<style>* { opacity: 1 }</style><label>Delivery speed <select id="speed"><option value="standard">Standard</option><option value="express">Express</option></select></label><label><input id="updates" type="checkbox" checked>Email updates</label><label id="note-label">Delivery note</label><div id="note" role="textbox" aria-labelledby="note-label" contenteditable="true">old</div><input id="password" aria-label="Password" type="password" value="secret">`,
+    { runScripts: "outside-only" },
+  );
+  try {
+    dom.window.CSS = {
+      escape: (value: string) => value,
+    } as typeof dom.window.CSS;
+    dom.window.HTMLElement.prototype.getBoundingClientRect = () => ({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      width: 100,
+      height: 20,
+      right: 100,
+      bottom: 20,
+      toJSON() {
+        return {};
+      },
+    });
+    const targets = (
+      dom.window.eval(browserInspectScript) as {
+        targets: BrowserTargetFingerprint[];
+      }
+    ).targets;
+    const select = targets.find(({ name }) => name === "Delivery speed")!;
+    assert.deepEqual(Array.from(select.actions), ["click", "select"]);
+    assert.equal(select.value, "standard");
+    assert.deepEqual(
+      select.options === undefined
+        ? undefined
+        : Array.from(select.options, (option) => ({ ...option })),
+      [
+        {
+          value: "standard",
+          label: "Standard",
+          selected: true,
+          disabled: false,
+        },
+        {
+          value: "express",
+          label: "Express",
+          selected: false,
+          disabled: false,
+        },
+      ],
+    );
+    assert.equal(
+      (
+        dom.window.eval(browserActionScript(select, "select", "Express")) as {
+          ok: boolean;
+        }
+      ).ok,
+      true,
+    );
+    assert.equal(
+      (dom.window.document.querySelector("#speed") as HTMLSelectElement).value,
+      "express",
+    );
+    assert.equal(
+      targets.find(({ name }) => name === "Email updates")?.checked,
+      true,
+    );
+    const note = targets.find(({ name }) => name === "Delivery note")!;
+    assert.deepEqual(Array.from(note.actions), ["type"]);
+    assert.equal(note.value, "old");
+    assert.equal(
+      (
+        dom.window.eval(browserActionScript(note, "type", "门口轻放")) as {
+          ok: boolean;
+        }
+      ).ok,
+      true,
+    );
+    assert.equal(
+      dom.window.document.querySelector("#note")?.textContent,
+      "门口轻放",
+    );
+    assert.equal(
+      targets.find(({ name }) => name === "Password")?.value,
+      undefined,
+    );
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("browser URL projection uniformly removes credentials, query, and hash", () => {
   assert.equal(
     redactBrowserUrl(

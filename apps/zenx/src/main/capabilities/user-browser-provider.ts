@@ -756,6 +756,17 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
           ...(fingerprint.value === undefined
             ? {}
             : { value: fingerprint.value }),
+          ...(fingerprint.checked === undefined
+            ? {}
+            : { checked: fingerprint.checked }),
+          ...(fingerprint.selected === undefined
+            ? {}
+            : { selected: fingerprint.selected }),
+          ...(fingerprint.options === undefined
+            ? {}
+            : {
+                options: fingerprint.options.map((option) => ({ ...option })),
+              }),
         };
       });
       const summary = await this.#summary(sessionId, tabId);
@@ -846,6 +857,28 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       "type",
       text,
       submit,
+      signal,
+    );
+    observeRejection(operation);
+    return operation;
+  }
+
+  select(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    targetId: string,
+    option: string,
+    signal?: AbortSignal,
+  ): Promise<BrowserTabSummary> {
+    const operation = this.#act(
+      sessionId,
+      tabId,
+      observationId,
+      targetId,
+      "select",
+      option,
+      false,
       signal,
     );
     observeRejection(operation);
@@ -1081,7 +1114,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     tabId: string,
     observationId: string,
     targetId: string,
-    action: "click" | "type",
+    action: BrowserTargetFingerprint["actions"][number],
     text: string,
     submit: boolean,
     signal?: AbortSignal,
@@ -3720,8 +3753,26 @@ function requireFingerprint(value: unknown): BrowserTargetFingerprint {
       "href",
     ].every((key) => typeof target[key] === "string") ||
     !Array.isArray(actions) ||
-    !actions.every((action) => action === "click" || action === "type") ||
-    (target.value !== undefined && typeof target.value !== "string")
+    !actions.every(
+      (action) =>
+        action === "click" || action === "type" || action === "select",
+    ) ||
+    (target.value !== undefined && typeof target.value !== "string") ||
+    (target.checked !== undefined && typeof target.checked !== "boolean") ||
+    (target.selected !== undefined && typeof target.selected !== "boolean") ||
+    (target.options !== undefined &&
+      (!Array.isArray(target.options) ||
+        target.options.length > 100 ||
+        !target.options.every((option) => {
+          const candidate = asRecord(option);
+          return (
+            candidate !== undefined &&
+            typeof candidate.value === "string" &&
+            typeof candidate.label === "string" &&
+            typeof candidate.selected === "boolean" &&
+            typeof candidate.disabled === "boolean"
+          );
+        })))
   ) {
     throw new Error("User browser CDP inspection target is invalid");
   }
@@ -3737,6 +3788,21 @@ function requireFingerprint(value: unknown): BrowserTargetFingerprint {
     href: target.href as string,
     actions: [...actions],
     ...(target.value === undefined ? {} : { value: target.value }),
+    ...(target.checked === undefined ? {} : { checked: target.checked }),
+    ...(target.selected === undefined ? {} : { selected: target.selected }),
+    ...(target.options === undefined
+      ? {}
+      : {
+          options: target.options.map((option) => {
+            const candidate = asRecord(option)!;
+            return {
+              value: candidate.value as string,
+              label: candidate.label as string,
+              selected: candidate.selected as boolean,
+              disabled: candidate.disabled as boolean,
+            };
+          }),
+        }),
   };
 }
 
