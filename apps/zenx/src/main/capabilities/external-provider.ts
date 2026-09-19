@@ -268,11 +268,16 @@ function providerProcessEnvironment(
     "USERPROFILE",
     "PLAYWRIGHT_BROWSERS_PATH",
   ];
-  return Object.fromEntries(
-    keys.flatMap((key) =>
-      source[key] === undefined ? [] : [[key, source[key]]],
+  return {
+    ...Object.fromEntries(
+      keys.flatMap((key) =>
+        source[key] === undefined ? [] : [[key, source[key]]],
+      ),
     ),
-  );
+    // Host-managed providers have pinned versions. A CLI update lookup on every
+    // launch adds network latency and cannot update this verified installation.
+    NO_UPDATE_NOTIFIER: "1",
+  };
 }
 
 function redactExternalDiagnostic(value: string): string {

@@ -87,3 +87,19 @@ test("external provider runner applies a scoped Playwright browser path", async 
   );
   assert.equal(result.stdout, browserPath);
 });
+
+test("provider execution suppresses interactive update checks without forwarding secrets", async () => {
+  const runner = new SystemExternalProviderProcessRunner();
+  const result = await runner.run(
+    process.execPath,
+    [
+      "-e",
+      "process.stdout.write(JSON.stringify({ update: process.env.NO_UPDATE_NOTIFIER, secret: process.env.ZENX_TEST_SECRET }))",
+    ],
+    {
+      timeoutMs: 5000,
+      environment: { NO_UPDATE_NOTIFIER: "", ZENX_TEST_SECRET: "private" },
+    },
+  );
+  assert.deepEqual(JSON.parse(result.stdout), { update: "1" });
+});
