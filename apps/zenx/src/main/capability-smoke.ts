@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { access, writeFile } from "node:fs/promises";
 
 import { app, screen } from "electron";
+import { verifyElectronScrollCancellation } from "./browser-scroll-cancellation-smoke.js";
 
 import {
   BrowserZenXCapabilityPackage,
@@ -78,6 +79,7 @@ void app.whenReady().then(async () => {
       );
     }
     const port = await listen();
+    await verifyElectronScrollCancellation(`http://127.0.0.1:${String(port)}/`);
     await computerBackend.prepareForegroundInput(new AbortController().signal);
     const cursorBefore = screen.getCursorScreenPoint();
     const foregroundBefore = await computerBackend.desktopContext();

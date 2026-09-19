@@ -1012,7 +1012,9 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     observationId: string,
     direction: BrowserScrollDirection,
     pixels: number,
+    signal?: AbortSignal,
   ): Promise<BrowserTabSummary> {
+    signal?.throwIfAborted();
     const expression = browserScrollScript(direction, pixels);
     const tab = this.#requireTab(sessionId, tabId);
     assertBrowserObservation(
@@ -1021,7 +1023,24 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
       observationId,
     );
     tab.observation = undefined;
-    await evaluateInTab(tab, expression);
+    // Runtime.evaluate cannot reliably stop a dispatched mutation. Keep awaiting
+    // its real settlement; cancellation must not imply the page stopped moving.
+    try {
+      await evaluateInTab(tab, expression);
+    } catch (error) {
+      if (signal?.aborted) {
+        throw new Error(
+          "Browser scroll outcome unknown after cancellation; inspect again before interacting",
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    if (signal?.aborted) {
+      throw new Error(
+        "Browser scroll outcome unknown after cancellation; inspect again before interacting",
+      );
+    }
     return summarizeTab(tab);
   }
 
