@@ -1,5 +1,8 @@
 # Zen
 
+Licensed under the [MIT License](LICENSE). Third-party components retain their
+own licenses and notices.
+
 本地优先的个人 agent 运行框架：一个 append-only ItemList 驱动的极简
 Agent Runtime，加一个按 Thread 路由的统一 App Server。CLI、桌面、Web、IM
 都是平级接入端。
