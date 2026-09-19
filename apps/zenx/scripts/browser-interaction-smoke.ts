@@ -128,7 +128,9 @@ try {
       /stale or unknown/,
     );
     observation = await inspect(long.tabId);
-    if (index === 0) {
+    // CDP proves movement by revealing an initially absent viewport target.
+    // Playwright exposes offscreen targets too, so verify its rendered viewport.
+    if (index === 0 && mode === "playwright") {
       assert.notDeepEqual(
         await readFile(observation.screenshot.artifactPath),
         initialScreenshot,
