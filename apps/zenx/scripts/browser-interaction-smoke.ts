@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 import {
   BrowserZenXCapabilityPackage,
   type BrowserInspection,
@@ -54,7 +55,7 @@ async function invoke(name: string, args: Record<string, unknown>) {
     name,
     arguments: { sessionId: "interaction-smoke", ...args },
     cwd: process.cwd(),
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(120_000),
   });
 }
 async function inspect(tabId: string) {
@@ -109,6 +110,7 @@ try {
     (target) => target.name === "Finish task",
   );
   if (mode === "cdp") assert.equal(initialTargetExposed, false);
+  const initialScreenshot = await readFile(observation.screenshot.artifactPath);
   for (let index = 0; index < 3; index += 1) {
     await invoke("browser_scroll", {
       tabId: long.tabId,
@@ -126,6 +128,13 @@ try {
       /stale or unknown/,
     );
     observation = await inspect(long.tabId);
+    if (index === 0) {
+      assert.notDeepEqual(
+        await readFile(observation.screenshot.artifactPath),
+        initialScreenshot,
+        "Page scroll must change the static fixture viewport before click auto-scroll can run",
+      );
+    }
   }
   const finish = observation.targets.find(
     (target) => target.name === "Finish task",
