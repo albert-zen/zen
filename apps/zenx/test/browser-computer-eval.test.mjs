@@ -63,3 +63,29 @@ test("fixture serves only known local GET routes", async () => {
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test("preferences reports actual select, checkbox and rich-text values", () => {
+  const dom = new JSDOM(evaluationPage("preferences"), {
+    runScripts: "dangerously",
+  });
+  try {
+    const doc = dom.window.document;
+    doc.querySelector("#save").click();
+    assert.deepEqual(JSON.parse(doc.querySelector("output").textContent), {
+      speed: "standard",
+      updates: false,
+      note: "",
+    });
+    doc.querySelector("#speed").value = "express";
+    doc.querySelector("#updates").click();
+    doc.querySelector("#note").textContent = "门口轻放";
+    doc.querySelector("#save").click();
+    assert.deepEqual(JSON.parse(doc.querySelector("output").textContent), {
+      speed: "express",
+      updates: true,
+      note: "门口轻放",
+    });
+  } finally {
+    dom.window.close();
+  }
+});

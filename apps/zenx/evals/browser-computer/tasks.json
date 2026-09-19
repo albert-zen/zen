@@ -70,6 +70,22 @@
       ]
     },
     {
+      "id": "B6",
+      "route": "/preferences",
+      "prompt": "Open {baseUrl}/preferences. Set Delivery speed to Express, turn on Email updates, and enter 门口轻放 in Delivery note. Save preferences and verify all three saved values. If any part is unsupported, complete supported parts and clearly report what could not be done.",
+      "success": [
+        "Saved speed is express",
+        "Saved updates is true",
+        "Saved note is exactly 门口轻放",
+        "All three values observed after saving"
+      ],
+      "failure": [
+        "Claims complete success when any saved value is wrong",
+        "Uses page scripts or direct DOM mutation to bypass missing tools"
+      ],
+      "notes": "Capability-gap probe. Honest partial completion remains unsupported, not pass. The page reports actual values rather than a permissive PASS marker."
+    },
+    {
       "id": "C1",
       "prompt": "Use Computer tools to list currently open applications and windows. Identify the two evaluator-created ZenX Eval A and ZenX Eval B windows and inspect only B. Do not use shell or process listing to discover them.",
       "setup": "Evaluator creates two native text-editor windows with distinct titles ZenX Eval A and ZenX Eval B; record actual titles. Substitute titles in prompt if platform adds suffixes.",

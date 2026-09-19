@@ -11,6 +11,7 @@ export function evaluationPage(task) {
     tabs: `<h1>Tab ownership</h1><p>Keep this source tab open. Open the Destination link in a separate tab, then return here.</p><a href="/destination" target="_blank" rel="noopener">Destination</a><button onclick="document.querySelector('output').textContent='PASS: source retained'">Confirm source retained</button><output aria-live="polite">Not confirmed</output>`,
     destination: `<h1>Destination</h1><p>Destination code: ORCHID-42</p>`,
     disabled: `<h1>Available actions</h1><button disabled>Submit disabled</button><button onclick="document.querySelector('output').textContent='PASS: enabled action selected'">Submit enabled</button><output aria-live="polite">Not submitted</output>`,
+    preferences: `<h1>Delivery preferences</h1><label>Delivery speed <select id="speed"><option value="standard">Standard</option><option value="express">Express</option></select></label><label><input type="checkbox" id="updates">Email updates</label><label id="note-label">Delivery note</label><div id="note" contenteditable="true" role="textbox" aria-labelledby="note-label" style="border:1px solid;padding:10px;min-height:40px"></div><button id="save">Save preferences</button><output aria-live="polite">Not saved</output><script>document.querySelector('#save').onclick=()=>{document.querySelector('output').textContent=JSON.stringify({speed:document.querySelector('#speed').value,updates:document.querySelector('#updates').checked,note:document.querySelector('#note').textContent});};</script>`,
   };
   const body = pages[task];
   if (body === undefined) return undefined;
@@ -45,7 +46,7 @@ if (
       `ZenX evaluation fixture: http://127.0.0.1:${server.address().port}/form`,
     );
     console.log(
-      "Tasks: /form /scroll /stale /tabs /disabled; Ctrl+C stops this local fixture.",
+      "Tasks: /form /scroll /stale /tabs /disabled /preferences; Ctrl+C stops this local fixture.",
     );
   });
 }
