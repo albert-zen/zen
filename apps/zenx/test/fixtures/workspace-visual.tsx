@@ -151,7 +151,44 @@ const zenx = {
     onChange: () => () => undefined,
   },
   plugins: {
-    get: async () => ({ plugins: [], sidebar: [], pages: [] }),
+    get: async () => ({
+      plugins: [{ id: "notes", enabled: true, available: true }],
+      sidebar: [],
+      pages: [],
+      panels: [
+        {
+          key: "notes:preview",
+          pluginId: "notes",
+          id: "preview",
+          title: "Project notes",
+          surfaceId: "notes",
+        },
+      ],
+      surfaces: [
+        {
+          key: "notes:notes",
+          pluginId: "notes",
+          id: "notes",
+          bundleId: "ui",
+          exportName: "main",
+        },
+      ],
+      bundles: [
+        {
+          key: "notes:ui",
+          pluginId: "notes",
+          id: "ui",
+          apiVersion: 1,
+          kind: "isolated",
+          entry:
+            '<main style="padding:20px;font:14px/1.6 system-ui;color:inherit"><h2 style="font-size:17px">Project notes</h2><p>This view is provided by a registered plugin.</p><label>Notes<textarea aria-label="Project notes" style="display:block;width:100%;min-height:160px;margin-top:8px;font:inherit">The host supplies the tab; the plugin owns this view.</textarea></label></main>',
+        },
+      ],
+      subroutes: [],
+      settings: [],
+      commands: [],
+      menus: [],
+    }),
     onChange: () => () => undefined,
   },
 };
