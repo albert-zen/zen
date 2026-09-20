@@ -69,9 +69,11 @@ test("self-control reads and updates the same workflow configuration port", asyn
   };
   const workflows = {
     workflowConfiguration: async () => structuredClone(value),
-    saveWorkflowConfiguration: async (
-      next: typeof value & { baseRevision?: number; titlePrompt?: string },
-    ) => {
+    saveWorkflowConfiguration: async (next: {
+      commands: typeof value.commands;
+      baseRevision: number;
+      titlePrompt?: string;
+    }) => {
       assert.equal(next.baseRevision, value.revision);
       value = {
         revision: value.revision + 1,
