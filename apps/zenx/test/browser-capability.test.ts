@@ -745,10 +745,12 @@ test("DOM action rejects an earlier route change but permits its own route chang
         targets: BrowserTargetFingerprint[];
       };
     let clicks = 0;
-    dom.window.document.querySelector("button")!.addEventListener("click", () => {
-      clicks += 1;
-      dom.window.history.pushState({}, "", "/agent-route");
-    });
+    dom.window.document
+      .querySelector("button")!
+      .addEventListener("click", () => {
+        clicks += 1;
+        dom.window.history.pushState({}, "", "/agent-route");
+      });
 
     const staleTarget = inspect().targets[0]!;
     dom.window.history.pushState({}, "", "/human-route");
