@@ -496,7 +496,10 @@ function projectNativeThread(
   const firstMessage = snapshot.items.find(
     (item) => item.type === "user_message",
   );
-  const createdAt = seconds(metadata.createdAt);
+  const fork = [...snapshot.items]
+    .reverse()
+    .find((item) => item.type === "thread_forked");
+  const createdAt = seconds(fork?.createdAt ?? metadata.createdAt);
   const deliveredClientIds = new Set(
     snapshot.items.flatMap((item) =>
       item.type === "user_message" && item.clientId !== undefined
@@ -507,7 +510,7 @@ function projectNativeThread(
   return {
     id: snapshot.id,
     sessionId: snapshot.id,
-    forkedFromId: null,
+    forkedFromId: fork?.sourceThreadId ?? null,
     parentThreadId: null,
     preview: firstMessage === undefined ? "" : userMessagePreview(firstMessage),
     ephemeral: false,
