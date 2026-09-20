@@ -78,6 +78,7 @@ export async function serveCodexWebSocket(options: {
       projection: nativeProjection,
       appServer: options.appServer,
       requestApproval: (request) => connection.requestApproval(request),
+      isInitialized: () => connection.initialized,
       send: (message) => {
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify(message));

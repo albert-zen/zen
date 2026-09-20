@@ -19,6 +19,276 @@ import {
 } from "../src/model.js";
 import { NativeConnection } from "../src/protocol/native/connection.js";
 import { NativeRecoveryProjection } from "../src/protocol/native/recovery.js";
+import { pendingQueuedMessages } from "../src/input-queue.js";
+import { serveCodexWebSocket } from "../src/protocol/codex/websocket.js";
+import { WebSocket } from "ws";
+
+test("pending Skill intents reject different public start input without consuming the queue", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-skills-pending-"));
+  try {
+    const service = new SkillsService(path.join(root, "host"));
+    const source = path.join(root, "source");
+    await mkdir(source);
+    await writeFile(
+      path.join(source, "SKILL.md"),
+      "---\nname: A\ndescription: A\n---\nORIGINAL_A",
+    );
+    const skill = await service.importDirectory(source);
+    const reference = [{ type: "skill" as const, id: skill.id }];
+    let calls = 0;
+    const server = serverFor(root, [], service, {
+      provider: "skills-test",
+      async *stream(request) {
+        if (++calls === 1)
+          await new Promise<void>((resolve) => {
+            if (request.signal.aborted) resolve();
+            else
+              request.signal.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
+          });
+        yield { type: "text_delta", delta: "done" };
+      },
+    });
+    const thread = await server.startThread();
+    const active = await server.startTurn(thread.id, "hold");
+    await server.queueMessage(thread.id, reference, "pending-A");
+    await server.interruptTurn(thread.id, active.id);
+    await active.done;
+    const before = (await server.readThread(thread.id)).items;
+    assert.equal(pendingQueuedMessages(before).length, 1);
+    await assert.rejects(
+      async () => {
+        await (
+          await server.startTurn(thread.id, "DIFFERENT B", {
+            clientId: "pending-A",
+          })
+        ).done;
+      },
+      { code: "idempotency_conflict" },
+    );
+    assert.deepEqual((await server.readThread(thread.id)).items, before);
+    await service.setMode(skill.id, "disabled");
+    await writeFile(path.join(skill.directory, "SKILL.md"), "broken");
+    await server.resumeQueue(thread.id);
+    await waitUntil(async () =>
+      (await server.readThread(thread.id)).items.some(
+        (item) => item.type === "turn_completed",
+      ),
+    );
+    const after = (await server.readThread(thread.id)).items;
+    assert.equal(pendingQueuedMessages(after).length, 0);
+    assert.equal(
+      after.filter(
+        (item) => item.type === "user_message" && item.clientId === "pending-A",
+      ).length,
+      1,
+    );
+    assert.match(JSON.stringify(after), /ORIGINAL_A/);
+    assert.equal(calls, 2);
+
+    // Same original request can consume a pending intent across modes.
+    const second = await server.startThread();
+    // Seed a canonical accepted queue intent without automatically launching it.
+    const journal = new JsonlThreadJournal(path.join(root, "journal"));
+    const queued = before.find((item) => item.type === "user_message_queued")!;
+    assert.equal(queued.type, "user_message_queued");
+    await journal.append({
+      ...queued,
+      threadId: second.id,
+      id: "pending-copy",
+      clientId: "same-input",
+    });
+    const restored = serverFor(root, [], service);
+    await (
+      await restored.startTurn(second.id, reference, { clientId: "same-input" })
+    ).done;
+    assert.equal(
+      pendingQueuedMessages((await restored.readThread(second.id)).items)
+        .length,
+      0,
+    );
+
+    // A durable replacement intent reserves the same logical input too.
+    await writeFile(
+      path.join(skill.directory, "SKILL.md"),
+      "---\nname: A\ndescription: A\n---\nCHANGED",
+    );
+    const third = await server.startThread();
+    const predecessor = await server.startTurn(third.id, "predecessor");
+    await predecessor.done;
+    await journal.append({
+      type: "turn_replacement_requested",
+      id: "replacement-intent",
+      threadId: third.id,
+      createdAt: new Date().toISOString(),
+      turnId: predecessor.id,
+      successorTurnId: "successor",
+      clientId: "pending-replacement",
+      input: queued.input,
+    });
+    const restarted = serverFor(root, [], service);
+    const replacementBefore = (await restarted.readThread(third.id)).items;
+    await assert.rejects(
+      restarted.startTurn(third.id, "DIFFERENT B", {
+        clientId: "pending-replacement",
+      }),
+      { code: "idempotency_conflict" },
+    );
+    assert.deepEqual(
+      (await restarted.readThread(third.id)).items,
+      replacementBefore,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+async function waitUntil(predicate: () => Promise<boolean>) {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("Timed out waiting for test state");
+}
+
+test("real WebSocket native send requires explicit native or complete CAS initialization", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-skills-wire-init-"));
+  const service = new SkillsService(path.join(root, "host"));
+  const requests: ModelMessage[][] = [];
+  let holdNext = false;
+  const server = serverFor(root, requests, service, {
+    provider: "wire-test",
+    async *stream(request) {
+      requests.push(structuredClone(request.messages));
+      if (holdNext) {
+        holdNext = false;
+        await new Promise<void>((resolve) => {
+          if (request.signal.aborted) resolve();
+          else
+            request.signal.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
+        });
+      }
+      yield { type: "text_delta", delta: "done" };
+    },
+  });
+  const transport = await serveCodexWebSocket({
+    appServer: server,
+    zenHome: root,
+    listen: "ws://127.0.0.1:0",
+  });
+  try {
+    for (const handshake of ["native", "cas"]) {
+      const socket = new WebSocket(transport.url);
+      const responses = new Map<
+        string,
+        { result?: unknown; error?: { message: string } }
+      >();
+      socket.on("message", (data) => {
+        const message = JSON.parse(data.toString());
+        if (message.id) responses.set(message.id, message);
+      });
+      await new Promise<void>((resolve, reject) => {
+        socket.once("open", resolve);
+        socket.once("error", reject);
+      });
+      let id = 0;
+      const rpc = async (method: string, params: unknown = {}) => {
+        const key = String(++id);
+        socket.send(JSON.stringify({ id: key, method, params }));
+        await waitUntil(async () => responses.has(key));
+        return responses.get(key)!;
+      };
+      try {
+        const thread = await server.startThread();
+        const before = (await server.readThread(thread.id)).items;
+        const count = requests.length;
+        // Existing read remains available, but does not authorize writes.
+        assert.equal(
+          (await rpc("zen/thread/resume", { threadId: thread.id })).error,
+          undefined,
+        );
+        for (const mode of ["start", "queue", "steer", "replace"]) {
+          const reply = await rpc("zen/turn/send", {
+            threadId: thread.id,
+            mode,
+            expectedTurnId: "missing",
+            clientUserMessageId: `before-${mode}`,
+            input: [{ type: "text", text: "never execute" }],
+          });
+          if (reply.error === undefined && mode === "start")
+            await waitUntil(async () =>
+              (await server.readThread(thread.id)).items.some(
+                (item) => item.type === "turn_completed",
+              ),
+            );
+          assert.equal(reply.error?.message, "Not initialized");
+          assert.deepEqual((await server.readThread(thread.id)).items, before);
+          assert.equal(requests.length, count);
+        }
+        if (handshake === "native") await rpc("zen/initialize");
+        else {
+          await rpc("initialize");
+          assert.equal(
+            (
+              await rpc("zen/turn/send", {
+                threadId: thread.id,
+                mode: "start",
+                clientUserMessageId: "partial",
+                input: [{ type: "text", text: "no" }],
+              })
+            ).error?.message,
+            "Not initialized",
+          );
+          socket.send(JSON.stringify({ method: "initialized" }));
+        }
+        const reply = await rpc("zen/turn/send", {
+          threadId: thread.id,
+          mode: "start",
+          clientUserMessageId: "ready",
+          input: [{ type: "text", text: "execute" }],
+        });
+        assert.equal(reply.error, undefined);
+        await waitUntil(async () =>
+          (await server.readThread(thread.id)).items.some(
+            (item) => item.type === "turn_completed",
+          ),
+        );
+        holdNext = true;
+        const active = await server.startTurn(thread.id, "hold");
+        for (const mode of ["steer", "queue", "replace"]) {
+          const result = await rpc("zen/turn/send", {
+            threadId: thread.id,
+            mode,
+            expectedTurnId: active.id,
+            clientUserMessageId: `ready-${mode}`,
+            input: [{ type: "text", text: mode }],
+          });
+          assert.equal(result.error, undefined, `${handshake}: ${mode}`);
+        }
+        await active.done;
+        await waitUntil(async () => {
+          const items = (await server.readThread(thread.id)).items;
+          return (
+            ["ready-steer", "ready-queue", "ready-replace"].every((id) =>
+              items.some(
+                (item) => item.type === "user_message" && item.clientId === id,
+              ),
+            ) &&
+            items.filter((item) => item.type === "turn_completed").length >= 3
+          );
+        });
+      } finally {
+        socket.close();
+      }
+    }
+  } finally {
+    await transport.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("import keeps resources after source removal, defaults to no metadata, explicit input replays", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-skills-"));
@@ -275,6 +545,8 @@ test("a completed start with the same client ID never appends or executes twice"
       send: (message) => responses.push(message),
     });
     try {
+      await connection.receive({ id: "init", method: "zen/initialize" });
+      responses.length = 0;
       await connection.receive({
         id: "native-retry",
         method: "zen/turn/send",
@@ -415,6 +687,7 @@ test("ZAS native input, canonical restart and compaction use snapshots without r
       projection,
       send: (message) => messages.push(message),
     });
+    await connection.receive({ id: "init", method: "zen/initialize" });
     await connection.receive({
       id: "skill-send",
       method: "zen/turn/send",

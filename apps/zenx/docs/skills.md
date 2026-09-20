@@ -65,6 +65,9 @@ Modes are `start`, `queue`, `steer` and `replace`; the latter two require the
 current `expectedTurnId`. Native image/audio parts use canonical attachment
 references. Approval handling uses the same connection approval channel as
 ordinary sends. CAS's fixed mapped surface is unchanged.
+The connection must first complete `initialize` → `initialized` or explicitly
+call `zen/initialize`. A native resume/read alone does not authorize sending;
+all four send modes reject an uninitialized connection before any append.
 
 A `start` retry with the same client message ID and original input returns the
 already delivered Turn ID without appending or executing again. This applies
@@ -73,6 +76,9 @@ has since changed or been disabled. Reusing the ID with different input returns
 `idempotency_conflict`. Ordinary starts without a client ID remain independent.
 Queued and replacement intents are not proof of delivery: their internal
 launches still execute the captured input once.
+Pending intents also reserve their original input for that client ID. A public
+start with different input fails without consuming or modifying the intent;
+matching queued input can be delivered across modes using its saved snapshot.
 
 Loaded text and `skillSource` provenance are stored in existing canonical input
 parts. Queue draining, replacement launch and identical message retries reuse
