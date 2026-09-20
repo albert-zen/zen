@@ -1,3 +1,4 @@
+import { createReadStream, createWriteStream } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -19,6 +20,7 @@ export type ChromeNativeHostStage =
   | "electron-ready"
   | "default-user-data"
   | "read-descriptor"
+  | "stdio"
   | "connect"
   | "session";
 
@@ -89,21 +91,50 @@ export function chromeNativeHostFailureDiagnostic(
   error: unknown,
   stage: ChromeNativeHostStage,
 ): string {
-  const code =
-    typeof error === "object" &&
-    error !== null &&
-    typeof (error as { code?: unknown }).code === "string" &&
-    /^[A-Z0-9_]{1,32}$/u.test((error as { code: string }).code)
-      ? ` (${(error as { code: string }).code})`
-      : "";
-  return `ZenX Chrome native host failed [${stage}]${code}\n`;
+  const code = safeErrorCode(error);
+  const category = safeErrorCategory(error);
+  return `ZenX Chrome native host failed [${stage}]${code === undefined ? "" : ` (${code})`}${category === undefined ? "" : ` {${category}}`}\n`;
+}
+
+function safeErrorCode(error: unknown, depth = 0): string | undefined {
+  if (depth > 3 || typeof error !== "object" || error === null)
+    return undefined;
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string" && /^[A-Z0-9_]{1,32}$/u.test(code)) return code;
+  const cause = safeErrorCode((error as { cause?: unknown }).cause, depth + 1);
+  if (cause !== undefined) return cause;
+  const errors = (error as { errors?: unknown }).errors;
+  if (!Array.isArray(errors)) return undefined;
+  for (const nested of errors) {
+    const nestedCode = safeErrorCode(nested, depth + 1);
+    if (nestedCode !== undefined) return nestedCode;
+  }
+  return undefined;
+}
+
+function safeErrorCategory(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined;
+  if (/Unexpected server response: [0-9]{3}/u.test(error.message))
+    return "http-response";
+  if (/Opening handshake has timed out/u.test(error.message))
+    return "handshake-timeout";
+  if (/socket hang up/u.test(error.message)) return "socket-hang-up";
+  if (
+    /WebSocket was closed before the connection was established/u.test(
+      error.message,
+    )
+  )
+    return "closed-before-open";
+  if (/Implement me\. Unknown stream file type!/u.test(error.message))
+    return "unsupported-stdio";
+  return undefined;
 }
 
 export async function runChromeNativeHost(options: {
   descriptorFile: string;
   origin: string;
   expectedOrigin: string;
-  onStage?(stage: "read-descriptor" | "connect" | "session"): void;
+  onStage?(stage: "read-descriptor" | "stdio" | "connect" | "session"): void;
   input?: NodeJS.ReadableStream;
   output?: NodeJS.WritableStream;
 }): Promise<void> {
@@ -114,13 +145,25 @@ export async function runChromeNativeHost(options: {
   const descriptor = validateDescriptor(
     JSON.parse(await readFile(options.descriptorFile, "utf8")) as unknown,
   );
+  options.onStage?.("stdio");
+  // Electron replaces process.stdin with an already-ended Readable on Windows.
+  // Native Messaging still supplies inherited pipe handles, so open those file
+  // descriptors directly instead of observing Electron's synthetic EOF stream.
+  const input: NodeJS.ReadableStream =
+    options.input ??
+    (process.platform === "win32"
+      ? createReadStream("", { fd: 0, autoClose: false })
+      : process.stdin);
+  const output: NodeJS.WritableStream =
+    options.output ??
+    (process.platform === "win32"
+      ? createWriteStream("", { fd: 1, autoClose: false })
+      : process.stdout);
   options.onStage?.("connect");
   const socket = new WebSocket(descriptor.nativeWebSocketUrl, {
     headers: { origin: options.origin },
     handshakeTimeout: 5_000,
   });
-  const input = options.input ?? process.stdin;
-  const output = options.output ?? process.stdout;
   const decoder = new ChromeNativeMessageDecoder();
   const queued: string[] = [];
   let open = false;
@@ -167,6 +210,7 @@ export async function runChromeNativeHost(options: {
     });
     input.once("end", () => socket.close());
     input.once("error", fail);
+    output.once("error", fail);
   });
 }
 

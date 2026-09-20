@@ -79,6 +79,31 @@ test("native host resolves an explicit isolated user data directory without leak
     "ZenX Chrome native host failed [read-descriptor] (ENOENT)\n",
   );
   assert.doesNotMatch(diagnostic, /private-token|127\.0\.0\.1/u);
+  assert.equal(
+    chromeNativeHostFailureDiagnostic(
+      Object.assign(new Error("connect failed"), {
+        cause: Object.assign(new Error("secret endpoint"), {
+          code: "ECONNREFUSED",
+        }),
+      }),
+      "connect",
+    ),
+    "ZenX Chrome native host failed [connect] (ECONNREFUSED)\n",
+  );
+  assert.equal(
+    chromeNativeHostFailureDiagnostic(
+      new Error("Unexpected server response: 403 at a private URL"),
+      "connect",
+    ),
+    "ZenX Chrome native host failed [connect] {http-response}\n",
+  );
+  assert.equal(
+    chromeNativeHostFailureDiagnostic(
+      new Error("Implement me. Unknown stream file type!"),
+      "stdio",
+    ),
+    "ZenX Chrome native host failed [stdio] {unsupported-stdio}\n",
+  );
 });
 
 test("bundled extension key has the native-host allowlisted extension ID", async () => {
