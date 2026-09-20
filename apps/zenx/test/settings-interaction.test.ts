@@ -1372,6 +1372,56 @@ test("General exposes an optional maximum tool round setting", async () => {
   }
 });
 
+test("General names both browser modes and reports an extension-folder failure", async () => {
+  const browserSettings: PublicHostSettings = {
+    ...settings,
+    profile: { ...settings.profile, browserMode: "user-session" },
+  };
+  const snapshot = {
+    configuredMode: "user-session" as const,
+    effectiveMode: "user-session" as const,
+    environmentOverride: false,
+    connector: "chrome-extension" as const,
+    packaged: true,
+    nativeHostRegistered: true,
+    extensionDirectory:
+      "/Applications/ZenX.app/Contents/Resources/chrome-extension",
+    extensionId: "fixture",
+    connection: { state: "waiting" as const },
+  };
+  const harness = await mountSettings("general", {
+    initialSettings: browserSettings,
+    chromeBridge: {
+      get: async () => snapshot,
+      prepare: async () => snapshot,
+      remove: async () => snapshot,
+      openExtension: async () => {
+        throw new Error("Extension folder is unavailable");
+      },
+    },
+  });
+  try {
+    const mode = await waitFor(() => labeledSelect("Browser mode"));
+    assert.deepEqual(
+      Array.from(mode.options).map((option) => option.textContent?.trim()),
+      ["ZenX browser", "Connected Chrome tab"],
+    );
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /fixed extension id|wildcard|ZENX_BROWSER_MODE/iu,
+    );
+    await click(exactButtonRequired("Show extension folder"));
+    assert.match(
+      await waitFor(() =>
+        document.querySelector<HTMLElement>('[role="alert"]'),
+      ).then((element) => element.textContent ?? ""),
+      /Extension folder is unavailable/u,
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
 test("General exposes and saves the Host-owned tool presentation mode", async () => {
   const saved: ZenXSettingsUpdate[] = [];
   const harness = await mountSettings("general", {
@@ -1483,6 +1533,7 @@ async function mountSettings(
       providerProfileId: string,
       modelId: string,
     ): Promise<ZenXImageCapabilityProbeResult>;
+    chromeBridge?: Window["zenx"]["chromeBridge"];
     archivedThreads?: NativeThreadSummary[];
     onUnarchive?(thread: NativeThreadSummary): Promise<void>;
   } = {},
@@ -1516,6 +1567,9 @@ async function mountSettings(
   });
   const initialSettings = options.initialSettings ?? settings;
   const zenx = {
+    ...(options.chromeBridge === undefined
+      ? {}
+      : { chromeBridge: options.chromeBridge }),
     settings: {
       get: options.get ?? (async () => initialSettings),
       reconcile: options.reconcile,

@@ -300,12 +300,12 @@ async function bootstrapZenX(): Promise<void> {
   try {
     await settingsService.initialize(process.env);
     bootstrapFence.throwIfCancelled();
-    const savedBrowserMode =
-      (await settingsService.publicSettings()).profile.browserMode ??
-      "isolated";
+    const savedBrowserMode = (await settingsService.publicSettings()).profile
+      .browserMode;
     const browserEnvironment: NodeJS.ProcessEnv = {
       ...process.env,
-      ZENX_BROWSER_MODE: process.env.ZENX_BROWSER_MODE ?? savedBrowserMode,
+      ZENX_BROWSER_MODE:
+        process.env.ZENX_BROWSER_MODE ?? savedBrowserMode ?? "isolated",
     };
     if (
       browserEnvironment.ZENX_BROWSER_MODE === "user-session" &&
@@ -333,7 +333,10 @@ async function bootstrapZenX(): Promise<void> {
         },
       },
     });
-    const useSharedWorkspaceBrowser = useWorkspaceBrowserProvider(process.env);
+    const useSharedWorkspaceBrowser = useWorkspaceBrowserProvider(
+      process.env,
+      savedBrowserMode,
+    );
     capabilityService = new ZenXCapabilityService({
       userDataDirectory,
       ...(useSharedWorkspaceBrowser
@@ -1126,8 +1129,11 @@ function installChromeBridgeIpc(options: {
     await unregisterChromeNativeHost(registration);
     return await snapshot();
   });
-  ipcMain.handle(ipcChannels.chromeBridgeOpenExtension, () => {
-    shell.showItemInFolder(join(extensionDirectory, "manifest.json"));
+  ipcMain.handle(ipcChannels.chromeBridgeOpenExtension, async () => {
+    const failure = await shell.openPath(extensionDirectory);
+    if (failure.length > 0) {
+      throw new Error(`Could not open the ZenX Chrome extension: ${failure}`);
+    }
   });
 }
 

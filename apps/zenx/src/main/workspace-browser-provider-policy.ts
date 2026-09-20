@@ -1,6 +1,8 @@
-/** Default to the shared Workspace Browser; an explicit provider mode wins. */
+/** Keep the shared Workspace Browser unless an env override or saved Chrome opt-in selects a provider. */
 export function useWorkspaceBrowserProvider(
   environment: NodeJS.ProcessEnv,
+  configuredMode?: "isolated" | "user-session",
 ): boolean {
-  return environment.ZENX_BROWSER_MODE === undefined;
+  if (environment.ZENX_BROWSER_MODE !== undefined) return false;
+  return configuredMode !== "user-session";
 }

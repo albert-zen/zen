@@ -228,7 +228,12 @@ export class ChromeExtensionBridge {
   }
 
   #acceptNative(socket: WebSocket): void {
-    this.#native?.close(1008, "Replaced by a new ZenX extension connection");
+    const previous = this.#native;
+    if (previous !== undefined) {
+      this.#native = undefined;
+      this.#detachTab("Extension connection was replaced");
+      previous.close(1008, "Replaced by a new ZenX extension connection");
+    }
     this.#native = socket;
     socket.on("message", (data) =>
       this.#receiveNative(socket, data.toString()),

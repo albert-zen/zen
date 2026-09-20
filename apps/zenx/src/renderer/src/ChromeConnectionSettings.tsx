@@ -54,11 +54,8 @@ export function ChromeConnectionSettings({
     <div className="page-card settings-card chrome-connection-settings">
       <div className="settings-card-head">
         <div>
-          <h3>Browser session</h3>
-          <p>
-            Choose the isolated ZenX browser or one Chrome tab that you connect
-            explicitly from Chrome.
-          </p>
+          <h3>Browser</h3>
+          <p>Choose where Browser tools work.</p>
         </div>
         <span
           className={connected === undefined ? "status-muted" : "status-good"}
@@ -69,7 +66,7 @@ export function ChromeConnectionSettings({
         </span>
       </div>
       <label className="field">
-        <span>Agent browser</span>
+        <span>Browser mode</span>
         <select
           value={selectedMode}
           onChange={(event) =>
@@ -79,12 +76,11 @@ export function ChromeConnectionSettings({
             })
           }
         >
-          <option value="isolated">Isolated ZenX browser</option>
-          <option value="user-session">Explicit Chrome tab</option>
+          <option value="isolated">ZenX browser</option>
+          <option value="user-session">Connected Chrome tab</option>
         </select>
         <small className="settings-note">
-          Changing this mode takes effect after restarting ZenX. An explicit
-          ZENX_BROWSER_MODE environment value overrides this setting.
+          Changing this mode takes effect after restarting ZenX.
         </small>
       </label>
       {selectedMode === "user-session" ? (
@@ -92,10 +88,7 @@ export function ChromeConnectionSettings({
           <div className="settings-row">
             <div>
               <strong>1. Register the local connector</strong>
-              <span>
-                Chrome may start only this ZenX executable. The registration
-                accepts the fixed ZenX extension ID and no wildcard origins.
-              </span>
+              <span>Let Chrome connect to this installed ZenX app.</span>
             </div>
             <div className="settings-actions">
               {snapshot?.nativeHostRegistered ? (
@@ -134,9 +127,15 @@ export function ChromeConnectionSettings({
             <button
               className="secondary-button"
               type="button"
-              onClick={() => void window.zenx.chromeBridge.openExtension()}
+              disabled={busy !== null}
+              onClick={() =>
+                void run("open", async () => {
+                  await window.zenx.chromeBridge.openExtension();
+                  return await window.zenx.chromeBridge.get();
+                })
+              }
             >
-              Show extension folder
+              {busy === "open" ? "Opening…" : "Show extension folder"}
             </button>
           </div>
           <div className="settings-row">
@@ -166,12 +165,6 @@ export function ChromeConnectionSettings({
             copy of the Chrome tab.
           </p>
         </>
-      ) : null}
-      {snapshot?.environmentOverride ? (
-        <p className="settings-note" role="status">
-          The current launch is using the ZENX_BROWSER_MODE environment
-          override.
-        </p>
       ) : null}
       {error === null ? null : (
         <div className="settings-error" role="alert">

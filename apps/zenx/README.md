@@ -475,7 +475,7 @@ cleanup, and advances the partition generation; reopening the same `sessionId`
 therefore starts without the prior cookies or session storage. Generation state
 exists only for active/pending sessions, so logical session bookkeeping is bounded.
 User-browser attachment is a separate explicit opt-in mode. In Settings →
-General → Browser session, choose **Explicit Chrome tab**, apply, and restart
+General → Browser, choose **Connected Chrome tab**, apply, and restart
 ZenX. Register the local connector, load the bundled unpacked extension from the
 folder shown by ZenX, open the signed-in page in ordinary Chrome, then click the
 extension action. The action grants ZenX debugger access to that one tab. Click

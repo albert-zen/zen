@@ -244,12 +244,14 @@ test("Chrome bridge exposes only the explicitly attached tab over authenticated 
   }
 });
 
-test("Chrome bridge ignores a replaced native connection's late tab message", async () => {
+test("replacing the native connection revokes its tab, sessions, and pending commands", async () => {
   const runtimeDirectory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-chrome-generation-"),
   );
   const bridge = await ChromeExtensionBridge.start({ runtimeDirectory });
   const sockets: WebSocket[] = [];
+  let connection:
+    Awaited<ReturnType<typeof bridge.connectProvider>> | undefined;
   try {
     const descriptor = JSON.parse(
       await readFile(path.join(runtimeDirectory, "chrome-bridge.json"), "utf8"),
@@ -266,17 +268,56 @@ test("Chrome bridge ignores a replaced native connection's late tab message", as
       return socket;
     };
     const oldSocket = await connect();
+    let navigateDispatched = false;
+    oldSocket.on("message", (data) => {
+      const message = JSON.parse(data.toString()) as {
+        type?: string;
+        requestId?: string;
+        method?: string;
+      };
+      if (message.type !== "cdp-command" || message.requestId === undefined)
+        return;
+      if (message.method === "Page.navigate") {
+        navigateDispatched = true;
+        return;
+      }
+      oldSocket.send(
+        JSON.stringify({
+          type: "cdp-result",
+          requestId: message.requestId,
+          result: {},
+        }),
+      );
+    });
+    oldSocket.send(
+      JSON.stringify({
+        type: "tab-attached",
+        tab: { id: 7, title: "Old", url: "https://old.test/" },
+      }),
+    );
+    await waitFor(() => bridge.status().connectedTab?.id === 7);
+    connection = await bridge.connectProvider();
+    assert.equal(
+      (await connection.backend.listTabs("thread"))[0]?.tabId,
+      "chrome-tab-7",
+    );
+    const navigation = connection.backend.navigate(
+      "thread",
+      "chrome-tab-7",
+      "https://old.test/pending",
+    );
+    await waitFor(() => navigateDispatched);
+
     const currentSocket = await connect();
+    await assert.rejects(navigation);
+    await waitFor(() => bridge.status().state === "waiting");
+    assert.deepEqual(await connection.backend.listTabs("thread"), []);
+    assert.equal(await connection.backend.closeSession("thread"), 0);
+
     currentSocket.send(
       JSON.stringify({
         type: "tab-attached",
         tab: { id: 8, title: "Current", url: "https://current.test/" },
-      }),
-    );
-    oldSocket.send(
-      JSON.stringify({
-        type: "tab-attached",
-        tab: { id: 7, title: "Stale", url: "https://stale.test/" },
       }),
     );
     await waitFor(() => bridge.status().connectedTab?.id === 8);
@@ -286,6 +327,7 @@ test("Chrome bridge ignores a replaced native connection's late tab message", as
       url: "https://current.test/",
     });
   } finally {
+    await connection?.backend.close();
     for (const socket of sockets) socket.close();
     await bridge.close();
     await rm(runtimeDirectory, { recursive: true, force: true });
