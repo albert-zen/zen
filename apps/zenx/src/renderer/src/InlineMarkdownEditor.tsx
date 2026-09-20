@@ -7,6 +7,7 @@ import {
 import { markdown } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
 import {
+  Compartment,
   EditorState,
   StateEffect,
   StateField,
@@ -286,6 +287,7 @@ export function InlineMarkdownEditor({
   const viewRef = useRef<EditorView | undefined>(undefined);
   const onChangeRef = useRef(onChange);
   const applyingExternal = useRef(false);
+  const historyCompartment = useRef(new Compartment());
   onChangeRef.current = onChange;
 
   useEffect(() => {
@@ -299,7 +301,7 @@ export function InlineMarkdownEditor({
           rawSource.init(() => text),
           preserveRawSource,
           markdown({ extensions: [GFM] }),
-          history(),
+          historyCompartment.current.of(history()),
           keymap.of([...defaultKeymap, ...historyKeymap]),
           EditorView.lineWrapping,
           EditorView.contentAttributes.of({
@@ -352,8 +354,16 @@ export function InlineMarkdownEditor({
         to: view.state.doc.length,
         insert: normalizedSource(text),
       },
-      effects: setRawSource.of(text),
+      // A disk replacement starts a new undo history. Old raw-source effects
+      // refer to the previous file revision and must never survive it.
+      effects: [
+        setRawSource.of(text),
+        historyCompartment.current.reconfigure([]),
+      ],
       annotations: Transaction.addToHistory.of(false),
+    });
+    view.dispatch({
+      effects: historyCompartment.current.reconfigure(history()),
     });
     applyingExternal.current = false;
   }, [text]);
