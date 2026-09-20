@@ -36,7 +36,7 @@ test("sidebar announces active Thread loading", () => {
   assert.match(html, /Loading active Threads…/u);
 });
 
-test("active Thread menu offers Rename and a safely disabled Archive", () => {
+test("active Thread menu offers copy at the latest complete boundary", () => {
   const html = renderToStaticMarkup(
     createElement(ThreadItemMenu, {
       archived: false,
@@ -58,6 +58,8 @@ test("active Thread menu offers Rename and a safely disabled Archive", () => {
   );
   assert.match(html, /role="menu"/u);
   assert.match(html, />Rename</u);
+  assert.match(html, />Copy thread</u);
+  assert.match(html, /data-thread-action="copy"/u);
   assert.match(html, />Pin<\/button>/u);
   assert.match(
     html,

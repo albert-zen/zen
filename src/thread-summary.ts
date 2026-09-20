@@ -25,6 +25,8 @@ export interface ThreadSummary {
   updatedAt: string;
   preview: string;
   status: "idle" | "active";
+  forkedFromThreadId?: string;
+  forkedFromTurnId?: string;
 }
 
 export interface UnavailableThreadSummary {
@@ -147,6 +149,10 @@ export function isNativeThreadSummary(
     (value.status === "idle" || value.status === "active") &&
     typeof value.createdAt === "string" &&
     typeof value.updatedAt === "string" &&
+    (value.forkedFromThreadId === undefined ||
+      typeof value.forkedFromThreadId === "string") &&
+    (value.forkedFromTurnId === undefined ||
+      typeof value.forkedFromTurnId === "string") &&
     value.error === undefined &&
     isCurrentMetadata(value.currentMetadata)
   );

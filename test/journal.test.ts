@@ -1,12 +1,48 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import { JsonlThreadJournal } from "../src/journal.js";
+import type { CanonicalItem } from "../src/item.js";
 
 const createdAt = "2026-09-03T00:00:00.000Z";
+
+test("JSONL create atomically refuses to replace an existing Thread", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-journal-create-"),
+  );
+  const journal = new JsonlThreadJournal(directory);
+  const metadata = (threadId: string, id: string): CanonicalItem => ({
+    id,
+    threadId,
+    createdAt,
+    type: "thread_metadata",
+    cwd: "/tmp",
+    providerProfileId: "provider",
+    modelId: "model",
+    reasoningEffort: "medium",
+    sandbox: "danger-full-access",
+    approvalPolicy: "never",
+  });
+  try {
+    await journal.create!([metadata("copy", "first")]);
+    const filename = path.join(directory, "copy.jsonl");
+    const original = await readFile(filename, "utf8");
+    await assert.rejects(
+      journal.create!([metadata("copy", "replacement")]),
+      /exist/u,
+    );
+    assert.equal(await readFile(filename, "utf8"), original);
+    assert.deepEqual(
+      (await journal.read("copy")).map((item) => item.id),
+      ["first"],
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("JSONL read accepts every current and legacy canonical Item shape", async () => {
   const directory = await mkdtemp(
@@ -39,6 +75,13 @@ test("JSONL read accepts every current and legacy canonical Item shape", async (
       ...selection,
       sandbox: "danger-full-access",
       approvalPolicy: "always",
+    },
+    {
+      ...base("forked", "thread_forked"),
+      sourceThreadId: "source-thread",
+      sourceBoundaryItemId: "source-completed",
+      sourceTurnId: "source-turn",
+      workspace: "same-directory",
     },
     {
       ...base("configuration-legacy", "thread_configuration_changed"),

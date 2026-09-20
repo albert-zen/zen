@@ -276,6 +276,37 @@ export class CodexConnection {
         });
         return;
       }
+      case "thread/fork": {
+        rejectUnsupportedValues(params, [
+          "sourceThreadId",
+          "through",
+          "workspace",
+        ]);
+        const through = requiredObject(params, "through");
+        const workspace = requiredObject(params, "workspace");
+        if (through.type !== "latest-complete") {
+          throw new InvalidParamsError(
+            "thread/fork through.type must be latest-complete",
+          );
+        }
+        if (workspace.type !== "same-directory") {
+          throw new InvalidParamsError(
+            "thread/fork workspace.type must be same-directory",
+          );
+        }
+        const snapshot = await this.#appServer.forkThread({
+          sourceThreadId: requiredString(params, "sourceThreadId"),
+          through: { type: "latest-complete" },
+          workspace: { type: "same-directory" },
+        });
+        this.#subscribedThreads.add(snapshot.id);
+        const thread = projectThread(snapshot, { includeTurns: true });
+        this.#send({
+          id: request.id,
+          result: { thread, ...threadSettings(snapshot) },
+        });
+        return;
+      }
       case "thread/resume": {
         const threadId = requiredString(params, "threadId");
         const priorEventTail = this.#eventChain;
@@ -1359,6 +1390,17 @@ function requiredString(params: Record<string, unknown>, key: string): string {
   const value = params[key];
   if (typeof value !== "string" || value.length === 0) {
     throw new InvalidParamsError(`${key} must be a non-empty string`);
+  }
+  return value;
+}
+
+function requiredObject(
+  params: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> {
+  const value = params[key];
+  if (!isRecord(value)) {
+    throw new InvalidParamsError(`${key} must be an object`);
   }
   return value;
 }

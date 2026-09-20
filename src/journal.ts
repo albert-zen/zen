@@ -1,4 +1,5 @@
-import { mkdir, open, readdir, readFile } from "node:fs/promises";
+import { link, mkdir, open, readdir, readFile, unlink } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 import { decodeCanonicalItem, type CanonicalItem } from "./item.js";
@@ -7,6 +8,8 @@ const THREAD_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 export interface ThreadJournal {
   append(item: CanonicalItem): Promise<void>;
+  /** Atomically publishes a complete new Thread when supported by the store. */
+  create?(items: readonly CanonicalItem[]): Promise<void>;
   listThreadIds(): Promise<string[]>;
   read(threadId: string): Promise<CanonicalItem[]>;
 }
@@ -25,6 +28,14 @@ export class InMemoryThreadJournal implements ThreadJournal {
     const items = this.#threads.get(item.threadId) ?? [];
     items.push(structuredClone(item));
     this.#threads.set(item.threadId, items);
+  }
+
+  async create(items: readonly CanonicalItem[]): Promise<void> {
+    const threadId = validateThreadItems(items);
+    if (this.#threads.has(threadId)) {
+      throw new Error(`Thread already exists: ${threadId}`);
+    }
+    this.#threads.set(threadId, structuredClone([...items]));
   }
 
   async listThreadIds(): Promise<string[]> {
@@ -52,6 +63,29 @@ export class JsonlThreadJournal implements ThreadJournal {
       await file.sync();
     } finally {
       await file.close();
+    }
+  }
+
+  async create(items: readonly CanonicalItem[]): Promise<void> {
+    const threadId = validateThreadItems(items);
+    await mkdir(this.#directory, { recursive: true });
+    const target = this.#pathFor(threadId);
+    const temporary = path.join(
+      this.#directory,
+      `.${threadId}.${randomUUID()}.tmp`,
+    );
+    const file = await open(temporary, "wx", 0o600);
+    try {
+      await file.write(
+        `${items.map((item) => JSON.stringify(item)).join("\n")}\n`,
+      );
+      await file.sync();
+      await link(temporary, target);
+    } finally {
+      await file.close();
+      await unlink(temporary).catch((error: unknown) => {
+        if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+      });
     }
   }
 
@@ -121,6 +155,20 @@ function validateThreadId(threadId: string): void {
   if (!THREAD_ID_PATTERN.test(threadId)) {
     throw new Error(`Invalid thread id: ${threadId}`);
   }
+}
+
+function validateThreadItems(items: readonly CanonicalItem[]): string {
+  const first = items[0];
+  if (first === undefined)
+    throw new Error("Cannot create an empty Thread journal");
+  validateThreadId(first.threadId);
+  for (const item of items) {
+    if (item.threadId !== first.threadId) {
+      throw new Error("All created journal Items must belong to one Thread");
+    }
+    decodeCanonicalItem(structuredClone(item));
+  }
+  return first.threadId;
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

@@ -60,6 +60,7 @@ Server request：`item/commandExecution/requestApproval`。
 
 - `turn/replace`
 - `thread/compact`
+- `thread/fork`：ZAS 的最近闭合 Turn、同目录复制；显式接受 `sourceThreadId`、`through: { type: "latest-complete" }`、`workspace: { type: "same-directory" }`，不声明兼容 CAS 同名方法的请求 shape。
 - `thread/permissions/update` accepts `{ threadId, sandbox }`, where sandbox is `read-only`, `workspace-write`, or `danger-full-access`. It changes the canonical file permission preset only when the Thread and its tool tasks are idle, then broadcasts `thread/settings/updated`. Defaults remain Full Access.
 - Approval requests may include native `approvalScope: "once"`. Such decisions never reuse or create session/capability grants, even when a client responds with `acceptForSession`.
 - `turn/start`、`turn/steer` 与 `turn/replace` input 的

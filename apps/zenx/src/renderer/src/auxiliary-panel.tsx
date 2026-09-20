@@ -40,7 +40,9 @@ export function AuxiliaryPanel({
   workspacePath,
   openedTabs,
   onTabsChange,
+  onWidthChange,
 }: {
+  onWidthChange?(width: number): void;
   fileDrafts?: WorkspaceFileDrafts;
   workspacePath?: string;
   threadId: string;
@@ -61,6 +63,22 @@ export function AuxiliaryPanel({
   const setOrder = onTabsChange ?? setLocalTabs;
   const theme = useAppearance();
   const [width, setWidth] = useState(520);
+  const panel = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    if (!panel.current || !onWidthChange) return;
+    const measure = () =>
+      onWidthChange(open ? panel.current!.getBoundingClientRect().width : 0);
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(measure);
+    observer?.observe(panel.current);
+    measure();
+    return () => {
+      observer?.disconnect();
+      onWidthChange(0);
+    };
+  }, [open, onWidthChange]);
   const [expanded, setExpanded] = useState(false);
   const [choosing, setChoosing] = useState(false);
   const [pickingFile, setPickingFile] = useState(false);
@@ -325,6 +343,7 @@ export function AuxiliaryPanel({
   };
   return (
     <aside
+      ref={panel}
       id="thread-workspace-panel"
       className="auxiliary-panel"
       data-open={open === true}
@@ -384,85 +403,89 @@ export function AuxiliaryPanel({
         }}
       />
       <header className="auxiliary-heading">
-        <div role="tablist" aria-label="Workspace tabs">
-          {tabs.map((tab, index) => (
-            <span
-              className="workspace-content-tab"
-              data-active={!showChooser && active === tab.id}
-              key={tab.id}
-            >
-              <button
-                type="button"
-                role="tab"
-                id={`aux-tab-${tab.id}`}
-                aria-selected={!showChooser && active === tab.id}
-                aria-controls={`aux-content-${tab.id}`}
-                tabIndex={active === tab.id ? 0 : -1}
-                title={tab.path ?? tab.browser?.url ?? tab.title}
-                onClick={() => select(tab.id)}
-                onKeyDown={(event) => {
-                  const next =
-                    event.key === "Home"
-                      ? 0
-                      : event.key === "End"
-                        ? tabs.length - 1
-                        : event.key === "ArrowRight"
-                          ? (index + 1) % tabs.length
-                          : event.key === "ArrowLeft"
-                            ? (index + tabs.length - 1) % tabs.length
-                            : -1;
-                  if (next >= 0) {
-                    event.preventDefault();
-                    select(tabs[next]!.id);
-                    document
-                      .getElementById(`aux-tab-${tabs[next]!.id}`)
-                      ?.focus();
+        <div className="workspace-tab-rail">
+          <div role="tablist" aria-label="Workspace tabs">
+            {tabs.map((tab, index) => (
+              <span
+                className="workspace-content-tab"
+                data-active={!showChooser && active === tab.id}
+                key={tab.id}
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  id={`aux-tab-${tab.id}`}
+                  aria-selected={!showChooser && active === tab.id}
+                  aria-controls={`aux-content-${tab.id}`}
+                  tabIndex={active === tab.id ? 0 : -1}
+                  title={tab.path ?? tab.browser?.url ?? tab.title}
+                  onClick={() => select(tab.id)}
+                  onKeyDown={(event) => {
+                    const next =
+                      event.key === "Home"
+                        ? 0
+                        : event.key === "End"
+                          ? tabs.length - 1
+                          : event.key === "ArrowRight"
+                            ? (index + 1) % tabs.length
+                            : event.key === "ArrowLeft"
+                              ? (index + tabs.length - 1) % tabs.length
+                              : -1;
+                    if (next >= 0) {
+                      event.preventDefault();
+                      select(tabs[next]!.id);
+                      document
+                        .getElementById(`aux-tab-${tabs[next]!.id}`)
+                        ?.focus();
+                    }
+                  }}
+                >
+                  <Icon name={tab.icon} />
+                  <span>{tab.title}</span>
+                  {tab.path &&
+                  isFileDirty(
+                    entries.get(fileDraftKey(threadId, tab.path))!,
+                  ) ? (
+                    <span
+                      className="workspace-tab-dirty"
+                      aria-label="Unsaved changes"
+                    >
+                      •
+                    </span>
+                  ) : null}
+                </button>
+                <button
+                  type="button"
+                  className="workspace-tab-close"
+                  aria-label={`Close tab ${tab.title}`}
+                  disabled={
+                    tab.path
+                      ? entries.get(fileDraftKey(threadId, tab.path))
+                          ?.closing === true
+                      : false
                   }
-                }}
-              >
-                <Icon name={tab.icon} />
-                <span>{tab.title}</span>
-                {tab.path &&
-                isFileDirty(entries.get(fileDraftKey(threadId, tab.path))!) ? (
-                  <span
-                    className="workspace-tab-dirty"
-                    aria-label="Unsaved changes"
-                  >
-                    •
-                  </span>
-                ) : null}
-              </button>
-              <button
-                type="button"
-                className="workspace-tab-close"
-                aria-label={`Close tab ${tab.title}`}
-                disabled={
-                  tab.path
-                    ? entries.get(fileDraftKey(threadId, tab.path))?.closing ===
-                      true
-                    : false
-                }
-                onClick={() => void closeTab(tab)}
-              >
-                <Icon name="x" />
-              </button>
-            </span>
-          ))}
+                  onClick={() => void closeTab(tab)}
+                >
+                  <Icon name="x" />
+                </button>
+              </span>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="icon-button workspace-add-tab"
+            aria-label="New workspace tab"
+            aria-pressed={showChooser}
+            onClick={() => {
+              selectionEpoch.current += 1;
+              setChoosing(true);
+              setPickingFile(false);
+              setError("");
+            }}
+          >
+            <Icon name="plus" />
+          </button>
         </div>
-        <button
-          type="button"
-          className="icon-button workspace-add-tab"
-          aria-label="New workspace tab"
-          aria-pressed={showChooser}
-          onClick={() => {
-            selectionEpoch.current += 1;
-            setChoosing(true);
-            setPickingFile(false);
-            setError("");
-          }}
-        >
-          +
-        </button>
         <button
           type="button"
           className="icon-button"
@@ -478,7 +501,7 @@ export function AuxiliaryPanel({
           aria-label="Close side panel"
           onClick={close}
         >
-          <Icon name="x" />
+          <Icon name="panel-right" />
         </button>
       </header>
       {error ? (
