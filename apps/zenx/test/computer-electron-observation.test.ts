@@ -9,14 +9,17 @@ test("Computer live capture is serial, bounded, cancellable, and announces live 
   let captures = 0;
   let active = 0;
   let maxActive = 0;
-  const stop = observeComputerWindow(async () => {
-    captures += 1;
-    active += 1;
-    maxActive = Math.max(maxActive, active);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    active -= 1;
-    return fakeImage() as never;
-  }, (event) => events.push(event));
+  const stop = observeComputerWindow(
+    async () => {
+      captures += 1;
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      active -= 1;
+      return fakeImage() as never;
+    },
+    (event) => events.push(event),
+  );
 
   await new Promise((resolve) => setTimeout(resolve, 825));
   stop();
@@ -27,9 +30,8 @@ test("Computer live capture is serial, bounded, cancellable, and announces live 
   assert.ok(capturesAtStop >= 2);
   assert.equal(captures, capturesAtStop);
   assert.equal(
-    events.filter(
-      (event) => event.type === "status" && event.status === "live",
-    ).length,
+    events.filter((event) => event.type === "status" && event.status === "live")
+      .length,
     1,
   );
   const frames = events.filter((event) => event.type === "frame");

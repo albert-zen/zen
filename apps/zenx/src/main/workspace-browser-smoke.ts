@@ -52,10 +52,7 @@ void app.whenReady().then(async () => {
     assert.ok(tabId, "Human navigation must create a shared tab");
     browser.bindThreadSession("shared-session", "shared-thread");
     await eventually(async () =>
-      assert.equal(
-        (await browser.listTabs("shared-session"))[0]?.url,
-        url,
-      ),
+      assert.equal((await browser.listTabs("shared-session"))[0]?.url, url),
     );
     browser.mount(owner.webContents, {
       threadId: "shared-thread",

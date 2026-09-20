@@ -81,7 +81,10 @@ test("Computer panel follows the Agent until the user pins and pauses frames whi
   const select = dom.window.document.querySelector("select")!;
   assert.equal(select.value, "__follow__");
   assert.match(select.textContent ?? "", /Follow Agent/u);
-  assert.doesNotMatch(dom.window.document.body.textContent ?? "", /private-call-id/u);
+  assert.doesNotMatch(
+    dom.window.document.body.textContent ?? "",
+    /private-call-id/u,
+  );
   assert.match(select.title, /latest-private-call-id/u);
 
   select.value = "window-a";

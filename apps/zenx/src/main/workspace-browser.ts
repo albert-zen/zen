@@ -437,11 +437,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         })
         .toPNG();
     }
-    const screenshot = await this.#artifacts.write(
-      tab.id,
-      observationId,
-      png,
-    );
+    const screenshot = await this.#artifacts.write(tab.id, observationId, png);
     if (tab.documentVersion !== documentVersion) {
       await this.#artifacts.removeArtifact(
         screenshot.artifactPath,
