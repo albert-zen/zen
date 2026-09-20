@@ -357,6 +357,7 @@ function compileCanonicalModelMessages(
         break;
       case "context_compaction":
       case "model_usage":
+      case "thread_forked":
       case "turn_aborted":
       case "turn_completed":
       case "user_message_queued":

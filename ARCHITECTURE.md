@@ -24,6 +24,7 @@
   工具调用、工具结果与失败，都是 Item。
 - **Canonical Item Decoder** — JSONL journal 只在读取边界用一个穷尽的 runtime decoder 接纳现行与明确 legacy Item shape，拒绝不能安全重放的结构，而写侧继续只使用同一组 canonical TypeScript 类型。
 - **Thread** — 一个 agent 上下文，权威状态是一条 append-only 的 Item list。
+- **Thread Fork** — Core 在最近一个完整 Turn 边界原子复制并重标识 canonical Item 前缀，再追加 `thread_forked` 来源事实；新 Thread 继续独立追加，且不继承源 Thread 的活动执行、排队输入或 Host 资源。
 - **Turn** — 一次交换：从一条用户输入开始、到 agent 完成响应为止追加的那段连续 Item。
 - **AgentRuntime** — Zen 拥有的 provider-neutral agent loop：从 ItemList 编译上下文 → 调用模型 → 通过 Tool Environment 执行工具，并把 canonical `tool_call` / `tool_result` 在内的一切事实追加为 Item。
 - **AppServer** — 按 threadId 把请求路由到 Thread、驱动 AgentRuntime、向订阅者广播 item 事件的唯一服务入口。

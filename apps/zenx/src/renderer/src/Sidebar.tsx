@@ -67,6 +67,7 @@ interface SidebarProps {
   onOpenSettings(): void;
   onRetryThreads(): void;
   onRenameThread(threadId: string, title: string): Promise<void>;
+  onForkThread?(threadId: string): Promise<void>;
   onSelectThread(threadId: string): void;
   pendingApprovalThreadIds: ReadonlySet<string>;
   pluginContributions: readonly LoadedPluginContribution[];
@@ -102,6 +103,7 @@ export function Sidebar({
   onOpenSettings,
   onRetryThreads,
   onRenameThread,
+  onForkThread = async () => undefined,
   onSelectThread,
   pendingApprovalThreadIds,
   pluginContributions,
@@ -360,6 +362,7 @@ export function Sidebar({
               onChangeThreadLifecycle={onChangeThreadLifecycle}
               onChangeThreadPinned={changeThreadPinned}
               onRenameThread={onRenameThread}
+              onForkThread={onForkThread}
               pendingApprovalThreadIds={pendingApprovalThreadIds}
               selectedThreadId={selectedThreadId}
               threads={threads}
@@ -375,6 +378,7 @@ export function Sidebar({
                   onChangeThreadLifecycle={onChangeThreadLifecycle}
                   onChangeThreadPinned={changeThreadPinned}
                   onRenameThread={onRenameThread}
+                  onForkThread={onForkThread}
                   onSelectThread={onSelectThread}
                   pendingApprovalThreadIds={pendingApprovalThreadIds}
                   selectedThreadId={selectedThreadId}
@@ -395,6 +399,7 @@ export function Sidebar({
                   onChangeThreadLifecycle={onChangeThreadLifecycle}
                   onChangeThreadPinned={changeThreadPinned}
                   onRenameThread={onRenameThread}
+                  onForkThread={onForkThread}
                   onChangeProjectPinned={onChangeProjectPinned}
                   onReorderProject={onReorderProject}
                   onReorderThread={onReorderThread}
@@ -523,6 +528,7 @@ function InboxView({
   onChangeThreadLifecycle,
   onChangeThreadPinned,
   onRenameThread,
+  onForkThread,
   pendingApprovalThreadIds,
   liveThread,
   watchingThreadIds,
@@ -534,6 +540,7 @@ function InboxView({
   onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
   onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
   onRenameThread(threadId: string, title: string): Promise<void>;
+  onForkThread(threadId: string): Promise<void>;
   pendingApprovalThreadIds: ReadonlySet<string>;
   liveThread: Thread | null;
   watchingThreadIds: ReadonlySet<string>;
@@ -555,6 +562,7 @@ function InboxView({
             onChangeThreadLifecycle={onChangeThreadLifecycle}
             onChangeThreadPinned={onChangeThreadPinned}
             onRenameThread={onRenameThread}
+            onForkThread={onForkThread}
             onSelectThread={onSelectThread}
             pendingApproval={pendingApprovalThreadIds.has(thread.threadId)}
             pinned={pinnedThreadIds.has(thread.threadId)}
@@ -573,6 +581,7 @@ function PinnedThreadsView({
   onChangeThreadLifecycle,
   onChangeThreadPinned,
   onRenameThread,
+  onForkThread,
   onSelectThread,
   pendingApprovalThreadIds,
   selectedThreadId,
@@ -583,6 +592,7 @@ function PinnedThreadsView({
   onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
   onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
   onRenameThread(threadId: string, title: string): Promise<void>;
+  onForkThread(threadId: string): Promise<void>;
   onSelectThread(threadId: string): void;
   pendingApprovalThreadIds: ReadonlySet<string>;
   selectedThreadId: string | null;
@@ -604,6 +614,7 @@ function PinnedThreadsView({
           onChangeThreadLifecycle={onChangeThreadLifecycle}
           onChangeThreadPinned={onChangeThreadPinned}
           onRenameThread={onRenameThread}
+          onForkThread={onForkThread}
           onSelectThread={onSelectThread}
           pendingApproval={pendingApprovalThreadIds.has(thread.threadId)}
           pinned
@@ -630,6 +641,7 @@ function ProjectsView({
   onChangeThreadLifecycle,
   onChangeThreadPinned,
   onRenameThread,
+  onForkThread,
   onChangeProjectPinned,
   onReorderProject,
   onReorderThread,
@@ -653,6 +665,7 @@ function ProjectsView({
   onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
   onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
   onRenameThread(threadId: string, title: string): Promise<void>;
+  onForkThread(threadId: string): Promise<void>;
   onChangeProjectPinned?: SidebarProps["onChangeProjectPinned"];
   onReorderProject?: SidebarProps["onReorderProject"];
   onReorderThread?: SidebarProps["onReorderThread"];
@@ -736,6 +749,7 @@ function ProjectsView({
       onChangeThreadLifecycle={onChangeThreadLifecycle}
       onChangeThreadPinned={onChangeThreadPinned}
       onRenameThread={onRenameThread}
+      onForkThread={onForkThread}
       onNewThread={onNewThread}
       newThreadDisabled={newThreadDisabled}
       onRemoveProject={onRemoveProject}
@@ -989,6 +1003,7 @@ function ProjectRows({
   onChangeThreadLifecycle,
   onChangeThreadPinned,
   onRenameThread,
+  onForkThread,
   pendingApprovalThreadIds,
   liveThread,
   watchingThreadIds,
@@ -1009,6 +1024,7 @@ function ProjectRows({
   onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
   onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
   onRenameThread(threadId: string, title: string): Promise<void>;
+  onForkThread(threadId: string): Promise<void>;
   pendingApprovalThreadIds: ReadonlySet<string>;
   liveThread: Thread | null;
   watchingThreadIds: ReadonlySet<string>;
@@ -1298,6 +1314,7 @@ function ProjectRows({
             onChangeThreadLifecycle={onChangeThreadLifecycle}
             onChangeThreadPinned={onChangeThreadPinned}
             onRenameThread={onRenameThread}
+            onForkThread={onForkThread}
             onSelectThread={onSelectThread}
             pendingApproval={pendingApprovalThreadIds.has(thread.threadId)}
             pinned={pinnedThreadIds.has(thread.threadId)}
@@ -1356,6 +1373,7 @@ function ThreadRow({
   onChangeThreadLifecycle,
   onChangeThreadPinned,
   onRenameThread,
+  onForkThread,
   onSelectThread,
   pendingApproval,
   pinned,
@@ -1369,6 +1387,7 @@ function ThreadRow({
   onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
   onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
   onRenameThread(threadId: string, title: string): Promise<void>;
+  onForkThread(threadId: string): Promise<void>;
   onSelectThread(threadId: string): void;
   pendingApproval: boolean;
   pinned: boolean;
@@ -1385,7 +1404,7 @@ function ThreadRow({
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState(threadTitle(thread));
   const [busyAction, setBusyAction] = useState<
-    "rename" | "pin" | "unpin" | "archive" | "unarchive" | null
+    "rename" | "copy" | "pin" | "unpin" | "archive" | "unarchive" | null
   >(null);
   const [menuError, setMenuError] = useState<string | null>(null);
   const closeMenu = (restoreFocus = true) => {
@@ -1452,7 +1471,7 @@ function ThreadRow({
     </>
   );
   const runAction = async (
-    action: "rename" | "pin" | "unpin" | "archive" | "unarchive",
+    action: "rename" | "copy" | "pin" | "unpin" | "archive" | "unarchive",
     operation: () => Promise<void>,
   ) => {
     setBusyAction(action);
@@ -1586,6 +1605,9 @@ function ThreadRow({
           void runAction("archive", () => onChangeThreadLifecycle(thread))
         }
         onBeginRename={() => setRenaming(true)}
+        onCopy={() =>
+          void runAction("copy", () => onForkThread(thread.threadId))
+        }
         onCancelRename={() => setRenaming(false)}
         onRequestClose={() => closeMenu()}
         onDraftChange={setRenameDraft}
@@ -1622,6 +1644,7 @@ export function ThreadItemMenu({
   renameDraft,
   onArchive,
   onBeginRename,
+  onCopy = () => undefined,
   onCancelRename,
   onRequestClose,
   onDraftChange,
@@ -1630,7 +1653,8 @@ export function ThreadItemMenu({
   onUnarchive,
 }: {
   archived: boolean;
-  busyAction: "rename" | "pin" | "unpin" | "archive" | "unarchive" | null;
+  busyAction:
+    "rename" | "copy" | "pin" | "unpin" | "archive" | "unarchive" | null;
   error: string | null;
   hasActiveTurn: boolean;
   labelledBy?: string;
@@ -1643,6 +1667,7 @@ export function ThreadItemMenu({
   renameDraft: string;
   onArchive(): void;
   onBeginRename(): void;
+  onCopy?(): void;
   onCancelRename(): void;
   onRequestClose?(): void;
   onDraftChange(value: string): void;
@@ -1740,6 +1765,18 @@ export function ThreadItemMenu({
           >
             <Icon name="compose" />
             Rename
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            tabIndex={-1}
+            data-thread-action="copy"
+            disabled={busy}
+            title="Copies through the latest complete Turn and uses the same working directory."
+            onClick={onCopy}
+          >
+            <Icon name="copy" />
+            {busyAction === "copy" ? "Copying…" : "Copy thread"}
           </button>
           <button
             type="button"

@@ -1918,6 +1918,16 @@ export function App() {
     });
   };
 
+  const forkThread = async (sourceThreadId: string) => {
+    const result = await window.zenx.protocol.request("thread/fork", {
+      sourceThreadId,
+      through: { type: "latest-complete" },
+      workspace: { type: "same-directory" },
+    });
+    await Promise.all([loadThreadSummaries(), loadProjects()]);
+    await resumeThread(result.thread.id);
+  };
+
   const changeSidebarMode = (mode: SidebarMode) => {
     setSidebarMode(mode);
     try {
@@ -1972,8 +1982,12 @@ export function App() {
               }))
             }
             onRename={renameSelectedThread}
+            onOpenSource={(threadId) => void resumeThread(threadId)}
             onRetryTitle={retrySelectedTitle}
             selectedSummary={selectedSummary}
+            sourceSummary={threads.find(
+              (candidate) => candidate.threadId === threadDetail?.forkedFromId,
+            )}
             threadDetail={threadDetail}
             titleProjection={titleProjection}
           />
@@ -2066,6 +2080,7 @@ export function App() {
         onOpenSettings={() => openPage("settings")}
         onRetryThreads={() => void loadThreadSummaries(true)}
         onRenameThread={renameThread}
+        onForkThread={forkThread}
         onSelectThread={(threadId) => void resumeThread(threadId)}
         pendingApprovalThreadIds={pendingThreadIds}
         pluginContributions={pluginContributions}
@@ -2446,8 +2461,10 @@ function ConversationTitleBar({
   onToggleBrowser,
   onOpenSidebar,
   onRename,
+  onOpenSource,
   onRetryTitle,
   selectedSummary,
+  sourceSummary,
   threadDetail,
   titleProjection,
 }: {
@@ -2456,8 +2473,10 @@ function ConversationTitleBar({
   onToggleBrowser(): void;
   onOpenSidebar(): void;
   onRename(title: string): Promise<void>;
+  onOpenSource(threadId: string): void;
   onRetryTitle(): Promise<void>;
   selectedSummary: NativeThreadSummary;
+  sourceSummary: NativeThreadSummary | undefined;
   threadDetail: Thread | null;
   titleProjection: ThreadTitleProjection | undefined;
 }) {
@@ -2484,6 +2503,22 @@ function ConversationTitleBar({
             {selectedSummary.status === "systemError"
               ? "Unavailable journal"
               : selectedSummary.currentMetadata.cwd}
+            {threadDetail?.forkedFromId === null ||
+            threadDetail?.forkedFromId === undefined ? null : sourceSummary ===
+              undefined ? (
+              <> · Copied from unavailable source</>
+            ) : (
+              <>
+                {" · "}
+                <button
+                  className="thread-source-link"
+                  type="button"
+                  onClick={() => onOpenSource(sourceSummary.threadId)}
+                >
+                  Copied from {threadTitle(sourceSummary)}
+                </button>
+              </>
+            )}
           </span>
         </div>
       </div>

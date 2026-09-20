@@ -16,6 +16,7 @@ export interface WorkspaceInstructionFile {
 
 export type ItemType =
   | "thread_metadata"
+  | "thread_forked"
   | "thread_configuration_changed"
   | "context_compaction"
   | "turn_started"
@@ -34,6 +35,7 @@ export type ItemType =
 
 const CANONICAL_ITEM_TYPES = {
   thread_metadata: true,
+  thread_forked: true,
   thread_configuration_changed: true,
   context_compaction: true,
   turn_started: true,
@@ -82,6 +84,14 @@ export interface ProviderThreadMetadataItem extends ThreadMetadataItemBase {
 
 export type ThreadMetadataItem =
   LegacyThreadMetadataItem | ProviderThreadMetadataItem;
+
+export interface ThreadForkedItem extends ItemBase {
+  type: "thread_forked";
+  sourceThreadId: string;
+  sourceBoundaryItemId: string;
+  sourceTurnId: string;
+  workspace: "same-directory";
+}
 
 export interface CanonicalProviderSelection {
   providerProfileId: string;
@@ -346,6 +356,7 @@ export type CanonicalItem =
   | CodeStateItem
   | QueuedUserMessageItem
   | ThreadMetadataItem
+  | ThreadForkedItem
   | ThreadConfigurationChangedItem
   | ContextCompactionItem
   | TurnStartedItem
@@ -498,6 +509,23 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       } else {
         validateSelection(item, "thread_metadata");
       }
+      break;
+    case "thread_forked":
+      requireNoTurnId(item);
+      requireNonEmptyString(
+        item.sourceThreadId,
+        "thread_forked.sourceThreadId",
+      );
+      requireNonEmptyString(
+        item.sourceBoundaryItemId,
+        "thread_forked.sourceBoundaryItemId",
+      );
+      requireNonEmptyString(item.sourceTurnId, "thread_forked.sourceTurnId");
+      requireEnum(
+        item.workspace,
+        ["same-directory"],
+        "thread_forked.workspace",
+      );
       break;
     case "thread_configuration_changed":
       requireNoTurnId(item);

@@ -36,9 +36,18 @@ test("Thread menu manages keyboard focus through close and row removal", async (
   const container = document.getElementById("root");
   assert.ok(container);
   const root = createRoot(container);
+  let forkedThreadId: string | null = null;
 
   try {
-    await act(async () => root.render(createElement(TestSidebar)));
+    await act(async () =>
+      root.render(
+        createElement(TestSidebar, {
+          onForkThread: async (threadId: string) => {
+            forkedThreadId = threadId;
+          },
+        }),
+      ),
+    );
     const trigger = requiredElement<HTMLButtonElement>(".thread-menu-trigger");
     const threadRow = requiredElement<HTMLButtonElement>(".thread-row");
     let anchorLeft = 220;
@@ -94,7 +103,7 @@ test("Thread menu manages keyboard focus through close and row removal", async (
         }),
       );
     });
-    assert.equal(document.activeElement?.textContent?.trim(), "Pin");
+    assert.equal(document.activeElement?.textContent?.trim(), "Copy thread");
 
     await act(async () => {
       document.activeElement?.dispatchEvent(
@@ -182,6 +191,18 @@ test("Thread menu manages keyboard focus through close and row removal", async (
     assert.equal(document.querySelector('[role="menu"]'), null);
 
     await act(async () => trigger.click());
+    const copy = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent?.includes("Copy thread"));
+    assert.ok(copy);
+    await act(async () => {
+      copy.click();
+      await Promise.resolve();
+    });
+    assert.equal(forkedThreadId, "active-thread");
+    assert.equal(document.querySelector('[role="menu"]'), null);
+
+    await act(async () => trigger.click());
     const archive = Array.from(
       document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
     ).find((item) => item.textContent?.includes("Archive"));
@@ -204,7 +225,11 @@ test("Thread menu manages keyboard focus through close and row removal", async (
   }
 });
 
-function TestSidebar() {
+function TestSidebar({
+  onForkThread,
+}: {
+  onForkThread(threadId: string): Promise<void>;
+}) {
   const [threads, setThreads] = useState<NativeThreadSummary[]>([
     activeSummary(),
   ]);
@@ -221,6 +246,7 @@ function TestSidebar() {
     onOpenSettings: noop,
     onChangeThreadLifecycle: async () => setThreads([]),
     onChangeThreadPinned: async () => undefined,
+    onForkThread,
     onRenameThread: async () => undefined,
     onRetryThreads: noop,
     onSelectThread: noop,

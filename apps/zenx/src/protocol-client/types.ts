@@ -132,6 +132,11 @@ export interface ClientRequestParams {
   "skills/list": { cwds: string[] };
   "model/list": { cursor?: null };
   "thread/start": ThreadConfigurationParams;
+  "thread/fork": {
+    sourceThreadId: string;
+    through: { type: "latest-complete" };
+    workspace: { type: "same-directory" };
+  };
   "thread/resume": { threadId: string } & ThreadConfigurationParams;
   "zen/thread/resume": { threadId: string };
   "thread/read": { threadId: string; includeTurns?: boolean };
@@ -190,6 +195,7 @@ export interface ClientRequestResults {
   };
   "model/list": { data: ModelSummary[]; nextCursor: null };
   "thread/start": { thread: Thread } & ThreadSettingsSnapshot;
+  "thread/fork": { thread: Thread } & ThreadSettingsSnapshot;
   "thread/resume": { thread: Thread } & ThreadSettingsSnapshot;
   "zen/thread/resume": NativeThreadRecoverySnapshot;
   "thread/read": { thread: Thread };

@@ -175,6 +175,19 @@ test("runs a complete typed lifecycle against the real App Server", async () => 
       "zenx-message-1",
     );
 
+    const copied = await client.request("thread/fork", {
+      sourceThreadId: started.thread.id,
+      through: { type: "latest-complete" },
+      workspace: { type: "same-directory" },
+    });
+    assert.equal(copied.thread.forkedFromId, started.thread.id);
+    assert.equal(copied.thread.cwd, started.thread.cwd);
+    assert.equal(copied.thread.turns.length, 1);
+    assert.deepEqual(client.subscriptions, [
+      started.thread.id,
+      copied.thread.id,
+    ]);
+
     await assert.rejects(
       client.request("initialize", {
         clientInfo: { name: "again", title: "Again", version: "1" },
