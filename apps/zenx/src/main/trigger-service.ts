@@ -57,6 +57,8 @@ import type {
 } from "./trigger-types.js";
 
 export interface ZenXTriggerAppServerPort {
+  readThread?(threadId: string): Promise<ClientRequestResults["thread/read"]>;
+  enqueue?(params: ClientRequestParams["turn/queue"]): Promise<void>;
   request(
     method: "turn/start",
     params: ClientRequestParams["turn/start"],
@@ -182,6 +184,7 @@ export class ZenXTriggerService {
       const snapshot = await this.#store.read();
       for (const entry of snapshot.history) {
         if (entry.status === "starting" || entry.status === "running") {
+          if (entry.delivery !== undefined) entry.delivery = "unknown";
           entry.status = "failed";
           entry.completedAt = this.#now();
           entry.error =
@@ -279,6 +282,7 @@ export class ZenXTriggerService {
           for (const entry of snapshot.history) {
             if (isTerminal(entry.status)) continue;
             entry.status = "failed";
+            if (entry.delivery !== undefined) entry.delivery = "unknown";
             entry.completedAt = this.#now();
             entry.error =
               "ZenX Trigger generation retired before this wakeup reached a visible terminal result; it was not retried.";
@@ -336,6 +340,12 @@ export class ZenXTriggerService {
 
   async create(input: CreateTriggerInput): Promise<ZenXTrigger> {
     const generation = this.#runningGeneration();
+    if (
+      input.kind === "thread" &&
+      input.includeLatest &&
+      this.#manager.readThread === undefined
+    )
+      throw new Error("Reading the latest Thread result is unavailable");
     const trigger = await this.#mutate(generation, async (snapshot) => {
       if (snapshot.triggers.length >= MAX_TRIGGER_COUNT)
         throw new Error(`ZenX Trigger limit is ${String(MAX_TRIGGER_COUNT)}`);
@@ -350,10 +360,36 @@ export class ZenXTriggerService {
       return value;
     });
     this.#rescheduleTimers(generation);
-    return structuredClone(trigger);
+    if (input.kind === "thread" && input.includeLatest) {
+      try {
+        // Install first, then read: a completion racing this read goes through
+        // the same occurrence key as the live event, never a second send.
+        const result = await this.#manager.readThread!(input.watchedThreadId);
+        const latest = result.thread.turns.at(-1);
+        if (latest !== undefined && latest.status !== "inProgress")
+          await this.#fireThreadCompletion(
+            generation,
+            trigger.id,
+            input.watchedThreadId,
+            latest,
+          );
+      } catch (error) {
+        await this.cancel(trigger.id);
+        throw new Error(
+          `Latest result could not be checked; watch ${trigger.id} was stopped: ${describeError(error)}`,
+        );
+      }
+    }
+    return structuredClone(
+      this.#snapshot.triggers.find((entry) => entry.id === trigger.id)!,
+    );
   }
 
   async update(input: UpdateTriggerInput): Promise<ZenXTrigger> {
+    if (input.kind === "thread" && input.includeLatest)
+      throw new Error(
+        "includeLatest is only supported when creating a new watch",
+      );
     const generation = this.#runningGeneration();
     const trigger = await this.#mutate(generation, async (snapshot) => {
       const index = snapshot.triggers.findIndex(
@@ -626,20 +662,30 @@ export class ZenXTriggerService {
           trigger.watch?.threadId === event.threadId,
       )
       .map((trigger) => trigger.id);
-    const eventText = completedItemText(completedItems);
     for (const triggerId of watchers) {
-      await this.#fire(generation, triggerId, {
-        reason: `Thread ${event.threadId} emitted turn_completed for ${event.turn.id}`,
-        occurrenceKey: `thread:${event.threadId}:${event.turn.id}`,
-        sourceThreadId: event.threadId,
-        sourceTurnId: event.turn.id,
-        projection: projectCompletedTurn(event.threadId, {
-          ...event.turn,
-          items: completedItems,
-        }),
-        ...(eventText === undefined ? {} : { eventText }),
+      await this.#fireThreadCompletion(generation, triggerId, event.threadId, {
+        ...event.turn,
+        items: completedItems,
       });
     }
+  }
+
+  async #fireThreadCompletion(
+    generation: TriggerGeneration,
+    triggerId: string,
+    threadId: string,
+    turn: Turn,
+  ): Promise<void> {
+    if (turn.status === "inProgress") return;
+    const eventText = completedItemText(turn.items);
+    await this.#fire(generation, triggerId, {
+      reason: `Thread ${threadId}: ${turn.status} (Turn ${turn.id})`,
+      occurrenceKey: `thread:${threadId}:${turn.id}`,
+      sourceThreadId: threadId,
+      sourceTurnId: turn.id,
+      projection: projectCompletedTurn(threadId, turn),
+      ...(eventText === undefined ? {} : { eventText }),
+    });
   }
 
   #handleItemCompleted(
@@ -768,6 +814,12 @@ export class ZenXTriggerService {
       (item) => item.id === triggerId && item.active,
     );
     if (trigger === undefined) return undefined;
+    if (
+      wakeup.sourceThreadId !== undefined &&
+      trigger.kind === "thread" &&
+      trigger.watch?.threadId !== wakeup.sourceThreadId
+    )
+      return undefined;
     // A timer callback may have queued behind a definition update. Check the
     // committed schedule here, after acquiring the mutation slot.
     if (
@@ -820,6 +872,11 @@ export class ZenXTriggerService {
       programInvocationId: null,
       programOutcome: null,
       programOutcomes: [],
+      ...(trigger.kind === "thread" &&
+      this.#manager.enqueue !== undefined &&
+      trigger.program === undefined
+        ? { delivery: rejected ? ("failed" as const) : ("pending" as const) }
+        : {}),
     };
     snapshot.history.unshift(history);
     // Consume the event before dispatch. A failed/uncertain send is visible in
@@ -964,6 +1021,39 @@ export class ZenXTriggerService {
         return;
       }
       if (!this.#isOperational(generation)) return;
+      if (trigger.kind === "thread" && this.#manager.enqueue !== undefined) {
+        if (this.#history(active.historyId).delivery === undefined) {
+          await this.#mutate(generation, async (snapshot) => {
+            snapshot.history.find(
+              (entry) => entry.id === active.historyId,
+            )!.delivery = "pending";
+          });
+        }
+        await this.#manager.enqueue({
+          threadId: trigger.threadId,
+          clientUserMessageId: active.clientUserMessageId,
+          input: [
+            {
+              type: "text",
+              text: wakeupInput(
+                trigger,
+                this.#history(active.historyId),
+                wakeup.projection,
+              ),
+            },
+          ],
+        });
+        await this.#mutate(generation, async (snapshot) => {
+          const entry = snapshot.history.find(
+            (candidate) => candidate.id === active.historyId,
+          )!;
+          entry.delivery = "queued";
+          entry.status = "completed";
+          entry.completedAt = this.#now();
+        });
+        this.#releaseActiveWakeup(generation, active.historyId);
+        return;
+      }
       const result = await this.#manager.request("turn/start", {
         threadId: trigger.threadId,
         clientUserMessageId: active.clientUserMessageId,
@@ -1194,6 +1284,7 @@ export class ZenXTriggerService {
       );
       if (entry === undefined || isTerminal(entry.status)) return;
       entry.status = "failed";
+      if (entry.delivery === "pending") entry.delivery = "unknown";
       entry.completedAt = this.#now();
       entry.error = bounded(error, MAX_ERROR_BYTES);
       released = true;
@@ -1451,6 +1542,8 @@ function triggerFromInput(
     };
   }
   if (input.kind === "thread") {
+    if (input.once !== undefined && typeof input.once !== "boolean")
+      throw new Error("once must be a boolean");
     return {
       ...common,
       kind: "thread",
@@ -1840,6 +1933,9 @@ export function projectCompletedTurn(threadId: string, turn: Turn): string {
       `Source Thread: ${threadId}`,
       `Source Turn: ${turn.id}`,
       `Status: ${turn.status}`,
+      turn.error === null
+        ? null
+        : `Error: ${bounded(turn.error.message, 1_000)}`,
       userInputs.length === 0
         ? null
         : `User input:\n${userInputs.join("\n\n")}`,
@@ -1847,7 +1943,7 @@ export function projectCompletedTurn(threadId: string, turn: Turn): string {
         ? null
         : `Command/result summary:\n${commands.join("\n\n")}`,
       conclusion?.type === "agentMessage"
-        ? `Agent conclusion:\n${bounded(conclusion.text, 1_800)}`
+        ? `${turn.status === "completed" ? "Agent conclusion" : "Agent output (turn did not complete successfully)"}:\n${bounded(conclusion.text, 1_800)}`
         : "Agent conclusion:\nNo final Agent message was emitted.",
     ]
       .filter((section): section is string => section !== null)

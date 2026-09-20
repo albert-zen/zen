@@ -1,5 +1,10 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import {
+  listThreadCandidates,
+  resolveThreadTarget,
+  type ThreadTargetPort,
+} from "./thread-target.js";
 
 import {
   ZENX_ROOMS_CAPABILITY_ID,
@@ -13,6 +18,7 @@ import {
 } from "./plugin-host-sdk.js";
 import {
   ZenXTriggerService,
+  projectCompletedTurn,
   type ZenXTriggerAppServerPort,
   type ZenXTriggerStorePort,
   type ZenXTriggerTitlePort,
@@ -30,6 +36,7 @@ export async function createBundledAutomationPluginService(options: {
   userDataDirectory: string;
   appServer: ZenXTriggerAppServerPort;
   titles?: ZenXTriggerTitlePort;
+  threadTargets?: ThreadTargetPort;
 }): Promise<ZenXBundledAutomationPluginService> {
   let legacy: TriggerSnapshot;
   try {
@@ -72,6 +79,7 @@ export async function createBundledAutomationPluginService(options: {
     new PluginAutomationStore(storageRoot, active),
     active,
     options.titles,
+    options.threadTargets,
   );
 }
 
@@ -173,6 +181,8 @@ async function readPluginValue(
 export class ZenXBundledAutomationPluginService implements ZenXAutomationControlPort {
   readonly #service: ZenXTriggerService;
   readonly #active: Set<string>;
+  readonly #targets: ThreadTargetPort | undefined;
+  readonly #appServer: ZenXTriggerAppServerPort;
   #lifecycle: Promise<void> = Promise.resolve();
 
   constructor(
@@ -180,8 +190,11 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     store: ZenXTriggerStorePort,
     active: Set<string>,
     titles?: ZenXTriggerTitlePort,
+    targets?: ThreadTargetPort,
   ) {
     this.#active = active;
+    this.#appServer = appServer;
+    this.#targets = targets;
     this.#service = new ZenXTriggerService(appServer, store, { titles });
   }
 
@@ -239,10 +252,59 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   }
 
   async create(input: CreateTriggerInput) {
-    return await this.#service.create(input);
+    return await this.#service.create(await this.#resolveInput(input));
   }
   async update(input: UpdateTriggerInput) {
-    return await this.#service.update(input);
+    return await this.#service.update({
+      ...(await this.#resolveInput(input)),
+      id: input.id,
+    });
+  }
+  async threads() {
+    if (this.#targets === undefined)
+      throw new Error("Thread discovery is unavailable");
+    return await listThreadCandidates(this.#targets);
+  }
+  async result(historyId: string) {
+    const entry = this.#service
+      .snapshot()
+      .history.find((item) => item.id === historyId);
+    if (entry?.sourceThreadId == null || entry.sourceTurnId == null)
+      throw new Error(
+        "Source result was not found in retained notification history",
+      );
+    if (this.#appServer.readThread === undefined)
+      throw new Error("Reading Thread results is unavailable");
+    const read = await this.#appServer.readThread(entry.sourceThreadId);
+    const turn = read.thread.turns.find(
+      (item) => item.id === entry.sourceTurnId,
+    );
+    if (turn === undefined) throw new Error("Source Turn is unavailable");
+    return {
+      threadId: entry.sourceThreadId,
+      turnId: turn.id,
+      status: turn.status,
+      preview: projectCompletedTurn(entry.sourceThreadId, turn),
+    };
+  }
+  async #resolveInput(input: CreateTriggerInput): Promise<CreateTriggerInput> {
+    if (this.#targets === undefined) return input;
+    const resolve = async (target: string) => {
+      const result = await resolveThreadTarget(this.#targets!, { target });
+      if (result.status !== "resolved")
+        throw new Error(
+          `Thread target ${JSON.stringify(target)} is ${result.status}: ${JSON.stringify(result.candidates)}`,
+        );
+      return result.threadId;
+    };
+    const threadId = await resolve(input.threadId);
+    return input.kind === "thread"
+      ? {
+          ...input,
+          threadId,
+          watchedThreadId: await resolve(input.watchedThreadId),
+        }
+      : { ...input, threadId };
   }
   async cancel(triggerId: string): Promise<void> {
     await this.#service.cancel(triggerId);

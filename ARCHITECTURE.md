@@ -238,14 +238,14 @@
 - **ProviderTransport** — 宿主为 Provider HTTP 请求注入的显式连接策略；首版只接受
   无 credential 的 HTTP(S) proxy URL，并保证 abort 与脱敏错误，不进入 Agent Runtime 状态。
 - **ZenXTriggerRegistry** — `zenx-triggers` Plugin Package 在自身 storage namespace 持久化的可审计
-  唤醒条件与命中历史；每次命中只以稳定幂等 key 通过 App Server 发起普通新 Turn，失败明确记录且不自动补偿。
+  唤醒条件与命中历史；每次命中以稳定幂等 key 通过 App Server 提交普通输入，Thread 完成通知使用既有 canonical queue，失败明确记录且不自动补偿。
 - **ZenXRoom** — `zenx-rooms` Plugin Package 在自身 storage namespace 持有的共享协作转录与 Thread 路由表面；Room 本身不是
   Agent 上下文，只有明确命中 membership / mention 时才把带来源的内容投递给成员 Thread。
 - **ZenXWakeupProjection** — ZenX 把 Trigger 命中的 `clientUserMessageId` 与外部审计记录
   关联成系统级唤醒卡片，并把有界、带明确来源的 completed Turn / Room 上下文作为
   新 Turn 输入投影；它不是第二份权威 transcript，canonical `user_message` 仍是唯一输入事实。
 - **ZenXTriggerAppServerPort** — ZenX Trigger 服务观察 completed Item/Turn 并发起普通
-  `turn/start` 所需的最小 host-local App Server 边界；它不引入另一套 Runtime、队列或重试器。
+  `turn/start` / `turn/queue` 与按需 Thread 读取所需的最小 host-local App Server 边界；它不引入另一套 Runtime、队列或重试器。
 - **ZenXExternalLinkPolicy** — ZenX renderer 与 Electron 主进程共同执行的外链 allowlist；
   只有 `http:`、`https:`、`mailto:` 可交给操作系统，页内锚点留在 renderer 处理。
 - **ZenXPluginCatalog** — ZenX 主进程从 profile 的直接 dependencies 注册 v2 package，原子管理

@@ -49,11 +49,10 @@ test("thread targets resolve full IDs, unique prefixes and exact titles across e
   for (const target of ["aaa", "Review"]) {
     const result = await resolveThreadTarget(port, { target });
     assert.equal(result.status, "ambiguous");
-    if (result.status !== "resolved")
-      assert.deepEqual(
-        result.candidates.map((c) => c.threadId),
-        ["aaa111", "aaa222"],
-      );
+    assert.deepEqual(
+      result.candidates.map((c) => c.threadId),
+      ["aaa111", "aaa222"],
+    );
   }
   assert.equal(
     (await resolveThreadTarget(port, { target: "Rev" })).status,

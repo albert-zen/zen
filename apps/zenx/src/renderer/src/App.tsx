@@ -1797,6 +1797,10 @@ export function App() {
   };
 
   const openPage = (next: ProductPage) => {
+    if (next.startsWith("/threads/")) {
+      void resumeThread(decodeURIComponent(next.slice("/threads/".length)));
+      return;
+    }
     discardRecoverableDraft();
     if (projectPickerIntentRef.current !== null) closeProjectPicker();
     if (next !== "agent") abandonNewThreadDraft();

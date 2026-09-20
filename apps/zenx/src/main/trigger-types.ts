@@ -65,6 +65,7 @@ export interface ZenXTrigger {
 }
 
 export interface TriggerHistoryEntry {
+  delivery?: "pending" | "queued" | "failed" | "unknown";
   id: string;
   triggerId: string;
   threadId: string;
