@@ -232,3 +232,189 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
     dom.window.close();
   }
 });
+
+test("delayed Browser and File opens keep the newer tab selected", async () => {
+  const dom = new JSDOM(
+    '<button id="thread-browser-toggle">Panel</button><div id="root"></div>',
+    { url: "https://zenx.local/", pretendToBeVisual: true },
+  );
+  Object.assign(globalThis, {
+    window: dom.window,
+    Window: dom.window.Window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    MutationObserver: dom.window.MutationObserver,
+    Node: dom.window.Node,
+    getComputedStyle: dom.window.getComputedStyle,
+    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+    cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  (dom.window.HTMLElement.prototype as any).attachEvent = () => {};
+  (dom.window.HTMLElement.prototype as any).detachEvent = () => {};
+  let resolveBrowser!: (value: any[]) => void;
+  let resolveList!: (value: any[]) => void;
+  let resolveRead!: (value: any) => void;
+  const browserList = new Promise<any[]>((resolve) => {
+    resolveList = resolve;
+  });
+  const browserNew = new Promise<any[]>((resolve) => {
+    resolveBrowser = resolve;
+  });
+  const fileRead = new Promise<any>((resolve) => {
+    resolveRead = resolve;
+  });
+  (dom.window as any).zenx = {
+    workspaceBrowser: {
+      onChanged: () => () => {},
+      command: async (_threadId: string, action: string) => {
+        if (action === "list") return await browserList;
+        if (action === "new") return await browserNew;
+        return [];
+      },
+    },
+    workspaceFiles: {
+      list: async () => ({
+        path: ".",
+        entries: [{ name: "README.md", path: "README.md", kind: "file" }],
+        truncated: false,
+      }),
+      read: async () => await fileRead,
+      save: async () => ({ status: "saved", file: {} }),
+    },
+    plugins: { executeCommand: async () => null, readHandle: async () => null },
+  };
+  const snapshot: ZenXPluginSnapshot = {
+    plugins: [],
+    panels: [
+      {
+        key: "notes:preview",
+        pluginId: "notes",
+        id: "preview",
+        title: "Notes",
+        surfaceId: "note",
+      },
+    ],
+    surfaces: [
+      {
+        key: "notes:note",
+        pluginId: "notes",
+        id: "note",
+        bundleId: "ui",
+        exportName: "main",
+      },
+    ],
+    bundles: [
+      {
+        key: "notes:ui",
+        pluginId: "notes",
+        id: "ui",
+        apiVersion: 1,
+        kind: "isolated",
+        entry: "<p>Notes preview</p>",
+      },
+    ],
+    sidebar: [],
+    pages: [],
+    subroutes: [],
+    settings: [],
+    commands: [],
+    menus: [],
+  };
+  function Harness() {
+    const [selectedTab, onSelectTab] = useState("plugin:notes:preview");
+    const [open, onOpenChange] = useState(true);
+    const [openedTabs, onTabsChange] = useState([
+      "browser:browser-1",
+      "plugin:notes:preview",
+    ]);
+    return React.createElement(AuxiliaryPanel, {
+      threadId: "thread-a",
+      title: "Task A",
+      snapshot,
+      open,
+      onOpenChange,
+      selectedTab,
+      onSelectTab,
+      openedTabs,
+      onTabsChange,
+    });
+  }
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () => root.render(React.createElement(Harness)));
+    assert.deepEqual(
+      [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].map(
+        (element) => element.textContent,
+      ),
+      ["Notes"],
+      "the unresolved Browser list must not rewrite the persisted order",
+    );
+    resolveList([
+      { id: "browser-1", title: "Existing browser", url: "about:blank" },
+    ]);
+    await act(async () => await Promise.resolve());
+    const choose = (name: string) =>
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          ".workspace-tab-types > button",
+        ),
+      ].find((element) => element.textContent === name)!;
+    const selectedTab = () =>
+      document.querySelector<HTMLButtonElement>(
+        '[role="tab"][aria-selected="true"]',
+      );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
+        .click(),
+    );
+    await act(async () => choose("Browser").click());
+    await act(async () => choose("Notes").click());
+    resolveBrowser([
+      { id: "browser-1", title: "Existing browser", url: "about:blank" },
+      { id: "browser-2", title: "Delayed browser", url: "about:blank" },
+    ]);
+    await act(async () => await Promise.resolve());
+    assert.equal(selectedTab()?.textContent, "Notes");
+    assert.ok(
+      [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].some(
+        (element) => element.textContent === "Delayed browser",
+      ),
+    );
+
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
+        .click(),
+    );
+    await act(async () => choose("File").click());
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".file-list button")!.click(),
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
+        .click(),
+    );
+    await act(async () => choose("Notes").click());
+    resolveRead({
+      path: "README.md",
+      text: "# delayed",
+      revision: "r1",
+      editable: true,
+    });
+    await act(async () => await Promise.resolve());
+    assert.equal(selectedTab()?.textContent, "Notes");
+    assert.equal(
+      [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].some(
+        (element) => element.textContent === "README.md",
+      ),
+      false,
+    );
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});

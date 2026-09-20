@@ -61,6 +61,66 @@ test("autosave serializes an in-flight snapshot without losing newer input", asy
   });
 });
 
+test("closeAfterSave survives newer input and keeps a failed draft", async () => {
+  const drafts = new WorkspaceFileDrafts(5);
+  const key = fileDraftKey("thread", "README.md");
+  drafts.set(key, {
+    base: { path: "README.md", text: "before", revision: "r1" },
+    text: "before",
+  });
+  const calls: Array<{
+    text: string;
+    revision: string;
+    resolve(value: {
+      status: "saved";
+      file: { path: string; text: string; revision: string };
+    }): void;
+  }> = [];
+  const save = (text: string, revision: string) =>
+    new Promise<{
+      status: "saved";
+      file: { path: string; text: string; revision: string };
+    }>((resolve) => calls.push({ text, revision, resolve }));
+
+  drafts.edit(key, "first", save);
+  await wait();
+  drafts.closeAfterSave(key, save);
+  drafts.edit(key, "second", save);
+  calls[0]!.resolve({
+    status: "saved",
+    file: { path: "README.md", text: "first", revision: "r2" },
+  });
+  await wait();
+  assert.deepEqual(
+    calls.map(({ text, revision }) => [text, revision]),
+    [
+      ["first", "r1"],
+      ["second", "r2"],
+    ],
+  );
+  calls[1]!.resolve({
+    status: "saved",
+    file: { path: "README.md", text: "second", revision: "r3" },
+  });
+  await wait();
+  assert.equal(drafts.snapshot().has(key), false);
+
+  drafts.set(key, {
+    base: { path: "README.md", text: "second", revision: "r3" },
+    text: "failed close",
+  });
+  drafts.closeAfterSave(key, async () => {
+    throw new Error("disk unavailable");
+  });
+  await wait();
+  assert.deepEqual(drafts.snapshot().get(key), {
+    base: { path: "README.md", text: "second", revision: "r3" },
+    text: "failed close",
+    saving: false,
+    error: "disk unavailable",
+  });
+});
+
 test("autosave stops after failure and retries only after editing or Retry", async () => {
   const drafts = new WorkspaceFileDrafts(5);
   const key = fileDraftKey("thread", "notes.txt");

@@ -6,6 +6,7 @@ export interface WorkspaceFileDraft {
   base: WorkspaceTextFile;
   text: string;
   saving?: boolean;
+  closing?: boolean;
   error?: string;
   conflict?: WorkspaceTextFile;
 }
@@ -61,6 +62,21 @@ export class WorkspaceFileDrafts {
     this.#clearTimer(key);
     void this.#save(key, save);
   }
+  markClosing(key: string) {
+    const current = this.#entries.get(key);
+    if (current === undefined || current.closing) return;
+    this.set(key, { ...current, closing: true });
+  }
+  closeAfterSave(key: string, save: WorkspaceFileSaver) {
+    const current = this.#entries.get(key);
+    if (current === undefined) return;
+    if (!isFileDirty(current) && !current.saving) {
+      this.remove(key);
+      return;
+    }
+    this.markClosing(key);
+    this.flush(key, save);
+  }
   remove(key: string) {
     this.#clearTimer(key);
     this.#pending.delete(key);
@@ -104,8 +120,10 @@ export class WorkspaceFileDrafts {
       const current = this.#entries.get(key);
       if (current === undefined) return;
       if (result.status === "conflict") {
+        const next = { ...current };
+        delete next.closing;
         this.set(key, {
-          ...current,
+          ...next,
           saving: false,
           conflict: result.file,
           error:
@@ -114,19 +132,27 @@ export class WorkspaceFileDrafts {
         this.#pending.delete(key);
         return;
       }
-      this.set(key, {
+      const next = {
         base: result.file,
         text: current.text,
         saving: false,
-      });
+      };
+      if (current.closing && !isFileDirty(next)) {
+        this.remove(key);
+        return;
+      }
+      this.set(key, current.closing ? { ...next, closing: true } : next);
     } catch (reason) {
       const current = this.#entries.get(key);
-      if (current !== undefined)
+      if (current !== undefined) {
+        const next = { ...current };
+        delete next.closing;
         this.set(key, {
-          ...current,
+          ...next,
           saving: false,
           error: reason instanceof Error ? reason.message : String(reason),
         });
+      }
       this.#pending.delete(key);
       return;
     } finally {

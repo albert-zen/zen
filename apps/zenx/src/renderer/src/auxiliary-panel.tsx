@@ -64,10 +64,11 @@ export function AuxiliaryPanel({
   const [choosing, setChoosing] = useState(false);
   const [pickingFile, setPickingFile] = useState(false);
   const [browserTabs, setBrowserTabs] = useState<WorkspaceBrowserTab[]>([]);
+  const [browserListThread, setBrowserListThread] = useState<string>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [closingFiles, setClosingFiles] = useState<string[]>([]);
   const mounted = useRef(true);
+  const selectionEpoch = useRef(0);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -130,14 +131,48 @@ export function AuxiliaryPanel({
     ]),
   ].filter((id) => available.has(id));
   const signature = JSON.stringify(ids);
+  const browserListReady =
+    !window.zenx.workspaceBrowser || browserListThread === threadId;
   useEffect(() => {
-    if (JSON.stringify(order) !== signature) setOrder(JSON.parse(signature));
-  }, [signature, order, setOrder]);
+    if (browserListReady && JSON.stringify(order) !== signature)
+      setOrder(JSON.parse(signature));
+    const selectionKnown =
+      selectedTab?.startsWith("file:") || selectedTab?.startsWith("browser:")
+        ? browserListReady
+        : snapshot !== null;
+    if (
+      browserListReady &&
+      selectionKnown &&
+      selectedTab &&
+      !ids.includes(selectedTab)
+    ) {
+      selectionEpoch.current += 1;
+      onSelectTab(ids[0] ?? "");
+    }
+  }, [
+    browserListReady,
+    ids,
+    onSelectTab,
+    order,
+    selectedTab,
+    setOrder,
+    signature,
+    snapshot,
+  ]);
   const tabs = ids.map((id) => available.get(id)!);
   const active =
     selectedTab && ids.includes(selectedTab) ? selectedTab : ids[0];
+  const idsRef = useRef(ids);
+  const activeRef = useRef(active);
+  const orderRef = useRef(order);
+  const threadIdRef = useRef(threadId);
+  idsRef.current = ids;
+  activeRef.current = active;
+  orderRef.current = order;
+  threadIdRef.current = threadId;
   const showChooser = choosing || tabs.length === 0;
   const select = (id: string) => {
+    selectionEpoch.current += 1;
     setChoosing(false);
     setPickingFile(false);
     setError("");
@@ -149,18 +184,28 @@ export function AuxiliaryPanel({
   }, [selectedTab]);
   useEffect(() => {
     const api = window.zenx.workspaceBrowser;
-    if (!api) return;
+    selectionEpoch.current += 1;
+    setBrowserListThread(undefined);
+    setBrowserTabs([]);
+    if (!api) {
+      setBrowserListThread(threadId);
+      return;
+    }
     let alive = true;
     let changed = false;
     const stop = api.onChanged((value) => {
       if (alive && value.threadId === threadId) {
         changed = true;
+        setBrowserListThread(threadId);
         setBrowserTabs(value.tabs);
       }
     });
     void api.command(threadId, "list").then(
       (value) => {
-        if (alive && !changed) setBrowserTabs(value);
+        if (alive && !changed) {
+          setBrowserListThread(threadId);
+          setBrowserTabs(value);
+        }
       },
       (reason) => {
         if (alive) setError(String(reason.message ?? reason));
@@ -172,6 +217,7 @@ export function AuxiliaryPanel({
     };
   }, [threadId]);
   const add = async (id: string) => {
+    const operationEpoch = ++selectionEpoch.current;
     setError("");
     if (id === "file") {
       setPickingFile(true);
@@ -179,7 +225,7 @@ export function AuxiliaryPanel({
       return;
     }
     if (id !== "browser") {
-      setOrder([...new Set([...ids, id])]);
+      setOrder([...new Set([...orderRef.current, id])]);
       select(id);
       return;
     }
@@ -190,35 +236,51 @@ export function AuxiliaryPanel({
     setBusy(true);
     try {
       const value = await window.zenx.workspaceBrowser.command(threadId, "new");
-      if (!mounted.current) return;
+      if (!mounted.current || threadIdRef.current !== threadId) return;
       setBrowserTabs(value);
+      if (selectionEpoch.current !== operationEpoch) return;
       const created = value.at(-1);
       if (created) select(`browser:${created.id}`);
     } catch (reason) {
-      if (mounted.current)
+      if (mounted.current && threadIdRef.current === threadId)
         setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      if (mounted.current) setBusy(false);
+      if (mounted.current && threadIdRef.current === threadId) setBusy(false);
     }
   };
   const openFile = async (path: string) => {
+    const operationEpoch = selectionEpoch.current;
     const value = await window.zenx.workspaceFiles.read(threadId, path);
-    if (!mounted.current) return;
+    if (
+      !mounted.current ||
+      threadIdRef.current !== threadId ||
+      selectionEpoch.current !== operationEpoch
+    )
+      return;
     const key = fileDraftKey(threadId, value.path);
     const current = drafts.snapshot().get(key);
     if (!current || (!isFileDirty(current) && !current.saving))
       drafts.set(key, { base: value, text: value.text });
     select(`file:${value.path}`);
   };
-  const remove = (id: string) => {
-    const index = ids.indexOf(id);
-    const remaining = ids.filter((value) => value !== id);
+  const remove = (id: string, expectedEpoch?: number) => {
+    const currentIds = idsRef.current;
+    const currentOrder = orderRef.current;
+    const source = currentOrder.includes(id) ? currentOrder : currentIds;
+    const index = source.indexOf(id);
+    const remaining = source.filter((value) => value !== id);
     setOrder(remaining);
-    if (active === id)
+    if (
+      activeRef.current === id &&
+      (expectedEpoch === undefined || selectionEpoch.current === expectedEpoch)
+    ) {
+      selectionEpoch.current += 1;
       onSelectTab(remaining[Math.min(index, remaining.length - 1)] ?? "");
+    }
   };
   const closeTab = async (tab: ContentTab) => {
     setError("");
+    let operationEpoch: number | undefined;
     if (tab.path) {
       const key = fileDraftKey(threadId, tab.path);
       const draft = drafts.snapshot().get(key);
@@ -228,50 +290,30 @@ export function AuxiliaryPanel({
           setError("Resolve this file's save issue before closing it.");
           return;
         }
-        setClosingFiles((current) => [...new Set([...current, tab.path!])]);
-        drafts.flush(key, (text, revision) =>
+        drafts.closeAfterSave(key, (text, revision) =>
           window.zenx.workspaceFiles.save(threadId, tab.path!, text, revision),
         );
         return;
       }
       drafts.remove(key);
     } else if (tab.browser) {
+      operationEpoch = selectionEpoch.current;
       try {
         const value = await window.zenx.workspaceBrowser.command(
           threadId,
           "close",
           tab.browser.id,
         );
-        if (!mounted.current) return;
+        if (!mounted.current || threadIdRef.current !== threadId) return;
         setBrowserTabs(value);
       } catch (reason) {
-        if (mounted.current) setError(String(reason));
+        if (mounted.current && threadIdRef.current === threadId)
+          setError(String(reason));
         return;
       }
     }
-    remove(tab.id);
+    remove(tab.id, operationEpoch);
   };
-  useEffect(() => {
-    for (const path of closingFiles) {
-      const key = fileDraftKey(threadId, path);
-      const draft = entries.get(key);
-      if (
-        draft &&
-        !draft.error &&
-        !draft.conflict &&
-        (isFileDirty(draft) || draft.saving)
-      )
-        continue;
-      setClosingFiles((current) => current.filter((value) => value !== path));
-      if (draft?.error || draft?.conflict) {
-        select(`file:${path}`);
-        setError("This file could not be saved. Your changes are still open.");
-      } else {
-        drafts.remove(key);
-        remove(`file:${path}`);
-      }
-    }
-  }, [entries, closingFiles]);
   const close = () => {
     setExpanded(false);
     onOpenChange(false);
@@ -390,7 +432,12 @@ export function AuxiliaryPanel({
                 type="button"
                 className="workspace-tab-close"
                 aria-label={`Close tab ${tab.title}`}
-                disabled={tab.path ? closingFiles.includes(tab.path) : false}
+                disabled={
+                  tab.path
+                    ? entries.get(fileDraftKey(threadId, tab.path))?.closing ===
+                      true
+                    : false
+                }
                 onClick={() => void closeTab(tab)}
               >
                 <Icon name="x" />
@@ -404,6 +451,7 @@ export function AuxiliaryPanel({
           aria-label="New workspace tab"
           aria-pressed={showChooser}
           onClick={() => {
+            selectionEpoch.current += 1;
             setChoosing(true);
             setPickingFile(false);
             setError("");
@@ -440,7 +488,10 @@ export function AuxiliaryPanel({
             <WorkspaceFilePicker
               threadId={threadId}
               onOpen={openFile}
-              onBack={() => setPickingFile(false)}
+              onBack={() => {
+                selectionEpoch.current += 1;
+                setPickingFile(false);
+              }}
             />
           ) : (
             <div className="workspace-tab-types" aria-label="New tab type">
