@@ -1304,6 +1304,19 @@ select:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.thread-source-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.thread-source-link:hover,
+.thread-source-link:focus-visible {
+  color: var(--text-2);
+}
 .thread-title-line {
   min-width: 0;
   display: flex;

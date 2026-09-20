@@ -446,9 +446,10 @@ export class ZenXProtocolClient {
     params: ClientRequestParams[M],
     result: ClientRequestResults[M],
   ): void {
-    if (method === "thread/start") {
+    if (method === "thread/start" || method === "thread/fork") {
       this.#subscribedThreads.add(
-        (result as ClientRequestResults["thread/start"]).thread.id,
+        (result as ClientRequestResults["thread/start" | "thread/fork"]).thread
+          .id,
       );
       return;
     }

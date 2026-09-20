@@ -8,6 +8,7 @@ import type {
 import type {
   CanonicalItem,
   ThreadMetadataItem,
+  ThreadForkedItem,
   ToolCallItem,
   ToolResultItem,
 } from "../../item.js";
@@ -19,7 +20,7 @@ import { encodeModelKey } from "./model-key.js";
 export interface CodexThread {
   id: string;
   sessionId: string;
-  forkedFromId: null;
+  forkedFromId: string | null;
   parentThreadId: null;
   preview: string;
   ephemeral: false;
@@ -125,7 +126,8 @@ export function projectThread(
     return projectUnavailableThread(snapshot);
   }
   const metadata = metadataFor(snapshot.items);
-  const createdAt = seconds(metadata.createdAt);
+  const fork = forkFor(snapshot.items);
+  const createdAt = seconds(fork?.createdAt ?? metadata.createdAt);
   const updatedAt = seconds(
     snapshot.items.at(-1)?.createdAt ?? metadata.createdAt,
   );
@@ -133,7 +135,7 @@ export function projectThread(
   return {
     id: snapshot.id,
     sessionId: snapshot.id,
-    forkedFromId: null,
+    forkedFromId: fork?.sourceThreadId ?? null,
     parentThreadId: null,
     preview: firstUserMessagePreview(snapshot.items),
     ephemeral: false,
@@ -179,7 +181,7 @@ export function projectThreadSummary(
   return {
     id: summary.threadId,
     sessionId: summary.threadId,
-    forkedFromId: null,
+    forkedFromId: summary.forkedFromThreadId ?? null,
     parentThreadId: null,
     preview: summary.preview,
     ephemeral: false,
@@ -321,6 +323,7 @@ export function projectCompletedItem(
     case "context_compaction":
     case "model_usage":
     case "thread_configuration_changed":
+    case "thread_forked":
     case "thread_metadata":
     case "tool_result":
     case "turn_aborted":
@@ -501,6 +504,14 @@ function metadataFor(items: readonly CanonicalItem[]): ThreadMetadataItem {
     throw new Error("Thread has no metadata item");
   }
   return metadata;
+}
+
+function forkFor(
+  items: readonly CanonicalItem[],
+): ThreadForkedItem | undefined {
+  return [...items]
+    .reverse()
+    .find((item): item is ThreadForkedItem => item.type === "thread_forked");
 }
 
 function firstUserMessagePreview(items: readonly CanonicalItem[]): string {

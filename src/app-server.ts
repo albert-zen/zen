@@ -29,6 +29,7 @@ import type {
   SandboxMode,
   ThreadConfigurationChangedItem,
   ThreadMetadataItem,
+  ThreadForkedItem,
   TurnAbortedItem,
   TurnCompletedItem,
   TurnReplacementRequestedItem,
@@ -142,6 +143,12 @@ export interface CompactThreadOptions {
 
 export interface CompactThreadResult {
   compactionItemId: string;
+}
+
+export interface ForkThreadInput {
+  sourceThreadId: string;
+  through: { type: "latest-complete" };
+  workspace: { type: "same-directory" };
 }
 
 export interface SteerTurnOptions {
@@ -509,6 +516,87 @@ export class ZenAppServer {
         }
         throw error;
       }
+      const snapshot = await this.#snapshot(thread);
+      this.#emit({ type: "thread_started", threadId, thread: snapshot });
+      return snapshot;
+    } finally {
+      admission.release();
+    }
+  }
+
+  async forkThread(input: ForkThreadInput): Promise<ThreadSnapshot> {
+    const admission = this.beginHostOperation("other", "thread/fork");
+    try {
+      if (input.through.type !== "latest-complete") {
+        throw new AppServerError(
+          "invalid_request",
+          "Only the latest complete Turn can be copied",
+        );
+      }
+      if (input.workspace.type !== "same-directory") {
+        throw new AppServerError(
+          "invalid_request",
+          "Only same-directory Thread copies are supported",
+        );
+      }
+      const source = await this.#requireThread(input.sourceThreadId);
+      const sourceItems = source.items;
+      const terminalIndex = findLatestClosedTurnIndex(sourceItems);
+      if (terminalIndex < 0) {
+        throw new AppServerError(
+          "fork_boundary_unavailable",
+          "Copy is available after the Thread has a complete Turn",
+        );
+      }
+      const terminal = sourceItems[terminalIndex]!;
+      const sourceTurnId = terminal.turnId;
+      if (sourceTurnId === undefined) {
+        throw new Error("Closed Turn boundary is missing a Turn id");
+      }
+      const prefix = forkablePrefix(sourceItems, terminalIndex);
+      const threadId = this.#id();
+      const copiedItems = remapForkItems(prefix, threadId, this.#id);
+      const forked: ThreadForkedItem = {
+        id: this.#id(),
+        threadId,
+        createdAt: this.#now(),
+        type: "thread_forked",
+        sourceThreadId: source.id,
+        sourceBoundaryItemId: terminal.id,
+        sourceTurnId,
+        workspace: "same-directory",
+      };
+      const thread = new Thread(threadId, [...copiedItems, forked]);
+      if (this.#journal.create === undefined) {
+        throw new AppServerError(
+          "fork_unsupported",
+          "The configured Thread journal cannot create an atomic copy",
+        );
+      }
+      await this.#ensureThreadSummaries();
+      try {
+        await this.#journal.create(thread.items);
+      } catch (error) {
+        this.#threadSummaries = undefined;
+        throw new ThreadJournalAppendOutcomeUnknownError(error);
+      }
+      this.#threads.set(threadId, thread);
+      try {
+        const sourceMetadata = await this.#threadMetadata.read(source.id);
+        if (sourceMetadata.name !== undefined) {
+          const suffix = " · Copy";
+          await this.#threadMetadata.setName(
+            threadId,
+            `${sourceMetadata.name.slice(0, 200 - suffix.length)}${suffix}`,
+          );
+        }
+      } catch (error) {
+        console.warn(
+          `Could not copy product title to Thread ${threadId}`,
+          error,
+        );
+      }
+      await this.#refreshThreadSummary(thread);
       const snapshot = await this.#snapshot(thread);
       this.#emit({ type: "thread_started", threadId, thread: snapshot });
       return snapshot;
@@ -2001,6 +2089,7 @@ export class ZenAppServer {
     if (metadata === undefined) {
       throw new Error(`Thread ${thread.id} has no metadata item`);
     }
+    const fork = latestThreadFork(thread.items);
     return {
       threadId: thread.id,
       currentMetadata: configuration,
@@ -2008,8 +2097,14 @@ export class ZenAppServer {
       ...(productMetadata.name === undefined
         ? {}
         : { name: productMetadata.name }),
-      createdAt: metadata.createdAt,
+      createdAt: fork?.createdAt ?? metadata.createdAt,
       updatedAt: thread.items.at(-1)?.createdAt ?? metadata.createdAt,
+      ...(fork === undefined
+        ? {}
+        : {
+            forkedFromThreadId: fork.sourceThreadId,
+            forkedFromTurnId: fork.sourceTurnId,
+          }),
       preview: firstUserMessagePreview(thread.items),
       status: thread
         .deriveTurns(
@@ -2283,6 +2378,87 @@ function firstUserMessagePreview(items: readonly CanonicalItem[]): string {
       candidate.type === "user_message",
   );
   return item === undefined ? "" : previewFromUserMessage(item);
+}
+
+function latestThreadFork(
+  items: readonly CanonicalItem[],
+): ThreadForkedItem | undefined {
+  return [...items]
+    .reverse()
+    .find((item): item is ThreadForkedItem => item.type === "thread_forked");
+}
+
+function findLatestClosedTurnIndex(items: readonly CanonicalItem[]): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item?.type === "turn_completed" || item?.type === "turn_aborted") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function forkablePrefix(
+  items: readonly CanonicalItem[],
+  terminalIndex: number,
+): readonly CanonicalItem[] {
+  let end = terminalIndex + 1;
+  while (end < items.length) {
+    const item = items[end]!;
+    if (
+      item.type !== "thread_configuration_changed" &&
+      !(item.type === "context_compaction" && item.turnId === undefined)
+    ) {
+      break;
+    }
+    end += 1;
+  }
+  return items.slice(0, end);
+}
+
+function remapForkItems(
+  items: readonly CanonicalItem[],
+  threadId: string,
+  idFactory: () => string,
+): CanonicalItem[] {
+  const localIds = new Set(items.map((item) => item.id));
+  for (const item of items) {
+    if (
+      (item.type === "tool_call" || item.type === "model_usage") &&
+      item.modelResponseId !== undefined
+    ) {
+      localIds.add(item.modelResponseId);
+    }
+    if (item.type === "user_message" && item.deliveryAfter !== undefined) {
+      localIds.add(item.deliveryAfter);
+    }
+    if (item.type === "context_compaction" && item.provenance === "agentic") {
+      localIds.add(item.sourceModelResponseId);
+    }
+  }
+  const ids = new Map([...localIds].map((id) => [id, idFactory()] as const));
+  const remap = (id: string): string => ids.get(id) ?? id;
+  return items.map((item) => {
+    const copied = structuredClone(item) as CanonicalItem;
+    Object.assign(copied, { id: remap(item.id), threadId });
+    if (copied.type === "user_message" && copied.deliveryAfter !== undefined) {
+      copied.deliveryAfter = remap(copied.deliveryAfter);
+    }
+    if (
+      (copied.type === "tool_call" || copied.type === "model_usage") &&
+      copied.modelResponseId !== undefined
+    ) {
+      copied.modelResponseId = remap(copied.modelResponseId);
+    }
+    if (copied.type === "context_compaction") {
+      copied.coveredThroughItemId = remap(copied.coveredThroughItemId);
+      copied.retainedItemIds = copied.retainedItemIds.map(remap);
+      if (copied.provenance === "agentic") {
+        copied.sourceModelResponseId = remap(copied.sourceModelResponseId);
+      }
+    }
+    return copied;
+  });
 }
 
 function attachmentAppServerError(error: unknown): Error {
