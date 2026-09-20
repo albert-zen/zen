@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
+import { ComputerThreadPanel } from "./computer-thread-panel.js";
 import { WorkspaceBrowserPanel } from "./workspace-browser-panel.js";
 import { GenericPluginUiHost } from "./plugin-ui-host.js";
 import { pluginUiRegistry, useAppearance } from "./PluginProductPage.js";
@@ -36,12 +37,17 @@ export function AuxiliaryPanel({
     snapshot?.plugins.some(
       (p) => p.id === "browser" && p.enabled && p.available,
     ) ?? false;
+  const computer =
+    snapshot?.plugins.some(
+      (p) => p.id === "computer" && p.enabled && p.available,
+    ) ?? false;
   const panels = [...(snapshot?.panels ?? [])].sort(
     (a, b) => (a.order ?? 0) - (b.order ?? 0) || a.key.localeCompare(b.key),
   );
   const tabs = [
     { id: "browser", title: "Browser" },
     { id: "files", title: "Files" },
+    ...(computer ? [{ id: "computer", title: "Computer" }] : []),
     ...panels.map((p) => ({ id: `plugin:${p.key}`, title: p.title })),
   ];
   const active = tabs.some((tab) => tab.id === selectedTab)
@@ -200,6 +206,21 @@ export function AuxiliaryPanel({
           />
         ) : null}
       </div>
+      {computer ? (
+        <div
+          className="auxiliary-content"
+          role="tabpanel"
+          id="aux-content-computer"
+          aria-labelledby="aux-tab-computer"
+          hidden={active !== "computer"}
+        >
+          <ComputerThreadPanel
+            key={threadId}
+            threadId={threadId}
+            active={open === true && active === "computer"}
+          />
+        </div>
+      ) : null}
       {open && panel && snapshot ? (
         <div
           className="auxiliary-content"

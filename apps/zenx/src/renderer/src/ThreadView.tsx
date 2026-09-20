@@ -1037,6 +1037,10 @@ export function ContextUsageIndicator({
 }) {
   const [open, setOpen] = useState(false);
   const popoverId = useId();
+  const [popoverPosition, setPopoverPosition] = useState({
+    left: 0,
+    width: 286,
+  });
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -1045,6 +1049,40 @@ export function ContextUsageIndicator({
     };
     document.addEventListener("mousedown", closeOutside);
     return () => document.removeEventListener("mousedown", closeOutside);
+  }, [open]);
+  useLayoutEffect(() => {
+    if (!open || !rootRef.current) return;
+    const root = rootRef.current;
+    const boundary = root.closest(".thread-view");
+    const place = () => {
+      const anchor = root.getBoundingClientRect();
+      const bounds = boundary?.getBoundingClientRect();
+      const left = Math.max(0, bounds?.left ?? 0) + 8;
+      const right =
+        Math.min(
+          window.innerWidth,
+          bounds?.width ? bounds.right : window.innerWidth,
+        ) - 8;
+      const width = Math.min(286, Math.max(0, right - left));
+      setPopoverPosition({
+        left:
+          Math.max(left, Math.min(anchor.right - width, right - width)) -
+          anchor.left,
+        width,
+      });
+    };
+    place();
+    window.addEventListener("resize", place);
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(place);
+    observer?.observe(root);
+    if (boundary) observer?.observe(boundary);
+    return () => {
+      window.removeEventListener("resize", place);
+      observer?.disconnect();
+    };
   }, [open]);
   if (context?.ratio === null || context?.ratio === undefined) return null;
   const percent = Math.round(context.ratio * 100);
@@ -1098,6 +1136,7 @@ export function ContextUsageIndicator({
       {open ? (
         <div
           className="context-usage-popover"
+          style={popoverPosition}
           id={popoverId}
           role="dialog"
           aria-label="Context details"
@@ -1119,8 +1158,8 @@ export function ContextUsageIndicator({
           <p>{contextLabel}</p>
           <p>{threadCacheUsageLabel(threadCacheHitRate)}</p>
           <p className="context-usage-explanation">
-            Compaction keeps selected canonical items and a generated summary;
-            the full transcript remains available.
+            Condense earlier context for the next reply. Your conversation stays
+            available.
           </p>
           <button
             className="context-usage-compact"
