@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { SkillsService } from "../../cli/src/skills.js";
 import { ZenAppServer } from "../../../src/app-server.js";
 import { InMemoryThreadJournal } from "../../../src/journal.js";
 import { InMemoryThreadMetadataStore } from "../../../src/thread-metadata.js";
@@ -19,9 +23,11 @@ import {
 async function fixture(
   adapter?: ModelAdapter,
   toolEnvironment = new ToolEnvironment({ bundles: [] }),
+  skills?: SkillsService,
 ) {
   const journal = new InMemoryThreadJournal();
   const app = new ZenAppServer({
+    skills,
     journal,
     threadMetadata: new InMemoryThreadMetadataStore(),
     runtime: new AgentRuntime({
@@ -148,6 +154,106 @@ test("sending needs only a target and text, and retrying the same invocation nev
     await f.close();
   }
 });
+
+for (const skillMode of ["auto", "manual"] as const) {
+  for (const sendMode of ["start", "queue", "replace"] as const) {
+    test(`Skills ${skillMode} ${sendMode} send retries use captured input after catalog changes`, async () => {
+      const root = await mkdtemp(
+        path.join(os.tmpdir(), "zen-self-control-skills-"),
+      );
+      const source = path.join(root, "source");
+      await mkdir(source);
+      await writeFile(
+        path.join(source, "SKILL.md"),
+        "---\nname: send-fixture\ndescription: initial catalog description\n---\nInstruction",
+      );
+      const skills = new SkillsService(path.join(root, "host"));
+      const skill = await skills.importDirectory(source);
+      await skills.setMode(skill.id, skillMode);
+      let preparations = 0;
+      const prepare = skills.prepare.bind(skills);
+      skills.prepare = async (input) => {
+        preparations++;
+        return await prepare(input);
+      };
+      const f = await fixture(
+        {
+          provider: "test",
+          async *stream(request) {
+            await new Promise<void>((resolve) => {
+              if (request.signal.aborted) resolve();
+              else
+                request.signal.addEventListener("abort", () => resolve(), {
+                  once: true,
+                });
+            });
+            yield { type: "text_delta", delta: "stopped" };
+          },
+        },
+        undefined,
+        skills,
+      );
+      const target = (await f.app.startThread()).id;
+      try {
+        if (sendMode !== "start")
+          await f.app.startTurn(target, "existing work");
+        const original =
+          "Original request mentions Available Skills (metadata only) literally.";
+        const send = async (text = original) =>
+          (await f.control.invoke("zenx_threads_send", {
+            name: "zenx_threads_send",
+            arguments: {
+              target,
+              text,
+              ...(sendMode === "replace"
+                ? { messageType: "replacement" }
+                : { messageType: "follow_up" }),
+            },
+            callId: randomUUID(),
+            canonicalToolCallId: "trusted-send-call",
+            threadId: "source-thread",
+            cwd: root,
+            signal: new AbortController().signal,
+          })) as Record<string, any>;
+        const first = await send();
+        assert.equal(first.mode, sendMode);
+        const before = await f.journal.read(target);
+        const captures = before.filter(
+          (item) =>
+            "clientId" in item && item.clientId === first.clientUserMessageId,
+        );
+        assert.ok(captures.length > 0);
+        assert.equal(
+          JSON.stringify(captures).includes('"kind":"catalog"'),
+          skillMode === "auto",
+        );
+        const preparationCount = preparations;
+        // Mutate real host configuration: retry must use the captured snapshot.
+        await skills.setMode(
+          skill.id,
+          skillMode === "auto" ? "manual" : "auto",
+        );
+        const retry = await send();
+        assert.equal(retry.duplicate, true);
+        assert.equal(retry.clientUserMessageId, first.clientUserMessageId);
+        assert.equal(retry.turnId, first.turnId);
+        await assert.rejects(
+          send("changed original request"),
+          /different input/,
+        );
+        assert.equal(preparations, preparationCount);
+        assert.deepEqual(await f.journal.read(target), before);
+      } finally {
+        const snapshot = await f.app.readThread(target);
+        for (const turn of snapshot.turns)
+          if (turn.status === "inProgress")
+            await f.app.interruptTurn(target, turn.id);
+        await f.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+}
 
 test("original history has stable older pages and complete item continuation bound to its filters", async () => {
   const f = await fixture();
