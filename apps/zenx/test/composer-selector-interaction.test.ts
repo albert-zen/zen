@@ -17,6 +17,25 @@ import {
 const { act, createElement } = React;
 const { ThreadView } = await import("../src/renderer/src/ThreadView.js");
 
+for (const command of [
+  "/compact",
+  "/compact ",
+  "  /compact\t",
+  "/compact reason",
+]) {
+  test(`compact input ${JSON.stringify(command)} reaches the existing handler`, async () => {
+    await withView(async ({ sends }) => {
+      await input(command);
+      await key("Enter");
+      assert.deepEqual(sends, [command]);
+      assert.equal(
+        document.querySelector('[aria-label="Slash commands"]'),
+        null,
+      );
+    });
+  });
+}
+
 const skill = {
   id: "11111111-1111-1111-1111-111111111111",
   name: "sample",

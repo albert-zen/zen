@@ -7,6 +7,7 @@ import {
   type WorkflowCommandCandidate,
 } from "./workflow-commands.js";
 import { parseSkillDraft, withSkillDraft } from "./skill-draft.js";
+import { isCompactCommand } from "./compact-command.js";
 import {
   replaceTrigger,
   selectorTrigger,
@@ -71,7 +72,7 @@ export function useComposerSelector({
   const referenceMode = trigger?.kind === "reference";
   const open =
     dismissed !== scope &&
-    (referenceMode || (slash && commandInput !== "/compact"));
+    (referenceMode || (slash && !isCompactCommand(commandInput)));
   const query = trigger?.query ?? "";
   useEffect(() => {
     setActive(0);
