@@ -3,6 +3,7 @@
 ## 核心概念
 
 - **ZenX Thread Target** — Host 从 App Server 当前列表与 workspace 身份投影解析完整 ID、唯一前缀或精确标题，歧义只返回易读候选；共享解析不保存索引或拥有会话语义。
+- **ZenX 自控原文与发送** — 原生 `zen/thread/read` 无订阅地读取 canonical snapshot，Host 用 Item/Turn 边界派生分页与原文片段，并从可信工具调用身份及当前快照推导发送幂等键和 Turn fence；发送偏好仍由 Host profile 持有，不引入命令账本或会话权威。
 
 - **ZenX 共享浏览器** — Host 拥有的 WebContentsView 标签按 Thread 分组，以独立持久 profile 承载用户与 Agent 对同一页面 target 的操作；可信 Tool invocation 把 provider session 绑定到 Thread，窗口只挂载该 target 的实时视图，页面和绑定都不成为会话权威。
 - **ZenX Computer 实时观察** — Host 以 Thread、Tool invocation 与精确窗口 target 关联最近八次 Computer 操作，并只在可见订阅期间串行捕获有界、可取消且带时间戳的窗口帧；观察失败不改变工具结果或建立桌面接管状态。

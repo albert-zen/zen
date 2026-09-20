@@ -954,6 +954,7 @@ export class AgentRuntime {
       }
       prepared = this.#tools.prepare({
         callId: toolCall.callId,
+        canonicalToolCallId: toolCall.id,
         name: toolCall.name,
         arguments: toolCall.arguments,
         cwd: options.configuration.cwd,

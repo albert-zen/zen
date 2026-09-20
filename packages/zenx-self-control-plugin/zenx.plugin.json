@@ -28,6 +28,51 @@
   ],
   "tools": [
     {
+      "name": "zenx_models_list",
+      "description": "Discover the current model IDs, supported reasoning efforts and defaults from the App Server model catalog.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-self-control.workspace-read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.threads.read"],
+      "maxOutputBytes": 524288
+    },
+    {
+      "name": "zenx_threads_configure",
+      "description": "Select an existing model and optional reasoning effort for a Thread. Discover choices using zenx_models_list; App Server validates availability and active-work constraints.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "Full Thread ID, unique ID prefix, or exact title. Ambiguous targets return candidates without writing."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Optional workspace path to disambiguate the target."
+          },
+          "model": {
+            "type": "string"
+          },
+          "effort": {
+            "type": "string"
+          }
+        },
+        "required": ["target", "model"],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "zenx-self-control.workspace-read",
+        "zenx-self-control.local-device-control"
+      ],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.threads.control"],
+      "maxOutputBytes": 524288
+    },
+    {
       "name": "zenx_projects_list",
       "description": "List bounded workspace groupings derived from ZenX configuration and Thread cwd metadata. Projects are not runtime objects.",
       "inputSchema": {
@@ -44,7 +89,7 @@
       "permissions": ["zenx-self-control.workspace-read"],
       "interactionMode": "background_safe",
       "capabilities": ["zenx.projects.read"],
-      "maxOutputBytes": 65536
+      "maxOutputBytes": 524288
     },
     {
       "name": "zenx_threads_list",
@@ -64,6 +109,10 @@
           "archived": {
             "type": "boolean"
           },
+          "cursor": {
+            "type": "string",
+            "description": "Continue the same filters; list changes invalidate the cursor explicitly."
+          },
           "limit": {
             "type": "integer",
             "minimum": 1,
@@ -75,7 +124,7 @@
       "permissions": ["zenx-self-control.workspace-read"],
       "interactionMode": "background_safe",
       "capabilities": ["zenx.threads.read"],
-      "maxOutputBytes": 65536
+      "maxOutputBytes": 524288
     },
     {
       "name": "zenx_threads_create",
@@ -86,7 +135,14 @@
           "cwd": {
             "type": "string"
           },
+          "project": {
+            "type": "string",
+            "description": "Exact configured Project name or workspace path; use projects_list to discover."
+          },
           "model": {
+            "type": "string"
+          },
+          "effort": {
             "type": "string"
           },
           "approvalPolicy": {
@@ -98,7 +154,14 @@
             "enum": ["danger-full-access"]
           }
         },
-        "required": ["cwd"],
+        "anyOf": [
+          {
+            "required": ["cwd"]
+          },
+          {
+            "required": ["project"]
+          }
+        ],
         "additionalProperties": false
       },
       "permissions": [
@@ -107,15 +170,33 @@
       ],
       "interactionMode": "background_safe",
       "capabilities": ["zenx.threads.control"],
-      "maxOutputBytes": 65536
+      "maxOutputBytes": 524288
     },
     {
       "name": "zenx_threads_read",
-      "description": "Read bounded recent turns and safe item projections from one Thread through App Server thread/read.",
+      "description": "Read original canonical history. Default: latest turns; cursor reads older pages. Choose items or agent_messages, optionally within turnId. Choose item plus itemId for complete canonical JSON chunks; concatenate content using nextCursor. Previews are excerpts, never summaries.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "threadId": {
+          "target": {
+            "type": "string",
+            "description": "Full Thread ID, unique ID prefix, or exact title. Ambiguous targets return candidates without writing."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Optional workspace path to disambiguate the target."
+          },
+          "granularity": {
+            "type": "string",
+            "enum": ["turns", "items", "agent_messages", "item"]
+          },
+          "turnId": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "cursor": {
             "type": "string"
           },
           "maxTurns": {
@@ -129,13 +210,13 @@
             "maximum": 25
           }
         },
-        "required": ["threadId"],
+        "required": ["target"],
         "additionalProperties": false
       },
       "permissions": ["zenx-self-control.workspace-read"],
       "interactionMode": "background_safe",
       "capabilities": ["zenx.threads.read"],
-      "maxOutputBytes": 65536
+      "maxOutputBytes": 524288
     },
     {
       "name": "zenx_threads_status",
@@ -143,17 +224,22 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "threadId": {
-            "type": "string"
+          "target": {
+            "type": "string",
+            "description": "Full Thread ID, unique ID prefix, or exact title. Ambiguous targets return candidates without writing."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Optional workspace path to disambiguate the target."
           }
         },
-        "required": ["threadId"],
+        "required": ["target"],
         "additionalProperties": false
       },
       "permissions": ["zenx-self-control.workspace-read"],
       "interactionMode": "background_safe",
       "capabilities": ["zenx.threads.read"],
-      "maxOutputBytes": 65536
+      "maxOutputBytes": 524288
     },
     {
       "name": "zenx_threads_rename",
@@ -161,14 +247,19 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "threadId": {
-            "type": "string"
+          "target": {
+            "type": "string",
+            "description": "Full Thread ID, unique ID prefix, or exact title. Ambiguous targets return candidates without writing."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Optional workspace path to disambiguate the target."
           },
           "name": {
             "type": "string"
           }
         },
-        "required": ["threadId", "name"],
+        "required": ["target", "name"],
         "additionalProperties": false
       },
       "permissions": [
@@ -177,7 +268,7 @@
       ],
       "interactionMode": "background_safe",
       "capabilities": ["zenx.threads.control"],
-      "maxOutputBytes": 65536
+      "maxOutputBytes": 524288
     },
     {
       "name": "zenx_threads_archive",
@@ -185,11 +276,16 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "threadId": {
-            "type": "string"
+          "target": {
+            "type": "string",
+            "description": "Full Thread ID, unique ID prefix, or exact title. Ambiguous targets return candidates without writing."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Optional workspace path to disambiguate the target."
           }
         },
-        "required": ["threadId"],
+        "required": ["target"],
         "additionalProperties": false
       },
       "permissions": [
@@ -198,7 +294,7 @@
       ],
       "interactionMode": "background_safe",
       "capabilities": ["zenx.threads.control"],
-      "maxOutputBytes": 65536
+      "maxOutputBytes": 524288
     },
     {
       "name": "zenx_threads_unarchive",
@@ -206,11 +302,16 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "threadId": {
-            "type": "string"
+          "target": {
+            "type": "string",
+            "description": "Full Thread ID, unique ID prefix, or exact title. Ambiguous targets return candidates without writing."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Optional workspace path to disambiguate the target."
           }
         },
-        "required": ["threadId"],
+        "required": ["target"],
         "additionalProperties": false
       },
       "permissions": [
@@ -219,32 +320,32 @@
       ],
       "interactionMode": "background_safe",
       "capabilities": ["zenx.threads.control"],
-      "maxOutputBytes": 65536
+      "maxOutputBytes": 524288
     },
     {
       "name": "zenx_threads_send",
-      "description": "Send input through explicit App Server start, steer, or replace semantics. steer and replace require the expected active Turn ID; every mode requires a stable clientUserMessageId.",
+      "description": "Send a message to a Thread. Omit messageType to follow the saved ZenX sending preference; use follow_up to queue next work, guidance to supplement current work, or replacement to interrupt and change the task. The application handles message IDs and concurrent Turn checks.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "threadId": {
-            "type": "string"
-          },
-          "mode": {
+          "target": {
             "type": "string",
-            "enum": ["start", "steer", "replace"]
+            "description": "Full Thread ID, unique ID prefix, or exact title. Ambiguous targets return candidates without writing."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Optional workspace path to disambiguate the target."
+          },
+          "messageType": {
+            "type": "string",
+            "enum": ["follow_up", "guidance", "replacement"],
+            "description": "follow_up: do this after current work; guidance: add guidance to current work; replacement: interrupt current work and do this instead. Omit to use the saved ZenX send preference."
           },
           "text": {
             "type": "string"
-          },
-          "expectedTurnId": {
-            "type": "string"
-          },
-          "clientUserMessageId": {
-            "type": "string"
           }
         },
-        "required": ["threadId", "mode", "text", "clientUserMessageId"],
+        "required": ["target", "text"],
         "additionalProperties": false
       },
       "permissions": [
@@ -253,7 +354,7 @@
       ],
       "interactionMode": "background_safe",
       "capabilities": ["zenx.threads.control"],
-      "maxOutputBytes": 65536
+      "maxOutputBytes": 524288
     },
     {
       "name": "zenx_self_control_workflows_get",
@@ -266,7 +367,7 @@
       "permissions": ["zenx-self-control.workspace-read"],
       "interactionMode": "background_safe",
       "capabilities": ["zenx.projects.read"],
-      "maxOutputBytes": 65536
+      "maxOutputBytes": 524288
     },
     {
       "name": "zenx_self_control_workflows_update",
@@ -274,23 +375,36 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "baseRevision": { "type": "integer", "minimum": 0 },
+          "baseRevision": {
+            "type": "integer",
+            "minimum": 0
+          },
           "commands": {
             "type": "array",
             "maxItems": 64,
             "items": {
               "type": "object",
               "properties": {
-                "name": { "type": "string" },
-                "description": { "type": "string" },
-                "prompt": { "type": "string" },
-                "enabled": { "type": "boolean" }
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "prompt": {
+                  "type": "string"
+                },
+                "enabled": {
+                  "type": "boolean"
+                }
               },
               "required": ["name", "description", "prompt", "enabled"],
               "additionalProperties": false
             }
           },
-          "titlePrompt": { "type": ["string", "null"] }
+          "titlePrompt": {
+            "type": ["string", "null"]
+          }
         },
         "required": ["baseRevision", "commands"],
         "additionalProperties": false
@@ -298,7 +412,7 @@
       "permissions": ["zenx-self-control.local-device-control"],
       "interactionMode": "background_safe",
       "capabilities": ["zenx.threads.control"],
-      "maxOutputBytes": 65536
+      "maxOutputBytes": 524288
     }
   ],
   "schemaVersion": 2,
@@ -310,5 +424,5 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "Use ZenX self-control to list derived workspaces and inspect or control Threads through the authoritative App Server."
+  "mainDocument": "Use readable Thread targets and original-history cursors. Send target/text and optional follow_up, guidance or replacement intent; the app owns IDs and concurrency checks. Discover models/efforts and Projects before selecting. See README for pagination."
 }

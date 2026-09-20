@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ZenXProjectProjection } from "../src/main/project-projection.js";
 import {
+  listThreadCandidates,
   resolveThreadTarget,
   type ThreadTargetPort,
 } from "../src/main/thread-target.js";
@@ -49,11 +50,10 @@ test("thread targets resolve full IDs, unique prefixes and exact titles across e
   for (const target of ["aaa", "Review"]) {
     const result = await resolveThreadTarget(port, { target });
     assert.equal(result.status, "ambiguous");
-    if (result.status !== "resolved")
-      assert.deepEqual(
-        result.candidates.map((c) => c.threadId),
-        ["aaa111", "aaa222"],
-      );
+    assert.deepEqual(
+      result.candidates.map((c) => c.threadId),
+      ["aaa111", "aaa222"],
+    );
   }
   assert.equal(
     (await resolveThreadTarget(port, { target: "Rev" })).status,
@@ -65,4 +65,45 @@ test("thread targets resolve full IDs, unique prefixes and exact titles across e
   });
   assert.equal(scoped.status, "resolved");
   if (scoped.status === "resolved") assert.equal(scoped.threadId, "aaa111");
+});
+
+test("displayed short IDs remain unique even when an exact title collides with a prefix", async () => {
+  const rows = [
+    {
+      id: "12345678aaa",
+      name: "one",
+      cwd: "/one",
+      status: { type: "idle" as const },
+    },
+    {
+      id: "12345678bbb",
+      name: "12345678a",
+      cwd: "/one",
+      status: { type: "idle" as const },
+    },
+    {
+      id: "elsewhere",
+      name: "12345678aaa",
+      cwd: "/two",
+      status: { type: "idle" as const },
+    },
+  ];
+  const port: ThreadTargetPort = {
+    projectProjection: new ZenXProjectProjection(),
+    async request(_method, params) {
+      return { data: params.archived ? [] : rows, nextCursor: null };
+    },
+  };
+  const candidates = await listThreadCandidates(port);
+  assert.equal(candidates[0]?.shortId, "12345678aa");
+  for (const candidate of candidates) {
+    const resolved = await resolveThreadTarget(port, {
+      target: candidate.shortId,
+    });
+    assert.equal(resolved.status, "resolved");
+    assert.equal(resolved.threadId, candidate.threadId);
+  }
+  const full = await resolveThreadTarget(port, { target: "12345678aaa" });
+  assert.equal(full.status, "resolved");
+  assert.equal(full.threadId, "12345678aaa");
 });

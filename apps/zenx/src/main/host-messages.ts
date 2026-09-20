@@ -213,6 +213,7 @@ export type HostEvent =
       generationToken: string;
       invocation: {
         callId: string;
+        canonicalToolCallId?: string;
         threadId?: string;
         name: string;
         arguments: Record<string, unknown>;

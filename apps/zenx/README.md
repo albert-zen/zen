@@ -439,24 +439,43 @@ of current plugin lifecycle.
 The `zenx-self-control` package is a bundled, cross-platform,
 `background_safe` plugin. Its enabled lifecycle uses the same profile, Runtime
 Supervisor and hosted App Server projection as every other package. Its
-provider-valid tools are `zenx_projects_list`, `zenx_threads_list`,
-`zenx_threads_create`, `zenx_threads_read`, `zenx_threads_status`,
-`zenx_threads_rename`, `zenx_threads_archive`, `zenx_threads_unarchive`, and
-`zenx_threads_send`. Archived Threads remain readable and are returned from
-`zenx_threads_list` only when `archived: true` is requested.
+tools discover Projects/models, list/search, create/configure, read/status, rename,
+archive/unarchive and send messages. Thread operations accept `target` as a full
+ID, unique prefix or exact title, optionally scoped by `workspace`. Exact IDs win;
+ambiguous titles/prefixes return candidates with canonical and unique short IDs,
+and perform no mutation. Archived targets remain readable and resolvable; list
+shows archived Threads only with `archived: true`.
 
-Projects are bounded groupings derived from the configured workspace and
-canonical Thread cwd metadata, not runtime objects. Reads expose bounded recent
-Turn/item projections and omit command output. Create and send operations use a
-narrow in-memory request port attached to the current `AppServerManager`, and
-that port issues only typed `thread/list`, `thread/start`, `thread/read`,
-`thread/name/set`, `thread/archive`, `thread/unarchive`, `turn/start`,
-`turn/steer`, and `turn/replace` requests. `steer` and `replace`
-require the expected active Turn ID; all sends require a stable client message
-ID. Tool calls, results, interruption, and replacement remain auditable in the
-canonical ItemLists and capability audit projection. Mutual `turn_completed`
-relays are intentionally allowed; there is no blanket cycle ban or second
-transcript/queue.
+`zenx_threads_send` needs only `target` and `text`. Optional `messageType` is
+`follow_up` (queue next work), `guidance` (supplement running work), or
+`replacement` (interrupt and change the task). Omission follows the saved ZenX
+composer preference. Idle Threads start normally. The Host derives stable message
+identity from the Runtime's canonical tool-call identity, reads the authoritative
+active Turn and retains the server's exact-Turn fence. A concurrent Turn change
+fails; it never silently retries against a new Turn. Duplicate committed messages
+are recognized from canonical history; only pending calls share an in-memory
+promise. There is no command ledger or new wait system.
+
+`zenx_threads_read` returns canonical original Items through the native-only,
+non-subscribing `zen/thread/read` snapshot. `granularity` selects recent `turns`,
+`items`, `agent_messages`, or one `item` by `itemId`. The first three return latest
+pages in chronological order and `nextCursor` for older pages; optional `turnId`
+filters item/message pages. Cursor bindings include the Thread, granularity,
+filters and immutable Item boundary, so later appends do not move the read window.
+Previews identify truncation and include a `read` request. Single-item reads return
+8,000-character chunks of canonical JSON: concatenate `content` using `nextCursor`
+and parse once complete. This preserves every stored field, including tool output;
+existing output-spool receipts still describe their original storage limits.
+Turn pages cap their total preview count at 100 and report the effective per-Turn
+limit. There are no generated summaries. List cursors bind filters and ordering;
+a changed listing rejects stale cursors explicitly.
+
+`zenx_projects_list` exposes configured names and workspace paths. Creation accepts
+an exact configured `project` name/path or `cwd`, plus the existing model/effort
+settings. `zenx_models_list` exposes the live catalog, including supported efforts;
+`zenx_threads_configure` selects those existing settings through App Server validation.
+Projects remain derived Host views, never runtime objects. Completion notifications
+use the Triggers plugin.
 
 The bundled browser provider uses hidden Electron windows in a dedicated,
 ephemeral Chromium partition. Its list/open/navigate/inspect/click/type/close tools

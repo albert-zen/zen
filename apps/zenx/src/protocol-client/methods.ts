@@ -9,6 +9,7 @@ export const clientRequestMethods = [
   "thread/fork",
   "thread/resume",
   "zen/thread/resume",
+  "zen/thread/read",
   "thread/read",
   "thread/list",
   "thread/name/set",

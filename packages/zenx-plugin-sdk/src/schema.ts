@@ -181,6 +181,8 @@ export function validatePluginManifest(value: unknown): ZenXPluginManifestV2 {
 }
 
 const HISTORICAL_SELF_CONTROL_TOOLS = new Set([
+  "zenx_models_list",
+  "zenx_threads_configure",
   "zenx_projects_list",
   "zenx_threads_list",
   "zenx_threads_create",

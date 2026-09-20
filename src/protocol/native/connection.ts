@@ -9,6 +9,7 @@ import {
   NATIVE_INITIALIZE_METHOD,
   NATIVE_THREAD_EVENT_METHOD,
   NATIVE_THREAD_RESUME_METHOD,
+  NATIVE_THREAD_READ_METHOD,
 } from "./wire.js";
 
 export class NativeConnection {
@@ -61,7 +62,10 @@ export class NativeConnection {
       });
       return;
     }
-    if (message.method !== NATIVE_THREAD_RESUME_METHOD) {
+    if (
+      message.method !== NATIVE_THREAD_RESUME_METHOD &&
+      message.method !== NATIVE_THREAD_READ_METHOD
+    ) {
       this.#send({
         id: message.id,
         error: { code: -32601, message: `Method not found: ${message.method}` },
@@ -79,6 +83,22 @@ export class NativeConnection {
       return;
     }
     const threadId = message.params.threadId;
+    if (message.method === NATIVE_THREAD_READ_METHOD) {
+      try {
+        const thread = await this.#projection.read(threadId);
+        if (!this.#closed) this.#send({ id: message.id, result: { thread } });
+      } catch (error) {
+        if (!this.#closed)
+          this.#send({
+            id: message.id,
+            error: {
+              code: -32603,
+              message: error instanceof Error ? error.message : String(error),
+            },
+          });
+      }
+      return;
+    }
     this.#nativeSession = true;
     if (this.#barriers.has(threadId)) {
       this.#send({

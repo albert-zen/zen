@@ -114,6 +114,9 @@ export class ZenXHostToolBundle implements ToolBundle {
         generationToken: this.#generationToken,
         invocation: {
           callId: invocation.callId,
+          ...(invocation.canonicalToolCallId === undefined
+            ? {}
+            : { canonicalToolCallId: invocation.canonicalToolCallId }),
           name: invocation.name,
           arguments: invocation.arguments,
           cwd: invocation.cwd,

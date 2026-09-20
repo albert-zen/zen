@@ -344,6 +344,9 @@ async function bootstrapZenX(): Promise<void> {
     }
     const selfControlPackage = new ZenXSelfControlCapabilityPackage({
       appServer: selfControlPort,
+      sendPreference: async () =>
+        (await settingsService!.publicSettings()).profile.composerSendMode ??
+        "queue",
       workflows: {
         workflowConfiguration: async () =>
           await settingsService!.workflowConfiguration(),

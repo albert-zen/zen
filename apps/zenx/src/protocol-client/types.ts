@@ -6,6 +6,7 @@ import type {
 } from "../../../../src/protocol/codex/mapper.js";
 import type { AttachmentRef } from "../../../../src/attachment.js";
 import type { CanonicalItem } from "../../../../src/item.js";
+import type { ThreadSnapshot } from "../../../../src/app-server.js";
 import type {
   NativeProjectedThreadEvent,
   NativeThreadRecoverySnapshot,
@@ -139,6 +140,7 @@ export interface ClientRequestParams {
   };
   "thread/resume": { threadId: string } & ThreadConfigurationParams;
   "zen/thread/resume": { threadId: string };
+  "zen/thread/read": { threadId: string };
   "thread/read": { threadId: string; includeTurns?: boolean };
   "thread/list": {
     limit?: number;
@@ -198,6 +200,7 @@ export interface ClientRequestResults {
   "thread/fork": { thread: Thread } & ThreadSettingsSnapshot;
   "thread/resume": { thread: Thread } & ThreadSettingsSnapshot;
   "zen/thread/resume": NativeThreadRecoverySnapshot;
+  "zen/thread/read": { thread: ThreadSnapshot };
   "thread/read": { thread: Thread };
   "thread/list": {
     data: Thread[];

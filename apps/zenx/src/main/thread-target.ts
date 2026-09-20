@@ -81,7 +81,8 @@ export async function listThreadCandidates(
       candidates.some(
         (other) =>
           other.threadId !== candidate.threadId &&
-          other.threadId.startsWith(candidate.threadId.slice(0, length)),
+          (other.threadId.startsWith(candidate.threadId.slice(0, length)) ||
+            other.name === candidate.threadId.slice(0, length)),
       )
     )
       length++;

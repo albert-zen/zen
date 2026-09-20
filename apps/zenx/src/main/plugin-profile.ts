@@ -524,6 +524,9 @@ class ProfileProcessPluginPackage implements ZenXCapabilityPackage {
       arguments: invocation.arguments,
       context: {
         callId: invocation.callId,
+        ...(invocation.canonicalToolCallId === undefined
+          ? {}
+          : { canonicalToolCallId: invocation.canonicalToolCallId }),
         cwd: invocation.cwd,
         ...(invocation.threadId === undefined
           ? {}
@@ -573,6 +576,9 @@ class ProfileHttpPluginPackage implements ZenXCapabilityPackage {
       arguments: invocation.arguments,
       context: {
         callId: invocation.callId,
+        ...(invocation.canonicalToolCallId === undefined
+          ? {}
+          : { canonicalToolCallId: invocation.canonicalToolCallId }),
         cwd: invocation.cwd,
         ...(invocation.threadId === undefined
           ? {}
@@ -618,6 +624,9 @@ class ProfileTrustedPluginPackage implements ZenXCapabilityPackage {
   async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
     return await this.#runtime.invoke(toolName, {
       callId: invocation.callId,
+      ...(invocation.canonicalToolCallId === undefined
+        ? {}
+        : { canonicalToolCallId: invocation.canonicalToolCallId }),
       arguments: invocation.arguments,
       cwd: invocation.cwd,
       ...(invocation.threadId === undefined

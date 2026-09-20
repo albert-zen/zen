@@ -40,7 +40,12 @@ export interface PluginRuntimeInvocation {
   invocationId: string;
   tool: string;
   arguments: Record<string, unknown>;
-  context: { callId: string; cwd: string; threadId?: string };
+  context: {
+    callId: string;
+    cwd: string;
+    threadId?: string;
+    canonicalToolCallId?: string;
+  };
   signal: AbortSignal;
 }
 
@@ -314,6 +319,9 @@ export class PluginRuntimeSupervisor {
       arguments: invocation.arguments,
       context: {
         callId: invocation.callId,
+        ...(invocation.canonicalToolCallId === undefined
+          ? {}
+          : { canonicalToolCallId: invocation.canonicalToolCallId }),
         cwd: invocation.cwd,
         ...(invocation.threadId === undefined
           ? {}
@@ -433,6 +441,9 @@ class SupervisedPluginBundle implements ToolBundle {
       arguments: invocation.arguments,
       context: {
         callId: invocation.callId,
+        ...(invocation.canonicalToolCallId === undefined
+          ? {}
+          : { canonicalToolCallId: invocation.canonicalToolCallId }),
         cwd: invocation.cwd,
         ...(invocation.threadId === undefined
           ? {}
@@ -1239,6 +1250,12 @@ export function bundledPackageRegistration(
                 invocation.tool,
                 {
                   callId: invocation.context.callId,
+                  ...(invocation.context.canonicalToolCallId === undefined
+                    ? {}
+                    : {
+                        canonicalToolCallId:
+                          invocation.context.canonicalToolCallId,
+                      }),
                   name: invocation.tool,
                   arguments: invocation.arguments,
                   cwd: invocation.context.cwd,
@@ -1288,6 +1305,8 @@ function normalizePackageResult(value: unknown): ToolExecutionResult {
 }
 
 const HISTORICAL_SELF_CONTROL_TOOLS = new Set([
+  "zenx_models_list",
+  "zenx_threads_configure",
   "zenx_projects_list",
   "zenx_threads_list",
   "zenx_threads_create",
