@@ -33,11 +33,16 @@ const fixture = createServer((request, response) => {
     response.end("<!doctype html><title>Latest fast page</title>");
     return;
   }
+  if (request.url === "/agent-destination") {
+    response.end("<!doctype html><title>Agent destination</title>");
+    return;
+  }
   response.end(`<!doctype html>
     <title>Shared browser fixture</title>
     <main>
       <label>Human value <input aria-label="Human value"></label>
       <button onclick="document.querySelector('output').textContent='Agent clicked'">Agent action</button>
+      <a href="/agent-destination">Agent navigation</a>
       <output>Waiting</output>
     </main>`);
 });
@@ -114,6 +119,46 @@ void app.whenReady().then(async () => {
       "Agent action must mutate the mounted human page",
     );
 
+    inspection = await browser.inspect("shared-session", tabId);
+    const beforeHumanRoute = requiredTarget(
+      inspection,
+      "Agent navigation",
+      "click",
+    );
+    await createdView.webContents.executeJavaScript(
+      "history.pushState({}, '', '/human-route')",
+    );
+    await assert.rejects(
+      browser.click(
+        "shared-session",
+        tabId,
+        inspection.observationId,
+        beforeHumanRoute.targetId,
+      ),
+      /observation is stale or unknown/u,
+      "a human SPA route change must invalidate the earlier observation",
+    );
+
+    inspection = await browser.inspect("shared-session", tabId);
+    const agentNavigation = requiredTarget(
+      inspection,
+      "Agent navigation",
+      "click",
+    );
+    await browser.click(
+      "shared-session",
+      tabId,
+      inspection.observationId,
+      agentNavigation.targetId,
+    );
+    const agentDestination = `http://127.0.0.1:${String(port)}/agent-destination`;
+    await eventually(async () =>
+      assert.equal(
+        (await browser.listTabs("shared-session"))[0]?.url,
+        agentDestination,
+      ),
+    );
+
     const superseded = browser.navigate(
       "shared-session",
       tabId,
@@ -153,6 +198,8 @@ void app.whenReady().then(async () => {
           "human Chromium input is visible to Browser inspect",
           "Browser click mutates the mounted human page",
           "human mount and Agent target share one WebContents id",
+          "human SPA navigation invalidates the earlier Agent observation",
+          "Agent click navigation succeeds on the same shared WebContents",
           "Chromium cancels an older load and the provider reports it stale",
         ],
       }),

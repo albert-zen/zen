@@ -218,8 +218,8 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     web.on("did-navigate-in-page", publish);
     web.on("did-start-loading", publish);
     web.on("did-stop-loading", publish);
-    web.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
-      if (isMainFrame && !isInPlace) {
+    web.on("did-start-navigation", (_event, _url, _isInPlace, isMainFrame) => {
+      if (isMainFrame) {
         tab.documentVersion += 1;
         tab.observation = undefined;
       }
