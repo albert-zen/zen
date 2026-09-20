@@ -15,8 +15,24 @@ const directory = mkdtempSync(
 app.setPath("userData", path.join(directory, "user-data"));
 app.on("window-all-closed", () => undefined);
 
-const fixture = createServer((_request, response) => {
+let markSlowRequestStarted!: () => void;
+const slowRequestStarted = new Promise<void>((resolve) => {
+  markSlowRequestStarted = resolve;
+});
+const fixture = createServer((request, response) => {
   response.setHeader("content-type", "text/html; charset=utf-8");
+  if (request.url === "/slow") {
+    markSlowRequestStarted();
+    setTimeout(
+      () => response.end("<!doctype html><title>Old slow page</title>"),
+      250,
+    );
+    return;
+  }
+  if (request.url === "/fast") {
+    response.end("<!doctype html><title>Latest fast page</title>");
+    return;
+  }
   response.end(`<!doctype html>
     <title>Shared browser fixture</title>
     <main>
@@ -98,6 +114,28 @@ void app.whenReady().then(async () => {
       "Agent action must mutate the mounted human page",
     );
 
+    const superseded = browser.navigate(
+      "shared-session",
+      tabId,
+      `http://127.0.0.1:${String(port)}/slow`,
+    );
+    await slowRequestStarted;
+    const supersededFailure = assert.rejects(
+      superseded,
+      /superseded|interrupted/u,
+    );
+    await browser.navigate(
+      "shared-session",
+      tabId,
+      `http://127.0.0.1:${String(port)}/fast`,
+    );
+    await supersededFailure;
+    assert.equal(
+      (await browser.listTabs("shared-session"))[0]?.url,
+      `http://127.0.0.1:${String(port)}/fast`,
+      "Chromium must cancel the older load and retain the latest navigation",
+    );
+
     assert.equal(browser.closeSession("shared-session"), 0);
     assert.equal(
       browser.command(owner.webContents, "shared-thread", "list").length,
@@ -115,6 +153,7 @@ void app.whenReady().then(async () => {
           "human Chromium input is visible to Browser inspect",
           "Browser click mutates the mounted human page",
           "human mount and Agent target share one WebContents id",
+          "Chromium cancels an older load and the provider reports it stale",
         ],
       }),
     );

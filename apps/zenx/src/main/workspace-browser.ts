@@ -41,6 +41,7 @@ interface Tab {
   view: WebContentsView;
   owner?: Owner;
   documentVersion: number;
+  navigationGeneration: number;
   observation?: BrowserObservation;
   error?: string;
 }
@@ -171,19 +172,23 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
   }
 
   async #load(tab: Tab, url: string): Promise<void> {
+    const generation = this.#beginNavigation(tab);
     tab.error = undefined;
     try {
       await tab.view.webContents.loadURL(url);
     } catch (error) {
-      if (
-        this.#tabs.get(tab.id) !== tab ||
-        (error as NodeJS.ErrnoException).code === "ERR_ABORTED"
-      )
-        return;
+      this.#assertNavigationCurrent(tab, generation);
+      if ((error as NodeJS.ErrnoException).code === "ERR_ABORTED") {
+        tab.error =
+          "Navigation was interrupted. Inspect the current page before continuing.";
+        this.#publish(tab.threadId);
+        throw new Error(tab.error, { cause: error });
+      }
       tab.error = error instanceof Error ? error.message : String(error);
       this.#publish(tab.threadId);
       throw error;
     }
+    this.#assertNavigationCurrent(tab, generation);
   }
 
   #new(threadId: string, owner?: Owner): Tab {
@@ -198,6 +203,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       view,
       owner,
       documentVersion: 0,
+      navigationGeneration: 0,
     };
     this.#tabs.set(tab.id, tab);
     view.setVisible(false);
@@ -293,14 +299,20 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         void this.#load(tab, workspaceBrowserUrl(url)).catch(() => undefined);
         break;
       case "back":
-        if (web.navigationHistory.canGoBack()) web.navigationHistory.goBack();
+        if (web.navigationHistory.canGoBack()) {
+          this.#beginNavigation(tab);
+          web.navigationHistory.goBack();
+        }
         break;
       case "forward":
-        if (web.navigationHistory.canGoForward())
+        if (web.navigationHistory.canGoForward()) {
+          this.#beginNavigation(tab);
           web.navigationHistory.goForward();
+        }
         break;
       case "reload":
         tab.error = undefined;
+        this.#beginNavigation(tab);
         web.reload();
         break;
       case "close":
@@ -399,7 +411,10 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     try {
       await this.#load(tab, safeUrl);
       this.#publish(threadId);
-      return this.#agentSummary(sessionId, tab);
+      return this.#agentSummary(
+        sessionId,
+        this.#requireAgentTab(sessionId, tab.id),
+      );
     } catch (error) {
       this.#closeTab(tab);
       throw error;
@@ -412,18 +427,28 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     url: string,
   ): Promise<BrowserTabSummary> {
     const tab = this.#requireAgentTab(sessionId, tabId);
-    tab.observation = undefined;
     await this.#load(tab, workspaceBrowserUrl(url));
-    return this.#agentSummary(sessionId, tab);
+    return this.#agentSummary(
+      sessionId,
+      this.#requireAgentTab(sessionId, tabId),
+    );
   }
 
   async inspect(sessionId: string, tabId: string): Promise<BrowserInspection> {
     const tab = this.#requireAgentTab(sessionId, tabId);
     const documentVersion = tab.documentVersion;
+    const navigationGeneration = tab.navigationGeneration;
     const inspected = await this.#evaluate<{
       visibleText: string;
       targets: BrowserTargetFingerprint[];
     }>(tab, browserInspectScript);
+    this.#assertAgentOperationCurrent(
+      sessionId,
+      tab,
+      navigationGeneration,
+      documentVersion,
+      "inspection",
+    );
     const observationId = randomUUID();
     const image = await tab.view.webContents.capturePage();
     let png = image.toPNG();
@@ -437,15 +462,28 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         })
         .toPNG();
     }
+    this.#assertAgentOperationCurrent(
+      sessionId,
+      tab,
+      navigationGeneration,
+      documentVersion,
+      "inspection",
+    );
     const screenshot = await this.#artifacts.write(tab.id, observationId, png);
-    if (tab.documentVersion !== documentVersion) {
+    try {
+      this.#assertAgentOperationCurrent(
+        sessionId,
+        tab,
+        navigationGeneration,
+        documentVersion,
+        "inspection",
+      );
+    } catch (error) {
       await this.#artifacts.removeArtifact(
         screenshot.artifactPath,
         screenshot.observationId,
       );
-      throw new Error(
-        "Browser document changed during inspection; inspect again",
-      );
+      throw error;
     }
     const targets = new Map<string, BrowserTargetFingerprint>();
     const projected = inspected.targets.slice(0, 80).map((target) => {
@@ -533,6 +571,8 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
   ): Promise<BrowserTabSummary> {
     signal?.throwIfAborted();
     const tab = this.#requireAgentTab(sessionId, tabId);
+    const navigationGeneration = tab.navigationGeneration;
+    const documentVersion = tab.documentVersion;
     assertBrowserObservation(
       tab.observation,
       tab.documentVersion,
@@ -540,6 +580,13 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     );
     tab.observation = undefined;
     await this.#evaluate(tab, browserScrollScript(direction, pixels));
+    this.#assertAgentOperationCurrent(
+      sessionId,
+      tab,
+      navigationGeneration,
+      documentVersion,
+      "scroll",
+    );
     if (signal?.aborted)
       throw new Error(
         "Browser scroll outcome unknown after cancellation; inspect again before interacting",
@@ -576,6 +623,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     submit = false,
   ): Promise<BrowserTabSummary> {
     const tab = this.#requireAgentTab(sessionId, tabId);
+    const navigationGeneration = tab.navigationGeneration;
     const target = resolveBrowserObservedTarget(
       tab.observation,
       tab.documentVersion,
@@ -592,8 +640,56 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       throw new Error(
         `Browser ${action} target is stale or unsafe: ${result.reason}`,
       );
+    this.#assertAgentOperationCurrent(
+      sessionId,
+      tab,
+      navigationGeneration,
+      undefined,
+      action,
+    );
     await settleWebContents(tab.view.webContents);
+    this.#assertAgentOperationCurrent(
+      sessionId,
+      tab,
+      navigationGeneration,
+      undefined,
+      action,
+    );
     return this.#agentSummary(sessionId, tab);
+  }
+
+  #beginNavigation(tab: Tab): number {
+    tab.observation = undefined;
+    tab.navigationGeneration += 1;
+    return tab.navigationGeneration;
+  }
+
+  #assertNavigationCurrent(tab: Tab, generation: number): void {
+    if (this.#tabs.get(tab.id) !== tab || tab.view.webContents.isDestroyed())
+      throw new Error(
+        "Unknown browser navigation target; it is no longer available",
+      );
+    if (tab.navigationGeneration !== generation)
+      throw new Error(
+        "Browser navigation was superseded by a newer page request",
+      );
+  }
+
+  #assertAgentOperationCurrent(
+    sessionId: string,
+    tab: Tab,
+    navigationGeneration: number,
+    documentVersion: number | undefined,
+    operation: string,
+  ): void {
+    this.#requireAgentTab(sessionId, tab.id);
+    if (
+      tab.navigationGeneration !== navigationGeneration ||
+      (documentVersion !== undefined && tab.documentVersion !== documentVersion)
+    )
+      throw new Error(
+        `Browser ${operation} became stale and its outcome is unknown after the page changed; inspect again`,
+      );
   }
 
   #requireSessionThread(sessionId: string): string {
@@ -604,9 +700,10 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
   }
 
   #requireAgentTab(sessionId: string, tabId: string): Tab {
-    const threadId = this.#requireSessionThread(sessionId);
+    const threadId = this.#sessionThreads.get(sessionId);
     const tab = this.#tabs.get(tabId);
     if (
+      threadId === undefined ||
       tab === undefined ||
       tab.threadId !== threadId ||
       tab.view.webContents.isDestroyed()

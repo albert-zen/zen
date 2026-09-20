@@ -96,9 +96,211 @@ test("Workspace Browser human view and Agent backend operate the exact same targ
   }
 });
 
+test("an aborted current Agent navigation fails instead of reporting success", async () => {
+  const fixture = await sharedFixture();
+  try {
+    fixture.browser.bindThreadSession("agent-session", "thread-a");
+    const opened = await fixture.browser.open(
+      "agent-session",
+      "https://example.test/start",
+    );
+    const load = deferred<void>();
+    fixture.views[0]!.webContents.nextLoad = load;
+    const navigating = fixture.browser.navigate(
+      "agent-session",
+      opened.tabId,
+      "https://example.test/interrupted",
+    );
+    const error = Object.assign(new Error("aborted"), { code: "ERR_ABORTED" });
+    load.reject(error);
+    await assert.rejects(navigating, /interrupted/u);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("human navigation fences an in-flight Agent inspection and action without waiting", async () => {
+  const fixture = await sharedFixture();
+  try {
+    const humanTabs = fixture.browser.command(
+      fixture.sender as never,
+      "thread-a",
+      "new",
+      undefined,
+      "https://example.test/start",
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    const tabId = humanTabs[0]!.id;
+    const web = fixture.views[0]!.webContents;
+    fixture.browser.bindThreadSession("agent-session", "thread-a");
+
+    const inspectionEvaluation = deferred<unknown>();
+    web.debuggerApi.nextEvaluation = inspectionEvaluation;
+    const inspecting = fixture.browser.inspect("agent-session", tabId);
+    const humanLoad = deferred<void>();
+    web.nextLoad = humanLoad;
+    fixture.browser.command(
+      fixture.sender as never,
+      "thread-a",
+      "navigate",
+      tabId,
+      "https://example.test/human",
+    );
+    assert.equal(
+      web.loadCalls.at(-1),
+      "https://example.test/human",
+      "human navigation must start while inspect is still pending",
+    );
+    inspectionEvaluation.resolve({ visibleText: "old", targets: [] });
+    await assert.rejects(inspecting, /stale/u);
+    humanLoad.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    web.debuggerApi.defaultValue = {
+      visibleText: "fixture",
+      targets: [
+        {
+          selector: "button",
+          role: "button",
+          name: "Act",
+          actions: ["click"],
+          state: {},
+        },
+      ],
+    };
+    const inspection = await fixture.browser.inspect("agent-session", tabId);
+    const actionEvaluation = deferred<unknown>();
+    web.debuggerApi.nextEvaluation = actionEvaluation;
+    const acting = fixture.browser.click(
+      "agent-session",
+      tabId,
+      inspection.observationId,
+      inspection.targets[0]!.targetId,
+    );
+    const laterHumanLoad = deferred<void>();
+    web.nextLoad = laterHumanLoad;
+    fixture.browser.command(
+      fixture.sender as never,
+      "thread-a",
+      "navigate",
+      tabId,
+      "https://example.test/later-human",
+    );
+    assert.equal(
+      web.loadCalls.at(-1),
+      "https://example.test/later-human",
+      "human navigation must not queue behind an Agent action",
+    );
+    actionEvaluation.resolve({ ok: true });
+    await assert.rejects(acting, /stale/u);
+    laterHumanLoad.resolve();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("closing a shared tab makes an in-flight Agent inspection unknown", async () => {
+  const fixture = await sharedFixture();
+  try {
+    const humanTabs = fixture.browser.command(
+      fixture.sender as never,
+      "thread-a",
+      "new",
+      undefined,
+      "https://example.test/start",
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    const tabId = humanTabs[0]!.id;
+    fixture.browser.bindThreadSession("agent-session", "thread-a");
+    const evaluation = deferred<unknown>();
+    fixture.views[0]!.webContents.debuggerApi.nextEvaluation = evaluation;
+    const inspecting = fixture.browser.inspect("agent-session", tabId);
+    fixture.browser.command(
+      fixture.sender as never,
+      "thread-a",
+      "close",
+      tabId,
+    );
+    evaluation.resolve({ visibleText: "old", targets: [] });
+    await assert.rejects(inspecting, /Unknown browser target/u);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("detaching an Agent session makes its in-flight inspection unknown without closing the page", async () => {
+  const fixture = await sharedFixture();
+  try {
+    const humanTabs = fixture.browser.command(
+      fixture.sender as never,
+      "thread-a",
+      "new",
+      undefined,
+      "https://example.test/start",
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    const tabId = humanTabs[0]!.id;
+    fixture.browser.bindThreadSession("agent-session", "thread-a");
+    const evaluation = deferred<unknown>();
+    fixture.views[0]!.webContents.debuggerApi.nextEvaluation = evaluation;
+    const inspecting = fixture.browser.inspect("agent-session", tabId);
+    assert.equal(fixture.browser.closeSession("agent-session"), 0);
+    evaluation.resolve({ visibleText: "old", targets: [] });
+    await assert.rejects(inspecting, /Unknown browser target/u);
+    assert.equal(
+      fixture.browser.command(fixture.sender as never, "thread-a", "list")
+        .length,
+      1,
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+async function sharedFixture() {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-shared-browser-race-"),
+  );
+  const sender = new FakeWebContents(99);
+  const window = new FakeWindow(sender);
+  const views: FakeView[] = [];
+  const browser = new WorkspaceBrowser({
+    artifactDirectory: directory,
+    dependencies: {
+      createView: () => {
+        const view = new FakeView();
+        views.push(view);
+        return view as never;
+      },
+      windowFor: () => window as never,
+    },
+  });
+  return {
+    browser,
+    sender,
+    views,
+    close: async () => {
+      await browser.shutdown();
+      await rm(directory, { recursive: true, force: true });
+    },
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((accept, decline) => {
+    resolve = accept;
+    reject = decline;
+  });
+  return { promise, resolve, reject };
+}
+
 class FakeDebugger {
   attached = false;
   evaluations = 0;
+  defaultValue: unknown = { visibleText: "fixture", targets: [] };
+  nextEvaluation?: ReturnType<typeof deferred<unknown>>;
   isAttached() {
     return this.attached;
   }
@@ -108,7 +310,13 @@ class FakeDebugger {
   async sendCommand(method: string) {
     assert.equal(method, "Runtime.evaluate");
     this.evaluations += 1;
-    return { result: { value: { visibleText: "fixture", targets: [] } } };
+    const next = this.nextEvaluation;
+    this.nextEvaluation = undefined;
+    return {
+      result: {
+        value: next === undefined ? this.defaultValue : await next.promise,
+      },
+    };
   }
 }
 
@@ -148,11 +356,17 @@ class FakeWebContents extends EventEmitter {
   };
   #url = "about:blank";
   #destroyed = false;
+  readonly loadCalls: string[] = [];
+  nextLoad?: ReturnType<typeof deferred<void>>;
   constructor(readonly id = 1) {
     super();
   }
   async loadURL(url: string) {
+    this.loadCalls.push(url);
     this.emit("did-start-navigation", {}, url, false, true);
+    const next = this.nextLoad;
+    this.nextLoad = undefined;
+    if (next !== undefined) await next.promise;
     this.#url = url;
     this.emit("did-navigate");
     this.emit("did-stop-loading");
