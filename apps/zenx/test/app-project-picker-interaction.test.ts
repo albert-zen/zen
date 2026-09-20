@@ -1964,13 +1964,13 @@ test("host recovery refreshes the selected Thread without clearing draft or loca
     await setTextareaValue(composer, "Keep this local draft");
     const openWorkspace = await waitFor(() =>
       document.querySelector<HTMLButtonElement>(
-        '[aria-label="Open workspace panel"]',
+        '[aria-label="Open side panel"]',
       ),
     );
     await act(async () => openWorkspace.click());
     await waitFor(() =>
       document.querySelector<HTMLButtonElement>(
-        '[aria-label="Close workspace"]',
+        '[aria-label="Close side panel"]',
       ),
     );
     assert.ok(statusListener);
@@ -2015,7 +2015,7 @@ test("host recovery refreshes the selected Thread without clearing draft or loca
     );
     assert.ok(
       document.querySelector<HTMLButtonElement>(
-        '[aria-label="Close workspace"]',
+        '[aria-label="Close side panel"]',
       ),
     );
     assert.equal(
@@ -2112,11 +2112,12 @@ test("conversation header omits usage while Composer owns context indicator and 
       null,
     );
     const workspaceAction = document.querySelector(
-      '.workspace-header [aria-label="Open workspace panel"]',
+      '.workspace-header [aria-label="Open side panel"]',
     );
+    assert.ok(workspaceAction);
     assert.equal(
       document
-        .querySelector('.workspace-header [aria-label="Open workspace panel"]')
+        .querySelector('.workspace-header [aria-label="Open side panel"]')
         ?.getAttribute("disabled"),
       null,
     );
