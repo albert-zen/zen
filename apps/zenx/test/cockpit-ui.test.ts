@@ -24,7 +24,33 @@ test("Cockpit navigation reads the real Host without new Turns; isolated bridge 
           params: Parameters<typeof host.client.request>[1],
         ) => {
           calls.push(method);
-          return host.client.request(method, params);
+          const result = await host.client.request(method, params);
+          // Synthetic nested visibility probe; real Host journal remains unchanged.
+          if (method === "zen/thread/read" && "thread" in result) {
+            const snapshot = result.thread as Awaited<
+              ReturnType<typeof host.appServer.readThread>
+            >;
+            const source = snapshot.items.find(
+              (item) => item.type === "agent_message",
+            );
+            Object.assign(source!, {
+              syntheticNested: [
+                { contentVisibility: "public", text: "PUBLIC_SOURCE_MARKER" },
+                {
+                  contentVisibility: "opaque",
+                  payload: "PRIVATE_PAYLOAD_MARKER",
+                  summary: [
+                    { text: "PUBLIC_SUMMARY_MARKER" },
+                    {
+                      contentVisibility: "opaque",
+                      payload: "NESTED_PRIVATE_MARKER",
+                    },
+                  ],
+                },
+              ],
+            });
+          }
+          return result;
         },
       },
     },
@@ -40,6 +66,7 @@ test("Cockpit navigation reads the real Host without new Turns; isolated bridge 
           approvals: new Set<string>(),
           connected,
           loading: false,
+          overviewReadAt: Date.now(),
           error: null,
           onRefresh() {},
           onOpenThread() {},
@@ -101,7 +128,17 @@ test("Cockpit navigation reads the real Host without new Turns; isolated bridge 
       );
       return messages[0];
     };
-    assert.equal((await message("handles.read", sourceId)).value.id, sourceId);
+    const publicSource = (await message("handles.read", sourceId)).value;
+    assert.equal(publicSource.id, sourceId);
+    const originalSource = initial.items.find((item) => item.id === sourceId);
+    assert.ok(originalSource?.type === "agent_message");
+    assert.equal(publicSource.text, originalSource.text);
+    assert.match(JSON.stringify(publicSource), /PUBLIC_SOURCE_MARKER/);
+    assert.match(JSON.stringify(publicSource), /PUBLIC_SUMMARY_MARKER/);
+    assert.doesNotMatch(
+      JSON.stringify(publicSource),
+      /PRIVATE_PAYLOAD_MARKER|NESTED_PRIVATE_MARKER/,
+    );
     assert.match(
       (await message("handles.read", "unrelated-item")).message,
       /declared scope/,
@@ -125,6 +162,10 @@ test("Cockpit navigation reads the real Host without new Turns; isolated bridge 
       true,
     );
     await click("Source 1");
+    assert.match(
+      document.querySelector(".cockpit-source")!.textContent!,
+      /PRIVATE_PAYLOAD_MARKER/,
+    );
     assert.equal(
       document.activeElement?.getAttribute("aria-label"),
       "Canonical source",

@@ -20,6 +20,7 @@ Object.assign(window, { zenx: { protocol: { request } } });
 function Fixture() {
   const [summaries, setSummaries] = useState<NativeThreadSummary[]>([]);
   const [mode, setMode] = useState("live");
+  const [readAt, setReadAt] = useState<number | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [opened, setOpened] = useState<string | null>(null);
@@ -28,6 +29,7 @@ function Fixture() {
       const response = await fetch("/cockpit-api");
       setSummaries(await response.json());
       setLoaded(true);
+      setReadAt(Date.now());
       setError(null);
     } catch (error) {
       setError(String(error));
@@ -89,6 +91,7 @@ function Fixture() {
           )
         }
         connected={mode !== "offline"}
+        overviewReadAt={readAt}
         loading={!loaded || mode === "loading"}
         error={mode === "error" ? "Fixture: summary read failed" : error}
         onRefresh={() => void refresh()}

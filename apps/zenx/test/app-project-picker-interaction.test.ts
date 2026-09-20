@@ -1,3 +1,4 @@
+import { createCockpitHost } from "./fixtures/cockpit-host.js";
 import "./dom-primitives.js";
 /// <reference path="../src/renderer/src/env.d.ts" />
 
@@ -88,6 +89,174 @@ test("Cockpit is absent by default and false, and the enabled App entry opens wi
     } finally {
       await unmountApp(harness);
     }
+  }
+});
+
+test("production Cockpit polls un-subscribed real Host start/completion, pauses hidden, and exposes refresh failure", async () => {
+  const host = await createCockpitHost();
+  const notifications: string[] = [];
+  const disposers = ["turn/started", "turn/completed", "item/completed"].map(
+    (method) =>
+      host.client.onNotification(method as "turn/started", () => {
+        notifications.push(method);
+      }),
+  );
+  let reads = 0;
+  let fail = false;
+  const harness = await mountApp(oneProject(), {
+    cockpitEnabled: true,
+    threads: async (archived) => {
+      if (!archived) reads++;
+      if (fail) throw new Error("synthetic list unavailable");
+      return host.appServer.listThreadSummaries({ archived });
+    },
+  });
+  Object.defineProperty(document, "hidden", {
+    configurable: true,
+    value: false,
+  });
+  const group = () =>
+    [...document.querySelectorAll(".cockpit-task")]
+      .find((button) =>
+        button.textContent?.includes("Verify the release evidence"),
+      )
+      ?.closest(".cockpit-group")
+      ?.querySelector("h2")?.textContent;
+  const waitForPoll = async (expected: string) => {
+    for (let i = 0; i < 70; i++) {
+      if (group()?.startsWith(expected)) return;
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      });
+    }
+    assert.fail(`expected ${expected}, got ${group()}`);
+  };
+  try {
+    await act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent?.includes("Cockpit"))!
+        .click(),
+    );
+    await waitForPoll("Idle");
+    const turn = await host.appServer.startTurn(host.threadId, "keep running");
+    await waitForPoll("Running");
+    host.completeWaitingTurn();
+    await turn.done;
+    await waitForPoll("Idle");
+    assert.deepEqual(notifications, []);
+    assert.match(
+      document.querySelector(".cockpit-connection")!.textContent!,
+      /Overview read/,
+    );
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      value: true,
+    });
+    const before = reads;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5100));
+    });
+    assert.equal(reads, before);
+    fail = true;
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      value: false,
+    });
+    await act(async () =>
+      document.dispatchEvent(new window.Event("visibilitychange")),
+    );
+    await waitFor(() =>
+      document
+        .querySelector('[role="alert"]')
+        ?.textContent?.includes("synthetic list unavailable"),
+    );
+    assert.match(group()!, /Last known/);
+    assert.match(
+      document.querySelector(".cockpit-connection")!.textContent!,
+      /Unknown \/ stale/,
+    );
+    fail = false;
+    await act(async () =>
+      document.dispatchEvent(new window.Event("visibilitychange")),
+    );
+    await waitForPoll("Idle");
+  } finally {
+    host.completeWaitingTurn();
+    await unmountApp(harness);
+    disposers.forEach((dispose) => dispose());
+    await host.close();
+  }
+});
+
+test("Cockpit bounds pending polling and discards older and departed-view results", async () => {
+  let pending: ReturnType<typeof deferred<NativeThreadSummary[]>> | null = null;
+  let reads = 0;
+  const harness = await mountApp(oneProject(), {
+    cockpitEnabled: true,
+    threads: async (archived) => {
+      if (archived) return [];
+      reads++;
+      return pending
+        ? pending.promise
+        : [summary(false, "t", "Current overview")];
+    },
+  });
+  Object.defineProperty(document, "hidden", {
+    configurable: true,
+    value: false,
+  });
+  const click = async (name: string) =>
+    act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent?.includes(name))!
+        .click(),
+    );
+  try {
+    await click("Cockpit");
+    pending = deferred();
+    await act(async () =>
+      document.dispatchEvent(new window.Event("visibilitychange")),
+    );
+    const old = pending;
+    const before = reads;
+    await act(async () =>
+      document.dispatchEvent(new window.Event("visibilitychange")),
+    );
+    assert.equal(reads, before, "poll cannot overlap pending list");
+    pending = null;
+    await click("Refresh overview");
+    await act(async () =>
+      old.resolve([summary(false, "old", "Out-of-order stale result")]),
+    );
+    assert.doesNotMatch(
+      document.body.textContent!,
+      /Out-of-order stale result/,
+    );
+    pending = deferred();
+    await act(async () =>
+      document.dispatchEvent(new window.Event("visibilitychange")),
+    );
+    const departed = pending;
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label^="Settings —"]')!
+        .click(),
+    );
+    assert.equal(
+      document.querySelector('[aria-label="Experimental Cockpit"]'),
+      null,
+    );
+    await act(async () =>
+      departed.resolve([summary(false, "late", "Departed-view stale result")]),
+    );
+    assert.doesNotMatch(
+      document.body.textContent!,
+      /Departed-view stale result/,
+    );
+    pending = null;
+  } finally {
+    pending?.resolve([]);
+    await unmountApp(harness);
   }
 });
 

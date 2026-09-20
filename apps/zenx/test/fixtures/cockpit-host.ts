@@ -23,6 +23,7 @@ import { ZenXProtocolClient } from "../../src/protocol-client/index.js";
 // A deterministic author for reproducible integration, not online LLM evidence.
 class FixtureAuthor implements ModelAdapter {
   readonly provider = "cockpit-fixture";
+  completeWaitingTurn?: () => void;
   async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
     const user = request.messages.findLastIndex(
       (message) => message.role === "user",
@@ -58,6 +59,10 @@ class FixtureAuthor implements ModelAdapter {
       if (text.includes("keep running"))
         await new Promise<void>((resolve, reject) => {
           const timer = setTimeout(resolve, 120_000);
+          this.completeWaitingTurn = () => {
+            clearTimeout(timer);
+            resolve();
+          };
           request.signal.addEventListener(
             "abort",
             () => {
@@ -168,6 +173,7 @@ export async function createCockpitHost() {
   }
   return {
     appServer,
+    completeWaitingTurn: () => model.completeWaitingTurn?.(),
     client,
     threadId: thread.id,
     async close() {

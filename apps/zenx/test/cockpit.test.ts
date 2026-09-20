@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -130,4 +131,20 @@ test("component admission requires successful producing call and preceding same-
       ),
     /call/i,
   );
+});
+
+test("integration fixture retains the exact production parent CSP", async () => {
+  const production = await readFile(
+    new URL("../src/renderer/index.html", import.meta.url),
+    "utf8",
+  );
+  const fixture = await readFile(
+    new URL("./fixtures/cockpit.html", import.meta.url),
+    "utf8",
+  );
+  const csp = (html: string) =>
+    html.match(/http-equiv="Content-Security-Policy"\s+content="([^"]+)"/)?.[1];
+  assert.ok(csp(production));
+  assert.equal(csp(fixture), csp(production));
+  assert.doesNotMatch(fixture, /<base/);
 });

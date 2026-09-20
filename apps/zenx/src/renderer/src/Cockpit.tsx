@@ -1,3 +1,4 @@
+import { publicItemValue } from "../../public-item.js";
 import React, {
   useCallback,
   useEffect,
@@ -25,6 +26,7 @@ export interface CockpitProps {
   approvals: ReadonlySet<string>;
   connected: boolean;
   loading: boolean;
+  overviewReadAt: number | null;
   error: string | null;
   onRefresh(): void;
   onOpenThread(threadId: string): void;
@@ -35,10 +37,21 @@ export function Cockpit({
   approvals,
   connected,
   loading,
+  overviewReadAt,
   error,
   onRefresh,
   onOpenThread,
 }: CockpitProps) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const overviewStale =
+    !connected ||
+    error !== null ||
+    overviewReadAt === null ||
+    now - overviewReadAt > COCKPIT_STALE_MS;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const selected = summaries.find((summary) => summary.threadId === selectedId);
@@ -63,6 +76,14 @@ export function Cockpit({
           <span className={connected ? "cockpit-dot" : "cockpit-dot offline"} />
           {connected ? "Host connected" : "Host unavailable · state unknown"}
           <button onClick={onRefresh}>Refresh overview</button>
+          <small role="status">
+            {overviewReadAt === null
+              ? "Overview not yet read"
+              : `Overview read ${Math.max(0, Math.floor((now - overviewReadAt) / 1000))}s ago`}
+            {overviewStale
+              ? " · Unknown / stale"
+              : " · refreshes every 5s while visible"}
+          </small>
         </div>
       </header>
       {error && (
@@ -96,7 +117,7 @@ export function Cockpit({
             return tasks.length ? (
               <section className="cockpit-group" key={group}>
                 <h2>
-                  {connected ? group : `Last known · ${group}`}
+                  {overviewStale ? `Last known · ${group}` : group}
                   <span>{tasks.length}</span>
                 </h2>
                 {tasks.map((summary) => (
@@ -521,7 +542,7 @@ function ComponentCard({
             throw new Error(
               "Source is outside this component’s declared scope.",
             );
-          return structuredClone(source);
+          return publicItemValue(source);
         },
       },
     }),

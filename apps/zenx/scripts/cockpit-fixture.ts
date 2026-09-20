@@ -1,4 +1,7 @@
-import { createServer } from "vite";
+import { build, preview } from "vite";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import { createCockpitHost } from "../test/fixtures/cockpit-host.js";
@@ -9,20 +12,38 @@ import type {
 
 const host = await createCockpitHost();
 const root = fileURLToPath(new URL("../../../", import.meta.url));
-const server = await createServer({
+const outDir = await mkdtemp(path.join(tmpdir(), "zenx-cockpit-preview-"));
+await build({
   configFile: false,
   root,
   publicDir: "apps/zenx/src/renderer/public",
+  plugins: [react()],
+  build: {
+    outDir,
+    emptyOutDir: false,
+    rollupOptions: {
+      input: path.join(root, "apps/zenx/test/fixtures/cockpit.html"),
+    },
+  },
+});
+const server = await preview({
+  configFile: false,
+  root,
+  build: { outDir },
   plugins: [
-    react(),
     {
       name: "cockpit-fixture-api",
-      configureServer(server) {
+      configurePreviewServer(server) {
         server.middlewares.use("/cockpit-api", api);
+        server.middlewares.use((request, _response, next) => {
+          if (request.url === "/apps/zenx/test/fixtures/plugin-frame.html")
+            request.url = "/plugin-frame.html";
+          next();
+        });
       },
     },
   ],
-  server: { host: "127.0.0.1", port: 5193, strictPort: true },
+  preview: { host: "127.0.0.1", port: 5193, strictPort: true },
 });
 async function api(
   request: import("node:http").IncomingMessage,
@@ -62,7 +83,6 @@ async function api(
     );
   }
 }
-await server.listen();
 console.log(
   "Cockpit fixture: http://127.0.0.1:5193/apps/zenx/test/fixtures/cockpit.html",
 );
@@ -70,7 +90,9 @@ console.log(
   "Real Runtime + process plugin + canonical Items. Deterministic author, not an online model. In-memory data only.",
 );
 const close = async () => {
-  await server.close();
+  await new Promise<void>((resolve, reject) =>
+    server.httpServer.close((error) => (error ? reject(error) : resolve())),
+  );
   await host.close();
   process.exit(0);
 };
