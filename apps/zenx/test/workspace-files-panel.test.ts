@@ -165,15 +165,10 @@ test("inline editors autosave real files, preserve in-flight input, and expose c
       document.querySelector('.file-save-error[role="alert"]')!.textContent!,
       /changed on disk/,
     );
-    assert.equal(
-      (() => {
-        const state = EditorView.findFromDOM(
-          document.querySelector<HTMLElement>(".cm-editor")!,
-        )!.state;
-        return state.sliceDoc(0, state.doc.length);
-      })(),
-      "# Kept draft\r\n\r\nBody\r\n",
+    const localDraft = [...drafts.snapshot().values()].find(
+      (draft) => draft.base.path === "README.md",
     );
+    assert.equal(localDraft?.text, "# Kept draft\r\n\r\nBody\r\n");
     assert.equal(
       (await readWorkspaceFile(workspace, "README.md")).text,
       "# External edit\r\n",

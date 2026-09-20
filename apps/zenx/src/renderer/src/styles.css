@@ -6998,6 +6998,27 @@ select:focus-visible {
   font-style: italic;
 }
 
+.workspace-files-panel .markdown-live-editor .cm-live-strikethrough {
+  text-decoration: line-through;
+}
+
+.workspace-files-panel .markdown-live-editor .cm-live-bullet-marker {
+  display: inline-block;
+  min-width: 1ch;
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+
+.workspace-files-panel .markdown-live-editor .cm-live-quote-marker {
+  display: inline-block;
+  width: 3px;
+  height: 1.15em;
+  margin-right: 0.65em;
+  border-radius: 2px;
+  background: var(--color-border-focus);
+  vertical-align: -0.18em;
+}
+
 .workspace-files-panel .markdown-live-editor .cm-live-link {
   color: var(--color-text-accent);
   text-decoration: underline;

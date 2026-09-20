@@ -1,7 +1,19 @@
-import { history, historyKeymap, defaultKeymap } from "@codemirror/commands";
+import {
+  history,
+  historyKeymap,
+  defaultKeymap,
+  invertedEffects,
+} from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
-import { EditorState, type SelectionRange } from "@codemirror/state";
+import {
+  EditorState,
+  StateEffect,
+  StateField,
+  Transaction,
+  type ChangeSet,
+  type SelectionRange,
+} from "@codemirror/state";
 import {
   Decoration,
   EditorView,
@@ -9,6 +21,7 @@ import {
   type DecorationSet,
   ViewPlugin,
   type ViewUpdate,
+  WidgetType,
 } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
 import { useEffect, useRef } from "react";
@@ -20,8 +33,95 @@ const touches = (
   to: number,
 ) => selection.some((range) => range.from <= to && range.to >= from);
 
-const documentText = (state: EditorState) =>
-  state.sliceDoc(0, state.doc.length);
+const normalizedSource = (source: string) => source.replace(/\r\n?|\n/gu, "\n");
+
+function rawOffsetAt(source: string, normalizedOffset: number) {
+  let raw = 0;
+  let normalized = 0;
+  while (raw < source.length && normalized < normalizedOffset) {
+    raw += source[raw] === "\r" && source[raw + 1] === "\n" ? 2 : 1;
+    normalized += 1;
+  }
+  return raw;
+}
+
+const nearbyLineEnding = (source: string, from: number, to: number) => {
+  const removed = source.slice(from, to).match(/\r\n|\r|\n/u)?.[0];
+  if (removed) return removed;
+  const after = source.slice(to).match(/\r\n|\r|\n/u)?.[0];
+  const before = [...source.slice(0, from).matchAll(/\r\n|\r|\n/gu)].at(
+    -1,
+  )?.[0];
+  return after ?? before ?? "\n";
+};
+
+function applyChangesToRawSource(source: string, changes: ChangeSet) {
+  let output = "";
+  let cursor = 0;
+  changes.iterChanges((from, to, _fromNew, _toNew, inserted) => {
+    const rawFrom = rawOffsetAt(source, from);
+    const rawTo = rawOffsetAt(source, to);
+    const lineEnding = nearbyLineEnding(source, rawFrom, rawTo);
+    output += source.slice(cursor, rawFrom);
+    output += inserted.toString().replaceAll("\n", lineEnding);
+    cursor = rawTo;
+  });
+  return output + source.slice(cursor);
+}
+
+const setRawSource = StateEffect.define<string>();
+const rawSource = StateField.define<string>({
+  create: () => "",
+  update(value, transaction) {
+    for (const effect of transaction.effects)
+      if (effect.is(setRawSource)) value = effect.value;
+    return value;
+  },
+});
+
+const preserveRawSource = [
+  EditorState.transactionExtender.of((transaction) => {
+    if (
+      !transaction.docChanged ||
+      transaction.effects.some((effect) => effect.is(setRawSource))
+    )
+      return null;
+    return {
+      effects: setRawSource.of(
+        applyChangesToRawSource(
+          transaction.startState.field(rawSource),
+          transaction.changes,
+        ),
+      ),
+    };
+  }),
+  invertedEffects.of((transaction) =>
+    transaction.effects.some((effect) => effect.is(setRawSource))
+      ? [setRawSource.of(transaction.startState.field(rawSource))]
+      : [],
+  ),
+];
+
+const documentText = (state: EditorState) => state.field(rawSource);
+
+class MarkerWidget extends WidgetType {
+  constructor(
+    readonly kind: "bullet" | "quote",
+    readonly text = "",
+  ) {
+    super();
+  }
+  eq(other: MarkerWidget) {
+    return other.kind === this.kind && other.text === this.text;
+  }
+  toDOM() {
+    const marker = document.createElement("span");
+    marker.className = `cm-live-${this.kind}-marker`;
+    marker.textContent = this.text;
+    marker.setAttribute("aria-hidden", "true");
+    return marker;
+  }
+}
 
 function livePreviewDecorations(
   state: EditorState,
@@ -30,7 +130,13 @@ function livePreviewDecorations(
   const ranges: ReturnType<Decoration["range"]>[] = [];
   const selection = state.selection.ranges;
   const hide = (from: number, to: number) => {
-    if (to > from) ranges.push(Decoration.replace({}).range(from, to));
+    let cursor = from;
+    while (cursor < to) {
+      const line = state.doc.lineAt(cursor);
+      const end = Math.min(to, line.to);
+      if (end > cursor) ranges.push(Decoration.replace({}).range(cursor, end));
+      cursor = line.to + 1;
+    }
   };
   syntaxTree(state).iterate({
     enter(node) {
@@ -89,6 +195,35 @@ function livePreviewDecorations(
         }
       } else if (node.name === "LinkReference") {
         if (!active) hide(node.from, node.to);
+      } else if (node.name === "ListItem") {
+        if (!active)
+          for (const mark of children("ListMark")) {
+            const source = state.sliceDoc(mark.from, mark.to);
+            const ordered = /\d/u.test(source);
+            ranges.push(
+              Decoration.replace({
+                widget: new MarkerWidget("bullet", ordered ? source : "•"),
+              }).range(mark.from, mark.to),
+            );
+          }
+      } else if (node.name === "Blockquote") {
+        if (!active)
+          for (const mark of children("QuoteMark"))
+            ranges.push(
+              Decoration.replace({
+                widget: new MarkerWidget("quote"),
+              }).range(mark.from, mark.to),
+            );
+      } else if (node.name === "Strikethrough") {
+        ranges.push(
+          Decoration.mark({ class: "cm-live-strikethrough" }).range(
+            node.from,
+            node.to,
+          ),
+        );
+        if (!active)
+          for (const mark of children("StrikethroughMark"))
+            hide(mark.from, mark.to);
       } else if (node.name === "InlineCode") {
         ranges.push(
           Decoration.mark({ class: "cm-live-inline-code" }).range(
@@ -122,7 +257,13 @@ const livePreview = ViewPlugin.fromClass(
       this.decorations = livePreviewDecorations(view.state, view.hasFocus);
     }
     update(update: ViewUpdate) {
-      if (update.docChanged || update.selectionSet || update.focusChanged)
+      if (
+        update.docChanged ||
+        update.selectionSet ||
+        update.focusChanged ||
+        update.viewportChanged ||
+        syntaxTree(update.startState) !== syntaxTree(update.state)
+      )
         this.decorations = livePreviewDecorations(
           update.state,
           update.view.hasFocus,
@@ -153,9 +294,10 @@ export function InlineMarkdownEditor({
     const view = new EditorView({
       parent: host,
       state: EditorState.create({
-        doc: text,
+        doc: normalizedSource(text),
         extensions: [
-          EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"),
+          rawSource.init(() => text),
+          preserveRawSource,
           markdown({ extensions: [GFM] }),
           history(),
           keymap.of([...defaultKeymap, ...historyKeymap]),
@@ -205,7 +347,13 @@ export function InlineMarkdownEditor({
     if (view === undefined || documentText(view.state) === text) return;
     applyingExternal.current = true;
     view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: text },
+      changes: {
+        from: 0,
+        to: view.state.doc.length,
+        insert: normalizedSource(text),
+      },
+      effects: setRawSource.of(text),
+      annotations: Transaction.addToHistory.of(false),
     });
     applyingExternal.current = false;
   }, [text]);

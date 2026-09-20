@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { undo } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 import { JSDOM } from "jsdom";
 import React, { act, useState } from "react";
@@ -7,7 +8,7 @@ import React, { act, useState } from "react";
 import { InlineMarkdownEditor } from "../src/renderer/src/InlineMarkdownEditor.js";
 
 const source =
-  "## 😀 Title\r\n\r\nA [link](https://example.test), [ref][id], and **bold** with *style*.\r\n\r\n- one\r\n- two\r\n\r\n| A | B |\r\n| - | - |\r\n| 1 | 2 |\r\n\r\n```js\r\nconst x = 1;\r\n```\r\n\r\n[id]: https://reference.test\r\n";
+  "## 😀 Title\r\n\nA [link](https://example.test), [ref][id], and **bold** with *style*.\n\r\n- one\r\n- two\n\n> quote\r\n\n~~gone~~\n\n| A | B |\r\n| - | - |\n| 1 | 2 |\r\n\n```js\r\nconst x = 1;\n```\r\n\n[id]:\n  https://reference.test\r\n";
 
 const flush = async () =>
   await act(async () => {
@@ -32,6 +33,15 @@ test("live preview keeps one editable document and reveals only the selected syn
     cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
     IS_REACT_ACT_ENVIRONMENT: true,
   });
+  (dom.window.Range.prototype as any).getClientRects = () => [];
+  (dom.window.Range.prototype as any).getBoundingClientRect = () => ({
+    bottom: 0,
+    height: 0,
+    left: 0,
+    right: 0,
+    top: 0,
+    width: 0,
+  });
   const { createRoot } = await import("react-dom/client");
   const root = createRoot(document.getElementById("root")!);
   let latest = source;
@@ -52,6 +62,10 @@ test("live preview keeps one editable document and reveals only the selected syn
     const editor = document.querySelector<HTMLElement>(".cm-editor")!;
     const view = EditorView.findFromDOM(editor);
     assert.ok(view);
+    assert.equal(
+      view.state.doc.lines,
+      source.replace(/\r\n?|\n/gu, "\n").split("\n").length,
+    );
     const visible = () =>
       document.querySelector<HTMLElement>(".cm-content")!.textContent!;
 
@@ -63,14 +77,29 @@ test("live preview keeps one editable document and reveals only the selected syn
     assert.ok(document.querySelector(".cm-live-heading-2"));
     assert.ok(document.querySelector(".cm-live-strong"));
     assert.ok(document.querySelector(".cm-live-emphasis"));
-    assert.match(visible(), /- one/);
+    assert.ok(document.querySelector(".cm-live-strikethrough"));
+    assert.match(visible(), /• one/);
+    assert.doesNotMatch(visible(), /> quote/);
+    assert.match(visible(), /quote/);
+    assert.doesNotMatch(visible(), /~~gone~~/);
+    assert.match(visible(), /gone/);
     assert.match(visible(), /\| A \| B \|/);
     assert.match(visible(), /const x = 1/);
     assert.doesNotMatch(visible(), /reference\.test/);
 
-    const normalized = source.replaceAll("\r\n", "\n");
-    const linkStart = normalized.indexOf("[link]");
+    const normalized = source.replace(/\r\n?|\n/gu, "\n");
+    const listStart = normalized.indexOf("- one");
     await act(async () => view.focus());
+    await act(async () => view.dispatch({ selection: { anchor: listStart } }));
+    assert.match(visible(), /- one/);
+    assert.doesNotMatch(visible(), /> quote/);
+
+    const quoteStart = normalized.indexOf("> quote");
+    await act(async () => view.dispatch({ selection: { anchor: quoteStart } }));
+    assert.match(visible(), /> quote/);
+    assert.match(visible(), /• one/);
+
+    const linkStart = normalized.indexOf("[link]");
     await act(async () => view.dispatch({ selection: { anchor: linkStart } }));
     await flush();
     assert.equal(view.state.selection.main.head, linkStart);
@@ -97,10 +126,23 @@ test("live preview keeps one editable document and reveals only the selected syn
     );
     assert.equal(latest, source.replace("**bold**", "*bold**"));
     assert.match(latest, /😀/);
-    assert.match(latest, /\r\n\r\n- one/);
-    assert.match(latest, /\| A \| B \|\r\n\| - \| - \|/);
-    assert.match(latest, /```js\r\nconst x = 1;\r\n```/);
-    assert.match(latest, /\[id\]: https:\/\/reference\.test/);
+    assert.match(latest, /\r\n- one\r\n- two\n/);
+    assert.match(latest, /\| A \| B \|\r\n\| - \| - \|\n/);
+    assert.match(latest, /```js\r\nconst x = 1;\n```/);
+    assert.match(latest, /\[id\]:\n  https:\/\/reference\.test/);
+
+    await act(async () => assert.equal(undo(view), true));
+    assert.equal(latest, source);
+    await act(async () =>
+      view.dispatch({
+        changes: { from: boldStart + 2, insert: "X" },
+        selection: { anchor: boldStart + 3 },
+        userEvent: "input.type",
+      }),
+    );
+    assert.equal(latest, source.replace("**bold**", "**Xbold**"));
+    await act(async () => assert.equal(undo(view), true));
+    assert.equal(latest, source);
   } finally {
     await act(async () => root.unmount());
     dom.window.close();
