@@ -22,6 +22,7 @@ import {
 } from "../src/main/chrome-native-host.js";
 import {
   chromeNativeHostManifestPath,
+  chromeNativeHostExecutablePath,
   chromeNativeHostRegistered,
   registerChromeNativeHost,
   unregisterChromeNativeHost,
@@ -423,6 +424,20 @@ test("native host registration pins the executable and exact extension origin an
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("Windows native host manifest selects the no-console launcher", () => {
+  const options = {
+    platform: "win32" as const,
+    homeDirectory: "unused",
+    runtimeDirectory: path.resolve("runtime"),
+    executablePath: path.resolve("ZenX.exe"),
+    windowsLauncherPath: path.resolve("resources/zenx-native-host.cmd"),
+  };
+  assert.equal(
+    chromeNativeHostExecutablePath(options),
+    options.windowsLauncherPath,
+  );
 });
 
 async function waitFor(predicate: () => boolean): Promise<void> {

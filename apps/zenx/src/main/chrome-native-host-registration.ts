@@ -15,6 +15,17 @@ export interface ChromeNativeHostRegistrationOptions {
   homeDirectory: string;
   runtimeDirectory: string;
   executablePath: string;
+  windowsLauncherPath?: string;
+}
+
+export function chromeNativeHostExecutablePath(
+  options: ChromeNativeHostRegistrationOptions,
+): string {
+  if (options.platform !== "win32") return path.resolve(options.executablePath);
+  if (options.windowsLauncherPath === undefined) {
+    throw new Error("Packaged ZenX Chrome native host launcher is missing");
+  }
+  return path.resolve(options.windowsLauncherPath);
 }
 
 export function chromeNativeHostManifestPath(
@@ -58,7 +69,7 @@ export async function registerChromeNativeHost(
   const manifest = {
     name: ZENX_CHROME_NATIVE_HOST_NAME,
     description: "ZenX bridge for one explicitly selected Chrome tab",
-    path: path.resolve(options.executablePath),
+    path: chromeNativeHostExecutablePath(options),
     type: "stdio",
     allowed_origins: [ZENX_CHROME_EXTENSION_ORIGIN],
   };
@@ -125,7 +136,7 @@ export async function chromeNativeHostRegistered(
     manifest === null ||
     (manifest as { name?: unknown }).name !== ZENX_CHROME_NATIVE_HOST_NAME ||
     (manifest as { path?: unknown }).path !==
-      path.resolve(options.executablePath) ||
+      chromeNativeHostExecutablePath(options) ||
     JSON.stringify(
       (manifest as { allowed_origins?: unknown }).allowed_origins,
     ) !== JSON.stringify([ZENX_CHROME_EXTENSION_ORIGIN])

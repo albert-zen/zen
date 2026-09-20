@@ -1,4 +1,4 @@
-import { createReadStream, createWriteStream } from "node:fs";
+import { createReadStream } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -154,11 +154,7 @@ export async function runChromeNativeHost(options: {
     (process.platform === "win32"
       ? createReadStream("", { fd: 0, autoClose: false })
       : process.stdin);
-  const output: NodeJS.WritableStream =
-    options.output ??
-    (process.platform === "win32"
-      ? createWriteStream("", { fd: 1, autoClose: false })
-      : process.stdout);
+  const output: NodeJS.WritableStream = options.output ?? process.stdout;
   options.onStage?.("connect");
   const socket = new WebSocket(descriptor.nativeWebSocketUrl, {
     headers: { origin: options.origin },

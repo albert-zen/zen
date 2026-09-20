@@ -114,6 +114,10 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(__dirname, "src/main/index.ts"),
+          "chrome-native-host-cli": resolve(
+            __dirname,
+            "src/main/chrome-native-host-cli.ts",
+          ),
           "app-server-host": resolve(__dirname, "src/main/app-server-host.ts"),
           "code-runtime-worker": resolve(
             __dirname,

@@ -17,7 +17,14 @@ const binary =
   process.argv[2] ??
   (process.platform === "darwin"
     ? path.join(artifact, "ZenX.app", "Contents", "MacOS", "ZenX")
-    : path.join(artifact, process.platform === "win32" ? "ZenX.exe" : "ZenX"));
+    : process.platform === "win32"
+      ? path.join(
+          artifact,
+          "resources",
+          "chrome-native-host",
+          "zenx-native-host.cmd",
+        )
+      : path.join(artifact, "ZenX"));
 const directory = await mkdtemp(path.join(tmpdir(), "zenx-native-host-smoke-"));
 const origin = "chrome-extension://jenndkelhapgbokkmmfifkmiadkeflci/";
 const token = randomBytes(32).toString("base64url");
@@ -33,6 +40,7 @@ await writeFile(
 );
 const child = spawn(binary, [`--user-data-dir=${directory}`, origin], {
   stdio: ["pipe", "pipe", "pipe"],
+  shell: process.platform === "win32",
 });
 let stdout = Buffer.alloc(0),
   stderr = "",
@@ -48,14 +56,35 @@ const encode = (value) => {
   return Buffer.concat([header, body]);
 };
 const frames = [];
+let stdoutFailure;
+const failStdout = (reason) => {
+  if (stdoutFailure !== undefined) return;
+  const prefix = stdout.subarray(0, 16).toString("hex");
+  stdoutFailure = new Error(
+    `native stdout ${reason}; prefixHex=${prefix || "empty"}`,
+  );
+};
 child.stdout.on("data", (chunk) => {
+  if (stdoutFailure !== undefined) return;
   stdout = Buffer.concat([stdout, chunk]);
-  while (stdout.length >= 4) {
-    const length = stdout.readUInt32LE(0);
-    assert(length < 1024 * 1024, "stdout polluted or oversized");
-    if (stdout.length < 4 + length) break;
-    frames.push(JSON.parse(stdout.subarray(4, 4 + length).toString()));
-    stdout = stdout.subarray(4 + length);
+  try {
+    while (stdout.length >= 4) {
+      const length = stdout.readUInt32LE(0);
+      if (length >= 1024 * 1024) {
+        failStdout(`polluted or oversized length=${length}`);
+        return;
+      }
+      if (stdout.length < 4 + length) break;
+      try {
+        frames.push(JSON.parse(stdout.subarray(4, 4 + length).toString()));
+      } catch {
+        failStdout(`contained invalid JSON length=${length}`);
+        return;
+      }
+      stdout = stdout.subarray(4 + length);
+    }
+  } catch {
+    failStdout("could not be decoded");
   }
 });
 const exited = new Promise((resolve, reject) => {
@@ -96,6 +125,7 @@ try {
   const until = async (predicate) => {
     const end = Date.now() + 3000;
     while (!predicate()) {
+      if (stdoutFailure !== undefined) throw stdoutFailure;
       assert(Date.now() < end, "frame timeout");
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
@@ -123,6 +153,7 @@ try {
   assert.equal(received[1].result.result.value, 2);
   child.stdin.end();
   assert.deepEqual(await exited, { code: 0, signal: null });
+  if (stdoutFailure !== undefined) throw stdoutFailure;
   assert.equal(stdout.length, 0);
   console.log(
     JSON.stringify(

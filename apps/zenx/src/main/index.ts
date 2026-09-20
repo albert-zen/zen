@@ -1112,6 +1112,11 @@ function installChromeBridgeIpc(options: {
     homeDirectory: app.getPath("home"),
     runtimeDirectory: join(options.userDataDirectory, "runtime"),
     executablePath: process.execPath,
+    windowsLauncherPath: join(
+      options.resourcesDirectory,
+      "chrome-native-host",
+      "zenx-native-host.cmd",
+    ),
   };
   const snapshot = async () => {
     const configuredMode =
