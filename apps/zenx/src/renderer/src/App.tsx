@@ -1985,7 +1985,7 @@ export function App() {
             onOpenSource={(threadId) => void resumeThread(threadId)}
             onRetryTitle={retrySelectedTitle}
             selectedSummary={selectedSummary}
-            sourceSummary={threads.find(
+            sourceSummary={activeSummaries.find(
               (candidate) => candidate.threadId === threadDetail?.forkedFromId,
             )}
             threadDetail={threadDetail}
