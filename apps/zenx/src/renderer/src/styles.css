@@ -6130,7 +6130,7 @@ a:focus-visible {
   overflow: auto;
 }
 .selector-error {
-  color: var(--color-danger, var(--color-text-primary));
+  color: var(--color-status-danger);
 }
 .workflow-command-menu footer {
   display: flex;
