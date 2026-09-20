@@ -23,6 +23,8 @@ export class NativeConnection {
   readonly #unsubscribe: () => void;
   #closed = false;
   #nativeSession = false;
+  #initialized = false;
+  readonly #isInitialized: () => boolean;
   readonly #appServer: ZenAppServer | undefined;
   readonly #requestApproval: ApprovalHandler | undefined;
 
@@ -31,11 +33,13 @@ export class NativeConnection {
     send: SendJson;
     appServer?: ZenAppServer;
     requestApproval?: ApprovalHandler;
+    isInitialized?: () => boolean;
   }) {
     this.#projection = options.projection;
     this.#send = options.send;
     this.#appServer = options.appServer;
     this.#requestApproval = options.requestApproval;
+    this.#isInitialized = options.isInitialized ?? (() => false);
     this.#unsubscribe = this.#projection.subscribe((projected) => {
       if (this.#closed) return;
       if (projected.type === "model_catalog_updated") {
@@ -64,6 +68,13 @@ export class NativeConnection {
   async receive(message: JsonRpcMessage): Promise<void> {
     if (this.#closed || !isRequest(message)) return;
     if (message.method === "zen/turn/send") {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
       try {
         const params = message.params;
         if (this.#appServer === undefined)
@@ -100,7 +111,6 @@ export class NativeConnection {
             ? {}
             : { requestApproval: this.#requestApproval }),
         };
-        this.#nativeSession = true;
         this.#subscriptions.add(params.threadId);
         let result: { turnId?: string } = {};
         if (params.mode === "queue")
@@ -154,6 +164,7 @@ export class NativeConnection {
       return;
     }
     if (message.method === NATIVE_INITIALIZE_METHOD) {
+      this.#initialized = true;
       this.#nativeSession = true;
       this.#send({
         id: message.id,

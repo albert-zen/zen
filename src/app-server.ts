@@ -1053,6 +1053,24 @@ export class ZenAppServer {
             ready: Promise.resolve(),
           };
         }
+        for (const intent of thread.items) {
+          if (
+            (intent.type === "user_message_queued" ||
+              intent.type === "turn_replacement_requested") &&
+            intent.clientId === options.clientId &&
+            !matchesSkillInputSnapshot(
+              requestedInput,
+              intent.type === "user_message_queued"
+                ? intent.input
+                : inputFromReplacement(intent),
+            )
+          ) {
+            throw new AppServerError(
+              "idempotency_conflict",
+              "Start client id was already used for different input",
+            );
+          }
+        }
       }
       const input =
         internal.preparedInput === true

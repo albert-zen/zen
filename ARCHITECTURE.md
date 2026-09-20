@@ -766,6 +766,8 @@ ZAS 当前把它们投影为 `turn/started` / `turn/completed`；CAS adapter 可
 任一 canonical append Promise 拒绝后，持久化结果都视为未知：当前 Turn 停止后续
 canonical 写入，App Server 丢弃对应 Thread 与 summary 缓存并在下次读取时从 journal
 重建，不补写替代 failure 或第二个 terminal。
+同一 ID 的 queued/replacement intent 同样约束原输入，公共 start 不得以不同输入
+消费未交付 intent；已交付匹配优先返回，内部 prepared launch 仍执行原快照。
 canonical `user_message` 可携带接入端提供的可选 `clientId`，仅用于跨接入端关联
 同一条用户消息，并投影为 wire `userMessage.clientId`。active Turn 接受的 soft
 steer 仍是普通 canonical `user_message`；若它在一次模型响应或其工具执行期间
@@ -812,6 +814,8 @@ claim，不得被称为 Codex extension 或因固定 CAS schema 缺失而删除�
 - **固定 CAS 版本**：CAS 字段 shape 以 codex-cli 0.146.0 的生成结果为准，不承诺
   "兼容最新"，也不自动继承后续 Codex 语义；升级 adapter 基线是一次显式决策。
 - **强制握手**：每个连接先 `initialize` → `initialized`，之后才接受其他方法。
+  原生 `zen/turn/send` 复用该就绪状态或显式 `zen/initialize`；既有原生 resume
+  读取不授予发送就绪状态，发送本身不得隐式初始化连接。
 - **WebSocket 访问控制在宿主侧**：loopback listener 拒绝浏览器 `Origin`，可选
   bearer credential 仅用于 transport 握手，不进入 Zen Core、Thread 或 journal。
 - **stdio ↔ WebSocket bridge 只是 transport adapter**：它原样转发共享 endpoint 消息，

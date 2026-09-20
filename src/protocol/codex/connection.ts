@@ -94,6 +94,10 @@ export class CodexConnection {
     });
   }
 
+  get initialized(): boolean {
+    return this.#initializedRequest && this.#initializedNotification;
+  }
+
   async receive(message: unknown): Promise<void> {
     if (this.#closed) {
       return;
