@@ -1,5 +1,7 @@
 # ARCHITECTURE
 
+ContextInspection 是从 canonical ItemList 经 compileModelMessages 派生的有界只读调试投影，不保存会话状态；它展示本地消息估算、规则快照与压缩来源，不代表 provider 私有上下文或当前完整工具目录。ZenX 实验通过 host-local usage 投影携带，默认关闭。
+
 ## 核心概念
 
 - **ZenX 共享浏览器** — Host 拥有的 WebContentsView 标签按 Thread 分组，以独立持久 profile 承载用户与 Agent 对同一页面 target 的操作；可信 Tool invocation 把 provider session 绑定到 Thread，窗口只挂载该 target 的实时视图，页面和绑定都不成为会话权威。

@@ -1,3 +1,4 @@
+import { projectContextInspection } from "../../../../src/context-inspection.js";
 import {
   createHostedAppServer,
   type HostedZenAppServer,
@@ -314,17 +315,25 @@ async function handleCommand(command: HostCommand): Promise<void> {
       send({
         type: "thread-usage/result",
         requestId: command.requestId,
-        usage: projectModelUsage(snapshot.items, {
-          contextWindow,
-          estimatedInputTokens: estimateModelMessageInputTokens(
-            compileModelMessages(snapshot.items, selection),
-          ),
-          providerContextUsageCompatible:
-            usageSelection !== undefined &&
-            usageSelection.providerProfileId === selection.providerProfileId &&
-            usageSelection.modelId === selection.modelId &&
-            usageSelection.reasoningEffort === selection.reasoningEffort,
-        }),
+        usage: {
+          ...(process.env.ZENX_CONTEXT_INSPECTOR === "1"
+            ? {
+                inspection: projectContextInspection(snapshot.items, selection),
+              }
+            : {}),
+          ...projectModelUsage(snapshot.items, {
+            contextWindow,
+            estimatedInputTokens: estimateModelMessageInputTokens(
+              compileModelMessages(snapshot.items, selection),
+            ),
+            providerContextUsageCompatible:
+              usageSelection !== undefined &&
+              usageSelection.providerProfileId ===
+                selection.providerProfileId &&
+              usageSelection.modelId === selection.modelId &&
+              usageSelection.reasoningEffort === selection.reasoningEffort,
+          }),
+        },
       });
     } catch (error) {
       send({

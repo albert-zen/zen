@@ -191,6 +191,8 @@ const externalZasAcceptanceEnvironment =
 delete process.env["ZENX_EXTERNAL_ZAS_ACCEPTANCE_CONFIG"];
 const pluginDevEnabled = process.env["ZENX_PLUGIN_DEV"] === "1";
 delete process.env["ZENX_PLUGIN_DEV"];
+// The inspector is a source-development experiment, never a packaged feature.
+if (app.isPackaged) delete process.env["ZENX_CONTEXT_INSPECTOR"];
 const projectWorkspaceAcceptancePath = projectWorkspaceAcceptanceConfigPath(
   process.argv,
   projectWorkspaceAcceptanceEnvironment,

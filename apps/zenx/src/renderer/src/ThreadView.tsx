@@ -96,6 +96,7 @@ interface ThreadViewProps {
   thread: Thread | null;
   threadAttachments?: ZenXThreadAttachmentProjection;
   threadUsage?: ModelUsageProjection;
+  onInspectContext?(): void;
   wakeups?: readonly TriggerHistoryEntry[];
   watching?: boolean;
   workflowCommands?: readonly WorkflowCommand[];
@@ -145,6 +146,7 @@ export function ThreadView({
   thread,
   threadAttachments = {},
   threadUsage,
+  onInspectContext,
   wakeups = [],
   watching = false,
   workflowCommands = [],
@@ -619,6 +621,9 @@ export function ThreadView({
               )}
               <ContextUsageIndicator
                 context={threadUsage?.context}
+                onInspect={
+                  threadUsage?.inspection ? onInspectContext : undefined
+                }
                 threadCacheHitRate={threadUsage?.thread.cacheHitRate}
                 compactDisabled={
                   composerDisabled || runningTurn !== null || submitting
@@ -1025,12 +1030,14 @@ export function threadCacheUsageLabel(
 }
 
 export function ContextUsageIndicator({
+  onInspect,
   context,
   threadCacheHitRate,
   compactDisabled = false,
   onCompact,
 }: {
   context?: ModelContextUsageProjection;
+  onInspect?(): void;
   threadCacheHitRate?: number;
   compactDisabled?: boolean;
   onCompact?(): Promise<void>;
@@ -1084,7 +1091,16 @@ export function ContextUsageIndicator({
       observer?.disconnect();
     };
   }, [open]);
-  if (context?.ratio === null || context?.ratio === undefined) return null;
+  if (context?.ratio === null || context?.ratio === undefined)
+    return onInspect ? (
+      <button
+        type="button"
+        className="context-usage-compact"
+        onClick={onInspect}
+      >
+        Inspect context
+      </button>
+    ) : null;
   const percent = Math.round(context.ratio * 100);
   const visualRatio = Math.max(0, Math.min(1, context.ratio));
   const visualPercent = Math.round(visualRatio * 100);
@@ -1157,6 +1173,18 @@ export function ContextUsageIndicator({
           </div>
           <p>{contextLabel}</p>
           <p>{threadCacheUsageLabel(threadCacheHitRate)}</p>
+          {onInspect ? (
+            <button
+              type="button"
+              className="context-usage-compact"
+              onClick={() => {
+                setOpen(false);
+                onInspect();
+              }}
+            >
+              Inspect context
+            </button>
+          ) : null}
           <p className="context-usage-explanation">
             Condense earlier context for the next reply. Your conversation stays
             available.

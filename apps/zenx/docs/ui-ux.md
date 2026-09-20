@@ -2,6 +2,12 @@
 
 更新日期：2026-09-01
 
+### Experiment / TBD：上下文检查器
+
+源码开发启动前设置 `ZENX_CONTEXT_INSPECTOR=1`，重启开发应用后从 Composer 的 Context 弹层点击 **Inspect context**，或右侧统一 tabs 的 **+ → Context · experiment** 打开。默认关闭；打包应用忽略此变量。PowerShell 示例：`$env:ZENX_CONTEXT_INSPECTOR='1'; npm run dev --workspace @zen/zenx`，结束实验后 `Remove-Item Env:ZENX_CONTEXT_INSPECTOR`。
+
+检查器只读展示当前已提交 ItemList 的本地消息投影，复用与现有压缩事件展示相同的 `compileModelMessages`；压缩事件仍负责“当时的压缩结果”，检查器负责“当前快照”。消息估算不包含工具 schema/provider 添加内容，最近 provider 输入不是当前投影的实时精确值，也不是累计消耗。完整已加载 Skills/工具目录在此切片未知；调用名只证明仍在投影中的调用。规则来自已保存快照，不重新读取磁盘。每条预览最多 2,000 字符，最近 80 条消息、40 个规则文件、80 个保留 ID，截断明确说明；附件仅列类型，opaque reasoning 不展示。失败沿既有 usage 错误提示，不创建缓存权威或自动恢复状态机。 当前线程的 canonical 设置/权限通知（包括其他客户端的修改）会使 usage 失效并重新读取；从 Context 指示器打开也重新读取。等待或失败时隐藏旧检查器内容并标为过期，可显式重试，迟到响应继续由既有请求 epoch 隔离。
+
 New thread 打开临时本地编辑页；选择或添加 Project 不创建 Thread，第一条有效 Send 才配置所选 Project、创建真实 Thread，并在 Sidebar、usage 等辅助元数据独立刷新时立即启动 Turn。全局入口使用最近 Project，Project 内入口使用该精确 Project；失败以明确、可恢复且不遮盖会话的通知呈现。
 
 ## 1. 文档权威与规则等级
