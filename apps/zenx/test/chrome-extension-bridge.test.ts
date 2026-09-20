@@ -101,20 +101,66 @@ test("Chrome bridge exposes only the explicitly attached tab over authenticated 
       }),
     );
     const forwardedMethods: string[] = [];
+    let documentUrl = "https://example.test/account";
     native.on("message", (data) => {
       const message = JSON.parse(data.toString()) as {
         type?: string;
         requestId?: string;
         method?: string;
+        params?: Record<string, unknown>;
       };
       if (message.type !== "cdp-command" || message.requestId === undefined)
         return;
-      forwardedMethods.push(message.method ?? "");
+      const method = message.method ?? "";
+      forwardedMethods.push(method);
+      let result: unknown = {};
+      if (method === "Page.getFrameTree") {
+        result = {
+          frameTree: {
+            frame: { id: "main", loaderId: "loader", url: documentUrl },
+          },
+        };
+      } else if (method === "Page.createIsolatedWorld") {
+        result = { executionContextId: 100 };
+      } else if (method === "Runtime.evaluate") {
+        const expression = String(message.params?.expression ?? "");
+        result = {
+          result: {
+            value: expression.includes("const expected =")
+              ? { ok: true }
+              : expression === "void 0"
+                ? undefined
+                : {
+                    visibleText: "Signed in as Alice",
+                    targets: [
+                      {
+                        selector: "#continue",
+                        tag: "button",
+                        role: "button",
+                        name: "Continue",
+                        type: "",
+                        id: "continue",
+                        fieldName: "",
+                        autocomplete: "",
+                        href: "",
+                        actions: ["click"],
+                      },
+                    ],
+                  },
+          },
+        };
+      } else if (method === "Page.captureScreenshot") {
+        result = {
+          data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        };
+      } else if (method === "Page.navigate") {
+        documentUrl = String(message.params?.url ?? documentUrl);
+      }
       native!.send(
         JSON.stringify({
           type: "cdp-result",
           requestId: message.requestId,
-          result: {},
+          result,
         }),
       );
     });
@@ -131,17 +177,42 @@ test("Chrome bridge exposes only the explicitly attached tab over authenticated 
         },
       ]);
       assert.deepEqual(await connection.backend.listTabs("thread-2"), []);
+      const inspection = await connection.backend.inspect(
+        "thread-1",
+        "chrome-tab-42",
+      );
+      assert.match(inspection.visibleText, /Signed in as Alice/u);
+      const actionTarget = inspection.targets[0];
+      assert.equal(actionTarget?.name, "Continue");
+      assert.ok(actionTarget);
+      await connection.backend.click(
+        "thread-1",
+        "chrome-tab-42",
+        inspection.observationId,
+        actionTarget.targetId,
+      );
       const navigated = await connection.backend.navigate(
         "thread-1",
         "chrome-tab-42",
         "https://example.test/next",
       );
       assert.equal(navigated.url, "https://example.test/next");
-      assert.deepEqual(forwardedMethods, [
+      for (const method of [
         "Page.enable",
         "Runtime.enable",
+        "Page.getFrameTree",
+        "Page.createIsolatedWorld",
+        "Runtime.evaluate",
+        "Page.captureScreenshot",
         "Page.navigate",
-      ]);
+      ])
+        assert.ok(forwardedMethods.includes(method), method);
+      assert.equal(
+        forwardedMethods.some((method) =>
+          /^(?:Network|Storage)\.|cookie/iu.test(method),
+        ),
+        false,
+      );
       native.send(
         JSON.stringify({
           type: "cdp-event",
