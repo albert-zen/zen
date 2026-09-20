@@ -104,6 +104,12 @@
 - **ZenXThreadUsageProjection** — ZenX Electron main 从 canonical `model_usage`、
   当前模型目录 `contextWindow` 和可重放模型消息投影展示用 usage / context pressure，
   不进入 CAS schema、Agent 上下文或自动压缩决策。
+- **ZenX Context Compaction Projection** — Renderer 从原生恢复与 live canonical Items
+  派生压缩时间线及压缩点的真实 `compileModelMessages`，进行中反馈只属于当前窗口，
+  不伪造工具调用、摘要或第二份 Thread 权威。
+- **Browser-safe model projection** — Core 的纯模型消息编译只依赖 browser-safe 的
+  canonical Item 和媒体值模块；文件系统 Attachment Store 仍留在 `attachment.ts`，
+  使 ZenX 能直接查看 Core 的真实投影，而不复制压缩语义。
 - **ZenXModelCatalogCompletion** — Provider 发现可以保留只有 ID、尚缺 `contextWindow` 的模型行供
   Settings 补全，但缺少正整数窗口的行不得保存为可运行配置、进入模型选择或发起请求；legacy profile
   读取保持宽容，以便用户修复，而 Host runtime、Provider resolve 与兼容 `model/list` 都显式拒绝该状态。
@@ -688,7 +694,8 @@ Summary Provider 的每个请求也必须落在所选模型的 context window �
 
 Provider-generated `context_compaction` canonical Item 记录 `provenance`、`coveredThroughItemId`、
 原样 summary、稳定 canonical 顺序的 `retainedItemIds`、实际 Provider selection、
-`algorithmVersion` 与 input/output token usage；旧 journal 缺少 `provenance` 时仍按此形态读取。
+`algorithmVersion`、人工或自动 `initiator` 与 input/output token usage；旧 journal 缺少
+`provenance` / `initiator` 时仍按原形态读取，当前 agentic writer 记录 `initiator: agent`。
 覆盖目标必须是已存在的 `turn_completed`；保留引用必须已存在、不重复、不晚于覆盖边界且按 journal 顺序排列，
 并完整保留同一模型响应的 tool-call 集及每个 call/result 对。相同或更早的有效边界
 不得再次追加。最新有效 compaction 决定模型投影并 supersede 更早投影状态，但所有

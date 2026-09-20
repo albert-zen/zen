@@ -143,13 +143,13 @@ test("resume commits canonical state before auxiliary reads and replays catch-up
       await Promise.resolve();
       await Promise.resolve();
     });
-    const contextUsage = document.querySelector<HTMLElement>(
-      ".context-usage-indicator",
+    const contextUsage = document.querySelector<HTMLButtonElement>(
+      ".context-usage-trigger",
     );
     assert.ok(contextUsage);
     assert.equal(
-      contextUsage.getAttribute("aria-valuetext"),
-      "Context 10% · 7 / 70\nThread cache unknown",
+      contextUsage.getAttribute("aria-label"),
+      "Open context details. Context 10% · 7 / 70\nThread cache unknown",
     );
   } finally {
     await harness.unmount();

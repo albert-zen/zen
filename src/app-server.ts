@@ -841,6 +841,7 @@ export class ZenAppServer {
         const item = await this.#appendContextCompaction({
           thread,
           boundary,
+          initiator: "human",
           selection: admitted.provider,
           contextCompaction: admitted.configuration.contextCompaction,
           signal,
@@ -1554,6 +1555,7 @@ export class ZenAppServer {
       await this.#appendContextCompaction({
         thread: options.thread,
         boundary,
+        initiator: "automatic",
         selection: options.resolved,
         contextCompaction: options.contextCompaction,
         signal: options.signal,
@@ -1630,6 +1632,7 @@ export class ZenAppServer {
     await this.#appendContextCompaction({
       thread: options.thread,
       boundary,
+      initiator: "automatic",
       selection: options.resolved,
       contextCompaction: options.contextCompaction,
       signal: options.signal,
@@ -1639,6 +1642,7 @@ export class ZenAppServer {
   async #appendContextCompaction(options: {
     thread: Thread;
     boundary: NonNullable<ReturnType<typeof latestEligibleCompactionBoundary>>;
+    initiator: "human" | "automatic";
     selection: ResolvedProviderSelection;
     contextCompaction: ResolvedContextCompactionConfig;
     signal: AbortSignal;
@@ -1715,6 +1719,7 @@ export class ZenAppServer {
       createdAt: this.#now(),
       type: "context_compaction",
       provenance: "provider_generated",
+      initiator: options.initiator,
       workspaceInstructions,
       coveredThroughItemId: options.boundary.item.id,
       summary: summary.text,
@@ -1727,6 +1732,7 @@ export class ZenAppServer {
     };
     try {
       await this.#commit(options.thread, item);
+      this.#emit({ type: "item_completed", item });
     } catch (error) {
       throw new AppServerError(
         "compaction_persistence_failed",

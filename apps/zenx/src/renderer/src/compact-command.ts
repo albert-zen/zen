@@ -4,6 +4,15 @@ export function isCompactCommand(text: string): boolean {
   return /^\/compact(?:\s|$)/u.test(text.trim());
 }
 
+export interface ContextCompactionRequest {
+  threadId: string | null;
+  active: boolean;
+  clearCommandDraft: boolean;
+  read(): ComposerState;
+  update(change: (state: ComposerState) => ComposerState): void;
+  compact(threadId: string): Promise<unknown>;
+}
+
 /** Handles the composer command before any turn, queue, steer, or replacement. */
 export async function handleCompactCommand(options: {
   threadId: string | null;
@@ -33,6 +42,36 @@ export async function handleCompactCommand(options: {
     }));
     return true;
   }
+  await requestContextCompaction({
+    ...options,
+    clearCommandDraft: true,
+  });
+  return true;
+}
+
+/** Shared executor for slash commands and explicit context UI actions. */
+export async function requestContextCompaction(
+  options: ContextCompactionRequest,
+): Promise<void> {
+  const state = options.read();
+  if (
+    state.compaction?.status === "pending" ||
+    state.submission?.status === "pending"
+  )
+    return;
+  const error =
+    options.threadId === null
+      ? "There is no conversation to compact yet."
+      : options.active
+        ? "Wait for the current reply to finish before compacting context."
+        : null;
+  if (error !== null) {
+    options.update((current) => ({
+      ...current,
+      compaction: { status: "failed", message: error },
+    }));
+    return;
+  }
   const pending = {
     status: "pending" as const,
     message: "Compacting context…",
@@ -50,7 +89,7 @@ export async function handleCompactCommand(options: {
         : {
             ...current,
             draft:
-              current.draft === state.draft
+              options.clearCommandDraft && current.draft === state.draft
                 ? { text: "", images: [] }
                 : current.draft,
             compaction: { status: "succeeded", message: "Context compacted." },
@@ -66,7 +105,6 @@ export async function handleCompactCommand(options: {
           },
     );
   }
-  return true;
 }
 
 function compactError(reason: unknown): string {

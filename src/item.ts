@@ -4,7 +4,7 @@ import {
   MAX_IMAGE_DIMENSION,
   MAX_IMAGE_PIXELS,
   type AttachmentRef,
-} from "./attachment.js";
+} from "./attachment-ref.js";
 
 /** Original UTF-8 text budget for the fixed repository instruction snapshot. */
 export const MAX_WORKSPACE_INSTRUCTION_BYTES = 128 * 1024;
@@ -291,6 +291,8 @@ interface ContextCompactionItemBase extends ItemBase {
   /** Rules reread when this compaction was committed; [] clears prior rules. */
   workspaceInstructions?: WorkspaceInstructionFile[];
   type: "context_compaction";
+  /** Legacy journals omit this; current writers identify who requested reset. */
+  initiator?: "human" | "automatic" | "agent";
   coveredThroughItemId: string;
   summary: string;
   retainedItemIds: string[];
@@ -559,6 +561,14 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       }
       break;
     case "context_compaction": {
+      if (
+        item.initiator !== undefined &&
+        item.initiator !== "human" &&
+        item.initiator !== "automatic" &&
+        item.initiator !== "agent"
+      ) {
+        throw new Error("context_compaction.initiator is invalid");
+      }
       requireNonEmptyString(
         item.coveredThroughItemId,
         "context_compaction.coveredThroughItemId",

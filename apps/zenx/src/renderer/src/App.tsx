@@ -1,4 +1,8 @@
-import { handleCompactCommand, isCompactCommand } from "./compact-command.js";
+import {
+  handleCompactCommand,
+  isCompactCommand,
+  requestContextCompaction,
+} from "./compact-command.js";
 import { useWorkspaceFileDrafts } from "./workspace-file-drafts.js";
 import { AuxiliaryPanel } from "./auxiliary-panel.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
@@ -1557,8 +1561,12 @@ export function App() {
           threadDetail.turns.some((turn) => turn.status === "inProgress"),
         read: () => composerStatesRef.current[threadId] ?? emptyComposerState(),
         update: (change) => updateComposer(threadId, change),
-        compact: (id) =>
-          window.zenx.protocol.request("thread/compact", { threadId: id }),
+        compact: async (id) => {
+          await window.zenx.protocol.request("thread/compact", {
+            threadId: id,
+          });
+          if (selectedThreadIdRef.current === id) await resumeThread(id, true);
+        },
       });
       return;
     }
@@ -1642,6 +1650,26 @@ export function App() {
         ),
       );
     }
+  };
+
+  const compactFromContext = async () => {
+    if (
+      threadDetail === null ||
+      archivingThreadIdsRef.current.has(threadDetail.id)
+    )
+      return;
+    const threadId = threadDetail.id;
+    await requestContextCompaction({
+      threadId,
+      active: threadDetail.turns.some((turn) => turn.status === "inProgress"),
+      clearCommandDraft: false,
+      read: () => composerStatesRef.current[threadId] ?? emptyComposerState(),
+      update: (change) => updateComposer(threadId, change),
+      compact: async (id) => {
+        await window.zenx.protocol.request("thread/compact", { threadId: id });
+        if (selectedThreadIdRef.current === id) await resumeThread(id, true);
+      },
+    });
   };
 
   const respondToApproval = async (
@@ -2243,6 +2271,7 @@ export function App() {
             onReasoningChange={(effort) => void changeReasoning(effort)}
             onOpenSidebar={() => setSidebarOpen(true)}
             onRespondToApproval={respondToApproval}
+            onCompact={compactFromContext}
             onSubmit={submitComposer}
             onSubmitNewThread={submitNewThreadDraft}
             selectedSettings={selectedSettings}
@@ -2534,6 +2563,7 @@ function AgentSurface({
   onReasoningChange,
   onOpenSidebar,
   onRespondToApproval,
+  onCompact,
   onSubmit,
   onSubmitNewThread,
   selectedSettings,
@@ -2585,6 +2615,7 @@ function AgentSurface({
     requestId: string,
     decision: ApprovalDecision,
   ): Promise<void>;
+  onCompact(): Promise<void>;
   onSubmit(
     intent: ComposerIntent,
     expectedTurnId: string | null,
@@ -2800,6 +2831,7 @@ function AgentSurface({
             onModelChange={onModelChange}
             onReasoningChange={onReasoningChange}
             onRespondToApproval={onRespondToApproval}
+            onCompact={onCompact}
             onSubmit={onSubmit}
           />
         </>

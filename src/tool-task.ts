@@ -13,6 +13,9 @@ import {
   type ToolRuntime,
   type ToolExecutionResult,
 } from "./tool.js";
+import { TOOL_TASK_CONTENT_TYPE } from "./tool-task-content.js";
+
+export { TOOL_TASK_CONTENT_TYPE } from "./tool-task-content.js";
 
 export interface ToolTaskPolicy {
   yieldTimeMs?: number;
@@ -41,7 +44,6 @@ export interface ToolTaskOptions {
   maxOutputBytes?: number;
   toolOutputSpool?: ToolOutputSpool;
 }
-export const TOOL_TASK_CONTENT_TYPE = "application/vnd.zen.tool-task+json";
 export const MAX_TOOL_YIELD_TIME_MS = 180000;
 type Status =
   | "queued"

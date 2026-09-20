@@ -1,6 +1,6 @@
 import type { WorkspaceInstructionFile } from "./item.js";
-import { deduplicateMediaContent } from "./model-content.js";
-import { TOOL_TASK_CONTENT_TYPE } from "./tool-task.js";
+import { deduplicateMediaContent } from "./media-content.js";
+import { TOOL_TASK_CONTENT_TYPE } from "./tool-task-content.js";
 import {
   contentFromUserMessage,
   textFromUserInput,

@@ -7,6 +7,7 @@ import test from "node:test";
 
 import type { Thread, ThreadItem, Turn } from "../src/protocol-client/index.js";
 import type { AttachmentRef } from "../../../src/attachment.js";
+import type { CanonicalItem } from "../../../src/item.js";
 import type { ModelUsageProjection } from "../../../src/model-usage.js";
 import { projectCompletedItem } from "../../../src/protocol/codex/mapper.js";
 import type { ApprovalCardState } from "../src/renderer/src/approval-state.js";
@@ -62,11 +63,102 @@ test("context usage renders beside the composer with honest tooltip details", ()
   );
   assert.match(
     html,
-    /class="context-usage-indicator"[^>]*aria-label="Context 30% est[^"]*Thread cache 50%/u,
+    /class="context-usage-trigger"[^>]*aria-label="Open context details\. Context 30% est[^"]*Thread cache 50%/u,
   );
-  assert.match(html, /data-tooltip="Context 30% est[^"]*Thread cache 50%/u);
-  assert.match(html, /aria-valuetext="Context 30% est[^"]*Thread cache 50%/u);
+  assert.match(html, /aria-haspopup="dialog"/u);
+  assert.match(html, /aria-expanded="false"/u);
   assert.match(html, /stroke-dasharray="0\.3 1"/u);
+});
+
+test("context ring opens an accessible popover before its compact action runs", async () => {
+  await withDom(async (root) => {
+    let compactCalls = 0;
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: emptyComposerState(),
+          thread: thread([turnWithItems("completed", [])]),
+          threadUsage: usageProjection(),
+          onCompact: async () => {
+            compactCalls += 1;
+          },
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      ),
+    );
+
+    const ring = requiredButton(".context-usage-trigger");
+    assert.equal(ring.getAttribute("aria-expanded"), "false");
+    await act(async () => ring.click());
+    assert.equal(compactCalls, 0);
+    assert.equal(ring.getAttribute("aria-expanded"), "true");
+    assert.ok(document.querySelector('[role="dialog"]'));
+
+    await act(async () => requiredButton(".context-usage-compact").click());
+    assert.equal(compactCalls, 1);
+  });
+});
+
+test("compaction progress is a transcript item and completed items reveal exact effective messages", async () => {
+  const canonicalItems = compactionHistory();
+  const completedThread: Thread = {
+    ...thread([
+      turnWithItems("completed", [
+        user("Keep this request"),
+        agent("Kept answer"),
+      ]),
+    ]),
+    canonicalItems,
+  };
+  await withDom(async (root) => {
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: emptyComposerState(),
+          thread: completedThread,
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      ),
+    );
+
+    const event = requiredElement(".context-compaction-event");
+    assert.match(event.textContent ?? "", /Context compacted/u);
+    assert.match(event.textContent ?? "", /Human initiated/u);
+    await act(async () => requiredButton(".context-compaction-toggle").click());
+    assert.match(event.textContent ?? "", /Keep this request/u);
+    assert.match(event.textContent ?? "", /Kept answer/u);
+    assert.match(event.textContent ?? "", /Continue with the accepted plan/u);
+
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: {
+            ...emptyComposerState(),
+            compaction: { status: "pending", message: "Compacting context…" },
+          },
+          thread: completedThread,
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      ),
+    );
+    assert.match(
+      requiredElement(".context-compaction-progress").textContent ?? "",
+      /Compacting context/u,
+    );
+    assert.equal(document.querySelector(".composer-command-status"), null);
+  });
 });
 
 test("context tooltip exposes exact zero and unknown Thread cache rates", () => {
@@ -146,7 +238,7 @@ test("context indicator hides unknown ratio instead of presenting zero", () => {
       },
     },
   );
-  assert.match(over, /aria-label="Context 120%/u);
+  assert.match(over, /aria-label="Open context details\. Context 120%/u);
   assert.match(over, /stroke-dasharray="1 1"/u);
 });
 
@@ -1153,6 +1245,88 @@ function renderTurns(
       onSubmit: noop,
     }),
   );
+}
+
+function usageProjection(): ModelUsageProjection {
+  return {
+    thread: { responseCount: 1, inputTokens: 10, outputTokens: 2 },
+    turns: {},
+    context: {
+      inputTokens: 78_200,
+      inputTokenSource: "estimated",
+      contextWindow: 262_000,
+      ratio: 0.3,
+    },
+  };
+}
+
+function compactionHistory(): CanonicalItem[] {
+  return [
+    {
+      id: "metadata-1",
+      type: "thread_metadata",
+      threadId: "thread-1",
+      createdAt: "2026-09-20T09:00:00Z",
+      cwd: "/workspace",
+      providerProfileId: "openai",
+      modelId: "test-model",
+      reasoningEffort: null,
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    },
+    {
+      id: "started-1",
+      type: "turn_started",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      createdAt: "2026-09-20T09:00:01Z",
+      selection: {
+        providerProfileId: "openai",
+        modelId: "test-model",
+        reasoningEffort: null,
+      },
+    },
+    {
+      id: "user-1",
+      type: "user_message",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      createdAt: "2026-09-20T09:00:02Z",
+      content: [{ type: "text", text: "Keep this request" }],
+    },
+    {
+      id: "agent-1",
+      type: "agent_message",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      createdAt: "2026-09-20T09:00:03Z",
+      text: "Kept answer",
+    },
+    {
+      id: "completed-1",
+      type: "turn_completed",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      createdAt: "2026-09-20T09:00:04Z",
+      status: "completed",
+    },
+    {
+      id: "compact-1",
+      type: "context_compaction",
+      threadId: "thread-1",
+      createdAt: "2026-09-20T09:00:05Z",
+      provenance: "provider_generated",
+      initiator: "human",
+      coveredThroughItemId: "completed-1",
+      summary: "Continue with the accepted plan",
+      retainedItemIds: ["user-1", "agent-1"],
+      providerProfileId: "openai",
+      modelId: "test-model",
+      reasoningEffort: null,
+      algorithmVersion: "zen.context-compaction.v2",
+      tokenUsage: { inputTokens: 25, outputTokens: 8 },
+    },
+  ];
 }
 
 function domTextAreaPrototype(): typeof HTMLTextAreaElement.prototype {
