@@ -70,4 +70,7 @@ export const ipcChannels = {
   browserLiveSubscribe: "zenx:browser-live:subscribe",
   browserLiveUnsubscribe: "zenx:browser-live:unsubscribe",
   browserLiveEvent: "zenx:browser-live:event",
+  computerLiveSubscribe: "zenx:computer-live:subscribe",
+  computerLiveUnsubscribe: "zenx:computer-live:unsubscribe",
+  computerLiveEvent: "zenx:computer-live:event",
 } as const;

@@ -77,6 +77,7 @@ export class BrowserThreadObservation {
         targets: new Map(),
       };
       this.#sessions.set(key, session);
+      this.#backend.bindThreadSession?.(session.providerSessionId, threadId);
     }
     return session;
   }

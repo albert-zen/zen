@@ -93,6 +93,8 @@ export type BrowserLiveObservationListener = (
 ) => void;
 
 export interface ZenXBrowserBackend {
+  /** Bind the provider's opaque session to its trusted Thread owner. */
+  bindThreadSession?(sessionId: string, threadId: string): void;
   scroll?(
     sessionId: string,
     tabId: string,

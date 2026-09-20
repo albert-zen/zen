@@ -129,6 +129,10 @@ export default defineConfig({
           ),
           "real-smoke": resolve(__dirname, "src/main/real-smoke.ts"),
           "provider-smoke": resolve(__dirname, "src/main/provider-smoke.ts"),
+          "workspace-browser-smoke": resolve(
+            __dirname,
+            "src/main/workspace-browser-smoke.ts",
+          ),
         },
       },
     },

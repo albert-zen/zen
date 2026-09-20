@@ -1,6 +1,25 @@
 import { randomUUID } from "node:crypto";
-import { BrowserWindow, WebContentsView, type WebContents } from "electron";
+import type { BrowserWindow, WebContents, WebContentsView } from "electron";
+
 import { ipcChannels } from "../preload/ipc.js";
+import { observeElectronPage } from "./capabilities/browser-electron-observation.js";
+import {
+  assertBrowserObservation,
+  browserActionScript,
+  browserInspectScript,
+  browserScrollScript,
+  BrowserScreenshotArtifactStore,
+  redactBrowserUrl,
+  resolveBrowserObservedTarget,
+  type BrowserInspection,
+  type BrowserLiveObservationListener,
+  type BrowserObservation,
+  type BrowserScrollDirection,
+  type BrowserTabSummary,
+  type BrowserTargetAction,
+  type BrowserTargetFingerprint,
+  type ZenXBrowserBackend,
+} from "./capabilities/browser-provider.js";
 
 export interface WorkspaceBrowserTab {
   id: string;
@@ -10,21 +29,30 @@ export interface WorkspaceBrowserTab {
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
+  sharedWithAgent: true;
   error?: string;
 }
 export type WorkspaceBrowserCommand =
   "list" | "new" | "navigate" | "back" | "forward" | "reload" | "close";
+
 interface Tab {
   id: string;
   threadId: string;
   view: WebContentsView;
+  owner?: Owner;
+  documentVersion: number;
+  observation?: BrowserObservation;
   error?: string;
 }
 interface Owner {
   window: BrowserWindow;
-  tabs: Map<string, Tab>;
   active?: { tab: Tab; lease: string };
 }
+interface WorkspaceBrowserDependencies {
+  createView(): WebContentsView;
+  windowFor(sender: WebContents): BrowserWindow | null;
+}
+
 export function workspaceBrowserUrl(input: unknown): string {
   if (typeof input !== "string" || input.length > 8192)
     throw new Error("Enter a valid web address");
@@ -47,22 +75,48 @@ export function workspaceBrowserUrl(input: unknown): string {
   return url.href;
 }
 
-// Human browsing is independent of Agent sessions/targets. Remote pages get no preload
-// or Node access. Only the owning ZenX renderer can mount or control these views.
-export class WorkspaceBrowser {
-  #owners = new Map<number, Owner>();
+/** One Thread-bound page registry shared by the visible view and Browser tools. */
+export class WorkspaceBrowser implements ZenXBrowserBackend {
+  readonly #owners = new Map<number, Owner>();
+  readonly #tabs = new Map<string, Tab>();
+  readonly #sessionThreads = new Map<string, string>();
+  readonly #artifacts: BrowserScreenshotArtifactStore;
+  readonly #dependencies: WorkspaceBrowserDependencies;
+
+  constructor(options: {
+    artifactDirectory?: string;
+    dependencies: WorkspaceBrowserDependencies;
+  }) {
+    this.#artifacts = new BrowserScreenshotArtifactStore(
+      options.artifactDirectory,
+    );
+    this.#dependencies = {
+      createView: options.dependencies.createView,
+      windowFor: options.dependencies.windowFor,
+    };
+  }
+
+  bindThreadSession(sessionId: string, threadId: string): void {
+    const existing = this.#sessionThreads.get(sessionId);
+    if (existing !== undefined && existing !== threadId)
+      throw new Error("Browser session is already bound to another Thread");
+    this.#sessionThreads.set(sessionId, threadId);
+  }
+
   #owner(sender: WebContents): Owner {
-    const window = BrowserWindow.fromWebContents(sender);
+    const window = this.#dependencies.windowFor(sender);
     if (!window || window.webContents !== sender)
       throw new Error("Browser UI requires its owning window");
     let owner = this.#owners.get(sender.id);
     if (!owner) {
-      owner = { window, tabs: new Map() };
+      owner = { window };
       this.#owners.set(sender.id, owner);
       const id = sender.id;
       window.once("closed", () => {
-        for (const tab of owner!.tabs.values())
-          if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
+        this.#hide(owner!);
+        for (const tab of this.#tabs.values()) {
+          if (tab.owner === owner) tab.owner = undefined;
+        }
         this.#owners.delete(id);
       });
       sender.on("did-start-navigation", (_event, _url, _inPlace, mainFrame) => {
@@ -71,16 +125,17 @@ export class WorkspaceBrowser {
     }
     return owner;
   }
-  #hide(owner: Owner) {
-    if (owner.active) {
-      owner.active.tab.view.setVisible(false);
-      if (!owner.window.isDestroyed())
-        owner.window.contentView.removeChildView(owner.active.tab.view);
-      owner.active = undefined;
-    }
+
+  #hide(owner: Owner): void {
+    if (!owner.active) return;
+    owner.active.tab.view.setVisible(false);
+    if (!owner.window.isDestroyed())
+      owner.window.contentView.removeChildView(owner.active.tab.view);
+    owner.active = undefined;
   }
-  #snapshot(owner: Owner, threadId: string): WorkspaceBrowserTab[] {
-    return [...owner.tabs.values()]
+
+  #workspaceSnapshot(threadId: string): WorkspaceBrowserTab[] {
+    return [...this.#tabs.values()]
       .filter(
         (tab) =>
           tab.threadId === threadId && !tab.view.webContents.isDestroyed(),
@@ -95,56 +150,77 @@ export class WorkspaceBrowser {
           loading: web.isLoading(),
           canGoBack: web.navigationHistory.canGoBack(),
           canGoForward: web.navigationHistory.canGoForward(),
+          sharedWithAgent: true,
           ...(tab.error ? { error: tab.error } : {}),
         };
       });
   }
-  #publish(owner: Owner, threadId: string) {
-    if (!owner.window.isDestroyed() && !owner.window.webContents.isDestroyed())
-      owner.window.webContents.send(ipcChannels.workspaceBrowserChanged, {
-        threadId,
-        tabs: this.#snapshot(owner, threadId),
-      });
+
+  #publish(threadId: string): void {
+    const tabs = this.#workspaceSnapshot(threadId);
+    for (const owner of this.#owners.values()) {
+      if (
+        !owner.window.isDestroyed() &&
+        !owner.window.webContents.isDestroyed()
+      )
+        owner.window.webContents.send(ipcChannels.workspaceBrowserChanged, {
+          threadId,
+          tabs,
+        });
+    }
   }
-  #load(owner: Owner, tab: Tab, url: string) {
+
+  async #load(tab: Tab, url: string): Promise<void> {
     tab.error = undefined;
-    void tab.view.webContents.loadURL(url).catch((error) => {
-      if (owner.tabs.get(tab.id) !== tab || error.code === "ERR_ABORTED")
+    try {
+      await tab.view.webContents.loadURL(url);
+    } catch (error) {
+      if (
+        this.#tabs.get(tab.id) !== tab ||
+        (error as NodeJS.ErrnoException).code === "ERR_ABORTED"
+      )
         return;
-      tab.error = error.message;
-      this.#publish(owner, tab.threadId);
-    });
+      tab.error = error instanceof Error ? error.message : String(error);
+      this.#publish(tab.threadId);
+      throw error;
+    }
   }
-  #new(owner: Owner, threadId: string, url: string) {
-    if (owner.tabs.size >= 20)
+
+  #new(threadId: string, owner?: Owner): Tab {
+    if (this.#tabs.size >= 20)
       throw new Error(
         "Close a browser tab before opening another (20 tab limit)",
       );
-    const view = new WebContentsView({
-      webPreferences: {
-        partition: "persist:zenx-workspace-browser",
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-      },
-    });
-    const tab: Tab = { id: randomUUID(), threadId, view };
-    owner.tabs.set(tab.id, tab);
+    const view = this.#dependencies.createView();
+    const tab: Tab = {
+      id: randomUUID(),
+      threadId,
+      view,
+      owner,
+      documentVersion: 0,
+    };
+    this.#tabs.set(tab.id, tab);
     view.setVisible(false);
     const web = view.webContents;
     web.session.setPermissionRequestHandler(
       (_contents, _permission, callback) => callback(false),
     );
     web.session.setPermissionCheckHandler(() => false);
-    const publish = () => this.#publish(owner, threadId);
+    const publish = () => this.#publish(threadId);
     web.on("page-title-updated", publish);
     web.on("did-navigate", publish);
     web.on("did-navigate-in-page", publish);
     web.on("did-start-loading", publish);
     web.on("did-stop-loading", publish);
-    const guardNavigation = (event: Electron.Event, url: string) => {
+    web.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
+      if (isMainFrame && !isInPlace) {
+        tab.documentVersion += 1;
+        tab.observation = undefined;
+      }
+    });
+    const guardNavigation = (event: Electron.Event, nextUrl: string) => {
       try {
-        workspaceBrowserUrl(url);
+        workspaceBrowserUrl(nextUrl);
       } catch {
         event.preventDefault();
         tab.error = "This address cannot open in the browser";
@@ -155,18 +231,23 @@ export class WorkspaceBrowser {
     web.on("will-redirect", guardNavigation);
     web.setWindowOpenHandler(({ url }) => {
       try {
-        this.#new(owner, threadId, workspaceBrowserUrl(url));
+        const safeUrl = workspaceBrowserUrl(url);
+        const popup = this.#new(threadId, tab.owner);
+        void this.#load(popup, safeUrl).catch(() => undefined);
+        publish();
       } catch (error) {
-        tab.error = String(error);
+        tab.error = error instanceof Error ? error.message : String(error);
         publish();
       }
       return { action: "deny" };
     });
     web.on("before-input-event", (event, input) => {
       if ((input.control || input.meta) && input.key.toLowerCase() === "l") {
+        const currentOwner = tab.owner;
+        if (currentOwner === undefined) return;
         event.preventDefault();
-        owner.window.webContents.focus();
-        owner.window.webContents.send(
+        currentOwner.window.webContents.focus();
+        currentOwner.window.webContents.send(
           ipcChannels.workspaceBrowserFocusAddress,
           threadId,
         );
@@ -177,36 +258,39 @@ export class WorkspaceBrowser {
       publish();
     });
     web.on("destroyed", () => {
-      if (owner.active?.tab === tab) this.#hide(owner);
-      owner.tabs.delete(tab.id);
+      if (tab.owner?.active?.tab === tab) this.#hide(tab.owner);
+      this.#tabs.delete(tab.id);
+      void this.#artifacts.clearScope(tab.id);
       publish();
     });
-    this.#load(owner, tab, url);
-    publish();
     return tab;
   }
+
   command(
     sender: WebContents,
     threadId: unknown,
     command: unknown,
     tabId?: unknown,
     url?: unknown,
-  ) {
+  ): WorkspaceBrowserTab[] {
     if (typeof threadId !== "string" || !threadId || threadId.length > 512)
       throw new Error("Invalid browser Thread");
     const owner = this.#owner(sender);
-    if (command === "list") return this.#snapshot(owner, threadId);
+    if (command === "list") return this.#workspaceSnapshot(threadId);
     if (command === "new") {
-      this.#new(owner, threadId, workspaceBrowserUrl(url ?? ""));
-      return this.#snapshot(owner, threadId);
+      const safeUrl = workspaceBrowserUrl(url ?? "");
+      const tab = this.#new(threadId, owner);
+      void this.#load(tab, safeUrl).catch(() => undefined);
+      this.#publish(threadId);
+      return this.#workspaceSnapshot(threadId);
     }
-    const tab = typeof tabId === "string" ? owner.tabs.get(tabId) : undefined;
+    const tab = typeof tabId === "string" ? this.#tabs.get(tabId) : undefined;
     if (!tab || tab.threadId !== threadId)
       throw new Error("Browser tab is not in this Thread");
     const web = tab.view.webContents;
     switch (command) {
       case "navigate":
-        this.#load(owner, tab, workspaceBrowserUrl(url));
+        void this.#load(tab, workspaceBrowserUrl(url)).catch(() => undefined);
         break;
       case "back":
         if (web.navigationHistory.canGoBack()) web.navigationHistory.goBack();
@@ -220,17 +304,16 @@ export class WorkspaceBrowser {
         web.reload();
         break;
       case "close":
-        if (owner.active?.tab === tab) this.#hide(owner);
-        owner.tabs.delete(tab.id);
-        web.close();
+        this.#closeTab(tab);
         break;
       default:
         throw new Error("Unknown browser command");
     }
-    this.#publish(owner, threadId);
-    return this.#snapshot(owner, threadId);
+    this.#publish(threadId);
+    return this.#workspaceSnapshot(threadId);
   }
-  mount(sender: WebContents, request: unknown) {
+
+  mount(sender: WebContents, request: unknown): void {
     if (!request || typeof request !== "object")
       throw new Error("Invalid browser view");
     const value = request as {
@@ -247,7 +330,7 @@ export class WorkspaceBrowser {
       return;
     }
     const tab =
-      typeof value.tabId === "string" ? owner.tabs.get(value.tabId) : undefined;
+      typeof value.tabId === "string" ? this.#tabs.get(value.tabId) : undefined;
     if (!tab || tab.threadId !== value.threadId)
       throw new Error("Browser tab is not in this Thread");
     const { x, y, width, height } = value.bounds;
@@ -270,6 +353,8 @@ export class WorkspaceBrowser {
       if (owner.active?.lease === value.lease) this.#hide(owner);
       return;
     }
+    if (tab.owner !== undefined && tab.owner !== owner) this.#hide(tab.owner);
+    tab.owner = owner;
     if (owner.active?.tab !== tab) {
       this.#hide(owner);
       owner.window.contentView.addChildView(tab.view);
@@ -278,4 +363,308 @@ export class WorkspaceBrowser {
     tab.view.setBounds(bounds);
     tab.view.setVisible(true);
   }
+
+  observeTab(
+    sessionId: string,
+    tabId: string,
+    listener: BrowserLiveObservationListener,
+  ): () => void {
+    const tab = this.#requireAgentTab(sessionId, tabId);
+    return observeElectronPage(
+      {
+        capture: async () => await tab.view.webContents.capturePage(),
+        current: () =>
+          this.#tabs.get(tab.id) === tab && !tab.view.webContents.isDestroyed()
+            ? tab.documentVersion
+            : undefined,
+      },
+      listener,
+    );
+  }
+
+  async listTabs(sessionId: string): Promise<BrowserTabSummary[]> {
+    const threadId = this.#requireSessionThread(sessionId);
+    return [...this.#tabs.values()]
+      .filter(
+        (tab) =>
+          tab.threadId === threadId && !tab.view.webContents.isDestroyed(),
+      )
+      .map((tab) => this.#agentSummary(sessionId, tab));
+  }
+
+  async open(sessionId: string, url: string): Promise<BrowserTabSummary> {
+    const threadId = this.#requireSessionThread(sessionId);
+    const safeUrl = workspaceBrowserUrl(url);
+    const tab = this.#new(threadId);
+    try {
+      await this.#load(tab, safeUrl);
+      this.#publish(threadId);
+      return this.#agentSummary(sessionId, tab);
+    } catch (error) {
+      this.#closeTab(tab);
+      throw error;
+    }
+  }
+
+  async navigate(
+    sessionId: string,
+    tabId: string,
+    url: string,
+  ): Promise<BrowserTabSummary> {
+    const tab = this.#requireAgentTab(sessionId, tabId);
+    tab.observation = undefined;
+    await this.#load(tab, workspaceBrowserUrl(url));
+    return this.#agentSummary(sessionId, tab);
+  }
+
+  async inspect(sessionId: string, tabId: string): Promise<BrowserInspection> {
+    const tab = this.#requireAgentTab(sessionId, tabId);
+    const documentVersion = tab.documentVersion;
+    const inspected = await this.#evaluate<{
+      visibleText: string;
+      targets: BrowserTargetFingerprint[];
+    }>(tab, browserInspectScript);
+    const observationId = randomUUID();
+    const image = await tab.view.webContents.capturePage();
+    let png = image.toPNG();
+    if (png.byteLength > 4 * 1024 * 1024) {
+      const size = image.getSize();
+      const scale = Math.sqrt((4 * 1024 * 1024) / png.byteLength);
+      png = image
+        .resize({
+          width: Math.max(1, Math.floor(size.width * scale)),
+          height: Math.max(1, Math.floor(size.height * scale)),
+        })
+        .toPNG();
+    }
+    const screenshot = await this.#artifacts.write(
+      tab.id,
+      observationId,
+      png,
+    );
+    if (tab.documentVersion !== documentVersion) {
+      await this.#artifacts.removeArtifact(
+        screenshot.artifactPath,
+        screenshot.observationId,
+      );
+      throw new Error(
+        "Browser document changed during inspection; inspect again",
+      );
+    }
+    const targets = new Map<string, BrowserTargetFingerprint>();
+    const projected = inspected.targets.slice(0, 80).map((target) => {
+      const targetId = randomUUID();
+      targets.set(targetId, target);
+      return {
+        targetId,
+        role: target.role,
+        name: target.name,
+        actions: [...target.actions],
+        ...(target.value === undefined ? {} : { value: target.value }),
+        ...(target.checked === undefined ? {} : { checked: target.checked }),
+        ...(target.selected === undefined ? {} : { selected: target.selected }),
+        ...(target.options === undefined
+          ? {}
+          : { options: target.options.map((option) => ({ ...option })) }),
+        ...(target.optionsTruncated === undefined
+          ? {}
+          : { optionsTruncated: target.optionsTruncated }),
+      };
+    });
+    tab.observation = { id: observationId, documentVersion, targets };
+    return {
+      ...this.#agentSummary(sessionId, tab),
+      observationId,
+      documentVersion,
+      visibleText: inspected.visibleText.slice(0, 8_000),
+      screenshot,
+      targets: projected,
+    };
+  }
+
+  async click(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    targetId: string,
+  ): Promise<BrowserTabSummary> {
+    return await this.#act(sessionId, tabId, observationId, targetId, "click");
+  }
+
+  async type(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    targetId: string,
+    text: string,
+    submit: boolean,
+  ): Promise<BrowserTabSummary> {
+    return await this.#act(
+      sessionId,
+      tabId,
+      observationId,
+      targetId,
+      "type",
+      text,
+      submit,
+    );
+  }
+
+  async select(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    targetId: string,
+    option: string,
+  ): Promise<BrowserTabSummary> {
+    return await this.#act(
+      sessionId,
+      tabId,
+      observationId,
+      targetId,
+      "select",
+      option,
+    );
+  }
+
+  async scroll(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    direction: BrowserScrollDirection,
+    pixels: number,
+    signal?: AbortSignal,
+  ): Promise<BrowserTabSummary> {
+    signal?.throwIfAborted();
+    const tab = this.#requireAgentTab(sessionId, tabId);
+    assertBrowserObservation(
+      tab.observation,
+      tab.documentVersion,
+      observationId,
+    );
+    tab.observation = undefined;
+    await this.#evaluate(tab, browserScrollScript(direction, pixels));
+    if (signal?.aborted)
+      throw new Error(
+        "Browser scroll outcome unknown after cancellation; inspect again before interacting",
+      );
+    return this.#agentSummary(sessionId, tab);
+  }
+
+  async closeTab(sessionId: string, tabId: string): Promise<void> {
+    this.#closeTab(this.#requireAgentTab(sessionId, tabId));
+  }
+
+  closeSession(sessionId: string): number {
+    this.#requireSessionThread(sessionId);
+    this.#sessionThreads.delete(sessionId);
+    return 0;
+  }
+
+  async close(): Promise<void> {
+    this.#sessionThreads.clear();
+  }
+
+  async shutdown(): Promise<void> {
+    for (const tab of [...this.#tabs.values()]) this.#closeTab(tab);
+    await this.#artifacts.close();
+  }
+
+  async #act(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    targetId: string,
+    action: BrowserTargetAction,
+    value?: string,
+    submit = false,
+  ): Promise<BrowserTabSummary> {
+    const tab = this.#requireAgentTab(sessionId, tabId);
+    const target = resolveBrowserObservedTarget(
+      tab.observation,
+      tab.documentVersion,
+      observationId,
+      targetId,
+      action,
+    );
+    tab.observation = undefined;
+    const result = await this.#evaluate<{ ok: boolean; reason?: string }>(
+      tab,
+      browserActionScript(target, action, value, submit),
+    );
+    if (!result.ok)
+      throw new Error(
+        `Browser ${action} target is stale or unsafe: ${result.reason}`,
+      );
+    await settleWebContents(tab.view.webContents);
+    return this.#agentSummary(sessionId, tab);
+  }
+
+  #requireSessionThread(sessionId: string): string {
+    const threadId = this.#sessionThreads.get(sessionId);
+    if (threadId === undefined)
+      throw new Error("Browser session is not bound to a Thread");
+    return threadId;
+  }
+
+  #requireAgentTab(sessionId: string, tabId: string): Tab {
+    const threadId = this.#requireSessionThread(sessionId);
+    const tab = this.#tabs.get(tabId);
+    if (
+      tab === undefined ||
+      tab.threadId !== threadId ||
+      tab.view.webContents.isDestroyed()
+    )
+      throw new Error(`Unknown browser target ${sessionId}/${tabId}`);
+    return tab;
+  }
+
+  #agentSummary(sessionId: string, tab: Tab): BrowserTabSummary {
+    const web = tab.view.webContents;
+    return {
+      sessionId,
+      tabId: tab.id,
+      title: (web.getTitle() || "New tab").slice(0, 256),
+      url: redactBrowserUrl(web.getURL() || "about:blank"),
+      loading: web.isLoading(),
+    };
+  }
+
+  #closeTab(tab: Tab): void {
+    if (tab.owner?.active?.tab === tab) this.#hide(tab.owner);
+    this.#tabs.delete(tab.id);
+    tab.observation = undefined;
+    if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
+    void this.#artifacts.clearScope(tab.id);
+    this.#publish(tab.threadId);
+  }
+
+  async #evaluate<T>(tab: Tab, expression: string): Promise<T> {
+    const debuggerApi = tab.view.webContents.debugger;
+    if (!debuggerApi.isAttached()) debuggerApi.attach("1.3");
+    const response = (await debuggerApi.sendCommand("Runtime.evaluate", {
+      expression,
+      awaitPromise: true,
+      returnByValue: true,
+    })) as {
+      result?: { value?: unknown; description?: string };
+      exceptionDetails?: { text?: string };
+    };
+    if (response.exceptionDetails !== undefined)
+      throw new Error(
+        `Browser CDP evaluation failed: ${response.exceptionDetails.text ?? response.result?.description ?? "unknown error"}`,
+      );
+    return response.result?.value as T;
+  }
+}
+
+async function settleWebContents(webContents: WebContents): Promise<void> {
+  if (!webContents.isLoading()) return;
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, 2_000);
+    webContents.once("did-stop-loading", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 }

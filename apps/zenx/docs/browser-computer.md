@@ -32,6 +32,10 @@ The current suite does not establish reliability for nested scrolling containers
 
 Next evaluations should prioritize nested-container scrolling and richer editable controls, then multi-window and missing-window recovery across native platforms. Attached user-browser tests must continue checking that cleanup does not close user-owned tabs. Popup creation and asynchronous tab discovery need their own acceptance case; a successful click does not prove a new tab is already visible.
 
+The default ZenX workspace browser now uses one Thread-bound WebContentsView target for both the visible human tab and Browser tools. Agent session close detaches tool ownership without closing the user's page. The existing `user-browser-cdp` provider remains the explicit path for an already running Chrome/Edge instance; it requires a public loopback CDP endpoint. An installed third-party extension's private native-messaging protocol is not treated as a supported endpoint.
+
+Computer panels may subscribe to the latest exact window targets used by Computer tools. On macOS the built-in provider captures at most one frame at a time every 750 ms while subscribed, reports each capture timestamp, and stops immediately when the panel unsubscribes. This is a live observation surface, not authority to control the window; Computer actions retain their existing semantic/foreground permission boundaries.
+
 ## Sources
 
 - [OpenAI Browser documentation](https://developers.openai.com/es-419/docs/browser?surface=app) and [Computer Use documentation](https://developers.openai.com/es-419/docs/computer-use) describe the product surfaces; local observations above are narrower than those general descriptions.

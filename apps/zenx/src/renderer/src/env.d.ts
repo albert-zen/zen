@@ -238,6 +238,14 @@ declare global {
           listener: (event: BrowserThreadEvent) => void,
         ): () => void;
       };
+      computerObservation: {
+        subscribe(
+          request: import("../../main/capabilities/computer-thread-observation.js").ComputerThreadRequest,
+          listener: (
+            event: import("../../main/capabilities/computer-thread-observation.js").ComputerThreadEvent,
+          ) => void,
+        ): () => void;
+      };
       plugins: {
         get(): Promise<ZenXPluginSnapshot>;
         setEnabled(

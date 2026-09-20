@@ -1,4 +1,3 @@
-import { WorkspaceBrowser } from "./workspace-browser.js";
 import { createImZenXProfileLoader } from "./imzenx-profile-loader.js";
 import { readZenXConnectionDescriptor } from "../protocol-client/connection-descriptor.js";
 import {
@@ -95,12 +94,15 @@ import { ZenXPluginDevControlServer } from "./plugin-dev-control.js";
 import { createDelegatingFirstPartyProfileLoader } from "./first-party-profile-loader.js";
 import { installZenXBundledPluginsAtStartup } from "./bundled-plugin-startup.js";
 import { BrowserLiveObservationIpcBridge } from "./browser-live-observation-ipc.js";
+import { ComputerLiveObservationIpcBridge } from "./computer-live-observation-ipc.js";
+import { createElectronWorkspaceBrowser } from "./workspace-browser-electron.js";
+import { useWorkspaceBrowserProvider } from "./workspace-browser-provider-policy.js";
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
 let capabilityService: ZenXCapabilityService | undefined;
 let pluginDevControl: ZenXPluginDevControlServer | undefined;
-const workspaceBrowser = new WorkspaceBrowser();
+const workspaceBrowser = createElectronWorkspaceBrowser();
 const dirtyFileWindows = new Set<number>();
 const projectProjection = new ZenXProjectProjection();
 const selfControlPort = new MutableAppServerRequestPort(projectProjection);
@@ -278,8 +280,15 @@ async function bootstrapZenX(): Promise<void> {
         },
       },
     });
+    const useSharedWorkspaceBrowser = useWorkspaceBrowserProvider(process.env);
     capabilityService = new ZenXCapabilityService({
       userDataDirectory,
+      ...(useSharedWorkspaceBrowser
+        ? {
+            browserBackend: workspaceBrowser,
+            browserBackendAuthoritative: true,
+          }
+        : {}),
       allowForegroundRequired:
         settingsService.computerForegroundControlEnabled(),
       bundledProvidersOnly: app.isPackaged,
@@ -1327,6 +1336,10 @@ function installCapabilityIpc(
     capabilities,
     ipcChannels.browserLiveEvent,
   );
+  const computerLive = new ComputerLiveObservationIpcBridge(
+    capabilities,
+    ipcChannels.computerLiveEvent,
+  );
   ipcMain.handle(
     ipcChannels.browserLiveSubscribe,
     (event, subscriptionId, request) => {
@@ -1337,6 +1350,18 @@ function installCapabilityIpc(
     ipcChannels.browserLiveUnsubscribe,
     (event, subscriptionId) => {
       browserLive.unsubscribe(event.sender, subscriptionId);
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.computerLiveSubscribe,
+    (event, subscriptionId, request) => {
+      computerLive.subscribe(event.sender, subscriptionId, request);
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.computerLiveUnsubscribe,
+    (event, subscriptionId) => {
+      computerLive.unsubscribe(event.sender, subscriptionId);
     },
   );
   ipcMain.handle(ipcChannels.marketplaceGet, async () => {

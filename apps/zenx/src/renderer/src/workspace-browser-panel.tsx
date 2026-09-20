@@ -22,7 +22,7 @@ export function WorkspaceBrowserPanel({
   agentAvailable: boolean;
 }) {
   const [tabs, setTabs] = useState<WorkspaceBrowserTab[]>([]);
-  const [selected, setSelected] = useState<string>("agent");
+  const [selected, setSelected] = useState<string>("attached");
   const [address, setAddress] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -39,6 +39,11 @@ export function WorkspaceBrowserPanel({
       if (value.threadId === threadId) {
         updates++;
         setTabs(value.tabs);
+        setSelected((current) =>
+          current === "attached" && value.tabs.length > 0
+            ? value.tabs.at(-1)!.id
+            : current,
+        );
       }
     });
     void api.command(threadId, "list").then(
@@ -66,7 +71,7 @@ export function WorkspaceBrowserPanel({
     setAddress(active?.url === "about:blank" ? "" : (active?.url ?? ""));
   }, [active?.id, active?.url]);
   useEffect(() => {
-    if (selected !== "agent" && !active) setSelected("agent");
+    if (selected !== "attached" && !active) setSelected("attached");
   }, [selected, active]);
   useEffect(() => {
     if (!open || !active || !area.current) return;
@@ -135,7 +140,7 @@ export function WorkspaceBrowserPanel({
       if (request !== generation.current) return;
       if (operation === "new") setSelected(value.at(-1)!.id);
       if (operation === "close" && selected === tabId)
-        setSelected(value.at(-1)?.id ?? "agent");
+        setSelected(value.at(-1)?.id ?? "attached");
     } catch (reason) {
       if (request === generation.current)
         setError(reason instanceof Error ? reason.message : String(reason));
@@ -162,10 +167,10 @@ export function WorkspaceBrowserPanel({
       <div className="workspace-browser-tabs" aria-label="Browser pages">
         <button
           type="button"
-          aria-pressed={selected === "agent"}
-          onClick={() => setSelected("agent")}
+          aria-pressed={selected === "attached"}
+          onClick={() => setSelected("attached")}
         >
-          Agent pages
+          Attached browser
         </button>
         {tabs.map((tab) => (
           <span className="workspace-browser-tab" key={tab.id}>
@@ -245,9 +250,6 @@ export function WorkspaceBrowserPanel({
               Go
             </button>
           </form>
-          <p className="workspace-browser-owner">
-            Your tab · You can interact with this page
-          </p>
           {active.error ? (
             <p role="alert" className="browser-ui-error">
               {active.error}
@@ -271,7 +273,7 @@ export function WorkspaceBrowserPanel({
         />
       ) : (
         <div className="browser-empty-state">
-          <p>No Agent browser is available.</p>
+          <p>Open a shared page for you and the Agent.</p>
           <button
             type="button"
             disabled={busy}
