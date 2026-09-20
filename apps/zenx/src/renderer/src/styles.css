@@ -306,6 +306,7 @@ select:focus-visible {
 }
 
 .app-shell {
+  --workspace-panel-width: 0px;
   --sidebar-track: 264px;
   --sidebar-divider-x: var(--sidebar-track);
   --titlebar-brand-track: var(--sidebar-track);
@@ -6263,7 +6264,7 @@ select:focus-visible {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--border-control);
+  border-left: 1px solid var(--color-border-subtle);
   background: var(--color-surface-main);
   color: var(--color-text-primary);
 }
@@ -7065,22 +7066,85 @@ select:focus-visible {
   min-width: 0;
 }
 
+/* The workspace shares the native title row with the conversation. Measuring
+   its rendered width also covers resize, expanded mode and a collapsed sidebar. */
+@media (min-width: 721px) {
+  .app-shell:has(.auxiliary-panel[data-open="true"]) > .window-titlebar {
+    width: calc(100% - var(--workspace-panel-width, 0px));
+    padding-right: 0;
+  }
+  .workspace:has(> .auxiliary-panel[data-open="true"]) {
+    grid-row: 1 / -1;
+  }
+  .workspace:has(> .auxiliary-panel[data-open="true"]) > .agent-surface {
+    padding-top: var(--titlebar-height);
+  }
+  .app-shell:has(.auxiliary-panel[data-open="true"]) #thread-browser-toggle {
+    display: none;
+  }
+  .app-shell:has(.auxiliary-panel[data-open="true"][data-expanded="true"])
+    .window-titlebar-session {
+    visibility: hidden;
+  }
+  :root[data-platform="win32"] .auxiliary-heading {
+    padding-right: calc(var(--windows-control-region) + 6px);
+  }
+}
+@media (min-width: 721px) and (max-width: 1099px) {
+  .app-shell:has(.auxiliary-panel[data-open="true"]) .window-titlebar-session {
+    visibility: hidden;
+  }
+}
+
 /* Content instances share one tab strip; type selection is a temporary view. */
 .auxiliary-heading {
-  min-height: 40px;
-  padding: 4px 6px;
+  height: var(--native-titlebar-height, 44px);
+  min-height: var(--native-titlebar-height, 44px);
+  padding: 6px 8px;
+  gap: 4px;
+  -webkit-app-region: drag;
+}
+.auxiliary-heading button,
+.auxiliary-heading [role="tablist"] {
+  -webkit-app-region: no-drag;
+}
+.auxiliary-heading .icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  line-height: 1;
+  border-radius: 6px;
+}
+.auxiliary-heading .icon-button svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+.workspace-tab-rail {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 3px;
 }
 .auxiliary-heading [role="tablist"] {
-  gap: 3px;
-  scrollbar-width: thin;
+  flex: 0 1 auto;
+  gap: 4px;
+  scrollbar-width: none;
   align-items: center;
+  padding: 2px;
+  scroll-padding-inline: 2px;
 }
 .workspace-content-tab {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
-  max-width: 220px;
-  border-radius: 7px;
+  max-width: 210px;
+  min-width: 0;
+  height: 30px;
+  border-radius: 8px;
 }
 .workspace-content-tab[data-active="true"] {
   background: var(--color-surface-hover);
@@ -7090,7 +7154,9 @@ select:focus-visible {
   align-items: center;
   gap: 7px;
   min-width: 0;
-  padding: 7px 3px 7px 8px;
+  flex-shrink: 1;
+  padding: 6px 3px 6px 9px;
+  line-height: 18px;
   background: transparent;
 }
 .workspace-content-tab [role="tab"] > span:first-of-type {
@@ -7123,9 +7189,27 @@ select:focus-visible {
 .workspace-tab-dirty {
   color: var(--color-text-accent);
 }
-.workspace-add-tab {
-  font-size: 20px;
-  font-weight: 300;
+.workspace-tab-close {
+  flex-shrink: 0;
+  margin-right: 3px;
+  width: 22px;
+  height: 24px;
+  opacity: 0;
+}
+.workspace-content-tab:hover .workspace-tab-close,
+.workspace-content-tab:focus-within .workspace-tab-close,
+.workspace-content-tab[data-active="true"] .workspace-tab-close {
+  opacity: 1;
+}
+@media (hover: none) {
+  .workspace-tab-close {
+    opacity: 1;
+  }
+}
+.auxiliary-heading button:focus-visible,
+.workspace-browser-address button:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--color-focus-ring);
+  filter: none;
 }
 .workspace-new-tab {
   align-items: center;
@@ -7189,4 +7273,54 @@ select:focus-visible {
 }
 .auxiliary-content > .workspace-files-panel {
   width: 100%;
+}
+
+/* Browser controls use the same optical center as workspace actions. */
+.workspace-browser-address {
+  gap: 3px;
+  height: 44px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.workspace-browser-address button {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  line-height: 1;
+}
+.workspace-browser-address button svg {
+  display: block;
+}
+.workspace-browser-address button:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+.workspace-browser-location {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  margin-left: 5px;
+  padding-right: 2px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  background: var(--color-surface-wash);
+}
+.workspace-browser-location:focus-within {
+  border-color: var(--color-text-accent);
+}
+.workspace-browser-location input {
+  width: 0;
+  height: 28px;
+  padding: 4px 9px;
+  border: 0;
+  border-radius: 7px;
+  outline: none;
+  background: transparent;
 }

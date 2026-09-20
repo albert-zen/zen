@@ -5,6 +5,10 @@ import React from "react";
 
 export type IconName =
   | ZenXPluginIconName
+  | "arrow-left"
+  | "arrow-right"
+  | "reload"
+  | "plus"
   | "arrow-down"
   | "archive"
   | "browser"
@@ -64,6 +68,14 @@ const paths: Record<IconName, ReactNode> = {
       <path d="M8 11v3M4.5 14h7" />
     </>
   ),
+  "arrow-left": <path d="M13.5 8h-11m4-4-4 4 4 4" />,
+  "arrow-right": <path d="M2.5 8h11m-4-4 4 4-4 4" />,
+  reload: (
+    <>
+      <path d="M13.5 6A5.6 5.6 0 1 0 13 11M13.5 2.5V6H10" />
+    </>
+  ),
+  plus: <path d="M8 3v10M3 8h10" />,
   "arrow-down": <path d="M8 2.2v11.2m-4-4 4 4 4-4" />,
   expand: <path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" />,
   compress: <path d="M2 1v4h4M14 1v4h-4M2 15v-4h4M14 15v-4h-4M5 8h6" />,

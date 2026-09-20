@@ -452,6 +452,7 @@ export function App() {
       }),
     [],
   );
+  const [workspacePanelWidth, setWorkspacePanelWidth] = useState(0);
   const [browserPanels, setBrowserPanels] = useState<Record<string, boolean>>(
     {},
   );
@@ -1957,6 +1958,11 @@ export function App() {
   return (
     <div
       className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarOpen ? " sidebar-open" : ""}`}
+      style={
+        {
+          "--workspace-panel-width": `${workspacePanelWidth}px`,
+        } as React.CSSProperties
+      }
     >
       <WindowTitleBar
         mode={sidebarMode}
@@ -2309,6 +2315,7 @@ export function App() {
         threadDetail !== null &&
         selectedThreadId === threadDetail.id ? (
           <AuxiliaryPanel
+            onWidthChange={setWorkspacePanelWidth}
             fileDrafts={fileDrafts}
             workspacePath={threadDetail.cwd}
             key={threadDetail.id}
