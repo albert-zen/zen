@@ -822,6 +822,9 @@ export class ZenXTriggerService {
       programOutcomes: [],
     };
     snapshot.history.unshift(history);
+    // Consume the event before dispatch. A failed/uncertain send is visible in
+    // history and never silently retried after restart.
+    if (trigger.watch?.once === true) trigger.active = false;
     if (trigger.timer !== undefined) {
       if (trigger.timer.intervalMinutes === null) trigger.active = false;
       else {
@@ -1458,6 +1461,7 @@ function triggerFromInput(
           MAX_ID_BYTES,
         ),
         event: "turn_completed",
+        ...(input.once === undefined ? {} : { once: input.once }),
       },
     };
   }

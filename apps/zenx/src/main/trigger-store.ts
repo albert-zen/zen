@@ -90,7 +90,7 @@ const TRIGGER_BASE_KEYS = [
   "active",
 ] as const;
 const TIMER_KEYS = ["nextRunAt", "intervalMinutes"] as const;
-const WATCH_KEYS = ["threadId", "event"] as const;
+const WATCH_KEYS = ["threadId", "event", "once"] as const;
 const ROOM_TRIGGER_KEYS = ["roomId", "mention"] as const;
 const SIGNAL_KEYS = ["name"] as const;
 const PROGRAM_KEYS = ["predicate", "action", "match"] as const;
@@ -295,6 +295,7 @@ function canonicalTrigger(
       watch: {
         threadId: trigger.watch!.threadId,
         event: trigger.watch!.event,
+        ...(trigger.watch!.once === undefined ? {} : { once: trigger.watch!.once }),
       },
       ...program,
     };
@@ -536,7 +537,8 @@ function isTrigger(
       watch !== null &&
       exactKeys(watch, WATCH_KEYS) &&
       string(watch["threadId"], MAX_ID_BYTES) &&
-      watch["event"] === "turn_completed"
+      watch["event"] === "turn_completed" &&
+      (watch["once"] === undefined || typeof watch["once"] === "boolean")
     );
   }
   if (trigger["kind"] === "roomMention") {

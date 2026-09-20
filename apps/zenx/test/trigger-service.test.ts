@@ -1514,6 +1514,29 @@ test("completed Turn projection is bounded and includes commands/results", () =>
   assert(projection.length <= 6_000);
 });
 
+test("one-shot thread watch consumes one terminal event and preserves its source", async () => {
+  const manager = new ControlledManager();
+  let saved: TriggerSnapshot = { triggers: [], history: [], rooms: [] };
+  const service = new ZenXTriggerService(manager, {
+    read: async () => structuredClone(saved),
+    write: async (value) => { saved = structuredClone(value); },
+  });
+  await service.start();
+  try {
+    await service.create({ threadId: "parent", kind: "thread", label: "Child done", prompt: "Read result", watchedThreadId: "child", once: true });
+    const terminal: Turn = { id: "child-turn", status: "failed", error: null, items: [], itemsView: "full", startedAt: 1, completedAt: 2, durationMs: 1 };
+    manager.complete("child", terminal);
+    await snapshotWhen(service, (snapshot) => snapshot.history[0]?.status === "running");
+    assert.equal(service.snapshot().triggers[0]?.active, false);
+    manager.complete("child", terminal);
+    manager.complete("child", { ...terminal, id: "second-turn" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(manager.requests.length, 1);
+    assert.equal(service.snapshot().history[0]?.sourceTurnId, "child-turn");
+    assert.match(JSON.stringify(manager.requests[0]), /failed/u);
+  } finally { await service.stop(); }
+});
+
 class ControlledManager implements ZenXTriggerAppServerPort {
   readonly requests: ClientRequestParams["turn/start"][] = [];
   requestError: Error | null = null;

@@ -2,6 +2,8 @@
 
 ## 核心概念
 
+- **Trigger Thread Watch** — 既有 Trigger 配置固定来源与目标 Thread，可监听一次或后续各 Turn 的终态；注册后的可选 canonical 快照与实时事件使用同一去重入口，一次性监听在事件接纳时停用，通知发送的失败或不确定性单独记录，不重试或补发离线事件。
+
 - **ZenX 共享浏览器** — Host 拥有的 WebContentsView 标签按 Thread 分组，以独立持久 profile 承载用户与 Agent 对同一页面 target 的操作；可信 Tool invocation 把 provider session 绑定到 Thread，窗口只挂载该 target 的实时视图，页面和绑定都不成为会话权威。
 - **ZenX Computer 实时观察** — Host 以 Thread、Tool invocation 与精确窗口 target 关联最近八次 Computer 操作，并只在可见订阅期间串行捕获有界、可取消且带时间戳的窗口帧；观察失败不改变工具结果或建立桌面接管状态。
 - **ZenX 文件草稿** — Renderer 在窗口生命周期内按 Thread/path 保存易失编辑草稿，独立于会话历史；Host 以读取版本检测外部冲突并原子替换现有 UTF-8 文件，人工编辑不作为 Agent 工具执行，不更改线程权限策略。
