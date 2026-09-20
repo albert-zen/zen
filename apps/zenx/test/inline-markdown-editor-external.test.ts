@@ -45,6 +45,7 @@ test("external disk replacement clears stale raw-source undo history", async () 
   const { createRoot } = await import("react-dom/client");
   const root = createRoot(document.getElementById("root")!);
   let latest = source;
+  const currentText = (): string => latest;
   let externalSet!: (s: string) => void;
   function Harness() {
     const [text, setText] = useState(source);
@@ -77,9 +78,9 @@ test("external disk replacement clears stale raw-source undo history", async () 
       }),
     );
     await act(async () => undo(view));
-    assert.equal(latest, source, "group undo exact");
+    assert.equal(currentText(), source, "group undo exact");
     await act(async () => redo(view));
-    assert.equal(latest, "XY" + source, "group redo exact");
+    assert.equal(currentText(), "XY" + source, "group redo exact");
     await act(async () => externalSet("# External\r\nBody\n😀\rEnd"));
     await act(async () => assert.equal(undo(view), false));
     await act(async () => assert.equal(redo(view), false));
@@ -89,11 +90,11 @@ test("external disk replacement clears stale raw-source undo history", async () 
         userEvent: "input.type",
       }),
     );
-    assert.equal(latest, "# External\r\nBody\n😀\rEndZ");
+    assert.equal(currentText(), "# External\r\nBody\n😀\rEndZ");
     await act(async () => assert.equal(undo(view), true));
-    assert.equal(latest, "# External\r\nBody\n😀\rEnd");
+    assert.equal(currentText(), "# External\r\nBody\n😀\rEnd");
     assert.equal(
-      latest.replace(/\r\n?|\n/gu, "\n"),
+      currentText().replace(/\r\n?|\n/gu, "\n"),
       view.state.doc.toString(),
       "raw and visible text must agree",
     );
