@@ -47,7 +47,7 @@ export interface WorkflowConfigurationPort {
     titlePrompt?: string;
   }>;
   saveWorkflowConfiguration(value: {
-    baseRevision?: number;
+    baseRevision: number;
     commands: WorkflowCommand[];
     titlePrompt?: string;
   }): Promise<void>;
@@ -347,7 +347,7 @@ const manifest: ZenXPluginManifestV2 = {
     {
       name: "zenx_self_control_workflows_update",
       description:
-        "Replace the user-scoped custom Slash workflows and optional title prompt. The built-in /compact command is reserved; omit titlePrompt or pass null to restore the default.",
+        "Replace the user-scoped custom Slash workflows and optional title prompt using the baseRevision from workflows_get. The built-in /compact command is reserved; omit titlePrompt or pass null to restore the default.",
       inputSchema: {
         type: "object",
         properties: {
@@ -369,7 +369,7 @@ const manifest: ZenXPluginManifestV2 = {
           },
           titlePrompt: { type: ["string", "null"] },
         },
-        required: ["commands"],
+        required: ["baseRevision", "commands"],
         additionalProperties: false,
       },
       permissions: [ZENX_SELF_CONTROL_LOCAL_DEVICE_PERMISSION],
@@ -447,11 +447,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
   async #updateWorkflows(args: Record<string, unknown>): Promise<unknown> {
     assertOnly(args, ["baseRevision", "commands", "titlePrompt"]);
     await this.#requireWorkflows().saveWorkflowConfiguration({
-      ...(args.baseRevision === undefined
-        ? {}
-        : {
-            baseRevision: nonNegativeInteger(args.baseRevision, "baseRevision"),
-          }),
+      baseRevision: nonNegativeInteger(args.baseRevision, "baseRevision"),
       commands: args.commands as WorkflowCommand[],
       ...(args.titlePrompt === undefined || args.titlePrompt === null
         ? {}

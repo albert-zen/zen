@@ -102,6 +102,10 @@ test("self-control reads and updates the same workflow configuration port", asyn
     await invocation("zenx_self_control_workflows_get", {}),
     value,
   );
+  await assert.rejects(
+    invocation("zenx_self_control_workflows_update", { commands: [] }),
+    /baseRevision/u,
+  );
   const updated = (await invocation("zenx_self_control_workflows_update", {
     baseRevision: 4,
     commands: [

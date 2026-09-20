@@ -53,6 +53,12 @@ test("persists one user-scoped workflow configuration for Settings and self-cont
     assert.equal(saved.commands[0]?.name, "review");
     assert.equal(saved.titlePrompt, "Name this request: {{request}}");
 
+    await assert.rejects(
+      service.saveWorkflowConfiguration({ commands: [] } as never),
+      /baseRevision/u,
+    );
+    assert.deepEqual(await service.workflowConfiguration(), saved);
+
     const profile = (await service.publicSettings()).profile;
     await service.save({
       baseRevision: profile.revision,

@@ -430,10 +430,14 @@ export class ZenXSettingsService {
   }
 
   async saveWorkflowConfiguration(value: {
-    baseRevision?: number;
+    baseRevision: number;
     commands: WorkflowCommand[];
     titlePrompt?: string;
   }): Promise<void> {
+    if (!Number.isSafeInteger(value.baseRevision) || value.baseRevision < 0)
+      throw new Error(
+        "baseRevision is required; read workflow configuration before updating",
+      );
     await this.#queueProfileOperation(async () => {
       this.#assertBaseRevision(value.baseRevision);
       const current = this.#requireProfile();
