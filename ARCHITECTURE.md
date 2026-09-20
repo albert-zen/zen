@@ -798,7 +798,7 @@ native surface；物理位置不赋予 CAS 语义权威。当前 endpoint 提供
 loopback WebSocket 两种 transport，Unix socket 尚未实现。原版 Codex CLI、T3 Code
 的互操作是收益，不是 ZAS、Core 或产品的设计前提。
 
-`turn/replace`、`thread/compact` 与 typed input 的 `attachment` variant 是 ZAS
+`turn/replace`、`thread/compact`、`thread/fork` 与 typed input 的 `attachment` variant 是 ZAS
 native surface；command item 上 structured result 和调用 lineage 的可选字段同样
 来自 ZAS 产品语义。它们即使当前存在于共享 endpoint/DTO，也不属于 CAS compatibility
 claim，不得被称为 Codex extension 或因固定 CAS schema 缺失而删除。
