@@ -113,6 +113,18 @@ contextBridge.exposeInMainWorld("zenx", {
     },
   },
   workspaceFiles: {
+    search: async (threadId: string, query: string) =>
+      await ipcRenderer.invoke(
+        ipcChannels.workspaceFilesSearch,
+        threadId,
+        query,
+      ),
+    validateReference: async (threadId: string, path: string) =>
+      await ipcRenderer.invoke(
+        ipcChannels.workspaceFilesValidateReference,
+        threadId,
+        path,
+      ),
     setDirty: (dirty: boolean) =>
       ipcRenderer.send(ipcChannels.workspaceFilesDirty, dirty),
     save: async (

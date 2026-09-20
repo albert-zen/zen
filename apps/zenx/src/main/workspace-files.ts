@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import { rename, rm, stat, open, opendir, realpath } from "node:fs/promises";
+import {
+  rename,
+  rm,
+  stat,
+  lstat,
+  open,
+  opendir,
+  realpath,
+} from "node:fs/promises";
 import path from "node:path";
 
 export interface WorkspaceFileListing {
@@ -11,6 +19,163 @@ export interface WorkspaceTextFile {
   path: string;
   text: string;
   revision: string;
+}
+export interface WorkspaceFileReference {
+  cwd: string;
+  path: string;
+  name: string;
+}
+export interface WorkspaceFileSearch {
+  cwd: string;
+  entries: { name: string; path: string }[];
+  truncated: boolean;
+  scanned: number;
+  warnings?: string[];
+}
+
+const referenceSearchExcludedDirectories = new Set([
+  ".git",
+  "node_modules",
+  ".hg",
+  ".svn",
+  ".venv",
+  "__pycache__",
+]);
+
+// Ephemeral discovery only: no index, file content, or session state is retained.
+export async function searchWorkspaceFiles(
+  root: string,
+  query: unknown,
+): Promise<WorkspaceFileSearch> {
+  if (
+    typeof query !== "string" ||
+    query.length > 512 ||
+    /[\u0000-\u001f\u007f]/.test(query)
+  )
+    throw new Error("Invalid workspace file search query");
+  const cwd = await realpath(root);
+  // Root access is required even if a prioritized subtree fills the result limit.
+  const rootDirectory = await opendir(cwd);
+  await rootDirectory.close();
+  const normalizedQuery = query
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/^\.\//, "");
+  const needle = normalizedQuery.toLocaleLowerCase();
+  const result: WorkspaceFileSearch = {
+    cwd,
+    entries: [],
+    truncated: false,
+    scanned: 0,
+  };
+  const pending = [{ relative: "", depth: 0, priority: false }];
+  const warn = (relative: string, error: unknown) => {
+    result.truncated = true;
+    const code = (error as NodeJS.ErrnoException)?.code;
+    const message = error instanceof Error ? error.message : String(error);
+    (result.warnings ??= []).push(`${relative}: ${code ?? message}`);
+  };
+  const parent = normalizedQuery.slice(0, normalizedQuery.lastIndexOf("/") + 1);
+  if (parent) {
+    const parts = parent.split("/").filter(Boolean);
+    if (path.isAbsolute(parent) || parts.includes(".."))
+      throw new Error("Search path is outside this workspace");
+    if (
+      !parts.some((part) =>
+        referenceSearchExcludedDirectories.has(part.toLowerCase()),
+      )
+    ) {
+      try {
+        let directory = cwd;
+        for (const part of parts) {
+          directory = path.join(directory, part);
+          if ((await lstat(directory)).isSymbolicLink())
+            throw new Error(
+              "Symbolic link directories are excluded from search",
+            );
+        }
+        const target = await resolveWorkspacePath(cwd, parent);
+        pending.unshift({
+          relative: target.relative,
+          depth: 0,
+          priority: true,
+        });
+      } catch (error) {
+        warn(parent, error);
+      }
+    }
+  }
+  const visited = new Set<string>();
+  const deadline = performance.now() + 500;
+  for (let index = 0; index < pending.length; index++) {
+    const current = pending[index]!;
+    if (visited.has(current.relative)) continue;
+    visited.add(current.relative);
+    if (performance.now() >= deadline) {
+      result.truncated = true;
+      break;
+    }
+    // Resolve again before opening so a replaced directory cannot ordinarily
+    // redirect traversal outside cwd. As with the viewer, this is not openat.
+    try {
+      const target = await resolveWorkspacePath(cwd, current.relative);
+      const directory = await opendir(target.resolved);
+      for await (const entry of directory) {
+        if (result.scanned >= 10_000 || performance.now() >= deadline) {
+          result.truncated = true;
+          break;
+        }
+        result.scanned++;
+        const relative = current.relative
+          ? `${current.relative}/${entry.name}`
+          : entry.name;
+        if (entry.isDirectory()) {
+          if (referenceSearchExcludedDirectories.has(entry.name.toLowerCase()))
+            continue;
+          if (current.depth >= 32) result.truncated = true;
+          else {
+            const next = {
+              relative,
+              depth: current.depth + 1,
+              priority: current.priority,
+            };
+            if (current.priority) pending.splice(index + 1, 0, next);
+            else pending.push(next);
+          }
+        } else if (
+          entry.isFile() &&
+          relative.toLocaleLowerCase().includes(needle)
+        ) {
+          if (result.entries.length === 80) {
+            result.truncated = true;
+            result.entries.sort((a, b) => a.path.localeCompare(b.path));
+            return result;
+          }
+          result.entries.push({ name: entry.name, path: relative });
+        }
+      }
+    } catch (error) {
+      if (!current.relative) throw error;
+      warn(current.relative, error);
+    }
+    if (result.scanned >= 10_000 || performance.now() >= deadline) {
+      result.truncated = true;
+      break;
+    }
+  }
+  result.entries.sort((a, b) => a.path.localeCompare(b.path));
+  return result;
+}
+
+export async function validateWorkspaceFileReference(
+  root: string,
+  relative: unknown,
+): Promise<WorkspaceFileReference> {
+  const cwd = await realpath(root);
+  const target = await resolveWorkspacePath(cwd, relative);
+  if (!(await stat(target.resolved)).isFile())
+    throw new Error("Only a regular file can be referenced");
+  return { cwd, path: target.relative, name: path.basename(target.resolved) };
 }
 export type WorkspaceFileSaveResult = {
   status: "saved" | "conflict";

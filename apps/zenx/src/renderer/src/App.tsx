@@ -1,4 +1,5 @@
 import { parseSkillDraft } from "./skill-draft.js";
+import { referenceMessage, referenceTitle } from "./reference-draft.js";
 import {
   handleCompactCommand,
   isCompactCommand,
@@ -1277,9 +1278,17 @@ export function App() {
     threadId: string,
     submission: ComposerSubmission,
   ) => {
+    const skillDraft = parseSkillDraft(submission.text);
+    const messageText = referenceMessage(
+      skillDraft.text,
+      skillDraft.references,
+    );
     if (submission.text.length > 0)
       await window.zenx.titles
-        .observe(threadId, parseSkillDraft(submission.text).text)
+        .observe(
+          threadId,
+          referenceTitle(skillDraft.text, skillDraft.references),
+        )
         .then((projection) => {
           if (projection !== undefined)
             setTitleSnapshot((current) => ({
@@ -1292,7 +1301,6 @@ export function App() {
             `Thread title could not be staged: ${describeError(error)}`,
           ),
         );
-    const skillDraft = parseSkillDraft(submission.text);
     if (skillDraft.skills.length > 0) {
       if (archivingThreadIdsRef.current.has(threadId))
         throw new Error("This Thread is being archived.");
@@ -1305,8 +1313,8 @@ export function App() {
         | import("../../../../../src/item.js").UserInputPart
         | import("../../../../../src/skill-input.js").SkillReference
       )[] = [];
-      if (skillDraft.text.trim().length > 0)
-        input.push({ type: "text", text: skillDraft.text });
+      if (messageText.trim().length > 0)
+        input.push({ type: "text", text: messageText });
       for (const skill of skillDraft.skills)
         input.push({ type: "skill", id: skill.id });
       for (const image of submission.images)
@@ -1322,7 +1330,10 @@ export function App() {
       });
       return;
     }
-    const input = await composerSubmissionInput(submission);
+    const input = await composerSubmissionInput({
+      ...submission,
+      text: messageText,
+    });
     if (submission.intent === "start") {
       if (archivingThreadIdsRef.current.has(threadId))
         throw new Error(
@@ -3469,6 +3480,7 @@ export function optimisticThreadSummary(
   },
   preview: string,
 ): NativeThreadSummary {
+  const draft = parseSkillDraft(preview);
   return {
     threadId: result.thread.id,
     currentMetadata: {
@@ -3483,7 +3495,7 @@ export function optimisticThreadSummary(
     createdAt: new Date(result.thread.createdAt * 1_000).toISOString(),
     updatedAt: new Date(result.thread.updatedAt * 1_000).toISOString(),
     name: result.thread.name ?? "New thread",
-    preview,
+    preview: referenceTitle(draft.text, draft.references),
     status: "idle",
   };
 }

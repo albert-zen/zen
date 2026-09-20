@@ -62,11 +62,8 @@ import {
   type TurnDisplayNode,
 } from "./turn-projection.js";
 import { WorkflowCommandMenu } from "./WorkflowCommandMenu.js";
-import {
-  commandCandidates,
-  expandWorkflowCommand,
-  type WorkflowCommand,
-} from "./workflow-commands.js";
+import type { WorkflowCommand } from "./workflow-commands.js";
+import { useComposerSelector } from "./use-composer-selector.js";
 import {
   compactionInitiatorLabel,
   projectContextCompactions,
@@ -195,10 +192,6 @@ export function ThreadView({
       active = false;
     };
   }, [thread?.id, composer.draft.text.startsWith("/")]);
-  const [workflowIndex, setWorkflowIndex] = useState(0);
-  const [dismissedWorkflowInput, setDismissedWorkflowInput] = useState<
-    string | null
-  >(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const shouldFollowRef = useRef(true);
   const viewRef = useRef<HTMLDivElement>(null);
@@ -227,30 +220,15 @@ export function ThreadView({
     !compactRequested &&
     composer.draft.images.length > 0 &&
     imageCapabilityError !== null;
-  const workflowCandidates = useMemo(
-    () =>
-      dismissedWorkflowInput === composer.draft.text
-        ? []
-        : commandCandidates(skillDraft.text, workflowCommands, skills),
-    [composer.draft.text, dismissedWorkflowInput, workflowCommands, skills],
-  );
-
-  useEffect(() => setWorkflowIndex(0), [composer.draft.text]);
-
-  const chooseWorkflow = (index: number) => {
-    const command = workflowCandidates[index];
-    if (command === undefined) return;
-    const selected =
-      command.kind === "skill" &&
-      !skillDraft.skills.some((skill) => skill.id === command.id)
-        ? [...skillDraft.skills, { id: command.id, name: command.name }]
-        : skillDraft.skills;
-    onDraftChange(
-      withSkillDraft(expandWorkflowCommand(skillDraft.text, command), selected),
-    );
-    setDismissedWorkflowInput(null);
-    requestAnimationFrame(() => composerTextareaRef.current?.focus());
-  };
+  const selector = useComposerSelector({
+    draft: composer.draft.text,
+    threadId: thread?.id,
+    commands: workflowCommands,
+    skills,
+    onChange: onDraftChange,
+    textarea: composerTextareaRef,
+  });
+  const selectorId = useId();
 
   useEffect(() => {
     const scroll = scrollRef.current;
@@ -536,6 +514,7 @@ export function ThreadView({
                         skillDraft.skills.filter(
                           (entry) => entry.id !== skill.id,
                         ),
+                        skillDraft.references,
                       ),
                     )
                   }
@@ -545,13 +524,39 @@ export function ThreadView({
               ))}
             </div>
           )}
-          <WorkflowCommandMenu
-            activeIndex={workflowIndex}
-            candidates={workflowCandidates}
-            onChoose={(command) =>
-              chooseWorkflow(workflowCandidates.indexOf(command))
-            }
-          />
+          {skillDraft.references.length > 0 && (
+            <div
+              className="composer-skills composer-references"
+              aria-label="References to send"
+            >
+              {skillDraft.references.map((reference, index) => (
+                <span
+                  className="composer-skill"
+                  key={index}
+                  title={`${reference.cwd} · ${reference.kind === "file" ? reference.path : reference.id}`}
+                >
+                  <Icon name={reference.kind === "file" ? "file" : "thread"} />
+                  <span>{reference.name}</span>
+                  <button
+                    type="button"
+                    aria-label={`Remove reference ${reference.name}`}
+                    onClick={() =>
+                      onDraftChange(
+                        withSkillDraft(
+                          skillDraft.text,
+                          skillDraft.skills,
+                          skillDraft.references.filter((_, i) => i !== index),
+                        ),
+                      )
+                    }
+                  >
+                    <Icon name="x" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <WorkflowCommandMenu id={selectorId} selector={selector} />
           <label className="sr-only" htmlFor="thread-composer">
             Message ZenX
           </label>
@@ -578,11 +583,26 @@ export function ThreadView({
             id="thread-composer"
             aria-label="Message"
             data-autogrow="true"
+            aria-controls={selector.open ? selectorId : undefined}
+            aria-activedescendant={
+              selector.open && selector.rows.length
+                ? `${selectorId}-${selector.active}`
+                : undefined
+            }
+            aria-describedby={selector.open ? `${selectorId}-hint` : undefined}
+            onSelect={(event) => selector.select(event.currentTarget)}
+            onBlur={() => selector.dismiss()}
+
             disabled={composerDisabled}
             onChange={(event) => {
-              setDismissedWorkflowInput(null);
+              selector.reopen();
+              selector.select(event.currentTarget ?? event.target);
               onDraftChange(
-                withSkillDraft(event.target.value, skillDraft.skills),
+                withSkillDraft(
+                  event.target.value,
+                  skillDraft.skills,
+                  skillDraft.references,
+                ),
               );
             }}
             onPaste={(event) => {
@@ -596,28 +616,32 @@ export function ThreadView({
               );
             }}
             onKeyDown={(event) => {
-              if (
-                !event.nativeEvent.isComposing &&
-                workflowCandidates.length > 0
-              ) {
-                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              if (!event.nativeEvent.isComposing && selector.open) {
+                if (event.key === "Escape") {
                   event.preventDefault();
-                  setWorkflowIndex((current) =>
-                    event.key === "ArrowDown"
-                      ? (current + 1) % workflowCandidates.length
-                      : (current - 1 + workflowCandidates.length) %
-                        workflowCandidates.length,
+                  selector.dismiss();
+                  return;
+                }
+                if (
+                  (event.key === "ArrowDown" || event.key === "ArrowUp") &&
+                  selector.rows.length
+                ) {
+                  event.preventDefault();
+                  selector.setActive(
+                    (selector.active +
+                      (event.key === "ArrowDown" ? 1 : -1) +
+                      selector.rows.length) %
+                      selector.rows.length,
                   );
                   return;
                 }
-                if (event.key === "Tab" || event.key === "Enter") {
+                if (
+                  (event.key === "Enter" && !event.shiftKey) ||
+                  (event.key === "Tab" &&
+                    (selector.rows.length || selector.loading || selector.busy))
+                ) {
                   event.preventDefault();
-                  if (!event.repeat) chooseWorkflow(workflowIndex);
-                  return;
-                }
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  setDismissedWorkflowInput(composer.draft.text);
+                  if (!event.repeat) void selector.choose(selector.active);
                   return;
                 }
               }
