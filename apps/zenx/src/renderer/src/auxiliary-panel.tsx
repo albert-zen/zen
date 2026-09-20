@@ -68,11 +68,14 @@ export function AuxiliaryPanel({
     if (!panel.current || !onWidthChange) return;
     const measure = () =>
       onWidthChange(open ? panel.current!.getBoundingClientRect().width : 0);
-    const observer = new ResizeObserver(measure);
-    observer.observe(panel.current);
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(measure);
+    observer?.observe(panel.current);
     measure();
     return () => {
-      observer.disconnect();
+      observer?.disconnect();
       onWidthChange(0);
     };
   }, [open, onWidthChange]);
