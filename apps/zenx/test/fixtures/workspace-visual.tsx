@@ -11,14 +11,40 @@ Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
 document.documentElement.dataset.appearance = params.get("theme") ?? "light";
 document.documentElement.dataset.platform = params.get("platform") ?? "win32";
+let compactions = 0;
 const options = {
   request: async (method: string) => {
-    if (method === "zen/thread/resume")
-      return resumed(
+    if (method === "zen/thread/resume") {
+      const recovery = resumed(
         threadWithMessage(
           "已检查工作区。你可以在右侧阅读和编辑计划，同时保留当前对话。\n\n### 下一步\n\n- 统一浏览器和文件工作区\n- 在同一页面与 Agent 协作\n- 查看上下文压缩结果",
         ),
       );
+      if (compactions)
+        recovery.thread.items.push({
+          id: `compact-${compactions}`,
+          type: "context_compaction",
+          threadId: "thread-1",
+          createdAt: new Date().toISOString(),
+          provenance: "provider_generated",
+          initiator: "human",
+          coveredThroughItemId: recovery.thread.items.at(-1)!.id,
+          summary:
+            "Visual fixture summary: keep one shared workspace for files, Browser and Computer. Markdown edits save automatically. Preserve the user's current draft.",
+          retainedItemIds: [],
+          providerProfileId: "fake",
+          modelId: "fake",
+          reasoningEffort: "medium",
+          algorithmVersion: "zen.context-compaction.v2",
+          tokenUsage: { inputTokens: 12000, outputTokens: 180 },
+        });
+      return recovery;
+    }
+    if (method === "thread/compact") {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      compactions += 1;
+      return { compactionItemId: `compact-${compactions}` };
+    }
     throw new Error("Fixture unsupported: " + method);
   },
 };
@@ -130,6 +156,13 @@ const zenx = {
   },
 };
 
+let fixtureFile = {
+  path: "PLAN.md",
+  text: "# A shared workspace\n\nKeep the conversation and the **work side by side**.\n\n## Current focus\n\n- One place for files, browser and computer\n- Clear state and deliberate actions\n- Edit Markdown with automatic saves\n\nSee the [Zen project](https://github.com/albert-zen/zen) for more context.\n\n> This is a visual fixture. Edits stay in this page; no real files are changed.",
+  revision: "demo-0",
+  editable: true,
+};
+let fileRevision = 0;
 Object.assign(zenx, {
   browserObservation: { subscribe: () => () => undefined },
   workspaceFiles: {
@@ -141,14 +174,22 @@ Object.assign(zenx, {
       ],
       truncated: false,
     }),
-    read: async () => ({
-      path: "PLAN.md",
-      text: "# A shared workspace\n\nKeep the conversation and the work side by side.\n\n## Current focus\n\n- One place for files, browser and computer\n- Clear state and deliberate actions\n- Editable Markdown with safe saves\n\n> This is a visual fixture. No real files are changed.",
-      revision: "demo",
-      editable: true,
-    }),
-    save: async () => {
-      throw new Error("Fixture does not write real files");
+    read: async () => ({ ...fixtureFile }),
+    save: async (
+      _threadId: string,
+      _path: string,
+      text: string,
+      revision: string,
+    ) => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      if (revision !== fixtureFile.revision)
+        return { status: "conflict", file: { ...fixtureFile } };
+      fixtureFile = {
+        ...fixtureFile,
+        text,
+        revision: `demo-${++fileRevision}`,
+      };
+      return { status: "saved", file: { ...fixtureFile } };
     },
   },
 });
@@ -227,6 +268,23 @@ function threadWithMessage(text: string): Thread {
         completedAt: 20,
         durationMs: 10,
         items: [
+          {
+            id: "browser-inspect-demo",
+            type: "commandExecution",
+            toolName: "zenx_browser_inspect",
+            toolArguments: { tabId: "shared-demo" },
+            pluginId: null,
+            scriptPath: null,
+            command: "Inspect shared page",
+            cwd: "/work/zen",
+            processId: null,
+            source: "agent",
+            status: "completed",
+            commandActions: [],
+            aggregatedOutput: "Shared workspace fixture ready.",
+            exitCode: 0,
+            durationMs: 125,
+          },
           {
             id: `agent-${text}`,
             type: "agentMessage",
