@@ -6928,3 +6928,105 @@ select:focus-visible {
   min-height: 0;
   background: var(--surface-1);
 }
+
+.workspace-files-panel .markdown-live-editor {
+  min-height: 180px;
+  color: var(--color-text-primary);
+  font: inherit;
+  line-height: 1.65;
+}
+
+.workspace-files-panel .markdown-live-editor .cm-editor {
+  min-height: inherit;
+  background: transparent;
+}
+
+.workspace-files-panel .markdown-live-editor .cm-focused {
+  outline: none;
+}
+
+.workspace-files-panel .markdown-live-editor .cm-scroller,
+.workspace-files-panel .markdown-live-editor .cm-content {
+  font: inherit;
+}
+
+.workspace-files-panel .markdown-live-editor .cm-content {
+  min-height: inherit;
+  padding: 0;
+  caret-color: var(--color-text-primary);
+}
+
+.workspace-files-panel .markdown-live-editor .cm-line {
+  padding-inline: 0;
+}
+
+.workspace-files-panel .markdown-live-editor .cm-live-heading {
+  color: var(--color-text-primary);
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.workspace-files-panel .markdown-live-editor .cm-live-heading-1 {
+  font-size: 1.7em;
+}
+
+.workspace-files-panel .markdown-live-editor .cm-live-heading-2 {
+  font-size: 1.4em;
+}
+
+.workspace-files-panel .markdown-live-editor .cm-live-heading-3 {
+  font-size: 1.2em;
+}
+
+.workspace-files-panel .markdown-live-editor .cm-live-heading-4 {
+  font-size: 1.1em;
+}
+
+.workspace-files-panel .markdown-live-editor .cm-live-heading-5 {
+  font-size: 1em;
+}
+
+.workspace-files-panel .markdown-live-editor .cm-live-heading-6 {
+  font-size: 0.95em;
+}
+
+.workspace-files-panel .markdown-live-editor .cm-live-strong {
+  font-weight: 700;
+}
+
+.workspace-files-panel .markdown-live-editor .cm-live-emphasis {
+  font-style: italic;
+}
+
+.workspace-files-panel .markdown-live-editor .cm-live-link {
+  color: var(--color-text-accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.workspace-files-panel .markdown-live-editor .cm-live-inline-code,
+.workspace-files-panel .markdown-live-editor .cm-live-code-block {
+  border-radius: 4px;
+  background: var(--color-surface-inset);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.workspace-files-panel .markdown-live-editor .cm-live-inline-code {
+  padding-inline: 3px;
+}
+
+.workspace-files-panel .file-save-error,
+.workspace-files-panel .file-conflict {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-start;
+  margin-block: 10px;
+}
+
+.workspace-files-panel .file-save-error > span,
+.workspace-files-panel .file-conflict > details {
+  flex: 1;
+  min-width: 0;
+}

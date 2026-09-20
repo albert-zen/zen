@@ -10,7 +10,7 @@ import {
   fileDraftKey,
   isFileDirty,
 } from "./workspace-file-drafts.js";
-import { Markdown } from "./Markdown.js";
+import { InlineMarkdownEditor } from "./InlineMarkdownEditor.js";
 import { Icon } from "./icons.js";
 
 export function WorkspaceFilesPanel({
@@ -29,10 +29,10 @@ export function WorkspaceFilesPanel({
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [revision, setRevision] = useState(0);
-  const [source, setSource] = useState(false);
   const [closePending, setClosePending] = useState<string>();
   const [discardPending, setDiscardPending] = useState(false);
   const [pathInput, setPathInput] = useState("");
+  const [editorEpoch, setEditorEpoch] = useState(0);
   const sequence = useRef(0);
   const key =
     filePath === undefined ? undefined : fileDraftKey(threadId, filePath);
@@ -73,7 +73,6 @@ export function WorkspaceFilesPanel({
     const existing = drafts.snapshot().get(fileDraftKey(threadId, path));
     if (!reload && existing && (isFileDirty(existing) || existing.saving)) {
       setFilePath(path);
-      setSource(true);
       setLoading(false);
       return;
     }
@@ -90,15 +89,14 @@ export function WorkspaceFilesPanel({
         (isFileDirty(canonical) || canonical.saving)
       ) {
         setFilePath(value.path);
-        setSource(true);
         return;
       }
       drafts.set(fileDraftKey(threadId, value.path), {
         base: value,
         text: value.text,
       });
+      if (reload) setEditorEpoch((current) => current + 1);
       setFilePath(value.path);
-      setSource(false);
     } catch (reason) {
       if (request === sequence.current)
         setError(reason instanceof Error ? reason.message : String(reason));
@@ -106,41 +104,8 @@ export function WorkspaceFilesPanel({
       if (request === sequence.current) setLoading(false);
     }
   };
-  const save = async () => {
-    if (!key || !file || !dirty || drafts.snapshot().get(key)?.saving) return;
-    drafts.set(key, {
-      ...file,
-      saving: true,
-      error: undefined,
-      conflict: undefined,
-    });
-    try {
-      const result = await window.zenx.workspaceFiles.save(
-        threadId,
-        file.base.path,
-        file.text,
-        file.base.revision,
-      );
-      drafts.set(
-        key,
-        result.status === "saved"
-          ? { base: result.file, text: result.file.text }
-          : {
-              ...file,
-              saving: false,
-              conflict: result.file,
-              error:
-                "This file changed on disk. Your draft is kept. Compare the disk version or discard your draft and reload.",
-            },
-      );
-    } catch (reason) {
-      drafts.set(key, {
-        ...file,
-        saving: false,
-        error: reason instanceof Error ? reason.message : String(reason),
-      });
-    }
-  };
+  const saver = (path: string) => (text: string, baseRevision: string) =>
+    window.zenx.workspaceFiles.save(threadId, path, text, baseRevision);
   const closeFile = (path: string, confirmed = false) => {
     const targetKey = fileDraftKey(threadId, path);
     const draft = drafts.snapshot().get(targetKey);
@@ -174,7 +139,7 @@ export function WorkspaceFilesPanel({
           event.key.toLowerCase() === "s"
         ) {
           event.preventDefault();
-          void save();
+          if (key && file) drafts.flush(key, saver(file.base.path));
         }
       }}
     >
@@ -283,24 +248,6 @@ export function WorkspaceFilesPanel({
           {file ? "Files" : "Up"}
         </button>
         <span title={filePath ?? directory}>{file ? null : directory}</span>
-        {file ? (
-          <>
-            <button
-              type="button"
-              aria-pressed={source}
-              onClick={() => setSource((value) => !value)}
-            >
-              {source ? "Preview" : "Edit"}
-            </button>
-            <button
-              type="button"
-              disabled={!dirty || file.saving}
-              onClick={() => void save()}
-            >
-              {file.saving ? "Saving…" : "Save"}
-            </button>
-          </>
-        ) : null}
         <button
           type="button"
           disabled={loading || file?.saving}
@@ -332,18 +279,43 @@ export function WorkspaceFilesPanel({
         {!loading && file ? (
           <>
             <p className="file-save-status" role="status">
-              {file.saving ? "Saving…" : dirty ? "Unsaved changes" : "Saved"} ·
-              UTF-8
+              {file.saving
+                ? "Saving…"
+                : file.conflict
+                  ? "Save conflict"
+                  : file.error
+                    ? "Save failed"
+                    : dirty
+                      ? "Waiting to save…"
+                      : "Saved"}{" "}
+              · UTF-8
             </p>
-            {file.error ? <p role="alert">{file.error}</p> : null}
+            {file.error ? (
+              <div className="file-save-error" role="alert">
+                <span>{file.error}</span>
+                {!file.conflict ? (
+                  <button
+                    type="button"
+                    onClick={() => drafts.flush(key!, saver(file.base.path))}
+                  >
+                    Retry
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             {file.conflict ? (
-              <details className="file-conflict">
-                <summary>Compare disk version</summary>
-                <SourcePreview
-                  text={file.conflict.text}
-                  path={file.base.path}
-                />
-              </details>
+              <div className="file-conflict">
+                <details>
+                  <summary>Compare disk version</summary>
+                  <SourcePreview
+                    text={file.conflict.text}
+                    path={file.base.path}
+                  />
+                </details>
+                <button type="button" onClick={() => setDiscardPending(true)}>
+                  Reload disk version
+                </button>
+              </div>
             ) : null}
             {discardPending ? (
               <div role="alert" className="file-discard">
@@ -359,24 +331,28 @@ export function WorkspaceFilesPanel({
                 </button>
               </div>
             ) : null}
-            {source ? (
+            {markdown ? (
+              <InlineMarkdownEditor
+                key={`${file.base.path}:${editorEpoch}`}
+                path={file.base.path}
+                text={file.text}
+                onChange={(text) =>
+                  drafts.edit(key!, text, saver(file.base.path))
+                }
+              />
+            ) : (
               <textarea
                 className="file-editor"
                 aria-label={`Edit ${file.base.path}`}
                 spellCheck={false}
-                disabled={file.saving}
                 value={file.text}
                 onChange={(event) => {
                   const text = file.base.text.includes("\r\n")
                     ? event.target.value.replace(/\r?\n/g, "\r\n")
                     : event.target.value;
-                  drafts.set(key!, { ...file, text, error: undefined });
+                  drafts.edit(key!, text, saver(file.base.path));
                 }}
               />
-            ) : markdown ? (
-              <Markdown text={file.text} />
-            ) : (
-              <SourcePreview text={file.text} path={file.base.path} />
             )}
           </>
         ) : null}

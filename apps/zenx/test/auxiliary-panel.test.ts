@@ -3,6 +3,7 @@ import test from "node:test";
 import React, { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
+import { EditorView } from "@codemirror/view";
 import { AuxiliaryPanel } from "../src/renderer/src/auxiliary-panel.js";
 import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 
@@ -13,10 +14,21 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
   );
   Object.assign(globalThis, {
     window: dom.window,
+    Window: dom.window.Window,
     document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    MutationObserver: dom.window.MutationObserver,
+    Node: dom.window.Node,
+    getComputedStyle: dom.window.getComputedStyle,
+    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+    cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
     React,
     IS_REACT_ACT_ENVIRONMENT: true,
   });
+  // React's legacy input polyfill probes these IE hooks in jsdom when the
+  // block editor focuses its textarea.
+  (dom.window.HTMLElement.prototype as any).attachEvent = () => {};
+  (dom.window.HTMLElement.prototype as any).detachEvent = () => {};
   const requests: { threadId: string; frames: boolean }[] = [];
   let stopped = 0;
   (dom.window as any).zenx = {
@@ -108,19 +120,16 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
       ][0]!.click(),
     );
     assert.equal(
-      document.querySelector(".file-content h1")?.textContent,
+      document
+        .querySelector(".file-content .cm-live-heading-1")
+        ?.textContent?.trim(),
       "Workspace guide",
     );
     assert.equal(document.querySelector(".file-content script"), null);
-    await act(async () =>
-      [...document.querySelectorAll<HTMLButtonElement>(".file-toolbar button")]
-        .find((e) => e.textContent === "Edit")!
-        .click(),
-    );
     assert.ok(
-      document
-        .querySelector<HTMLTextAreaElement>(".file-editor")
-        ?.value.includes("<script>"),
+      EditorView.findFromDOM(document.querySelector<HTMLElement>(".cm-editor")!)
+        ?.state.doc.toString()
+        .includes("<script>"),
     );
     await act(async () =>
       tab("Files").dispatchEvent(
