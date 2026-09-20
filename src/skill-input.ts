@@ -50,6 +50,19 @@ export async function prepareSkillInput(
   return normalizeUserInput(input as UserInput);
 }
 
+/** Compare an incoming request with its captured input without touching packages. */
+export function matchesSkillInputSnapshot(
+  requested: RequestedUserInput,
+  captured: UserInput,
+): boolean {
+  return sameRequestedInput(
+    requestedSkillInput(captured),
+    typeof requested === "string"
+      ? [{ type: "text", text: requested }]
+      : requested,
+  );
+}
+
 function sameRequestedInput(
   left: readonly (UserInputPart | SkillReference)[],
   right: readonly (UserInputPart | SkillReference)[],

@@ -66,6 +66,14 @@ current `expectedTurnId`. Native image/audio parts use canonical attachment
 references. Approval handling uses the same connection approval channel as
 ordinary sends. CAS's fixed mapped surface is unchanged.
 
+A `start` retry with the same client message ID and original input returns the
+already delivered Turn ID without appending or executing again. This applies
+while that Turn runs and after completion or Host restart, even when the Skill
+has since changed or been disabled. Reusing the ID with different input returns
+`idempotency_conflict`. Ordinary starts without a client ID remain independent.
+Queued and replacement intents are not proof of delivery: their internal
+launches still execute the captured input once.
+
 Loaded text and `skillSource` provenance are stored in existing canonical input
 parts. Queue draining, replacement launch and identical message retries reuse
 that snapshot. Editing, disabling or removing a package does not rewrite old

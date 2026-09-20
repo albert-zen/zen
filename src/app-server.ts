@@ -1,4 +1,5 @@
 import {
+  matchesSkillInputSnapshot,
   prepareSkillInput,
   type RequestedUserInput,
   type SkillInputLoader,
@@ -1021,6 +1022,38 @@ export class ZenAppServer {
   ): Promise<TurnHandle> {
     const launch = await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      // Only delivered user messages prove execution. Queue/replacement intents
+      // still need their prepared internal launch, even with the same client ID.
+      if (internal.preparedInput !== true && options.clientId !== undefined) {
+        const duplicate = thread.items.find(
+          (item): item is UserMessageItem =>
+            item.type === "user_message" && item.clientId === options.clientId,
+        );
+        if (duplicate !== undefined) {
+          if (
+            !matchesSkillInputSnapshot(
+              requestedInput,
+              contentFromUserMessage(duplicate),
+            )
+          ) {
+            throw new AppServerError(
+              "idempotency_conflict",
+              "Start client id was already used for different input",
+            );
+          }
+          const active = this.#activeTurns.get(threadId);
+          return {
+            handle: {
+              id: duplicate.turnId,
+              done:
+                active?.turnId === duplicate.turnId
+                  ? active.done
+                  : Promise.resolve(),
+            },
+            ready: Promise.resolve(),
+          };
+        }
+      }
       const input =
         internal.preparedInput === true
           ? normalizeAppServerInput(requestedInput as UserInput, "Turn")

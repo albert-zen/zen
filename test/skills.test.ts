@@ -152,6 +152,153 @@ function serverFor(
   });
 }
 
+test("start retries reuse one running/completed canonical Turn across Skill changes and restart", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-skills-start-retry-"));
+  const service = new SkillsService(path.join(root, "host"));
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let calls = 0;
+  const adapter: ModelAdapter = {
+    provider: "skills-test",
+    async *stream() {
+      calls++;
+      await gate;
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  let first: Awaited<ReturnType<ZenAppServer["startTurn"]>> | undefined;
+  try {
+    const source = path.join(root, "source");
+    await mkdir(source);
+    await writeFile(
+      path.join(source, "SKILL.md"),
+      "---\nname: sample\ndescription: Test\n---\nORIGINAL_BODY",
+    );
+    const skill = await service.importDirectory(source);
+    const server = serverFor(root, [], service, adapter);
+    const thread = await server.startThread();
+    const reference = [{ type: "skill" as const, id: skill.id }];
+    first = await server.startTurn(thread.id, reference, {
+      clientId: "retry-start",
+    });
+    const running = await server.startTurn(thread.id, reference, {
+      clientId: "retry-start",
+    });
+    assert.equal(running.id, first.id);
+    assert.equal(running.done, first.done);
+    await writeFile(
+      path.join(skill.directory, "SKILL.md"),
+      "INVALID MODIFIED PACKAGE",
+    );
+    await service.setMode(skill.id, "disabled");
+    const disabledRetry = await server.startTurn(thread.id, reference, {
+      clientId: "retry-start",
+    });
+    assert.equal(disabledRetry.id, first.id);
+    await assert.rejects(
+      server.startTurn(thread.id, "different input", {
+        clientId: "retry-start",
+      }),
+      { code: "idempotency_conflict" },
+    );
+    release();
+    await first.done;
+    const before = (await server.readThread(thread.id)).items;
+    const completed = await server.startTurn(thread.id, reference, {
+      clientId: "retry-start",
+    });
+    await completed.done;
+    assert.equal(completed.id, first.id);
+    assert.deepEqual((await server.readThread(thread.id)).items, before);
+    const restored = serverFor(root, [], service, adapter);
+    const replayed = await restored.startTurn(thread.id, reference, {
+      clientId: "retry-start",
+    });
+    await replayed.done;
+    assert.equal(replayed.id, first.id);
+    assert.equal(calls, 1);
+    assert.deepEqual((await restored.readThread(thread.id)).items, before);
+    await assert.rejects(
+      restored.startTurn(thread.id, [{ type: "skill", id: "different-id" }], {
+        clientId: "retry-start",
+      }),
+      { code: "idempotency_conflict" },
+    );
+    await writeFile(
+      path.join(skill.directory, "SKILL.md"),
+      "---\nname: sample\ndescription: Test\n---\nUPDATED_BODY",
+    );
+    const independent1 = await restored.startTurn(thread.id, "ordinary send");
+    await independent1.done;
+    const independent2 = await restored.startTurn(thread.id, "ordinary send");
+    await independent2.done;
+    assert.notEqual(independent1.id, independent2.id);
+    assert.equal(calls, 3);
+  } finally {
+    release();
+    await first?.done;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a completed start with the same client ID never appends or executes twice", async () => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "zen-completed-start-retry-"),
+  );
+  try {
+    const requests: ModelMessage[][] = [];
+    const server = serverFor(
+      root,
+      requests,
+      new SkillsService(path.join(root, "host")),
+    );
+    const thread = await server.startThread();
+    const first = await server.startTurn(thread.id, "perform once", {
+      clientId: "same-request",
+    });
+    await first.done;
+    const before = (await server.readThread(thread.id)).items;
+    const retry = await server.startTurn(thread.id, "perform once", {
+      clientId: "same-request",
+    });
+    await retry.done;
+    assert.equal(requests.length, 1);
+    assert.equal(retry.id, first.id);
+    assert.deepEqual((await server.readThread(thread.id)).items, before);
+    const projection = new NativeRecoveryProjection(server);
+    const responses: unknown[] = [];
+    const connection = new NativeConnection({
+      appServer: server,
+      projection,
+      send: (message) => responses.push(message),
+    });
+    try {
+      await connection.receive({
+        id: "native-retry",
+        method: "zen/turn/send",
+        params: {
+          threadId: thread.id,
+          mode: "start",
+          clientUserMessageId: "same-request",
+          input: [{ type: "text", text: "perform once" }],
+        },
+      });
+      assert.deepEqual(responses, [
+        { id: "native-retry", result: { turnId: first.id } },
+      ]);
+      assert.equal(requests.length, 1);
+      assert.deepEqual((await server.readThread(thread.id)).items, before);
+    } finally {
+      connection.close();
+      projection.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("queue, steer and replacement capture Skills at admission and reject stale turns", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-skills-admission-"));
   const service = new SkillsService(path.join(root, "host"));
