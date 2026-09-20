@@ -14,6 +14,8 @@ import {
   ZENX_CHROME_EXTENSION_ORIGIN,
 } from "../src/main/chrome-extension-bridge.js";
 import {
+  chromeNativeHostFailureDiagnostic,
+  chromeNativeHostUserDataDirectory,
   CHROME_NATIVE_INPUT_MAX_BYTES,
   ChromeNativeMessageDecoder,
   encodeChromeNativeMessage,
@@ -38,6 +40,39 @@ test("native messaging framing preserves split UTF-8 messages and rejects oversi
   const oversized = Buffer.alloc(4);
   oversized.writeUInt32LE(CHROME_NATIVE_INPUT_MAX_BYTES + 1);
   assert.throws(() => decoder.push(oversized), /exceeds/u);
+});
+
+test("native host resolves an explicit isolated user data directory without leaking diagnostics", () => {
+  const isolated = path.resolve(os.tmpdir(), "zenx native fixture");
+  assert.equal(
+    chromeNativeHostUserDataDirectory({
+      argv: ["ZenX", `--user-data-dir=${isolated}`],
+      fallback: "/fallback",
+    }),
+    isolated,
+  );
+  assert.equal(
+    chromeNativeHostUserDataDirectory({
+      argv: ["ZenX"],
+      commandLineValue: isolated,
+      fallback: "/fallback",
+    }),
+    isolated,
+  );
+  assert.equal(
+    chromeNativeHostUserDataDirectory({
+      argv: ["ZenX"],
+      fallback: "/fallback",
+    }),
+    "/fallback",
+  );
+  const diagnostic = chromeNativeHostFailureDiagnostic(
+    Object.assign(new Error("ws://127.0.0.1/native/private-token"), {
+      code: "ENOENT",
+    }),
+  );
+  assert.equal(diagnostic, "ZenX Chrome native host failed (ENOENT)\n");
+  assert.doesNotMatch(diagnostic, /private-token|127\.0\.0\.1/u);
 });
 
 test("bundled extension key has the native-host allowlisted extension ID", async () => {

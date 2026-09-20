@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 import WebSocket from "ws";
 
@@ -52,6 +53,40 @@ export function chromeNativeHostOrigin(
   expectedOrigin: string,
 ): string | undefined {
   return argv.find((value) => value === expectedOrigin);
+}
+
+export function chromeNativeHostUserDataDirectory(options: {
+  argv: readonly string[];
+  commandLineValue?: string;
+  fallback: string;
+}): string {
+  const prefix = "--user-data-dir=";
+  const argvValues = options.argv.flatMap((value, index, values) => {
+    if (value.startsWith(prefix)) return [value.slice(prefix.length)];
+    return value === "--user-data-dir" && values[index + 1] !== undefined
+      ? [values[index + 1]!]
+      : [];
+  });
+  const candidates = [options.commandLineValue, ...argvValues].filter(
+    (value): value is string => value !== undefined && value.length > 0,
+  );
+  const distinct = [...new Set(candidates.map((value) => path.resolve(value)))];
+  if (distinct.length === 0) return options.fallback;
+  if (distinct.length !== 1 || !path.isAbsolute(distinct[0]!)) {
+    throw new Error("ZenX native host user data directory is invalid");
+  }
+  return distinct[0]!;
+}
+
+export function chromeNativeHostFailureDiagnostic(error: unknown): string {
+  const code =
+    typeof error === "object" &&
+    error !== null &&
+    typeof (error as { code?: unknown }).code === "string" &&
+    /^[A-Z0-9_]{1,32}$/u.test((error as { code: string }).code)
+      ? ` (${(error as { code: string }).code})`
+      : "";
+  return `ZenX Chrome native host failed${code}\n`;
 }
 
 export async function runChromeNativeHost(options: {
