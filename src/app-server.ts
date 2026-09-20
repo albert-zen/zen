@@ -1,3 +1,8 @@
+import {
+  prepareSkillInput,
+  type RequestedUserInput,
+  type SkillInputLoader,
+} from "./skill-input.js";
 import { loadWorkspaceInstructions } from "./workspace-instructions.js";
 import type { WorkspaceInstructionFile } from "./item.js";
 import { pendingQueuedMessages } from "./input-queue.js";
@@ -271,6 +276,7 @@ export class ZenAppServer {
     label?: string;
   }>();
   #acceptingRootOperations = true;
+  readonly #skills: SkillInputLoader | undefined;
   readonly #id: () => string;
   readonly #now: () => string;
   readonly #threads = new Map<string, Thread>();
@@ -296,6 +302,7 @@ export class ZenAppServer {
 
   constructor(options: {
     journal: ThreadJournal;
+    skills?: SkillInputLoader;
     attachments?: AttachmentStore;
     runtime: AgentRuntime;
     providerRegistry: ProviderRegistry;
@@ -307,6 +314,7 @@ export class ZenAppServer {
     now?: () => string;
   }) {
     this.#journal = options.journal;
+    this.#skills = options.skills;
     this.#attachments = options.attachments ?? new InMemoryAttachmentStore();
     this.#runtime = options.runtime;
     this.#providerRegistry = options.providerRegistry;
@@ -759,17 +767,47 @@ export class ZenAppServer {
     });
   }
 
+  async #prepareSkillInput(
+    thread: Thread,
+    requested: RequestedUserInput,
+    clientId?: string,
+  ): Promise<UserInput> {
+    const prior =
+      clientId === undefined
+        ? undefined
+        : thread.items.find(
+            (item) =>
+              (item.type === "user_message" ||
+                item.type === "user_message_queued" ||
+                item.type === "turn_replacement_requested") &&
+              item.clientId === clientId,
+          );
+    const priorInput =
+      prior?.type === "user_message"
+        ? contentFromUserMessage(prior)
+        : prior?.type === "user_message_queued"
+          ? prior.input
+          : prior?.type === "turn_replacement_requested"
+            ? inputFromReplacement(prior)
+            : undefined;
+    return await prepareSkillInput(this.#skills, requested, priorInput);
+  }
+
   async queueMessage(
     threadId: string,
-    requestedInput: string | UserInput,
+    requestedInput: RequestedUserInput,
     clientId: string,
     options: { requestApproval?: ApprovalHandler } = {},
   ): Promise<void> {
-    const input = normalizeAppServerInput(requestedInput, "Queue");
     if (clientId.trim().length === 0)
       throw new AppServerError("invalid_input", "Queue client id is required");
     await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      const input = await this.#prepareSkillInput(
+        thread,
+        requestedInput,
+        clientId,
+      );
       const duplicate = thread.items.find(
         (item) =>
           (item.type === "user_message_queued" ||
@@ -840,10 +878,15 @@ export class ZenAppServer {
         if (this.#pendingReplacement(thread) !== undefined) return;
         const queued = pendingQueuedMessages(thread.items)[0];
         if (queued === undefined) return;
-        const turn = await this.#launchTurn(threadId, queued.input, {
-          ...options,
-          clientId: queued.clientId,
-        });
+        const turn = await this.#launchTurn(
+          threadId,
+          queued.input,
+          {
+            ...options,
+            clientId: queued.clientId,
+          },
+          { preparedInput: true },
+        );
         await turn.done;
         if (
           !thread.items.some(
@@ -862,7 +905,7 @@ export class ZenAppServer {
 
   async startTurn(
     threadId: string,
-    input: string | UserInput,
+    input: RequestedUserInput,
     options: {
       clientId?: string;
       selection?: ProviderSelectionInput;
@@ -963,7 +1006,7 @@ export class ZenAppServer {
 
   async #launchTurn(
     threadId: string,
-    requestedInput: string | UserInput,
+    requestedInput: RequestedUserInput,
     options: {
       clientId?: string;
       selection?: ProviderSelectionInput;
@@ -971,13 +1014,21 @@ export class ZenAppServer {
       requestApproval?: ApprovalHandler;
     },
     internal: {
+      preparedInput?: boolean;
       turnId?: string;
       replacementClientId?: string;
     } = {},
   ): Promise<TurnHandle> {
-    const input = normalizeAppServerInput(requestedInput, "Turn");
     const launch = await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      const input =
+        internal.preparedInput === true
+          ? normalizeAppServerInput(requestedInput as UserInput, "Turn")
+          : await this.#prepareSkillInput(
+              thread,
+              requestedInput,
+              options.clientId,
+            );
       const predecessor = this.#activeTurns.get(threadId);
       if (predecessor !== undefined) {
         if (!this.#isTerminal(thread, predecessor.turnId)) {
@@ -1241,10 +1292,9 @@ export class ZenAppServer {
   async replaceTurn(
     threadId: string,
     expectedTurnId: string,
-    requestedInput: string | UserInput,
+    requestedInput: RequestedUserInput,
     options: ReplaceTurnOptions,
   ): Promise<ReplaceTurnResult> {
-    const input = normalizeAppServerInput(requestedInput, "Replacement");
     if (options.clientId.length === 0) {
       throw new AppServerError(
         "invalid_request",
@@ -1254,6 +1304,11 @@ export class ZenAppServer {
 
     const planned = await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      const input = await this.#prepareSkillInput(
+        thread,
+        requestedInput,
+        options.clientId,
+      );
       const resolved = this.#requireSelection(thread.effectiveConfiguration());
       await this.#validateInput(input, resolved.model.inputModalities);
       const existing = thread.items.find(
@@ -1413,6 +1468,7 @@ export class ZenAppServer {
           },
           {
             turnId: replacementIntent.successorTurnId,
+            preparedInput: true,
             replacementClientId: replacementIntent.clientId,
           },
         );
@@ -1440,12 +1496,16 @@ export class ZenAppServer {
   async steerTurn(
     threadId: string,
     expectedTurnId: string,
-    requestedInput: string | UserInput,
+    requestedInput: RequestedUserInput,
     options: SteerTurnOptions = {},
   ): Promise<TurnHandle> {
-    const input = normalizeAppServerInput(requestedInput, "Steer");
     return await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      const input = await this.#prepareSkillInput(
+        thread,
+        requestedInput,
+        options.clientId,
+      );
       if (options.clientId !== undefined) {
         const duplicate = thread.items.find(
           (item): item is UserMessageItem =>

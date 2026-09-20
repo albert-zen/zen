@@ -4,6 +4,7 @@ import { App } from "./App";
 import { getAppearanceController } from "./appearance";
 import "./theme.css";
 import "./styles.css";
+import "./skills.css";
 
 getAppearanceController();
 

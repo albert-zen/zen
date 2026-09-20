@@ -2,6 +2,8 @@
 
 ## 核心概念
 
+- **Host Skills** — Host 保存标准目录的完整导入副本与独立可见性覆盖；ZAS 的统一发送入口按预算将自动目录和显式引用解析为带来源的 canonical 文本输入，重试从已有 Item 复用快照，恢复与压缩不重新读取目录。默认手动模式不自动披露任何元数据，禁用模式拒绝加载。
+
 - **ZenX 共享浏览器** — Host 拥有的 WebContentsView 标签按 Thread 分组，以独立持久 profile 承载用户与 Agent 对同一页面 target 的操作；可信 Tool invocation 把 provider session 绑定到 Thread，窗口只挂载该 target 的实时视图，页面和绑定都不成为会话权威。
 - **ZenX Computer 实时观察** — Host 以 Thread、Tool invocation 与精确窗口 target 关联最近八次 Computer 操作，并只在可见订阅期间串行捕获有界、可取消且带时间戳的窗口帧；观察失败不改变工具结果或建立桌面接管状态。
 - **ZenX 文件草稿** — Renderer 在窗口生命周期内按 Thread/path 保存易失编辑草稿，独立于会话历史；Host 以读取版本检测外部冲突并原子替换现有 UTF-8 文件，人工编辑不作为 Agent 工具执行，不更改线程权限策略。
@@ -493,8 +495,7 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
 - Plugin Package v2 为发现提供的最小 metadata 是稳定 `id`、非空 `name` / short
   `description` / `mainDocument`，以及普通 namespaced tool 的 `name` / `description` /
   `inputSchema`；这是所有非 builtin 工具的唯一 manifest 与 discovery 合同。
-- 插件 main document 是首要模型说明；独立 Skills 平台暂缓，现有固定协议
-  `skills/list` 不因此获得新的会话语义。
+- 插件 main document 是插件的首要模型说明；独立 Skills 由 Host 导入、配置并经 ZAS 统一加载，CAS `skills/list` 保持既有兼容范围。
 - 同一模型响应产生的 direct calls 与一次 `run_code` 中的 nested calls 共用 Turn 内
   有界执行器：prepare、Host admission 与
   canonical result commit 保持模型提交顺序，只有标记为 `parallel_safe` 的 runtime

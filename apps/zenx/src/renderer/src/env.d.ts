@@ -62,6 +62,16 @@ declare global {
   interface Window {
     zenx: {
       platform: NodeJS.Platform;
+      skills: {
+        list(): Promise<import("../../../../cli/src/skills.js").SkillsSnapshot>;
+        importDirectory(
+          directory: string,
+        ): Promise<import("../../../../cli/src/skills.js").SkillEntry>;
+        setMode(
+          id: string,
+          mode: import("../../../../cli/src/skills.js").SkillMode | null,
+        ): Promise<void>;
+      };
       workspaceBrowser: {
         command(
           threadId: string,

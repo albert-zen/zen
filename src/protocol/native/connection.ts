@@ -1,4 +1,8 @@
 import type { JsonRpcMessage, SendJson } from "../codex/wire.js";
+import type { ZenAppServer } from "../../app-server.js";
+import type { ApprovalHandler } from "../../tool.js";
+import { validateUserInput, type UserInputPart } from "../../item.js";
+import type { SkillReference } from "../../skill-input.js";
 import { isRecord, isRequest } from "../codex/wire.js";
 import {
   NativeRecoveryProjection,
@@ -19,13 +23,19 @@ export class NativeConnection {
   readonly #unsubscribe: () => void;
   #closed = false;
   #nativeSession = false;
+  readonly #appServer: ZenAppServer | undefined;
+  readonly #requestApproval: ApprovalHandler | undefined;
 
   constructor(options: {
     projection: NativeRecoveryProjection;
     send: SendJson;
+    appServer?: ZenAppServer;
+    requestApproval?: ApprovalHandler;
   }) {
     this.#projection = options.projection;
     this.#send = options.send;
+    this.#appServer = options.appServer;
+    this.#requestApproval = options.requestApproval;
     this.#unsubscribe = this.#projection.subscribe((projected) => {
       if (this.#closed) return;
       if (projected.type === "model_catalog_updated") {
@@ -53,6 +63,96 @@ export class NativeConnection {
 
   async receive(message: JsonRpcMessage): Promise<void> {
     if (this.#closed || !isRequest(message)) return;
+    if (message.method === "zen/turn/send") {
+      try {
+        const params = message.params;
+        if (this.#appServer === undefined)
+          throw new Error("Native send is unavailable");
+        if (
+          !isRecord(params) ||
+          typeof params.threadId !== "string" ||
+          typeof params.clientUserMessageId !== "string" ||
+          params.clientUserMessageId.length === 0 ||
+          !Array.isArray(params.input) ||
+          params.input.length === 0
+        )
+          throw new Error(
+            "threadId, clientUserMessageId and input are required",
+          );
+        const input: (UserInputPart | SkillReference)[] = params.input.map(
+          (part: unknown) => {
+            if (!isRecord(part)) throw new Error("Invalid input part");
+            if (
+              part.type === "skill" &&
+              typeof part.id === "string" &&
+              part.id.length > 0
+            )
+              return { type: "skill", id: part.id };
+            if (part.skillSource !== undefined)
+              throw new Error("Skill provenance is Host-owned");
+            validateUserInput([part], "input");
+            return part as unknown as UserInputPart;
+          },
+        );
+        const options = {
+          clientId: params.clientUserMessageId,
+          ...(this.#requestApproval === undefined
+            ? {}
+            : { requestApproval: this.#requestApproval }),
+        };
+        this.#nativeSession = true;
+        this.#subscriptions.add(params.threadId);
+        let result: { turnId?: string } = {};
+        if (params.mode === "queue")
+          await this.#appServer.queueMessage(
+            params.threadId,
+            input,
+            options.clientId,
+            options,
+          );
+        else if (params.mode === "start") {
+          const turn = await this.#appServer.startTurn(
+            params.threadId,
+            input,
+            options,
+          );
+          result = { turnId: turn.id };
+          void turn.done.catch(() => undefined);
+        } else {
+          if (typeof params.expectedTurnId !== "string")
+            throw new Error("expectedTurnId is required");
+          if (params.mode === "steer") {
+            const turn = await this.#appServer.steerTurn(
+              params.threadId,
+              params.expectedTurnId,
+              input,
+              options,
+            );
+            result = { turnId: turn.id };
+            void turn.done.catch(() => undefined);
+          } else if (params.mode === "replace") {
+            const replacement = await this.#appServer.replaceTurn(
+              params.threadId,
+              params.expectedTurnId,
+              input,
+              options,
+            );
+            result = { turnId: replacement.turn.id };
+            void replacement.turn.done.catch(() => undefined);
+          } else throw new Error("Invalid send mode");
+        }
+        this.#send({ id: message.id, result });
+      } catch (error) {
+        this.#send({
+          id: message.id,
+          error: {
+            code: -32602,
+            message: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
+      return;
+    }
     if (message.method === NATIVE_INITIALIZE_METHOD) {
       this.#nativeSession = true;
       this.#send({

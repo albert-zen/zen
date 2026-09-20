@@ -20,7 +20,11 @@ export function WorkflowCommandMenu({
         <button
           aria-selected={index === activeIndex}
           className={index === activeIndex ? "is-active" : undefined}
-          key={`${command.kind}:${command.name}`}
+          key={
+            command.kind === "skill"
+              ? command.id
+              : `${command.kind}:${command.name}`
+          }
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => onChoose(command)}
           role="option"
@@ -28,7 +32,13 @@ export function WorkflowCommandMenu({
         >
           <strong>/{command.name}</strong>
           <span>{command.description}</span>
-          <small>{command.kind === "built-in" ? "Built in" : "Custom"}</small>
+          <small>
+            {command.kind === "skill"
+              ? `Skill · ${command.source} · ${command.id.slice(0, 8)}`
+              : command.kind === "built-in"
+                ? "Built in"
+                : "Custom"}
+          </small>
         </button>
       ))}
     </div>

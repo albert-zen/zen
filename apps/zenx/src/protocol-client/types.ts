@@ -126,6 +126,16 @@ export type UserInputPart =
   | { type: "attachment"; attachment: AttachmentRef };
 
 export interface ClientRequestParams {
+  "zen/turn/send": {
+    threadId: string;
+    mode: "start" | "queue" | "steer" | "replace";
+    expectedTurnId?: string;
+    clientUserMessageId: string;
+    input: readonly (
+      | import("../../../../src/item.js").UserInputPart
+      | import("../../../../src/skill-input.js").SkillReference
+    )[];
+  };
   initialize: InitializeParams;
   "zen/initialize": Record<string, never>;
   "account/read": Record<string, never>;
@@ -187,6 +197,7 @@ export interface ClientRequestParams {
 }
 
 export interface ClientRequestResults {
+  "zen/turn/send": { turnId?: string };
   initialize: InitializeResult;
   "zen/initialize": { processEpoch: string };
   "account/read": { account: null; requiresOpenaiAuth: false };

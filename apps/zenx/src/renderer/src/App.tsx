@@ -1,3 +1,4 @@
+import { parseSkillDraft } from "./skill-draft.js";
 import {
   handleCompactCommand,
   isCompactCommand,
@@ -1278,7 +1279,7 @@ export function App() {
   ) => {
     if (submission.text.length > 0)
       await window.zenx.titles
-        .observe(threadId, submission.text)
+        .observe(threadId, parseSkillDraft(submission.text).text)
         .then((projection) => {
           if (projection !== undefined)
             setTitleSnapshot((current) => ({
@@ -1291,6 +1292,36 @@ export function App() {
             `Thread title could not be staged: ${describeError(error)}`,
           ),
         );
+    const skillDraft = parseSkillDraft(submission.text);
+    if (skillDraft.skills.length > 0) {
+      if (archivingThreadIdsRef.current.has(threadId))
+        throw new Error("This Thread is being archived.");
+      if (
+        (submission.intent === "steer" || submission.intent === "replace") &&
+        submission.expectedTurnId === null
+      )
+        throw new Error("The active turn changed before sending");
+      const input: (
+        | import("../../../../../src/item.js").UserInputPart
+        | import("../../../../../src/skill-input.js").SkillReference
+      )[] = [];
+      if (skillDraft.text.trim().length > 0)
+        input.push({ type: "text", text: skillDraft.text });
+      for (const skill of skillDraft.skills)
+        input.push({ type: "skill", id: skill.id });
+      for (const image of submission.images)
+        input.push({ type: "image", attachment: image.attachment });
+      await window.zenx.protocol.request("zen/turn/send", {
+        threadId,
+        input,
+        mode: submission.intent,
+        clientUserMessageId: submission.clientUserMessageId,
+        ...(submission.expectedTurnId === null
+          ? {}
+          : { expectedTurnId: submission.expectedTurnId }),
+      });
+      return;
+    }
     const input = await composerSubmissionInput(submission);
     if (submission.intent === "start") {
       if (archivingThreadIdsRef.current.has(threadId))
