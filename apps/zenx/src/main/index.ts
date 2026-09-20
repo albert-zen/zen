@@ -1,3 +1,4 @@
+import { SkillsService, type SkillMode } from "../../../cli/src/skills.js";
 import { createImZenXProfileLoader } from "./imzenx-profile-loader.js";
 import { readZenXConnectionDescriptor } from "../protocol-client/connection-descriptor.js";
 import {
@@ -293,6 +294,20 @@ async function bootstrapZenX(): Promise<void> {
   );
   const zenDataDirectory = resolve(
     process.env["ZENX_DATA_DIR"] ?? join(app.getPath("home"), ".zen"),
+  );
+  const skills = new SkillsService(zenDataDirectory);
+  ipcMain.handle(ipcChannels.skillsList, () => skills.list());
+  ipcMain.handle(ipcChannels.skillsImport, (_event, directory: unknown) => {
+    if (typeof directory !== "string")
+      throw new Error("Skill directory is required");
+    return skills.importDirectory(directory);
+  });
+  ipcMain.handle(
+    ipcChannels.skillsMode,
+    (_event, id: unknown, mode: unknown) => {
+      if (typeof id !== "string") throw new Error("Skill id is required");
+      return skills.setMode(id, mode as SkillMode | null);
+    },
   );
   const imageAttachments = new FileAttachmentStore(
     join(zenDataDirectory, "attachments"),

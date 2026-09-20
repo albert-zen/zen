@@ -890,3 +890,7 @@ Pinned threads come first, collapsed project threads do not consume a number, an
 Markdown images render inline and open a full-window preview when clicked. PNG/JPEG/GIF/WebP data URLs, HTTP(S) image URLs, absolute local paths, file URLs, and paths relative to the current thread workspace are supported. Local files are read only for display, validated as images, and never imported into the journal. Missing or unsupported images show a placeholder. Escape, the close button or the backdrop closes the preview.
 
 Tool image content already returned by `view_image` appears in its expanded tool detail with the same preview. Tool commands, arguments and output text remain unchanged; a plain path alone remains text.
+
+## Skills
+
+Import standard Skill directories and choose manual, automatic or disabled mode in Settings → Skills. See [Skills](docs/skills.md) for configuration precedence, explicit slash references, resource copies and replay budgets.

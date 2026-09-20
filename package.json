@@ -34,7 +34,8 @@
   "dependencies": {
     "acorn": "8.18.0",
     "undici": "^7.29.0",
-    "ws": "^8.18.3"
+    "ws": "^8.18.3",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

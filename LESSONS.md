@@ -36,7 +36,6 @@
   因此现在只把复用同一 installer 的只读 package metadata 目录纳入范围，不扩大为新的分发 authority
 - OS daemon、launch agent、云端 Plugin/ZAS service；本阶段 ZenX Host 只在应用进程中
   跨窗口存活，显式 Quit 后停止
-- 独立 Skills 平台；本阶段插件以 main document 提供首要模型说明
 - 借 Plugin Platform 或 Tool Presentation 顺带进行 Provider、图片、attachment 或
   compaction 重构
 - 工具失败后的自动重试、fallback、自愈或 durable recovery 状态机；工具局部失败只
@@ -48,6 +47,8 @@
 - 与 zen-legacy 的数据、协议、接口兼容
 
 ## 已解除的非目标
+
+- **独立 Skills（2026-09-20，#184）**。原限制用于优先闭合插件主文档；标准技能导入、手动引用和独立可见性已成为明确产品需求，因此解除阶段性限制。技能仍是 Host 资源，不拥有运行时或第二份会话历史。
 
 - **ZAS 自有协议（2026-09-03）**。原判断禁止 Zen 自创 wire protocol，是为了避免
   第二个 AppServer / Thread authority 与未收口的半迁移；错误在于把这项约束等同于

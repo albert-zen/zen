@@ -23,6 +23,88 @@ const { ThreadView } = await import("../src/renderer/src/ThreadView.js");
 
 const noop = async () => undefined;
 
+test("manual Skills are slash candidates and selection stays removable without sending", async () => {
+  await withDom(async (root) => {
+    let composer = editComposer(emptyComposerState(), "/sample");
+    let sends = 0;
+    const priorFrame = globalThis.requestAnimationFrame;
+    globalThis.requestAnimationFrame = (callback) => {
+      callback(0);
+      return 0;
+    };
+    const skill = {
+      id: "11111111-1111-1111-1111-111111111111",
+      name: "sample",
+      description: "Manual instructions",
+      source: "C:/original/sample",
+      directory: "C:/host/sample",
+      mode: "manual" as const,
+      configurationSource: "default" as const,
+    };
+    Object.assign(window, {
+      zenx: {
+        skills: {
+          list: async () => ({
+            skills: [
+              skill,
+              {
+                ...skill,
+                id: "22222222-2222-2222-2222-222222222222",
+                name: "disabled",
+                mode: "disabled",
+              },
+            ],
+            errors: [],
+            catalogBudgetBytes: 16384,
+          }),
+        },
+      },
+    });
+    const renderView = () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer,
+          thread: null,
+          onDraftChange: (text: string) => {
+            composer = editComposer(composer, text);
+            renderView();
+          },
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: async () => {
+            sends++;
+          },
+        }),
+      );
+    try {
+      await act(async () => renderView());
+      assert.match(
+        requiredElement('[role="listbox"]').textContent ?? "",
+        /sample/,
+      );
+      assert.doesNotMatch(
+        requiredElement('[role="listbox"]').textContent ?? "",
+        /disabled/,
+      );
+      await act(async () => requiredButton('[role="option"]').click());
+      assert.equal(sends, 0);
+      assert.equal(
+        document.querySelector<HTMLTextAreaElement>("textarea")!.value,
+        "",
+      );
+      assert.match(composer.draft.text, /11111111/);
+      await act(async () =>
+        requiredButton('[aria-label="Remove Skill sample"]').click(),
+      );
+      assert.equal(composer.draft.text, "");
+      assert.equal(sends, 0);
+    } finally {
+      globalThis.requestAnimationFrame = priorFrame;
+    }
+  });
+});
+
 test("idle composer exposes one disabled Send action when empty", () => {
   const html = render(false, []);
   assert.match(html, /aria-label="Send"/u);

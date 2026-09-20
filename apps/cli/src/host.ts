@@ -1,3 +1,4 @@
+import { SkillsService } from "./skills.js";
 import { RtkShellOutputFilter } from "../../../src/shell-output-filter.js";
 import { createModelDiagnosticWriter } from "./model-diagnostics.js";
 import { randomUUID } from "node:crypto";
@@ -252,6 +253,7 @@ export function createHostedAppServer(
   }
   const profiles = preparedProfiles.map((profile) => profile.registryProfile);
   const appServer = new ZenAppServer({
+    skills: new SkillsService(options.dataDirectory),
     journal,
     attachments,
     runtime: new AgentRuntime({

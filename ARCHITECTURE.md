@@ -5,6 +5,7 @@
 - **ZenX Thread Target** — Host 从 App Server 当前列表与 workspace 身份投影解析完整 ID、唯一前缀或精确标题，歧义只返回易读候选；共享解析不保存索引或拥有会话语义。
 - **ZenX 自控原文与发送** — 原生 `zen/thread/read` 无订阅地读取 canonical snapshot，Host 用 Item/Turn 边界派生分页与原文片段，并从可信工具调用身份及当前快照推导发送幂等键和 Turn fence；发送偏好仍由 Host profile 持有，不引入命令账本或会话权威。
 - **Trigger Thread Watch** — 既有 Trigger 配置固定来源与目标 Thread，可监听一次或后续各 Turn 的终态；注册后的可选 canonical 快照与实时事件使用同一去重入口，一次性监听在事件接纳时停用，通知发送的失败或不确定性单独记录，不重试或补发离线事件。
+- **Host Skills** — Host 保存标准目录的完整导入副本与独立可见性覆盖；ZAS 的统一发送入口按预算将自动目录和显式引用解析为带来源的 canonical 文本输入，重试从已有 Item 复用快照，恢复与压缩不重新读取目录。默认手动模式不自动披露任何元数据，禁用模式拒绝加载。
 
 - **ZenX 共享浏览器** — Host 拥有的 WebContentsView 标签按 Thread 分组，以独立持久 profile 承载用户与 Agent 对同一页面 target 的操作；可信 Tool invocation 把 provider session 绑定到 Thread，窗口只挂载该 target 的实时视图，页面和绑定都不成为会话权威。
 - **ZenX Computer 实时观察** — Host 以 Thread、Tool invocation 与精确窗口 target 关联最近八次 Computer 操作，并只在可见订阅期间串行捕获有界、可取消且带时间戳的窗口帧；观察失败不改变工具结果或建立桌面接管状态。
@@ -497,8 +498,7 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
 - Plugin Package v2 为发现提供的最小 metadata 是稳定 `id`、非空 `name` / short
   `description` / `mainDocument`，以及普通 namespaced tool 的 `name` / `description` /
   `inputSchema`；这是所有非 builtin 工具的唯一 manifest 与 discovery 合同。
-- 插件 main document 是首要模型说明；独立 Skills 平台暂缓，现有固定协议
-  `skills/list` 不因此获得新的会话语义。
+- 插件 main document 是插件的首要模型说明；独立 Skills 由 Host 导入、配置并经 ZAS 统一加载，CAS `skills/list` 保持既有兼容范围。
 - 同一模型响应产生的 direct calls 与一次 `run_code` 中的 nested calls 共用 Turn 内
   有界执行器：prepare、Host admission 与
   canonical result commit 保持模型提交顺序，只有标记为 `parallel_safe` 的 runtime

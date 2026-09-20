@@ -176,6 +176,13 @@ export type TurnReplacementRequestedItem =
 export interface TextUserInputPart {
   type: "text";
   text: string;
+  /** Host-loaded skill snapshot; text and source remain canonical on replay. */
+  skillSource?: {
+    kind: "catalog" | "instruction";
+    id?: string;
+    path?: string;
+    sha256?: string;
+  };
 }
 
 export interface ImageUserInputPart {
@@ -894,6 +901,24 @@ export function validateUserInput(value: unknown, name: string): void {
     const part = requireRecord(rawPart, `${name}[${String(index)}]`);
     if (part.type === "text") {
       requireNonEmptyString(part.text, `${name}[${String(index)}].text`);
+      if (part.skillSource !== undefined) {
+        const source = requireRecord(part.skillSource, "skillSource");
+        requireEnum(
+          source.kind,
+          ["catalog", "instruction"],
+          "skillSource.kind",
+        );
+        if (source.kind === "instruction") {
+          requireNonEmptyString(source.id, "skillSource.id");
+          requireNonEmptyString(source.path, "skillSource.path");
+          const hash = requireNonEmptyString(
+            source.sha256,
+            "skillSource.sha256",
+          );
+          if (!/^[a-f0-9]{64}$/u.test(hash))
+            throw new Error("Invalid Skill source hash");
+        }
+      }
     } else if (part.type === "image" || part.type === "audio") {
       validateAttachmentRef(
         part.attachment,

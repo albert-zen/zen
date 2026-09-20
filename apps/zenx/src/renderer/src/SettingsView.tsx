@@ -1,3 +1,4 @@
+import { SkillsSettingsPanel } from "./SkillsSettingsPanel.js";
 import { SubscriptionUsageCard } from "./SubscriptionUsageCard.js";
 import { RtkSettingsCard } from "./RtkSettingsCard.js";
 import { useEffect, useRef, useState } from "react";
@@ -52,6 +53,7 @@ export type SettingsTab =
   | "appearance"
   | "general"
   | "compaction"
+  | "skills"
   | "workflows"
   | "archived";
 
@@ -206,6 +208,7 @@ export function SettingsView({
     { id: "appearance", label: "Appearance", icon: "moon" },
     { id: "general", label: "General", icon: "settings" },
     { id: "compaction", label: "Context compaction", icon: "compress" },
+    { id: "skills", label: "Skills", icon: "compose" },
     { id: "workflows", label: "Workflows", icon: "compose" },
     { id: "archived", label: "Archived threads", icon: "archive" },
   ];
@@ -355,6 +358,7 @@ export function SettingsView({
                 }
               />
             ) : null}
+            {tab === "skills" ? <SkillsSettingsPanel /> : null}
             {tab === "workflows" ? (
               <WorkflowSettingsPanel
                 commands={draft.workflowCommands ?? []}
