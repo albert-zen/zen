@@ -940,6 +940,7 @@ export class ZenXSettingsService {
             onboardingComplete: settings.onboardingComplete,
             computerForegroundControlEnabled:
               settings.computerForegroundControlEnabled === true,
+            browserMode: settings.browserMode ?? current.browserMode,
             providerProfiles: settings.providerProfiles,
             defaultModel: settings.defaultModel,
             titleModel: settings.titleModel,

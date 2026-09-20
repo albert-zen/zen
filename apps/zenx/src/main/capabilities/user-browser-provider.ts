@@ -1629,6 +1629,7 @@ export interface UserBrowserConnection {
 export async function connectUserBrowserCdp(
   endpoint: string,
   signal?: AbortSignal,
+  options: { authorization?: string } = {},
 ): Promise<UserBrowserConnection> {
   const base = validateCdpEndpoint(endpoint);
   const timeout = AbortSignal.timeout(5_000);
@@ -1636,7 +1637,12 @@ export async function connectUserBrowserCdp(
     signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
   const response = await fetch(new URL("/json/version", base), {
     signal: probeSignal,
-    headers: { accept: "application/json" },
+    headers: {
+      accept: "application/json",
+      ...(options.authorization === undefined
+        ? {}
+        : { authorization: options.authorization }),
+    },
     redirect: "error",
   });
   const finalUrl = validateCdpEndpoint(response.url);
@@ -1679,6 +1685,7 @@ export async function connectUserBrowserCdp(
     socketUrl.toString(),
     base,
     probeSignal,
+    options,
   );
   return { backend: new UserBrowserCdpBackend(client), product };
 }
@@ -1708,6 +1715,7 @@ export function validateUserBrowserVersion(
 class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   readonly #socket: WebSocket;
   readonly #httpBase: URL;
+  readonly #authorization?: string;
   readonly #pending = new Map<
     number,
     {
@@ -1762,9 +1770,14 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   #screencast?: UserBrowserScreencastState;
   #screencastSubscription?: UserBrowserScreencastSubscription;
 
-  private constructor(socket: WebSocket, httpBase: URL) {
+  private constructor(
+    socket: WebSocket,
+    httpBase: URL,
+    authorization?: string,
+  ) {
     this.#socket = socket;
     this.#httpBase = httpBase;
+    this.#authorization = authorization;
     socket.on("message", (data) => this.#receive(data.toString()));
     socket.on("close", () =>
       this.#failAll(new Error("User browser CDP connection closed")),
@@ -1776,8 +1789,14 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     url: string,
     httpBase: URL,
     signal?: AbortSignal,
+    options: { authorization?: string } = {},
   ): Promise<JsonRpcUserBrowserCdpClient> {
-    const socket = new WebSocket(url, { handshakeTimeout: 5_000 });
+    const socket = new WebSocket(url, {
+      handshakeTimeout: 5_000,
+      ...(options.authorization === undefined
+        ? {}
+        : { headers: { authorization: options.authorization } }),
+    });
     await new Promise<void>((resolve, reject) => {
       const abort = () => {
         socket.close();
@@ -1798,7 +1817,11 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       signal?.addEventListener("abort", abort, { once: true });
       if (signal?.aborted === true) abort();
     });
-    const client = new JsonRpcUserBrowserCdpClient(socket, httpBase);
+    const client = new JsonRpcUserBrowserCdpClient(
+      socket,
+      httpBase,
+      options.authorization,
+    );
     try {
       await client.#send("Target.setDiscoverTargets", { discover: true });
     } catch (error) {
@@ -1863,7 +1886,12 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
     const response = await fetch(new URL("/json/list", this.#httpBase), {
       signal: requestSignal,
-      headers: { accept: "application/json" },
+      headers: {
+        accept: "application/json",
+        ...(this.#authorization === undefined
+          ? {}
+          : { authorization: this.#authorization }),
+      },
       redirect: "error",
     });
     const finalUrl = validateCdpEndpoint(response.url);

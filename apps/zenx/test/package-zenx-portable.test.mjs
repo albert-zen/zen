@@ -17,6 +17,7 @@ import test from "node:test";
 
 import {
   applicationIconForPlatform,
+  copyChromeExtensionResource,
   copyBundledPnpmResource,
   copyFirstPartyPluginResources,
   copyMarketplaceCatalogResource,
@@ -195,6 +196,42 @@ test("copies first-party plugin tarballs into App Resources", async () => {
       ),
       "rooms tarball",
     );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("copies the fixed Chrome extension into App Resources", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-chrome-extension-resource-"),
+  );
+  try {
+    const sourceDirectory = path.join(directory, "source", "chrome-extension");
+    await mkdir(sourceDirectory, { recursive: true });
+    await writeFile(
+      path.join(sourceDirectory, "manifest.json"),
+      '{"manifest_version":3}\n',
+    );
+    await writeFile(
+      path.join(sourceDirectory, "service-worker.js"),
+      "// fixture\n",
+    );
+    const buildPath = path.join(
+      directory,
+      "build",
+      "ZenX.app",
+      "Contents",
+      "Resources",
+      "app",
+    );
+    const destination = await copyChromeExtensionResource({
+      buildPath,
+      sourceDirectory,
+    });
+    assert.deepEqual((await readdir(destination)).sort(), [
+      "manifest.json",
+      "service-worker.js",
+    ]);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

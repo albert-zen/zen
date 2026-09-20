@@ -61,6 +61,8 @@ export interface ZenXHostProfile {
   onboardingComplete: boolean;
   /** Missing in an older v3 profile means the high-impact tools stay off. */
   computerForegroundControlEnabled?: boolean;
+  /** Missing means the ordinary isolated browser provider. */
+  browserMode?: "isolated" | "user-session";
   providerProfiles: ZenXProviderProfile[];
   defaultModel: ZenXModelReference;
   titleModel: ZenXModelReference;
@@ -90,6 +92,7 @@ export type ZenXSettingsUpdate = Pick<
   ZenXHostProfile,
   | "onboardingComplete"
   | "computerForegroundControlEnabled"
+  | "browserMode"
   | "providerProfiles"
   | "defaultModel"
   | "titleModel"
@@ -314,6 +317,13 @@ export function validateHostProfile(
     typeof value.experimentalRtkEnabled !== "boolean"
   )
     throw new Error("RTK enablement must be a boolean");
+  if (
+    value.browserMode !== undefined &&
+    value.browserMode !== "isolated" &&
+    value.browserMode !== "user-session"
+  ) {
+    throw new Error("Invalid browser session mode");
+  }
   const composerSendMode = value.composerSendMode ?? "queue";
   if (
     composerSendMode !== "queue" &&
@@ -358,6 +368,9 @@ export function validateHostProfile(
     onboardingComplete: value.onboardingComplete === true,
     computerForegroundControlEnabled:
       value.computerForegroundControlEnabled === true,
+    ...(value.browserMode === undefined
+      ? {}
+      : { browserMode: value.browserMode }),
     providerProfiles,
     defaultModel,
     titleModel,

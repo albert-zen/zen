@@ -43,6 +43,7 @@ import { Icon, type IconName } from "./icons.js";
 import { ProviderLogo, providerLogoKindForIdentity } from "./ProviderLogo.js";
 import { threadModelIdentity, threadTitle } from "./thread-list.js";
 import { PluginSettingsSurfaces } from "./PluginProductPage.js";
+import { ChromeConnectionSettings } from "./ChromeConnectionSettings.js";
 
 export type SettingsTab =
   | "account"
@@ -135,6 +136,7 @@ export function SettingsView({
         onboardingComplete: true,
         computerForegroundControlEnabled:
           draft.computerForegroundControlEnabled === true,
+        browserMode: draft.browserMode ?? "isolated",
         providerProfiles: draft.providerProfiles,
         defaultModel: draft.defaultModel,
         titleModel: draft.titleModel,
@@ -334,6 +336,7 @@ export function SettingsView({
             {tab === "general" ? (
               <>
                 <GeneralPanel draft={draft} setDraft={setDraft} />
+                <ChromeConnectionSettings draft={draft} setDraft={setDraft} />
                 <RtkSettingsCard
                   draft={draft}
                   settings={settings}

@@ -109,6 +109,10 @@ async function packageZenX(arguments_) {
               buildPath,
               sourceDirectory: path.join(resources, "plugins"),
             });
+            await copyChromeExtensionResource({
+              buildPath,
+              sourceDirectory: path.join(zenx, "resources", "chrome-extension"),
+            });
           },
         ],
         asar: false,
@@ -321,6 +325,14 @@ export async function copyBundledPnpmResource(options) {
 export async function copyFirstPartyPluginResources(options) {
   const resourcesDirectory = path.dirname(options.buildPath);
   const destination = path.join(resourcesDirectory, "plugins");
+  await mkdir(resourcesDirectory, { recursive: true, mode: 0o700 });
+  await cp(options.sourceDirectory, destination, { recursive: true });
+  return destination;
+}
+
+export async function copyChromeExtensionResource(options) {
+  const resourcesDirectory = path.dirname(options.buildPath);
+  const destination = path.join(resourcesDirectory, "chrome-extension");
   await mkdir(resourcesDirectory, { recursive: true, mode: 0o700 });
   await cp(options.sourceDirectory, destination, { recursive: true });
   return destination;
