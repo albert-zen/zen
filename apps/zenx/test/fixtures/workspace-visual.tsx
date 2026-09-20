@@ -56,10 +56,10 @@ const zenx = {
       thread: { responseCount: 0, inputTokens: 0, outputTokens: 0 },
       turns: {},
       context: {
-        inputTokens: null,
-        inputTokenSource: null,
-        contextWindow: null,
-        ratio: null,
+        inputTokens: 12000,
+        inputTokenSource: "usage",
+        contextWindow: 128000,
+        ratio: 12000 / 128000,
       },
     }),
   },
@@ -84,6 +84,15 @@ const zenx = {
         onboardingComplete: true,
         pinnedThreadIds: [],
         providerProfiles: [],
+        workflowCommands: [
+          {
+            name: "review",
+            description: "Review a change",
+            prompt:
+              "Review this change and list actionable issues.\n\n{{args}}",
+            enabled: true,
+          },
+        ],
       },
     }),
     markWorkspaceUsed: async () => ({
@@ -91,6 +100,15 @@ const zenx = {
         onboardingComplete: true,
         pinnedThreadIds: [],
         providerProfiles: [],
+        workflowCommands: [
+          {
+            name: "review",
+            description: "Review a change",
+            prompt:
+              "Review this change and list actionable issues.\n\n{{args}}",
+            enabled: true,
+          },
+        ],
       },
     }),
   },
