@@ -1,3 +1,5 @@
+import type { SkillEntry } from "../../../../cli/src/skills.js";
+import { parseSkillDraft, withSkillDraft } from "./skill-draft.js";
 import { toolPresentation } from "./tool-presentation.js";
 import { isCompactCommand } from "./compact-command.js";
 import { createPortal } from "react-dom";
@@ -174,6 +176,25 @@ export function ThreadView({
     trigger: HTMLButtonElement;
   } | null>(null);
   const [atLive, setAtLive] = useState(true);
+  const [skills, setSkills] = useState<SkillEntry[]>([]);
+  const [skillError, setSkillError] = useState<string | null>(null);
+  const skillDraft = parseSkillDraft(composer.draft.text);
+  useEffect(() => {
+    if (window.zenx?.skills === undefined) return;
+    let active = true;
+    void window.zenx.skills
+      .list()
+      .then((value) => {
+        if (active) {
+          setSkills(value.skills);
+          setSkillError(value.errors.join("\n") || null);
+        }
+      })
+      .catch((error: unknown) => active && setSkillError(String(error)));
+    return () => {
+      active = false;
+    };
+  }, [thread?.id, composer.draft.text.startsWith("/")]);
   const [workflowIndex, setWorkflowIndex] = useState(0);
   const [dismissedWorkflowInput, setDismissedWorkflowInput] = useState<
     string | null
@@ -210,8 +231,8 @@ export function ThreadView({
     () =>
       dismissedWorkflowInput === composer.draft.text
         ? []
-        : commandCandidates(composer.draft.text, workflowCommands),
-    [composer.draft.text, dismissedWorkflowInput, workflowCommands],
+        : commandCandidates(skillDraft.text, workflowCommands, skills),
+    [composer.draft.text, dismissedWorkflowInput, workflowCommands, skills],
   );
 
   useEffect(() => setWorkflowIndex(0), [composer.draft.text]);
@@ -219,7 +240,14 @@ export function ThreadView({
   const chooseWorkflow = (index: number) => {
     const command = workflowCandidates[index];
     if (command === undefined) return;
-    onDraftChange(expandWorkflowCommand(composer.draft.text, command));
+    const selected =
+      command.kind === "skill" &&
+      !skillDraft.skills.some((skill) => skill.id === command.id)
+        ? [...skillDraft.skills, { id: command.id, name: command.name }]
+        : skillDraft.skills;
+    onDraftChange(
+      withSkillDraft(expandWorkflowCommand(skillDraft.text, command), selected),
+    );
     setDismissedWorkflowInput(null);
     requestAnimationFrame(() => composerTextareaRef.current?.focus());
   };
@@ -488,6 +516,35 @@ export function ThreadView({
             primary();
           }}
         >
+          {skillError !== null && (
+            <p role="alert" className="settings-error">
+              {skillError}
+            </p>
+          )}
+          {skillDraft.skills.length > 0 && (
+            <div className="composer-images" aria-label="Skills to send">
+              {skillDraft.skills.map((skill) => (
+                <button
+                  type="button"
+                  className="quiet-button"
+                  key={skill.id}
+                  aria-label={`Remove Skill ${skill.name}`}
+                  onClick={() =>
+                    onDraftChange(
+                      withSkillDraft(
+                        skillDraft.text,
+                        skillDraft.skills.filter(
+                          (entry) => entry.id !== skill.id,
+                        ),
+                      ),
+                    )
+                  }
+                >
+                  {skill.name} ×
+                </button>
+              ))}
+            </div>
+          )}
           <WorkflowCommandMenu
             activeIndex={workflowIndex}
             candidates={workflowCandidates}
@@ -524,7 +581,9 @@ export function ThreadView({
             disabled={composerDisabled}
             onChange={(event) => {
               setDismissedWorkflowInput(null);
-              onDraftChange(event.target.value);
+              onDraftChange(
+                withSkillDraft(event.target.value, skillDraft.skills),
+              );
             }}
             onPaste={(event) => {
               if (composerDisabled || submitting) return;
@@ -585,7 +644,7 @@ export function ThreadView({
             }
             ref={composerTextareaRef}
             rows={1}
-            value={composer.draft.text}
+            value={skillDraft.text}
           />
           <div className="composer-rail">
             <div className="composer-tools">
@@ -777,13 +836,14 @@ function ContextCompactionProgress({
   );
 }
 
-function ContextCompactionEvent({
+export function ContextCompactionEvent({
   projection,
 }: {
   projection: ContextCompactionProjection;
 }) {
   const [expanded, setExpanded] = useState(false);
   const { item, effectiveMessages } = projection;
+  const [copyState, setCopyState] = useState("");
   return (
     <section
       className="context-compaction-event"
@@ -801,26 +861,60 @@ function ContextCompactionEvent({
         <span>
           <strong>Context compacted</strong>
           <small>
-            {compactionInitiatorLabel(item)} · {effectiveMessages.length}{" "}
-            effective messages
+            {compactionInitiatorLabel(item)} ·{" "}
+            {Array.from(item.summary).length.toLocaleString()} summary
+            characters · Full input size unknown
           </small>
         </span>
         <Icon name="chevron-down" size={13} />
       </button>
       {expanded ? (
         <div className="context-compaction-detail">
+          <div className="compaction-summary-heading">
+            <h3>Saved summary</h3>
+            <button
+              type="button"
+              className="quiet-button"
+              onClick={() => {
+                void navigator.clipboard.writeText(item.summary).then(
+                  () => setCopyState("Summary copied"),
+                  () =>
+                    setCopyState(
+                      "Could not copy. Select the summary text to copy it.",
+                    ),
+                );
+              }}
+            >
+              Copy summary
+            </button>
+          </div>
+          <span role="status">{copyState}</span>
+          <div className="compaction-summary">
+            <Markdown text={item.summary} />
+          </div>
           <p>
-            This is the actual model context immediately after this compaction.
-            The full conversation remains in the transcript.
+            {item.retainedItemIds.length} original items retained alongside the
+            summary. This snapshot is from the time of compaction; later
+            conversation adds to it.
           </p>
-          <ol>
-            {effectiveMessages.map((message, index) => (
-              <li key={`${item.id}:${String(index)}`}>
-                <span>{modelMessageRole(message)}</span>
-                <pre>{formatModelMessage(message)}</pre>
-              </li>
-            ))}
-          </ol>
+          <details className="compaction-projection">
+            <summary>Retained context and diagnostics</summary>
+            <p>
+              {effectiveMessages.length} projected history messages, not tokens.
+              This includes the summary and retained conversation. Rules, tool
+              definitions and other request inputs may be added separately. Full
+              model input size was not recorded. The summary generation usage is
+              not the post-compaction context size.
+            </p>
+            <ol>
+              {effectiveMessages.map((message, index) => (
+                <li key={`${item.id}:${String(index)}`}>
+                  <span>{modelMessageRole(message)}</span>
+                  <pre>{formatModelMessage(message)}</pre>
+                </li>
+              ))}
+            </ol>
+          </details>
         </div>
       ) : null}
     </section>

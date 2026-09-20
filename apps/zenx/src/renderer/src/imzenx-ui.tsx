@@ -1,3 +1,4 @@
+import { Select } from "./ui/controls.js";
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "./icons.js";
 import type {
@@ -233,18 +234,18 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
                 </label>
                 <label className="field">
                   <span>新会话执行权限</span>
-                  <select
+                  <Select
                     value={config.permissionMode}
-                    onChange={(event) =>
+                    onValueChange={(value) =>
                       setConfig({
                         ...config,
-                        permissionMode: event.target.value,
+                        permissionMode: value,
                       })
                     }
                   >
                     <option value="full-access">Full access</option>
                     <option value="approval-required">执行前审批</option>
-                  </select>
+                  </Select>
                 </label>
                 <label>
                   <input

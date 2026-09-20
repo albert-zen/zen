@@ -1,4 +1,7 @@
 export const ipcChannels = {
+  skillsList: "zenx:skills:list",
+  skillsImport: "zenx:skills:import",
+  skillsMode: "zenx:skills:mode",
   workspaceBrowserCommand: "zenx:workspace-browser:command",
   workspaceBrowserMount: "zenx:workspace-browser:mount",
   workspaceBrowserChanged: "zenx:workspace-browser:changed",

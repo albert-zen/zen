@@ -68,6 +68,13 @@ import type { ChromeBridgeSettingsSnapshot } from "../main/chrome-extension-brid
 
 contextBridge.exposeInMainWorld("zenx", {
   platform: process.platform,
+  skills: {
+    list: () => ipcRenderer.invoke(ipcChannels.skillsList),
+    importDirectory: (directory: string) =>
+      ipcRenderer.invoke(ipcChannels.skillsImport, directory),
+    setMode: (id: string, mode: string | null) =>
+      ipcRenderer.invoke(ipcChannels.skillsMode, id, mode),
+  },
   workspaceBrowser: {
     command: async (
       threadId: string,

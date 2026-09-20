@@ -39,6 +39,8 @@ const TOOL_OUTPUT_SUFFIX = Symbol("tool-output-suffix");
 
 export interface ToolInvocation {
   callId: string;
+  /** Runtime-owned canonical tool_call Item identity, independent of provider call IDs. */
+  canonicalToolCallId?: string;
   name: string;
   arguments: Record<string, unknown>;
   cwd: string;

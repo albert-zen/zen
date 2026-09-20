@@ -96,6 +96,10 @@ export class NativeRecoveryProjection {
     }
   }
 
+  async read(threadId: string): Promise<ThreadSnapshot> {
+    return await this.#appServer.readThread(threadId);
+  }
+
   close(): void {
     this.#unsubscribe();
     this.#listeners.clear();

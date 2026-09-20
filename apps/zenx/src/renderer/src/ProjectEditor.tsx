@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { Dialog } from "./ui/controls.js";
+import { useRef, useState } from "react";
 import { Icon } from "./icons.js";
 import { DirectoryPicker } from "./DirectoryPicker.js";
 
@@ -26,14 +27,6 @@ export function ProjectEditor({
   const [error, setError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const folderRef = useRef<HTMLButtonElement>(null);
-  const initialFocus = useRef<HTMLElement | null>(null);
-  useEffect(() => {
-    initialFocus.current = document.activeElement as HTMLElement | null;
-    dialogRef.current?.querySelector("input")?.focus();
-    return () => {
-      if (initialFocus.current?.isConnected) initialFocus.current.focus();
-    };
-  }, []);
   const run = async (action: () => Promise<void>) => {
     if (busy) return;
     setBusy(true);
@@ -46,44 +39,22 @@ export function ProjectEditor({
       setBusy(false);
     }
   };
-  const keyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (event.key === "Escape") {
-      event.stopPropagation();
-      event.preventDefault();
-      if (!busy) onClose();
-      return;
-    }
-    if (event.key !== "Tab") return;
-    const elements = Array.from(
-      dialogRef.current?.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), input:not(:disabled), [tabindex="0"]',
-      ) ?? [],
-    );
-    if (!elements.length) {
-      event.preventDefault();
-      return;
-    }
-    const first = elements[0],
-      last = elements.at(-1);
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last?.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first?.focus();
-    }
-  };
+
   const changesDefaultFolder = isDefault && folder !== workspace;
   return (
     <>
-      <div className="project-editor-backdrop" hidden={picking}>
+      <Dialog
+        open={!picking}
+        onOpenChange={(open) => {
+          if (!open && !busy) onClose();
+        }}
+        title="Edit project"
+        className="project-editor-shell"
+      >
         <section
           className="project-editor"
           ref={dialogRef}
-          role="dialog"
-          aria-modal="true"
           aria-labelledby="project-editor-title"
-          onKeyDown={keyDown}
         >
           <header>
             <h2 id="project-editor-title">Edit project</h2>
@@ -177,7 +148,7 @@ export function ProjectEditor({
             </footer>
           </form>
         </section>
-      </div>
+      </Dialog>
       {picking ? (
         <DirectoryPicker
           onCancel={() => {

@@ -187,22 +187,13 @@ test("renders each arbitrary plugin sidebar icon declared by its manifest", asyn
     dom.window.document.querySelector("svg[data-icon='trigger']"),
     null,
   );
-  const toggle = dom.window.document.querySelector<HTMLButtonElement>(
-    ".plugin-spaces-toggle",
-  )!;
-  assert.equal(toggle.getAttribute("aria-expanded"), "true");
-  const links = dom.window.document.getElementById(
-    toggle.getAttribute("aria-controls")!,
-  )!;
-  assert.equal(links.hidden, false);
-  toggle.focus();
-  await act(async () => toggle.click());
-  assert.equal(toggle.getAttribute("aria-expanded"), "false");
-  assert.equal(links.hidden, true);
-  assert.equal(dom.window.document.activeElement, toggle);
-  await act(async () => toggle.click());
-  assert.equal(links.hidden, false);
-  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+  assert.equal(
+    dom.window.document.querySelector(".plugin-spaces-toggle"),
+    null,
+  );
+  const links = dom.window.document.querySelector("nav.plugin-spaces");
+  assert.ok(links);
+  assert.equal(links.hasAttribute("hidden"), false);
   assert.equal(
     links.querySelector("button[aria-current='page']")?.textContent,
     "Notebook",

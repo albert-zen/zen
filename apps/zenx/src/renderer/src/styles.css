@@ -2,13 +2,7 @@
   --shadow-low: 0 10px 30px var(--color-elevation-low);
   --shadow-medium: 0 14px 36px var(--color-elevation-medium);
   --shadow-high: 0 28px 90px var(--color-elevation-high);
-  font-family:
-    Inter,
-    ui-sans-serif,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+  font-family: var(--font-body);
   font-synthesis: none;
 }
 /* One thin, track-less scrollbar vocabulary for every scrollable surface so
@@ -86,7 +80,7 @@
 .browser-live-status strong {
   overflow: hidden;
   color: currentColor;
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-weight: 580;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -96,7 +90,7 @@
 .browser-live-status small {
   overflow: hidden;
   color: var(--color-text-muted);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -110,7 +104,7 @@
   justify-content: center;
   gap: 6px;
   color: var(--color-text-muted);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   line-height: 1.35;
 }
 
@@ -194,13 +188,13 @@
 
 .browser-live-placeholder strong {
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-weight: 550;
 }
 
 .browser-live-placeholder small {
   color: var(--color-text-muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   line-height: 1.4;
 }
 
@@ -286,12 +280,8 @@ textarea:focus-visible,
 input:focus-visible,
 select:focus-visible,
 a:focus-visible {
-  outline: none;
-}
-button:focus-visible,
-a:focus-visible,
-select:focus-visible {
-  filter: brightness(0.9);
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 3px;
 }
 .sr-only {
   position: absolute;
@@ -324,7 +314,8 @@ select:focus-visible {
   overflow: hidden;
   background: var(--color-surface-main);
   isolation: isolate;
-  transition: grid-template-columns 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: grid-template-columns var(--motion-layout)
+    cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .app-shell::after {
   content: "";
@@ -571,7 +562,7 @@ select:focus-visible {
   background: transparent;
   cursor: pointer;
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   font-weight: 500;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -613,7 +604,7 @@ select:focus-visible {
   border-radius: 10px;
   background: var(--surface-active);
   color: var(--text-2);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .new-thread-control {
   position: relative;
@@ -635,7 +626,7 @@ select:focus-visible {
     var(--color-surface-control)
   );
   color: var(--color-text-primary);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   text-align: left;
   box-shadow: inset 0 1px var(--color-surface-highlight);
 }
@@ -647,7 +638,7 @@ select:focus-visible {
   max-width: 74px;
   overflow: hidden;
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -679,7 +670,7 @@ select:focus-visible {
   transform: rotate(-90deg);
 }
 .sidebar-view-head span {
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .sidebar-inline-action {
   width: 28px;
@@ -692,7 +683,7 @@ select:focus-visible {
   border-radius: 7px;
   background: var(--surface-wash);
   color: var(--text-2);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .sidebar-scroll {
   min-height: 0;
@@ -706,7 +697,7 @@ select:focus-visible {
 .sidebar-empty {
   padding: 24px 12px;
   color: var(--text-3);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   line-height: 1.55;
 }
 .sidebar-error p {
@@ -720,7 +711,7 @@ select:focus-visible {
   border-radius: 7px;
   background: var(--surface-2);
   color: var(--text-2);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 .projects-zero-state {
   display: grid;
@@ -736,7 +727,7 @@ select:focus-visible {
 }
 .projects-zero-state p {
   margin: 0;
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   line-height: 1.55;
 }
 .project-group + .project-group,
@@ -751,7 +742,7 @@ select:focus-visible {
 .pinned-thread-group h2 {
   margin: 4px 10px 8px;
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: 500;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -893,7 +884,7 @@ select:focus-visible {
   border-radius: 6px;
   background: transparent;
   color: var(--text-2);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   text-align: left;
 }
 .project-menu button:hover,
@@ -907,12 +898,12 @@ select:focus-visible {
 .project-empty {
   margin: 4px 10px 10px 29px;
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .inbox-group h2 {
   margin: 4px 10px 8px;
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: 500;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -994,7 +985,7 @@ select:focus-visible {
   border-radius: 7px;
   background: transparent;
   color: var(--text-2);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   text-align: left;
 }
 .thread-item-menu > button:hover:not(:disabled) {
@@ -1005,7 +996,7 @@ select:focus-visible {
 .thread-menu-help {
   margin: 3px 6px;
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   line-height: 1.45;
 }
 .thread-item-menu > p[role="alert"] {
@@ -1020,7 +1011,7 @@ select:focus-visible {
   display: grid;
   gap: 5px;
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .thread-menu-rename input {
   width: 100%;
@@ -1044,7 +1035,7 @@ select:focus-visible {
   border-radius: 6px;
   background: var(--surface-3);
   color: var(--text-2);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .thread-row:hover {
   background: var(--surface-wash-strong);
@@ -1077,7 +1068,7 @@ select:focus-visible {
 .thread-project,
 .model-line {
   color: var(--color-text-muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .thread-title {
   color: var(--color-text-primary);
@@ -1300,7 +1291,7 @@ select:focus-visible {
   overflow: hidden;
   color: var(--text-3);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1337,7 +1328,7 @@ select:focus-visible {
   border-radius: 5px;
   background: transparent;
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .thread-title-line button:hover,
 .thread-title-line button:focus-visible {
@@ -1346,7 +1337,7 @@ select:focus-visible {
 }
 .thread-title-line small {
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .thread-title-form {
   min-width: 0;
@@ -1366,7 +1357,7 @@ select:focus-visible {
   border-radius: 6px;
   background: var(--surface-2);
   color: var(--text-2);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .top-actions,
 .page-header-actions {
@@ -1555,7 +1546,7 @@ select:focus-visible {
   display: grid;
   place-items: center;
   padding: 8px;
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .turn-running-label,
 .turn-toggle {
@@ -1567,11 +1558,11 @@ select:focus-visible {
   margin: 1px 0 -2px -7px;
   padding: 0 7px;
   color: var(--text-3);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 .turn-usage {
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: 400;
   font-variant-numeric: tabular-nums;
 }
@@ -1623,7 +1614,7 @@ select:focus-visible {
   gap: 8px;
   opacity: 0;
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-variant-numeric: tabular-nums;
   transition: opacity 140ms ease;
 }
@@ -1644,7 +1635,7 @@ select:focus-visible {
   border-radius: 5px;
   background: transparent;
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .message-actions button:hover,
 .message-actions button:focus-visible {
@@ -1665,7 +1656,7 @@ select:focus-visible {
   white-space: normal;
 }
 .trace-detail-markdown .markdown-body {
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   line-height: 1.6;
 }
 .trace-detail-markdown .markdown-body > :first-child {
@@ -1732,7 +1723,7 @@ select:focus-visible {
   font-size: 12px;
 }
 .trace-toggle small {
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   white-space: nowrap;
 }
 .trace-toggle > svg:last-child {
@@ -1789,7 +1780,7 @@ select:focus-visible {
   grid-column: 5;
 }
 .trace-item-status small {
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   white-space: nowrap;
 }
 .tool-status.interrupted {
@@ -1814,7 +1805,7 @@ select:focus-visible {
 }
 .trace-item-toggle > small,
 .trace-item-static > small {
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .tool-status.completed {
   color: var(--good);
@@ -1863,7 +1854,7 @@ select:focus-visible {
   display: flex;
   gap: 8px;
   color: var(--text-violet);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .wakeup-card p {
   margin: 8px 0;
@@ -1884,7 +1875,7 @@ select:focus-visible {
   background: var(--surface-2);
   color: var(--text-2);
   box-shadow: 0 10px 30px var(--shadow-color);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 
 .bottom-zone {
@@ -1928,7 +1919,7 @@ select:focus-visible {
   gap: 7px;
   padding: 0 8px;
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .new-thread-project-context span {
   min-width: 0;
@@ -1957,7 +1948,8 @@ select:focus-visible {
   color: var(--text-accent);
 }
 .new-thread-project-trigger:focus-visible {
-  outline: none;
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 3px;
   border-radius: 3px;
 }
 .new-thread-project-popover {
@@ -2006,7 +1998,7 @@ select:focus-visible {
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 .new-thread-project-search input::placeholder {
   color: var(--text-3);
@@ -2055,7 +2047,7 @@ select:focus-visible {
 .new-thread-project-empty {
   margin: 8px;
   color: var(--text-3);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   text-align: center;
 }
 .new-thread-project-separator {
@@ -2100,14 +2092,14 @@ select:focus-visible {
 }
 .approval-bar strong {
   color: var(--text-2);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-weight: 500;
 }
 .approval-bar p,
 .approval-cwd {
   margin: 0;
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   overflow-wrap: anywhere;
 }
 .approval-command {
@@ -2119,7 +2111,7 @@ select:focus-visible {
   background: var(--surface-wash-subtle);
   color: var(--text-2);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   line-height: 1.5;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -2138,7 +2130,7 @@ select:focus-visible {
   border-radius: 8px;
   background: transparent;
   color: var(--text-2);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .approval-actions .allow {
   border-color: color-mix(in srgb, var(--warn) 42%, transparent);
@@ -2264,7 +2256,7 @@ select:focus-visible {
   border-radius: 9px;
   background: transparent;
   color: var(--color-text-muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .composer-tool.icon-only {
   width: 36px;
@@ -2342,7 +2334,7 @@ select:focus-visible {
   background: var(--color-surface-elevated);
   color: var(--color-text-primary);
   box-shadow: 0 12px 30px var(--color-shadow-low);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   line-height: 1.35;
   white-space: pre-line;
   overflow-wrap: anywhere;
@@ -2401,13 +2393,13 @@ select:focus-visible {
   gap: 3px;
 }
 .composer-selection-menu button strong {
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-weight: 560;
 }
 .composer-selection-menu button small {
   overflow: hidden;
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2415,7 +2407,7 @@ select:focus-visible {
 .composer-menu-warning {
   margin: 4px 8px 3px;
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   line-height: 1.45;
 }
 .composer-menu-warning {
@@ -2443,7 +2435,7 @@ select:focus-visible {
 .composer-model-group > p {
   margin: 5px 9px 3px;
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   font-weight: 560;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -2454,7 +2446,7 @@ select:focus-visible {
   background: var(--accent-soft);
 }
 .composer-effort-option {
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   text-transform: capitalize;
 }
 .composer-actions {
@@ -2467,7 +2459,7 @@ select:focus-visible {
   border-radius: 8px;
   background: transparent;
   color: var(--color-text-muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .steer-button:hover {
   color: var(--color-text-primary);
@@ -2515,7 +2507,7 @@ select:focus-visible {
   margin: 0;
   padding: 0 14px 8px;
   color: var(--danger);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .image-preview-layer {
@@ -2576,7 +2568,7 @@ select:focus-visible {
   margin: 0;
   overflow: hidden;
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2626,7 +2618,7 @@ select:focus-visible {
   border-radius: 9px;
   background: var(--color-surface-elevated);
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-weight: 500;
   white-space: nowrap;
 }
@@ -2668,7 +2660,7 @@ select:focus-visible {
 }
 .metric span {
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
@@ -2684,13 +2676,13 @@ select:focus-visible {
 }
 .section-heading span {
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .page-empty {
   margin: 0;
   padding: 28px;
   color: var(--text-3);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   text-align: center;
 }
 .schedule-row,
@@ -2727,7 +2719,7 @@ select:focus-visible {
 }
 .schedule-row strong,
 .history-row strong {
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-weight: 520;
 }
 .schedule-row small,
@@ -2735,7 +2727,7 @@ select:focus-visible {
 .schedule-row time,
 .history-row time {
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .kind-pill {
   width: fit-content;
@@ -2783,7 +2775,7 @@ select:focus-visible {
 .signal-card > div:first-child p {
   margin: 0 0 14px;
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .inline-form {
   display: grid;
@@ -2801,7 +2793,7 @@ select:focus-visible {
   display: grid;
   gap: 7px;
   color: var(--color-text-muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .field.wide {
   grid-column: 1 / -1;
@@ -2813,7 +2805,7 @@ select:focus-visible {
 }
 .field small {
   color: var(--color-text-muted);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .field input,
 .field select,
@@ -2826,7 +2818,7 @@ select:focus-visible {
   border-radius: 9px;
   background: var(--color-surface-code);
   color: var(--color-text-primary);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 .field input,
 .field select,
@@ -2845,7 +2837,7 @@ select:focus-visible {
   border-radius: 9px;
   background: var(--color-surface-code);
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2862,7 +2854,7 @@ select:focus-visible {
 }
 .form-error {
   color: var(--danger) !important;
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .room-grid {
@@ -2889,7 +2881,7 @@ select:focus-visible {
 .room-card > span {
   margin: 0;
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .member-drafts {
   flex-wrap: wrap;
@@ -2907,7 +2899,7 @@ select:focus-visible {
   border-radius: 14px;
   background: var(--surface-overlay);
   color: var(--text-2);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .member-drafts button,
 .room-members button {
@@ -2932,7 +2924,7 @@ select:focus-visible {
 .room-context p {
   margin: 0;
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .room-members {
   flex-wrap: wrap;
@@ -2960,7 +2952,7 @@ select:focus-visible {
   border-radius: 10px;
   background: var(--surface-inset);
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   line-height: 1.55;
 }
 .room-message {
@@ -2973,11 +2965,11 @@ select:focus-visible {
   margin-bottom: 7px;
 }
 .room-message header strong {
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 .room-message header time {
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .room-message .markdown-body {
   color: var(--text);
@@ -2987,7 +2979,7 @@ select:focus-visible {
 .room-system {
   margin: 14px 0;
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   text-align: center;
 }
 .origin-card {
@@ -3001,7 +2993,7 @@ select:focus-visible {
   border-radius: 8px;
   background: var(--surface-inset);
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .origin-card span {
   margin-left: auto;
@@ -3121,7 +3113,7 @@ select:focus-visible {
 .settings-card-head span {
   margin: 0;
   color: var(--text-3);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   line-height: 1.65;
 }
 .settings-row + .settings-row {
@@ -3188,7 +3180,7 @@ select:focus-visible {
 }
 .settings-panel .field small,
 .settings-panel .settings-note {
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   line-height: 1.65;
 }
 .settings-panel .provider-editor {
@@ -3204,7 +3196,7 @@ select:focus-visible {
 }
 .settings-panel .provider-profile-main small,
 .settings-panel .provider-profile-actions button {
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 .settings-panel .settings-apply-bar {
   position: sticky;
@@ -3236,7 +3228,7 @@ select:focus-visible {
 .provider-section-head p {
   margin: 0;
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .provider-section-actions {
   display: flex;
@@ -3260,13 +3252,13 @@ select:focus-visible {
 .provider-editor-head strong,
 .delete-provider-panel strong {
   color: var(--text-2);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-weight: 550;
 }
 .provider-add-choices > div span,
 .provider-editor-head span {
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   line-height: 1.45;
 }
 .provider-add-choices > button:not(.provider-choice-cancel) {
@@ -3297,13 +3289,13 @@ select:focus-visible {
   align-self: center;
 }
 .provider-add-choices button strong {
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: 550;
 }
 .provider-add-choices button span:last-child {
   overflow: hidden;
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3358,7 +3350,7 @@ select:focus-visible {
 .provider-profile-name strong {
   overflow: hidden;
   color: var(--text);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-weight: 550;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3373,7 +3365,7 @@ select:focus-visible {
   white-space: nowrap;
 }
 .provider-profile-main small {
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .provider-model-summary {
   min-width: 0;
@@ -3408,7 +3400,7 @@ select:focus-visible {
 .provider-profile-actions button {
   min-height: 30px;
   padding-inline: 8px;
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .provider-editor,
 .delete-provider-panel {
@@ -3447,14 +3439,14 @@ select:focus-visible {
 .provider-model-editor legend {
   padding: 0 4px;
   color: var(--text-2);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: 550;
 }
 .provider-model-editor > p,
 .delete-provider-panel p {
   margin: 0 0 3px;
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   line-height: 1.5;
 }
 .model-catalog-head {
@@ -3467,7 +3459,7 @@ select:focus-visible {
 .model-catalog-status {
   margin: 0;
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   line-height: 1.5;
 }
 .model-catalog-status {
@@ -3491,7 +3483,7 @@ select:focus-visible {
 .provider-model-capabilities summary {
   cursor: pointer;
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .model-capability-grid {
   display: grid;
@@ -3505,7 +3497,7 @@ select:focus-visible {
   align-items: center;
   gap: 7px;
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .add-model-button {
   justify-self: start;
@@ -3549,7 +3541,7 @@ select:focus-visible {
   border-radius: 8px;
   background: var(--surface-inset);
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   cursor: pointer;
 }
 .appearance-options label {
@@ -3637,7 +3629,7 @@ select:focus-visible {
   border-radius: 7px;
   background: var(--color-accent);
   color: var(--color-text-on-accent);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   pointer-events: none;
 }
 .appearance-editor-grid {
@@ -3659,7 +3651,7 @@ select:focus-visible {
 .appearance-control-row > legend {
   margin-bottom: 6px;
   color: var(--color-text-secondary);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: 600;
 }
 .appearance-preset-options {
@@ -3696,7 +3688,7 @@ select:focus-visible {
 }
 .appearance-preset-options strong {
   color: inherit;
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: 600;
 }
 .appearance-preset-options small {
@@ -3742,7 +3734,7 @@ select:focus-visible {
 }
 .appearance-accent-options strong {
   color: inherit;
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: 600;
 }
 .appearance-accent-options small {
@@ -3785,7 +3777,7 @@ select:focus-visible {
   border-radius: 8px;
   background: var(--color-surface-inset);
   color: var(--color-text-muted);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   cursor: pointer;
 }
 .accent-chip > i {
@@ -3818,20 +3810,20 @@ select:focus-visible {
 }
 .settings-note {
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   line-height: 1.55;
 }
 .status-good {
   color: var(--good) !important;
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .status-bad {
   color: var(--danger) !important;
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .status-muted {
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .settings-error,
 .settings-success {
@@ -3840,7 +3832,7 @@ select:focus-visible {
   gap: 8px;
   padding: 10px 12px;
   border-radius: 9px;
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .settings-error {
   background: var(--status-danger-soft);
@@ -3872,13 +3864,13 @@ select:focus-visible {
 }
 .settings-apply-bar strong {
   color: var(--text-2);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-weight: 520;
 }
 .settings-apply-bar span,
 .settings-empty {
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   line-height: 1.5;
 }
 .settings-empty {
@@ -3926,14 +3918,14 @@ select:focus-visible {
 }
 .archived-thread-copy > span {
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .archived-thread-copy small {
   display: flex;
   align-items: center;
   gap: 7px;
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .plugin-boundary {
   display: grid;
@@ -3956,7 +3948,7 @@ select:focus-visible {
 .plugin-library-head span,
 .plugin-empty span {
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   line-height: 1.55;
 }
 .settings-actions {
@@ -4004,7 +3996,7 @@ select:focus-visible {
 .plugin-source-copy span,
 .marketplace-catalog-warning span {
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   line-height: 1.5;
 }
 .marketplace-eyebrow,
@@ -4054,7 +4046,7 @@ select:focus-visible {
   outline: 0;
   background: transparent;
   color: var(--text);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .marketplace-search:focus-within {
   border-color: var(--border-accent);
@@ -4069,7 +4061,7 @@ select:focus-visible {
   border: 0;
   background: transparent;
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .marketplace-search button:hover,
 .marketplace-filters button:hover,
@@ -4135,7 +4127,7 @@ select:focus-visible {
   border-left-color: var(--warn);
 }
 .marketplace-icon {
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -4168,7 +4160,7 @@ select:focus-visible {
   gap: 5px;
   margin-top: 3px;
   color: var(--warn);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   line-height: 1.4;
 }
 .plugin-unavailable svg {
@@ -4186,7 +4178,7 @@ select:focus-visible {
   border-radius: 7px;
   background: var(--surface-code);
   color: var(--text-2);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .marketplace-version select {
   max-width: 145px;
@@ -4207,7 +4199,7 @@ select:focus-visible {
   display: grid;
   gap: 5px;
   color: var(--text-2);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .plugin-source-install select,
 .plugin-source-install input {
@@ -4230,7 +4222,7 @@ select:focus-visible {
   color: var(--warn);
 }
 .marketplace-catalog-warning strong {
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   font-weight: 600;
 }
 .plugin-lifecycle-card {
@@ -4274,7 +4266,7 @@ select:focus-visible {
 .plugin-lifecycle-copy p,
 .plugin-lifecycle-copy small {
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   line-height: 1.5;
 }
 .plugin-status {
@@ -4311,7 +4303,7 @@ select:focus-visible {
 .plugin-confirm p {
   margin: 0;
   color: var(--text-2);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   line-height: 1.5;
 }
 .settings-success {
@@ -4319,7 +4311,7 @@ select:focus-visible {
   border: 1px solid var(--border-accent);
   border-radius: 9px;
   color: var(--text-accent);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .plugin-boundary > div {
   display: grid;
@@ -4328,7 +4320,7 @@ select:focus-visible {
 .plugin-boundary > div span,
 .plugin-boundary small {
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .plugin-icon {
   width: 38px;
@@ -4426,11 +4418,11 @@ select:focus-visible {
 .directory-picker-dialog header p {
   margin: 0;
   color: var(--text-3);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 .eyebrow {
   color: var(--accent);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   font-weight: 650;
   letter-spacing: 0.13em;
   text-transform: uppercase;
@@ -4458,7 +4450,7 @@ select:focus-visible {
   border-radius: 8px;
   background: transparent;
   color: var(--text-2);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   text-align: left;
 }
 .directory-picker-body > nav button:hover {
@@ -4490,7 +4482,7 @@ select:focus-visible {
   border-radius: 7px;
   background: transparent;
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .directory-picker-breadcrumbs button:hover:not(:disabled),
 .directory-picker-breadcrumbs button:last-child {
@@ -4507,7 +4499,7 @@ select:focus-visible {
 .directory-picker-list > p {
   margin: 28px 16px;
   color: var(--text-3);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 .directory-picker-list > button {
   width: 100%;
@@ -4521,7 +4513,7 @@ select:focus-visible {
   border-radius: 8px;
   background: transparent;
   color: var(--text-2);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   text-align: left;
 }
 .directory-picker-list > button:hover,
@@ -4566,7 +4558,7 @@ select:focus-visible {
 }
 .directory-picker-dialog > footer span {
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -4574,7 +4566,7 @@ select:focus-visible {
   overflow: hidden;
   color: var(--text-2);
   font-family: ui-monospace, "Cascadia Code", monospace;
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: 450;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4634,7 +4626,7 @@ select:focus-visible {
   padding: 7px 10px;
   border-bottom: 1px solid var(--border-soft);
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 .markdown-code-header button {
   border: 0;
@@ -5317,7 +5309,7 @@ select:focus-visible {
 }
 .project-menu-summary > span {
   color: var(--text-3);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5656,8 +5648,8 @@ select:focus-visible {
 .imzenx-page select:focus-visible,
 .imzenx-page button:focus-visible,
 .imzenx-page summary:focus-visible {
-  outline: none;
-  filter: brightness(0.9);
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 3px;
 }
 .imzenx-page .imzenx-hint {
   margin: 12px 0 16px;
@@ -6012,7 +6004,7 @@ select:focus-visible {
   margin: 0 0 6px;
 }
 .rtk-experiment-label {
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-weight: 500;
   color: var(--text-secondary);
 }
@@ -6119,7 +6111,7 @@ select:focus-visible {
   justify-content: space-between;
   gap: 8px;
   color: var(--text-3);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 .quota-limits {
   display: grid;
@@ -6147,7 +6139,7 @@ select:focus-visible {
 .quota-window-label,
 .quota-reset {
   color: var(--text-3);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 .quota-amount {
   display: flex;
@@ -6162,7 +6154,7 @@ select:focus-visible {
 }
 .quota-amount span {
   color: var(--text-3);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 .quota-window progress,
 .quota-unknown-bar {
@@ -6696,7 +6688,7 @@ select:focus-visible {
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-weight: 600;
 }
 .context-usage-heading strong {
@@ -6719,7 +6711,7 @@ select:focus-visible {
 .context-usage-popover p {
   margin: 0;
   color: var(--text-2);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   line-height: 1.45;
 }
 .context-usage-popover .context-usage-explanation {
@@ -6734,7 +6726,7 @@ select:focus-visible {
   border-radius: 8px;
   background: var(--surface-control);
   color: var(--color-text-primary);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-weight: 600;
   cursor: pointer;
 }
@@ -6792,7 +6784,7 @@ select:focus-visible {
 }
 .context-compaction-toggle small {
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .context-compaction-mark {
   width: 28px;
@@ -6814,7 +6806,7 @@ select:focus-visible {
 .context-compaction-detail > p {
   margin: 0;
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   line-height: 1.5;
 }
 .context-compaction-detail ol {
@@ -6833,7 +6825,7 @@ select:focus-visible {
   display: block;
   margin-bottom: 3px;
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -6909,7 +6901,7 @@ select:focus-visible {
   font-size: 12px;
 }
 .computer-live-toolbar [role="status"] {
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   color: var(--text-3);
 }
 .computer-live-toolbar [data-status="live"] {
@@ -6935,7 +6927,7 @@ select:focus-visible {
 }
 .computer-live-stage figcaption {
   color: var(--text-3);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 .computer-live-placeholder {
   flex: 1;
@@ -7323,4 +7315,651 @@ select:focus-visible {
   border-radius: 7px;
   outline: none;
   background: transparent;
+}
+
+/* Shared desktop control and feedback vocabulary. */
+:where(button, input, textarea, select, summary, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 3px;
+}
+:where(button, input, textarea) {
+  font: inherit;
+}
+:where(button) {
+  cursor: pointer;
+}
+:where(button:disabled) {
+  cursor: not-allowed;
+}
+:where(h1, h2, h3) {
+  font-family: var(--font-heading);
+  text-wrap: balance;
+}
+:where(button, a, summary) {
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast),
+    border-color var(--motion-fast);
+}
+:where(input, textarea) {
+  accent-color: var(--color-accent);
+}
+.ui-select {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  min-height: var(--control-height);
+  padding: 6px 10px;
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-control);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-label);
+  text-align: left;
+}
+.ui-select > span:first-child {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ui-select > span:last-child {
+  flex-shrink: 0;
+  display: flex;
+}
+.ui-select:hover:not(:disabled) {
+  background: var(--color-surface-control-hover);
+}
+.ui-select:disabled {
+  opacity: 0.5;
+}
+.ui-select[data-state="open"] {
+  border-color: var(--color-focus-ring);
+}
+.ui-select-popover,
+.ui-popover {
+  z-index: var(--z-popover);
+  box-sizing: border-box;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-popover);
+  background: var(--color-surface-overlay);
+  color: var(--color-text-primary);
+  box-shadow: var(--shadow-medium);
+  padding: 5px;
+  max-width: min(440px, calc(100vw - 20px));
+  max-height: var(
+    --radix-select-content-available-height,
+    var(--radix-popover-content-available-height, 70vh)
+  );
+  overflow: auto;
+  transform-origin: var(
+    --radix-select-content-transform-origin,
+    var(--radix-popover-content-transform-origin)
+  );
+}
+.ui-select-popover {
+  min-width: min(var(--radix-select-trigger-width), calc(100vw - 20px));
+}
+.ui-select-option {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+  min-height: 32px;
+  padding: 7px 10px;
+  border-radius: 5px;
+  font-size: var(--font-size-label);
+  line-height: 1.4;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  outline: none;
+}
+.ui-select-option[data-highlighted] {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: -2px;
+  background: var(--color-surface-hover);
+}
+.ui-select-option[data-state="checked"] {
+  color: var(--color-text-accent);
+  background: var(--color-accent-soft);
+}
+.ui-select-option[data-disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.ui-select-group {
+  padding: 8px 10px 4px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+}
+.ui-select-scroll {
+  text-align: center;
+}
+.ui-popover.composer-selection-menu {
+  position: relative;
+  inset: auto;
+  width: 310px;
+}
+.ui-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-dialog);
+  background: var(--color-overlay);
+}
+.ui-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: calc(var(--z-dialog) + 1);
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-high);
+  padding: 20px;
+}
+@keyframes ui-enter {
+  from {
+    opacity: 0;
+    translate: 0 3px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+@keyframes ui-exit {
+  to {
+    opacity: 0;
+  }
+}
+.ui-popover[data-state="open"],
+.ui-select-popover[data-state="open"],
+.ui-dialog[data-state="open"],
+.ui-dialog-overlay[data-state="open"] {
+  animation: ui-enter var(--motion-enter) var(--ease-standard);
+}
+.ui-popover[data-state="closed"],
+.ui-select-popover[data-state="closed"],
+.ui-dialog[data-state="closed"],
+.ui-dialog-overlay[data-state="closed"] {
+  animation: ui-exit var(--motion-exit) ease-out;
+}
+:where(.primary-button, .secondary-button, .quiet-button, .danger-button) {
+  min-height: var(--control-height);
+  font-size: var(--font-size-label);
+  border-radius: var(--radius-control);
+}
+:where(.field, .settings-note, .settings-row, .settings-card p, .page-card p) {
+  font-size: var(--font-size-label);
+  line-height: 1.55;
+}
+:where(.field input, .field textarea) {
+  font-size: var(--font-size-label);
+  min-height: var(--control-height);
+}
+.plugin-spaces {
+  display: grid;
+  gap: 3px;
+  padding: 0;
+  max-height: min(32vh, 300px);
+  overflow: auto;
+}
+.plugin-space-link,
+.new-thread-action,
+.settings-nav-row {
+  min-height: 34px;
+  border-radius: var(--radius-control);
+  font-size: var(--font-size-label);
+}
+.plugin-space-link[aria-current="page"],
+.settings-nav-row[aria-current="page"] {
+  box-shadow: inset 3px 0 var(--color-accent);
+  background: var(--color-accent-soft);
+  color: var(--color-text-primary);
+}
+.thread-row {
+  min-height: 34px;
+  padding-block: 8px;
+}
+.thread-title {
+  font-size: var(--font-size-label);
+}
+.thread-state-label {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  margin-top: 4px;
+}
+.thread-menu-trigger {
+  min-width: 28px;
+  min-height: 28px;
+}
+.settings-view {
+  min-height: 0;
+}
+.settings-view > .page-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.settings-view > .settings-apply-bar {
+  position: relative;
+  flex: 0 0 auto;
+  margin: 0;
+  border-width: 1px 0 0;
+  border-radius: 0;
+  padding: 12px 24px;
+  background: var(--color-surface-main);
+  box-shadow: none;
+}
+.settings-apply-bar.dirty {
+  border-color: var(--color-border-accent);
+}
+.settings-layout {
+  gap: 28px;
+  min-height: 0;
+}
+.settings-panel {
+  min-width: 0;
+  padding-bottom: 16px;
+}
+.settings-panel > .settings-card {
+  box-shadow: none;
+}
+.settings-toast-region {
+  pointer-events: none;
+}
+.compaction-summary-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.compaction-summary-heading h3 {
+  margin: 0;
+  font-size: var(--font-size-label);
+}
+.compaction-summary {
+  margin-top: 12px;
+  max-height: 420px;
+  overflow: auto;
+  padding: 14px 16px;
+  border-left: 2px solid var(--color-accent);
+  background: var(--color-surface-wash);
+  font-size: var(--font-size-body);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.compaction-projection summary {
+  padding: 10px 0;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+}
+.context-compaction-toggle {
+  min-height: 44px;
+}
+.context-compaction-toggle small {
+  font-size: var(--font-size-caption);
+}
+.context-compaction-toggle[aria-expanded="true"] > svg:last-child {
+  rotate: 180deg;
+}
+.context-compaction-detail p {
+  font-size: var(--font-size-caption);
+  line-height: 1.6;
+}
+.context-compaction-detail pre {
+  font: var(--font-size-caption)/1.6 var(--font-mono);
+}
+.workspace-tab-types {
+  align-content: start;
+}
+.workspace-tab-types > header {
+  grid-column: 1 / -1;
+  margin-bottom: 10px;
+}
+.workspace-tab-types h3 {
+  font-size: 17px;
+  margin: 0 0 6px;
+}
+.workspace-tab-types p,
+.workspace-tab-types small {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
+}
+.workspace-tab-types button > span {
+  display: grid;
+  gap: 3px;
+  text-align: left;
+}
+.workspace-tab-types button {
+  min-height: 64px;
+}
+.workspace-content-tab[data-active="true"] {
+  box-shadow: inset 0 -2px var(--color-accent);
+}
+[data-plugin-surface] :where(button:not([class])) {
+  min-height: var(--control-height);
+  padding: 6px 12px;
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-control);
+  color: var(--color-text-primary);
+  background: var(--color-surface-control);
+  font-size: var(--font-size-label);
+}
+[data-plugin-surface] :where(input:not([type="checkbox"]), textarea) {
+  min-height: var(--control-height);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-control);
+  padding: 8px 10px;
+  background: var(--color-surface-control);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-label);
+}
+[data-plugin-surface] :where(label) {
+  display: grid;
+  gap: 6px;
+}
+[data-plugin-surface] :where(button:disabled) {
+  opacity: 0.5;
+}
+[data-plugin-surface] :where(button:hover:not(:disabled)) {
+  background-color: var(--color-surface-control-hover);
+}
+@media (max-width: 760px) {
+  .settings-layout {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+  .settings-nav {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .settings-nav button {
+    width: auto;
+    min-height: 32px;
+    padding: 6px 9px;
+  }
+  .settings-view > .settings-apply-bar {
+    padding: 10px 14px;
+  }
+  .settings-apply-bar > div {
+    min-width: 0;
+  }
+  .settings-apply-bar span {
+    white-space: normal;
+  }
+  .plugin-page-scroll {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 14px;
+  }
+}
+@media (pointer: coarse) {
+  :where(button, .ui-select, .ui-select-option) {
+    min-height: 44px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-enter: 0ms;
+    --motion-exit: 0ms;
+    --motion-layout: 0ms;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.ui-dialog.project-editor-shell,
+.ui-dialog.directory-picker-shell {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.ui-dialog.directory-picker-shell {
+  width: min(780px, calc(100vw - 32px));
+}
+.ui-dialog .project-editor,
+.ui-dialog .directory-picker-dialog {
+  width: 100%;
+  max-height: calc(100dvh - 32px);
+}
+.rooms-overview .room-create-card {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+  gap: 16px;
+}
+.rooms-overview .room-create-card h2 {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.rooms-overview .room-create-card .primary-button {
+  justify-self: start;
+}
+.rooms-overview .rooms-layout {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 20px;
+  margin-top: 24px;
+}
+.rooms-overview .room-list {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+.rooms-overview .room-list [aria-current="true"] {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+.rooms-overview .page-card > .field {
+  margin-block: 16px;
+}
+.rooms-overview .page-card li {
+  overflow-wrap: anywhere;
+  margin-block: 10px;
+}
+@media (max-width: 760px) {
+  .rooms-overview .room-create-card,
+  .rooms-overview .rooms-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ui-combobox {
+  width: min(360px, calc(100vw - 20px));
+}
+.ui-combobox input {
+  width: 100%;
+  min-height: 34px;
+  padding: 8px 10px;
+  margin-bottom: 5px;
+  border: 1px solid var(--color-border-control);
+  border-radius: 6px;
+  background: var(--color-surface-control);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-label);
+}
+.ui-combobox-options {
+  max-height: min(320px, 45vh);
+  overflow: auto;
+}
+.ui-select-option[aria-selected="true"] {
+  color: var(--color-text-accent);
+}
+
+.auxiliary-panel {
+  transition:
+    opacity var(--motion-layout) var(--ease-standard),
+    translate var(--motion-layout) var(--ease-standard),
+    display var(--motion-layout) allow-discrete;
+}
+.auxiliary-panel[data-open="false"] {
+  opacity: 0;
+  translate: 12px 0;
+  pointer-events: none;
+}
+@starting-style {
+  .auxiliary-panel[data-open="true"] {
+    opacity: 0;
+    translate: 12px 0;
+  }
+}
+.sidebar {
+  transition:
+    opacity var(--motion-layout) var(--ease-standard),
+    transform var(--motion-layout) var(--ease-standard),
+    visibility var(--motion-layout);
+}
+.thread-menu,
+.project-menu {
+  animation: ui-enter var(--motion-enter) var(--ease-standard);
+}
+
+.settings-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--font-size-label);
+}
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.settings-explanation {
+  margin-block: 10px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+}
+.settings-explanation > summary {
+  padding-block: 6px;
+}
+.composer-model-search {
+  box-sizing: border-box;
+  width: calc(100% - 12px);
+  margin: 6px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-control);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-label);
+}
+@supports (interpolate-size: allow-keywords) {
+  details {
+    interpolate-size: allow-keywords;
+  }
+  details::details-content {
+    block-size: 0;
+    overflow: clip;
+    transition:
+      block-size var(--motion-layout) var(--ease-standard),
+      content-visibility var(--motion-layout) allow-discrete;
+  }
+  details[open]::details-content {
+    block-size: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auxiliary-panel {
+    translate: none !important;
+  }
+  .ui-popover,
+  .ui-select-popover,
+  .ui-dialog,
+  .ui-dialog-overlay {
+    animation: none !important;
+  }
+}
+
+.ui-action-menu {
+  width: 270px;
+}
+.ui-action-item {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  text-align: left;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-label);
+}
+.ui-action-item small {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  line-height: 1.4;
+}
+.ui-action-item:hover,
+.ui-action-item:focus-visible {
+  background: var(--color-surface-hover);
+}
+.ui-action-item.is-danger {
+  border-top: 1px solid var(--color-border);
+  margin-top: 5px;
+  padding-top: 12px;
+  color: var(--color-status-danger);
+}
+.ui-action-item:disabled {
+  opacity: 0.5;
+}
+
+.project-disclosure {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition:
+    grid-template-rows var(--motion-layout) var(--ease-standard),
+    opacity var(--motion-layout);
+}
+.project-disclosure > div {
+  min-height: 0;
+  overflow: hidden;
+}
+.project-disclosure[data-open="false"] {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+.window-titlebar-inbox .inbox-button {
+  width: auto;
+  padding-inline: 8px;
+  gap: 5px;
+  font-size: var(--font-size-caption);
+}
+.workspace-tab-types strong {
+  font-weight: 500;
+}
+.settings-view[hidden],
+.preserved-plugin-settings[hidden] {
+  display: none;
+}
+.preserved-plugin-settings:not([hidden]) {
+  display: contents;
+}
+
+/* Native WebContentsView bounds are owned by Electron; do not visually translate
+   its DOM placeholder independently of the actual page. */
+.auxiliary-panel:has(.workspace-browser-panel) {
+  translate: none;
+  transition: none;
 }

@@ -1,3 +1,4 @@
+import { parseSkillDraft } from "./skill-draft.js";
 import {
   handleCompactCommand,
   isCompactCommand,
@@ -1278,7 +1279,7 @@ export function App() {
   ) => {
     if (submission.text.length > 0)
       await window.zenx.titles
-        .observe(threadId, submission.text)
+        .observe(threadId, parseSkillDraft(submission.text).text)
         .then((projection) => {
           if (projection !== undefined)
             setTitleSnapshot((current) => ({
@@ -1291,6 +1292,36 @@ export function App() {
             `Thread title could not be staged: ${describeError(error)}`,
           ),
         );
+    const skillDraft = parseSkillDraft(submission.text);
+    if (skillDraft.skills.length > 0) {
+      if (archivingThreadIdsRef.current.has(threadId))
+        throw new Error("This Thread is being archived.");
+      if (
+        (submission.intent === "steer" || submission.intent === "replace") &&
+        submission.expectedTurnId === null
+      )
+        throw new Error("The active turn changed before sending");
+      const input: (
+        | import("../../../../../src/item.js").UserInputPart
+        | import("../../../../../src/skill-input.js").SkillReference
+      )[] = [];
+      if (skillDraft.text.trim().length > 0)
+        input.push({ type: "text", text: skillDraft.text });
+      for (const skill of skillDraft.skills)
+        input.push({ type: "skill", id: skill.id });
+      for (const image of submission.images)
+        input.push({ type: "image", attachment: image.attachment });
+      await window.zenx.protocol.request("zen/turn/send", {
+        threadId,
+        input,
+        mode: submission.intent,
+        clientUserMessageId: submission.clientUserMessageId,
+        ...(submission.expectedTurnId === null
+          ? {}
+          : { expectedTurnId: submission.expectedTurnId }),
+      });
+      return;
+    }
     const input = await composerSubmissionInput(submission);
     if (submission.intent === "start") {
       if (archivingThreadIdsRef.current.has(threadId))
@@ -1797,6 +1828,10 @@ export function App() {
   };
 
   const openPage = (next: ProductPage) => {
+    if (next.startsWith("/threads/")) {
+      void resumeThread(decodeURIComponent(next.slice("/threads/".length)));
+      return;
+    }
     discardRecoverableDraft();
     if (projectPickerIntentRef.current !== null) closeProjectPicker();
     if (next !== "agent") abandonNewThreadDraft();
@@ -2152,20 +2187,21 @@ export function App() {
       ) : null}
 
       <main className="workspace">
-        {page === "settings" ? (
-          <SettingsView
-            archivedError={threadListErrors.archived}
-            archivedLoading={!threadListLoaded.archived}
-            archivedThreads={archivedSummaries}
-            onRetryArchived={() => void loadThreadSummaries(true)}
-            onTabChange={setSettingsTab}
-            onUnarchive={performThreadLifecycle}
-            onOpenSidebar={() => setSidebarOpen(true)}
-            tab={settingsTab}
-            pluginSnapshot={pluginSnapshot}
-            showHeader={false}
-          />
-        ) : genericPluginTarget !== undefined && pluginSnapshot !== null ? (
+        <SettingsView
+          active={page === "settings"}
+          archivedError={threadListErrors.archived}
+          archivedLoading={!threadListLoaded.archived}
+          archivedThreads={archivedSummaries}
+          onRetryArchived={() => void loadThreadSummaries(true)}
+          onTabChange={setSettingsTab}
+          onUnarchive={performThreadLifecycle}
+          onOpenSidebar={() => setSidebarOpen(true)}
+          tab={settingsTab}
+          pluginSnapshot={pluginSnapshot}
+          showHeader={false}
+        />
+        {page === "settings" ? null : genericPluginTarget !== undefined &&
+          pluginSnapshot !== null ? (
           <PluginProductPage
             snapshot={pluginSnapshot}
             route={page}
@@ -2435,6 +2471,9 @@ function WindowTitleBar({
             onClick={onToggleInbox}
           >
             <Icon name="inbox" />
+            <span className="inbox-label">
+              {mode === "inbox" ? "Projects" : "Inbox"}
+            </span>
             {pendingApprovalCount > 0 ? (
               <span className="inbox-dot" aria-hidden="true" />
             ) : null}

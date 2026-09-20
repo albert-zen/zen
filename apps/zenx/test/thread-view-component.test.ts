@@ -1,3 +1,4 @@
+import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import * as React from "react";
@@ -22,6 +23,88 @@ Object.assign(globalThis, { React });
 const { ThreadView } = await import("../src/renderer/src/ThreadView.js");
 
 const noop = async () => undefined;
+
+test("manual Skills are slash candidates and selection stays removable without sending", async () => {
+  await withDom(async (root) => {
+    let composer = editComposer(emptyComposerState(), "/sample");
+    let sends = 0;
+    const priorFrame = globalThis.requestAnimationFrame;
+    globalThis.requestAnimationFrame = (callback) => {
+      callback(0);
+      return 0;
+    };
+    const skill = {
+      id: "11111111-1111-1111-1111-111111111111",
+      name: "sample",
+      description: "Manual instructions",
+      source: "C:/original/sample",
+      directory: "C:/host/sample",
+      mode: "manual" as const,
+      configurationSource: "default" as const,
+    };
+    Object.assign(window, {
+      zenx: {
+        skills: {
+          list: async () => ({
+            skills: [
+              skill,
+              {
+                ...skill,
+                id: "22222222-2222-2222-2222-222222222222",
+                name: "disabled",
+                mode: "disabled",
+              },
+            ],
+            errors: [],
+            catalogBudgetBytes: 16384,
+          }),
+        },
+      },
+    });
+    const renderView = () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer,
+          thread: null,
+          onDraftChange: (text: string) => {
+            composer = editComposer(composer, text);
+            renderView();
+          },
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: async () => {
+            sends++;
+          },
+        }),
+      );
+    try {
+      await act(async () => renderView());
+      assert.match(
+        requiredElement('[role="listbox"]').textContent ?? "",
+        /sample/,
+      );
+      assert.doesNotMatch(
+        requiredElement('[role="listbox"]').textContent ?? "",
+        /disabled/,
+      );
+      await act(async () => requiredButton('[role="option"]').click());
+      assert.equal(sends, 0);
+      assert.equal(
+        document.querySelector<HTMLTextAreaElement>("textarea")!.value,
+        "",
+      );
+      assert.match(composer.draft.text, /11111111/);
+      await act(async () =>
+        requiredButton('[aria-label="Remove Skill sample"]').click(),
+      );
+      assert.equal(composer.draft.text, "");
+      assert.equal(sends, 0);
+    } finally {
+      globalThis.requestAnimationFrame = priorFrame;
+    }
+  });
+});
 
 test("idle composer exposes one disabled Send action when empty", () => {
   const html = render(false, []);
@@ -132,10 +215,25 @@ test("compaction progress is a transcript item and completed items reveal exact 
     const event = requiredElement(".context-compaction-event");
     assert.match(event.textContent ?? "", /Context compacted/u);
     assert.match(event.textContent ?? "", /Human initiated/u);
+    assert.match(event.textContent ?? "", /Full input size unknown/u);
+    assert.doesNotMatch(event.textContent ?? "", /effective messages/u);
     await act(async () => requiredButton(".context-compaction-toggle").click());
     assert.match(event.textContent ?? "", /Keep this request/u);
     assert.match(event.textContent ?? "", /Kept answer/u);
     assert.match(event.textContent ?? "", /Continue with the accepted plan/u);
+    assert.match(
+      requiredElement(".compaction-summary").textContent ?? "",
+      /Continue with the accepted plan/u,
+    );
+    assert.equal(
+      requiredElement(".compaction-projection").hasAttribute("open"),
+      false,
+    );
+    assert.match(event.textContent ?? "", /not tokens/u);
+    assert.match(
+      event.textContent ?? "",
+      /request inputs may be added separately/u,
+    );
 
     await act(async () =>
       root.render(

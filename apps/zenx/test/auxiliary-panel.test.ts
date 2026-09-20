@@ -1,3 +1,4 @@
+import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import React, { act, useState } from "react";
@@ -121,7 +122,7 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
         ...document.querySelectorAll<HTMLButtonElement>(
           ".workspace-tab-types > button",
         ),
-      ].find((e) => e.textContent === name)!;
+      ].find((e) => e.querySelector("strong")?.textContent === name)!;
     await act(async () => choose("Attached browser").click());
     assert.equal(requests.at(-1)?.frames, true);
     const tab = (name: string) =>
@@ -372,7 +373,9 @@ for (const throughHostSdk of [false, true]) {
           ...document.querySelectorAll<HTMLButtonElement>(
             ".workspace-tab-types > button",
           ),
-        ].find((element) => element.textContent === name)!;
+        ].find(
+          (element) => element.querySelector("strong")?.textContent === name,
+        )!;
       const selectedTab = () =>
         document.querySelector<HTMLButtonElement>(
           '[role="tab"][aria-selected="true"]',

@@ -82,6 +82,12 @@ export interface PluginUiSdkV1 {
   readonly version: 1;
   readonly pluginId: string;
   readonly theme: "light" | "dark";
+  /** Optional additive theme contract. Updates never imply a plugin reload. */
+  readonly appearance?: {
+    readonly version: 1;
+    readonly variables: Readonly<Record<string, string>>;
+    readonly reducedMotion: boolean;
+  };
   readonly context: Readonly<Record<string, unknown>>;
   readonly navigation: { navigate(route: string): void };
   readonly handles: { read(handleId: string): Promise<unknown> };

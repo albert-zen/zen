@@ -2,6 +2,14 @@
 
 ## 核心概念
 
+- **ZenX Thread Target** — Host 从 App Server 当前列表与 workspace 身份投影解析完整 ID、唯一前缀或精确标题，歧义只返回易读候选；共享解析不保存索引或拥有会话语义。
+- **ZenX 自控原文与发送** — 原生 `zen/thread/read` 无订阅地读取完整 canonical snapshot；Host 用 Item/Turn 边界派生分页，并在所有模型可见预览与续读前递归投影可公开的 Item：标记 opaque 的结构只保留定位字段与公开 summary，public reasoning 与工具原文字符串不改写，journal 与可信原生读取/恢复仍完整。发送幂等键和 Turn fence 从可信工具调用身份及当前快照推导；发送偏好仍由 Host profile 持有，不引入命令账本或会话权威。
+- **Trigger Thread Watch** — 既有 Trigger 配置固定来源与目标 Thread，可监听一次或后续各 Turn 的终态；注册后的可选 canonical 快照与实时事件使用同一去重入口，一次性监听在事件接纳时停用，通知发送的失败或不确定性单独记录，不重试或补发离线事件。
+- **Host Skills** — Host 保存标准目录的完整导入副本与独立可见性覆盖；ZAS 的统一发送入口按预算将自动目录和显式引用解析为带来源的 canonical 文本输入，重试从已有 Item 复用快照，恢复与压缩不重新读取目录。默认手动模式不自动披露任何元数据，禁用模式拒绝加载。
+- **ZenX 界面控件** — Renderer 的共享 Select、Popover、Dialog 使用无样式可访问性 primitives 与既有主题 tokens 统一键盘、焦点、浮层避让及可取消动效，只管理易失展示状态。
+- **Plugin UI 主题快照** — Host renderer 向 trusted/isolated surface 提供版本化、只读的颜色、密度与 reduced-motion 变量，主题变化仅更新展示，不重载插件或放宽隔离。
+  设置插件隐藏时保留文档及其消息桥的共同生命周期，使用 hidden/inert 禁止界面交互；普通编辑面板可用 Activity 暂停 effects，Host 设置刷新订阅按页面可见性启停。
+
 - **ZenX 共享浏览器** — Host 拥有的 WebContentsView 标签按 Thread 分组，以独立持久 profile 承载用户与 Agent 对同一页面 target 的操作；可信 Tool invocation 把 provider session 绑定到 Thread，窗口只挂载该 target 的实时视图，页面和绑定都不成为会话权威。
 - **ZenX Computer 实时观察** — Host 以 Thread、Tool invocation 与精确窗口 target 关联最近八次 Computer 操作，并只在可见订阅期间串行捕获有界、可取消且带时间戳的窗口帧；观察失败不改变工具结果或建立桌面接管状态。
 - **ZenX 文件草稿** — Renderer 在窗口生命周期内按 Thread/path 保存易失编辑草稿，独立于会话历史；Host 以读取版本检测外部冲突并原子替换现有 UTF-8 文件，人工编辑不作为 Agent 工具执行，不更改线程权限策略。
@@ -235,14 +243,14 @@
 - **ProviderTransport** — 宿主为 Provider HTTP 请求注入的显式连接策略；首版只接受
   无 credential 的 HTTP(S) proxy URL，并保证 abort 与脱敏错误，不进入 Agent Runtime 状态。
 - **ZenXTriggerRegistry** — `zenx-triggers` Plugin Package 在自身 storage namespace 持久化的可审计
-  唤醒条件与命中历史；每次命中只以稳定幂等 key 通过 App Server 发起普通新 Turn，失败明确记录且不自动补偿。
+  唤醒条件与命中历史；每次命中以稳定幂等 key 通过 App Server 提交普通输入，Thread 完成通知使用既有 canonical queue，失败明确记录且不自动补偿。
 - **ZenXRoom** — `zenx-rooms` Plugin Package 在自身 storage namespace 持有的共享协作转录与 Thread 路由表面；Room 本身不是
   Agent 上下文，只有明确命中 membership / mention 时才把带来源的内容投递给成员 Thread。
 - **ZenXWakeupProjection** — ZenX 把 Trigger 命中的 `clientUserMessageId` 与外部审计记录
   关联成系统级唤醒卡片，并把有界、带明确来源的 completed Turn / Room 上下文作为
   新 Turn 输入投影；它不是第二份权威 transcript，canonical `user_message` 仍是唯一输入事实。
 - **ZenXTriggerAppServerPort** — ZenX Trigger 服务观察 completed Item/Turn 并发起普通
-  `turn/start` 所需的最小 host-local App Server 边界；它不引入另一套 Runtime、队列或重试器。
+  `turn/start` / `turn/queue` 与按需 Thread 读取所需的最小 host-local App Server 边界；它不引入另一套 Runtime、队列或重试器。
 - **ZenXExternalLinkPolicy** — ZenX renderer 与 Electron 主进程共同执行的外链 allowlist；
   只有 `http:`、`https:`、`mailto:` 可交给操作系统，页内锚点留在 renderer 处理。
 - **ZenXPluginCatalog** — ZenX 主进程从 profile 的直接 dependencies 注册 v2 package，原子管理
@@ -493,8 +501,7 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
 - Plugin Package v2 为发现提供的最小 metadata 是稳定 `id`、非空 `name` / short
   `description` / `mainDocument`，以及普通 namespaced tool 的 `name` / `description` /
   `inputSchema`；这是所有非 builtin 工具的唯一 manifest 与 discovery 合同。
-- 插件 main document 是首要模型说明；独立 Skills 平台暂缓，现有固定协议
-  `skills/list` 不因此获得新的会话语义。
+- 插件 main document 是插件的首要模型说明；独立 Skills 由 Host 导入、配置并经 ZAS 统一加载，CAS `skills/list` 保持既有兼容范围。
 - 同一模型响应产生的 direct calls 与一次 `run_code` 中的 nested calls 共用 Turn 内
   有界执行器：prepare、Host admission 与
   canonical result commit 保持模型提交顺序，只有标记为 `parallel_safe` 的 runtime
@@ -765,6 +772,8 @@ ZAS 当前把它们投影为 `turn/started` / `turn/completed`；CAS adapter 可
 任一 canonical append Promise 拒绝后，持久化结果都视为未知：当前 Turn 停止后续
 canonical 写入，App Server 丢弃对应 Thread 与 summary 缓存并在下次读取时从 journal
 重建，不补写替代 failure 或第二个 terminal。
+同一 ID 的 queued/replacement intent 同样约束原输入，公共 start 不得以不同输入
+消费未交付 intent；已交付匹配优先返回，内部 prepared launch 仍执行原快照。
 canonical `user_message` 可携带接入端提供的可选 `clientId`，仅用于跨接入端关联
 同一条用户消息，并投影为 wire `userMessage.clientId`。active Turn 接受的 soft
 steer 仍是普通 canonical `user_message`；若它在一次模型响应或其工具执行期间
@@ -811,6 +820,8 @@ claim，不得被称为 Codex extension 或因固定 CAS schema 缺失而删除�
 - **固定 CAS 版本**：CAS 字段 shape 以 codex-cli 0.146.0 的生成结果为准，不承诺
   "兼容最新"，也不自动继承后续 Codex 语义；升级 adapter 基线是一次显式决策。
 - **强制握手**：每个连接先 `initialize` → `initialized`，之后才接受其他方法。
+  原生 `zen/turn/send` 复用该就绪状态或显式 `zen/initialize`；既有原生 resume
+  读取不授予发送就绪状态，发送本身不得隐式初始化连接。
 - **WebSocket 访问控制在宿主侧**：loopback listener 拒绝浏览器 `Origin`，可选
   bearer credential 仅用于 transport 握手，不进入 Zen Core、Thread 或 journal。
 - **stdio ↔ WebSocket bridge 只是 transport adapter**：它原样转发共享 endpoint 消息，

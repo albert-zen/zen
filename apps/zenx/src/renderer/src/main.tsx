@@ -4,6 +4,8 @@ import { App } from "./App";
 import { getAppearanceController } from "./appearance";
 import "./theme.css";
 import "./styles.css";
+import "./trigger-ui.css";
+import "./skills.css";
 
 getAppearanceController();
 

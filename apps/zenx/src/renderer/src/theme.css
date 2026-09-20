@@ -1,5 +1,28 @@
 :root {
   color-scheme: dark;
+  --font-body: "Segoe UI Variable Text", "Segoe UI", -apple-system, sans-serif;
+  --font-heading:
+    "Segoe UI Variable Display", "Segoe UI", -apple-system, sans-serif;
+  --font-mono: "Cascadia Code", Consolas, monospace;
+  --font-size-body: 14px;
+  --font-size-label: 13px;
+  --font-size-caption: 12px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --control-height: 32px;
+  --control-height-compact: 28px;
+  --radius-control: 7px;
+  --radius-popover: 10px;
+  --motion-fast: 100ms;
+  --motion-enter: 150ms;
+  --motion-exit: 100ms;
+  --motion-layout: 200ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --z-popover: 1000;
+  --z-dialog: 900;
 
   /* Canonical semantic colors for the migrated v0 slice. */
   --color-canvas: #090a0c;

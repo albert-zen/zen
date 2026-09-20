@@ -235,15 +235,13 @@ test("project pins reorder the list, retain collapse through reload, and unpin r
   });
 });
 
-test("plugins and Projects retain disclosure choices across remount", async () => {
+test("plugin navigation stays visible while Projects retains disclosure choices across remount", async () => {
   await harness(async ({ remount }) => {
-    await click(".plugin-spaces-toggle");
+    assert.ok(document.querySelector(".plugin-space-link"));
     await click(".projects-section-toggle");
     await remount();
-    assert.equal(
-      button(".plugin-spaces-toggle").getAttribute("aria-expanded"),
-      "false",
-    );
+    assert.equal(document.querySelector(".plugin-spaces-toggle"), null);
+    assert.ok(document.querySelector(".plugin-space-link"));
     assert.equal(
       button(".projects-section-toggle").getAttribute("aria-expanded"),
       "false",

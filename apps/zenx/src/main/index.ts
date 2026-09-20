@@ -1,3 +1,4 @@
+import { SkillsService, type SkillMode } from "../../../cli/src/skills.js";
 import { createImZenXProfileLoader } from "./imzenx-profile-loader.js";
 import { readZenXConnectionDescriptor } from "../protocol-client/connection-descriptor.js";
 import {
@@ -294,6 +295,20 @@ async function bootstrapZenX(): Promise<void> {
   const zenDataDirectory = resolve(
     process.env["ZENX_DATA_DIR"] ?? join(app.getPath("home"), ".zen"),
   );
+  const skills = new SkillsService(zenDataDirectory);
+  ipcMain.handle(ipcChannels.skillsList, () => skills.list());
+  ipcMain.handle(ipcChannels.skillsImport, (_event, directory: unknown) => {
+    if (typeof directory !== "string")
+      throw new Error("Skill directory is required");
+    return skills.importDirectory(directory);
+  });
+  ipcMain.handle(
+    ipcChannels.skillsMode,
+    (_event, id: unknown, mode: unknown) => {
+      if (typeof id !== "string") throw new Error("Skill id is required");
+      return skills.setMode(id, mode as SkillMode | null);
+    },
+  );
   const imageAttachments = new FileAttachmentStore(
     join(zenDataDirectory, "attachments"),
   );
@@ -344,6 +359,9 @@ async function bootstrapZenX(): Promise<void> {
     }
     const selfControlPackage = new ZenXSelfControlCapabilityPackage({
       appServer: selfControlPort,
+      sendPreference: async () =>
+        (await settingsService!.publicSettings()).profile.composerSendMode ??
+        "queue",
       workflows: {
         workflowConfiguration: async () =>
           await settingsService!.workflowConfiguration(),
@@ -481,9 +499,26 @@ async function bootstrapZenX(): Promise<void> {
     );
     bootstrapFence.throwIfCancelled();
     installTitleIpc(titleCoordinator);
+    const automationManager = appServerManager;
     automationService = await createBundledAutomationPluginService({
+      threadTargets: {
+        projectProjection,
+        request: (method, params) => automationManager.request(method, params),
+      },
       userDataDirectory,
-      appServer: appServerManager,
+      appServer: {
+        request: (method, params) => automationManager.request(method, params),
+        onNotification: (listener) =>
+          automationManager.onNotification(listener),
+        readThread: (threadId) =>
+          automationManager.request("thread/read", {
+            threadId,
+            includeTurns: true,
+          }),
+        enqueue: async (params) => {
+          await automationManager.request("turn/queue", params);
+        },
+      },
       titles: titleCoordinator,
     });
     bootstrapFence.throwIfCancelled();

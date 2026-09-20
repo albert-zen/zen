@@ -1,3 +1,4 @@
+import { Popover, PopoverTrigger, PopoverContent } from "./ui/controls.js";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
 import { Icon } from "./icons.js";
@@ -38,14 +39,6 @@ export function PermissionSelect({
     setOpen(false);
   };
   useEffect(() => {
-    if (!open) return;
-    const outside = (event: PointerEvent) => {
-      if (!containerRef.current?.contains(event.target as Node)) close(false);
-    };
-    document.addEventListener("pointerdown", outside);
-    return () => document.removeEventListener("pointerdown", outside);
-  }, [open]);
-  useEffect(() => {
     if (unavailable) setOpen(false);
   }, [unavailable]);
   useEffect(() => {
@@ -62,41 +55,52 @@ export function PermissionSelect({
     triggerRef.current?.focus();
   }, [open]);
   return (
-    <div className="permission-picker" ref={containerRef}>
-      <button
-        ref={triggerRef}
-        className="composer-model-trigger permission-trigger"
-        type="button"
-        aria-label="File permissions"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-describedby={error ? "composer-permission-error" : undefined}
-        disabled={unavailable}
-        title={
-          disabled
-            ? "Wait for the current operation to finish before changing permissions"
-            : "File permissions for this thread"
-        }
-        onClick={() => (open ? close() : setOpen(true))}
-        onKeyDown={(event) => {
-          if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-          event.preventDefault();
-          setOpen(true);
-        }}
-      >
-        <span role={switching ? "status" : undefined}>
-          {switching
-            ? "Saving…"
-            : legacyApproval
-              ? "Approval required"
-              : permissionLabels[value]}
-        </span>
-        <Icon name="chevron-down" size={12} />
-      </button>
-      {open && !unavailable ? (
-        <div
+    <Popover open={open && !unavailable} onOpenChange={setOpen}>
+      <div className="permission-picker" ref={containerRef}>
+        <PopoverTrigger asChild>
+          <button
+            ref={triggerRef}
+            className="composer-model-trigger permission-trigger"
+            type="button"
+            aria-label="File permissions"
+            aria-haspopup="menu"
+            aria-expanded={open}
+            aria-describedby={error ? "composer-permission-error" : undefined}
+            disabled={unavailable}
+            title={
+              disabled
+                ? "Wait for the current operation to finish before changing permissions"
+                : "File permissions for this thread"
+            }
+            onClick={() => (open ? close() : setOpen(true))}
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+              event.preventDefault();
+              setOpen(true);
+            }}
+          >
+            <span role={switching ? "status" : undefined}>
+              {switching
+                ? "Saving…"
+                : legacyApproval
+                  ? "Approval required"
+                  : permissionLabels[value]}
+            </span>
+            <Icon name="chevron-down" size={12} />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
           className="composer-selection-menu permission-menu"
           ref={menuRef}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            (
+              menuRef.current?.querySelector<HTMLButtonElement>(
+                '[aria-checked="true"]',
+              ) ?? menuRef.current?.querySelector<HTMLButtonElement>("button")
+            )?.focus();
+          }}
+          onCloseAutoFocus={(event) => event.preventDefault()}
           role="menu"
           aria-label="File permissions"
           onKeyDown={(event) => {
@@ -107,6 +111,7 @@ export function PermissionSelect({
               return;
             }
             if (event.key === "Tab") {
+              triggerRef.current?.focus();
               close(false);
               return;
             }
@@ -159,17 +164,17 @@ export function PermissionSelect({
               Actions outside these limits require approval.
             </p>
           ) : null}
-        </div>
-      ) : null}
-      {error ? (
-        <span
-          id="composer-permission-error"
-          role="alert"
-          className="permission-error"
-        >
-          {error}
-        </span>
-      ) : null}
-    </div>
+        </PopoverContent>
+        {error ? (
+          <span
+            id="composer-permission-error"
+            role="alert"
+            className="permission-error"
+          >
+            {error}
+          </span>
+        ) : null}
+      </div>
+    </Popover>
   );
 }

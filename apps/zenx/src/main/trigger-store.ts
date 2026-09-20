@@ -90,7 +90,7 @@ const TRIGGER_BASE_KEYS = [
   "active",
 ] as const;
 const TIMER_KEYS = ["nextRunAt", "intervalMinutes"] as const;
-const WATCH_KEYS = ["threadId", "event"] as const;
+const WATCH_KEYS = ["threadId", "event", "once"] as const;
 const ROOM_TRIGGER_KEYS = ["roomId", "mention"] as const;
 const SIGNAL_KEYS = ["name"] as const;
 const PROGRAM_KEYS = ["predicate", "action", "match"] as const;
@@ -125,6 +125,7 @@ const HISTORY_SOURCE_KEYS = [
 ] as const;
 const HISTORY_V2_KEYS = [...HISTORY_BASE_KEYS, ...HISTORY_SOURCE_KEYS] as const;
 const HISTORY_V3_KEYS = [
+  "delivery",
   ...HISTORY_BASE_KEYS,
   ...HISTORY_SOURCE_KEYS,
   "replyRoomId",
@@ -295,6 +296,9 @@ function canonicalTrigger(
       watch: {
         threadId: trigger.watch!.threadId,
         event: trigger.watch!.event,
+        ...(trigger.watch!.once === undefined
+          ? {}
+          : { once: trigger.watch!.once }),
       },
       ...program,
     };
@@ -348,6 +352,7 @@ function canonicalBaseHistory(
 
 function canonicalHistory(entry: TriggerHistoryEntry): TriggerHistoryEntry {
   return {
+    ...(entry.delivery === undefined ? {} : { delivery: entry.delivery }),
     ...canonicalBaseHistory(entry),
     sourceThreadId: entry.sourceThreadId,
     sourceTurnId: entry.sourceTurnId,
@@ -536,7 +541,8 @@ function isTrigger(
       watch !== null &&
       exactKeys(watch, WATCH_KEYS) &&
       string(watch["threadId"], MAX_ID_BYTES) &&
-      watch["event"] === "turn_completed"
+      watch["event"] === "turn_completed" &&
+      (watch["once"] === undefined || typeof watch["once"] === "boolean")
     );
   }
   if (trigger["kind"] === "roomMention") {
@@ -561,6 +567,10 @@ function isHistory(value: unknown): value is TriggerHistoryEntry {
   return (
     entry !== null &&
     exactKeys(entry, HISTORY_V3_KEYS) &&
+    (entry["delivery"] === undefined ||
+      ["pending", "queued", "failed", "unknown"].includes(
+        String(entry["delivery"]),
+      )) &&
     isHistoryBase(entry) &&
     entry !== null &&
     nullableString(entry["replyRoomId"], MAX_ID_BYTES) &&

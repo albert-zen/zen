@@ -94,6 +94,10 @@ export class CodexConnection {
     });
   }
 
+  get initialized(): boolean {
+    return this.#initializedRequest && this.#initializedNotification;
+  }
+
   async receive(message: unknown): Promise<void> {
     if (this.#closed) {
       return;
@@ -564,7 +568,7 @@ export class CodexConnection {
             ? {}
             : { selection: requestedSelectionInput }),
           requestApproval: async (approval) =>
-            await this.#requestApproval(approval),
+            await this.requestApproval(approval),
         });
         const now = Math.floor(Date.now() / 1000);
         this.#send({
@@ -602,7 +606,7 @@ export class CodexConnection {
           requiredString(params, "clientUserMessageId"),
           {
             requestApproval: async (approval) =>
-              await this.#requestApproval(approval),
+              await this.requestApproval(approval),
           },
         );
         this.#send({ id: request.id, result: {} });
@@ -614,7 +618,7 @@ export class CodexConnection {
         await this.#appServer.readThread(threadId);
         await this.#appServer.resumeQueue(threadId, {
           requestApproval: async (approval) =>
-            await this.#requestApproval(approval),
+            await this.requestApproval(approval),
         });
         this.#send({ id: request.id, result: {} });
         return;
@@ -662,7 +666,7 @@ export class CodexConnection {
           {
             clientId,
             requestApproval: async (approval) =>
-              await this.#requestApproval(approval),
+              await this.requestApproval(approval),
           },
         );
         this.#send({
@@ -1075,7 +1079,7 @@ export class CodexConnection {
     });
   }
 
-  async #requestApproval(request: ApprovalRequest): Promise<ApprovalDecision> {
+  async requestApproval(request: ApprovalRequest): Promise<ApprovalDecision> {
     // The command item must be visible before its approval request, matching Codex.
     await this.#eventChain;
     request.signal.throwIfAborted();

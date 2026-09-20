@@ -209,6 +209,63 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   }
 }
 
+test("native read returns original canonical history without subscribing to later events", async () => {
+  const host = createHostedAppServer({
+    cwd: process.cwd(),
+    dataDirectory: "/tmp/unused-native-read",
+    model: "fake",
+    models: ["fake"],
+    approvalPolicy: "never",
+    provider: { type: "fake" },
+    journal: new InMemoryThreadJournal(),
+  });
+  const thread = await host.startThread();
+  const server = await serveCodexWebSocket({
+    appServer: host,
+    zenHome: "/tmp/unused-native-read-home",
+    listen: "ws://127.0.0.1:0",
+  });
+  const socket = new WebSocket(server.url);
+  const messages: Array<Record<string, unknown>> = [];
+  socket.on("message", (data) => messages.push(JSON.parse(data.toString())));
+  try {
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+    socket.send(
+      JSON.stringify({
+        id: 1,
+        method: "zen/thread/read",
+        params: { threadId: thread.id },
+      }),
+    );
+    await waitFor(() => messages.some((message) => message.id === 1));
+    await (
+      await host.startTurn(thread.id, "original text")
+    ).done;
+    socket.send(
+      JSON.stringify({
+        id: 2,
+        method: "zen/thread/read",
+        params: { threadId: thread.id },
+      }),
+    );
+    await waitFor(() => messages.some((message) => message.id === 2));
+    assert.deepEqual(messages.find((message) => message.id === 2)?.result, {
+      thread: await host.readThread(thread.id),
+    });
+    assert.equal(
+      messages.some((message) => message.method === "zen/thread/event"),
+      false,
+    );
+  } finally {
+    socket.close();
+    await server.close();
+    await host.closeProviderTransport();
+  }
+});
+
 test("native recovery starts a new watermark namespace for a new process epoch", async () => {
   const host = createHostedAppServer({
     cwd: process.cwd(),

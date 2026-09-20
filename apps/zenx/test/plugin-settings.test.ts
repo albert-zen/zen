@@ -1,3 +1,5 @@
+import { chooseValue } from "./choice-interaction.js";
+import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import React from "react";
@@ -221,18 +223,14 @@ test("Plugin Settings exposes typed package sources and reports post-commit upda
       (candidate) => candidate.textContent === label,
     ) as HTMLButtonElement;
   await act(async () => button("Install from source…").click());
-  const select = dom.window.document.querySelector<HTMLSelectElement>(
-    'select[aria-label="Plugin source"]',
+  const select = dom.window.document.querySelector<HTMLButtonElement>(
+    'button[aria-label="Plugin source"]',
   )!;
   const input = dom.window.document.querySelector<HTMLInputElement>(
     ".plugin-source-install input",
   )!;
+  await chooseValue(select, "git");
   await act(async () => {
-    Object.getOwnPropertyDescriptor(
-      dom.window.HTMLSelectElement.prototype,
-      "value",
-    )!.set!.call(select, "git");
-    select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
     Object.getOwnPropertyDescriptor(
       dom.window.HTMLInputElement.prototype,
       "value",
@@ -243,10 +241,7 @@ test("Plugin Settings exposes typed package sources and reports post-commit upda
     input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
     input.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   });
-  assert.equal(
-    [...select.options].some((option) => option.value === "git"),
-    true,
-  );
+  assert.equal(select.dataset.value === "git", true);
   assert.deepEqual(sources, []);
   await act(async () => {
     button("Update…").click();
@@ -411,17 +406,11 @@ test("Marketplace exposes loading, search, detail, version install, and canonica
     dom.window.document.body.textContent ?? "",
     /@fixtures\/notes-plugin/u,
   );
-  const version = dom.window.document.querySelector<HTMLSelectElement>(
-    'select[aria-label="Notes version"]',
+  const version = dom.window.document.querySelector<HTMLButtonElement>(
+    'button[aria-label="Notes version"]',
   );
   assert.ok(version);
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(
-      dom.window.HTMLSelectElement.prototype,
-      "value",
-    )!.set!.call(version, "1.0.0");
-    version.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-  });
+  await chooseValue(version, "1.0.0");
   await act(async () => {
     button("Install v1.0.0").click();
     await Promise.resolve();
@@ -434,13 +423,7 @@ test("Marketplace exposes loading, search, detail, version install, and canonica
     /installed and enabled.*Agent capability refresh failed: fixture refresh failed/u,
   );
   assert.match(dom.window.document.body.textContent ?? "", /Update available/u);
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(
-      dom.window.HTMLSelectElement.prototype,
-      "value",
-    )!.set!.call(version, "2.0.0");
-    version.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-  });
+  await chooseValue(version, "2.0.0");
   await act(async () => {
     button("Update to v2.0.0").click();
     await Promise.resolve();
@@ -653,7 +636,9 @@ test("Marketplace is the single searchable plugin management surface with compac
     button("Install from source…").getAttribute("aria-expanded"),
     "true",
   );
-  assert.ok(dom.window.document.querySelector(".plugin-source-install select"));
+  assert.ok(
+    dom.window.document.querySelector(".plugin-source-install .ui-select"),
+  );
   assert.ok(dom.window.document.querySelector(".plugin-source-install input"));
 
   await act(async () => {
@@ -713,21 +698,26 @@ test("real Plugin Settings DOM confirms uninstall and keeps delete-data separate
   assert.match(dom.window.document.body.textContent ?? "", /Enabled/u);
   const button = (label: string) =>
     [...dom.window.document.querySelectorAll("button")].find(
-      (candidate) => candidate.textContent === label,
+      (candidate) =>
+        (candidate.querySelector("strong")?.textContent ??
+          candidate.textContent) === label,
     ) as HTMLButtonElement;
+  assert.equal(button("Delete data"), undefined);
+  await act(async () => button("More actions").click());
   assert.equal(button("Delete data").disabled, true);
   await act(async () => button("Uninstall").click());
   assert.match(
     dom.window.document.body.textContent ?? "",
     /Its data stays on this device/u,
   );
-  assert.equal(dom.window.document.activeElement, button("Confirm uninstall"));
+  assert.equal(dom.window.document.activeElement, button("Cancel"));
   await act(async () => {
     button("Confirm uninstall").click();
     await Promise.resolve();
   });
   assert.deepEqual(calls, ["uninstall"]);
   assert.match(dom.window.document.body.textContent ?? "", /data was kept/u);
+  await act(async () => button("More actions").click());
   assert.equal(button("Delete data").disabled, false);
   await act(async () => button("Delete data").click());
   assert.match(

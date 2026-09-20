@@ -1,3 +1,4 @@
+import { Select } from "./ui/controls.js";
 import { useEffect, useState } from "react";
 
 import type { ChromeBridgeSettingsSnapshot } from "../../main/chrome-extension-bridge.js";
@@ -67,18 +68,18 @@ export function ChromeConnectionSettings({
       </div>
       <label className="field">
         <span>Browser mode</span>
-        <select
+        <Select
           value={selectedMode}
-          onChange={(event) =>
+          onValueChange={(value) =>
             setDraft({
               ...draft,
-              browserMode: event.target.value as "isolated" | "user-session",
+              browserMode: value as "isolated" | "user-session",
             })
           }
         >
           <option value="isolated">ZenX browser</option>
           <option value="user-session">Connected Chrome tab</option>
-        </select>
+        </Select>
         <small className="settings-note">
           Changing this mode takes effect after restarting ZenX.
         </small>

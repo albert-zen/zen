@@ -1,3 +1,4 @@
+import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
@@ -20,7 +21,7 @@ const rendererStyles = await readFile(
 
 test("Composer model menu groups Providers and manages keyboard focus", async () => {
   const dom = new JSDOM(
-    "<!doctype html><html><body><main id=outside></main><div id=root></div></body></html>",
+    "<!doctype html><html><body><button id=outside>Outside target</button><div id=root></div></body></html>",
     { url: "http://localhost" },
   );
   const previousGlobals = {
@@ -124,7 +125,11 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
     await act(async () => beta.click());
     assert.deepEqual(modelChanges, [key("beta", "beta-vision")]);
     assert.equal(document.querySelector('[role="menu"]'), null);
-    assert.equal(document.activeElement, trigger);
+    assert.equal(
+      document.activeElement === trigger,
+      true,
+      `Focus: ${document.activeElement?.outerHTML.slice(0, 180)}`,
+    );
 
     await act(async () => trigger.click());
     const reasoningEntry = Array.from(
@@ -144,7 +149,11 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
       ).click(),
     );
     assert.deepEqual(reasoningChanges, ["low"]);
-    assert.equal(document.activeElement, trigger);
+    assert.equal(
+      document.activeElement === trigger,
+      true,
+      `Focus: ${document.activeElement?.outerHTML.slice(0, 180)}`,
+    );
 
     await act(async () => trigger.click());
     const reasoningForEscape = Array.from(
@@ -155,30 +164,47 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
     await act(async () =>
       document.activeElement?.dispatchEvent(keydown(dom, "Escape")),
     );
-    assert.equal(document.activeElement, trigger);
+    assert.equal(
+      document.activeElement === trigger,
+      true,
+      `Focus: ${document.activeElement?.outerHTML.slice(0, 180)}`,
+    );
 
     trigger.focus();
     await act(async () => trigger.dispatchEvent(keydown(dom, "ArrowDown")));
     await act(async () =>
       document.activeElement?.dispatchEvent(keydown(dom, "Escape")),
     );
-    assert.equal(document.activeElement, trigger);
+    assert.equal(
+      document.activeElement === trigger,
+      true,
+      `Focus: ${document.activeElement?.outerHTML.slice(0, 180)}`,
+    );
 
     trigger.focus();
     await act(async () => trigger.dispatchEvent(keydown(dom, "ArrowUp")));
     await act(async () =>
       document.activeElement?.dispatchEvent(keydown(dom, "Escape")),
     );
-    assert.equal(document.activeElement, trigger);
+    assert.equal(
+      document.activeElement === trigger,
+      true,
+      `Focus: ${document.activeElement?.outerHTML.slice(0, 180)}`,
+    );
 
     await act(async () => trigger.click());
     await act(async () => {
       document
         .getElementById("outside")
         ?.dispatchEvent(new dom.window.Event("pointerdown", { bubbles: true }));
+      document.getElementById("outside")?.focus();
     });
     assert.equal(document.querySelector('[role="menu"]'), null);
-    assert.equal(document.activeElement, trigger);
+    assert.equal(
+      document.activeElement?.id,
+      "outside",
+      "Outside clicks must not steal focus back to the menu trigger",
+    );
 
     const textOnly = key("alpha", "alpha-text-only");
     await act(async () =>

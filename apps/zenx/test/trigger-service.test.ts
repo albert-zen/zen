@@ -1514,6 +1514,339 @@ test("completed Turn projection is bounded and includes commands/results", () =>
   assert(projection.length <= 6_000);
 });
 
+test("one-shot thread watch consumes one terminal event and preserves its source", async () => {
+  const manager = new ControlledManager();
+  let saved: TriggerSnapshot = { triggers: [], history: [], rooms: [] };
+  const service = new ZenXTriggerService(manager, {
+    read: async () => structuredClone(saved),
+    write: async (value) => {
+      saved = structuredClone(value);
+    },
+  });
+  await service.start();
+  try {
+    await service.create({
+      threadId: "parent",
+      kind: "thread",
+      label: "Child done",
+      prompt: "Read result",
+      watchedThreadId: "child",
+      once: true,
+    });
+    const terminal: Turn = {
+      id: "child-turn",
+      status: "failed",
+      error: null,
+      items: [],
+      itemsView: "full",
+      startedAt: 1,
+      completedAt: 2,
+      durationMs: 1,
+    };
+    manager.complete("child", terminal);
+    await snapshotWhen(
+      service,
+      (snapshot) => snapshot.history[0]?.status === "running",
+    );
+    assert.equal(service.snapshot().triggers[0]?.active, false);
+    manager.complete("child", terminal);
+    manager.complete("child", { ...terminal, id: "second-turn" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(manager.requests.length, 1);
+    assert.equal(service.snapshot().history[0]?.sourceTurnId, "child-turn");
+    assert.match(JSON.stringify(manager.requests[0]), /failed/u);
+  } finally {
+    await service.stop();
+  }
+});
+
+for (const sourceStatus of ["completed", "failed", "interrupted"] as const) {
+  test(`registration snapshot and racing live ${sourceStatus} event enqueue once`, async () => {
+    const manager = new CompletionManager();
+    const service = new ZenXTriggerService(manager, memoryTriggerStore());
+    manager.latest = {
+      ...completedTurn("already-done", "child work"),
+      status: sourceStatus,
+    };
+    manager.raceRead = true;
+    await service.start();
+    try {
+      await service.create({
+        threadId: "parent",
+        kind: "thread",
+        label: "Result",
+        prompt: "Review",
+        watchedThreadId: "child",
+        once: true,
+        includeLatest: true,
+      });
+      await snapshotWhen(
+        service,
+        (snapshot) => snapshot.history[0]?.delivery === "queued",
+      );
+      assert.equal(manager.queued.length, 1);
+      assert.equal(manager.requests.length, 0);
+      assert.equal(service.snapshot().history[0]?.sourceTurnId, "already-done");
+      assert.match(
+        JSON.stringify(manager.queued[0]!.input),
+        new RegExp(`Status: ${sourceStatus}`, "u"),
+      );
+    } finally {
+      await service.stop();
+    }
+  });
+}
+
+test("active watch waits for terminal status, repeat deduplicates, and stop prevents future sends", async () => {
+  const manager = new CompletionManager();
+  const service = new ZenXTriggerService(manager, memoryTriggerStore());
+  manager.latest = {
+    ...completedTurn("active", "working"),
+    status: "inProgress",
+  };
+  await service.start();
+  try {
+    const watch = await service.create({
+      threadId: "parent",
+      kind: "thread",
+      label: "Result",
+      prompt: "Review",
+      watchedThreadId: "child",
+      once: false,
+      includeLatest: true,
+    });
+    assert.equal(manager.queued.length, 0);
+    manager.complete("child", manager.latest);
+    await settle();
+    assert.equal(manager.queued.length, 0);
+    manager.complete("child", completedTurn("active", "done"));
+    await snapshotWhen(
+      service,
+      (snapshot) => snapshot.history[0]?.delivery === "queued",
+    );
+    manager.complete("child", completedTurn("active", "done"));
+    manager.complete("child", completedTurn("next", "also done"));
+    await snapshotWhen(
+      service,
+      (snapshot) =>
+        snapshot.history.filter((entry) => entry.delivery === "queued")
+          .length === 2,
+    );
+    assert.equal(manager.queued.length, 2);
+    await service.cancel(watch.id);
+    manager.complete("child", completedTurn("later", "no notification"));
+    await settle();
+    assert.equal(manager.queued.length, 2);
+  } finally {
+    await service.stop();
+  }
+});
+
+test("failed delivery consumes a one-shot, records uncertainty and never retries on restart", async () => {
+  const manager = new CompletionManager();
+  manager.sendError = new Error("Connection closed before acknowledgement");
+  const store = memoryTriggerStore();
+  const service = new ZenXTriggerService(manager, store);
+  await service.start();
+  try {
+    await service.create({
+      threadId: "parent",
+      kind: "thread",
+      label: "Result",
+      prompt: "Review",
+      watchedThreadId: "child",
+      once: true,
+    });
+    manager.complete("child", completedTurn("failed-send", "done"));
+    await snapshotWhen(
+      service,
+      (snapshot) => snapshot.history[0]?.status === "failed",
+    );
+    assert.equal(service.snapshot().history[0]?.delivery, "unknown");
+    assert.match(
+      service.snapshot().history[0]?.error ?? "",
+      /Connection closed/u,
+    );
+    await service.stop();
+    await service.start();
+    manager.complete("child", completedTurn("failed-send", "done"));
+    manager.complete("child", completedTurn("later", "done"));
+    await settle();
+    assert.equal(manager.queued.length, 1);
+    assert.equal(service.snapshot().triggers[0]?.active, false);
+  } finally {
+    await service.stop();
+  }
+});
+
+test("restart resumes repeat configuration without reading or replaying offline results", async () => {
+  const manager = new CompletionManager();
+  const service = new ZenXTriggerService(manager, memoryTriggerStore());
+  await service.start();
+  try {
+    await service.create({
+      threadId: "parent",
+      kind: "thread",
+      label: "Result",
+      prompt: "Review",
+      watchedThreadId: "child",
+      once: false,
+    });
+    await service.stop();
+    manager.latest = completedTurn("offline", "done offline");
+    await service.start();
+    assert.equal(manager.reads, 0);
+    assert.equal(manager.queued.length, 0);
+    manager.complete("child", completedTurn("online", "done online"));
+    await snapshotWhen(
+      service,
+      (snapshot) => snapshot.history[0]?.delivery === "queued",
+    );
+    assert.equal(service.snapshot().history[0]?.sourceTurnId, "online");
+  } finally {
+    await service.stop();
+  }
+});
+
+test("one-shot self-watch only schedules one continuation", async () => {
+  const manager = new CompletionManager();
+  const service = new ZenXTriggerService(manager, memoryTriggerStore());
+  await service.start();
+  try {
+    await service.create({
+      threadId: "parent",
+      kind: "thread",
+      label: "Continue",
+      prompt: "Next step",
+      watchedThreadId: "parent",
+      once: true,
+    });
+    manager.complete("parent", completedTurn("first", "done"));
+    await snapshotWhen(
+      service,
+      (snapshot) => snapshot.history[0]?.delivery === "queued",
+    );
+    manager.complete("parent", completedTurn("continuation", "done"));
+    await settle();
+    assert.equal(manager.queued.length, 1);
+  } finally {
+    await service.stop();
+  }
+});
+
+test(
+  "real App Server queues a child completion behind a busy parent and preserves the result locator",
+  { timeout: 20_000 },
+  async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-completion-queue-"),
+    );
+    const manager = managerFor(directory);
+    let service: ZenXTriggerService | undefined;
+    let dispose = () => {};
+    try {
+      await manager.start();
+      const parent = (await manager.request("thread/start", {})).thread;
+      const child = (await manager.request("thread/start", {})).thread;
+      let observedBusy = false;
+      service = new ZenXTriggerService(
+        {
+          request: (method, params) => manager.request(method, params),
+          onNotification: (listener) => manager.onNotification(listener),
+          enqueue: async (params) => {
+            const before = await manager.request("thread/read", {
+              threadId: parent.id,
+              includeTurns: true,
+            });
+            observedBusy = before.thread.turns.at(-1)?.status === "inProgress";
+            await manager.request("turn/queue", params);
+          },
+        },
+        new ZenXTriggerStore(path.join(directory, "triggers.json")),
+      );
+      await service.start();
+      await service.create({
+        threadId: parent.id,
+        watchedThreadId: child.id,
+        kind: "thread",
+        label: "Child finished",
+        prompt: "Read the result",
+        once: true,
+      });
+      const delivered = new Promise<void>((resolve, reject) => {
+        let completions = 0;
+        const deadline = setTimeout(
+          () =>
+            reject(new Error("Parent did not finish its queued notification")),
+          10_000,
+        );
+        dispose = manager.onNotification((method, params) => {
+          if (method !== "turn/completed") return;
+          const event = params as ServerNotificationParams["turn/completed"];
+          if (event.threadId === parent.id && ++completions === 2) {
+            clearTimeout(deadline);
+            resolve();
+          }
+        });
+      });
+      const original = await manager.request("turn/start", {
+        threadId: parent.id,
+        input: [
+          { type: "text", text: '!shell node -e "setTimeout(()=>{},1500)"' },
+        ],
+      });
+      const source = await manager.request("turn/start", {
+        threadId: child.id,
+        input: [{ type: "text", text: "Child result" }],
+      });
+      const snapshot = await snapshotWhen(
+        service,
+        (value) => value.history[0]?.delivery === "queued",
+      );
+      assert.equal(observedBusy, true);
+      assert.equal(snapshot.history[0]?.sourceTurnId, source.turn.id);
+      await delivered;
+      const result = await manager.request("thread/read", {
+        threadId: parent.id,
+        includeTurns: true,
+      });
+      const input = userInputForClientId(
+        result.thread.turns,
+        snapshot.history[0]?.clientUserMessageId,
+      );
+      assert.match(input, /Child result/u);
+      assert.match(input, new RegExp(source.turn.id, "u"));
+      assert.equal(result.thread.turns.length, 2);
+      assert.equal(result.thread.turns[0]?.id, original.turn.id);
+      assert.equal(result.thread.turns[0]?.status, "completed");
+      const notifications = result.thread.turns
+        .flatMap((turn) => turn.items)
+        .filter(
+          (item) =>
+            item.type === "userMessage" &&
+            item.clientId === snapshot.history[0]?.clientUserMessageId,
+        );
+      assert.equal(notifications.length, 1);
+      assert.equal(result.thread.turns[1]?.status, "completed");
+    } finally {
+      dispose();
+      await service?.stop();
+      await manager.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+function memoryTriggerStore() {
+  let saved: TriggerSnapshot = { triggers: [], history: [], rooms: [] };
+  return {
+    read: async () => structuredClone(saved),
+    write: async (value: TriggerSnapshot) => {
+      saved = structuredClone(value);
+    },
+  };
+}
+
 class ControlledManager implements ZenXTriggerAppServerPort {
   readonly requests: ClientRequestParams["turn/start"][] = [];
   requestError: Error | null = null;
@@ -1558,6 +1891,31 @@ class ControlledManager implements ZenXTriggerAppServerPort {
 
   complete(threadId: string, turn: Turn): void {
     this.#listener?.("turn/completed", { threadId, turn });
+  }
+}
+
+class CompletionManager extends ControlledManager {
+  queued: ClientRequestParams["turn/queue"][] = [];
+  latest: Turn | undefined;
+  raceRead = false;
+  reads = 0;
+  sendError: Error | undefined;
+  async readThread(
+    threadId: string,
+  ): Promise<ClientRequestResults["thread/read"]> {
+    this.reads++;
+    if (this.raceRead && this.latest !== undefined)
+      this.complete(threadId, this.latest);
+    return {
+      thread: {
+        id: threadId,
+        turns: this.latest === undefined ? [] : [this.latest],
+      },
+    } as ClientRequestResults["thread/read"];
+  }
+  async enqueue(params: ClientRequestParams["turn/queue"]): Promise<void> {
+    this.queued.push(params);
+    if (this.sendError !== undefined) throw this.sendError;
   }
 }
 

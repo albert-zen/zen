@@ -411,17 +411,14 @@ test("Drag preview distinguishes item types and preserves the grab point", async
         assert.equal(captured.image.querySelector("svg")?.dataset.kind, kind);
       } else {
         assert.equal(captured.image.querySelector("svg[data-kind]"), null);
-        for (const selector of [
-          ".thread-title",
-          ".model-line",
-          ".provider-logo",
-        ]) {
+        for (const selector of [".thread-title"]) {
           assert.equal(
             captured.image.querySelector(selector)?.outerHTML,
             source.querySelector(selector)?.outerHTML,
           );
           assert.ok(captured.image.querySelector(selector));
         }
+        assert.equal(captured.image.title, source.title);
         assert.equal(
           captured.image.querySelector("[id], .thread-menu-trigger"),
           null,
