@@ -280,6 +280,39 @@ test("Agent automation inputs enforce bounded strings, members, and program env"
   );
 });
 
+test("thread notification creation uses the trusted caller and defaults to one attempt", async () => {
+  const port = new FakePort();
+  const capability = new ZenXTriggersCapabilityPackage(port);
+  await capability.invoke("zenx_triggers_create", {
+    name: "zenx_triggers_create",
+    callId: "setup",
+    threadId: "parent-thread",
+    cwd: process.cwd(),
+    signal: new AbortController().signal,
+    arguments: {
+      kind: "thread",
+      label: "Child done",
+      prompt: "Review result",
+      watchedThreadId: "Implement tests",
+      includeLatest: true,
+    },
+  });
+  assert.deepEqual(port.calls, [
+    [
+      "create",
+      {
+        threadId: "parent-thread",
+        kind: "thread",
+        label: "Child done",
+        prompt: "Review result",
+        watchedThreadId: "Implement tests",
+        once: true,
+        includeLatest: true,
+      },
+    ],
+  ]);
+});
+
 async function invoke(
   capability: Pick<ZenXCapabilityPackage, "invoke">,
   name: string,

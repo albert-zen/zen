@@ -58,13 +58,14 @@ export interface ZenXTrigger {
   createdAt: number;
   active: boolean;
   timer?: { nextRunAt: number; intervalMinutes: number | null };
-  watch?: { threadId: string; event: "turn_completed" };
+  watch?: { threadId: string; event: "turn_completed"; once?: boolean };
   room?: { roomId: string; mention: string };
   signal?: { name: string };
   program?: TriggerProgramConfig;
 }
 
 export interface TriggerHistoryEntry {
+  delivery?: "pending" | "queued" | "failed" | "unknown";
   id: string;
   triggerId: string;
   threadId: string;
@@ -131,6 +132,8 @@ export type CreateTriggerInput =
       label: string;
       prompt: string;
       watchedThreadId: string;
+      once?: boolean;
+      includeLatest?: boolean;
     } & TriggerProgramInput)
   | ({
       threadId: string;

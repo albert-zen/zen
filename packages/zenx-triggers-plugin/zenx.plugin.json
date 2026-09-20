@@ -12,7 +12,7 @@
     {
       "id": "zenx-triggers.read",
       "title": "Read Triggers",
-      "description": "List Trigger definitions and bounded wakeup history.",
+      "description": "List Trigger definitions, bounded wakeup history, Thread discovery, and referenced source results.",
       "scope": "workspace"
     },
     {
@@ -23,6 +23,38 @@
     }
   ],
   "tools": [
+    {
+      "name": "zenx_triggers_threads",
+      "description": "Discover readable Thread targets for notification setup.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-triggers.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.triggers.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_triggers_result",
+      "description": "Read the exact source Turn preview of a retained notification; full original content is available through Thread reading.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "historyId": {
+            "type": "string"
+          }
+        },
+        "required": ["historyId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-triggers.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.triggers.manage"],
+      "maxOutputBytes": 65536
+    },
     {
       "name": "zenx_triggers_list",
       "description": "List Trigger definitions and bounded wakeup history.",
@@ -45,7 +77,8 @@
         "properties": {
           "threadId": {
             "type": "string",
-            "maxLength": 512
+            "maxLength": 512,
+            "description": "Notification target: full ID, unique short ID, or exact title. On creation defaults to the calling Thread."
           },
           "kind": {
             "type": "string",
@@ -67,7 +100,16 @@
           },
           "watchedThreadId": {
             "type": "string",
-            "maxLength": 512
+            "maxLength": 512,
+            "description": "Source Thread: full ID, unique short ID, or exact title."
+          },
+          "once": {
+            "type": "boolean",
+            "description": "Attempt one notification, then stop listening. New thread watches default to true; false listens to every future Turn."
+          },
+          "includeLatest": {
+            "type": "boolean",
+            "description": "On creation, notify the latest Turn if it has already ended; otherwise wait for the active or next Turn."
           },
           "roomId": {
             "type": "string",
@@ -187,7 +229,7 @@
             "additionalProperties": false
           }
         },
-        "required": ["threadId", "kind", "label", "prompt"],
+        "required": ["kind", "label", "prompt"],
         "additionalProperties": false
       },
       "permissions": ["zenx-triggers.write"],
@@ -207,7 +249,8 @@
           },
           "threadId": {
             "type": "string",
-            "maxLength": 512
+            "maxLength": 512,
+            "description": "Notification target: full ID, unique short ID, or exact title. On creation defaults to the calling Thread."
           },
           "kind": {
             "type": "string",
@@ -229,7 +272,16 @@
           },
           "watchedThreadId": {
             "type": "string",
-            "maxLength": 512
+            "maxLength": 512,
+            "description": "Source Thread: full ID, unique short ID, or exact title."
+          },
+          "once": {
+            "type": "boolean",
+            "description": "Attempt one notification, then stop listening. New thread watches default to true; false listens to every future Turn."
+          },
+          "includeLatest": {
+            "type": "boolean",
+            "description": "On creation, notify the latest Turn if it has already ended; otherwise wait for the active or next Turn."
           },
           "roomId": {
             "type": "string",
@@ -425,7 +477,7 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "Use Triggers to schedule and inspect auditable ZenX wakeups.",
+  "mainDocument": "Use Triggers to notify a Thread when another Turn ends. Full IDs, unique short IDs and exact titles select Threads. New thread watches default to one notification attempt; omit threadId to notify the calling Thread. includeLatest checks an already ended latest Turn. Use list for delivery state, result for the exact source Turn preview, and cancel to stop listening. queued means accepted input, not completed work. Failed/interrupted source Turns are explicitly labeled. Offline events are not replayed; failed or unknown sends are not retried.",
   "ui": {
     "bundles": [
       {
@@ -467,6 +519,16 @@
       }
     ],
     "commands": [
+      {
+        "id": "threads",
+        "title": "Discover readable Thread targets for notification setup.",
+        "tool": "zenx_triggers_threads"
+      },
+      {
+        "id": "result",
+        "title": "Read the exact source Turn preview of a retained notification; full original content is available through Thread reading.",
+        "tool": "zenx_triggers_result"
+      },
       {
         "id": "list",
         "title": "List Trigger definitions and bounded wakeup history.",

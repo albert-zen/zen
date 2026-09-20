@@ -484,9 +484,26 @@ async function bootstrapZenX(): Promise<void> {
     );
     bootstrapFence.throwIfCancelled();
     installTitleIpc(titleCoordinator);
+    const automationManager = appServerManager;
     automationService = await createBundledAutomationPluginService({
+      threadTargets: {
+        projectProjection,
+        request: (method, params) => automationManager.request(method, params),
+      },
       userDataDirectory,
-      appServer: appServerManager,
+      appServer: {
+        request: (method, params) => automationManager.request(method, params),
+        onNotification: (listener) =>
+          automationManager.onNotification(listener),
+        readThread: (threadId) =>
+          automationManager.request("thread/read", {
+            threadId,
+            includeTurns: true,
+          }),
+        enqueue: async (params) => {
+          await automationManager.request("turn/queue", params);
+        },
+      },
       titles: titleCoordinator,
     });
     bootstrapFence.throwIfCancelled();

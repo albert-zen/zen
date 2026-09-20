@@ -1,4 +1,5 @@
 import type { ToolInvocation } from "../../../../../src/tool.js";
+import type { ThreadCandidate } from "../thread-target.js";
 import type {
   CreateRoomInput,
   CreateTriggerInput,
@@ -51,6 +52,13 @@ export const ZENX_AUTOMATION_READ_PERMISSION = "zenx-automation-control.read";
 export const ZENX_AUTOMATION_WRITE_PERMISSION = "zenx-automation-control.write";
 
 export interface ZenXAutomationControlPort {
+  threads?(): Promise<ThreadCandidate[]>;
+  result?(historyId: string): Promise<{
+    threadId: string;
+    turnId: string;
+    status: string;
+    preview: string;
+  }>;
   snapshot(): TriggerSnapshot;
   create(input: CreateTriggerInput): Promise<ZenXTrigger>;
   update(input: UpdateTriggerInput): Promise<ZenXTrigger>;
@@ -110,13 +118,32 @@ const programSchema = {
 };
 
 const triggerProperties = {
-  threadId: { type: "string", maxLength: MAX_ID_BYTES },
+  threadId: {
+    type: "string",
+    maxLength: MAX_ID_BYTES,
+    description:
+      "Notification target: full ID, unique short ID, or exact title. On creation defaults to the calling Thread.",
+  },
   kind: { type: "string", enum: ["timer", "thread", "roomMention", "signal"] },
   label: { type: "string", maxLength: MAX_TRIGGER_LABEL_BYTES },
   prompt: { type: "string", maxLength: MAX_TRIGGER_PROMPT_BYTES },
   runAt: { type: "number" },
   intervalMinutes: { type: "number" },
-  watchedThreadId: { type: "string", maxLength: MAX_ID_BYTES },
+  watchedThreadId: {
+    type: "string",
+    maxLength: MAX_ID_BYTES,
+    description: "Source Thread: full ID, unique short ID, or exact title.",
+  },
+  once: {
+    type: "boolean",
+    description:
+      "Attempt one notification, then stop listening. New thread watches default to true; false listens to every future Turn.",
+  },
+  includeLatest: {
+    type: "boolean",
+    description:
+      "On creation, notify the latest Turn if it has already ended; otherwise wait for the active or next Turn.",
+  },
   roomId: { type: "string", maxLength: MAX_ID_BYTES },
   mention: { type: "string", maxLength: MAX_MEMBER_NAME_BYTES },
   signalName: { type: "string", maxLength: MAX_ID_BYTES },
@@ -158,6 +185,20 @@ const manifest: ZenXPluginManifestV2 = {
   ],
   tools: [
     tool(
+      "zenx_triggers_threads",
+      "Discover readable Thread targets for notification setup.",
+      {},
+      [],
+      false,
+    ),
+    tool(
+      "zenx_triggers_result",
+      "Read the exact source Turn preview of a retained notification; full original content is available through Thread reading.",
+      { historyId: { type: "string" } },
+      ["historyId"],
+      false,
+    ),
+    tool(
       "zenx_triggers_list",
       "List Trigger definitions and bounded wakeup history.",
       {},
@@ -168,7 +209,7 @@ const manifest: ZenXPluginManifestV2 = {
       "zenx_triggers_create",
       "Create a timer, Thread watcher, Room mention, or signal Trigger, optionally with a local predicate/action.",
       triggerProperties,
-      ["threadId", "kind", "label", "prompt"],
+      ["kind", "label", "prompt"],
     ),
     tool(
       "zenx_triggers_update",
@@ -274,6 +315,14 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
     const uiInput = record(invocation.arguments.input);
     const args = uiInput ?? invocation.arguments;
     switch (name) {
+      case "zenx_triggers_threads":
+        if (this.#port.threads === undefined)
+          throw new Error("Thread discovery is unavailable");
+        return { threads: await this.#port.threads() };
+      case "zenx_triggers_result":
+        if (this.#port.result === undefined)
+          throw new Error("Reading source results is unavailable");
+        return await this.#port.result(string(args, "historyId", MAX_ID_BYTES));
       case "zenx_triggers_list": {
         const snapshot = this.#port.snapshot();
         return {
@@ -283,7 +332,15 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
         };
       }
       case "zenx_triggers_create":
-        return await this.#port.create(triggerInput(args));
+        return await this.#port.create(
+          triggerInput({
+            ...args,
+            threadId: args.threadId ?? invocation.threadId,
+            ...(args.kind === "thread" && args.once === undefined
+              ? { once: true }
+              : {}),
+          }),
+        );
       case "zenx_triggers_update":
         return await this.#port.update({
           id: string(args, "id", MAX_ID_BYTES),
@@ -512,7 +569,7 @@ function automationPluginManifest(
     },
     mainDocument:
       plugin.displayName === "Triggers"
-        ? "Use Triggers to schedule and inspect auditable ZenX wakeups."
+        ? "Use Triggers to notify a Thread when another Turn ends. Full IDs, unique short IDs and exact titles select Threads. New thread watches default to one notification attempt; omit threadId to notify the calling Thread. includeLatest checks an already ended latest Turn. Use list for delivery state, result for the exact source Turn preview, and cancel to stop listening. queued means accepted input, not completed work. Failed/interrupted source Turns are explicitly labeled. Offline events are not replayed; failed or unknown sends are not retried."
         : "Use Rooms to manage shared collaboration and explicit member routing.",
     description: plugin.description,
     provider: {
@@ -529,7 +586,7 @@ function automationPluginManifest(
       description: permission.description.replace(
         "Trigger definitions, bounded wakeup history, Rooms, and messages",
         plugin.displayName === "Triggers"
-          ? "Trigger definitions and bounded wakeup history"
+          ? "Trigger definitions, bounded wakeup history, Thread discovery, and referenced source results"
           : "Rooms and bounded recent messages",
       ),
     })),
@@ -613,6 +670,7 @@ function readSafeTrigger(trigger: ZenXTrigger): unknown {
       watch: {
         threadId: trigger.watch?.threadId,
         event: trigger.watch?.event,
+        once: trigger.watch?.once ?? false,
       },
     };
   if (trigger.kind === "roomMention")
@@ -667,6 +725,7 @@ function readSafeProgramSpec(spec: TriggerProgramSpec): TriggerProgramSpec {
 
 function readSafeHistory(entry: TriggerSnapshot["history"][number]): unknown {
   return {
+    ...(entry.delivery === undefined ? {} : { delivery: entry.delivery }),
     id: entry.id,
     triggerId: entry.triggerId,
     threadId: entry.threadId,
@@ -780,6 +839,10 @@ function triggerInput(args: Record<string, unknown>): CreateTriggerInput {
       ...common,
       kind,
       watchedThreadId: string(args, "watchedThreadId", MAX_ID_BYTES),
+      ...(args.once === undefined ? {} : { once: boolean(args, "once") }),
+      ...(args.includeLatest === undefined
+        ? {}
+        : { includeLatest: boolean(args, "includeLatest") }),
     };
   if (kind === "roomMention")
     return {
@@ -957,6 +1020,12 @@ function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function boolean(args: Record<string, unknown>, key: string): boolean {
+  if (typeof args[key] !== "boolean")
+    throw new Error(`${key} must be a boolean`);
+  return args[key];
 }
 
 function number(args: Record<string, unknown>, key: string): number {
