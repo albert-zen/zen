@@ -1,5 +1,6 @@
 import React, {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
@@ -178,7 +179,10 @@ export function AuxiliaryPanel({
     setError("");
     onSelectTab(id);
   };
-  useEffect(() => {
+  useLayoutEffect(() => {
+    // Host SDK panel requests can change selection without calling select().
+    // Fence pending actions as soon as that external selection is committed.
+    selectionEpoch.current += 1;
     setChoosing(false);
     setPickingFile(false);
   }, [selectedTab]);
