@@ -36,6 +36,7 @@ import { startSidebarDrag } from "./sidebar-drag.js";
 import { useSidebarExpansion } from "./sidebar-expansion.js";
 
 interface SidebarProps {
+  onOpenCockpit?(): void;
   collapsed?: boolean;
   mode: SidebarMode;
   open: boolean;
@@ -82,6 +83,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({
+  onOpenCockpit,
   collapsed = false,
   mode,
   open,
@@ -421,6 +423,19 @@ export function Sidebar({
         </div>
 
         <footer className="sidebar-footer">
+          {onOpenCockpit && (
+            <button
+              className="settings-nav-row"
+              type="button"
+              onClick={onOpenCockpit}
+              aria-current={selectedPage === "cockpit" ? "page" : undefined}
+            >
+              <Icon name="layers" />
+              <span>
+                Cockpit <small>Experiment</small>
+              </span>
+            </button>
+          )}
           <button
             className="settings-nav-row"
             type="button"

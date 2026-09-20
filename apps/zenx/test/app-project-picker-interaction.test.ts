@@ -52,6 +52,45 @@ function projectSwitcher(): HTMLButtonElement | undefined {
   );
 }
 
+test("Cockpit is absent by default and false, and the enabled App entry opens without creating a Turn", async () => {
+  for (const cockpitEnabled of [undefined, false, true]) {
+    const requests: string[] = [];
+    const harness = await mountApp(oneProject(), {
+      cockpitEnabled,
+      request: async (method) => {
+        requests.push(method);
+        return {};
+      },
+    });
+    try {
+      const entry = [
+        ...document.querySelectorAll<HTMLButtonElement>("button"),
+      ].find((button) => button.textContent?.includes("Cockpit"));
+      assert.equal(Boolean(entry), cockpitEnabled === true);
+      if (entry) {
+        await act(async () => entry.click());
+        assert.ok(
+          document.querySelector('[aria-label="Experimental Cockpit"]'),
+        );
+        assert.equal(entry.getAttribute("aria-current"), "page");
+        assert.ok(
+          document
+            .querySelector(".window-titlebar-session")
+            ?.textContent?.includes("Cockpit"),
+        );
+      }
+      assert.equal(
+        requests.some(
+          (method) => method.startsWith("turn/") || method === "thread/start",
+        ),
+        false,
+      );
+    } finally {
+      await unmountApp(harness);
+    }
+  }
+});
+
 test("desktop title bar collapses and restores the Sidebar", async () => {
   const harness = await mountApp({
     projects: [],
@@ -2718,6 +2757,7 @@ test("current permissions follow notifications even when the Thread list fails",
 async function mountApp(
   projects: ZenXProjectProjectionSnapshot,
   options: {
+    cockpitEnabled?: boolean;
     addWorkspace?(workspace: string): Promise<void>;
     getStatus?(): Promise<AppServerHostStatus>;
     initialPinnedThreadIds?: string[];
@@ -2916,7 +2956,9 @@ async function mountApp(
   const container = document.getElementById("root");
   assert.ok(container);
   const root = createRoot(container);
-  await act(async () => root.render(createElement(App)));
+  await act(async () =>
+    root.render(createElement(App, { cockpitEnabled: options.cockpitEnabled })),
+  );
   return { dom, root };
 }
 

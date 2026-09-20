@@ -6,6 +6,7 @@ import "./theme.css";
 import "./styles.css";
 import "./trigger-ui.css";
 import "./skills.css";
+import "./cockpit.css";
 
 getAppearanceController();
 

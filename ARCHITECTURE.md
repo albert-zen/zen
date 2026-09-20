@@ -2,6 +2,9 @@
 
 ## 核心概念
 
+- **实验 Cockpit** — 默认关闭的 Renderer 视图从现有 ThreadSummary、审批与无订阅 canonical snapshot 派生跨 workspace 概览和焦点事件，显式发送/中断仍走原生 App Server，不保存任务、调度或 Inbox 状态。
+- **实验 Cockpit component** — 可选 `cockpit-component` 插件把有界 agent-authored HTML 与同 Thread Item 引用作为既有 structured tool result 保存；用户显式打开后复用 Generic UI Host 的隔离 frame，桥只允许读取已核对的来源，不授予命令或导航能力，内容不成为可信状态。
+
 - **ZenX Thread Target** — Host 从 App Server 当前列表与 workspace 身份投影解析完整 ID、唯一前缀或精确标题，歧义只返回易读候选；共享解析不保存索引或拥有会话语义。
 - **ZenX 自控原文与发送** — 原生 `zen/thread/read` 无订阅地读取完整 canonical snapshot；Host 用 Item/Turn 边界派生分页，并在所有模型可见预览与续读前递归投影可公开的 Item：标记 opaque 的结构只保留定位字段与公开 summary，public reasoning 与工具原文字符串不改写，journal 与可信原生读取/恢复仍完整。发送幂等键和 Turn fence 从可信工具调用身份及当前快照推导；发送偏好仍由 Host profile 持有，不引入命令账本或会话权威。
 - **Trigger Thread Watch** — 既有 Trigger 配置固定来源与目标 Thread，可监听一次或后续各 Turn 的终态；注册后的可选 canonical 快照与实时事件使用同一去重入口，一次性监听在事件接纳时停用，通知发送的失败或不确定性单独记录，不重试或补发离线事件。

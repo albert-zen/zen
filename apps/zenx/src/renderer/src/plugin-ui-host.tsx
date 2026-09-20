@@ -162,7 +162,7 @@ function immutableClone<T>(value: T): T {
   return clone;
 }
 
-function IsolatedPluginSurface({
+export function IsolatedPluginSurface({
   bundleHtml,
   exportName,
   sdk,
@@ -201,14 +201,15 @@ function IsolatedPluginSurface({
         return;
       }
       if (!isUiRequest(event.data, channel)) return;
-      const operation =
+      const operation = Promise.resolve().then(() =>
         event.data.operation === "commands.execute"
           ? sdk.commands.execute(event.data.id, event.data.input)
           : event.data.operation === "handles.read"
             ? sdk.handles.read(event.data.id)
             : Promise.resolve(
                 sdk.navigation.navigate(String(event.data.input)),
-              );
+              ),
+      );
       void operation.then(
         (value) => {
           if (frame.current?.contentWindow !== requestWindow) return;
