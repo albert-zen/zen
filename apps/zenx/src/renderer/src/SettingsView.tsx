@@ -375,14 +375,18 @@ export function SettingsView({
                       it.
                     </p>
                   </header>
-                  <PluginSettings
-                    onFeedback={(message) => {
-                      if (feedbackScope.current.version !== feedbackVersion)
-                        return;
-                      setError(null);
-                      setStatus(message);
-                    }}
-                  />
+                  <Activity
+                    mode={active && tab === "plugins" ? "visible" : "hidden"}
+                  >
+                    <PluginSettings
+                      onFeedback={(message) => {
+                        if (feedbackScope.current.version !== feedbackVersion)
+                          return;
+                        setError(null);
+                        setStatus(message);
+                      }}
+                    />
+                  </Activity>
                   {pluginSnapshot === null ? null : (
                     <PluginSettingsSurfaces snapshot={pluginSnapshot} />
                   )}
