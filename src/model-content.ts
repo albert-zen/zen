@@ -11,6 +11,9 @@ import {
   type UserInputPart,
 } from "./item.js";
 import type { ModelMessage } from "./model.js";
+import { deduplicateMediaContent } from "./media-content.js";
+
+export { deduplicateMediaContent } from "./media-content.js";
 
 export type MediaKind = "image" | "audio";
 export interface CodeMediaOutput {
@@ -110,18 +113,6 @@ export function projectModelMessages(
 
 export function mediaReceipt(kind: MediaKind, ref: AttachmentRef): string {
   return `[${kind} attachment sha256:${ref.sha256}, ${ref.mediaType}, ${String(ref.byteLength)} bytes; ${kind} input unavailable for this model]`;
-}
-
-/** Collapse only identical media, keeping explicit text and first-occurrence order. */
-export function deduplicateMediaContent(content: UserInput): UserInput {
-  const seen = new Set<string>();
-  return content.filter((part) => {
-    if (part.type === "text") return true;
-    const key = `${part.type}:${part.attachment.sha256}:${part.attachment.mediaType}:${String(part.attachment.byteLength)}:${String(part.attachment.width)}:${String(part.attachment.height)}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }
 
 function referencedAttachments(

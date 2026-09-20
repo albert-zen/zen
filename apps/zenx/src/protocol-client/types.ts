@@ -5,12 +5,16 @@ import type {
   CodexTurn,
 } from "../../../../src/protocol/codex/mapper.js";
 import type { AttachmentRef } from "../../../../src/attachment.js";
+import type { CanonicalItem } from "../../../../src/item.js";
 import type {
   NativeProjectedThreadEvent,
   NativeThreadRecoverySnapshot,
 } from "../../../../src/protocol/native/recovery.js";
 
-export type Thread = CodexThread;
+export type Thread = CodexThread & {
+  /** Native product projection input; absent on CAS-only compatibility data. */
+  canonicalItems?: readonly CanonicalItem[];
+};
 export type Turn = CodexTurn;
 export type ThreadItem = CodexThreadItem;
 export type CommandItem = CodexCommandItem;

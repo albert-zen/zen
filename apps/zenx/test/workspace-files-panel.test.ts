@@ -1,25 +1,36 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { EditorView } from "@codemirror/view";
 import { JSDOM } from "jsdom";
 import React, { act } from "react";
+
 import {
   listWorkspaceFiles,
   readWorkspaceFile,
   saveWorkspaceFile,
 } from "../src/main/workspace-files.js";
 
-test("file editor saves, previews drafts, keeps edits across panels, and handles disk conflicts", async () => {
+test("inline editors autosave real files, preserve in-flight input, and expose conflicts", async () => {
   const workspace = await mkdtemp(path.join(os.tmpdir(), "zenx-editor-ui-"));
   const dom = new JSDOM('<div id="root"></div>', {
     url: "https://zenx.local/",
+    pretendToBeVisual: true,
   });
   Object.assign(globalThis, {
     window: dom.window,
+    Window: dom.window.Window,
     document: dom.window.document,
     HTMLElement: dom.window.HTMLElement,
+    Element: dom.window.Element,
+    MutationObserver: dom.window.MutationObserver,
+    Node: dom.window.Node,
+    getComputedStyle: dom.window.getComputedStyle,
+    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+    cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
+    React,
     IS_REACT_ACT_ENVIRONMENT: true,
   });
   const { createRoot } = await import("react-dom/client");
@@ -27,8 +38,10 @@ test("file editor saves, previews drafts, keeps edits across panels, and handles
     await import("../src/renderer/src/workspace-files-panel.js");
   const { WorkspaceFileDrafts } =
     await import("../src/renderer/src/workspace-file-drafts.js");
-  const drafts = new WorkspaceFileDrafts();
+  const drafts = new WorkspaceFileDrafts(10);
   const root = createRoot(document.getElementById("root")!);
+  let blockedSaveRelease: (() => void) | undefined;
+  let saveStarted: (() => void) | undefined;
   const writes: string[] = [];
   (window as any).zenx = {
     workspaceFiles: {
@@ -36,32 +49,49 @@ test("file editor saves, previews drafts, keeps edits across panels, and handles
         listWorkspaceFiles(workspace, relative),
       read: (_thread: string, relative: string) =>
         readWorkspaceFile(workspace, relative),
-      save: (
+      save: async (
         _thread: string,
         relative: string,
         text: string,
         revision: string,
       ) => {
         writes.push(text);
+        saveStarted?.();
+        if (blockedSaveRelease !== undefined) {
+          await new Promise<void>((resolve) => {
+            blockedSaveRelease = resolve;
+          });
+          blockedSaveRelease = undefined;
+        }
         return saveWorkspaceFile(workspace, relative, text, revision);
       },
     },
   };
-  const settle = async () => {
-    for (let i = 0; i < 12; i++)
+  const settle = async (rounds = 12) => {
+    for (let index = 0; index < rounds; index += 1)
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 10));
       });
   };
   const button = (text: string) =>
     [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent === text,
-    )!;
-  const click = async (text: string) => {
-    await act(async () => button(text).click());
-    await settle();
+      (candidate) => candidate.textContent === text,
+    );
+  const click = async (text: string, wait = true) => {
+    await act(async () => button(text)!.click());
+    if (wait) await settle();
   };
   const edit = async (text: string) => {
+    const codeMirror = document.querySelector<HTMLElement>(".cm-editor");
+    if (codeMirror) {
+      const view = EditorView.findFromDOM(codeMirror)!;
+      await act(async () =>
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: text },
+        }),
+      );
+      return;
+    }
     await act(async () => {
       const input = document.querySelector<HTMLTextAreaElement>("textarea")!;
       Object.getOwnPropertyDescriptor(
@@ -84,84 +114,86 @@ test("file editor saves, previews drafts, keeps edits across panels, and handles
     await settle();
   };
   try {
-    await writeFile(path.join(workspace, "README.md"), "# Original\r\n");
+    await writeFile(
+      path.join(workspace, "README.md"),
+      "# Original\r\n\r\nBody\r\n",
+    );
     await writeFile(
       path.join(workspace, "app.ts"),
       "export const value = 1;\n",
     );
     await render("a");
     await click("README.md");
-    await click("Source");
-    await edit("# My draft\n");
-    assert.equal(drafts.hasUnsaved(), true);
-    await click("Preview");
-    assert.equal(
-      document.querySelector(".file-content h1")?.textContent,
-      "My draft",
+
+    assert.equal(button("Edit"), undefined);
+    assert.equal(button("Preview"), undefined);
+    assert.equal(button("Save"), undefined);
+    assert.match(
+      document.querySelector(".cm-content")!.textContent!,
+      /Original/,
     );
-    await render("b");
-    assert.equal(document.querySelector("textarea"), null);
-    await render("a");
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>(".file-open-tabs button")!
-        .click(),
+    const started = new Promise<void>((resolve) => {
+      saveStarted = resolve;
+    });
+    blockedSaveRelease = () => {};
+    await edit("# First\r\n\r\nBody\r\n");
+    await act(async () => started);
+    saveStarted = undefined;
+    assert.match(
+      document.querySelector('[role="status"]')!.textContent!,
+      /Saving/,
     );
+
+    await edit("# Second\r\n\r\nBody\r\n");
+    const release = blockedSaveRelease;
+    assert.ok(release);
+    await act(async () => release());
     await settle();
-    assert.equal(
-      document.querySelector<HTMLTextAreaElement>("textarea")!.value,
-      "# My draft\n",
-    );
-    await click("Save");
+    assert.deepEqual(writes.slice(0, 2), [
+      "# First\r\n\r\nBody\r\n",
+      "# Second\r\n\r\nBody\r\n",
+    ]);
     assert.equal(
       (await readWorkspaceFile(workspace, "README.md")).text,
-      "# My draft\r\n",
+      "# Second\r\n\r\nBody\r\n",
     );
-    assert.equal(drafts.hasUnsaved(), false);
-    await edit("# Kept draft\n");
-    await writeFile(path.join(workspace, "README.md"), "# External edit");
-    await click("Save");
+
+    await edit("# Kept draft\r\n\r\nBody\r\n");
+    await writeFile(path.join(workspace, "README.md"), "# External edit\r\n");
+    await settle();
     assert.match(
-      document.querySelector('[role="alert"]')!.textContent!,
+      document.querySelector('.file-save-error[role="alert"]')!.textContent!,
       /changed on disk/,
     );
-    assert.equal(
-      document.querySelector<HTMLTextAreaElement>("textarea")!.value,
-      "# Kept draft\n",
+    const localDraft = [...drafts.snapshot().values()].find(
+      (draft) => draft.base.path === "README.md",
     );
+    assert.equal(localDraft?.text, "# Kept draft\r\n\r\nBody\r\n");
     assert.equal(
       (await readWorkspaceFile(workspace, "README.md")).text,
-      "# External edit",
+      "# External edit\r\n",
     );
-    await click("Refresh");
+    assert.ok(document.querySelector(".file-conflict details"));
+    await click("Reload disk version", false);
     await click("Keep editing");
     assert.equal(drafts.hasUnsaved(), true);
-    await click("Refresh");
+    await click("Reload disk version", false);
     await click("Discard and reload");
-    assert.equal(
-      document.querySelector(".file-content h1")?.textContent,
-      "External edit",
+    assert.match(
+      document.querySelector(".cm-content")!.textContent!,
+      /External edit/,
     );
     assert.equal(drafts.hasUnsaved(), false);
+
     await click("Files");
     await click("app.ts");
-    await click("Edit");
+    assert.ok(document.querySelector<HTMLTextAreaElement>(".file-editor"));
     await edit("export const value = 2;\n");
-    await act(async () =>
-      document.querySelector("textarea")!.dispatchEvent(
-        new dom.window.KeyboardEvent("keydown", {
-          key: "s",
-          ctrlKey: true,
-          bubbles: true,
-        }),
-      ),
-    );
     await settle();
     assert.equal(
       (await readWorkspaceFile(workspace, "app.ts")).text,
       "export const value = 2;\n",
     );
-    assert.equal(writes.length, 3);
   } finally {
     await act(async () => root.unmount());
     dom.window.close();

@@ -11,6 +11,7 @@ import type {
 } from "../../protocol-client/index.js";
 import type { ZenXPluginManifestV2, ZenXCapabilityPackage } from "./types.js";
 import { ZenXProjectProjection } from "../project-projection.js";
+import type { WorkflowCommand } from "../workflow-configuration.js";
 
 export const ZENX_SELF_CONTROL_CAPABILITY_ID = "zenx-self-control";
 export const ZENX_SELF_CONTROL_WORKSPACE_PERMISSION =
@@ -37,6 +38,19 @@ export interface AppServerRequestPort {
     method: M,
     params: ClientRequestParams[M],
   ): Promise<ClientRequestResults[M]>;
+}
+
+export interface WorkflowConfigurationPort {
+  workflowConfiguration(): Promise<{
+    revision: number;
+    commands: WorkflowCommand[];
+    titlePrompt?: string;
+  }>;
+  saveWorkflowConfiguration(value: {
+    baseRevision: number;
+    commands: WorkflowCommand[];
+    titlePrompt?: string;
+  }): Promise<void>;
 }
 
 interface AppServerRequestTarget {
@@ -316,6 +330,53 @@ const manifest: ZenXPluginManifestV2 = {
       capabilities: ["zenx.threads.control"],
       maxOutputBytes: 64 * 1024,
     },
+    {
+      name: "zenx_self_control_workflows_get",
+      description:
+        "Read the user-scoped custom Slash workflows and title-generation prompt configured in ZenX Settings.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+      permissions: [ZENX_SELF_CONTROL_WORKSPACE_PERMISSION],
+      interactionMode: "background_safe",
+      capabilities: ["zenx.projects.read"],
+      maxOutputBytes: 64 * 1024,
+    },
+    {
+      name: "zenx_self_control_workflows_update",
+      description:
+        "Replace the user-scoped custom Slash workflows and optional title prompt using the baseRevision from workflows_get. The built-in /compact command is reserved; omit titlePrompt or pass null to restore the default.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          baseRevision: { type: "integer", minimum: 0 },
+          commands: {
+            type: "array",
+            maxItems: 64,
+            items: {
+              type: "object",
+              properties: {
+                name: { type: "string" },
+                description: { type: "string" },
+                prompt: { type: "string" },
+                enabled: { type: "boolean" },
+              },
+              required: ["name", "description", "prompt", "enabled"],
+              additionalProperties: false,
+            },
+          },
+          titlePrompt: { type: ["string", "null"] },
+        },
+        required: ["baseRevision", "commands"],
+        additionalProperties: false,
+      },
+      permissions: [ZENX_SELF_CONTROL_LOCAL_DEVICE_PERMISSION],
+      interactionMode: "background_safe",
+      capabilities: ["zenx.threads.control"],
+      maxOutputBytes: 64 * 1024,
+    },
   ],
 };
 const controlToolNames = new Set(manifest.tools.map((tool) => tool.name));
@@ -323,9 +384,14 @@ const controlToolNames = new Set(manifest.tools.map((tool) => tool.name));
 export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
   readonly manifest = manifest;
   readonly #appServer: AppServerRequestPort;
+  readonly #workflows: WorkflowConfigurationPort | undefined;
 
-  constructor(options: { appServer: AppServerRequestPort }) {
+  constructor(options: {
+    appServer: AppServerRequestPort;
+    workflows?: WorkflowConfigurationPort;
+  }) {
     this.#appServer = options.appServer;
+    this.#workflows = options.workflows;
   }
 
   async invoke(name: string, invocation: ToolInvocation): Promise<unknown> {
@@ -362,9 +428,34 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
         return await this.#setArchived(args, false);
       case "zenx_threads_send":
         return await this.#send(args);
+      case "zenx_self_control_workflows_get":
+        assertOnly(args, []);
+        return await this.#requireWorkflows().workflowConfiguration();
+      case "zenx_self_control_workflows_update":
+        return await this.#updateWorkflows(args);
       default:
         throw new Error(`Unsupported ZenX product tool: ${name}`);
     }
+  }
+
+  #requireWorkflows(): WorkflowConfigurationPort {
+    if (this.#workflows === undefined)
+      throw new Error("ZenX workflow configuration is not attached");
+    return this.#workflows;
+  }
+
+  async #updateWorkflows(args: Record<string, unknown>): Promise<unknown> {
+    assertOnly(args, ["baseRevision", "commands", "titlePrompt"]);
+    await this.#requireWorkflows().saveWorkflowConfiguration({
+      baseRevision: nonNegativeInteger(args.baseRevision, "baseRevision"),
+      commands: args.commands as WorkflowCommand[],
+      ...(args.titlePrompt === undefined || args.titlePrompt === null
+        ? {}
+        : {
+            titlePrompt: limitedString(args.titlePrompt, "titlePrompt", 32_768),
+          }),
+    });
+    return await this.#requireWorkflows().workflowConfiguration();
   }
 
   async #listProjects(args: Record<string, unknown>): Promise<unknown> {
@@ -807,6 +898,12 @@ function boundedInteger(
   ) {
     throw new Error(`${label} must be an integer from 1 to ${String(maximum)}`);
   }
+  return value as number;
+}
+
+function nonNegativeInteger(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0)
+    throw new Error(`${label} must be a non-negative integer`);
   return value as number;
 }
 

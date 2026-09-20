@@ -1,11 +1,29 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
+import {
+  MAX_AUDIO_BYTES,
+  MAX_IMAGE_BYTES,
+  MAX_IMAGE_DIMENSION,
+  MAX_IMAGE_PIXELS,
+  type AttachmentRef,
+  type ImageAttachmentRef,
+  type ImageMediaType,
+} from "./attachment-ref.js";
 
-export const MAX_AUDIO_BYTES = 20 * 1024 * 1024;
-export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
-export const MAX_IMAGE_DIMENSION = 16_384;
-export const MAX_IMAGE_PIXELS = 40_000_000;
+export {
+  MAX_AUDIO_BYTES,
+  MAX_IMAGE_BYTES,
+  MAX_IMAGE_DIMENSION,
+  MAX_IMAGE_PIXELS,
+};
+export type {
+  AttachmentRef,
+  AudioAttachmentRef,
+  AudioMediaType,
+  ImageAttachmentRef,
+  ImageMediaType,
+} from "./attachment-ref.js";
 const CRC32_TABLE = Uint32Array.from({ length: 256 }, (_, value) => {
   let entry = value;
   for (let bit = 0; bit < 8; bit += 1) {
@@ -13,29 +31,6 @@ const CRC32_TABLE = Uint32Array.from({ length: 256 }, (_, value) => {
   }
   return entry >>> 0;
 });
-
-export type ImageMediaType =
-  "image/png" | "image/jpeg" | "image/gif" | "image/webp";
-
-export interface ImageAttachmentRef {
-  type: "attachment";
-  sha256: string;
-  mediaType: ImageMediaType;
-  byteLength: number;
-  width: number;
-  height: number;
-}
-
-export type AudioMediaType = "audio/wav" | "audio/mpeg";
-export interface AudioAttachmentRef {
-  type: "attachment";
-  sha256: string;
-  mediaType: AudioMediaType;
-  byteLength: number;
-  width?: never;
-  height?: never;
-}
-export type AttachmentRef = ImageAttachmentRef | AudioAttachmentRef;
 
 export interface AttachmentStore {
   importBytes(

@@ -2,13 +2,15 @@
 
 ## 核心概念
 
-- **ZenX 人工浏览器** — 窗口拥有的 WebContentsView 标签按 Thread 分组，以独立持久 profile 承载用户网页操作；不注册为 Agent target，不共享执行锁或会话权威，Browser 区域通过独立“Agent”入口观察已有 Agent 页面。
+- **ZenX 共享浏览器** — Host 拥有的 WebContentsView 标签按 Thread 分组，以独立持久 profile 承载用户与 Agent 对同一页面 target 的操作；可信 Tool invocation 把 provider session 绑定到 Thread，窗口只挂载该 target 的实时视图，页面和绑定都不成为会话权威。
+- **ZenX Computer 实时观察** — Host 以 Thread、Tool invocation 与精确窗口 target 关联最近八次 Computer 操作，并只在可见订阅期间串行捕获有界、可取消且带时间戳的窗口帧；观察失败不改变工具结果或建立桌面接管状态。
 - **ZenX 文件草稿** — Renderer 在窗口生命周期内按 Thread/path 保存易失编辑草稿，独立于会话历史；Host 以读取版本检测外部冲突并原子替换现有 UTF-8 文件，人工编辑不作为 Agent 工具执行，不更改线程权限策略。
 - **ZenX 辅助右栏** — Host 将线程 Browser observation、cwd 文本预览与显式编辑保存与已注册 Plugin panel 放入统一 tab 容器，选择与打开请求仅为易失 UI 状态，不拥有会话执行或持久历史。
 
 - **实验 Shell 输出展示** — 默认关闭的 Host 执行依赖仅在直接模型调用中对已保存在有界原始 spool 的输出做固定版本 RTK 过滤，过滤事实与原文回读凭据随既有工具结果写入 ItemList，程序化嵌套调用保持原始返回语义。
 
 - **Host 配置快照** — Host 将已准备的 Provider 目录、默认选择与执行参数作为一致的瞬时快照发布，新根执行只从当前快照取得依赖，配置文件仍是唯一持久配置权威。
+- **ZenX 工作流配置** — Host profile 按用户保存可启停的 Slash 文本模板与标题提示词，Renderer 只把所选模板展开为可审阅草稿，实际发送仍走既有 user message，标题辅助调用与配置均不进入会话权威。
 - **Provider 执行依赖持有** — 一次 Turn 或 Host 辅助模型请求对 adapter、模型元数据及 transport 的瞬时引用在真正执行结束后释放，退役资源待最后一个引用结束后关闭，不进入 journal。
 - **Host 配置候选** — prepare 产生绑定 processEpoch 与 revision 的瞬时候选，publish/discard 幂等且进程退出即丢弃；候选不成为持久配置权威。
 - **Host Provider 资源** — Host 按连接身份复用 adapter/transport，由配置快照与执行持有共同决定寿命，最后引用结束后异步关闭。
@@ -103,12 +105,19 @@
 - **ZenXThreadUsageProjection** — ZenX Electron main 从 canonical `model_usage`、
   当前模型目录 `contextWindow` 和可重放模型消息投影展示用 usage / context pressure，
   不进入 CAS schema、Agent 上下文或自动压缩决策。
+- **ZenX Context Compaction Projection** — Renderer 从原生恢复与 live canonical Items
+  派生压缩时间线及压缩点的真实 `compileModelMessages`，进行中反馈只属于当前窗口，
+  不伪造工具调用、摘要或第二份 Thread 权威。
+- **Browser-safe model projection** — Core 的纯模型消息编译只依赖 browser-safe 的
+  canonical Item 和媒体值模块；文件系统 Attachment Store 仍留在 `attachment.ts`，
+  使 ZenX 能直接查看 Core 的真实投影，而不复制压缩语义。
 - **ZenXModelCatalogCompletion** — Provider 发现可以保留只有 ID、尚缺 `contextWindow` 的模型行供
   Settings 补全，但缺少正整数窗口的行不得保存为可运行配置、进入模型选择或发起请求；legacy profile
   读取保持宽容，以便用户修复，而 Host runtime、Provider resolve 与兼容 `model/list` 都显式拒绝该状态。
 - **ZenXImageAttachmentProjection** — ZenX Electron main 通过既有 host-local 边界从 canonical
   `user_message` 投影按 Item 顺序排列的 `AttachmentRef`，并以只接受这些引用的 typed preload IPC
   导入和读取 Attachment Store payload；renderer 只持有草稿引用与短时 object URL，不取得任意文件读取权。
+- **ZenXThreadWorkspace** — Thread 右侧唯一的平级内容选项卡容器；每个文件、共享浏览器页面、Computer 观察或插件注册的 panel 直接占一个顶层 Tab，通过加号选择内容类型，不增加 Browser/Files 分类路由层。Host 持有打开顺序与选中项，插件仍用自身 surface 渲染内容；打开、宽度和编辑草稿是本机 UI 状态，真实文件写入由 Host 校验并使用版本冲突保护，不引入会话语义。
 - **ZenXSidebarMenuPopover** — 项目与会话菜单共用锚点定位的临时浮层，在侧栏右侧显示并按视口边界回退，不参与列表布局或持久化状态。
 - **ZenXProjectNamePreference** — host-profile 按已配置 workspace 保存可编辑显示名称；名称不改变目录身份、Thread cwd 或 journal，修改只刷新 Project 投影，不重启 Host。
 - **ZenXProjectProjection** — ZenX main 的同一个实例把 host-profile workspace 与 ZAS
@@ -686,7 +695,8 @@ Summary Provider 的每个请求也必须落在所选模型的 context window �
 
 Provider-generated `context_compaction` canonical Item 记录 `provenance`、`coveredThroughItemId`、
 原样 summary、稳定 canonical 顺序的 `retainedItemIds`、实际 Provider selection、
-`algorithmVersion` 与 input/output token usage；旧 journal 缺少 `provenance` 时仍按此形态读取。
+`algorithmVersion`、人工或自动 `initiator` 与 input/output token usage；旧 journal 缺少
+`provenance` / `initiator` 时仍按原形态读取，当前 agentic writer 记录 `initiator: agent`。
 覆盖目标必须是已存在的 `turn_completed`；保留引用必须已存在、不重复、不晚于覆盖边界且按 journal 顺序排列，
 并完整保留同一模型响应的 tool-call 集及每个 call/result 对。相同或更早的有效边界
 不得再次追加。最新有效 compaction 决定模型投影并 supersede 更早投影状态，但所有

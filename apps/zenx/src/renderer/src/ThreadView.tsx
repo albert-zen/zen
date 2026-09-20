@@ -1,7 +1,9 @@
+import { toolPresentation } from "./tool-presentation.js";
 import { isCompactCommand } from "./compact-command.js";
 import { createPortal } from "react-dom";
 import {
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -40,6 +42,7 @@ import { ComposerModelMenu } from "./ComposerModelMenu.js";
 import { Icon } from "./icons.js";
 import { PermissionSelect } from "./PermissionSelect.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
+import type { ModelMessage } from "../../../../../src/model.js";
 import { Markdown } from "./Markdown.js";
 import {
   AttachmentImage,
@@ -56,6 +59,17 @@ import {
   traceDisplayRows,
   type TurnDisplayNode,
 } from "./turn-projection.js";
+import { WorkflowCommandMenu } from "./WorkflowCommandMenu.js";
+import {
+  commandCandidates,
+  expandWorkflowCommand,
+  type WorkflowCommand,
+} from "./workflow-commands.js";
+import {
+  compactionInitiatorLabel,
+  projectContextCompactions,
+  type ContextCompactionProjection,
+} from "./context-compaction-projection.js";
 
 interface ThreadViewProps {
   composerSendMode?: ComposerSendMode;
@@ -84,6 +98,7 @@ interface ThreadViewProps {
   threadUsage?: ModelUsageProjection;
   wakeups?: readonly TriggerHistoryEntry[];
   watching?: boolean;
+  workflowCommands?: readonly WorkflowCommand[];
   pluginSnapshot?: ZenXPluginSnapshot | null;
   pluginUiRegistry?: PluginUiRegistry | null;
   onDraftChange(draft: string): void;
@@ -92,6 +107,7 @@ interface ThreadViewProps {
   onRemoveImage?(imageId: string): void;
   onReadAttachment?(attachment: AttachmentRef): Promise<Uint8Array>;
   onInterrupt(turnId: string): Promise<void>;
+  onCompact?(): Promise<void>;
   onModelChange?(model: string): void;
   onReasoningChange?(effort: string): void;
   onRespondToApproval(
@@ -131,6 +147,7 @@ export function ThreadView({
   threadUsage,
   wakeups = [],
   watching = false,
+  workflowCommands = [],
   pluginSnapshot = null,
   pluginUiRegistry = null,
   onDraftChange,
@@ -141,6 +158,7 @@ export function ThreadView({
     throw new Error("Image payload reader is unavailable");
   },
   onInterrupt,
+  onCompact,
   onModelChange,
   onReasoningChange,
   onRespondToApproval,
@@ -156,6 +174,10 @@ export function ThreadView({
     trigger: HTMLButtonElement;
   } | null>(null);
   const [atLive, setAtLive] = useState(true);
+  const [workflowIndex, setWorkflowIndex] = useState(0);
+  const [dismissedWorkflowInput, setDismissedWorkflowInput] = useState<
+    string | null
+  >(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const shouldFollowRef = useRef(true);
   const viewRef = useRef<HTMLDivElement>(null);
@@ -163,6 +185,15 @@ export function ThreadView({
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const runningTurn = thread === null ? null : activeTurn(thread);
   const turns = thread?.turns ?? [];
+  const contextCompactions = useMemo(
+    () => projectContextCompactions(thread?.canonicalItems),
+    [thread?.canonicalItems],
+  );
+  const transcriptRows = useMemo(
+    () =>
+      buildTranscriptRows(turns, thread?.canonicalItems, contextCompactions),
+    [contextCompactions, thread?.canonicalItems, turns],
+  );
   const pendingApprovals = approvals.filter(
     (approval) => approval.status === "pending",
   );
@@ -175,6 +206,23 @@ export function ThreadView({
     !compactRequested &&
     composer.draft.images.length > 0 &&
     imageCapabilityError !== null;
+  const workflowCandidates = useMemo(
+    () =>
+      dismissedWorkflowInput === composer.draft.text
+        ? []
+        : commandCandidates(composer.draft.text, workflowCommands),
+    [composer.draft.text, dismissedWorkflowInput, workflowCommands],
+  );
+
+  useEffect(() => setWorkflowIndex(0), [composer.draft.text]);
+
+  const chooseWorkflow = (index: number) => {
+    const command = workflowCandidates[index];
+    if (command === undefined) return;
+    onDraftChange(expandWorkflowCommand(composer.draft.text, command));
+    setDismissedWorkflowInput(null);
+    requestAnimationFrame(() => composerTextareaRef.current?.focus());
+  };
 
   useEffect(() => {
     const scroll = scrollRef.current;
@@ -182,7 +230,7 @@ export function ThreadView({
       scroll.scrollTop = scroll.scrollHeight;
       setAtLive(true);
     }
-  }, [thread?.turns, approvals]);
+  }, [approvals, composer.compaction, thread?.canonicalItems, thread?.turns]);
 
   // The Composer overlays the bottom of the full-height transcript scroll
   // area. Publish its live height so the list reserves matching virtual
@@ -338,7 +386,7 @@ export function ThreadView({
           }}
         >
           <div className="messages-inner">
-            {turns.length === 0
+            {transcriptRows.length === 0
               ? (emptyContent ?? (
                   <div className="thread-empty">
                     <h2>Start a new thread</h2>
@@ -348,22 +396,33 @@ export function ThreadView({
                     </p>
                   </div>
                 ))
-              : turns.map((turn, index) => (
-                  <TurnBlock
-                    index={index}
-                    key={turn.id}
-                    turn={turn}
-                    usage={threadUsage?.turns[turn.id]}
-                    wakeups={wakeups}
-                    attachments={threadAttachments}
-                    onOpenImage={(attachment, name, trigger) =>
-                      setPreview({ attachment, name, trigger })
-                    }
-                    onReadAttachment={onReadAttachment}
-                    pluginSnapshot={pluginSnapshot}
-                    pluginUiRegistry={pluginUiRegistry}
-                  />
-                ))}
+              : transcriptRows.map((row) =>
+                  row.type === "turn" ? (
+                    <TurnBlock
+                      index={row.index}
+                      key={row.turn.id}
+                      turn={row.turn}
+                      usage={threadUsage?.turns[row.turn.id]}
+                      wakeups={wakeups}
+                      attachments={threadAttachments}
+                      onOpenImage={(attachment, name, trigger) =>
+                        setPreview({ attachment, name, trigger })
+                      }
+                      onReadAttachment={onReadAttachment}
+                      pluginSnapshot={pluginSnapshot}
+                      pluginUiRegistry={pluginUiRegistry}
+                    />
+                  ) : (
+                    <ContextCompactionEvent
+                      key={row.compaction.item.id}
+                      projection={row.compaction}
+                    />
+                  ),
+                )}
+            {composer.compaction?.status === "pending" ||
+            composer.compaction?.status === "failed" ? (
+              <ContextCompactionProgress state={composer.compaction} />
+            ) : null}
           </div>
         </ThreadImagesContext.Provider>
       </div>
@@ -429,6 +488,13 @@ export function ThreadView({
             primary();
           }}
         >
+          <WorkflowCommandMenu
+            activeIndex={workflowIndex}
+            candidates={workflowCandidates}
+            onChoose={(command) =>
+              chooseWorkflow(workflowCandidates.indexOf(command))
+            }
+          />
           <label className="sr-only" htmlFor="thread-composer">
             Message ZenX
           </label>
@@ -456,7 +522,10 @@ export function ThreadView({
             aria-label="Message"
             data-autogrow="true"
             disabled={composerDisabled}
-            onChange={(event) => onDraftChange(event.target.value)}
+            onChange={(event) => {
+              setDismissedWorkflowInput(null);
+              onDraftChange(event.target.value);
+            }}
             onPaste={(event) => {
               if (composerDisabled || submitting) return;
               const files = imageFiles(event.clipboardData.files);
@@ -468,6 +537,31 @@ export function ThreadView({
               );
             }}
             onKeyDown={(event) => {
+              if (
+                !event.nativeEvent.isComposing &&
+                workflowCandidates.length > 0
+              ) {
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setWorkflowIndex((current) =>
+                    event.key === "ArrowDown"
+                      ? (current + 1) % workflowCandidates.length
+                      : (current - 1 + workflowCandidates.length) %
+                        workflowCandidates.length,
+                  );
+                  return;
+                }
+                if (event.key === "Tab" || event.key === "Enter") {
+                  event.preventDefault();
+                  if (!event.repeat) chooseWorkflow(workflowIndex);
+                  return;
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setDismissedWorkflowInput(composer.draft.text);
+                  return;
+                }
+              }
               if (event.key !== "Enter" || event.shiftKey) return;
               if (event.nativeEvent.isComposing) return;
               event.preventDefault();
@@ -526,6 +620,10 @@ export function ThreadView({
               <ContextUsageIndicator
                 context={threadUsage?.context}
                 threadCacheHitRate={threadUsage?.thread.cacheHitRate}
+                compactDisabled={
+                  composerDisabled || runningTurn !== null || submitting
+                }
+                onCompact={onCompact}
               />
               {permissionLabel === null ? null : (
                 <PermissionSelect
@@ -576,20 +674,6 @@ export function ThreadView({
               </button>
             </div>
           </div>
-          {composer.compaction ? (
-            <p
-              className={
-                composer.compaction.status === "failed"
-                  ? "composer-command-status is-error"
-                  : "composer-command-status"
-              }
-              role={
-                composer.compaction.status === "failed" ? "alert" : "status"
-              }
-            >
-              {composer.compaction.message}
-            </p>
-          ) : null}
           {composer.submission?.status === "failed" ||
           interruptError !== null ||
           attachmentError !== null ||
@@ -627,6 +711,144 @@ export function ThreadView({
       )}
     </div>
   );
+}
+
+type TranscriptRow =
+  | { type: "turn"; turn: Turn; index: number; order: number }
+  | {
+      type: "compaction";
+      compaction: ContextCompactionProjection;
+      order: number;
+    };
+
+function buildTranscriptRows(
+  turns: readonly Turn[],
+  canonicalItems: Thread["canonicalItems"],
+  compactions: readonly ContextCompactionProjection[],
+): TranscriptRow[] {
+  const fallbackStart = (canonicalItems?.length ?? 0) + 1;
+  const turnEnds = new Map<string, number>();
+  canonicalItems?.forEach((item, index) => {
+    if ("turnId" in item && typeof item.turnId === "string") {
+      turnEnds.set(item.turnId, index);
+    }
+  });
+  const rows: TranscriptRow[] = turns.map((turn, index) => ({
+    type: "turn",
+    turn,
+    index,
+    order: turnEnds.get(turn.id) ?? fallbackStart + index,
+  }));
+  for (const compaction of compactions) {
+    const turnEnd =
+      compaction.item.provenance === "agentic"
+        ? turnEnds.get(compaction.item.turnId)
+        : undefined;
+    rows.push({
+      type: "compaction",
+      compaction,
+      order:
+        turnEnd === undefined
+          ? compaction.canonicalIndex
+          : Math.max(compaction.canonicalIndex, turnEnd) + 0.25,
+    });
+  }
+  return rows.sort((left, right) => left.order - right.order);
+}
+
+function ContextCompactionProgress({
+  state,
+}: {
+  state: NonNullable<ComposerState["compaction"]>;
+}) {
+  const failed = state.status === "failed";
+  return (
+    <div
+      className={`context-compaction-progress${failed ? " is-error" : ""}`}
+      role={failed ? "alert" : "status"}
+    >
+      {failed ? (
+        <Icon name="warning" size={15} />
+      ) : (
+        <span className="mini-spinner" aria-hidden="true" />
+      )}
+      <span>{state.message}</span>
+    </div>
+  );
+}
+
+function ContextCompactionEvent({
+  projection,
+}: {
+  projection: ContextCompactionProjection;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const { item, effectiveMessages } = projection;
+  return (
+    <section
+      className="context-compaction-event"
+      aria-label="Context compacted"
+    >
+      <button
+        className="context-compaction-toggle"
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        <span className="context-compaction-mark" aria-hidden="true">
+          <Icon name="compress" size={14} />
+        </span>
+        <span>
+          <strong>Context compacted</strong>
+          <small>
+            {compactionInitiatorLabel(item)} · {effectiveMessages.length}{" "}
+            effective messages
+          </small>
+        </span>
+        <Icon name="chevron-down" size={13} />
+      </button>
+      {expanded ? (
+        <div className="context-compaction-detail">
+          <p>
+            This is the actual model context immediately after this compaction.
+            The full conversation remains in the transcript.
+          </p>
+          <ol>
+            {effectiveMessages.map((message, index) => (
+              <li key={`${item.id}:${String(index)}`}>
+                <span>{modelMessageRole(message)}</span>
+                <pre>{formatModelMessage(message)}</pre>
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function modelMessageRole(message: ModelMessage): string {
+  if (message.role === "tool") return "Tool";
+  if (message.role === "reasoning") return "Reasoning";
+  return message.role === "assistant" ? "Assistant" : "User";
+}
+
+function formatModelMessage(message: ModelMessage): string {
+  if (message.role === "reasoning") {
+    return [message.summary, message.reasoningContent]
+      .filter((part): part is string => part !== undefined && part.length > 0)
+      .join("\n");
+  }
+  if (message.role === "tool") {
+    return message.modelContent === undefined
+      ? message.text
+      : `${message.text}\n${JSON.stringify(message.modelContent, null, 2)}`;
+  }
+  if ("content" in message) return JSON.stringify(message.content, null, 2);
+  if ("toolCalls" in message) {
+    return `${message.text ?? ""}\n${JSON.stringify(message.toolCalls, null, 2)}`.trim();
+  }
+  return message.text;
 }
 
 function RunningTurnLabel({ startedAt }: { startedAt: number | null }) {
@@ -805,10 +1027,63 @@ export function threadCacheUsageLabel(
 export function ContextUsageIndicator({
   context,
   threadCacheHitRate,
+  compactDisabled = false,
+  onCompact,
 }: {
   context?: ModelContextUsageProjection;
   threadCacheHitRate?: number;
+  compactDisabled?: boolean;
+  onCompact?(): Promise<void>;
 }) {
+  const [open, setOpen] = useState(false);
+  const popoverId = useId();
+  const [popoverPosition, setPopoverPosition] = useState({
+    left: 0,
+    width: 286,
+  });
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", closeOutside);
+    return () => document.removeEventListener("mousedown", closeOutside);
+  }, [open]);
+  useLayoutEffect(() => {
+    if (!open || !rootRef.current) return;
+    const root = rootRef.current;
+    const boundary = root.closest(".thread-view");
+    const place = () => {
+      const anchor = root.getBoundingClientRect();
+      const bounds = boundary?.getBoundingClientRect();
+      const left = Math.max(0, bounds?.left ?? 0) + 8;
+      const right =
+        Math.min(
+          window.innerWidth,
+          bounds?.width ? bounds.right : window.innerWidth,
+        ) - 8;
+      const width = Math.min(286, Math.max(0, right - left));
+      setPopoverPosition({
+        left:
+          Math.max(left, Math.min(anchor.right - width, right - width)) -
+          anchor.left,
+        width,
+      });
+    };
+    place();
+    window.addEventListener("resize", place);
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(place);
+    observer?.observe(root);
+    if (boundary) observer?.observe(boundary);
+    return () => {
+      window.removeEventListener("resize", place);
+      observer?.disconnect();
+    };
+  }, [open]);
   if (context?.ratio === null || context?.ratio === undefined) return null;
   const percent = Math.round(context.ratio * 100);
   const visualRatio = Math.max(0, Math.min(1, context.ratio));
@@ -818,30 +1093,88 @@ export function ContextUsageIndicator({
   const tooltip = `${contextLabel}\n${threadCacheUsageLabel(threadCacheHitRate)}`;
   const radius = 7;
   return (
-    <span
+    <div
       className="context-usage-indicator"
-      role="progressbar"
-      tabIndex={0}
-      aria-label={tooltip}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={visualPercent}
-      aria-valuetext={tooltip}
-      data-tooltip={tooltip}
+      ref={rootRef}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={(event) => {
+        if (!event.currentTarget.contains(document.activeElement))
+          setOpen(false);
+      }}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          setOpen(false);
+        }
+      }}
     >
-      <svg aria-hidden="true" viewBox="0 0 20 20">
-        <circle className="context-usage-track" cx="10" cy="10" r={radius} />
-        <circle
-          className="context-usage-progress"
-          cx="10"
-          cy="10"
-          r={radius}
-          pathLength="1"
-          strokeDasharray={`${visualRatio} 1`}
-        />
-      </svg>
-      <span className="sr-only">{tooltip}</span>
-    </span>
+      <button
+        className="context-usage-trigger"
+        type="button"
+        aria-controls={popoverId}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-label={`Open context details. ${tooltip}`}
+        onClick={() => setOpen(true)}
+        onFocus={() => setOpen(true)}
+      >
+        <svg aria-hidden="true" viewBox="0 0 20 20">
+          <circle className="context-usage-track" cx="10" cy="10" r={radius} />
+          <circle
+            className="context-usage-progress"
+            cx="10"
+            cy="10"
+            r={radius}
+            pathLength="1"
+            strokeDasharray={`${visualRatio} 1`}
+          />
+        </svg>
+      </button>
+      {open ? (
+        <div
+          className="context-usage-popover"
+          style={popoverPosition}
+          id={popoverId}
+          role="dialog"
+          aria-label="Context details"
+        >
+          <div className="context-usage-heading">
+            <span>Context window</span>
+            <strong>{String(percent)}%</strong>
+          </div>
+          <div
+            className="context-usage-meter"
+            role="progressbar"
+            aria-label={contextLabel}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={visualPercent}
+          >
+            <span style={{ width: `${String(visualPercent)}%` }} />
+          </div>
+          <p>{contextLabel}</p>
+          <p>{threadCacheUsageLabel(threadCacheHitRate)}</p>
+          <p className="context-usage-explanation">
+            Condense earlier context for the next reply. Your conversation stays
+            available.
+          </p>
+          <button
+            className="context-usage-compact"
+            type="button"
+            disabled={compactDisabled || onCompact === undefined}
+            onClick={() => {
+              setOpen(false);
+              void onCompact?.();
+            }}
+          >
+            Compact context
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -1012,15 +1345,17 @@ function TraceItemHeader({
   return (
     <>
       <Icon
-        name={item.type === "reasoning" ? "reasoning" : "terminal"}
+        name={
+          item.type === "reasoning"
+            ? "reasoning"
+            : toolPresentation(item.toolName ?? item.command).icon
+        }
         size={14}
       />
       <strong>
         {item.type === "reasoning"
           ? "Think"
-          : item.toolName === "run_code"
-            ? "Code"
-            : "Tool"}
+          : toolPresentation(item.toolName ?? item.command).category}
       </strong>
       <span>{traceItemLabel(item)}</span>
       <span className="trace-item-status">
@@ -1361,7 +1696,8 @@ function traceItemLabel(item: ThreadItem): string {
     ? item.toolName === "run_code" &&
       typeof item.toolArguments?.description === "string"
       ? item.toolArguments.description
-      : commandLabel(item.toolName ?? item.command)
+      : (toolPresentation(item.toolName ?? item.command).action ??
+        commandLabel(item.toolName ?? item.command))
     : "Item details";
 }
 

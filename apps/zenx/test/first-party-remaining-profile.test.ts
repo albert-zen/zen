@@ -15,7 +15,10 @@ import {
   type ZenXBrowserBackend,
   type BrowserLiveObservationEvent,
 } from "../src/main/capabilities/browser-provider.js";
-import type { ZenXComputerBackend } from "../src/main/capabilities/computer-provider.js";
+import {
+  ComputerZenXCapabilityPackage,
+  type ZenXComputerBackend,
+} from "../src/main/capabilities/computer-provider.js";
 import { JsonZenXPluginCatalogStore } from "../src/main/capabilities/plugin-catalog-store.js";
 import type {
   ZenXPluginCatalogState,
@@ -151,6 +154,8 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
   const self = new ZenXSelfControlCapabilityPackage({ appServer: selfPort });
   const triggers = new ZenXTriggersCapabilityPackage(automationPort());
   const liveCallbacks: Array<(event: BrowserLiveObservationEvent) => void> = [];
+  const computerLiveCallbacks: Array<(event: any) => void> = [];
+  let computerLiveStops = 0;
   let service!: ZenXCapabilityService;
   const create = (missingPnpm = false) => {
     service = new ZenXCapabilityService({
@@ -165,7 +170,20 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
           return () => {};
         },
       },
-      computerBackend: computerBackend(),
+      computerBackend: {
+        ...computerBackend(),
+        observeWindow(_target, listener) {
+          computerLiveCallbacks.push(listener);
+          listener({
+            type: "status",
+            status: "live",
+            message: "Live fixture window.",
+          });
+          return () => {
+            computerLiveStops += 1;
+          };
+        },
+      },
       providerCatalogOptions: { platform: "darwin" },
       trustedProfileLoaders: {
         browser: createDelegatingFirstPartyProfileLoader(() =>
@@ -279,6 +297,83 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
     );
     stopA();
     stopB();
+    const computerEvents: any[] = [];
+    const stopComputer = service.observeComputerLive(
+      { threadId: "profile-a", frames: true },
+      (event) => computerEvents.push(event),
+    );
+    await call(
+      service,
+      "computer_inspect",
+      { target: { pid: 1, windowTitle: "Fixture" } },
+      "profile-a",
+    );
+    const oldComputerCallback = computerLiveCallbacks.at(-1)!;
+    assert.equal(computerEvents.at(-1)?.status, "live");
+    await service.setEnabled("computer", false);
+    assert.equal(computerLiveStops, 1);
+    assert.equal(computerEvents.at(-1)?.status, "unavailable");
+    const computerCountAfterDisable = computerEvents.length;
+    oldComputerCallback({
+      type: "frame",
+      frame: {
+        sequence: 1,
+        mimeType: "image/jpeg",
+        data: "YQ==",
+        width: 1,
+        height: 1,
+        capturedAt: new Date(0).toISOString(),
+      },
+    });
+    assert.equal(computerEvents.length, computerCountAfterDisable);
+    await service.setEnabled("computer", true);
+    assert.equal(computerLiveCallbacks.length, 2);
+    const enabledProviderCallback = computerLiveCallbacks.at(-1)!;
+    const replacementCallbacks: Array<(event: any) => void> = [];
+    let replacementStops = 0;
+    const replacement = new ComputerZenXCapabilityPackage({
+      ...computerBackend(),
+      observeWindow(_target, listener) {
+        replacementCallbacks.push(listener);
+        listener({
+          type: "status",
+          status: "live",
+          message: "Replacement live fixture window.",
+        });
+        return () => {
+          replacementStops += 1;
+        };
+      },
+    });
+    await service.replaceBundledProviderVariant(
+      path.join(
+        resources,
+        "plugins",
+        FIRST_PARTY_PLUGIN_PACKAGES.computer.tarball,
+      ),
+      {
+        pluginId: "computer",
+        packageName: FIRST_PARTY_PLUGIN_PACKAGES.computer.packageName,
+      },
+      replacement,
+    );
+    assert.equal(computerLiveStops, 2);
+    const countAfterReplace = computerEvents.length;
+    enabledProviderCallback({
+      type: "status",
+      status: "live",
+      message: "late old provider",
+    });
+    assert.equal(computerEvents.length, countAfterReplace);
+    await call(
+      service,
+      "computer_inspect",
+      { target: { pid: 1, windowTitle: "Fixture" } },
+      "profile-a",
+    );
+    assert.equal(replacementCallbacks.length, 1);
+    stopComputer();
+    assert.equal(replacementStops, 1);
     assert.ok(
       service
         .hostSnapshot()
@@ -442,7 +537,29 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
         "enabled",
       );
     }
+    const closeEvents: any[] = [];
+    const stopOnClose = service.observeComputerLive(
+      { threadId: "close-thread", frames: true },
+      (event) => closeEvents.push(event),
+    );
+    await call(
+      service,
+      "computer_inspect",
+      { target: { pid: 1, windowTitle: "Fixture" } },
+      "close-thread",
+    );
+    const callbackBeforeClose = replacementCallbacks.at(-1)!;
     await service.close();
+    assert.equal(replacementStops, 2);
+    assert.equal(closeEvents.at(-1)?.status, "unavailable");
+    const countAfterServiceClose = closeEvents.length;
+    callbackBeforeClose({
+      type: "status",
+      status: "live",
+      message: "late after service close",
+    });
+    assert.equal(closeEvents.length, countAfterServiceClose);
+    stopOnClose();
     await rm(path.join(resources, "plugins"), { recursive: true, force: true });
     await create(true).initialize();
     assert.deepEqual(

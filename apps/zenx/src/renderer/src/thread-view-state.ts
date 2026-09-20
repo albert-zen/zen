@@ -94,6 +94,18 @@ export function applyNativeThreadEvent(
   const threadId =
     event.type === "item_completed" ? event.item.threadId : event.threadId;
   if (threadId !== thread.id || event.type === "token_usage") return thread;
+  if (
+    event.type === "item_completed" &&
+    (thread.canonicalItems !== undefined ||
+      event.item.type === "context_compaction") &&
+    !thread.canonicalItems?.some((item) => item.id === event.item.id)
+  ) {
+    thread = {
+      ...thread,
+      canonicalItems: [...(thread.canonicalItems ?? []), event.item],
+      updatedAt: seconds(event.item.createdAt),
+    };
+  }
   if (event.type === "turn_started") {
     return applyThreadViewNotification(
       thread,
@@ -181,6 +193,7 @@ export function applyNativeThreadEvent(
     );
   }
   if (event.type === "item_completed") {
+    if (event.item.type === "context_compaction") return thread;
     if (event.item.type === "tool_result") {
       return updateCommandResult(
         thread,
@@ -515,6 +528,7 @@ function projectNativeThread(
     agentRole: null,
     gitInfo: null,
     name: snapshot.name ?? null,
+    canonicalItems: structuredClone(snapshot.items),
     queuedMessages: snapshot.items.flatMap((item) =>
       item.type === "user_message_queued" &&
       !deliveredClientIds.has(item.clientId)

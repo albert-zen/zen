@@ -7,6 +7,7 @@ import {
 import {
   handleCompactCommand,
   isCompactCommand,
+  requestContextCompaction,
 } from "../src/renderer/src/compact-command.js";
 
 test("compact is a standalone command, not ordinary prose or a code block", () => {
@@ -96,4 +97,25 @@ test("compact consumes only its unchanged command and maps backend failure witho
     assert.equal(state.compaction?.status, fail ? "failed" : "succeeded");
     assert.equal(state.submission, null);
   }
+});
+
+test("context action shares the command executor without consuming an unrelated draft", async () => {
+  let state = editComposer(emptyComposerState(), "Keep this draft");
+  let calls = 0;
+  await requestContextCompaction({
+    threadId: "thread",
+    active: false,
+    clearCommandDraft: false,
+    read: () => state,
+    update: (change) => {
+      state = change(state);
+    },
+    compact: async () => {
+      calls += 1;
+    },
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(state.draft.text, "Keep this draft");
+  assert.equal(state.compaction?.status, "succeeded");
 });

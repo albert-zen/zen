@@ -7,7 +7,10 @@ export type IconName =
   | ZenXPluginIconName
   | "arrow-down"
   | "archive"
+  | "browser"
+  | "computer"
   | "compress"
+  | "expand"
   | "chip"
   | "check"
   | "chevron-down"
@@ -49,7 +52,20 @@ type IconProps = SVGProps<SVGSVGElement> & {
 };
 
 const paths: Record<IconName, ReactNode> = {
+  browser: (
+    <>
+      <rect x="1.5" y="2" width="13" height="12" rx="2" />
+      <path d="M1.5 5.5h13M4 3.8h.1M6 3.8h.1" />
+    </>
+  ),
+  computer: (
+    <>
+      <rect x="1.5" y="2" width="13" height="9" rx="1.5" />
+      <path d="M8 11v3M4.5 14h7" />
+    </>
+  ),
   "arrow-down": <path d="M8 2.2v11.2m-4-4 4 4 4-4" />,
+  expand: <path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" />,
   compress: <path d="M2 1v4h4M14 1v4h-4M2 15v-4h4M14 15v-4h-4M5 8h6" />,
   chip: (
     <>

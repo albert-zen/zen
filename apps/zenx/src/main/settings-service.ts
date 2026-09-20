@@ -65,6 +65,7 @@ import {
   projectPathSnapshot,
   resolveProjectPath,
 } from "./project-projection.js";
+import type { WorkflowCommand } from "./workflow-configuration.js";
 
 const MAX_WORKSPACE_IDENTITY_ATTEMPTS = 2;
 
@@ -410,6 +411,44 @@ export class ZenXSettingsService {
   async hostConfig(): Promise<ZenXHostConfig> {
     await this.#profileOperations;
     return this.#hostConfigForProfile(this.#requireProfile());
+  }
+
+  async workflowConfiguration(): Promise<{
+    revision: number;
+    commands: WorkflowCommand[];
+    titlePrompt?: string;
+  }> {
+    await this.#profileOperations;
+    const profile = this.#requireProfile();
+    return {
+      revision: profile.revision ?? 0,
+      commands: structuredClone(profile.workflowCommands ?? []),
+      ...(profile.titlePrompt === undefined
+        ? {}
+        : { titlePrompt: profile.titlePrompt }),
+    };
+  }
+
+  async saveWorkflowConfiguration(value: {
+    baseRevision: number;
+    commands: WorkflowCommand[];
+    titlePrompt?: string;
+  }): Promise<void> {
+    if (!Number.isSafeInteger(value.baseRevision) || value.baseRevision < 0)
+      throw new Error(
+        "baseRevision is required; read workflow configuration before updating",
+      );
+    await this.#queueProfileOperation(async () => {
+      this.#assertBaseRevision(value.baseRevision);
+      const current = this.#requireProfile();
+      const validated = validateHostProfile({
+        ...current,
+        workflowCommands: value.commands,
+        titlePrompt: value.titlePrompt,
+      });
+      await this.#persistProfile(validated);
+      this.#profile = validated;
+    });
   }
 
   async #hostConfigForProfile(
@@ -914,6 +953,12 @@ export class ZenXSettingsService {
               settings.composerSendMode ?? current.composerSendMode ?? "queue",
             maxToolRounds: settings.maxToolRounds,
             contextCompaction: settings.contextCompaction,
+            workflowCommands:
+              settings.workflowCommands ?? current.workflowCommands,
+            titlePrompt:
+              settings.resetTitlePrompt === true
+                ? undefined
+                : (settings.titlePrompt ?? current.titlePrompt),
           }),
           [],
         )

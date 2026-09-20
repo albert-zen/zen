@@ -26,6 +26,43 @@ import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 
+test("thread exposes one working side panel instead of the legacy workspace drawer", async () => {
+  const harness = await mountApp({
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(thread());
+      throw new Error("Unexpected protocol request: " + method);
+    },
+  });
+  try {
+    const row = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".thread-row"),
+    );
+    await act(async () => row.click());
+    await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        "#thread-browser-toggle:not(:disabled)",
+      ),
+    );
+    assert.equal(document.querySelectorAll(".top-actions button").length, 1);
+    assert.equal(
+      document.querySelector('[aria-label="Open workspace panel"]'),
+      null,
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>("#thread-browser-toggle")!
+        .click(),
+    );
+    assert.equal(
+      document.querySelector(".auxiliary-panel")?.getAttribute("data-open"),
+      "true",
+    );
+    assert.equal(document.querySelector(".workspace-drawer"), null);
+  } finally {
+    await harness.unmount();
+  }
+});
+
 test("resume commits canonical state before auxiliary reads and replays catch-up events", async () => {
   const resumeResponse = deferred<ReturnType<typeof resumed>>();
   const usage = deferred<ModelUsageProjection>();
@@ -106,13 +143,13 @@ test("resume commits canonical state before auxiliary reads and replays catch-up
       await Promise.resolve();
       await Promise.resolve();
     });
-    const contextUsage = document.querySelector<HTMLElement>(
-      ".context-usage-indicator",
+    const contextUsage = document.querySelector<HTMLButtonElement>(
+      ".context-usage-trigger",
     );
     assert.ok(contextUsage);
     assert.equal(
-      contextUsage.getAttribute("aria-valuetext"),
-      "Context 10% · 7 / 70\nThread cache unknown",
+      contextUsage.getAttribute("aria-label"),
+      "Open context details. Context 10% · 7 / 70\nThread cache unknown",
     );
   } finally {
     await harness.unmount();

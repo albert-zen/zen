@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import os from "node:os";
 
-import { AppServerError, ZenAppServer } from "../src/app-server.js";
+import {
+  AppServerError,
+  ZenAppServer,
+  type AppServerEvent,
+} from "../src/app-server.js";
 import {
   boundedCompactionBoundary,
   normalizeContextCompactionConfig,
@@ -97,6 +101,7 @@ test("agentic compaction replaces the active context and replays identically", a
       item.type === "context_compaction" && item.provenance === "agentic",
   );
   assert(compaction !== undefined);
+  assert.equal(compaction.initiator, "agent");
   assert.equal(compaction.summary, source);
   assert.equal(compaction.turnId, snapshot.turns[0]?.id);
   assert.equal(compaction.callId, "compact-call");
@@ -662,7 +667,10 @@ test("manually compacts long history without changing the complete transcript", 
 
   const before = await server.readThread(thread.id);
   const beforeBytes = before.items.map((item) => JSON.stringify(item));
+  const events: AppServerEvent[] = [];
+  const unsubscribe = server.subscribe((event) => events.push(event));
   const result = await server.compactThread(thread.id);
+  unsubscribe();
   const compacted = await server.readThread(thread.id);
 
   assert.deepEqual(
@@ -673,7 +681,16 @@ test("manually compacts long history without changing the complete transcript", 
   );
   const item = compacted.items.at(-1);
   assert(item?.type === "context_compaction");
+  assert.equal(item.initiator, "human");
   assert.equal(result.compactionItemId, item.id);
+  assert.equal(
+    events.some(
+      (event) =>
+        event.type === "item_completed" &&
+        event.item.id === result.compactionItemId,
+    ),
+    true,
+  );
   assert.equal(item.coveredThroughItemId, before.items.at(-1)?.id);
   assert.equal(item.summary, "summary bytes\nkept verbatim");
   assert.equal(item.algorithmVersion, "zen.context-compaction.v2");
@@ -1476,6 +1493,7 @@ test("automatic compaction freezes admitted selection across a concurrent settin
   assert.equal(compacted.providerProfileId, "recording");
   assert.equal(compacted.modelId, "recording-model");
   assert.equal(compacted.reasoningEffort, "medium");
+  assert.equal(compacted.initiator, "automatic");
 });
 
 test("automatic compaction failure does not fail a completed Turn", async (t) => {

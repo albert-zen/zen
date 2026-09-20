@@ -167,6 +167,7 @@ declare global {
         ): Promise<ClientRequestResults["thread/start"]>;
       };
       settings: {
+        onChanged(listener: (settings: PublicHostSettings) => void): () => void;
         safeRestart(): Promise<PublicHostSettings>;
         reconcile(retry: boolean): Promise<PublicHostSettings>;
         get(): Promise<PublicHostSettings>;
@@ -235,6 +236,14 @@ declare global {
         subscribe(
           request: BrowserThreadRequest,
           listener: (event: BrowserThreadEvent) => void,
+        ): () => void;
+      };
+      computerObservation: {
+        subscribe(
+          request: import("../../main/capabilities/computer-thread-observation.js").ComputerThreadRequest,
+          listener: (
+            event: import("../../main/capabilities/computer-thread-observation.js").ComputerThreadEvent,
+          ) => void,
         ): () => void;
       };
       plugins: {

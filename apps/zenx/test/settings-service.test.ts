@@ -30,6 +30,61 @@ const encryption: LocalEncryption = {
   decryptString: (value) => value.toString().replace(/^secure:/u, ""),
 };
 
+test("persists one user-scoped workflow configuration for Settings and self-control", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-workflows-"));
+  try {
+    const service = settingsFor(directory, inactiveSubscription());
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    const before = await service.workflowConfiguration();
+    await service.saveWorkflowConfiguration({
+      baseRevision: before.revision,
+      commands: [
+        {
+          name: "review",
+          description: "Review a change",
+          prompt: "Review carefully: {{args}}",
+          enabled: true,
+        },
+      ],
+      titlePrompt: "Name this request: {{request}}",
+    });
+    const saved = await service.workflowConfiguration();
+    assert.equal(saved.revision, before.revision + 1);
+    assert.equal(saved.commands[0]?.name, "review");
+    assert.equal(saved.titlePrompt, "Name this request: {{request}}");
+
+    await assert.rejects(
+      service.saveWorkflowConfiguration({ commands: [] } as never),
+      /baseRevision/u,
+    );
+    assert.deepEqual(await service.workflowConfiguration(), saved);
+
+    const profile = (await service.publicSettings()).profile;
+    await service.save({
+      baseRevision: profile.revision,
+      onboardingComplete: profile.onboardingComplete,
+      providerProfiles: profile.providerProfiles,
+      defaultModel: profile.defaultModel,
+      titleModel: profile.titleModel,
+      approvalPolicy: profile.approvalPolicy,
+    });
+    assert.deepEqual(await service.workflowConfiguration(), saved);
+
+    const restarted = settingsFor(directory, inactiveSubscription());
+    await restarted.initialize({ ZENX_PROVIDER: "fake" });
+    assert.deepEqual(await restarted.workflowConfiguration(), saved);
+    await assert.rejects(
+      service.saveWorkflowConfiguration({
+        baseRevision: before.revision,
+        commands: [],
+      }),
+      /Configuration conflict/u,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("migrates legacy environment config once without persisting or inheriting its key", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-settings-"));
   const vault = new ZenXCredentialVault(

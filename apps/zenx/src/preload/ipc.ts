@@ -29,6 +29,7 @@ export const ipcChannels = {
   settingsSafeRestart: "zenx:settings:safe-restart",
   settingsReconcile: "zenx:settings:reconcile",
   settingsSave: "zenx:settings:save",
+  settingsChanged: "zenx:settings:changed",
   providerAdd: "zenx:settings:provider-add",
   providerEdit: "zenx:settings:provider-edit",
   providerDelete: "zenx:settings:provider-delete",
@@ -69,4 +70,7 @@ export const ipcChannels = {
   browserLiveSubscribe: "zenx:browser-live:subscribe",
   browserLiveUnsubscribe: "zenx:browser-live:unsubscribe",
   browserLiveEvent: "zenx:browser-live:event",
+  computerLiveSubscribe: "zenx:computer-live:subscribe",
+  computerLiveUnsubscribe: "zenx:computer-live:unsubscribe",
+  computerLiveEvent: "zenx:computer-live:event",
 } as const;

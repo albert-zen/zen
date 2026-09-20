@@ -2,6 +2,10 @@ import type {
   BrowserThreadRequest,
   BrowserThreadListener,
 } from "./capabilities/browser-thread-observation.js";
+import type {
+  ComputerThreadRequest,
+  ComputerThreadListener,
+} from "./capabilities/computer-thread-observation.js";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -96,6 +100,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #pluginRuntimeSupervisor: PluginRuntimeSupervisor;
   readonly #userDataDirectory: string;
   readonly #browserBackend?: ZenXBrowserBackend;
+  readonly #browserBackendAuthoritative: boolean;
   readonly #computerBackend?: ZenXComputerBackend;
   readonly #computerManifest?: ZenXPluginManifestV2;
   #foregroundRequiredAllowed: boolean;
@@ -122,6 +127,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   #browserProfilePackage: ZenXCapabilityPackage | undefined;
   readonly #browserObservationChanges = new Set<() => void>();
   #computerProfilePackage: ZenXCapabilityPackage | undefined;
+  readonly #computerObservationChanges = new Set<() => void>();
   #stagedBrowserProfilePackage: ZenXCapabilityPackage | undefined;
   #stagedComputerProfilePackage: ZenXCapabilityPackage | undefined;
   #pendingBrowserProfileSelection:
@@ -146,6 +152,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     userDataDirectory: string;
     catalogStore?: ZenXPluginCatalogStore;
     browserBackend?: ZenXBrowserBackend;
+    browserBackendAuthoritative?: boolean;
     computerBackend?: ZenXComputerBackend;
     computerManifest?: ZenXPluginManifestV2;
     allowForegroundRequired?: boolean;
@@ -238,6 +245,8 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     );
     this.#userDataDirectory = options.userDataDirectory;
     this.#browserBackend = options.browserBackend;
+    this.#browserBackendAuthoritative =
+      options.browserBackendAuthoritative ?? false;
     this.#computerBackend = options.computerBackend;
     this.#computerManifest = options.computerManifest;
     this.#bundledProvidersOnly = options.bundledProvidersOnly ?? false;
@@ -327,6 +336,11 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
 
   async #initializeBrowserProfileProvider(): Promise<void> {
     const selected = await this.#resolveBrowserProfileProvider();
+    if (this.#browserBackendAuthoritative) {
+      this.#pendingBrowserProfileSelection = undefined;
+      this.#publishBrowserProfileSelection(selected);
+      return;
+    }
     const descriptor = this.#registry.packageDescriptors().browser;
     if (
       descriptor?.source !== "bundled" ||
@@ -559,6 +573,58 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     return capabilityPackage;
   }
 
+  observeComputerLive(
+    request: ComputerThreadRequest,
+    listener: ComputerThreadListener,
+  ): () => void {
+    let selected: ZenXCapabilityPackage | undefined;
+    let initialized = false;
+    let active = true;
+    let stop: (() => void) | undefined;
+    const send: ComputerThreadListener = (event) => {
+      if (!active) return;
+      try {
+        listener(event);
+      } catch {
+        dispose();
+      }
+    };
+    const refresh = () => {
+      const enabled = this.pluginSnapshot().plugins.some(
+        (plugin) =>
+          plugin.id === "computer" && plugin.enabled && plugin.available,
+      );
+      const next = enabled ? this.#computerProfilePackage : undefined;
+      if (initialized && next === selected) return;
+      initialized = true;
+      selected = next;
+      stop?.();
+      stop = undefined;
+      if (next instanceof ComputerZenXCapabilityPackage) {
+        stop = next.observeThread(request, send);
+        if (!active) stop();
+      } else {
+        send({ type: "targets", targets: [] });
+        send({
+          type: "status",
+          status: "unavailable",
+          message:
+            "Computer observation is unavailable. Enable an available Computer plugin.",
+        });
+      }
+    };
+    const unsubscribe = this.#registry.onChange(refresh);
+    const dispose = () => {
+      active = false;
+      unsubscribe();
+      this.#computerObservationChanges.delete(refresh);
+      stop?.();
+    };
+    this.#computerObservationChanges.add(refresh);
+    refresh();
+    return dispose;
+  }
+
   pluginSnapshot(): ZenXPluginSnapshot {
     return this.#registry.pluginSnapshot();
   }
@@ -765,6 +831,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       for (const refresh of this.#browserObservationChanges) refresh();
     } else {
       this.#computerProfilePackage = capabilityPackage;
+      for (const refresh of this.#computerObservationChanges) refresh();
     }
   }
 
@@ -1425,6 +1492,8 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     this.#stagedComputerProfilePackage = undefined;
     this.#browserProfilePackage = undefined;
     this.#computerProfilePackage = undefined;
+    for (const refresh of this.#browserObservationChanges) refresh();
+    for (const refresh of this.#computerObservationChanges) refresh();
     const failures: Error[] = [];
     for (const operation of [
       async () => await this.#registry.close(),

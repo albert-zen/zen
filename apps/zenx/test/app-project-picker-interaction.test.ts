@@ -1964,13 +1964,13 @@ test("host recovery refreshes the selected Thread without clearing draft or loca
     await setTextareaValue(composer, "Keep this local draft");
     const openWorkspace = await waitFor(() =>
       document.querySelector<HTMLButtonElement>(
-        '[aria-label="Open workspace panel"]',
+        '[aria-label="Open side panel"]',
       ),
     );
     await act(async () => openWorkspace.click());
     await waitFor(() =>
       document.querySelector<HTMLButtonElement>(
-        '[aria-label="Close workspace"]',
+        '[aria-label="Close side panel"]',
       ),
     );
     assert.ok(statusListener);
@@ -2015,7 +2015,7 @@ test("host recovery refreshes the selected Thread without clearing draft or loca
     );
     assert.ok(
       document.querySelector<HTMLButtonElement>(
-        '[aria-label="Close workspace"]',
+        '[aria-label="Close side panel"]',
       ),
     );
     assert.equal(
@@ -2097,14 +2097,14 @@ test("conversation header omits usage while Composer owns context indicator and 
       document.querySelector(".workspace-header")?.textContent ?? "",
       /Context|Thread cache|50%/u,
     );
-    const contextIndicator = document.querySelector(
-      ".composer .context-usage-indicator",
+    const contextIndicator = document.querySelector<HTMLButtonElement>(
+      ".composer .context-usage-trigger",
     );
     assert.ok(contextIndicator);
-    assert.equal(contextIndicator?.getAttribute("role"), "progressbar");
-    assert.equal(contextIndicator?.getAttribute("aria-valuenow"), "50");
+    assert.equal(contextIndicator.getAttribute("aria-haspopup"), "dialog");
+    assert.equal(contextIndicator.getAttribute("aria-expanded"), "false");
     assert.match(
-      contextIndicator?.getAttribute("aria-valuetext") ?? "",
+      contextIndicator.getAttribute("aria-label") ?? "",
       /Context 50%/u,
     );
     assert.equal(
@@ -2112,11 +2112,12 @@ test("conversation header omits usage while Composer owns context indicator and 
       null,
     );
     const workspaceAction = document.querySelector(
-      '.workspace-header [aria-label="Open workspace panel"]',
+      '.workspace-header [aria-label="Open side panel"]',
     );
+    assert.ok(workspaceAction);
     assert.equal(
       document
-        .querySelector('.workspace-header [aria-label="Open workspace panel"]')
+        .querySelector('.workspace-header [aria-label="Open side panel"]')
         ?.getAttribute("disabled"),
       null,
     );
@@ -3363,16 +3364,48 @@ test("Settings and thread navigation are mutually exclusive, including return to
   }
 });
 
-test("/compact calls only the compact endpoint, preserves edits while pending, and reports success inline", async () => {
+test("/compact preserves later edits and refreshes the canonical compaction item", async () => {
   const methods: string[] = [];
   const response = deferred<{ compactionItemId: string }>();
+  let compacted = false;
   const harness = await mountThreadApp({
     request: async (method, params) => {
       methods.push(method);
-      if (method === "zen/thread/resume") return resumed(liveThread());
+      if (method === "zen/thread/resume") {
+        const recovery = resumed(liveThread());
+        return compacted
+          ? {
+              ...recovery,
+              thread: {
+                ...recovery.thread,
+                items: [
+                  ...recovery.thread.items,
+                  {
+                    id: "compact-1",
+                    type: "context_compaction" as const,
+                    threadId: "thread-1",
+                    createdAt: "2026-09-20T10:00:00Z",
+                    provenance: "provider_generated" as const,
+                    initiator: "human" as const,
+                    coveredThroughItemId: "thread-1-metadata",
+                    summary: "Continue from the compacted context.",
+                    retainedItemIds: [],
+                    providerProfileId: "fake",
+                    modelId: "fake",
+                    reasoningEffort: "medium",
+                    algorithmVersion: "zen.context-compaction.v2",
+                    tokenUsage: { inputTokens: 12, outputTokens: 5 },
+                  },
+                ],
+              },
+            }
+          : recovery;
+      }
       if (method === "thread/compact") {
         assert.deepEqual(params, { threadId: "thread-1" });
-        return await response.promise;
+        const result = await response.promise;
+        compacted = true;
+        return result;
       }
       throw new Error(`Unexpected ${method}`);
     },
@@ -3389,14 +3422,64 @@ test("/compact calls only the compact endpoint, preserves edits while pending, a
       await response.promise;
     });
     await waitFor(() =>
-      document.body.textContent?.includes("Context compacted."),
+      document.body.textContent?.includes("Context compacted"),
     );
+    assert.match(document.body.textContent ?? "", /Human initiated/u);
     assert.equal(textarea.value, "Keep this later draft");
     assert.equal(
       methods.some((m) => /^turn\//u.test(m)),
       false,
     );
     assert.equal(document.querySelector(".settings-toast"), null);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("context ring opens details and only its popover action compacts", async () => {
+  const methods: string[] = [];
+  const harness = await mountThreadApp({
+    modelUsage: async () => ({
+      thread: { responseCount: 1, inputTokens: 40, outputTokens: 5 },
+      turns: {},
+      context: {
+        inputTokens: 50,
+        inputTokenSource: "provider",
+        contextWindow: 100,
+        ratio: 0.5,
+      },
+    }),
+    request: async (method) => {
+      methods.push(method);
+      if (method === "zen/thread/resume") return resumed(liveThread());
+      if (method === "thread/compact") return { compactionItemId: "compact-1" };
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    await selectedComposer();
+    const ring = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".context-usage-trigger"),
+    );
+    await act(async () => ring.click());
+    assert.equal(
+      methods.filter((method) => method === "thread/compact").length,
+      0,
+    );
+    assert.ok(document.querySelector('[role="dialog"]'));
+    const compact = document.querySelector<HTMLButtonElement>(
+      ".context-usage-compact",
+    );
+    assert.ok(compact);
+    await act(async () => compact.click());
+    await waitFor(
+      () =>
+        methods.filter((method) => method === "thread/compact").length === 1,
+    );
+    assert.equal(
+      methods.some((method) => /^turn\//u.test(method)),
+      false,
+    );
   } finally {
     await unmountApp(harness);
   }

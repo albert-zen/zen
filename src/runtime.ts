@@ -6,7 +6,7 @@ import {
   AttachmentNotReferencedError,
   projectModelMessages,
 } from "./model-content.js";
-import { TOOL_TASK_CONTENT_TYPE } from "./tool-task.js";
+import { TOOL_TASK_CONTENT_TYPE } from "./tool-task-content.js";
 
 import type {
   AgenticContextCompactionItem,
@@ -880,6 +880,7 @@ export class AgentRuntime {
       createdAt: this.#now(),
       type: "context_compaction",
       provenance: "agentic",
+      initiator: "agent",
       coveredThroughItemId: agentic.contextBoundaryItemId,
       summary: text,
       retainedItemIds: [],

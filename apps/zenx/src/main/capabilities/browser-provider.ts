@@ -93,6 +93,8 @@ export type BrowserLiveObservationListener = (
 ) => void;
 
 export interface ZenXBrowserBackend {
+  /** Bind the provider's opaque session to its trusted Thread owner. */
+  bindThreadSession?(sessionId: string, threadId: string): void;
   scroll?(
     sessionId: string,
     tabId: string,
@@ -592,6 +594,7 @@ interface BrowserSessionIncarnation {
 }
 
 export interface BrowserTargetFingerprint {
+  documentIdentity?: string;
   selector: string;
   tag: string;
   role: string;
@@ -1458,6 +1461,7 @@ const browserElementNameScript = `(element) => {
 }`;
 
 export const browserInspectScript = `(() => {
+  const documentIdentity = String(performance.timeOrigin) + "|" + location.href;
   const visible = (element) => {
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
@@ -1502,6 +1506,7 @@ export const browserInspectScript = `(() => {
       const checked = element instanceof HTMLInputElement && ["checkbox", "radio"].includes(element.type.toLowerCase()) ? element.checked : element.getAttribute("aria-checked") === "true" ? true : element.getAttribute("aria-checked") === "false" ? false : undefined;
       const selected = element.getAttribute("aria-selected") === "true" ? true : element.getAttribute("aria-selected") === "false" ? false : element instanceof HTMLOptionElement ? element.selected : undefined;
       return {
+        documentIdentity,
         selector: selector(element),
         tag: element.tagName.toLowerCase(),
         role: element.getAttribute("role") ?? element.tagName.toLowerCase(),
@@ -1528,6 +1533,9 @@ export function browserActionScript(
   text = "",
   submit = false,
 ): string {
+  const expectedDocumentIdentity = JSON.stringify(
+    target.documentIdentity ?? null,
+  );
   const expected = JSON.stringify({
     tag: target.tag,
     role: target.role,
@@ -1540,6 +1548,9 @@ export function browserActionScript(
   });
   return `(() => {
     const name = ${browserElementNameScript};
+    const expectedDocumentIdentity = ${expectedDocumentIdentity};
+    const documentIdentity = String(performance.timeOrigin) + "|" + location.href;
+    if (expectedDocumentIdentity !== null && documentIdentity !== expectedDocumentIdentity) return { ok: false, reason: "document-changed" };
     const expected = ${expected};
     const selector = ${JSON.stringify(target.selector)};
     const action = ${JSON.stringify(action)};

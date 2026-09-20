@@ -6,6 +6,12 @@ import path from "node:path";
 
 import type { ToolInvocation } from "../../../../../src/tool.js";
 import type { ZenXPluginManifestV2, ZenXCapabilityPackage } from "./types.js";
+import {
+  ComputerThreadObservation,
+  type ComputerThreadListener,
+  type ComputerThreadRequest,
+} from "./computer-thread-observation.js";
+import { observeComputerWindow } from "./computer-electron-observation.js";
 
 export interface ComputerTarget {
   pid?: number;
@@ -44,7 +50,32 @@ export interface ComputerInspection {
   truncated: boolean;
 }
 
+export interface ComputerLiveObservationFrame {
+  sequence: number;
+  mimeType: "image/jpeg";
+  data: string;
+  width: number;
+  height: number;
+  capturedAt: string;
+}
+
+export type ComputerLiveObservationEvent =
+  | {
+      type: "status";
+      status: "idle" | "connecting" | "live" | "unavailable" | "failed";
+      message: string;
+    }
+  | { type: "frame"; frame: ComputerLiveObservationFrame };
+
+export type ComputerLiveObservationListener = (
+  event: ComputerLiveObservationEvent,
+) => void;
+
 export interface ZenXComputerBackend {
+  observeWindow?(
+    target: ComputerTarget,
+    listener: ComputerLiveObservationListener,
+  ): () => void;
   listWindows?(
     query: string | undefined,
     signal?: AbortSignal,
@@ -277,6 +308,7 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
 export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
   readonly manifest: ZenXPluginManifestV2;
   readonly #backend: ZenXComputerBackend;
+  readonly #threadObservation: ComputerThreadObservation;
   #foregroundControlAllowed: boolean;
   #foregroundConsent = new AbortController();
 
@@ -286,6 +318,7 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
     foregroundControlAllowed = false,
   ) {
     this.#backend = backend;
+    this.#threadObservation = new ComputerThreadObservation(backend);
     this.manifest = manifest;
     this.#foregroundControlAllowed = foregroundControlAllowed;
     if (!foregroundControlAllowed) this.#revokeForegroundConsent();
@@ -314,38 +347,62 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
       return await this.#invokeForeground(toolName, invocation);
     }
     const target = requiredTarget(invocation.arguments);
+    let result: unknown;
     switch (toolName) {
       case "computer_inspect":
         requireScopedWindow(target, "computer_inspect");
-        return await this.#backend.inspect(target, invocation.signal);
+        result = await this.#backend.inspect(target, invocation.signal);
+        break;
       case "computer_press":
         requireScopedWindow(target, "computer_press");
-        return await this.#backend.press(
+        result = await this.#backend.press(
           target,
           requiredControl(invocation.arguments),
           invocation.signal,
         );
+        break;
       case "computer_set_value": {
         requireScopedWindow(target, "computer_set_value");
         const value = requiredString(invocation.arguments, "value", true);
         if (value.length > 4_000) {
           throw new Error("computer_set_value is limited to 4000 characters");
         }
-        return await this.#backend.setValue(
+        result = await this.#backend.setValue(
           target,
           requiredControl(invocation.arguments),
           value,
           invocation.signal,
         );
+        break;
       }
       case "computer_screenshot":
         if (target.windowTitle === undefined) {
           throw new Error("computer_screenshot requires target.windowTitle");
         }
-        return await this.#backend.screenshot(target, invocation.signal);
+        result = await this.#backend.screenshot(target, invocation.signal);
+        break;
       default:
         throw new Error(`Unsupported computer tool: ${toolName}`);
     }
+    if (invocation.threadId !== undefined) {
+      const resolved =
+        result && typeof result === "object" && "target" in result
+          ? ((result as { target: ComputerTarget }).target ?? target)
+          : target;
+      this.#threadObservation.publish(
+        invocation.threadId,
+        invocation.callId,
+        resolved,
+      );
+    }
+    return result;
+  }
+
+  observeThread(
+    request: ComputerThreadRequest,
+    listener: ComputerThreadListener,
+  ): () => void {
+    return this.#threadObservation.observe(request, listener);
   }
 
   async #invokeForeground(
@@ -410,6 +467,7 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
   }
 
   async close(): Promise<void> {
+    this.#threadObservation.close();
     await this.#backend.close();
   }
 }
@@ -686,30 +744,13 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     expiresAt: string;
   }> {
     requireMacOs();
-    const resolved = (await this.#accessibility.run({
-      operation: "resolveWindow",
-      target,
-    })) as { target: ComputerInspection["target"]; windowId: number };
-    const { desktopCapturer } = await import("electron");
-    const sources = await desktopCapturer.getSources({
-      types: ["window"],
-      thumbnailSize: { width: 1600, height: 1000 },
-      fetchWindowIcons: false,
-    });
-    const source = sources.find((candidate) =>
-      candidate.id.startsWith(`window:${String(resolved.windowId)}:`),
-    );
-    if (source === undefined || source.thumbnail.isEmpty()) {
-      throw new Error(
-        "The targeted window is not available for scoped capture; grant Screen Recording permission and ensure the window is on-screen",
-      );
-    }
+    const { target: resolvedTarget, image } = await this.#captureWindow(target);
     await mkdir(this.#artifactDirectory, { recursive: true, mode: 0o700 });
     const artifactPath = path.join(
       this.#artifactDirectory,
       `${randomUUID()}.png`,
     );
-    const png = source.thumbnail.toPNG();
+    const png = image.toPNG();
     await writeFile(artifactPath, png, { mode: 0o600 });
     const expiresAt = new Date(Date.now() + 5 * 60_000);
     const timer = setTimeout(() => {
@@ -718,15 +759,58 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     }, 5 * 60_000);
     timer.unref();
     this.#expiryTimers.add(timer);
-    const size = source.thumbnail.getSize();
+    const size = image.getSize();
     return {
       artifactPath,
-      target: resolved.target,
+      target: resolvedTarget,
       width: size.width,
       height: size.height,
       bytes: png.length,
       expiresAt: expiresAt.toISOString(),
     };
+  }
+
+  observeWindow(
+    target: ComputerTarget,
+    listener: ComputerLiveObservationListener,
+  ): () => void {
+    const exactWindow = this.#resolveWindow(target);
+    return observeComputerWindow(async () => {
+      const resolved = await exactWindow;
+      return await this.#captureWindowId(resolved.windowId);
+    }, listener);
+  }
+
+  async #captureWindow(target: ComputerTarget) {
+    const resolved = await this.#resolveWindow(target);
+    return {
+      target: resolved.target,
+      image: await this.#captureWindowId(resolved.windowId),
+    };
+  }
+
+  async #resolveWindow(target: ComputerTarget) {
+    return (await this.#accessibility.run({
+      operation: "resolveWindow",
+      target,
+    })) as { target: ComputerInspection["target"]; windowId: number };
+  }
+
+  async #captureWindowId(windowId: number) {
+    const { desktopCapturer } = await import("electron");
+    const sources = await desktopCapturer.getSources({
+      types: ["window"],
+      thumbnailSize: { width: 1600, height: 1000 },
+      fetchWindowIcons: false,
+    });
+    const source = sources.find((candidate) =>
+      candidate.id.startsWith(`window:${String(windowId)}:`),
+    );
+    if (source === undefined || source.thumbnail.isEmpty())
+      throw new Error(
+        "The targeted window is not available for scoped capture; grant Screen Recording permission and ensure the window is on-screen",
+      );
+    return source.thumbnail;
   }
 
   async foregroundClick(

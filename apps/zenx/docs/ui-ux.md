@@ -118,8 +118,8 @@ New thread 可保留独立 row；它相对 Plugin spaces / Projects 的精确视
 - Packaged Windows/Linux 不安装 Electron 默认 application menu；macOS 只保留系统合规的 application、edit 和 window roles。原生菜单不得引入第二套产品导航。
 - 桌面窗口使用与产品壳连续的 integrated title bar，并把产品行、会话行与原生窗口控件分成明确的命中区域：macOS 顶行左侧为 traffic lights 留出空间并紧接 Sidebar 展开 / 收起入口，右侧直接承载 Thread 标题、cwd 与 Thread actions；ZenX mark / wordmark 与 Inbox 共同位于其下方的 Sidebar 产品行，因此左侧原生控件不会把右侧会话行整体下压。Windows 在顶行左侧显示 ZenX 品牌与 Inbox，并把 Sidebar 展开 / 收起保持为独立的顶行按钮，中间承载会话行，右侧为 minimize / maximize-restore / close 保留原生命中区；紧凑宽度可以把会话行移到原生控件下方的第二行，但不得重叠。展开时左侧顶行与整列 Sidebar 使用同一 Sidebar surface，右侧会话标题栏与 Workspace 使用同一 main surface；唯一的 1px 语义竖分割线从窗口顶部贯穿到底，右侧标题栏底线必须精确从该竖线开始，不使用圆角或 card 式壳层过渡。系统窗口控制仍由 Electron/OS 持有，产品按钮与 Thread 标题控件均是 no-drag，剩余表面才是 drag region。Sidebar 收起后 Chat 使用完整内容宽度，标题栏保留可恢复 Sidebar 的明确入口；该偏好只属于本机产品壳，不进入 Thread 或 canonical Items。
 - 不提供常驻右侧 Activity rail。Tool details 留在聊天流内；Workspace/Artifact 使用按需面板。
-- Thread header 显示 Thread cache telemetry，并只保留按需 Workspace/Artifact icon entry；不显示 Search 或 Archive 控件，也不使用常驻 “Workspace” 文本按钮、空 overflow 或装饰性状态控件。归档能力继续位于 Thread 管理菜单与 Settings。
-- Workspace/Artifact 面板的最终内容组成与 tabs 仍为 **TBD**。早期原型中的 Files / Trigger / Room 等内容不是已确认合同；Trigger 与 Room 作为 plugin 不能被预设为核心 Workspace tabs。
+- Thread header 只保留一个按需工作区 icon entry；上下文与 cache telemetry 位于 Composer。不显示 Search 或 Archive 控件，也不使用常驻 “Workspace” 文本按钮、空 overflow 或装饰性状态控件。归档能力继续位于 Thread 管理菜单与 Settings。
+- 右侧工作区只有一个并排容器和一个顶部入口，不再叠加旧 Workspace 模态抽屉。顶层只显示实际内容 Tab（文件名、浏览器页面、Computer 或插件注册的视图），加号选择新内容类型；不再先按 Browser / Files 分类再选择二级内容。插件贡献进入加号选择器，打开后按自身 surface 展示；Trigger 与 Room 不硬编码为核心 tabs。关闭和展开始终避开原生标题栏控件。Markdown 使用连续可编辑的实时预览：光标进入或触及格式节点时局部露出源码，离开后恢复渲染，自动保存，不提供常规 Edit / Preview / Save 按钮；失败与磁盘冲突在文件内处理，不覆盖未保存输入。
 
 ## 4. Interaction 与 state rules
 
@@ -409,12 +409,12 @@ Plugin Spaces 标题是展开/收起按钮，默认展开；收起隐藏插件�
 
 ## Thread 辅助右栏
 
-- Thread 顶栏的侧栏按钮统一打开 Browser、Files 与插件 panel tabs；即使 Browser 插件未启用，Files 和人工浏览器仍可用。原 workspace 信息抽屉保留。
-- Browser 跟随当前 Thread 的 Agent 目标，可手动选择该 Thread 的页面；用户浏览器与内置 Electron Browser 展示只读实时画面，Playwright 展示 Agent inspect 的临时截图。隐藏右栏、切换到其他 tab 或窗口不可见时停止订阅帧；右栏不会触发 inspect 或改变模型的 observationId。
+- Thread 顶栏只有一个工作区入口；文件、共享浏览器页面、Computer 与已注册插件 panel 都是平级内容 Tab。加号提供类型选择，不增加 Browser / Files 分类层或旧 Workspace 抽屉；即使 Browser 插件未启用，文件与人工内置浏览器仍可用。
+- 默认 Browser 工具与用户共用内置真实页面，页面直接作为顶层 Tab。显式配置外部 provider 时，Attached browser 可跟随或固定当前 Thread 的 Agent 目标；CDP 展示观察画面，isolated Playwright 展示最近一次 inspect 截图。观察面隐藏时停止订阅，不通过展示触发 inspect 或改变模型 observationId。Computer 按明确窗口目标持续观察，隐藏或 provider 停用、替换后停止；不支持该能力时明确显示状态。
 - 宽窗口可以调整右栏宽度或展开；窄窗口打开右栏时使用工作区全宽，关闭返回聊天。Tab 支持左右方向键、Home/End；Escape 还原展开或关闭右栏。
-- Files 从当前 Thread 的 cwd 浏览，读取和显式保存现有 UTF-8 文本，上限 1 MiB；目录最多显示 2,000 项并提示截断，不显示符号链接，拒绝解析时位于 cwd 外的路径。路径检查界定普通浏览范围，不构成防御本机进程并发替换文件树的 OS 沙箱。Markdown 默认渲染，可切换 Source 编辑；其他文本在高亮预览与 Edit 间切换。支持 Save 和 Ctrl/Cmd+S，保留 BOM 与原有 CRLF 换行。保存前校验读取版本，冲突保留草稿并可查看磁盘版本；不提供无提示强制覆盖。保存使用临时文件替换，并串行化 Host 内同一路径的保存，外部编辑采用乐观检查而非跨进程文件锁。常见代码扩展名提供基础词法高亮（超过 100,000 字符只显示纯文本）。路径面包屑回到目录，路径输入框直接打开文件，已打开文件标签支持切换/关闭与未保存圆点。未保存草稿跨面板和Thread切换保留在窗口内；关闭文件/刷新丢弃草稿时确认，窗口关闭或退出也提示。Refresh 重新读取磁盘，不自动监视，不缓存文件为会话历史。
-- 插件 `contributions.panels` 按 order 排列为右栏 tabs。内容继续使用 Generic UI Host：可信模块或隔离 iframe，不在聊天底部重复挂载；context 包含当前 threadId。插件卸载或停用后移除其 tab。
+- 文件选择器从当前 Thread 的 cwd 浏览现有 UTF-8 文本，上限 1 MiB；目录最多显示 2,000 项并提示截断，不显示符号链接，拒绝解析时位于 cwd 外的路径。路径检查界定普通浏览范围，不构成防御本机进程并发替换文件树的 OS 沙箱。每个文件直接占一个顶层 Tab，Markdown 使用连续编辑与光标附近语法展开，其他文本直接编辑；自动保存，无常规 Edit / Preview / Save 按钮，Ctrl/Cmd+S 可立即提交待保存内容。保留 BOM 与未修改区域的混合换行。保存前校验读取版本，冲突保留草稿并可查看磁盘版本；不提供无提示强制覆盖。保存使用临时文件替换，并串行化 Host 内同一路径的保存，外部编辑采用乐观检查而非跨进程文件锁。草稿跨面板和 Thread 切换保留在窗口内；关闭文件先完成保存，失败保留文件和输入；丢弃冲突草稿重新读磁盘需要明确操作，窗口关闭仍有未保存内容时提示。文件不自动监视，也不缓存为会话历史。
+- 插件 `contributions.panels` 按 order 排列在加号选择器中，打开后与文件、浏览器并列。内容继续使用 Generic UI Host：可信模块或隔离 iframe，不在聊天底部重复挂载；context 包含当前 threadId。插件卸载或停用后移除其 tab。
 - 插件通过 Host SDK `ui.panels.open({ panelId, threadId })` 请求展示自己声明的 panel。请求只改变易失 UI 选择，不切换当前 Thread，不创建 Turn；给后台 Thread 的请求在用户选择该 Thread 时展示。没有窗口或 panel 不可用时明确报错；成功表示已分发给窗口，不代表用户已看到或确认内容。
-- Browser 的 Agent pages 保留只读目标选择；“+”打开人工标签页，使用真实 Chromium WebContentsView 支持输入地址、点击、输入、滚动、前进/后退和刷新。人工页面按 Thread 分组、窗口拥有，登录状态保存在独立的 ZenX 人工浏览器 profile；不会导入系统浏览器或 Agent 的登录状态，不暴露为 Agent target。Ctrl/Cmd+L 聚焦地址栏。
-- 人工网页没有 Node 或 ZenX preload，外部导航限 HTTP(S)；设备、位置、通知等权限默认拒绝。关闭标签或窗口释放页面，隐藏面板/切换 Thread 时移除 native view，避免遮盖其他内容。当前最多20个人工标签，不提供书签、扩展、完整历史管理或向Agent交接人工页面。
+- Browser 的共享标签使用真实 Chromium WebContentsView 支持输入地址、点击、输入、滚动、前进/后退和刷新；同一 Thread 的 Browser 工具与用户挂载并操作精确相同的 target，登录状态保存在独立的 ZenX 持久 profile。外部 CDP provider 仍通过 “Attached browser” 显示其原页面，不把同 URL 的新页面冒充接管。Ctrl/Cmd+L 聚焦地址栏。
+- 共享网页没有 Node 或 ZenX preload，外部导航限 HTTP(S)；设备、位置、通知等权限默认拒绝。关闭标签释放页面；关闭窗口、隐藏面板或切换 Thread 时只移除 native view，Host 继续持有页面供同一 Thread 的 Agent 使用。当前最多20个共享标签，不提供书签、扩展或完整历史管理。
 - 当前范围不含新建/删除/重命名文件、终端及异步 Inbox 回答回流。

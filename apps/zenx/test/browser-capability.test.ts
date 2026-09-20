@@ -720,3 +720,59 @@ test("DOM inspection keeps an actionable button after 80 disabled controls", () 
     dom.window.close();
   }
 });
+
+test("DOM action rejects an earlier route change but permits its own route change", () => {
+  const dom = new JSDOM(
+    `<style>* { opacity: 1 }</style><button id="route">Route</button>`,
+    { runScripts: "outside-only", url: "https://example.test/start" },
+  );
+  try {
+    dom.window.HTMLElement.prototype.getBoundingClientRect = () => ({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      width: 100,
+      height: 20,
+      right: 100,
+      bottom: 20,
+      toJSON() {
+        return {};
+      },
+    });
+    const inspect = () =>
+      dom.window.eval(browserInspectScript) as {
+        targets: BrowserTargetFingerprint[];
+      };
+    let clicks = 0;
+    dom.window.document
+      .querySelector("button")!
+      .addEventListener("click", () => {
+        clicks += 1;
+        dom.window.history.pushState({}, "", "/agent-route");
+      });
+
+    const staleTarget = inspect().targets[0]!;
+    dom.window.history.pushState({}, "", "/human-route");
+    const staleResult = dom.window.eval(
+      browserActionScript(staleTarget, "click"),
+    ) as { ok: boolean; reason?: string };
+    assert.equal(staleResult.ok, false);
+    assert.equal(staleResult.reason, "document-changed");
+    assert.equal(clicks, 0, "a route change before dispatch must fail closed");
+
+    const currentTarget = inspect().targets[0]!;
+    const currentResult = dom.window.eval(
+      browserActionScript(currentTarget, "click"),
+    ) as { ok: boolean };
+    assert.equal(currentResult.ok, true);
+    assert.equal(clicks, 1);
+    assert.equal(
+      dom.window.location.pathname,
+      "/agent-route",
+      "the action's own synchronous route change must not turn success stale",
+    );
+  } finally {
+    dom.window.close();
+  }
+});

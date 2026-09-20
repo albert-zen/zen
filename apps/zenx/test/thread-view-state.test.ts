@@ -175,6 +175,10 @@ test("native recovery keeps an active partial response once without reviving old
   };
 
   const projected = projectNativeRecovery(recovery);
+  assert.deepEqual(
+    projected.canonicalItems?.map((item) => item.id),
+    ["metadata-1", "turn-start-1"],
+  );
   assert.equal(agentText(projected), "partial answer");
   assert.equal(activeTurn(projected)?.id, "turn-live");
   const awaiting = markThreadViewAwaitingRecovery(projected);
@@ -476,6 +480,38 @@ test("native completion replaces live reasoning without duplicates", () => {
     assert.notEqual(completed.status, "inProgress");
     assert.deepEqual(completed.content, ["finished"]);
   }
+});
+
+test("native projection keeps a live canonical compaction once for product UI", () => {
+  const current = thread();
+  const item = {
+    id: "compact-1",
+    threadId: current.id,
+    createdAt: "2026-09-20T10:00:00Z",
+    type: "context_compaction" as const,
+    provenance: "provider_generated" as const,
+    initiator: "human" as const,
+    coveredThroughItemId: "completed-1",
+    summary: "Continue from the reviewed implementation.",
+    retainedItemIds: [],
+    providerProfileId: "fake",
+    modelId: "fake",
+    reasoningEffort: null,
+    algorithmVersion: "zen.context-compaction.v2",
+    tokenUsage: { inputTokens: 42, outputTokens: 9 },
+  };
+
+  const once = applyNativeThreadEvent(current, {
+    type: "item_completed",
+    item,
+  });
+  const twice = applyNativeThreadEvent(once, {
+    type: "item_completed",
+    item,
+  });
+
+  assert.deepEqual(twice.canonicalItems, [item]);
+  assert.deepEqual(twice.turns, current.turns);
 });
 
 test("replayed native tool call preserves its completed result", () => {

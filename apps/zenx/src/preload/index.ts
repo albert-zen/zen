@@ -59,6 +59,11 @@ import type {
   BrowserThreadEvent,
 } from "../main/capabilities/browser-thread-observation.js";
 import type { BrowserObservationEnvelope } from "../main/browser-live-observation-ipc.js";
+import type {
+  ComputerThreadEvent,
+  ComputerThreadRequest,
+} from "../main/capabilities/computer-thread-observation.js";
+import type { ComputerObservationEnvelope } from "../main/computer-live-observation-ipc.js";
 
 contextBridge.exposeInMainWorld("zenx", {
   platform: process.platform,
@@ -245,6 +250,15 @@ contextBridge.exposeInMainWorld("zenx", {
       ),
   },
   settings: {
+    onChanged: (listener: (settings: PublicHostSettings) => void) => {
+      const receive = (
+        _event: Electron.IpcRendererEvent,
+        settings: PublicHostSettings,
+      ) => listener(settings);
+      ipcRenderer.on(ipcChannels.settingsChanged, receive);
+      return () =>
+        ipcRenderer.removeListener(ipcChannels.settingsChanged, receive);
+    },
     safeRestart: async (): Promise<PublicHostSettings> =>
       ipcRenderer.invoke(ipcChannels.settingsSafeRestart),
     reconcile: async (retry: boolean): Promise<PublicHostSettings> =>
@@ -415,6 +429,42 @@ contextBridge.exposeInMainWorld("zenx", {
         ipcRenderer.off(ipcChannels.browserLiveEvent, wrapped);
         void ipcRenderer.invoke(
           ipcChannels.browserLiveUnsubscribe,
+          subscriptionId,
+        );
+      };
+    },
+  },
+  computerObservation: {
+    subscribe: (
+      request: ComputerThreadRequest,
+      listener: (event: ComputerThreadEvent) => void,
+    ): (() => void) => {
+      let active = true;
+      const subscriptionId = crypto.randomUUID();
+      const wrapped = (
+        _event: Electron.IpcRendererEvent,
+        value: ComputerObservationEnvelope,
+      ) => {
+        if (active && value.subscriptionId === subscriptionId)
+          listener(value.event);
+      };
+      ipcRenderer.on(ipcChannels.computerLiveEvent, wrapped);
+      void ipcRenderer
+        .invoke(ipcChannels.computerLiveSubscribe, subscriptionId, request)
+        .catch(() => {
+          if (active)
+            listener({
+              type: "status",
+              status: "failed",
+              message: "The Computer window view could not be connected.",
+            });
+        });
+      return () => {
+        if (!active) return;
+        active = false;
+        ipcRenderer.off(ipcChannels.computerLiveEvent, wrapped);
+        void ipcRenderer.invoke(
+          ipcChannels.computerLiveUnsubscribe,
           subscriptionId,
         );
       };

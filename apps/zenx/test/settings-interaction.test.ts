@@ -1246,6 +1246,7 @@ test("every Settings tab remains keyboard reachable after narrow-screen reflow",
         "Appearance",
         "General",
         "Context compaction",
+        "Workflows",
         "Archived threads",
       ],
     );
@@ -1277,6 +1278,51 @@ test("every Settings tab remains keyboard reachable after narrow-screen reflow",
     });
     assert.equal(document.activeElement?.textContent?.trim(), "Account");
     assert.equal(tabs[0]?.getAttribute("aria-selected"), "true");
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Workflows edits Slash commands and restores the default title prompt", async () => {
+  const saved: ZenXSettingsUpdate[] = [];
+  const initialSettings: PublicHostSettings = {
+    ...settings,
+    profile: {
+      ...settings.profile,
+      titlePrompt: "Custom title: {{request}}",
+    },
+  };
+  const harness = await mountSettings("workflows", {
+    initialSettings,
+    save: async (profile) => {
+      saved.push(profile);
+      return {
+        ...initialSettings,
+        profile: { ...initialSettings.profile, ...profile },
+      };
+    },
+  });
+  try {
+    await waitFor(() => exactButton("Add command"));
+    await click(exactButtonRequired("Add command"));
+    const name = document.querySelector<HTMLInputElement>(
+      '[aria-label="Command 1 name"]',
+    );
+    const description = document.querySelector<HTMLInputElement>(
+      '[aria-label="Command 1 description"]',
+    );
+    const prompt = document.querySelector<HTMLTextAreaElement>(
+      '[aria-label="Command 1 prompt"]',
+    );
+    assert.ok(name && description && prompt);
+    await changeControl(name, "review");
+    await changeControl(description, "Review a change");
+    await changeControl(prompt, "Review carefully: {{args}}");
+    await click(exactButtonRequired("Restore default"));
+    await click(exactButtonRequired("Apply"));
+    assert.equal(saved[0]?.workflowCommands?.[0]?.name, "review");
+    assert.equal(saved[0]?.titlePrompt, undefined);
+    assert.equal(saved[0]?.resetTitlePrompt, true);
   } finally {
     await unmount(harness);
   }

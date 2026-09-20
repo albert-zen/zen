@@ -1,5 +1,6 @@
 import type { ZenXSettingsService } from "./settings-service.js";
 import type { ThreadTitleInference } from "./thread-title-types.js";
+import { renderTitlePrompt } from "./workflow-configuration.js";
 
 export class ZenXConfiguredTitleInference implements ThreadTitleInference {
   readonly #settings: ZenXSettingsService;
@@ -33,13 +34,15 @@ export class ZenXConfiguredTitleInference implements ThreadTitleInference {
         return localSemanticTitle(input);
       }
       let text = "";
+      const titlePrompt = (await this.#settings.publicSettings()).profile
+        .titlePrompt;
       for await (const event of configured.adapter.stream({
         model,
         reasoningEffort: configured.reasoningEffort,
         messages: [
           {
             role: "user",
-            text: `Create a concise title of at most 64 characters in the same language as this request. Return only the title.\n\nRequest:\n${input}`,
+            text: renderTitlePrompt(titlePrompt, input),
           },
         ],
         tools: [],

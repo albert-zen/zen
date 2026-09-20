@@ -3,6 +3,11 @@ import { RtkSettingsCard } from "./RtkSettingsCard.js";
 import { useEffect, useRef, useState } from "react";
 import { normalizeContextCompactionConfig } from "../../../../../src/context-compaction.js";
 import { ContextCompactionPanel } from "./ContextCompactionPanel.js";
+import { WorkflowSettingsPanel } from "./WorkflowSettingsPanel.js";
+import {
+  normalizeTitlePrompt,
+  normalizeWorkflowCommands,
+} from "../../main/workflow-configuration.js";
 
 import { builtInModelCatalogPreset } from "../../../../cli/src/model-presets.js";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
@@ -46,6 +51,7 @@ export type SettingsTab =
   | "appearance"
   | "general"
   | "compaction"
+  | "workflows"
   | "archived";
 
 export function SettingsView({
@@ -122,6 +128,8 @@ export function SettingsView({
     setStatus(null);
     try {
       normalizeContextCompactionConfig(draft.contextCompaction);
+      normalizeWorkflowCommands(draft.workflowCommands);
+      normalizeTitlePrompt(draft.titlePrompt);
       const value = await window.zenx.settings.save({
         baseRevision: draft.revision ?? 0,
         onboardingComplete: true,
@@ -136,6 +144,9 @@ export function SettingsView({
         composerSendMode: draft.composerSendMode ?? "queue",
         maxToolRounds: draft.maxToolRounds,
         contextCompaction: draft.contextCompaction,
+        workflowCommands: draft.workflowCommands ?? [],
+        titlePrompt: draft.titlePrompt,
+        resetTitlePrompt: draft.titlePrompt === undefined,
       });
       setSettings(value);
       setDraft(value.profile);
@@ -170,6 +181,13 @@ export function SettingsView({
   } catch (reason) {
     compactionError = describeError(reason);
   }
+  let workflowError: string | null = null;
+  try {
+    normalizeWorkflowCommands(draft.workflowCommands);
+    normalizeTitlePrompt(draft.titlePrompt);
+  } catch (reason) {
+    workflowError = describeError(reason);
+  }
   const hostDirty = JSON.stringify(draft) !== JSON.stringify(settings.profile);
   const sendModeOnly =
     hostDirty &&
@@ -186,6 +204,7 @@ export function SettingsView({
     { id: "appearance", label: "Appearance", icon: "moon" },
     { id: "general", label: "General", icon: "settings" },
     { id: "compaction", label: "Context compaction", icon: "compress" },
+    { id: "workflows", label: "Workflows", icon: "compose" },
     { id: "archived", label: "Archived threads", icon: "archive" },
   ];
   return (
@@ -333,9 +352,27 @@ export function SettingsView({
                 }
               />
             ) : null}
+            {tab === "workflows" ? (
+              <WorkflowSettingsPanel
+                commands={draft.workflowCommands ?? []}
+                titlePrompt={draft.titlePrompt}
+                onChange={(value) =>
+                  setDraft({
+                    ...draft,
+                    workflowCommands: value.workflowCommands,
+                    titlePrompt: value.titlePrompt,
+                  })
+                }
+              />
+            ) : null}
             {compactionError !== null ? (
               <div className="settings-error" role="alert">
                 {compactionError}
+              </div>
+            ) : null}
+            {workflowError !== null && tab === "workflows" ? (
+              <div className="settings-error" role="alert">
+                {workflowError}
               </div>
             ) : null}
             {tab === "archived" ? (
@@ -434,11 +471,15 @@ export function SettingsView({
                 </button>
               </div>
             ) : null}
-            {tab === "models" || tab === "general" || tab === "compaction" ? (
+            {tab === "models" ||
+            tab === "general" ||
+            tab === "compaction" ||
+            tab === "workflows" ? (
               <SettingsApplyBar
                 busy={busy === "save"}
                 disabled={
                   compactionError !== null ||
+                  workflowError !== null ||
                   settings.configuration?.status === "unconfirmed"
                 }
                 dirty={hostDirty}

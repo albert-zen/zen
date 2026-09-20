@@ -1,4 +1,8 @@
-import { handleCompactCommand, isCompactCommand } from "./compact-command.js";
+import {
+  handleCompactCommand,
+  isCompactCommand,
+  requestContextCompaction,
+} from "./compact-command.js";
 import { useWorkspaceFileDrafts } from "./workspace-file-drafts.js";
 import { AuxiliaryPanel } from "./auxiliary-panel.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
@@ -107,6 +111,7 @@ import {
   projectNativeRecovery,
 } from "./thread-view-state.js";
 import { ThreadView } from "./ThreadView.js";
+import type { WorkflowCommand } from "./workflow-commands.js";
 import { ZenXBrand } from "./ZenXBrand.js";
 
 type ProductPage = string;
@@ -390,6 +395,9 @@ export function App() {
   const [composerSendMode, setComposerSendMode] = useState<
     "queue" | "soft" | "hard"
   >("queue");
+  const [workflowCommands, setWorkflowCommands] = useState<WorkflowCommand[]>(
+    [],
+  );
   const [page, setPage] = useState<ProductPage>("agent");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -406,18 +414,30 @@ export function App() {
     void window.zenx.settings
       .get()
       .then((value) => {
-        if (active)
+        if (active) {
           setComposerSendMode(value.profile.composerSendMode ?? "queue");
+          setWorkflowCommands(value.profile.workflowCommands ?? []);
+        }
       })
       .catch(() => undefined);
     return () => {
       active = false;
     };
   }, [page]);
+  useEffect(() => {
+    const onChanged = window.zenx.settings.onChanged;
+    if (onChanged === undefined) return undefined;
+    return onChanged((value) => {
+      setComposerSendMode(value.profile.composerSendMode ?? "queue");
+      setWorkflowCommands(value.profile.workflowCommands ?? []);
+    });
+  }, []);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
-  const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const fileDrafts = useWorkspaceFileDrafts();
   const [panelTabs, setPanelTabs] = useState<Record<string, string>>({});
+  const [workspaceTabOrder, setWorkspaceTabOrder] = useState<
+    Record<string, string[]>
+  >({});
   useEffect(
     () =>
       window.zenx.panels.onOpen((request) => {
@@ -733,7 +753,6 @@ export function App() {
     if (!preserveNavigation) {
       setPage("agent");
       setSidebarOpen(false);
-      setWorkspaceOpen(false);
     }
     setSelectedThreadId(threadId);
     setThreadDetail(cached?.thread ?? null);
@@ -1093,12 +1112,11 @@ export function App() {
     const close = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (projectPickerIntent !== null) closeProjectPicker();
-      else if (workspaceOpen) setWorkspaceOpen(false);
       else if (sidebarOpen) setSidebarOpen(false);
     };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
-  }, [projectPickerIntent, sidebarOpen, workspaceOpen]);
+  }, [projectPickerIntent, sidebarOpen]);
 
   const activeSummaries = threadSummaries.map((summary) =>
     titleSnapshot[summary.threadId]?.title === undefined
@@ -1147,7 +1165,6 @@ export function App() {
     selectedThreadIdRef.current = null;
     setPage("agent");
     setSidebarOpen(false);
-    setWorkspaceOpen(false);
     setSelectedThreadId(null);
     setThreadDetail(null);
     setThreadLoading(false);
@@ -1547,8 +1564,12 @@ export function App() {
           threadDetail.turns.some((turn) => turn.status === "inProgress"),
         read: () => composerStatesRef.current[threadId] ?? emptyComposerState(),
         update: (change) => updateComposer(threadId, change),
-        compact: (id) =>
-          window.zenx.protocol.request("thread/compact", { threadId: id }),
+        compact: async (id) => {
+          await window.zenx.protocol.request("thread/compact", {
+            threadId: id,
+          });
+          if (selectedThreadIdRef.current === id) await resumeThread(id, true);
+        },
       });
       return;
     }
@@ -1632,6 +1653,26 @@ export function App() {
         ),
       );
     }
+  };
+
+  const compactFromContext = async () => {
+    if (
+      threadDetail === null ||
+      archivingThreadIdsRef.current.has(threadDetail.id)
+    )
+      return;
+    const threadId = threadDetail.id;
+    await requestContextCompaction({
+      threadId,
+      active: threadDetail.turns.some((turn) => turn.status === "inProgress"),
+      clearCommandDraft: false,
+      read: () => composerStatesRef.current[threadId] ?? emptyComposerState(),
+      update: (change) => updateComposer(threadId, change),
+      compact: async (id) => {
+        await window.zenx.protocol.request("thread/compact", { threadId: id });
+        if (selectedThreadIdRef.current === id) await resumeThread(id, true);
+      },
+    });
   };
 
   const respondToApproval = async (
@@ -1760,7 +1801,6 @@ export function App() {
     if (next !== "agent") abandonNewThreadDraft();
     setPage(next);
     setSidebarOpen(false);
-    setWorkspaceOpen(false);
   };
 
   useEffect(() => {
@@ -1922,7 +1962,6 @@ export function App() {
         selectedSummary !== null ? (
           <ConversationTitleBar
             onOpenSidebar={() => setSidebarOpen(true)}
-            onOpenWorkspace={() => setWorkspaceOpen(true)}
             browserEnabled={true}
             browserOpen={browserPanels[selectedSummary.threadId] === true}
             onToggleBrowser={() =>
@@ -2071,7 +2110,6 @@ export function App() {
                 setThreadUsage(undefined);
                 setSelectedSettings(null);
                 setThreadError(null);
-                setWorkspaceOpen(false);
                 confirmNewThreadDraft(draftRecoveryNotice.draft);
                 discardRecoverableDraft();
               }}
@@ -2124,6 +2162,7 @@ export function App() {
             threadUsage={threadUsage}
             models={models}
             providerProfiles={providerProfiles}
+            workflowCommands={workflowCommands}
             modelCatalogError={modelCatalogError}
             modelUpdateError={modelUpdateError}
             onDraftChange={(threadId, draft) =>
@@ -2235,6 +2274,7 @@ export function App() {
             onReasoningChange={(effort) => void changeReasoning(effort)}
             onOpenSidebar={() => setSidebarOpen(true)}
             onRespondToApproval={respondToApproval}
+            onCompact={compactFromContext}
             onSubmit={submitComposer}
             onSubmitNewThread={submitNewThreadDraft}
             selectedSettings={selectedSettings}
@@ -2271,6 +2311,13 @@ export function App() {
               }))
             }
             snapshot={pluginSnapshot}
+            openedTabs={workspaceTabOrder[threadDetail.id]}
+            onTabsChange={(tabs) =>
+              setWorkspaceTabOrder((current) => ({
+                ...current,
+                [threadDetail.id]: tabs,
+              }))
+            }
             selectedTab={panelTabs[threadDetail.id]}
             onSelectTab={(tab) =>
               setPanelTabs((current) => ({
@@ -2282,13 +2329,6 @@ export function App() {
         ) : null}
       </main>
 
-      {workspaceOpen && threadDetail !== null ? (
-        <WorkspaceDrawer
-          onClose={() => setWorkspaceOpen(false)}
-          settings={selectedSettings}
-          thread={threadDetail}
-        />
-      ) : null}
       {editingProject !== null ? (
         <ProjectEditor
           workspace={editingProject.workspace}
@@ -2405,7 +2445,6 @@ function ConversationTitleBar({
   browserOpen,
   onToggleBrowser,
   onOpenSidebar,
-  onOpenWorkspace,
   onRename,
   onRetryTitle,
   selectedSummary,
@@ -2416,7 +2455,6 @@ function ConversationTitleBar({
   browserOpen: boolean;
   onToggleBrowser(): void;
   onOpenSidebar(): void;
-  onOpenWorkspace(): void;
   onRename(title: string): Promise<void>;
   onRetryTitle(): Promise<void>;
   selectedSummary: NativeThreadSummary;
@@ -2456,24 +2494,15 @@ function ConversationTitleBar({
             className="icon-button"
             type="button"
             aria-label={browserOpen ? "Close side panel" : "Open side panel"}
-            title="Browser, files and plugin panels"
+            title="Workspace"
+            aria-controls="thread-workspace-panel"
             aria-expanded={browserOpen}
             disabled={threadDetail === null}
             onClick={onToggleBrowser}
           >
-            <Icon name="layers" />
+            <Icon name="panel-right" />
           </button>
         ) : null}
-        <button
-          className="icon-button"
-          type="button"
-          aria-label="Open workspace panel"
-          aria-haspopup="dialog"
-          disabled={threadDetail === null}
-          onClick={onOpenWorkspace}
-        >
-          <Icon name="panel-right" />
-        </button>
       </div>
     </div>
   );
@@ -2519,6 +2548,7 @@ function AgentSurface({
   threadUsage,
   models,
   providerProfiles,
+  workflowCommands,
   modelCatalogError,
   modelUpdateError,
   onDraftChange,
@@ -2543,6 +2573,7 @@ function AgentSurface({
   onReasoningChange,
   onOpenSidebar,
   onRespondToApproval,
+  onCompact,
   onSubmit,
   onSubmitNewThread,
   selectedSettings,
@@ -2564,6 +2595,7 @@ function AgentSurface({
   threadUsage: ModelUsageProjection | undefined;
   models: ModelSummary[];
   providerProfiles: ZenXProviderProfile[];
+  workflowCommands: WorkflowCommand[];
   modelCatalogError: string | null;
   modelUpdateError: string | null;
   onDraftChange(threadId: string, draft: string): void;
@@ -2593,6 +2625,7 @@ function AgentSurface({
     requestId: string,
     decision: ApprovalDecision,
   ): Promise<void>;
+  onCompact(): Promise<void>;
   onSubmit(
     intent: ComposerIntent,
     expectedTurnId: string | null,
@@ -2726,6 +2759,7 @@ function AgentSurface({
           selectedModel={draftSettings?.model}
           selectedReasoningEffort={draftSettings?.reasoningEffort}
           thread={null}
+          workflowCommands={workflowCommands}
           onDraftChange={onNewThreadDraftChange}
           onImportImages={onImportNewThreadImages}
           onPickImages={onPickNewThreadImages}
@@ -2797,6 +2831,7 @@ function AgentSurface({
             threadUsage={threadUsage}
             wakeups={[]}
             watching={false}
+            workflowCommands={workflowCommands}
             onDraftChange={(draft) => onDraftChange(threadDetail.id, draft)}
             onImportImages={(files) => onImportImages(threadDetail.id, files)}
             onPickImages={() => onPickImages(threadDetail.id)}
@@ -2806,6 +2841,7 @@ function AgentSurface({
             onModelChange={onModelChange}
             onReasoningChange={onReasoningChange}
             onRespondToApproval={onRespondToApproval}
+            onCompact={onCompact}
             onSubmit={onSubmit}
           />
         </>
@@ -3141,133 +3177,6 @@ function NewThreadProjectContext({
     >
       <Icon name="folder" size={13} />
       <span>{selectedLabel}</span>
-    </div>
-  );
-}
-
-function WorkspaceDrawer({
-  onClose,
-  settings,
-  thread,
-}: {
-  onClose(): void;
-  settings: SelectedThreadSettings | null;
-  thread: Thread;
-}) {
-  const [tab, setTab] = useState<"files" | "artifacts" | "context">("files");
-  const closeRef = useRef<HTMLButtonElement>(null);
-  const previousFocus = useRef<HTMLElement | null>(null);
-  useEffect(() => {
-    previousFocus.current = document.activeElement as HTMLElement | null;
-    closeRef.current?.focus();
-    return () => previousFocus.current?.focus();
-  }, []);
-  const commands = thread.turns.flatMap((turn) =>
-    turn.items.filter(
-      (
-        item,
-      ): item is Extract<
-        (typeof turn.items)[number],
-        { type: "commandExecution" }
-      > => item.type === "commandExecution",
-    ),
-  );
-  return (
-    <div
-      className="drawer-layer"
-      role="presentation"
-      onPointerDown={(event) =>
-        event.target === event.currentTarget && onClose()
-      }
-    >
-      <aside
-        className="workspace-drawer"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="workspace-drawer-title"
-      >
-        <header>
-          <div>
-            <strong id="workspace-drawer-title">Workspace</strong>
-            <span>Linked context for this Thread</span>
-          </div>
-          <button
-            ref={closeRef}
-            className="icon-button"
-            type="button"
-            aria-label="Close workspace"
-            onClick={onClose}
-          >
-            <Icon name="x" />
-          </button>
-        </header>
-        <div
-          className="drawer-tabs"
-          role="tablist"
-          aria-label="Workspace views"
-        >
-          {(["files", "artifacts", "context"] as const).map((name) => (
-            <button
-              key={name}
-              type="button"
-              role="tab"
-              aria-selected={tab === name}
-              onClick={() => setTab(name)}
-            >
-              {name[0]!.toUpperCase() + name.slice(1)}
-            </button>
-          ))}
-        </div>
-        <div className="drawer-content">
-          {tab === "files" ? (
-            <>
-              <p>
-                Files explicitly represented by this Thread’s current product
-                projection.
-              </p>
-              <div className="drawer-row">
-                <Icon name="folder" />
-                <div>
-                  <strong>{thread.cwd}</strong>
-                  <span>Thread workspace</span>
-                </div>
-              </div>
-              <p className="drawer-empty">
-                No file-reference Items are available for this Thread.
-              </p>
-            </>
-          ) : tab === "artifacts" ? (
-            <p className="drawer-empty">No live artifacts are available.</p>
-          ) : (
-            <>
-              <div className="drawer-row">
-                <Icon name="folder" />
-                <div>
-                  <strong>{thread.cwd}</strong>
-                  <span>Current workspace</span>
-                </div>
-              </div>
-              <div className="drawer-row">
-                <Icon name="layers" />
-                <div>
-                  <strong>{settings?.model ?? thread.modelProvider}</strong>
-                  <span>Effective Thread model</span>
-                </div>
-              </div>
-              <div className="drawer-row">
-                <Icon name="terminal" />
-                <div>
-                  <strong>
-                    {commands.length} tool{" "}
-                    {commands.length === 1 ? "call" : "calls"}
-                  </strong>
-                  <span>From canonical Thread Items</span>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-      </aside>
     </div>
   );
 }

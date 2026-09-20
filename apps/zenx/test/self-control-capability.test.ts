@@ -53,7 +53,75 @@ const SELF_CONTROL_TOOL_NAMES = [
   "zenx_threads_archive",
   "zenx_threads_unarchive",
   "zenx_threads_send",
+  "zenx_self_control_workflows_get",
+  "zenx_self_control_workflows_update",
 ];
+
+test("self-control reads and updates the same workflow configuration port", async () => {
+  let value = {
+    revision: 4,
+    commands: [] as Array<{
+      name: string;
+      description: string;
+      prompt: string;
+      enabled: boolean;
+    }>,
+  };
+  const workflows = {
+    workflowConfiguration: async () => structuredClone(value),
+    saveWorkflowConfiguration: async (next: {
+      commands: typeof value.commands;
+      baseRevision: number;
+      titlePrompt?: string;
+    }) => {
+      assert.equal(next.baseRevision, value.revision);
+      value = {
+        revision: value.revision + 1,
+        commands: structuredClone(next.commands),
+      };
+    },
+  };
+  const capabilityPackage = new ZenXSelfControlCapabilityPackage({
+    appServer: {
+      projectProjection: new ZenXProjectProjection(),
+      request: async () => {
+        throw new Error(
+          "App Server should not be used for workflow configuration",
+        );
+      },
+    } as AppServerRequestPort,
+    workflows,
+  });
+  const invocation = (name: string, arguments_: Record<string, unknown>) =>
+    capabilityPackage.invoke(name, {
+      callId: `workflow-${name}`,
+      name,
+      arguments: arguments_,
+      cwd: process.cwd(),
+      signal: new AbortController().signal,
+    });
+  assert.deepEqual(
+    await invocation("zenx_self_control_workflows_get", {}),
+    value,
+  );
+  await assert.rejects(
+    invocation("zenx_self_control_workflows_update", { commands: [] }),
+    /baseRevision/u,
+  );
+  const updated = (await invocation("zenx_self_control_workflows_update", {
+    baseRevision: 4,
+    commands: [
+      {
+        name: "review",
+        description: "Review",
+        prompt: "Review {{args}}",
+        enabled: true,
+      },
+    ],
+  })) as { revision: number; commands: Array<{ name: string }> };
+  assert.equal(updated.revision, 5);
+  assert.equal(updated.commands[0]?.name, "review");
+});
 
 test("real ZenX host control tools make active semantics explicit", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-control-host-"));
