@@ -51,6 +51,7 @@ import type {
 } from "../../main/image-attachments.js";
 import type { AttachmentRef } from "../../../../../src/attachment.js";
 import type { MarketplaceCatalogLoadSnapshot } from "../../marketplace.js";
+import type { ChromeBridgeSettingsSnapshot } from "../../main/chrome-extension-bridge.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
 import type {
   BrowserThreadRequest,
@@ -231,6 +232,12 @@ declare global {
       };
       marketplace: {
         get(): Promise<MarketplaceCatalogLoadSnapshot>;
+      };
+      chromeBridge: {
+        get(): Promise<ChromeBridgeSettingsSnapshot>;
+        prepare(): Promise<ChromeBridgeSettingsSnapshot>;
+        remove(): Promise<ChromeBridgeSettingsSnapshot>;
+        openExtension(): Promise<void>;
       };
       browserObservation: {
         subscribe(

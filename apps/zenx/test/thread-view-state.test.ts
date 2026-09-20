@@ -533,3 +533,63 @@ test("replayed native tool call preserves its completed result", () => {
   });
   assert.deepEqual(next, current);
 });
+
+test("native recovery preserves the immediate fork source and copy creation time", () => {
+  const metadata = {
+    id: "metadata-copy",
+    type: "thread_metadata" as const,
+    threadId: "copy",
+    createdAt: new Date(10_000).toISOString(),
+    cwd: "/workspace",
+    providerProfileId: "fake",
+    modelId: "fake",
+    reasoningEffort: null,
+    sandbox: "danger-full-access" as const,
+    approvalPolicy: "never" as const,
+  };
+  const priorFork = {
+    id: "prior-fork",
+    type: "thread_forked" as const,
+    threadId: "copy",
+    createdAt: new Date(20_000).toISOString(),
+    sourceThreadId: "grandparent",
+    sourceBoundaryItemId: "old-boundary",
+    sourceTurnId: "old-turn",
+    workspace: "same-directory" as const,
+  };
+  const latestFork = {
+    ...priorFork,
+    id: "latest-fork",
+    createdAt: new Date(30_000).toISOString(),
+    sourceThreadId: "parent",
+    sourceBoundaryItemId: "latest-boundary",
+  };
+  const recovery: NativeThreadRecoverySnapshot = {
+    processEpoch: "current",
+    threadId: "copy",
+    watermark: 0,
+    events: [],
+    thread: {
+      id: "copy",
+      items: [metadata, priorFork, latestFork],
+      turns: [],
+      cwd: "/workspace",
+      providerProfileId: "fake",
+      modelId: "fake",
+      reasoningEffort: null,
+      model: "fake",
+      provider: "fake",
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+      archived: false,
+    },
+  };
+  const projected = projectNativeRecovery(recovery);
+  assert.equal(projected.forkedFromId, "parent");
+  assert.equal(projected.createdAt, 30);
+  assert.equal(projected.status.type, "idle");
+  recovery.thread.items = [metadata];
+  const original = projectNativeRecovery(recovery);
+  assert.equal(original.forkedFromId, null);
+  assert.equal(original.createdAt, 10);
+});

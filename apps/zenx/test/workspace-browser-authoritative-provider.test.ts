@@ -12,12 +12,20 @@ import { useWorkspaceBrowserProvider } from "../src/main/workspace-browser-provi
 
 test("main selects the shared browser by default and honors an explicit provider mode", () => {
   assert.equal(useWorkspaceBrowserProvider({}), true);
+  assert.equal(useWorkspaceBrowserProvider({}, "isolated"), true);
+  assert.equal(useWorkspaceBrowserProvider({}, "user-session"), false);
   assert.equal(
-    useWorkspaceBrowserProvider({ ZENX_BROWSER_MODE: "user-session" }),
+    useWorkspaceBrowserProvider(
+      { ZENX_BROWSER_MODE: "user-session" },
+      "isolated",
+    ),
     false,
   );
   assert.equal(
-    useWorkspaceBrowserProvider({ ZENX_BROWSER_MODE: "isolated" }),
+    useWorkspaceBrowserProvider(
+      { ZENX_BROWSER_MODE: "isolated" },
+      "user-session",
+    ),
     false,
   );
 });

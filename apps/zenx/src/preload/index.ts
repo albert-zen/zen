@@ -64,6 +64,7 @@ import type {
   ComputerThreadRequest,
 } from "../main/capabilities/computer-thread-observation.js";
 import type { ComputerObservationEnvelope } from "../main/computer-live-observation-ipc.js";
+import type { ChromeBridgeSettingsSnapshot } from "../main/chrome-extension-bridge.js";
 
 contextBridge.exposeInMainWorld("zenx", {
   platform: process.platform,
@@ -396,6 +397,16 @@ contextBridge.exposeInMainWorld("zenx", {
   marketplace: {
     get: async (): Promise<MarketplaceCatalogLoadSnapshot> =>
       await ipcRenderer.invoke(ipcChannels.marketplaceGet),
+  },
+  chromeBridge: {
+    get: async (): Promise<ChromeBridgeSettingsSnapshot> =>
+      await ipcRenderer.invoke(ipcChannels.chromeBridgeGet),
+    prepare: async (): Promise<ChromeBridgeSettingsSnapshot> =>
+      await ipcRenderer.invoke(ipcChannels.chromeBridgePrepare),
+    remove: async (): Promise<ChromeBridgeSettingsSnapshot> =>
+      await ipcRenderer.invoke(ipcChannels.chromeBridgeRemove),
+    openExtension: async (): Promise<void> =>
+      await ipcRenderer.invoke(ipcChannels.chromeBridgeOpenExtension),
   },
   browserObservation: {
     subscribe: (

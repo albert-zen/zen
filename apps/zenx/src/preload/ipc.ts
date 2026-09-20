@@ -73,4 +73,8 @@ export const ipcChannels = {
   computerLiveSubscribe: "zenx:computer-live:subscribe",
   computerLiveUnsubscribe: "zenx:computer-live:unsubscribe",
   computerLiveEvent: "zenx:computer-live:event",
+  chromeBridgeGet: "zenx:chrome-bridge:get",
+  chromeBridgePrepare: "zenx:chrome-bridge:prepare",
+  chromeBridgeRemove: "zenx:chrome-bridge:remove",
+  chromeBridgeOpenExtension: "zenx:chrome-bridge:open-extension",
 } as const;

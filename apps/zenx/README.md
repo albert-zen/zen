@@ -474,9 +474,27 @@ per-session/global tab caps plus explicit tab/session close tools.
 cleanup, and advances the partition generation; reopening the same `sessionId`
 therefore starts without the prior cookies or session storage. Generation state
 exists only for active/pending sessions, so logical session bookkeeping is bounded.
-User-browser attachment is a separate explicit opt-in mode. Start a supported
-Chrome, Edge, or Chromium 100+ yourself with a loopback remote-debugging port,
-open or sign into the pages you want ZenX to use, then start ZenX with:
+User-browser attachment is a separate explicit opt-in mode. In Settings →
+General → Browser, choose **Connected Chrome tab**, apply, and restart
+ZenX. Register the local connector, load the bundled unpacked extension from the
+folder shown by ZenX, open the signed-in page in ordinary Chrome, then click the
+extension action. The action grants ZenX debugger access to that one tab. Click
+it again, disable the extension, or quit ZenX to revoke the connection. The
+original page remains in Chrome; ZenX does not embed or clone it into its own
+Chromium profile.
+
+The extension declares `debugger`, `nativeMessaging`, and `activeTab`, has no
+host wildcard, and talks only to a Native Messaging manifest pinned to its
+fixed extension ID. The native host connects to an authenticated ephemeral
+loopback bridge owned by the running ZenX process. Only the explicitly attached
+tab is projected to the existing user-browser provider. Cookies, storage,
+headers, other tabs, and the rest of the Chrome profile are neither requested
+nor exported. Agent close detaches ZenX's logical session without closing the
+user tab; extension or app disconnect detaches `chrome.debugger`.
+
+For development and compatibility testing, an independently started Chrome,
+Edge, or Chromium 100+ instance may still expose an explicit loopback CDP
+endpoint:
 
 ```powershell
 $env:ZENX_BROWSER_MODE = "user-session"
@@ -484,9 +502,14 @@ $env:ZENX_USER_BROWSER_CDP_ENDPOINT = "http://127.0.0.1:9222"
 npm --workspace apps/zenx run dev
 ```
 
-Modern Chromium releases may require the user to choose an explicit non-default
-`--user-data-dir` when enabling `--remote-debugging-port=9222`; ZenX never starts
-the browser, copies cookie databases, or attempts to unlock a profile directory.
+Chrome 136+ ignores remote-debugging switches for its default data directory,
+so this endpoint route requires a separate non-default data directory and does
+not reuse the ordinary current profile. See Chrome's official
+[remote-debugging change](https://developer.chrome.com/blog/remote-debugging-port),
+[debugger API](https://developer.chrome.com/docs/extensions/reference/api/debugger),
+and [Native Messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging)
+documentation. ZenX never starts the browser, copies cookie databases, or
+attempts to unlock a profile directory.
 The endpoint must be unauthenticated loopback HTTP and must identify Chrome,
 Edge, or Chromium. Unavailable or incompatible endpoints remain terminal
 `user-browser-cdp` diagnostics and never fall back to Playwright/Electron.
@@ -542,6 +565,10 @@ User-browser CDP supports one live panel per provider at a time; opening another
 live view explicitly marks the previous observer unavailable. Playwright and
 Electron show the latest timestamped Agent inspection screenshot, labeled as
 non-live. Thread/provider changes discard old subscription events and images.
+The Attached browser panel remains an observation surface; selecting a Chrome
+tab does not turn it into an embedded WebContentsView or by itself establish
+continuous live mirroring. Use the original Chrome tab as the authoritative
+human view.
 The Browser 1.0.1 bundled package removes the global sidebar contribution; its
 legacy route explains the thread-panel entry point.
 

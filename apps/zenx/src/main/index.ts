@@ -97,10 +97,70 @@ import { BrowserLiveObservationIpcBridge } from "./browser-live-observation-ipc.
 import { ComputerLiveObservationIpcBridge } from "./computer-live-observation-ipc.js";
 import { createElectronWorkspaceBrowser } from "./workspace-browser-electron.js";
 import { useWorkspaceBrowserProvider } from "./workspace-browser-provider-policy.js";
+import {
+  ChromeExtensionBridge,
+  ZENX_CHROME_EXTENSION_ID,
+  ZENX_CHROME_EXTENSION_ORIGIN,
+} from "./chrome-extension-bridge.js";
+import {
+  chromeNativeHostFailureDiagnostic,
+  chromeNativeHostOrigin,
+  chromeNativeHostUserDataDirectory,
+  runChromeNativeHost,
+  type ChromeNativeHostStage,
+} from "./chrome-native-host.js";
+import {
+  chromeNativeHostRegistered,
+  registerChromeNativeHost,
+  unregisterChromeNativeHost,
+} from "./chrome-native-host-registration.js";
+
+const nativeHostCaller = chromeNativeHostOrigin(
+  process.argv,
+  ZENX_CHROME_EXTENSION_ORIGIN,
+);
+const nativeHostMode = nativeHostCaller !== undefined;
+if (nativeHostCaller !== undefined) {
+  void (async () => {
+    let stage: ChromeNativeHostStage = "resolve-user-data";
+    try {
+      const explicitUserDataDirectory = chromeNativeHostUserDataDirectory({
+        argv: process.argv,
+        commandLineValue:
+          app.commandLine.getSwitchValue("user-data-dir") || undefined,
+      });
+      let userDataDirectory = explicitUserDataDirectory;
+      if (userDataDirectory === undefined) {
+        stage = "electron-ready";
+        await app.whenReady();
+        stage = "default-user-data";
+        userDataDirectory = app.getPath("userData");
+      }
+      const descriptorFile = join(
+        userDataDirectory,
+        "runtime",
+        "chrome-bridge.json",
+      );
+      await runChromeNativeHost({
+        descriptorFile,
+        origin: nativeHostCaller,
+        expectedOrigin: ZENX_CHROME_EXTENSION_ORIGIN,
+        onStage: (nextStage) => {
+          stage = nextStage;
+        },
+      });
+      process.exit(0);
+    } catch (error) {
+      process.stderr.write(chromeNativeHostFailureDiagnostic(error, stage));
+      process.exit(1);
+    }
+  })();
+}
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
 let capabilityService: ZenXCapabilityService | undefined;
+let chromeExtensionBridge: ChromeExtensionBridge | undefined;
 let pluginDevControl: ZenXPluginDevControlServer | undefined;
 const workspaceBrowser = createElectronWorkspaceBrowser();
 const dirtyFileWindows = new Set<number>();
@@ -109,8 +169,9 @@ const selfControlPort = new MutableAppServerRequestPort(projectProjection);
 let titleCoordinator: ZenXThreadTitleCoordinator | undefined;
 const bootstrapFence = new ZenXBootstrapFence();
 const ownsSingleInstance =
+  !nativeHostMode &&
   secondInstanceDisposition(app.requestSingleInstanceLock()) ===
-  "own-authority";
+    "own-authority";
 const hostLifecycle = new ZenXHostLifecycle({
   platform: desktopPlatform(process.platform),
   windowCount: () => BrowserWindow.getAllWindows().length,
@@ -121,7 +182,7 @@ const hostLifecycle = new ZenXHostLifecycle({
   reportStopFailure: (error) =>
     console.error("Could not fully stop ZenX before quit", error),
 });
-if (!ownsSingleInstance) app.quit();
+if (!ownsSingleInstance && !nativeHostMode) app.quit();
 const projectWorkspaceAcceptanceEnvironment =
   process.env["ZENX_PROJECT_ACCEPTANCE_CONFIG"];
 delete process.env["ZENX_PROJECT_ACCEPTANCE_CONFIG"];
@@ -264,6 +325,23 @@ async function bootstrapZenX(): Promise<void> {
   try {
     await settingsService.initialize(process.env);
     bootstrapFence.throwIfCancelled();
+    const savedBrowserMode = (await settingsService.publicSettings()).profile
+      .browserMode;
+    const browserEnvironment: NodeJS.ProcessEnv = {
+      ...process.env,
+      ZENX_BROWSER_MODE:
+        process.env.ZENX_BROWSER_MODE ?? savedBrowserMode ?? "isolated",
+    };
+    if (
+      browserEnvironment.ZENX_BROWSER_MODE === "user-session" &&
+      !browserEnvironment.ZENX_USER_BROWSER_CDP_ENDPOINT
+    ) {
+      chromeExtensionBridge = await ChromeExtensionBridge.start({
+        runtimeDirectory: join(userDataDirectory, "runtime"),
+      });
+      browserEnvironment.ZENX_USER_BROWSER_CDP_ENDPOINT =
+        chromeExtensionBridge.endpoint;
+    }
     const selfControlPackage = new ZenXSelfControlCapabilityPackage({
       appServer: selfControlPort,
       workflows: {
@@ -280,7 +358,10 @@ async function bootstrapZenX(): Promise<void> {
         },
       },
     });
-    const useSharedWorkspaceBrowser = useWorkspaceBrowserProvider(process.env);
+    const useSharedWorkspaceBrowser = useWorkspaceBrowserProvider(
+      process.env,
+      savedBrowserMode,
+    );
     capabilityService = new ZenXCapabilityService({
       userDataDirectory,
       ...(useSharedWorkspaceBrowser
@@ -293,6 +374,15 @@ async function bootstrapZenX(): Promise<void> {
         settingsService.computerForegroundControlEnabled(),
       bundledProvidersOnly: app.isPackaged,
       resourcesDirectory,
+      providerCatalogOptions: {
+        environment: browserEnvironment,
+        ...(chromeExtensionBridge === undefined
+          ? {}
+          : {
+              userBrowserConnector: (_endpoint, signal) =>
+                chromeExtensionBridge!.connectProvider(signal),
+            }),
+      },
       pnpmCliPath: app.isPackaged
         ? undefined
         : join(__dirname, "../../../../node_modules/pnpm/bin/pnpm.cjs"),
@@ -418,6 +508,12 @@ async function bootstrapZenX(): Promise<void> {
     );
     bootstrapFence.throwIfCancelled();
     installCapabilityIpc(capabilityService, appServerManager, marketplace);
+    installChromeBridgeIpc({
+      settings: settingsService,
+      bridge: chromeExtensionBridge,
+      resourcesDirectory,
+      userDataDirectory,
+    });
     if (startupError === undefined) {
       await appServerManager.start({
         assertCanPublish: () => bootstrapFence.throwIfCancelled(),
@@ -575,20 +671,21 @@ async function bootstrapZenX(): Promise<void> {
   bootstrapFence.throwIfCancelled();
 }
 
-void app
-  .whenReady()
-  .then(async () => {
-    if (!ownsSingleInstance || bootstrapFence.cancelled) return;
-    createWindow();
-    await bootstrapFence.run(bootstrapZenX);
-  })
-  .catch((error: unknown) => {
-    console.error("ZenX bootstrap failed", error);
-    if (hostLifecycle.quitting) return;
-    bootstrapFailure = error instanceof Error ? error.message : String(error);
-    const window = BrowserWindow.getAllWindows()[0] ?? createWindow();
-    loadStartupPage(window);
-  });
+if (!nativeHostMode)
+  void app
+    .whenReady()
+    .then(async () => {
+      if (!ownsSingleInstance || bootstrapFence.cancelled) return;
+      createWindow();
+      await bootstrapFence.run(bootstrapZenX);
+    })
+    .catch((error: unknown) => {
+      console.error("ZenX bootstrap failed", error);
+      if (hostLifecycle.quitting) return;
+      bootstrapFailure = error instanceof Error ? error.message : String(error);
+      const window = BrowserWindow.getAllWindows()[0] ?? createWindow();
+      loadStartupPage(window);
+    });
 
 app.on("before-quit", (event) => {
   if (!ownsSingleInstance) return;
@@ -652,6 +749,12 @@ async function stopZenXHost(): Promise<void> {
   }
   try {
     await capabilityService?.close();
+  } catch (error) {
+    errors.push(normalizeTitleOwnershipFailure(error));
+  }
+  try {
+    await chromeExtensionBridge?.close();
+    chromeExtensionBridge = undefined;
   } catch (error) {
     errors.push(normalizeTitleOwnershipFailure(error));
   }
@@ -991,6 +1094,76 @@ function installFailedProtocolIpc(message: string): void {
   });
   ipcMain.handle(ipcChannels.respondApproval, () => {
     throw new Error(`Zen App Server is not ready: ${message}`);
+  });
+}
+
+function installChromeBridgeIpc(options: {
+  settings: ZenXSettingsService;
+  bridge?: ChromeExtensionBridge;
+  resourcesDirectory: string;
+  userDataDirectory: string;
+}): void {
+  const extensionDirectory = join(
+    options.resourcesDirectory,
+    "chrome-extension",
+  );
+  const registration = {
+    platform: process.platform,
+    homeDirectory: app.getPath("home"),
+    runtimeDirectory: join(options.userDataDirectory, "runtime"),
+    executablePath: process.execPath,
+    windowsLauncherPath: join(
+      options.resourcesDirectory,
+      "chrome-native-host",
+      "zenx-native-host.cmd",
+    ),
+  };
+  const snapshot = async () => {
+    const configuredMode =
+      (await options.settings.publicSettings()).profile.browserMode ??
+      "isolated";
+    const environmentMode = process.env.ZENX_BROWSER_MODE;
+    const effectiveMode =
+      environmentMode === "user-session" || environmentMode === "isolated"
+        ? environmentMode
+        : configuredMode;
+    return {
+      configuredMode,
+      effectiveMode,
+      environmentOverride: environmentMode !== undefined,
+      connector:
+        options.bridge !== undefined
+          ? ("chrome-extension" as const)
+          : effectiveMode === "user-session" &&
+              process.env.ZENX_USER_BROWSER_CDP_ENDPOINT
+            ? ("external-cdp" as const)
+            : ("inactive" as const),
+      packaged: app.isPackaged,
+      nativeHostRegistered: await chromeNativeHostRegistered(registration),
+      extensionDirectory,
+      extensionId: ZENX_CHROME_EXTENSION_ID,
+      connection: options.bridge?.status() ?? { state: "waiting" as const },
+    };
+  };
+  ipcMain.handle(ipcChannels.chromeBridgeGet, snapshot);
+  ipcMain.handle(ipcChannels.chromeBridgePrepare, async () => {
+    if (!app.isPackaged) {
+      throw new Error(
+        "Build the packaged ZenX app before registering its Chrome connector",
+      );
+    }
+    await registerChromeNativeHost(registration);
+    return await snapshot();
+  });
+  ipcMain.handle(ipcChannels.chromeBridgeRemove, async () => {
+    await unregisterChromeNativeHost(registration);
+    return await snapshot();
+  });
+  ipcMain.handle(ipcChannels.chromeBridgeOpenExtension, async () => {
+    const failure = await shell.openPath(extensionDirectory);
+    if (failure.length > 0) {
+      throw new Error(`Could not open the ZenX Chrome extension: ${failure}`);
+    }
   });
 }
 

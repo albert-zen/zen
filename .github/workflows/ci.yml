@@ -115,6 +115,8 @@ jobs:
           }
       - name: Package the real ZenX portable app
         run: npm --workspace apps/zenx run package:portable
+      - name: Exercise packaged Chrome native host framing
+        run: node apps/zenx/scripts/smoke-chrome-native-host.mjs
       - name: Inspect the portable app without launching it
         shell: pwsh
         run: |

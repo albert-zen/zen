@@ -265,6 +265,9 @@
   attach attempt/incarnation 关联一次瞬时 attachment ownership，并在移除任何映射前把无法证明闭合的生命周期证据
   单调提升为有界 session taint；target 只在发布点原子授予一个逻辑 session/incarnation，且每次操作与清理都重验该
   owner；它不进入 Zen Core、durable journal，也绝不取得关闭用户 target 或 profile 的权限。
+- **ZenX Chrome 当前标签桥** — 用户以 Chrome 扩展按钮显式选择一个现有标签后，固定扩展 ID 的 Native Messaging
+  Host 通过鉴权 loopback bridge 将该标签的受限 `chrome.debugger` CDP surface 适配给既有 user-browser provider；
+  连接随扩展、ZenX 或用户断开而撤销，不枚举其它 profile 标签、不复制会话材料，也不取得关闭浏览器或用户标签的权限。
 - **ZenXUserBrowserDocumentExecutionFence** — ZenX user-browser provider 把 target、精确 attachment epoch/session、逻辑
   session owner/incarnation、main-frame loader/url/revision、isolated execution context 与 provider revision 绑定为一次
   瞬时且 fail-closed 的 acquire→dispatch fence，先把 Page/Runtime domain enable 作为精确 attachment setup barrier，
