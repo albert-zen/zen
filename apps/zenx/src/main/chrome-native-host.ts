@@ -14,6 +14,14 @@ export interface ChromeBridgeDescriptor {
   nativeWebSocketUrl: string;
 }
 
+export type ChromeNativeHostStage =
+  | "resolve-user-data"
+  | "electron-ready"
+  | "default-user-data"
+  | "read-descriptor"
+  | "connect"
+  | "session";
+
 export class ChromeNativeMessageDecoder {
   #buffer = Buffer.alloc(0);
 
@@ -58,8 +66,7 @@ export function chromeNativeHostOrigin(
 export function chromeNativeHostUserDataDirectory(options: {
   argv: readonly string[];
   commandLineValue?: string;
-  fallback: string;
-}): string {
+}): string | undefined {
   const prefix = "--user-data-dir=";
   const argvValues = options.argv.flatMap((value, index, values) => {
     if (value.startsWith(prefix)) return [value.slice(prefix.length)];
@@ -67,18 +74,21 @@ export function chromeNativeHostUserDataDirectory(options: {
       ? [values[index + 1]!]
       : [];
   });
-  const candidates = [options.commandLineValue, ...argvValues].filter(
-    (value): value is string => value !== undefined && value.length > 0,
-  );
-  const distinct = [...new Set(candidates.map((value) => path.resolve(value)))];
-  if (distinct.length === 0) return options.fallback;
-  if (distinct.length !== 1 || !path.isAbsolute(distinct[0]!)) {
+  const explicit = [...new Set(argvValues.map((value) => path.resolve(value)))];
+  if (explicit.length > 1) {
     throw new Error("ZenX native host user data directory is invalid");
   }
-  return distinct[0]!;
+  if (explicit[0] !== undefined) return explicit[0];
+  return options.commandLineValue === undefined ||
+    options.commandLineValue.length === 0
+    ? undefined
+    : path.resolve(options.commandLineValue);
 }
 
-export function chromeNativeHostFailureDiagnostic(error: unknown): string {
+export function chromeNativeHostFailureDiagnostic(
+  error: unknown,
+  stage: ChromeNativeHostStage,
+): string {
   const code =
     typeof error === "object" &&
     error !== null &&
@@ -86,22 +96,25 @@ export function chromeNativeHostFailureDiagnostic(error: unknown): string {
     /^[A-Z0-9_]{1,32}$/u.test((error as { code: string }).code)
       ? ` (${(error as { code: string }).code})`
       : "";
-  return `ZenX Chrome native host failed${code}\n`;
+  return `ZenX Chrome native host failed [${stage}]${code}\n`;
 }
 
 export async function runChromeNativeHost(options: {
   descriptorFile: string;
   origin: string;
   expectedOrigin: string;
+  onStage?(stage: "read-descriptor" | "connect" | "session"): void;
   input?: NodeJS.ReadableStream;
   output?: NodeJS.WritableStream;
 }): Promise<void> {
   if (options.origin !== options.expectedOrigin) {
     throw new Error("Chrome native host caller is not the ZenX extension");
   }
+  options.onStage?.("read-descriptor");
   const descriptor = validateDescriptor(
     JSON.parse(await readFile(options.descriptorFile, "utf8")) as unknown,
   );
+  options.onStage?.("connect");
   const socket = new WebSocket(descriptor.nativeWebSocketUrl, {
     headers: { origin: options.origin },
     handshakeTimeout: 5_000,
@@ -120,6 +133,7 @@ export async function runChromeNativeHost(options: {
       reject(error instanceof Error ? error : new Error(String(error)));
     };
     socket.once("open", () => {
+      options.onStage?.("session");
       open = true;
       for (const message of queued.splice(0)) socket.send(message);
     });

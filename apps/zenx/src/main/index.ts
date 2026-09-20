@@ -107,6 +107,7 @@ import {
   chromeNativeHostOrigin,
   chromeNativeHostUserDataDirectory,
   runChromeNativeHost,
+  type ChromeNativeHostStage,
 } from "./chrome-native-host.js";
 import {
   chromeNativeHostRegistered,
@@ -121,25 +122,36 @@ const nativeHostCaller = chromeNativeHostOrigin(
 const nativeHostMode = nativeHostCaller !== undefined;
 if (nativeHostCaller !== undefined) {
   void (async () => {
+    let stage: ChromeNativeHostStage = "resolve-user-data";
     try {
-      const userDataDirectory = chromeNativeHostUserDataDirectory({
+      const explicitUserDataDirectory = chromeNativeHostUserDataDirectory({
         argv: process.argv,
         commandLineValue:
           app.commandLine.getSwitchValue("user-data-dir") || undefined,
-        fallback: app.getPath("userData"),
       });
+      let userDataDirectory = explicitUserDataDirectory;
+      if (userDataDirectory === undefined) {
+        stage = "electron-ready";
+        await app.whenReady();
+        stage = "default-user-data";
+        userDataDirectory = app.getPath("userData");
+      }
+      const descriptorFile = join(
+        userDataDirectory,
+        "runtime",
+        "chrome-bridge.json",
+      );
       await runChromeNativeHost({
-        descriptorFile: join(
-          userDataDirectory,
-          "runtime",
-          "chrome-bridge.json",
-        ),
+        descriptorFile,
         origin: nativeHostCaller,
         expectedOrigin: ZENX_CHROME_EXTENSION_ORIGIN,
+        onStage: (nextStage) => {
+          stage = nextStage;
+        },
       });
       process.exit(0);
     } catch (error) {
-      process.stderr.write(chromeNativeHostFailureDiagnostic(error));
+      process.stderr.write(chromeNativeHostFailureDiagnostic(error, stage));
       process.exit(1);
     }
   })();

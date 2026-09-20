@@ -47,7 +47,6 @@ test("native host resolves an explicit isolated user data directory without leak
   assert.equal(
     chromeNativeHostUserDataDirectory({
       argv: ["ZenX", `--user-data-dir=${isolated}`],
-      fallback: "/fallback",
     }),
     isolated,
   );
@@ -55,23 +54,30 @@ test("native host resolves an explicit isolated user data directory without leak
     chromeNativeHostUserDataDirectory({
       argv: ["ZenX"],
       commandLineValue: isolated,
-      fallback: "/fallback",
     }),
     isolated,
   );
   assert.equal(
+    chromeNativeHostUserDataDirectory({ argv: ["ZenX"] }),
+    undefined,
+  );
+  assert.equal(
     chromeNativeHostUserDataDirectory({
-      argv: ["ZenX"],
-      fallback: "/fallback",
+      argv: ["ZenX", `--user-data-dir=${isolated}`],
+      commandLineValue: path.resolve(os.tmpdir(), "normalized elsewhere"),
     }),
-    "/fallback",
+    isolated,
   );
   const diagnostic = chromeNativeHostFailureDiagnostic(
     Object.assign(new Error("ws://127.0.0.1/native/private-token"), {
       code: "ENOENT",
     }),
+    "read-descriptor",
   );
-  assert.equal(diagnostic, "ZenX Chrome native host failed (ENOENT)\n");
+  assert.equal(
+    diagnostic,
+    "ZenX Chrome native host failed [read-descriptor] (ENOENT)\n",
+  );
   assert.doesNotMatch(diagnostic, /private-token|127\.0\.0\.1/u);
 });
 
