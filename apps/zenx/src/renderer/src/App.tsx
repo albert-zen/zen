@@ -107,6 +107,7 @@ import {
   projectNativeRecovery,
 } from "./thread-view-state.js";
 import { ThreadView } from "./ThreadView.js";
+import type { WorkflowCommand } from "./workflow-commands.js";
 import { ZenXBrand } from "./ZenXBrand.js";
 
 type ProductPage = string;
@@ -390,6 +391,9 @@ export function App() {
   const [composerSendMode, setComposerSendMode] = useState<
     "queue" | "soft" | "hard"
   >("queue");
+  const [workflowCommands, setWorkflowCommands] = useState<WorkflowCommand[]>(
+    [],
+  );
   const [page, setPage] = useState<ProductPage>("agent");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -406,14 +410,24 @@ export function App() {
     void window.zenx.settings
       .get()
       .then((value) => {
-        if (active)
+        if (active) {
           setComposerSendMode(value.profile.composerSendMode ?? "queue");
+          setWorkflowCommands(value.profile.workflowCommands ?? []);
+        }
       })
       .catch(() => undefined);
     return () => {
       active = false;
     };
   }, [page]);
+  useEffect(() => {
+    const onChanged = window.zenx.settings.onChanged;
+    if (onChanged === undefined) return undefined;
+    return onChanged((value) => {
+      setComposerSendMode(value.profile.composerSendMode ?? "queue");
+      setWorkflowCommands(value.profile.workflowCommands ?? []);
+    });
+  }, []);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   const fileDrafts = useWorkspaceFileDrafts();
   const [panelTabs, setPanelTabs] = useState<Record<string, string>>({});
@@ -2117,6 +2131,7 @@ export function App() {
             threadUsage={threadUsage}
             models={models}
             providerProfiles={providerProfiles}
+            workflowCommands={workflowCommands}
             modelCatalogError={modelCatalogError}
             modelUpdateError={modelUpdateError}
             onDraftChange={(threadId, draft) =>
@@ -2494,6 +2509,7 @@ function AgentSurface({
   threadUsage,
   models,
   providerProfiles,
+  workflowCommands,
   modelCatalogError,
   modelUpdateError,
   onDraftChange,
@@ -2539,6 +2555,7 @@ function AgentSurface({
   threadUsage: ModelUsageProjection | undefined;
   models: ModelSummary[];
   providerProfiles: ZenXProviderProfile[];
+  workflowCommands: WorkflowCommand[];
   modelCatalogError: string | null;
   modelUpdateError: string | null;
   onDraftChange(threadId: string, draft: string): void;
@@ -2701,6 +2718,7 @@ function AgentSurface({
           selectedModel={draftSettings?.model}
           selectedReasoningEffort={draftSettings?.reasoningEffort}
           thread={null}
+          workflowCommands={workflowCommands}
           onDraftChange={onNewThreadDraftChange}
           onImportImages={onImportNewThreadImages}
           onPickImages={onPickNewThreadImages}
@@ -2772,6 +2790,7 @@ function AgentSurface({
             threadUsage={threadUsage}
             wakeups={[]}
             watching={false}
+            workflowCommands={workflowCommands}
             onDraftChange={(draft) => onDraftChange(threadDetail.id, draft)}
             onImportImages={(files) => onImportImages(threadDetail.id, files)}
             onPickImages={() => onPickImages(threadDetail.id)}

@@ -29,6 +29,7 @@ export const ipcChannels = {
   settingsSafeRestart: "zenx:settings:safe-restart",
   settingsReconcile: "zenx:settings:reconcile",
   settingsSave: "zenx:settings:save",
+  settingsChanged: "zenx:settings:changed",
   providerAdd: "zenx:settings:provider-add",
   providerEdit: "zenx:settings:provider-edit",
   providerDelete: "zenx:settings:provider-delete",

@@ -57,6 +57,12 @@ import {
   traceDisplayRows,
   type TurnDisplayNode,
 } from "./turn-projection.js";
+import { WorkflowCommandMenu } from "./WorkflowCommandMenu.js";
+import {
+  commandCandidates,
+  expandWorkflowCommand,
+  type WorkflowCommand,
+} from "./workflow-commands.js";
 
 interface ThreadViewProps {
   composerSendMode?: ComposerSendMode;
@@ -85,6 +91,7 @@ interface ThreadViewProps {
   threadUsage?: ModelUsageProjection;
   wakeups?: readonly TriggerHistoryEntry[];
   watching?: boolean;
+  workflowCommands?: readonly WorkflowCommand[];
   pluginSnapshot?: ZenXPluginSnapshot | null;
   pluginUiRegistry?: PluginUiRegistry | null;
   onDraftChange(draft: string): void;
@@ -132,6 +139,7 @@ export function ThreadView({
   threadUsage,
   wakeups = [],
   watching = false,
+  workflowCommands = [],
   pluginSnapshot = null,
   pluginUiRegistry = null,
   onDraftChange,
@@ -157,6 +165,10 @@ export function ThreadView({
     trigger: HTMLButtonElement;
   } | null>(null);
   const [atLive, setAtLive] = useState(true);
+  const [workflowIndex, setWorkflowIndex] = useState(0);
+  const [dismissedWorkflowInput, setDismissedWorkflowInput] = useState<
+    string | null
+  >(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const shouldFollowRef = useRef(true);
   const viewRef = useRef<HTMLDivElement>(null);
@@ -176,6 +188,23 @@ export function ThreadView({
     !compactRequested &&
     composer.draft.images.length > 0 &&
     imageCapabilityError !== null;
+  const workflowCandidates = useMemo(
+    () =>
+      dismissedWorkflowInput === composer.draft.text
+        ? []
+        : commandCandidates(composer.draft.text, workflowCommands),
+    [composer.draft.text, dismissedWorkflowInput, workflowCommands],
+  );
+
+  useEffect(() => setWorkflowIndex(0), [composer.draft.text]);
+
+  const chooseWorkflow = (index: number) => {
+    const command = workflowCandidates[index];
+    if (command === undefined) return;
+    onDraftChange(expandWorkflowCommand(composer.draft.text, command));
+    setDismissedWorkflowInput(null);
+    requestAnimationFrame(() => composerTextareaRef.current?.focus());
+  };
 
   useEffect(() => {
     const scroll = scrollRef.current;
@@ -430,6 +459,13 @@ export function ThreadView({
             primary();
           }}
         >
+          <WorkflowCommandMenu
+            activeIndex={workflowIndex}
+            candidates={workflowCandidates}
+            onChoose={(command) =>
+              chooseWorkflow(workflowCandidates.indexOf(command))
+            }
+          />
           <label className="sr-only" htmlFor="thread-composer">
             Message ZenX
           </label>
@@ -457,7 +493,10 @@ export function ThreadView({
             aria-label="Message"
             data-autogrow="true"
             disabled={composerDisabled}
-            onChange={(event) => onDraftChange(event.target.value)}
+            onChange={(event) => {
+              setDismissedWorkflowInput(null);
+              onDraftChange(event.target.value);
+            }}
             onPaste={(event) => {
               if (composerDisabled || submitting) return;
               const files = imageFiles(event.clipboardData.files);
@@ -469,6 +508,31 @@ export function ThreadView({
               );
             }}
             onKeyDown={(event) => {
+              if (
+                !event.nativeEvent.isComposing &&
+                workflowCandidates.length > 0
+              ) {
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setWorkflowIndex((current) =>
+                    event.key === "ArrowDown"
+                      ? (current + 1) % workflowCandidates.length
+                      : (current - 1 + workflowCandidates.length) %
+                        workflowCandidates.length,
+                  );
+                  return;
+                }
+                if (event.key === "Tab" || event.key === "Enter") {
+                  event.preventDefault();
+                  if (!event.repeat) chooseWorkflow(workflowIndex);
+                  return;
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setDismissedWorkflowInput(composer.draft.text);
+                  return;
+                }
+              }
               if (event.key !== "Enter" || event.shiftKey) return;
               if (event.nativeEvent.isComposing) return;
               event.preventDefault();

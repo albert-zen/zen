@@ -245,6 +245,15 @@ contextBridge.exposeInMainWorld("zenx", {
       ),
   },
   settings: {
+    onChanged: (listener: (settings: PublicHostSettings) => void) => {
+      const receive = (
+        _event: Electron.IpcRendererEvent,
+        settings: PublicHostSettings,
+      ) => listener(settings);
+      ipcRenderer.on(ipcChannels.settingsChanged, receive);
+      return () =>
+        ipcRenderer.removeListener(ipcChannels.settingsChanged, receive);
+    },
     safeRestart: async (): Promise<PublicHostSettings> =>
       ipcRenderer.invoke(ipcChannels.settingsSafeRestart),
     reconcile: async (retry: boolean): Promise<PublicHostSettings> =>

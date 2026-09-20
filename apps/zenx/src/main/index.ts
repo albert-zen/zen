@@ -241,9 +241,6 @@ async function bootstrapZenX(): Promise<void> {
   installApplicationMenu();
   let automationService: ZenXAutomationControlPort | undefined;
   let triggersPackage: ZenXTriggersCapabilityPackage | undefined;
-  const selfControlPackage = new ZenXSelfControlCapabilityPackage({
-    appServer: selfControlPort,
-  });
   const resourcesDirectory = app.isPackaged
     ? process.resourcesPath
     : join(__dirname, "../../resources");
@@ -265,6 +262,22 @@ async function bootstrapZenX(): Promise<void> {
   try {
     await settingsService.initialize(process.env);
     bootstrapFence.throwIfCancelled();
+    const selfControlPackage = new ZenXSelfControlCapabilityPackage({
+      appServer: selfControlPort,
+      workflows: {
+        workflowConfiguration: async () =>
+          await settingsService!.workflowConfiguration(),
+        saveWorkflowConfiguration: async (value) => {
+          await settingsService!.saveWorkflowConfiguration(value);
+          const publicSettings = await settingsService!.publicSettings();
+          for (const window of BrowserWindow.getAllWindows())
+            window.webContents.send(
+              ipcChannels.settingsChanged,
+              publicSettings,
+            );
+        },
+      },
+    });
     capabilityService = new ZenXCapabilityService({
       userDataDirectory,
       allowForegroundRequired:

@@ -254,6 +254,51 @@
       "interactionMode": "background_safe",
       "capabilities": ["zenx.threads.control"],
       "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_self_control_workflows_get",
+      "description": "Read the user-scoped custom Slash workflows and title-generation prompt configured in ZenX Settings.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-self-control.workspace-read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.projects.read"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_self_control_workflows_update",
+      "description": "Replace the user-scoped custom Slash workflows and optional title prompt. The built-in /compact command is reserved; omit titlePrompt or pass null to restore the default.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "baseRevision": { "type": "integer", "minimum": 0 },
+          "commands": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "description": { "type": "string" },
+                "prompt": { "type": "string" },
+                "enabled": { "type": "boolean" }
+              },
+              "required": ["name", "description", "prompt", "enabled"],
+              "additionalProperties": false
+            }
+          },
+          "titlePrompt": { "type": ["string", "null"] }
+        },
+        "required": ["commands"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-self-control.local-device-control"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.threads.control"],
+      "maxOutputBytes": 65536
     }
   ],
   "schemaVersion": 2,

@@ -167,6 +167,7 @@ declare global {
         ): Promise<ClientRequestResults["thread/start"]>;
       };
       settings: {
+        onChanged(listener: (settings: PublicHostSettings) => void): () => void;
         safeRestart(): Promise<PublicHostSettings>;
         reconcile(retry: boolean): Promise<PublicHostSettings>;
         get(): Promise<PublicHostSettings>;

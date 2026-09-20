@@ -18,6 +18,11 @@ import {
 import type { ZenXHostConfig } from "./host-messages.js";
 import { resolveProjectPath } from "./project-projection.js";
 import type { ToolPresentation } from "../../../../src/tool-presentation.js";
+import {
+  normalizeTitlePrompt,
+  normalizeWorkflowCommands,
+  type WorkflowCommand,
+} from "./workflow-configuration.js";
 
 export type ZenXProviderConnection =
   | { type: "fake"; displayName: string }
@@ -73,6 +78,10 @@ export interface ZenXHostProfile {
   maxToolRounds?: number;
   /** Omitted means Core uses its default compaction prompt. */
   contextCompaction?: ContextCompactionConfig;
+  /** User-scoped composer workflows; omitted means no custom commands. */
+  workflowCommands?: WorkflowCommand[];
+  /** Omitted means the built-in title prompt. */
+  titlePrompt?: string;
   pinnedThreadIds: string[];
   sidebarOrder: ZenXSidebarOrder;
 }
@@ -90,7 +99,13 @@ export type ZenXSettingsUpdate = Pick<
   | "composerSendMode"
   | "maxToolRounds"
   | "contextCompaction"
-> & { baseRevision?: number };
+> & {
+  baseRevision?: number;
+  workflowCommands?: WorkflowCommand[];
+  titlePrompt?: string;
+  /** Explicit because missing titlePrompt preserves older caller semantics. */
+  resetTitlePrompt?: boolean;
+};
 
 export interface ZenXProviderEditOptions {
   baseRevision?: number;
@@ -309,6 +324,8 @@ export function validateHostProfile(
   const contextCompaction = optionalContextCompactionConfig(
     value.contextCompaction,
   );
+  const workflowCommands = normalizeWorkflowCommands(value.workflowCommands);
+  const titlePrompt = normalizeTitlePrompt(value.titlePrompt);
   const workspace =
     value.workspace === null
       ? null
@@ -362,6 +379,8 @@ export function validateHostProfile(
     composerSendMode,
     ...(maxToolRounds === undefined ? {} : { maxToolRounds }),
     ...(contextCompaction === undefined ? {} : { contextCompaction }),
+    ...(workflowCommands.length === 0 ? {} : { workflowCommands }),
+    ...(titlePrompt === undefined ? {} : { titlePrompt }),
     pinnedThreadIds: normalizePinnedThreadIds(value.pinnedThreadIds),
     sidebarOrder: normalizeSidebarOrder(value.sidebarOrder),
   };
