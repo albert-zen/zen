@@ -1,5 +1,7 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
+import type { NativeThreadSummary } from "../../../../src/thread-summary.js";
+import type { Thread } from "../../src/protocol-client/index.js";
 import { App } from "../../src/renderer/src/App.js";
 import { nativeRecoveryForThread } from "../native-recovery-fixture.js";
 import { encodeModelKey } from "../../../../src/protocol/codex/model-key.js";
@@ -9,7 +11,7 @@ Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
 document.documentElement.dataset.appearance = params.get("theme") ?? "light";
 document.documentElement.dataset.platform = params.get("platform") ?? "win32";
-const options: any = {
+const options = {
   request: async (method: string) => {
     if (method === "zen/thread/resume")
       return resumed(
@@ -24,59 +26,42 @@ const zenx = {
   panels: { onOpen: () => () => undefined },
   platform: params.get("platform") ?? "win32",
   protocol: {
-    getStatus: async (): Promise<AppServerHostStatus> => ({
+    getStatus: async () => ({
       type: "ready",
       reconnected: false,
     }),
-    getPendingApprovals: async () =>
-      options.getPendingApprovals === undefined
-        ? []
-        : await options.getPendingApprovals(),
+    getPendingApprovals: async () => [],
     request: async (method: string, params?: unknown) => {
       if (method === "model/list") return { data: [model()], nextCursor: null };
-      return await options.request(method, params);
+      return await options.request(method);
     },
     respondToApproval: async () => undefined,
-    onApprovalRequest: (listener: (value: ApprovalRequestEvent) => void) =>
-      options.onApprovalRequest?.(listener) ?? (() => undefined),
-    onApprovalResolved: (listener: (value: ApprovalResolvedEvent) => void) =>
-      options.onApprovalResolved?.(listener) ?? (() => undefined),
-    onStatus: (listener: (value: AppServerHostStatus) => void) =>
-      options.onStatus?.(listener) ?? (() => undefined),
-    onNotification: (listener: NotificationListener) =>
-      options.onNotification?.(listener) ?? (() => undefined),
+    onApprovalRequest: () => () => undefined,
+    onApprovalResolved: () => () => undefined,
+    onStatus: () => () => undefined,
+    onNotification: () => () => undefined,
   },
   threads: {
     list: async ({ archived }: { archived: boolean }) =>
-      options.threads === undefined
-        ? archived
-          ? []
-          : [summary()]
-        : await options.threads(archived),
+      archived ? [] : [summary()],
   },
   imageAttachments: {
     pick: async () => [],
     import: async () => [],
     read: async () => new Uint8Array(),
-    forThread: async (threadId: string) =>
-      options.attachments === undefined
-        ? {}
-        : await options.attachments(threadId),
+    forThread: async () => ({}),
   },
   modelUsage: {
-    forThread: async (threadId: string) =>
-      options.usage === undefined
-        ? {
-            thread: { responseCount: 0, inputTokens: 0, outputTokens: 0 },
-            turns: {},
-            context: {
-              inputTokens: null,
-              inputTokenSource: null,
-              contextWindow: null,
-              ratio: null,
-            },
-          }
-        : await options.usage(threadId),
+    forThread: async () => ({
+      thread: { responseCount: 0, inputTokens: 0, outputTokens: 0 },
+      turns: {},
+      context: {
+        inputTokens: null,
+        inputTokenSource: null,
+        contextWindow: null,
+        ratio: null,
+      },
+    }),
   },
   projects: {
     get: async () => ({
@@ -234,67 +219,6 @@ function threadWithMessage(text: string): Thread {
         ],
       },
     ],
-  };
-}
-
-function streamingThread(): Thread {
-  return {
-    ...thread("thread-1"),
-    status: { type: "active", activeFlags: [] },
-    turns: [
-      {
-        ...runningTurn(),
-        items: [
-          {
-            id: "streamed-item",
-            type: "agentMessage",
-            text: "Initial stream continues while away",
-            phase: "final_answer",
-            memoryCitation: null,
-          },
-        ],
-      },
-    ],
-  };
-}
-
-function threadWithAgentMessage(
-  threadId: string,
-  text: string,
-  active: boolean,
-): Thread {
-  return {
-    ...thread(threadId),
-    status: active ? { type: "active", activeFlags: [] } : { type: "idle" },
-    turns: [
-      {
-        ...runningTurn(),
-        status: active ? "inProgress" : "completed",
-        completedAt: active ? null : 20,
-        durationMs: active ? null : 10,
-        items: [
-          {
-            id: "background-agent",
-            type: "agentMessage",
-            text,
-            phase: "final_answer",
-            memoryCitation: null,
-          },
-        ],
-      },
-    ],
-  };
-}
-
-function nativeEvent(
-  watermark: number,
-  event: ServerNotificationParams["zen/thread/event"]["event"],
-): ServerNotificationParams["zen/thread/event"] {
-  return {
-    processEpoch: "test-process-epoch",
-    threadId: "thread-1",
-    watermark,
-    event,
   };
 }
 
