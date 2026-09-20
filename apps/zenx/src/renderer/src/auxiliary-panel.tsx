@@ -59,6 +59,7 @@ export function AuxiliaryPanel({
   };
   return (
     <aside
+      id="thread-workspace-panel"
       className="auxiliary-panel"
       data-open={open === true}
       data-expanded={expanded}
@@ -154,7 +155,7 @@ export function AuxiliaryPanel({
           aria-pressed={expanded}
           onClick={() => setExpanded((value) => !value)}
         >
-          <Icon name="layers" />
+          <Icon name={expanded ? "compress" : "expand"} />
         </button>
         <button
           className="icon-button"

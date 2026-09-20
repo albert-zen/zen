@@ -1,3 +1,4 @@
+import { toolPresentation } from "./tool-presentation.js";
 import { isCompactCommand } from "./compact-command.js";
 import { createPortal } from "react-dom";
 import {
@@ -1012,15 +1013,17 @@ function TraceItemHeader({
   return (
     <>
       <Icon
-        name={item.type === "reasoning" ? "reasoning" : "terminal"}
+        name={
+          item.type === "reasoning"
+            ? "reasoning"
+            : toolPresentation(item.toolName ?? item.command).icon
+        }
         size={14}
       />
       <strong>
         {item.type === "reasoning"
           ? "Think"
-          : item.toolName === "run_code"
-            ? "Code"
-            : "Tool"}
+          : toolPresentation(item.toolName ?? item.command).category}
       </strong>
       <span>{traceItemLabel(item)}</span>
       <span className="trace-item-status">
@@ -1361,7 +1364,8 @@ function traceItemLabel(item: ThreadItem): string {
     ? item.toolName === "run_code" &&
       typeof item.toolArguments?.description === "string"
       ? item.toolArguments.description
-      : commandLabel(item.toolName ?? item.command)
+      : (toolPresentation(item.toolName ?? item.command).action ??
+        commandLabel(item.toolName ?? item.command))
     : "Item details";
 }
 

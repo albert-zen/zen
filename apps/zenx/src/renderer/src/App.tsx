@@ -415,7 +415,6 @@ export function App() {
     };
   }, [page]);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
-  const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const fileDrafts = useWorkspaceFileDrafts();
   const [panelTabs, setPanelTabs] = useState<Record<string, string>>({});
   useEffect(
@@ -733,7 +732,6 @@ export function App() {
     if (!preserveNavigation) {
       setPage("agent");
       setSidebarOpen(false);
-      setWorkspaceOpen(false);
     }
     setSelectedThreadId(threadId);
     setThreadDetail(cached?.thread ?? null);
@@ -1093,12 +1091,11 @@ export function App() {
     const close = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (projectPickerIntent !== null) closeProjectPicker();
-      else if (workspaceOpen) setWorkspaceOpen(false);
       else if (sidebarOpen) setSidebarOpen(false);
     };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
-  }, [projectPickerIntent, sidebarOpen, workspaceOpen]);
+  }, [projectPickerIntent, sidebarOpen]);
 
   const activeSummaries = threadSummaries.map((summary) =>
     titleSnapshot[summary.threadId]?.title === undefined
@@ -1147,7 +1144,6 @@ export function App() {
     selectedThreadIdRef.current = null;
     setPage("agent");
     setSidebarOpen(false);
-    setWorkspaceOpen(false);
     setSelectedThreadId(null);
     setThreadDetail(null);
     setThreadLoading(false);
@@ -1760,7 +1756,6 @@ export function App() {
     if (next !== "agent") abandonNewThreadDraft();
     setPage(next);
     setSidebarOpen(false);
-    setWorkspaceOpen(false);
   };
 
   useEffect(() => {
@@ -1922,7 +1917,6 @@ export function App() {
         selectedSummary !== null ? (
           <ConversationTitleBar
             onOpenSidebar={() => setSidebarOpen(true)}
-            onOpenWorkspace={() => setWorkspaceOpen(true)}
             browserEnabled={true}
             browserOpen={browserPanels[selectedSummary.threadId] === true}
             onToggleBrowser={() =>
@@ -2071,7 +2065,6 @@ export function App() {
                 setThreadUsage(undefined);
                 setSelectedSettings(null);
                 setThreadError(null);
-                setWorkspaceOpen(false);
                 confirmNewThreadDraft(draftRecoveryNotice.draft);
                 discardRecoverableDraft();
               }}
@@ -2282,13 +2275,6 @@ export function App() {
         ) : null}
       </main>
 
-      {workspaceOpen && threadDetail !== null ? (
-        <WorkspaceDrawer
-          onClose={() => setWorkspaceOpen(false)}
-          settings={selectedSettings}
-          thread={threadDetail}
-        />
-      ) : null}
       {editingProject !== null ? (
         <ProjectEditor
           workspace={editingProject.workspace}
@@ -2405,7 +2391,6 @@ function ConversationTitleBar({
   browserOpen,
   onToggleBrowser,
   onOpenSidebar,
-  onOpenWorkspace,
   onRename,
   onRetryTitle,
   selectedSummary,
@@ -2416,7 +2401,6 @@ function ConversationTitleBar({
   browserOpen: boolean;
   onToggleBrowser(): void;
   onOpenSidebar(): void;
-  onOpenWorkspace(): void;
   onRename(title: string): Promise<void>;
   onRetryTitle(): Promise<void>;
   selectedSummary: NativeThreadSummary;
@@ -2456,24 +2440,15 @@ function ConversationTitleBar({
             className="icon-button"
             type="button"
             aria-label={browserOpen ? "Close side panel" : "Open side panel"}
-            title="Browser, files and plugin panels"
+            title="Workspace"
+            aria-controls="thread-workspace-panel"
             aria-expanded={browserOpen}
             disabled={threadDetail === null}
             onClick={onToggleBrowser}
           >
-            <Icon name="layers" />
+            <Icon name="panel-right" />
           </button>
         ) : null}
-        <button
-          className="icon-button"
-          type="button"
-          aria-label="Open workspace panel"
-          aria-haspopup="dialog"
-          disabled={threadDetail === null}
-          onClick={onOpenWorkspace}
-        >
-          <Icon name="panel-right" />
-        </button>
       </div>
     </div>
   );
@@ -3141,133 +3116,6 @@ function NewThreadProjectContext({
     >
       <Icon name="folder" size={13} />
       <span>{selectedLabel}</span>
-    </div>
-  );
-}
-
-function WorkspaceDrawer({
-  onClose,
-  settings,
-  thread,
-}: {
-  onClose(): void;
-  settings: SelectedThreadSettings | null;
-  thread: Thread;
-}) {
-  const [tab, setTab] = useState<"files" | "artifacts" | "context">("files");
-  const closeRef = useRef<HTMLButtonElement>(null);
-  const previousFocus = useRef<HTMLElement | null>(null);
-  useEffect(() => {
-    previousFocus.current = document.activeElement as HTMLElement | null;
-    closeRef.current?.focus();
-    return () => previousFocus.current?.focus();
-  }, []);
-  const commands = thread.turns.flatMap((turn) =>
-    turn.items.filter(
-      (
-        item,
-      ): item is Extract<
-        (typeof turn.items)[number],
-        { type: "commandExecution" }
-      > => item.type === "commandExecution",
-    ),
-  );
-  return (
-    <div
-      className="drawer-layer"
-      role="presentation"
-      onPointerDown={(event) =>
-        event.target === event.currentTarget && onClose()
-      }
-    >
-      <aside
-        className="workspace-drawer"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="workspace-drawer-title"
-      >
-        <header>
-          <div>
-            <strong id="workspace-drawer-title">Workspace</strong>
-            <span>Linked context for this Thread</span>
-          </div>
-          <button
-            ref={closeRef}
-            className="icon-button"
-            type="button"
-            aria-label="Close workspace"
-            onClick={onClose}
-          >
-            <Icon name="x" />
-          </button>
-        </header>
-        <div
-          className="drawer-tabs"
-          role="tablist"
-          aria-label="Workspace views"
-        >
-          {(["files", "artifacts", "context"] as const).map((name) => (
-            <button
-              key={name}
-              type="button"
-              role="tab"
-              aria-selected={tab === name}
-              onClick={() => setTab(name)}
-            >
-              {name[0]!.toUpperCase() + name.slice(1)}
-            </button>
-          ))}
-        </div>
-        <div className="drawer-content">
-          {tab === "files" ? (
-            <>
-              <p>
-                Files explicitly represented by this Thread’s current product
-                projection.
-              </p>
-              <div className="drawer-row">
-                <Icon name="folder" />
-                <div>
-                  <strong>{thread.cwd}</strong>
-                  <span>Thread workspace</span>
-                </div>
-              </div>
-              <p className="drawer-empty">
-                No file-reference Items are available for this Thread.
-              </p>
-            </>
-          ) : tab === "artifacts" ? (
-            <p className="drawer-empty">No live artifacts are available.</p>
-          ) : (
-            <>
-              <div className="drawer-row">
-                <Icon name="folder" />
-                <div>
-                  <strong>{thread.cwd}</strong>
-                  <span>Current workspace</span>
-                </div>
-              </div>
-              <div className="drawer-row">
-                <Icon name="layers" />
-                <div>
-                  <strong>{settings?.model ?? thread.modelProvider}</strong>
-                  <span>Effective Thread model</span>
-                </div>
-              </div>
-              <div className="drawer-row">
-                <Icon name="terminal" />
-                <div>
-                  <strong>
-                    {commands.length} tool{" "}
-                    {commands.length === 1 ? "call" : "calls"}
-                  </strong>
-                  <span>From canonical Thread Items</span>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-      </aside>
     </div>
   );
 }

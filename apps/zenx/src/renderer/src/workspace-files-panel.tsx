@@ -178,7 +178,7 @@ export function WorkspaceFilesPanel({
         }
       }}
     >
-      <nav className="file-breadcrumbs" aria-label="File path">
+      <nav className="file-breadcrumbs" aria-label="File path" hidden={!!file}>
         <button type="button" title={workspacePath} onClick={() => browse(".")}>
           {workspacePath?.split(/[\\/]/).filter(Boolean).at(-1) ?? "Workspace"}
         </button>
@@ -197,6 +197,7 @@ export function WorkspaceFilesPanel({
         ))}
       </nav>
       <form
+        hidden={!!file}
         className="file-path-form"
         onSubmit={(event) => {
           event.preventDefault();
@@ -250,7 +251,7 @@ export function WorkspaceFilesPanel({
                 title={draft.base.path}
                 onClick={() => void read(draft.base.path)}
               >
-                {draft.base.path}
+                {draft.base.path.split("/").at(-1)}
                 {isFileDirty(draft) ? " •" : ""}
               </button>
               <button
@@ -281,9 +282,7 @@ export function WorkspaceFilesPanel({
         >
           {file ? "Files" : "Up"}
         </button>
-        <span title={filePath ?? directory}>
-          {filePath?.split("/").at(-1) ?? directory}
-        </span>
+        <span title={filePath ?? directory}>{file ? null : directory}</span>
         {file ? (
           <>
             <button
@@ -291,7 +290,7 @@ export function WorkspaceFilesPanel({
               aria-pressed={source}
               onClick={() => setSource((value) => !value)}
             >
-              {source ? "Preview" : markdown ? "Source" : "Edit"}
+              {source ? "Preview" : "Edit"}
             </button>
             <button
               type="button"

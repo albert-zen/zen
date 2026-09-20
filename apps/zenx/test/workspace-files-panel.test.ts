@@ -91,7 +91,7 @@ test("file editor saves, previews drafts, keeps edits across panels, and handles
     );
     await render("a");
     await click("README.md");
-    await click("Source");
+    await click("Edit");
     await edit("# My draft\n");
     assert.equal(drafts.hasUnsaved(), true);
     await click("Preview");

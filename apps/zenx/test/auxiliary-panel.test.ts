@@ -114,7 +114,7 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
     assert.equal(document.querySelector(".file-content script"), null);
     await act(async () =>
       [...document.querySelectorAll<HTMLButtonElement>(".file-toolbar button")]
-        .find((e) => e.textContent === "Source")!
+        .find((e) => e.textContent === "Edit")!
         .click(),
     );
     assert.ok(
