@@ -849,6 +849,8 @@ import {
   listWorkspaceFiles,
   readWorkspaceFile,
   saveWorkspaceFile,
+  searchWorkspaceFiles,
+  validateWorkspaceFileReference,
 } from "./workspace-files.js";
 
 function installProtocolIpc(
@@ -860,6 +862,11 @@ function installProtocolIpc(
   for (const [channel, read] of [
     [ipcChannels.workspaceFilesList, listWorkspaceFiles],
     [ipcChannels.workspaceFilesRead, readWorkspaceFile],
+    [ipcChannels.workspaceFilesSearch, searchWorkspaceFiles],
+    [
+      ipcChannels.workspaceFilesValidateReference,
+      validateWorkspaceFileReference,
+    ],
   ] as const) {
     ipcMain.handle(
       channel,

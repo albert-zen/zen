@@ -6022,40 +6022,131 @@ a:focus-visible {
 /* User-configured Slash workflows */
 .workflow-command-menu {
   position: absolute;
-  right: 12px;
+  right: 8px;
   bottom: calc(100% + 8px);
-  left: 12px;
+  left: 8px;
   z-index: 8;
-  display: grid;
-  max-height: min(280px, 42vh);
-  overflow: auto;
-  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  height: min(360px, 45vh);
+  max-height: min(360px, 45vh);
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--surface-raised);
   box-shadow: 0 16px 42px var(--shadow-color-strong);
+  color: var(--color-text-primary);
 }
-
-.workflow-command-menu > button {
-  display: grid;
-  grid-template-columns: minmax(110px, auto) 1fr auto;
-  gap: 12px;
+.selector-heading {
+  display: flex;
   align-items: center;
-  padding: 9px 10px;
+  gap: 8px;
+  padding: 12px 14px 8px;
+}
+.selector-heading strong {
+  font-size: 13px;
+  flex: 1;
+}
+.selector-heading > span {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+.selector-results {
+  min-height: 72px;
+  flex: 1;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 0 6px 6px;
+  scroll-padding: 6px;
+}
+.selector-group {
+  padding: 10px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+.selector-option {
+  width: 100%;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   border: 0;
-  border-radius: 9px;
-  color: inherit;
+  border-radius: 8px;
+  padding: 8px 10px;
   text-align: left;
   background: transparent;
+  color: inherit;
+  cursor: pointer;
 }
-
-.workflow-command-menu > button:is(:hover, .is-active) {
+.selector-option.is-active {
   background: var(--surface-hover);
 }
-
-.workflow-command-menu span,
-.workflow-command-menu small {
+.selector-option:focus-visible {
+  outline: 2px solid var(--color-text-secondary);
+  outline-offset: -2px;
+}
+.selector-icon {
+  align-self: flex-start;
+  margin-top: 3px;
   color: var(--color-text-secondary);
+}
+.selector-copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+.selector-copy strong {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.selector-copy > span {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.selector-copy small {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.selector-enter {
+  color: var(--color-text-secondary);
+}
+.selector-status {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+  max-height: 80px;
+  overflow: auto;
+}
+.selector-error {
+  color: var(--color-status-danger);
+}
+.workflow-command-menu footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding: 9px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.workflow-command-menu kbd {
+  font: inherit;
+  padding: 1px 3px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
 }
 
 .workflow-command-editors {
@@ -7962,4 +8053,54 @@ a:focus-visible {
 .auxiliary-panel:has(.workspace-browser-panel) {
   translate: none;
   transition: none;
+}
+
+.composer-references {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px;
+}
+.composer-skill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 4px 7px;
+  background: var(--surface-hover);
+  font-size: 12px;
+}
+.composer-skill > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-skill > button {
+  display: grid;
+  place-items: center;
+  padding: 3px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.composer-skill > button:focus-visible {
+  outline: 2px solid currentColor;
+}
+
+.selector-group {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+.selector-group > span {
+  min-width: 0;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
 }

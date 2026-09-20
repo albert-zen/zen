@@ -10,6 +10,8 @@ export const ipcChannels = {
   workspaceFilesSave: "zenx:workspace-files:save",
   workspaceFilesList: "zenx:workspace-files:list",
   workspaceFilesRead: "zenx:workspace-files:read",
+  workspaceFilesSearch: "zenx:workspace-files:search",
+  workspaceFilesValidateReference: "zenx:workspace-files:validate-reference",
   pluginPanelOpen: "zenx:plugins:panel-open",
   getStatus: "zenx:app-server:get-status",
   getPendingApprovals: "zenx:protocol:get-pending-approvals",
