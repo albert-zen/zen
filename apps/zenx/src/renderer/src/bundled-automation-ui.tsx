@@ -438,10 +438,7 @@ function ThreadPicker({
       </label>
       <label className="field">
         <span>{label}</span>
-        <Select
-          value={value}
-          onValueChange={onChange}
-        >
+        <Select value={value} onValueChange={onChange}>
           <option value="">Choose a Thread</option>
           {visible.map((thread) => (
             <option key={thread.threadId} value={thread.threadId}>
