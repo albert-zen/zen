@@ -2181,6 +2181,17 @@ export function App() {
             newThreadDraft={newThreadDraft}
             threadAttachments={threadAttachments}
             threadUsage={threadUsage}
+            onInspectContext={() => {
+              if (!threadDetail) return;
+              setPanelTabs((current) => ({
+                ...current,
+                [threadDetail.id]: "context",
+              }));
+              setBrowserPanels((current) => ({
+                ...current,
+                [threadDetail.id]: true,
+              }));
+            }}
             models={models}
             providerProfiles={providerProfiles}
             workflowCommands={workflowCommands}
@@ -2315,6 +2326,7 @@ export function App() {
         threadDetail !== null &&
         selectedThreadId === threadDetail.id ? (
           <AuxiliaryPanel
+            contextUsage={threadUsage}
             onWidthChange={setWorkspacePanelWidth}
             fileDrafts={fileDrafts}
             workspacePath={threadDetail.cwd}
@@ -2588,6 +2600,7 @@ function AgentSurface({
   newThreadDraft,
   threadAttachments,
   threadUsage,
+  onInspectContext,
   models,
   providerProfiles,
   workflowCommands,
@@ -2635,6 +2648,7 @@ function AgentSurface({
   newThreadDraft: NewThreadDraft | null;
   threadAttachments: ZenXThreadAttachmentProjection;
   threadUsage: ModelUsageProjection | undefined;
+  onInspectContext(): void;
   models: ModelSummary[];
   providerProfiles: ZenXProviderProfile[];
   workflowCommands: WorkflowCommand[];
@@ -2871,6 +2885,7 @@ function AgentSurface({
             pluginUiRegistry={pluginUiRegistry}
             threadAttachments={threadAttachments}
             threadUsage={threadUsage}
+            onInspectContext={onInspectContext}
             wakeups={[]}
             watching={false}
             workflowCommands={workflowCommands}

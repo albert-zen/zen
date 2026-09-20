@@ -1,3 +1,7 @@
+import {
+  isContextInspection,
+  type ContextInspection,
+} from "./context-inspection.js";
 import type { CanonicalItem, ModelUsageItem, UserInput } from "./item.js";
 import type { ModelMessage } from "./model.js";
 
@@ -12,6 +16,7 @@ export interface ModelUsageAggregate {
 }
 
 export interface ModelUsageProjection {
+  inspection?: ContextInspection;
   thread: ModelUsageAggregate;
   turns: Readonly<Record<string, ModelUsageAggregate>>;
   context: ModelContextUsageProjection;
@@ -84,7 +89,8 @@ export function isModelUsageProjection(
     !isRecord(value) ||
     !isAggregate(value.thread) ||
     !isRecord(value.turns) ||
-    !isContextProjection(value.context)
+    !isContextProjection(value.context) ||
+    (value.inspection !== undefined && !isContextInspection(value.inspection))
   )
     return false;
   return Object.values(value.turns).every(isAggregate);

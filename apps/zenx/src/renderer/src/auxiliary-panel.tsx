@@ -1,3 +1,5 @@
+import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
+import { ContextInspector } from "./context-inspector.js";
 import React, {
   useEffect,
   useLayoutEffect,
@@ -29,6 +31,7 @@ interface ContentTab {
   browser?: WorkspaceBrowserTab;
 }
 export function AuxiliaryPanel({
+  contextUsage,
   threadId,
   title,
   open,
@@ -42,6 +45,7 @@ export function AuxiliaryPanel({
   onTabsChange,
   onWidthChange,
 }: {
+  contextUsage?: ModelUsageProjection;
   onWidthChange?(width: number): void;
   fileDrafts?: WorkspaceFileDrafts;
   workspacePath?: string;
@@ -64,6 +68,10 @@ export function AuxiliaryPanel({
   const theme = useAppearance();
   const [width, setWidth] = useState(520);
   const panel = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (open && selectedTab === "context")
+      document.getElementById("aux-tab-context")?.focus();
+  }, [open, selectedTab]);
   useLayoutEffect(() => {
     if (!panel.current || !onWidthChange) return;
     const measure = () =>
@@ -109,6 +117,9 @@ export function AuxiliaryPanel({
     ([key]) => JSON.parse(key)[0] === threadId,
   );
   const candidates: ContentTab[] = [
+    ...(contextUsage?.inspection
+      ? [{ id: "context", title: "Context", icon: "layers" as const }]
+      : []),
     ...files.map(([, draft]) => ({
       id: `file:${draft.base.path}`,
       title: draft.base.path.split("/").at(-1)!,
@@ -546,6 +557,12 @@ export function AuxiliaryPanel({
                   <span>Attached browser</span>
                 </button>
               ) : null}
+              {contextUsage?.inspection ? (
+                <button type="button" onClick={() => void add("context")}>
+                  <Icon name="layers" />
+                  <span>Context · experiment</span>
+                </button>
+              ) : null}
               {panels.map((panel) => (
                 <button
                   type="button"
@@ -572,6 +589,9 @@ export function AuxiliaryPanel({
             aria-labelledby={`aux-tab-${tab.id}`}
             hidden={!visible}
           >
+            {tab.id === "context" && contextUsage?.inspection ? (
+              <ContextInspector usage={contextUsage} />
+            ) : null}
             {tab.path ? (
               <WorkspaceFilesPanel
                 threadId={threadId}
