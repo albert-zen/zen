@@ -456,15 +456,18 @@ fails; it never silently retries against a new Turn. Duplicate committed message
 are recognized from canonical history; only pending calls share an in-memory
 promise. There is no command ledger or new wait system.
 
-`zenx_threads_read` returns canonical original Items through the native-only,
+`zenx_threads_read` returns public Item projections derived from the native-only,
 non-subscribing `zen/thread/read` snapshot. `granularity` selects recent `turns`,
 `items`, `agent_messages`, or one `item` by `itemId`. The first three return latest
 pages in chronological order and `nextCursor` for older pages; optional `turnId`
 filters item/message pages. Cursor bindings include the Thread, granularity,
 filters and immutable Item boundary, so later appends do not move the read window.
 Previews identify truncation and include a `read` request. Single-item reads return
-8,000-character chunks of canonical JSON: concatenate `content` using `nextCursor`
-and parse once complete. This preserves every stored field, including tool output;
+8,000-character chunks of `public_item_json`: concatenate `content` using `nextCursor`
+and parse once complete. Every preview and chunk recursively projects structured
+opaque values to identity fields and their public summary; private bodies and
+provider payloads are omitted. Public reasoning and original tool output strings
+are preserved. Canonical journals and trusted native reads/recovery remain complete;
 existing output-spool receipts still describe their original storage limits.
 Turn pages cap their total preview count at 100 and report the effective per-Turn
 limit. There are no generated summaries. List cursors bind filters and ordering;

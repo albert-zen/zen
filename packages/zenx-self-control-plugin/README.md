@@ -18,7 +18,10 @@ preference. The application owns IDs, retry deduplication and exact-Turn checks.
 Read original history with `zenx_threads_read`: turns (default), items,
 agent_messages, or item. Item/message pages optionally take turnId. Follow nextCursor
 for older pages with unchanged filters. Each excerpt has a read request; item reads
-return canonical JSON content in chunks, with offset, totalLength and nextCursor.
+return public Item JSON (`public_item_json`) in chunks, with offset, totalLength and nextCursor.
+All previews and continuations recursively expose only identity fields and public
+summary for structured opaque values. Public reasoning and original tool output
+strings are preserved; canonical journals and trusted native reads/recovery remain complete.
 Concatenate content and parse when complete. Cursors freeze the Item boundary and
 no automatic summary replaces the original text. Completion notifications belong
 to Triggers, not a self-control wait API.

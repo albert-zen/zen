@@ -278,7 +278,7 @@ const manifest: ZenXPluginManifestV2 = {
     {
       name: "zenx_threads_read",
       description:
-        "Read original canonical history. Default: latest turns; cursor reads older pages. Choose items or agent_messages, optionally within turnId. Choose item plus itemId for complete canonical JSON chunks; concatenate content using nextCursor. Previews are excerpts, never summaries.",
+        "Read public Item projections of history. Default: latest turns; cursor reads older pages. Choose items or agent_messages, optionally within turnId. Choose item plus itemId for public_item_json chunks; concatenate content using nextCursor. Structured opaque values expose only identity and public summary at every depth. Public reasoning and tool output text are preserved. Previews are excerpts, never generated summaries.",
       inputSchema: {
         type: "object",
         properties: {
