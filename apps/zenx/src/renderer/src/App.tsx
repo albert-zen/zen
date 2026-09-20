@@ -1,3 +1,4 @@
+import { Activity } from "react";
 import {
   handleCompactCommand,
   isCompactCommand,
@@ -2152,7 +2153,7 @@ export function App() {
       ) : null}
 
       <main className="workspace">
-        {page === "settings" ? (
+        <Activity mode={page === "settings" ? "visible" : "hidden"}>
           <SettingsView
             archivedError={threadListErrors.archived}
             archivedLoading={!threadListLoaded.archived}
@@ -2165,7 +2166,9 @@ export function App() {
             pluginSnapshot={pluginSnapshot}
             showHeader={false}
           />
-        ) : genericPluginTarget !== undefined && pluginSnapshot !== null ? (
+        </Activity>
+        {page === "settings" ? null : genericPluginTarget !== undefined &&
+          pluginSnapshot !== null ? (
           <PluginProductPage
             snapshot={pluginSnapshot}
             route={page}
@@ -2435,6 +2438,9 @@ function WindowTitleBar({
             onClick={onToggleInbox}
           >
             <Icon name="inbox" />
+            <span className="inbox-label">
+              {mode === "inbox" ? "Projects" : "Inbox"}
+            </span>
             {pendingApprovalCount > 0 ? (
               <span className="inbox-dot" aria-hidden="true" />
             ) : null}

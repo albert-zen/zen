@@ -1,6 +1,6 @@
 # ZenX UI/UX decisions
 
-更新日期：2026-09-01
+更新日期：2026-09-20
 
 New thread 打开临时本地编辑页；选择或添加 Project 不创建 Thread，第一条有效 Send 才配置所选 Project、创建真实 Thread，并在 Sidebar、usage 等辅助元数据独立刷新时立即启动 Turn。全局入口使用最近 Project，Project 内入口使用该精确 Project；失败以明确、可恢复且不遮盖会话的通知呈现。
 
@@ -73,7 +73,7 @@ Thread
 
 ### 2.4 Provider 与模型身份
 
-- Thread row 只显示 **Provider logo + model name**。
+- Thread row 以完整标题为第一层，第二层仅显示运行或待审批状态；Provider/model 降为标题 tooltip，当前生成配置仍在 Composer 中可见。
 - 预设 Provider 使用随 ZenX 分发的本地正式品牌 asset；未知 Provider 使用克制的 generic fallback。
 - Thread row 不显示 Provider 文本、内部 `modelProvider`、API/订阅标签或 Fake 品牌。
 - Provider 类型、账户、订阅状态、API key 和 endpoint 配置只在 Settings / onboarding 中出现，不进入 Thread 或 canonical Items。
@@ -99,11 +99,11 @@ Thread
 - 默认桌面 Agent 页面是 **Thread Sidebar + Chat** 两栏。
 - Inbox 是品牌区的 icon-only 模式切换，不是 Projects / Inbox segmented control。Inbox 中每个 Thread 必须明确显示 Project 归属。
 - Sidebar 的 Thread 列表只展示 active Threads。Archived Threads 的查看与 Unarchive 统一位于 Settings，不在 Sidebar 提供 Active / Archived switch。
-- 已确认的 Sidebar anchors 是品牌区与 Inbox、Projects/active Threads，以及左下 Settings。可选 Plugin spaces 位于完整的 Projects group 之前，不能插入 Projects header 与 Project/Thread list 之间。
+- 已确认的 Sidebar anchors 是品牌区与 Inbox、Projects/active Threads，以及左下 Settings。插件功能入口与内建功能平级，位于完整的 Projects group 之前，不能插入 Projects header 与 Project/Thread list 之间。
 - **Settings** 是左下常规导航 row，不是浮动齿轮 tile。
-- 插件只能使用受控 Plugin spaces contribution slot；它们不能重排、隐藏或覆写 Inbox、New thread、Projects/Threads 或 Settings。
+- 插件只能使用受控导航 contribution slot；它们不能重排、隐藏或覆写 Inbox、New thread、Projects/Threads 或 Settings。
 
-New thread 可保留独立 row；它相对 Plugin spaces / Projects 的精确视觉顺序仍可继续迭代，但全局入口与 Project 内入口的选择和创建语义已经确定。
+New thread 可保留独立 row；它相对 插件入口 / Projects 的精确视觉顺序仍可继续迭代，但全局入口与 Project 内入口的选择和创建语义已经确定。
 
 ### 3.3 Project 与 Thread 创建
 
@@ -138,7 +138,7 @@ New thread 可保留独立 row；它相对 Plugin spaces / Projects 的精确视
 - Project 按标题上下半区判断 before/after，插入线画在整个 Project group 的前/后边界；展开的线程数量不影响标题命中。Thread 按自身行的上下半区判断，插入线画在对应行边界。两层复用主题 accent 的亮线，线程排序期间列表位置保持稳定，松手后才保存顺序；离开目标、取消或结束拖动立即清除提示。
 - Project 在相同置顶状态的项目间排序；跨置顶分区不显示可投放提示、不产生 mutation。Thread 只接受同一 owning Project 内的 drop，不改变 cwd、selection、Pin、active Turn、menu、disclosure 或 archive semantics。
 - 拖动项目时暂时隐藏其子列表，保持组件实例与保存的展开偏好，结束或取消后恢复；标题的 aria-expanded 同步临时视觉状态。拖动线程不折叠 Project。
-- 拖动来源变淡，项目预览保留文件夹图标；线程预览复用原行的标题及厂商图标/模型名称两行样式，不添加线程图标，保留来源行尺寸及鼠标抓取坐标，避免拖起时跳到光标右侧；长标题省略。指针靠近 Sidebar 滚动区上/下边缘时按接近程度连续滚动，移回中央或移出区域停止。drop、dragend、Escape、失焦与卸载统一释放临时状态和滚动动画。
+- 拖动来源变淡，项目预览保留文件夹图标；线程预览复用原行的标题与当前状态样式，不添加线程图标，保留来源行尺寸及鼠标抓取坐标，避免拖起时跳到光标右侧；长标题省略。指针靠近 Sidebar 滚动区上/下边缘时按接近程度连续滚动，移回中央或移出区域停止。drop、dragend、Escape、失焦与卸载统一释放临时状态和滚动动画。
 - 当前不新增菜单上移/下移（用户明确低优先级）；保留既有键盘排序。
 - 聚焦 Project 标题或 Thread row 后可用 Alt+Arrow Up / Alt+Arrow Down 等价移动；完成或保存失败后，焦点返回同一对象。键盘与 pointer 路径使用同一 Settings mutation 与 reconciliation 规则。
 
@@ -240,7 +240,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 
 ### 4.6 Settings 与 onboarding
 
-- Settings 是由左下导航进入的 routed page。Settings 顶部动作的最终合同仍为 **TBD**；“不提供 Done”以及“只在 dirty 时显示或强调 Apply & restart”是当前设计实验，不是 durable semantics。
+- Settings 是由左下导航进入的 routed page。Host 设置使用独立底部 Apply 保存栏，未保存草稿跨页保留；即时外观设置在本页说明，重启仅按真实 configuration 状态提示。
 - Settings 明确管理 Archived Threads、Provider/Account 和 Plugins；General 可以承载其他 host-local preferences，但不能改变这些核心分区的所有权。
 - Context compaction prompt 是可选的 host-local preference；省略时使用 Core 默认。它只影响未来
   compaction summary 生成，不重写历史 Thread，也不进入 canonical ItemList。
@@ -255,7 +255,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
   custom OpenAI-compatible 入口编辑 display name、Provider name、base URL、API key replacement
   和 model IDs。稳定 profile ID 既不展示也不可编辑；已保存 API key 永不回显，空白表示保留。
 - Account 额度卡按当前 ZenX 登录账户的真实订阅接口窗口显示剩余/已用及本地重置时间，按返回时长命名；缺失窗口与空分组不渲染，窗口内未知值不补0。进入账户页或登录成功后查询，可显式刷新；失败清空旧值，退出或切换账户使迟到响应失效，不混入 API 余额。
-- Settings 的二态开关复用 plugin-switch，Agentic compaction、RTK、前台控制与外观开关保持同一命中区、焦点与禁用样式。原生选择器保留键盘和选择语义，使用统一主题箭头与留白，字段说明在对应控件下方。
+- Settings 的二态开关复用 plugin-switch，Agentic compaction、RTK、前台控制与外观开关保持同一命中区、焦点与禁用样式。共享 Select/Combobox 保留键盘和选择语义，使用统一主题浮层、箭头与留白，字段说明在对应控件下方。
 - Z05 UI 至多配置一个 OpenAI subscription profile；Account 的登录、登出与手动 code
   始终路由到这个 profile，而不是假定固定 ID。删除它会清理 profile-scoped OAuth credential，
   但不会恢复或改写历史 Thread。
@@ -404,8 +404,7 @@ ThreadView
 
 需要调整 durable semantics 时更新本文；只调整视觉校准时也应说明它没有改变状态归属、导航语义或 interaction contract。Git 历史负责保存旧决策，不在仓库中维护第二份当前规则。
 
-Plugin Spaces 标题是展开/收起按钮，默认展开；收起隐藏插件入口并释放侧栏空间，
-不改变当前插件页面。按钮支持键盘激活并通过 `aria-expanded` 表达状态。
+插件导航不再增加 Plugin Spaces 折叠层；所有可用入口共用与主导航一致的行、焦点和当前页面标记，较长列表在其导航区滚动。
 
 ## Thread 辅助右栏
 
@@ -418,3 +417,13 @@ Plugin Spaces 标题是展开/收起按钮，默认展开；收起隐藏插件�
 - Browser 的共享标签使用真实 Chromium WebContentsView 支持输入地址、点击、输入、滚动、前进/后退和刷新；同一 Thread 的 Browser 工具与用户挂载并操作精确相同的 target，登录状态保存在独立的 ZenX 持久 profile。外部 CDP provider 仍通过 “Attached browser” 显示其原页面，不把同 URL 的新页面冒充接管。Ctrl/Cmd+L 聚焦地址栏。
 - 共享网页没有 Node 或 ZenX preload，外部导航限 HTTP(S)；设备、位置、通知等权限默认拒绝。关闭标签释放页面；关闭窗口、隐藏面板或切换 Thread 时只移除 native view，Host 继续持有页面供同一 Thread 的 Agent 使用。当前最多20个共享标签，不提供书签、扩展或完整历史管理。
 - 当前范围不含新建/删除/重命名文件、终端及异步 Inbox 回答回流。
+
+## 7. Shared controls and readable context
+
+- `ui/controls.tsx` 以 Radix 的 Select/Popover/Dialog 为基础。短枚举用 `Select(value, onValueChange, option children)`；长目录用带搜索的 `Combobox`；动作使用 `ActionMenu`，页面切换保留 Tabs。值选择与动作语义分开。浮层使用 portal、视口避让和可取消的入退场；Esc/确认返回触发点，外部点击不抢回焦点。
+- 正文 14px、字段和导航 13px、辅助文字 12px；32px 常规控件、28px 紧凑控件，粗指针至少 44px。沿用现有 graphite/cobalt/ember、accent 与高对比 tokens，标题/正文用本机 Segoe UI Variable Display/Text，代码用 Cascadia Code/Consolas，不下载字体。
+- 插件与内建功能入口平级，长插件导航在自身区域滚动。会话标题与可操作状态优先，模型元信息按需查看。右栏的平级内容 tabs 不改变实例/草稿/执行生命周期；新建页解释每种内容的用途。
+- 设置保存栏与滚动内容分区；任意设置页存在未保存 Host 草稿时都保留保存入口。离开设置再返回保留草稿；异步保存不覆盖保存开始后继续编辑的值。Appearance 仍即时生效，Host 设置显式 Apply；错误保留草稿并允许重试。Uninstall 位于更多动作，保留数据；永久数据删除在同一菜单的独立危险分区，禁用前不可用，并有独立确认。
+- 共用 motion tokens 为反馈 100ms、进入 150ms、退出 100ms、布局 200ms；动画不控制业务提交。含 Electron 原生 Browser view 的右栏不单独平移 DOM 占位，以免与真实页面 bounds 脱节。菜单/对话框交由 primitive 的 presence 管理卸载，details 使用可反向的内在高度过渡；reduced motion 取消位移和动画，保留状态反馈。
+- 压缩完成行只从 canonical compaction 派生。默认展示发起者、摘要字符数与“完整输入占用未知”；字符不是 tokens。展开优先呈现可选取和复制的 Markdown 摘要，独立说明保留原始 Items 数量、时点与后续增长；真实 Core 消息投影在诊断 disclosure 中。历史消息条数、摘要字符数、摘要调用 tokenUsage 均不冒充完整模型输入；未记录的完整输入占用不展示为 0 或伪造节省比例。
+- `test/fixtures/controls-visual.html` 提供共享控件、禁用、长目录、对话框与长中文压缩摘要的开发展示面；不是产品导航入口。

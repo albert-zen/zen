@@ -1,3 +1,4 @@
+import { Select } from "./ui/controls.js";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
   BrowserThreadTarget,
@@ -213,10 +214,10 @@ export function BrowserThreadPanel({
       </header>
       <div className="browser-panel-target">
         <label htmlFor="thread-browser-target">Page</label>
-        <select
+        <Select
           id="thread-browser-target"
           value={targetId ?? ""}
-          onChange={(event) => choose(event.target.value)}
+          onValueChange={(value) => choose(value)}
         >
           <option value="">
             Follow Agent{selected ? ` · ${selected.title}` : ""}
@@ -230,7 +231,7 @@ export function BrowserThreadPanel({
               {target.title || target.url}
             </option>
           ))}
-        </select>
+        </Select>
         {targetId !== undefined ? (
           <button
             type="button"

@@ -1,3 +1,4 @@
+import { Select } from "./ui/controls.js";
 import type { ModelSummary } from "../../protocol-client/index.js";
 import { modelOptions } from "./model-settings";
 
@@ -22,11 +23,11 @@ export function ModelSelector({
   return (
     <div className="model-control">
       <label htmlFor="thread-model">Model</label>
-      <select
+      <Select
         aria-describedby={error === null ? undefined : "model-error"}
         disabled={disabled || switching}
         id="thread-model"
-        onChange={(event) => onChange(event.target.value)}
+        onValueChange={(value) => onChange(value)}
         value={selectedModel}
       >
         {options.map((model) => (
@@ -36,7 +37,7 @@ export function ModelSelector({
             {model.unavailable ? " · Unavailable" : ""}
           </option>
         ))}
-      </select>
+      </Select>
       {error === null ? null : (
         <span id="model-error" role="alert">
           {error}

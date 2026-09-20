@@ -76,3 +76,18 @@ Thread. A request for a background Thread is shown when the user selects that
 Thread. Missing panels, invalid Threads, and unavailable windows fail explicitly.
 Success acknowledges dispatch, not user visibility or acceptance. Calls should
 be awaited within their invocation; cancellation releases pending helper calls.
+
+### UI theme contract
+
+Generic UI SDK v1 includes optional `appearance` with `version: 1`, a read-only
+`variables` map of ZenX semantic CSS custom properties, and `reducedMotion`.
+Existing `theme` remains `light` or `dark`. Trusted surfaces inherit the host's
+control styles; isolated surfaces receive the same variables and a small base
+stylesheet for buttons, fields, focus and reduced motion, while retaining the
+`allow-scripts` sandbox without same-origin access.
+
+Isolated surfaces receive `zenx-plugin-ui:change` when context/theme changes.
+Read the current `window.zenxPluginUi` getters (or the event's `detail.sdk`) to
+update custom UI. Theme changes do not replace the document or clear local form
+input. Bundle replacement still creates a new document and invalidates replies
+to the old frame. Appearance is display information, never runtime authority.

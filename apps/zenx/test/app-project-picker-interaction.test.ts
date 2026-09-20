@@ -1,3 +1,4 @@
+import "./dom-primitives.js";
 /// <reference path="../src/renderer/src/env.d.ts" />
 
 import assert from "node:assert/strict";
@@ -3316,9 +3317,16 @@ test("Settings and thread navigation are mutually exclusive, including return to
       await act(async () =>
         document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
       );
-      await waitFor(() =>
-        document.querySelector('[aria-label="ZenX settings"]'),
+      await waitFor(
+        () =>
+          document
+            .querySelector('[aria-label="ZenX settings"]')
+            ?.closest('[style*="display: none"]') === null,
       );
+      const settingsSurface = document.querySelector(
+        '[aria-label="ZenX settings"]',
+      );
+      assert.ok(settingsSurface);
       assert.equal(
         document.querySelectorAll('.thread-row[aria-current="page"]').length,
         0,
@@ -3338,8 +3346,15 @@ test("Settings and thread navigation are mutually exclusive, including return to
       );
       await waitFor(() => document.querySelector("#thread-composer"));
       assert.equal(
-        document.querySelector('[aria-label="ZenX settings"]'),
-        null,
+        document.querySelector('[aria-label="ZenX settings"]') ===
+          settingsSurface,
+        true,
+      );
+      assert.equal(
+        document
+          .querySelector('[aria-label="ZenX settings"]')
+          ?.closest('[style*="display: none"]') !== null,
+        true,
       );
       assert.equal(
         document.querySelectorAll('.thread-row[aria-current="page"]').length,

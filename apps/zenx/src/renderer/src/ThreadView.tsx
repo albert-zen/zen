@@ -777,13 +777,14 @@ function ContextCompactionProgress({
   );
 }
 
-function ContextCompactionEvent({
+export function ContextCompactionEvent({
   projection,
 }: {
   projection: ContextCompactionProjection;
 }) {
   const [expanded, setExpanded] = useState(false);
   const { item, effectiveMessages } = projection;
+  const [copyState, setCopyState] = useState("");
   return (
     <section
       className="context-compaction-event"
@@ -801,26 +802,60 @@ function ContextCompactionEvent({
         <span>
           <strong>Context compacted</strong>
           <small>
-            {compactionInitiatorLabel(item)} · {effectiveMessages.length}{" "}
-            effective messages
+            {compactionInitiatorLabel(item)} ·{" "}
+            {Array.from(item.summary).length.toLocaleString()} summary
+            characters · Full input size unknown
           </small>
         </span>
         <Icon name="chevron-down" size={13} />
       </button>
       {expanded ? (
         <div className="context-compaction-detail">
+          <div className="compaction-summary-heading">
+            <h3>Saved summary</h3>
+            <button
+              type="button"
+              className="quiet-button"
+              onClick={() => {
+                void navigator.clipboard.writeText(item.summary).then(
+                  () => setCopyState("Summary copied"),
+                  () =>
+                    setCopyState(
+                      "Could not copy. Select the summary text to copy it.",
+                    ),
+                );
+              }}
+            >
+              Copy summary
+            </button>
+          </div>
+          <span role="status">{copyState}</span>
+          <div className="compaction-summary">
+            <Markdown text={item.summary} />
+          </div>
           <p>
-            This is the actual model context immediately after this compaction.
-            The full conversation remains in the transcript.
+            {item.retainedItemIds.length} original items retained alongside the
+            summary. This snapshot is from the time of compaction; later
+            conversation adds to it.
           </p>
-          <ol>
-            {effectiveMessages.map((message, index) => (
-              <li key={`${item.id}:${String(index)}`}>
-                <span>{modelMessageRole(message)}</span>
-                <pre>{formatModelMessage(message)}</pre>
-              </li>
-            ))}
-          </ol>
+          <details className="compaction-projection">
+            <summary>Retained context and diagnostics</summary>
+            <p>
+              {effectiveMessages.length} projected history messages, not tokens.
+              This includes the summary and retained conversation. Rules, tool
+              definitions and other request inputs may be added separately. Full
+              model input size was not recorded. The summary generation usage is
+              not the post-compaction context size.
+            </p>
+            <ol>
+              {effectiveMessages.map((message, index) => (
+                <li key={`${item.id}:${String(index)}`}>
+                  <span>{modelMessageRole(message)}</span>
+                  <pre>{formatModelMessage(message)}</pre>
+                </li>
+              ))}
+            </ol>
+          </details>
         </div>
       ) : null}
     </section>

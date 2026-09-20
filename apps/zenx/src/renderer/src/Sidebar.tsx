@@ -2,7 +2,6 @@ import {
   type CSSProperties,
   type ReactNode,
   useEffect,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -20,7 +19,6 @@ import type { ZenXSidebarOrder } from "../../main/host-profile.js";
 import type { AppServerHostStatus } from "../../main/app-server-manager.js";
 import { Icon } from "./icons.js";
 import type { LoadedPluginContribution } from "./plugin-contributions.js";
-import { ProviderLogo } from "./ProviderLogo.js";
 import {
   deriveInboxSections,
   deriveProjectGroups,
@@ -215,9 +213,11 @@ export function Sidebar({
         button.click();
         return;
       }
-      const rows = document.querySelectorAll<HTMLButtonElement>(
-        "#primary-sidebar .thread-row-shell > button.thread-row",
-      );
+      const rows = Array.from(
+        document.querySelectorAll<HTMLButtonElement>(
+          "#primary-sidebar .thread-row-shell > button.thread-row",
+        ),
+      ).filter((row) => !row.closest("[inert]"));
       const target = rows[Number(event.key) - 1];
       if (target === undefined) return;
       event.preventDefault();
@@ -234,6 +234,7 @@ export function Sidebar({
         className={`sidebar${open ? " open" : ""}`}
         aria-label="Projects and threads"
         aria-hidden={collapsed && !open ? true : undefined}
+        inert={collapsed && !open}
       >
         <header className="sidebar-header">
           <PluginSpaces
@@ -453,40 +454,25 @@ export function PluginSpaces({
   onOpen(route: string): void;
   selectedPage: string;
 }) {
-  const [expanded, toggleExpanded, expansionError] =
-    useSidebarExpansion("plugins");
-  const linksId = useId();
   if (contributions.length === 0) return null;
   return (
-    <section className="plugin-spaces" aria-label="Enabled plugin spaces">
-      <button
-        type="button"
-        className="plugin-spaces-toggle"
-        aria-expanded={expanded}
-        aria-controls={linksId}
-        onClick={toggleExpanded}
-      >
-        <Icon name={expanded ? "chevron-down" : "chevron-right"} />
-        <span>Plugin spaces</span>
-      </button>
-      {expansionError !== null ? <p role="alert">{expansionError}</p> : null}
-      <div id={linksId} hidden={!expanded}>
-        {contributions.map((contribution) => (
-          <button
-            className="plugin-space-link"
-            type="button"
-            aria-current={
-              selectedPage === contribution.page.route ? "page" : undefined
-            }
-            key={contribution.key}
-            onClick={() => onOpen(contribution.page.route)}
-          >
-            <Icon name={contribution.icon} />
-            <span>{contribution.label}</span>
-          </button>
-        ))}
-      </div>
-    </section>
+    <nav className="plugin-spaces" aria-label="Workspace navigation">
+      {contributions.map((contribution) => (
+        <button
+          className="plugin-space-link"
+          type="button"
+          aria-current={
+            selectedPage === contribution.page.route ? "page" : undefined
+          }
+          title={contribution.label}
+          key={contribution.key}
+          onClick={() => onOpen(contribution.page.route)}
+        >
+          <Icon name={contribution.icon} />
+          <span>{contribution.label}</span>
+        </button>
+      ))}
+    </nav>
   );
 }
 
@@ -1059,7 +1045,7 @@ function ProjectRows({
         !actionsRef.current?.contains(event.target as Node) &&
         !menuRef.current?.contains(event.target as Node)
       ) {
-        closeMenu();
+        closeMenu(false);
       }
     };
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -1304,52 +1290,64 @@ function ProjectRows({
           </div>
         )}
       </div>
-      {open && group.threads.length === 0 ? (
-        <p className="project-empty">No threads yet.</p>
-      ) : open ? (
-        group.threads.map((thread, threadIndex) => (
-          <ThreadRow
-            hasActiveTurn={threadHasActiveTurn(thread, liveThread)}
-            key={thread.threadId}
-            onChangeThreadLifecycle={onChangeThreadLifecycle}
-            onChangeThreadPinned={onChangeThreadPinned}
-            onRenameThread={onRenameThread}
-            onForkThread={onForkThread}
-            onSelectThread={onSelectThread}
-            pendingApproval={pendingApprovalThreadIds.has(thread.threadId)}
-            pinned={pinnedThreadIds.has(thread.threadId)}
-            selected={thread.threadId === selectedThreadId}
-            thread={thread}
-            watching={watchingThreadIds.has(thread.threadId)}
-            reorder={
-              threadReorder === undefined
-                ? undefined
-                : {
-                    controlId: sidebarOrderControlId("thread", thread.threadId),
-                    dragging: threadReorder.draggingId === thread.threadId,
-                    placement:
-                      threadReorder.targetId === thread.threadId
-                        ? threadReorder.placement
-                        : undefined,
-                    onDragLeave: threadReorder.onDragLeave,
-                    onDragStart: (event) =>
-                      threadReorder.onDragStart(thread.threadId, event),
-                    onDragEnd: threadReorder.onDragEnd,
-                    onDragOver: (event) =>
-                      threadReorder.onDragOver(thread.threadId, event),
-                    onDrop: (event) =>
-                      threadReorder.onDrop(thread.threadId, event),
-                    onKeyDown: (event) =>
-                      threadReorder.onKeyDown(
-                        threadIndex,
-                        thread.threadId,
-                        event,
-                      ),
-                  }
-            }
-          />
-        ))
-      ) : null}
+      <div
+        className="project-disclosure"
+        data-open={open}
+        inert={!open}
+        aria-hidden={!open}
+      >
+        <div>
+          {group.threads.length === 0 ? (
+            <p className="project-empty">No threads yet.</p>
+          ) : (
+            group.threads.map((thread, threadIndex) => (
+              <ThreadRow
+                hasActiveTurn={threadHasActiveTurn(thread, liveThread)}
+                key={thread.threadId}
+                onChangeThreadLifecycle={onChangeThreadLifecycle}
+                onChangeThreadPinned={onChangeThreadPinned}
+                onRenameThread={onRenameThread}
+                onForkThread={onForkThread}
+                onSelectThread={onSelectThread}
+                pendingApproval={pendingApprovalThreadIds.has(thread.threadId)}
+                pinned={pinnedThreadIds.has(thread.threadId)}
+                selected={thread.threadId === selectedThreadId}
+                thread={thread}
+                watching={watchingThreadIds.has(thread.threadId)}
+                reorder={
+                  threadReorder === undefined
+                    ? undefined
+                    : {
+                        controlId: sidebarOrderControlId(
+                          "thread",
+                          thread.threadId,
+                        ),
+                        dragging: threadReorder.draggingId === thread.threadId,
+                        placement:
+                          threadReorder.targetId === thread.threadId
+                            ? threadReorder.placement
+                            : undefined,
+                        onDragLeave: threadReorder.onDragLeave,
+                        onDragStart: (event) =>
+                          threadReorder.onDragStart(thread.threadId, event),
+                        onDragEnd: threadReorder.onDragEnd,
+                        onDragOver: (event) =>
+                          threadReorder.onDragOver(thread.threadId, event),
+                        onDrop: (event) =>
+                          threadReorder.onDrop(thread.threadId, event),
+                        onKeyDown: (event) =>
+                          threadReorder.onKeyDown(
+                            threadIndex,
+                            thread.threadId,
+                            event,
+                          ),
+                      }
+                }
+              />
+            ))
+          )}
+        </div>
+      </div>
     </section>
   );
 }
@@ -1426,7 +1424,7 @@ function ThreadRow({
         !rowRef.current?.contains(event.target as Node) &&
         !menuRef.current?.contains(event.target as Node)
       ) {
-        closeMenu();
+        closeMenu(false);
       }
     };
     document.addEventListener("pointerdown", closeOutside);
@@ -1462,12 +1460,11 @@ function ThreadRow({
           <Icon name="moon" size={12} aria-label="Watching" />
         ) : null}
       </span>
-      {identity === null ? null : (
-        <span className="model-line">
-          <ProviderLogo kind={identity.providerKind} />
-          <span>{identity.label}</span>
+      {pendingApproval || thread.status === "active" ? (
+        <span className="thread-state-label">
+          {pendingApproval ? "Needs your approval" : "Working"}
         </span>
-      )}
+      ) : null}
     </>
   );
   const runAction = async (
@@ -1541,6 +1538,7 @@ function ThreadRow({
         </div>
       ) : (
         <button
+          title={`${threadTitle(thread)}${identity ? ` · ${identity.label}` : ""}`}
           className={`thread-row${selected ? " selected" : ""}${inbox ? " inbox" : ""}`}
           type="button"
           id={reorder?.controlId}

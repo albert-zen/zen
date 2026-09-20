@@ -1,3 +1,8 @@
+import {
+  usePluginTheme,
+  pluginBaseStyles,
+  type PluginThemeV1,
+} from "./ui/plugin-theme.js";
 import React, { useEffect, useMemo, useRef } from "react";
 
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
@@ -6,6 +11,7 @@ export interface PluginUiSdkV1 {
   readonly version: 1;
   readonly pluginId: string;
   readonly theme: "light" | "dark";
+  readonly appearance?: PluginThemeV1;
   readonly context: Readonly<Record<string, unknown>>;
   readonly navigation: { navigate(route: string): void };
   readonly handles: { read(handleId: string): Promise<unknown> };
@@ -80,12 +86,14 @@ export function GenericPluginUiHost({
     (candidate) =>
       candidate.pluginId === pluginId && candidate.id === surface?.bundleId,
   );
+  const appearance = usePluginTheme();
   const sdk = useMemo<PluginUiSdkV1>(
     () =>
       Object.freeze({
         version: 1 as const,
         pluginId,
         theme,
+        appearance,
         context: immutableClone(context),
         navigation: Object.freeze({ navigate }),
         handles: Object.freeze({
@@ -97,7 +105,15 @@ export function GenericPluginUiHost({
             await executeCommand(pluginId, commandId, input),
         }),
       }),
-    [context, executeCommand, navigate, pluginId, readHandle, theme],
+    [
+      context,
+      executeCommand,
+      navigate,
+      pluginId,
+      readHandle,
+      theme,
+      appearance,
+    ],
   );
 
   if (surface === undefined || bundle === undefined) {
@@ -168,9 +184,23 @@ function IsolatedPluginSurface({
       if (
         !requestWindow ||
         event.source !== requestWindow ||
-        !isUiRequest(event.data, channel)
+        event.data?.channel !== channel
       )
         return;
+      if (event.data.type === "zenx-plugin-ui:ready") {
+        requestWindow.postMessage(
+          {
+            channel,
+            type: "zenx-plugin-ui:update",
+            theme: sdk.theme,
+            appearance: sdk.appearance,
+            context: sdk.context,
+          },
+          "*",
+        );
+        return;
+      }
+      if (!isUiRequest(event.data, channel)) return;
       const operation =
         event.data.operation === "commands.execute"
           ? sdk.commands.execute(event.data.id, event.data.input)
@@ -210,13 +240,35 @@ function IsolatedPluginSurface({
     return () => window.removeEventListener("message", receive);
   }, [channel, sdk]);
   const initialized = useRef(new WeakSet<HTMLIFrameElement>());
-  const html = isolatedDocument(bundleHtml, {
-    channel,
-    exportName,
-    pluginId: sdk.pluginId,
-    theme: sdk.theme,
-    context: sdk.context,
-  });
+  const initialSdk = useRef(sdk);
+  initialSdk.current = sdk;
+  const html = useMemo(
+    () =>
+      isolatedDocument(bundleHtml, {
+        channel,
+        exportName,
+        pluginId: initialSdk.current.pluginId,
+        theme: initialSdk.current.theme,
+        appearance: initialSdk.current.appearance,
+        context: initialSdk.current.context,
+      }),
+    [bundleHtml, channel, exportName, sdk.pluginId],
+  );
+  const update = () =>
+    frame.current?.contentWindow?.postMessage(
+      {
+        channel,
+        type: "zenx-plugin-ui:update",
+        theme: sdk.theme,
+        appearance: sdk.appearance,
+        context: sdk.context,
+      },
+      "*",
+    );
+  useEffect(() => {
+    update();
+  }, [sdk, channel]);
+
   return (
     <iframe
       key={html}
@@ -243,7 +295,7 @@ function isolatedDocument(
   init: Readonly<Record<string, unknown>>,
 ): string {
   const payload = JSON.stringify(init).replaceAll("<", "\\u003c");
-  return `<!doctype html><html data-theme="${String(init.theme)}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'"></head><body>${html}<script>(()=>{const init=${payload};const deepFreeze=(value)=>{if(!value||typeof value!=='object'||Object.isFrozen(value))return value;Object.values(value).forEach(deepFreeze);return Object.freeze(value)};window.zenxPluginUi=Object.freeze({version:1,pluginId:init.pluginId,theme:init.theme,context:deepFreeze(init.context),commands:{execute:(id,input)=>request('commands.execute',id,input)},handles:{read:(id)=>request('handles.read',id)},navigation:{navigate:(route)=>request('navigation.navigate','route',route)}});let sequence=0;const pending=new Map();function request(operation,id,input){const requestId=String(++sequence);parent.postMessage({channel:init.channel,type:'zenx-plugin-ui:request',requestId,operation,id,input},'*');return new Promise((resolve,reject)=>pending.set(requestId,{resolve,reject}));}addEventListener('message',(event)=>{const message=event.data;if(!message||message.channel!==init.channel)return;const waiter=pending.get(message.requestId);if(!waiter)return;pending.delete(message.requestId);message.type==='zenx-plugin-ui:result'?waiter.resolve(message.value):waiter.reject(new Error(message.message));});dispatchEvent(new CustomEvent('zenx-plugin-ui:init',{detail:{exportName:init.exportName,sdk:window.zenxPluginUi}}));})();</script></body></html>`;
+  return `<!doctype html><html data-theme="${String(init.theme)}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'"><style>${pluginBaseStyles}</style></head><body>${html}<script>(()=>{const init=${payload};const deepFreeze=(value)=>{if(!value||typeof value!=='object'||Object.isFrozen(value))return value;Object.values(value).forEach(deepFreeze);return Object.freeze(value)};function applyTheme(){document.documentElement.dataset.theme=init.theme;document.documentElement.style.colorScheme=init.theme;Object.entries(init.appearance?.variables||{}).forEach(([key,value])=>document.documentElement.style.setProperty(key,value));}applyTheme();window.zenxPluginUi=Object.freeze({version:1,pluginId:init.pluginId,get theme(){return init.theme},get appearance(){return deepFreeze(init.appearance)},get context(){return deepFreeze(init.context)},commands:{execute:(id,input)=>request('commands.execute',id,input)},handles:{read:(id)=>request('handles.read',id)},navigation:{navigate:(route)=>request('navigation.navigate','route',route)}});let sequence=0;const pending=new Map();function request(operation,id,input){const requestId=String(++sequence);parent.postMessage({channel:init.channel,type:'zenx-plugin-ui:request',requestId,operation,id,input},'*');return new Promise((resolve,reject)=>pending.set(requestId,{resolve,reject}));}addEventListener('message',(event)=>{const message=event.data;if(!message||message.channel!==init.channel)return;if(message.type==='zenx-plugin-ui:update'&&event.source===parent){init.theme=message.theme;init.appearance=message.appearance;init.context=message.context;applyTheme();dispatchEvent(new CustomEvent('zenx-plugin-ui:change',{detail:{sdk:window.zenxPluginUi}}));return;}const waiter=pending.get(message.requestId);if(!waiter)return;pending.delete(message.requestId);message.type==='zenx-plugin-ui:result'?waiter.resolve(message.value):waiter.reject(new Error(message.message));});parent.postMessage({channel:init.channel,type:'zenx-plugin-ui:ready'},'*');dispatchEvent(new CustomEvent('zenx-plugin-ui:init',{detail:{exportName:init.exportName,sdk:window.zenxPluginUi}}));})();</script></body></html>`;
 }
 
 function isUiRequest(

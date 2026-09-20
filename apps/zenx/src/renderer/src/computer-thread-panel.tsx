@@ -1,3 +1,4 @@
+import { Select } from "./ui/controls.js";
 import React, { useEffect, useRef, useState } from "react";
 
 import type {
@@ -60,15 +61,11 @@ export function ComputerThreadPanel({
   return (
     <section className="computer-thread-panel" aria-label="Computer workspace">
       <div className="computer-live-toolbar">
-        <select
+        <Select
           aria-label="Computer window"
           value={targetId ?? "__follow__"}
-          onChange={(event) =>
-            setTargetId(
-              event.target.value === "__follow__"
-                ? undefined
-                : event.target.value,
-            )
+          onValueChange={(value) =>
+            setTargetId(value === "__follow__" ? undefined : value)
           }
           title={
             followed
@@ -86,7 +83,7 @@ export function ComputerThreadPanel({
               {target.target.windowTitle ?? "Window"}
             </option>
           ))}
-        </select>
+        </Select>
         <span role="status" data-status={status.status}>
           {status.message}
         </span>

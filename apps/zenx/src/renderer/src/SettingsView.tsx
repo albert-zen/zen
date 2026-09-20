@@ -1,6 +1,7 @@
+import { Select, Combobox } from "./ui/controls.js";
 import { SubscriptionUsageCard } from "./SubscriptionUsageCard.js";
 import { RtkSettingsCard } from "./RtkSettingsCard.js";
-import { useEffect, useRef, useState } from "react";
+import { Activity, useEffect, useRef, useState } from "react";
 import { normalizeContextCompactionConfig } from "../../../../../src/context-compaction.js";
 import { ContextCompactionPanel } from "./ContextCompactionPanel.js";
 import { WorkflowSettingsPanel } from "./WorkflowSettingsPanel.js";
@@ -94,18 +95,32 @@ export function SettingsView({
   };
   const [manualCode, setManualCode] = useState(false);
   const navRef = useRef<HTMLElement>(null);
+  const draftSnapshot = useRef({ settings, draft });
+  draftSnapshot.current = { settings, draft };
 
   useEffect(() => {
     let active = true;
     const dispose = window.zenx.settings.onManualCodeRequested(() => {
       if (active) setManualCode(true);
     });
+    const current = draftSnapshot.current;
+    const hasUnsaved =
+      current.settings !== null &&
+      JSON.stringify(current.draft) !==
+        JSON.stringify(current.settings.profile);
+    if (hasUnsaved)
+      return () => {
+        active = false;
+        dispose();
+      };
     void window.zenx.settings
       .get()
       .then((value) => {
         if (!active) return;
         setSettings(value);
-        setDraft(value.profile);
+        setDraft((latest) =>
+          latest === current.draft ? value.profile : latest,
+        );
       })
       .catch((reason: unknown) => active && setError(describeError(reason)));
     return () => {
@@ -151,7 +166,13 @@ export function SettingsView({
         resetTitlePrompt: draft.titlePrompt === undefined,
       });
       setSettings(value);
-      setDraft(value.profile);
+      setDraft((latest) =>
+        latest === draft
+          ? value.profile
+          : latest === null
+            ? value.profile
+            : { ...latest, revision: value.profile.revision },
+      );
       setStatus(
         draft.experimentalRtkEnabled !==
           settings?.profile.experimentalRtkEnabled
@@ -277,6 +298,9 @@ export function SettingsView({
                 key={item.id}
                 type="button"
                 role="tab"
+                id={`settings-tab-${item.id}`}
+                aria-controls="settings-panel"
+                tabIndex={tab === item.id ? 0 : -1}
                 aria-selected={tab === item.id}
                 onClick={() => onTabChange(item.id)}
               >
@@ -285,8 +309,14 @@ export function SettingsView({
               </button>
             ))}
           </nav>
-          <div className="settings-panel">
-            {tab === "account" ? (
+          <div
+            className="settings-panel"
+            id="settings-panel"
+            role="tabpanel"
+            aria-labelledby={`settings-tab-${tab}`}
+            tabIndex={0}
+          >
+            <Activity mode={tab === "account" ? "visible" : "hidden"}>
               <AccountPanel
                 settings={settings}
                 busy={busy}
@@ -296,8 +326,8 @@ export function SettingsView({
                 setManualCode={setManualCode}
                 setSettings={setSettings}
               />
-            ) : null}
-            {tab === "models" ? (
+            </Activity>
+            <Activity mode={tab === "models" ? "visible" : "hidden"}>
               <ModelsPanel
                 busy={busy}
                 draft={draft}
@@ -309,8 +339,8 @@ export function SettingsView({
                 setSettings={setSettings}
                 setStatus={setStatus}
               />
-            ) : null}
-            {tab === "plugins" ? (
+            </Activity>
+            <Activity mode={tab === "plugins" ? "visible" : "hidden"}>
               <>
                 <header>
                   <h2>Plugins</h2>
@@ -331,9 +361,9 @@ export function SettingsView({
                   <PluginSettingsSurfaces snapshot={pluginSnapshot} />
                 )}
               </>
-            ) : null}
+            </Activity>
             {tab === "appearance" ? <AppearancePanel /> : null}
-            {tab === "general" ? (
+            <Activity mode={tab === "general" ? "visible" : "hidden"}>
               <>
                 <GeneralPanel draft={draft} setDraft={setDraft} />
                 <ChromeConnectionSettings draft={draft} setDraft={setDraft} />
@@ -346,16 +376,16 @@ export function SettingsView({
                   }
                 />
               </>
-            ) : null}
-            {tab === "compaction" ? (
+            </Activity>
+            <Activity mode={tab === "compaction" ? "visible" : "hidden"}>
               <ContextCompactionPanel
                 config={draft.contextCompaction}
                 onChange={(contextCompaction) =>
                   setDraft({ ...draft, contextCompaction })
                 }
               />
-            ) : null}
-            {tab === "workflows" ? (
+            </Activity>
+            <Activity mode={tab === "workflows" ? "visible" : "hidden"}>
               <WorkflowSettingsPanel
                 commands={draft.workflowCommands ?? []}
                 titlePrompt={draft.titlePrompt}
@@ -367,7 +397,7 @@ export function SettingsView({
                   })
                 }
               />
-            ) : null}
+            </Activity>
             {compactionError !== null ? (
               <div className="settings-error" role="alert">
                 {compactionError}
@@ -378,7 +408,7 @@ export function SettingsView({
                 {workflowError}
               </div>
             ) : null}
-            {tab === "archived" ? (
+            <Activity mode={tab === "archived" ? "visible" : "hidden"}>
               <ArchivedThreadsPanel
                 error={archivedError}
                 loading={archivedLoading}
@@ -386,7 +416,7 @@ export function SettingsView({
                 onUnarchive={onUnarchive}
                 threads={archivedThreads}
               />
-            ) : null}
+            </Activity>
             {settings.configuration?.status === "unconfirmed" ? (
               <div className="settings-note" role="status">
                 <p>{configurationSaveMessage(settings)}</p>
@@ -474,22 +504,6 @@ export function SettingsView({
                 </button>
               </div>
             ) : null}
-            {tab === "models" ||
-            tab === "general" ||
-            tab === "compaction" ||
-            tab === "workflows" ? (
-              <SettingsApplyBar
-                busy={busy === "save"}
-                disabled={
-                  compactionError !== null ||
-                  workflowError !== null ||
-                  settings.configuration?.status === "unconfirmed"
-                }
-                dirty={hostDirty}
-                requiresRestart={!sendModeOnly}
-                onApply={() => void save()}
-              />
-            ) : null}
             {error && tab !== "models" ? (
               <div className="settings-error" role="alert">
                 <Icon name="warning" />
@@ -499,6 +513,24 @@ export function SettingsView({
           </div>
         </div>
       </div>
+      {hostDirty ||
+      tab === "models" ||
+      tab === "general" ||
+      tab === "compaction" ||
+      tab === "workflows" ? (
+        <SettingsApplyBar
+          busy={busy === "save"}
+          disabled={
+            busy !== null ||
+            compactionError !== null ||
+            workflowError !== null ||
+            settings.configuration?.status === "unconfirmed"
+          }
+          dirty={hostDirty}
+          requiresRestart={!sendModeOnly}
+          onApply={() => void save()}
+        />
+      ) : null}
       <div
         className="settings-toast-region"
         role="status"
@@ -536,8 +568,8 @@ export function SettingsApplyBar({
         <span>
           {dirty
             ? requiresRestart
-              ? "Apply these changes. Running turns keep their current configuration."
-              : "Apply this sending preference without interrupting the running turn."
+              ? "Unsaved changes across settings. Running turns keep their current configuration."
+              : "Unsaved sending preference. Running turns continue uninterrupted."
             : "Your settings are up to date."}
         </span>
       </div>
@@ -1830,10 +1862,10 @@ function ModelCapabilityEditor({
         />
         <label className="field">
           <span>{`Model ${index + 1} reasoning metadata`}</span>
-          <select
+          <Select
             value={reasoningMode}
-            onChange={(event) => {
-              const mode = event.target.value;
+            onValueChange={(value) => {
+              const mode = value;
               if (model.supportedReasoningEfforts?.length)
                 savedReasoning.current = {
                   supportedReasoningEfforts: model.supportedReasoningEfforts,
@@ -1873,7 +1905,7 @@ function ModelCapabilityEditor({
             <option value="unknown">Unknown</option>
             <option value="text-only">No reasoning strength control</option>
             <option value="configured">Manual configuration</option>
-          </select>
+          </Select>
         </label>
         {onProbe === undefined ? null : (
           <button
@@ -1902,13 +1934,13 @@ function ModelCapabilityEditor({
             />
             <label className="field">
               <span>{`Model ${index + 1} default reasoning effort`}</span>
-              <select
+              <Select
                 aria-label={`Model ${index + 1} default reasoning effort`}
                 value={model.defaultReasoningEffort ?? ""}
-                onChange={(event) =>
+                onValueChange={(value) =>
                   onChange(
                     manual({
-                      defaultReasoningEffort: event.target.value || null,
+                      defaultReasoningEffort: value || null,
                     }),
                   )
                 }
@@ -1919,7 +1951,7 @@ function ModelCapabilityEditor({
                     {effort}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
             {!model.supportedReasoningEfforts?.length ||
             !model.supportedReasoningEfforts.includes(
@@ -1934,12 +1966,12 @@ function ModelCapabilityEditor({
         ) : null}
         <label className="field">
           <span>{`Model ${index + 1} input modalities`}</span>
-          <select
+          <Select
             value={inputModalityValue(model.inputModalities)}
-            onChange={(event) =>
+            onValueChange={(value) =>
               onChange(
                 manual({
-                  inputModalities: inputModalities(event.target.value),
+                  inputModalities: inputModalities(value),
                 }),
               )
             }
@@ -1949,7 +1981,7 @@ function ModelCapabilityEditor({
             <option value="text-image">Text + image</option>
             <option value="image">Image only</option>
             <option value="none">Known unsupported</option>
-          </select>
+          </Select>
         </label>
         <label className="field">
           <span>{`Model ${index + 1} context window (Required)`}</span>
@@ -2133,18 +2165,16 @@ function ModelReferenceSelect({
   return (
     <label className="field model-reference-field">
       <span>{label}</span>
-      <select
+      <Combobox
         autoFocus={autoFocus}
+        label={label}
         value={serialized}
-        onChange={(event) => {
+        onValueChange={(value) => {
           if (onChangeValue !== undefined) {
-            onChangeValue(event.target.value);
+            onChangeValue(value);
             return;
           }
-          const reference = modelReferenceFromValue(
-            event.target.value,
-            profiles,
-          );
+          const reference = modelReferenceFromValue(value, profiles);
           if (reference !== undefined) onChange?.(reference);
         }}
       >
@@ -2167,7 +2197,7 @@ function ModelReferenceSelect({
             );
           }),
         )}
-      </select>
+      </Combobox>
     </label>
   );
 }
@@ -2503,6 +2533,32 @@ function GeneralPanel({
         <h2>General</h2>
         <p>Choose how ZenX works with you and your projects.</p>
       </header>
+      <section className="settings-card">
+        <h3>Interaction</h3>{" "}
+        <label className="field">
+          <span id="composer-send-label">Send during a running turn</span>
+          <Select
+            aria-labelledby="composer-send-label"
+            value={draft.composerSendMode ?? "queue"}
+            onValueChange={(value) =>
+              setDraft({
+                ...draft,
+                composerSendMode: value as "queue" | "soft" | "hard",
+              })
+            }
+            aria-describedby="composer-send-help"
+          >
+            <option value="queue">Queue</option>
+            <option value="soft">Soft steer</option>
+            <option value="hard">Hard steer (interrupt and send)</option>
+          </Select>
+          <small id="composer-send-help" className="settings-note">
+            Enter and the send button use this choice. Cmd/Ctrl+Enter uses soft
+            steer when Queue is selected, and Queue when either steer mode is
+            selected. Shift+Enter adds a new line.
+          </small>
+        </label>
+      </section>
       <div className="page-card settings-card">
         <div className="settings-card-head">
           <div>
@@ -2545,6 +2601,7 @@ function GeneralPanel({
         </p>
       </div>
       <div className="page-card settings-card">
+        <h3>Execution and permissions</h3>
         <div className="form-grid">
           <div className="field wide">
             <span>Default project</span>
@@ -2557,62 +2614,37 @@ function GeneralPanel({
           </div>
           <label className="field">
             <span>Approval policy</span>
-            <select
+            <Select
               value={draft.approvalPolicy}
-              onChange={(event) =>
+              onValueChange={(value) =>
                 setDraft({
                   ...draft,
-                  approvalPolicy: event.target.value as "always" | "never",
+                  approvalPolicy: value as "always" | "never",
                 })
               }
             >
               <option value="always">Approval required</option>
               <option value="never">Full access</option>
-            </select>
-          </label>
-          <label className="field">
-            <span id="composer-send-label">Send during a running turn</span>
-            <select
-              aria-labelledby="composer-send-label"
-              value={draft.composerSendMode ?? "queue"}
-              onChange={(event) =>
-                setDraft({
-                  ...draft,
-                  composerSendMode: event.target.value as
-                    "queue" | "soft" | "hard",
-                })
-              }
-              aria-describedby="composer-send-help"
-            >
-              <option value="queue">Queue</option>
-              <option value="soft">Soft steer</option>
-              <option value="hard">Hard steer (interrupt and send)</option>
-            </select>
-            <small id="composer-send-help" className="settings-note">
-              Enter and the send button use this choice. Cmd/Ctrl+Enter uses
-              soft steer when Queue is selected, and Queue when either steer
-              mode is selected. Shift+Enter adds a new line.
-            </small>
+            </Select>
           </label>
 
           <label className="field">
             <span id="tool-presentation-label">Tool presentation</span>
-            <select
+            <Select
               aria-labelledby="tool-presentation-label"
               aria-describedby="tool-presentation-help"
               value={draft.toolPresentation ?? "both"}
-              onChange={(event) =>
+              onValueChange={(value) =>
                 setDraft({
                   ...draft,
-                  toolPresentation: event.target.value as
-                    "direct" | "code" | "both",
+                  toolPresentation: value as "direct" | "code" | "both",
                 })
               }
             >
               <option value="both">Direct and code (recommended)</option>
               <option value="direct">Direct tools only</option>
               <option value="code">Code only</option>
-            </select>
+            </Select>
             <small id="tool-presentation-help" className="settings-note">
               Both is the default. Code runs shell-equivalent erasable
               TypeScript through the same tools and history. Direct is the

@@ -1,3 +1,4 @@
+import { Popover, PopoverTrigger, PopoverContent } from "./ui/controls.js";
 import {
   useEffect,
   useLayoutEffect,
@@ -43,9 +44,22 @@ export function ComposerModelMenu({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const restoreFocusRef = useRef(false);
   const [panel, setPanel] = useState<MenuPanel | null>(null);
+  const lastPanel = useRef<MenuPanel>("root");
+  if (panel !== null) lastPanel.current = panel;
+  const visiblePanel = panel ?? lastPanel.current;
+  const [query, setQuery] = useState("");
   const selected = models.find((model) => model.id === selectedModel);
   const available = canSendWithModel(models, selectedModel);
-  const groups = groupedModelOptions(models, providerProfiles);
+  const groups = groupedModelOptions(models, providerProfiles)
+    .map((group) => ({
+      ...group,
+      models: group.models.filter((model) =>
+        `${model.displayName} ${group.displayName}`
+          .toLocaleLowerCase()
+          .includes(query.toLocaleLowerCase()),
+      ),
+    }))
+    .filter((group) => group.models.length > 0);
   const efforts = reasoningOptions(models, selectedModel);
   const currentModelLabel = selected?.displayName ?? "Unavailable model";
   const selectedReasoningLabel =
@@ -67,22 +81,16 @@ export function ComposerModelMenu({
   const close = (restoreFocus = true) => {
     restoreFocusRef.current = restoreFocus;
     setPanel(null);
+    setQuery("");
   };
 
-  useEffect(() => {
-    if (panel === null) return;
-    const closeOutside = (event: PointerEvent) => {
-      if (!containerRef.current?.contains(event.target as Node)) close();
-    };
-    document.addEventListener("pointerdown", closeOutside);
-    return () => document.removeEventListener("pointerdown", closeOutside);
-  }, [panel]);
   useEffect(() => {
     if (disabled || switching) setPanel(null);
   }, [disabled, switching]);
   useEffect(() => {
     if (panel === null) return;
-    enabledMenuItems(menuRef.current).at(0)?.focus();
+    if (panel === "model") menuRef.current?.querySelector("input")?.focus();
+    else enabledMenuItems(menuRef.current).at(0)?.focus();
   }, [panel]);
   useLayoutEffect(() => {
     if (panel !== null || !restoreFocusRef.current) return;
@@ -99,48 +107,59 @@ export function ComposerModelMenu({
     close();
   };
   return (
-    <div className="composer-model-menu" ref={containerRef}>
-      <button
-        ref={triggerRef}
-        className={`composer-model-trigger${available ? "" : " unavailable"}`}
-        type="button"
-        aria-describedby={
-          modelError === null ? undefined : "composer-model-error"
-        }
-        aria-expanded={panel !== null}
-        aria-haspopup="menu"
-        aria-label={`Model and reasoning: ${currentSelectionLabel}`}
-        title={currentSelectionLabel}
-        disabled={disabled || switching}
-        onClick={() => {
-          panel === null ? setPanel("root") : close();
-        }}
-        onKeyDown={(event) => {
-          if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-          event.preventDefault();
-          setPanel("root");
-        }}
-      >
-        <span>{switching ? "Changing…" : currentSelectionLabel}</span>
-        <Icon name="chevron-down" size={12} />
-      </button>
-      {panel === null ? null : (
-        <div
+    <Popover
+      open={panel !== null}
+      onOpenChange={(open) => (open ? setPanel("root") : close(false))}
+    >
+      <div className="composer-model-menu" ref={containerRef}>
+        <PopoverTrigger asChild>
+          <button
+            ref={triggerRef}
+            className={`composer-model-trigger${available ? "" : " unavailable"}`}
+            type="button"
+            aria-describedby={
+              modelError === null ? undefined : "composer-model-error"
+            }
+            aria-expanded={panel !== null}
+            aria-haspopup="menu"
+            aria-label={`Model and reasoning: ${currentSelectionLabel}`}
+            title={currentSelectionLabel}
+            disabled={disabled || switching}
+            onClick={() => {
+              panel === null ? setPanel("root") : close();
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+              event.preventDefault();
+              setPanel("root");
+            }}
+          >
+            <span>{switching ? "Changing…" : currentSelectionLabel}</span>
+            <Icon name="chevron-down" size={12} />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
           ref={menuRef}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            enabledMenuItems(menuRef.current).at(0)?.focus();
+          }}
+          onCloseAutoFocus={(event) => event.preventDefault()}
           className="composer-selection-menu"
           role="menu"
           aria-label={
-            panel === "root"
+            visiblePanel === "root"
               ? "Model and reasoning"
-              : panel === "model"
+              : visiblePanel === "model"
                 ? "Choose model"
                 : "Choose reasoning effort"
           }
-          onKeyDown={(event) =>
-            handleMenuKeyDown(event, panel, setPanel, close)
-          }
+          onKeyDown={(event) => {
+            if (event.key === "Tab") triggerRef.current?.focus();
+            handleMenuKeyDown(event, visiblePanel, setPanel, close);
+          }}
         >
-          {panel === "root" ? (
+          {visiblePanel === "root" ? (
             <>
               <MenuEntry
                 label="Model"
@@ -165,9 +184,36 @@ export function ComposerModelMenu({
                 </p>
               )}
             </>
-          ) : panel === "model" ? (
+          ) : visiblePanel === "model" ? (
             <>
-              <MenuBack label="Model" onClick={() => setPanel("root")} />
+              <MenuBack
+                label="Model"
+                onClick={() => {
+                  setQuery("");
+                  setPanel("root");
+                }}
+              />
+              <input
+                className="composer-model-search"
+                aria-label="Search models"
+                placeholder="Search models…"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (
+                    event.key !== "Escape" &&
+                    event.key !== "ArrowDown" &&
+                    event.key !== "ArrowUp" &&
+                    event.key !== "Tab"
+                  )
+                    event.stopPropagation();
+                }}
+              />
+              {groups.length === 0 ? (
+                <p className="composer-menu-note" role="status">
+                  No matching models.
+                </p>
+              ) : null}
               <div className="composer-menu-scroll">
                 {groups.map((group) => (
                   <div
@@ -227,9 +273,9 @@ export function ComposerModelMenu({
               ))}
             </>
           )}
-        </div>
-      )}
-    </div>
+        </PopoverContent>
+      </div>
+    </Popover>
   );
 }
 
