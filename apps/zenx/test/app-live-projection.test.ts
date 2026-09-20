@@ -930,3 +930,292 @@ async function waitFor<T>(read: () => T | null | undefined | false) {
   }
   throw new Error("Timed out waiting for renderer projection");
 }
+
+test("context inspector refreshes canonical settings from other clients and fences stale reads", async () => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { ZenAppServer } = await import("../../../src/app-server.js");
+  const { AgentRuntime } = await import("../../../src/runtime.js");
+  const { ToolEnvironment } = await import("../../../src/tool.js");
+  const { JsonlThreadJournal } = await import("../../../src/journal.js");
+  const { InMemoryThreadMetadataStore } =
+    await import("../../../src/thread-metadata.js");
+  const { ProviderRegistry } =
+    await import("../../../src/provider-registry.js");
+  const { StaticModelCatalog } = await import("../../../src/model-catalog.js");
+  const { projectContextInspection } =
+    await import("../../../src/context-inspection.js");
+  const { projectModelUsage } = await import("../../../src/model-usage.js");
+  const directory = await mkdtemp(join(tmpdir(), "zenx-context-settings-"));
+  const adapter: import("../../../src/model.js").ModelAdapter = {
+    provider: "fake",
+    async *stream() {
+      yield {
+        type: "reasoning",
+        reasoningContent: "MODEL_A_REASONING",
+        contentVisibility: "public",
+      };
+      yield { type: "text_delta", delta: "answer" };
+      yield { type: "usage", inputTokens: 100, outputTokens: 10 };
+    },
+  };
+  const server = new ZenAppServer({
+    journal: new JsonlThreadJournal(join(directory, "journal")),
+    runtime: new AgentRuntime({
+      toolEnvironment: new ToolEnvironment({ runtimes: [] }),
+    }),
+    threadMetadata: new InMemoryThreadMetadataStore(),
+    providerRegistry: new ProviderRegistry(
+      ["fake", "other"].map((providerProfileId) => ({
+        providerProfileId,
+        adapter,
+        modelCatalog: new StaticModelCatalog([
+          {
+            id: "fake",
+            isDefault: true,
+            contextWindow: 32768,
+            supportedReasoningEfforts: ["medium", "high"],
+          },
+          { id: "b", contextWindow: 131072 },
+        ]),
+      })),
+    ),
+    defaults: {
+      cwd: directory,
+      providerProfileId: "fake",
+      modelId: "fake",
+      reasoningEffort: "medium",
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    },
+  });
+  const first = await server.startThread();
+  const second = await server.startThread();
+  await (
+    await server.startTurn(first.id, "hello")
+  ).done;
+  let watermark = 0;
+  let notify: NotificationListener | undefined;
+  const reads: Array<{
+    threadId: string;
+    value: ModelUsageProjection;
+    pending: ReturnType<typeof deferred<ModelUsageProjection>>;
+  }> = [];
+  const stop = server.subscribe((event) => {
+    if (event.type === "thread_settings_updated")
+      notify?.("zen/thread/event", {
+        processEpoch: "test-process-epoch",
+        threadId: event.threadId,
+        watermark: ++watermark,
+        event,
+      });
+  });
+  const harness = await mountApp({
+    threads: async (archived) =>
+      archived
+        ? []
+        : [summary(first.id, "Thread one"), summary(second.id, "Thread two")],
+    request: async (method, params) => {
+      if (method === "zen/thread/resume") {
+        const id = (params as { threadId: string }).threadId;
+        return {
+          ...resumed(thread(id)),
+          watermark,
+          thread: await server.readThread(id),
+        };
+      }
+      throw new Error("Unexpected request: " + method);
+    },
+    usage: async (threadId) => {
+      const snapshot = await server.readThread(threadId);
+      const selection = {
+        providerProfileId: snapshot.providerProfileId,
+        modelId: snapshot.modelId,
+        reasoningEffort: snapshot.reasoningEffort,
+      };
+      const inspection = projectContextInspection(snapshot.items, selection);
+      const producing = snapshot.turns.at(-1)?.selection;
+      const value = {
+        ...projectModelUsage(snapshot.items, {
+          contextWindow: snapshot.modelId === "b" ? 131072 : 32768,
+          estimatedInputTokens: inspection.estimatedMessageTokens,
+          providerContextUsageCompatible:
+            JSON.stringify(selection) === JSON.stringify(producing),
+        }),
+        inspection,
+      };
+      const pending = deferred<ModelUsageProjection>();
+      reads.push({ threadId, value, pending });
+      return pending.promise;
+    },
+    onNotification: (listener) => {
+      notify = listener;
+      return () => {
+        notify = undefined;
+      };
+    },
+  });
+  const clickThread = async (title: string) => {
+    const row = await waitFor(() =>
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+      ).find((row) => row.textContent?.includes(title)),
+    );
+    await act(async () => row.click());
+  };
+  const settle = async (index: number) => {
+    const read = await waitFor(() => reads[index]);
+    await act(async () => {
+      read.pending.resolve(read.value);
+    });
+    return read;
+  };
+  const panelText = () =>
+    document.querySelector(".context-inspector")?.textContent ?? "";
+  try {
+    await clickThread("Thread one");
+    const original = await settle(0);
+    assert.equal(original.value.context.inputTokenSource, "provider");
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".context-usage-trigger")!
+        .click(),
+    );
+    const inspect = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent === "Inspect context")!;
+    await act(async () => inspect.click());
+    // Opening performs a fresh read as well as revealing the current thread's tab.
+    assert.equal(reads.length, 2, "opening the inspector must re-read usage");
+    await settle(1);
+    assert.match(panelText(), /MODEL_A_REASONING/u);
+    assert.match(panelText(), /32,768/u);
+
+    await act(async () => {
+      await server.updateThreadSettings(first.id, {
+        selection: {
+          providerProfileId: "fake",
+          modelId: "fake",
+          reasoningEffort: "high",
+        },
+      });
+    });
+    assert.equal(
+      reads.length,
+      3,
+      "reasoning settings from another client trigger usage read",
+    );
+    assert.match(panelText(), /out of date/u);
+    assert.doesNotMatch(panelText(), /MODEL_A_REASONING|32,768/u);
+    const effortRead = await settle(2);
+    assert.equal(effortRead.value.context.inputTokenSource, "estimated");
+    assert.match(panelText(), /Indicator estimate/u);
+
+    await act(async () => {
+      await server.updateThreadSettings(first.id, {
+        selection: {
+          providerProfileId: "other",
+          modelId: "b",
+          reasoningEffort: "medium",
+        },
+      });
+    });
+    assert.equal(reads.length, 4);
+    await settle(3);
+    assert.match(panelText(), /131,072/u);
+    assert.doesNotMatch(panelText(), /MODEL_A_REASONING/u);
+
+    await act(async () => {
+      await server.setThreadPermissions(first.id, "read-only");
+    });
+    assert.equal(
+      reads.length,
+      5,
+      "permissions-only canonical notification triggers usage read",
+    );
+    const permissionRead = await settle(4);
+    assert.match(JSON.stringify(permissionRead.value.inspection), /read.only/i);
+    assert.match(panelText(), /read.only/i);
+
+    await act(async () => {
+      await server.setThreadPermissions(first.id, "workspace-write");
+    });
+    const failed = await waitFor(() => reads[5]);
+    await act(async () =>
+      failed.pending.reject(new Error("usage unavailable")),
+    );
+    assert.match(panelText(), /out of date/u);
+    assert.doesNotMatch(panelText(), /131,072/u);
+    assert.match(document.body.textContent ?? "", /usage unavailable/u);
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Refresh context snapshot"]',
+        )!
+        .click(),
+    );
+    await settle(6);
+    assert.match(panelText(), /workspace.write/i);
+
+    await act(async () => {
+      await server.updateThreadSettings(first.id, {
+        selection: {
+          providerProfileId: "fake",
+          modelId: "fake",
+          reasoningEffort: "medium",
+        },
+      });
+    });
+    const stale = await waitFor(() => reads[7]);
+    await clickThread("Thread two");
+    await settle(8);
+    await act(async () => {
+      await server.setThreadPermissions(first.id, "read-only");
+    });
+    assert.equal(
+      reads.length,
+      9,
+      "background settings must not invalidate the selected thread",
+    );
+    await clickThread("Thread one");
+    const returning = await waitFor(() => reads[9]);
+    await act(async () => {
+      await server.updateThreadSettings(first.id, {
+        selection: {
+          providerProfileId: "other",
+          modelId: "b",
+          reasoningEffort: "medium",
+        },
+      });
+    });
+    await settle(10);
+    await act(async () => {
+      stale.pending.resolve(stale.value);
+      returning.pending.resolve(returning.value);
+    });
+    assert.match(
+      document
+        .querySelector(".context-usage-trigger")
+        ?.getAttribute("aria-label") ?? "",
+      /131\.1K/u,
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".context-usage-trigger")!
+        .click(),
+    );
+    const reopen = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent === "Inspect context")!;
+    await act(async () => reopen.click());
+    await settle(11);
+    assert.match(panelText(), /131,072/u);
+    assert.doesNotMatch(panelText(), /MODEL_A_REASONING/u);
+    assert.equal(reads.length, 12);
+  } finally {
+    stop();
+    await harness.unmount();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

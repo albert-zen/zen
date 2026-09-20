@@ -32,6 +32,8 @@ interface ContentTab {
 }
 export function AuxiliaryPanel({
   contextUsage,
+  contextUsageStale,
+  onRefreshContext,
   threadId,
   title,
   open,
@@ -46,6 +48,8 @@ export function AuxiliaryPanel({
   onWidthChange,
 }: {
   contextUsage?: ModelUsageProjection;
+  contextUsageStale?: boolean;
+  onRefreshContext?(): void;
   onWidthChange?(width: number): void;
   fileDrafts?: WorkspaceFileDrafts;
   workspacePath?: string;
@@ -590,7 +594,11 @@ export function AuxiliaryPanel({
             hidden={!visible}
           >
             {tab.id === "context" && contextUsage?.inspection ? (
-              <ContextInspector usage={contextUsage} />
+              <ContextInspector
+                usage={contextUsage}
+                stale={contextUsageStale}
+                onRefresh={onRefreshContext}
+              />
             ) : null}
             {tab.path ? (
               <WorkspaceFilesPanel

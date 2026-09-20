@@ -541,6 +541,7 @@ export function App() {
   const [threadUsage, setThreadUsage] = useState<
     ModelUsageProjection | undefined
   >();
+  const [threadUsageStale, setThreadUsageStale] = useState(false);
   // Stable identity so streaming re-renders of App do not restart every
   // mounted attachment read; thumbnails cache payloads per attachment.
   const readAttachment = useCallback(
@@ -721,7 +722,8 @@ export function App() {
     }
   };
 
-  const refreshThreadUsage = (threadId: string) => {
+  const refreshThreadUsage = (threadId: string, invalidate = false) => {
+    if (invalidate) setThreadUsageStale(true);
     const epoch = ++threadUsageLoadEpoch.current;
     void window.zenx.modelUsage
       .forThread(threadId)
@@ -729,8 +731,10 @@ export function App() {
         if (
           selectedThreadIdRef.current === threadId &&
           threadUsageLoadEpoch.current === epoch
-        )
+        ) {
           setThreadUsage(usage);
+          setThreadUsageStale(false);
+        }
       })
       .catch((error: unknown) => {
         if (
@@ -807,8 +811,10 @@ export function App() {
           if (
             selectionEpoch.current === epoch &&
             threadUsageLoadEpoch.current === usageEpoch
-          )
+          ) {
             setThreadUsage(usage);
+            setThreadUsageStale(false);
+          }
         })
         .catch((error: unknown) => {
           if (
@@ -982,10 +988,14 @@ export function App() {
             params as ServerNotificationParams["zen/thread/event"];
           if (
             projected.event.type === "item_completed" ||
-            projected.event.type === "turn_completed"
+            projected.event.type === "turn_completed" ||
+            projected.event.type === "thread_settings_updated"
           ) {
             if (selectedThreadIdRef.current === projected.threadId)
-              refreshThreadUsage(projected.threadId);
+              refreshThreadUsage(
+                projected.threadId,
+                projected.event.type === "thread_settings_updated",
+              );
           }
           if (
             projected.event.type === "item_completed" &&
@@ -1032,6 +1042,8 @@ export function App() {
           }
         }
         if (method === "thread/settings/updated") {
+          if (eventThreadId && selectedThreadIdRef.current === eventThreadId)
+            refreshThreadUsage(eventThreadId, true);
           setModelUpdateError(null);
         }
       },
@@ -2180,9 +2192,10 @@ export function App() {
             configuredProjects={configuredProjects}
             newThreadDraft={newThreadDraft}
             threadAttachments={threadAttachments}
-            threadUsage={threadUsage}
+            threadUsage={threadUsageStale ? undefined : threadUsage}
             onInspectContext={() => {
               if (!threadDetail) return;
+              refreshThreadUsage(threadDetail.id, true);
               setPanelTabs((current) => ({
                 ...current,
                 [threadDetail.id]: "context",
@@ -2327,6 +2340,8 @@ export function App() {
         selectedThreadId === threadDetail.id ? (
           <AuxiliaryPanel
             contextUsage={threadUsage}
+            contextUsageStale={threadUsageStale}
+            onRefreshContext={() => refreshThreadUsage(threadDetail.id, true)}
             onWidthChange={setWorkspacePanelWidth}
             fileDrafts={fileDrafts}
             workspacePath={threadDetail.cwd}

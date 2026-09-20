@@ -15,9 +15,33 @@ function Preview({ value }: { value: ContextPreview }) {
   );
 }
 
-export function ContextInspector({ usage }: { usage: ModelUsageProjection }) {
+export function ContextInspector({
+  usage,
+  stale = false,
+  onRefresh,
+}: {
+  usage: ModelUsageProjection;
+  stale?: boolean;
+  onRefresh?(): void;
+}) {
   const data = usage.inspection;
   if (!data) return null;
+  if (stale)
+    return (
+      <section className="context-inspector" aria-label="Context inspector">
+        <p role="status">
+          Context snapshot is out of date. Previous content is hidden until a
+          fresh read succeeds.
+        </p>
+        <button
+          type="button"
+          aria-label="Refresh context snapshot"
+          onClick={onRefresh}
+        >
+          Refresh context
+        </button>
+      </section>
+    );
   return (
     <section className="context-inspector" aria-label="Context inspector">
       <header>
