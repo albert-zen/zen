@@ -16,12 +16,16 @@ import {
   ZenXSelfControlCapabilityPackage,
 } from "../src/main/capabilities/self-control-package.js";
 
-async function fixture(adapter?: ModelAdapter) {
+async function fixture(
+  adapter?: ModelAdapter,
+  toolEnvironment = new ToolEnvironment({ bundles: [] }),
+) {
+  const journal = new InMemoryThreadJournal();
   const app = new ZenAppServer({
-    journal: new InMemoryThreadJournal(),
+    journal,
     threadMetadata: new InMemoryThreadMetadataStore(),
     runtime: new AgentRuntime({
-      toolEnvironment: new ToolEnvironment({ bundles: [] }),
+      toolEnvironment,
     }),
     providerRegistry: new ProviderRegistry([
       {
@@ -68,6 +72,7 @@ async function fixture(adapter?: ModelAdapter) {
   await port.attach(client, process.cwd());
   const control = new ZenXSelfControlCapabilityPackage({ appServer: port });
   return {
+    journal,
     app,
     client,
     control,
@@ -193,6 +198,173 @@ test("original history has stable older pages and complete item continuation bou
       cursor = chunk.nextCursor ?? undefined;
     } while (cursor !== undefined);
     assert.equal(JSON.parse(raw).text, "original".repeat(1000));
+  } finally {
+    await f.close();
+  }
+});
+
+test("self-control public history excludes opaque bodies across previews and every continuation", async () => {
+  const secret = "OPAQUE_PRIVATE_SENTINEL";
+  const longSummary = "public summary ".repeat(1300);
+  const publicReasoning = "public reasoning ".repeat(700);
+  const output =
+    'Original tool text: {"contentVisibility":"opaque","reasoningContent":"literal example"}';
+  const nested = {
+    layers: [
+      {
+        child: {
+          role: "reasoning",
+          contentVisibility: "opaque",
+          reasoningContent: secret,
+          futurePrivateField: secret,
+          summary: "nested summary",
+        },
+      },
+    ],
+    public: { contentVisibility: "public", reasoningContent: publicReasoning },
+  };
+  let sampled = false;
+  const f = await fixture(
+    {
+      provider: "test",
+      async *stream() {
+        if (sampled) {
+          yield { type: "text_delta", delta: "done" };
+          return;
+        }
+        sampled = true;
+        for (const [reasoningContent, summary] of [
+          [secret, "short summary"],
+          [secret.repeat(1000), longSummary],
+        ])
+          yield {
+            type: "reasoning",
+            reasoningContent: reasoningContent!,
+            summary: summary!,
+            contentVisibility: "opaque",
+          };
+        yield {
+          type: "reasoning",
+          reasoningContent: publicReasoning,
+          summary: "public summary",
+          contentVisibility: "public",
+        };
+        yield {
+          type: "tool_call",
+          callId: "nested",
+          name: "nested",
+          arguments: nested,
+        };
+      },
+    },
+    new ToolEnvironment({
+      bundles: [
+        {
+          identity: { kind: "builtin", id: "test" },
+          tools: [
+            {
+              name: "nested",
+              specification: {
+                name: "nested",
+                description: "Nested fixture",
+                inputSchema: { type: "object" },
+              },
+              async execute() {
+                return {
+                  output,
+                  exitCode: 0,
+                  contentType: "application/json",
+                  structuredContent: nested,
+                };
+              },
+            },
+          ],
+        },
+      ],
+    }),
+  );
+  try {
+    const target = (await f.client.request("thread/start", {})).thread.id;
+    await (
+      await f.app.startTurn(target, "inspect")
+    ).done;
+    const before = await f.journal.read(target);
+    assert.ok(JSON.stringify(before).includes(secret));
+    const turns = await f.invoke("zenx_threads_read", {
+      target,
+      maxTurns: 1,
+      maxItemsPerTurn: 25,
+    });
+    assert.ok(!JSON.stringify(turns).includes(secret));
+    assert.ok(JSON.stringify(turns).includes("short summary"));
+    const turnId = turns.turns[0].turnId;
+    for (const granularity of ["items", "agent_messages"]) {
+      let cursor: string | undefined;
+      do {
+        const page = await f.invoke("zenx_threads_read", {
+          target,
+          granularity,
+          turnId,
+          maxItemsPerTurn: 2,
+          ...(cursor ? { cursor } : {}),
+        });
+        assert.ok(!JSON.stringify(page).includes(secret));
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+    }
+    const projected: Record<string, any>[] = [];
+    for (const item of before) {
+      let cursor: string | undefined;
+      let raw = "";
+      do {
+        const chunk = await f.invoke("zenx_threads_read", {
+          target,
+          granularity: "item",
+          itemId: item.id,
+          ...(cursor ? { cursor } : {}),
+        });
+        assert.ok(!JSON.stringify(chunk).includes(secret));
+        assert.equal(chunk.format, "public_item_json");
+        assert.equal(chunk.offset, raw.length);
+        raw += chunk.content;
+        cursor = chunk.nextCursor ?? undefined;
+        if (!cursor) assert.equal(chunk.totalLength, raw.length);
+      } while (cursor);
+      projected.push(JSON.parse(raw));
+    }
+    const reasoning = projected.filter((item) => item.type === "reasoning");
+    assert.equal(reasoning.length, 3);
+    assert.equal(reasoning[0]!.summary, "short summary");
+    assert.equal(reasoning[1]!.summary, longSummary);
+    assert.equal(reasoning[0]!.reasoningContent, undefined);
+    assert.equal(reasoning[1]!.reasoningContent, undefined);
+    assert.equal(reasoning[2]!.reasoningContent, publicReasoning);
+    for (const value of [
+      projected.find((item) => item.type === "tool_call")!.arguments,
+      projected.find((item) => item.type === "tool_result")!.structuredContent,
+    ]) {
+      assert.deepEqual(value.layers[0].child, {
+        role: "reasoning",
+        contentVisibility: "opaque",
+        summary: "nested summary",
+      });
+      assert.deepEqual(value.public, nested.public);
+    }
+    assert.equal(
+      projected.find((item) => item.type === "tool_result")!.output,
+      output,
+    );
+    assert.deepEqual(
+      (await f.client.request("zen/thread/read", { threadId: target })).thread
+        .items,
+      before,
+    );
+    assert.deepEqual(
+      (await f.client.request("zen/thread/resume", { threadId: target })).thread
+        .items,
+      before,
+    );
+    assert.deepEqual(await f.journal.read(target), before);
   } finally {
     await f.close();
   }

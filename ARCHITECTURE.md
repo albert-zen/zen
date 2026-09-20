@@ -3,7 +3,7 @@
 ## 核心概念
 
 - **ZenX Thread Target** — Host 从 App Server 当前列表与 workspace 身份投影解析完整 ID、唯一前缀或精确标题，歧义只返回易读候选；共享解析不保存索引或拥有会话语义。
-- **ZenX 自控原文与发送** — 原生 `zen/thread/read` 无订阅地读取 canonical snapshot，Host 用 Item/Turn 边界派生分页与原文片段，并从可信工具调用身份及当前快照推导发送幂等键和 Turn fence；发送偏好仍由 Host profile 持有，不引入命令账本或会话权威。
+- **ZenX 自控原文与发送** — 原生 `zen/thread/read` 无订阅地读取完整 canonical snapshot；Host 用 Item/Turn 边界派生分页，并在所有模型可见预览与续读前递归投影可公开的 Item：标记 opaque 的结构只保留定位字段与公开 summary，public reasoning 与工具原文字符串不改写，journal 与可信原生读取/恢复仍完整。发送幂等键和 Turn fence 从可信工具调用身份及当前快照推导；发送偏好仍由 Host profile 持有，不引入命令账本或会话权威。
 - **Trigger Thread Watch** — 既有 Trigger 配置固定来源与目标 Thread，可监听一次或后续各 Turn 的终态；注册后的可选 canonical 快照与实时事件使用同一去重入口，一次性监听在事件接纳时停用，通知发送的失败或不确定性单独记录，不重试或补发离线事件。
 - **Host Skills** — Host 保存标准目录的完整导入副本与独立可见性覆盖；ZAS 的统一发送入口按预算将自动目录和显式引用解析为带来源的 canonical 文本输入，重试从已有 Item 复用快照，恢复与压缩不重新读取目录。默认手动模式不自动披露任何元数据，禁用模式拒绝加载。
 - **ZenX 界面控件** — Renderer 的共享 Select、Popover、Dialog 使用无样式可访问性 primitives 与既有主题 tokens 统一键盘、焦点、浮层避让及可取消动效，只管理易失展示状态。
