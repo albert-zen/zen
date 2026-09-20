@@ -578,7 +578,20 @@ test(
       });
       const running = await composition.toolEnvironment.execute(prepared);
       assert.equal(structuredStatus(running.structuredContent), "running");
-      const pid = Number(await readFile(marker, "utf8"));
+      // Admission can yield before the child has reached its first write.
+      const deadline = Date.now() + 5000;
+      let pid = 0;
+      while (!pid) {
+        try {
+          pid = Number(await readFile(marker, "utf8"));
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        if (pid) break;
+        if (Date.now() >= deadline)
+          throw new Error("Shell did not write its PID");
+        await new Promise<void>((resolve) => setTimeout(resolve, 5));
+      }
 
       await composition.close();
       await waitForProcessExit(pid);

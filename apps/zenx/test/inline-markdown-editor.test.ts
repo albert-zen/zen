@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { undo } from "@codemirror/commands";
+import { forceParsing } from "@codemirror/language";
 import { EditorView } from "@codemirror/view";
 import { JSDOM } from "jsdom";
 import React, { act, useState } from "react";
@@ -62,6 +63,11 @@ test("live preview keeps one editable document and reveals only the selected syn
     const editor = document.querySelector<HTMLElement>(".cm-editor")!;
     const view = EditorView.findFromDOM(editor);
     assert.ok(view);
+    // Parsing is time-budgeted. Under suite load the first render can stop
+    // before the trailing reference definition; test the fully parsed view.
+    await act(async () => {
+      assert.ok(forceParsing(view, view.state.doc.length, 1000));
+    });
     assert.equal(
       view.state.doc.lines,
       source.replace(/\r\n?|\n/gu, "\n").split("\n").length,

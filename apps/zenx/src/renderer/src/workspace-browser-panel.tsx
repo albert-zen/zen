@@ -1,3 +1,4 @@
+import { Icon } from "./icons.js";
 import React, { useEffect, useRef, useState } from "react";
 import type {
   WorkspaceBrowserCommand,
@@ -144,7 +145,7 @@ export function WorkspaceBrowserPanel({
             disabled={!active.canGoBack || busy}
             onClick={() => void command("back")}
           >
-            ←
+            <Icon name="arrow-left" />
           </button>
           <button
             type="button"
@@ -152,7 +153,7 @@ export function WorkspaceBrowserPanel({
             disabled={!active.canGoForward || busy}
             onClick={() => void command("forward")}
           >
-            →
+            <Icon name="arrow-right" />
           </button>
           <button
             type="button"
@@ -160,18 +161,20 @@ export function WorkspaceBrowserPanel({
             disabled={busy}
             onClick={() => void command("reload")}
           >
-            ↻
+            <Icon name="reload" />
           </button>
-          <input
-            ref={addressInput}
-            aria-label="Browser address"
-            placeholder="Enter a URL"
-            value={address}
-            onChange={(event) => setAddress(event.target.value)}
-          />
-          <button type="submit" disabled={busy}>
-            Go
-          </button>
+          <div className="workspace-browser-location">
+            <input
+              ref={addressInput}
+              aria-label="Browser address"
+              placeholder="Enter a URL"
+              value={address}
+              onChange={(event) => setAddress(event.target.value)}
+            />
+            <button type="submit" aria-label="Go" title="Go" disabled={busy}>
+              <Icon name="arrow-right" />
+            </button>
+          </div>
         </form>
         {active.error ? (
           <p role="alert" className="browser-ui-error">

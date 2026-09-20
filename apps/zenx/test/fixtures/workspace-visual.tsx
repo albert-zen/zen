@@ -12,6 +12,10 @@ const params = new URLSearchParams(location.search);
 document.documentElement.dataset.appearance = params.get("theme") ?? "light";
 document.documentElement.dataset.platform = params.get("platform") ?? "win32";
 let compactions = 0;
+// Controlled browser state for toolbar layout; no external site is loaded.
+let previewTabs: import("../../src/main/workspace-browser.js").WorkspaceBrowserTab[] =
+  [];
+
 const options = {
   request: async (method: string) => {
     if (method === "zen/thread/resume") {
@@ -49,6 +53,38 @@ const options = {
   },
 };
 const zenx = {
+  workspaceBrowser: {
+    command: async (
+      threadId: string,
+      command: string,
+      tabId?: string,
+      url?: string,
+    ) => {
+      if (command === "new")
+        previewTabs.push({
+          id: crypto.randomUUID(),
+          threadId,
+          title: "New tab",
+          url: "about:blank",
+          loading: false,
+          canGoBack: false,
+          canGoForward: false,
+          sharedWithAgent: true,
+        });
+      if (command === "close")
+        previewTabs = previewTabs.filter((tab) => tab.id !== tabId);
+      if (command === "navigate")
+        previewTabs = previewTabs.map((tab) =>
+          tab.id === tabId
+            ? { ...tab, title: "Personal Inbox", url: url ?? "about:blank" }
+            : tab,
+        );
+      return previewTabs.filter((tab) => tab.threadId === threadId);
+    },
+    mount: async () => undefined,
+    onChanged: () => () => undefined,
+    onFocusAddress: () => () => undefined,
+  },
   panels: { onOpen: () => () => undefined },
   platform: params.get("platform") ?? "win32",
   protocol: {
