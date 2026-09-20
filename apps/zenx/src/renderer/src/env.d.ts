@@ -96,6 +96,16 @@ declare global {
         onFocusAddress(listener: (threadId: string) => void): () => void;
       };
       workspaceFiles: {
+        search(
+          threadId: string,
+          query: string,
+        ): Promise<import("../../main/workspace-files.js").WorkspaceFileSearch>;
+        validateReference(
+          threadId: string,
+          path: string,
+        ): Promise<
+          import("../../main/workspace-files.js").WorkspaceFileReference
+        >;
         setDirty(dirty: boolean): void;
         save(
           threadId: string,

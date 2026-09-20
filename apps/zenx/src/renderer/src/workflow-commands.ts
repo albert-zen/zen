@@ -70,7 +70,9 @@ export function commandCandidates(
       .map((command) => ({ kind: "custom" as const, ...command })),
   ];
   return candidates.filter((command) =>
-    command.name.toLowerCase().startsWith(parsed.name),
+    `${command.name} ${command.description}`
+      .toLowerCase()
+      .includes(parsed.name),
   );
 }
 

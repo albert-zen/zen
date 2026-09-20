@@ -3708,3 +3708,87 @@ test("Ctrl+1 releases hidden plugin control portals while retaining the isolated
     await unmountApp(harness);
   }
 });
+
+test("reference selector sends exact locators through App with and without native Skills", async () => {
+  for (const includeSkill of [false, true]) {
+    const sends: { method: string; params: any }[] = [];
+    const titles: string[] = [];
+    const harness = await mountThreadApp({
+      request: async (method, params) => {
+        if (method === "zen/thread/resume") return resumed(liveThread());
+        if (method === "turn/start" || method === "zen/turn/send") {
+          sends.push({ method, params });
+          return {};
+        }
+        throw new Error(`Unexpected ${method}`);
+      },
+    });
+    try {
+      window.zenx.workspaceFiles = {
+        ...window.zenx.workspaceFiles,
+        search: async () => ({
+          cwd: "C:/space root",
+          entries: [{ name: '文 [x]".ts', path: 'src/文 [x]".ts' }],
+          truncated: false,
+          scanned: 1,
+        }),
+        validateReference: async (_id, path) => ({
+          cwd: "C:/space root",
+          name: '文 [x]".ts',
+          path,
+        }),
+      };
+      window.zenx.titles.observe = async (_id, text) => {
+        titles.push(text);
+        return undefined as any;
+      };
+      const textarea = await selectedComposer();
+      const prefix = includeSkill
+        ? "[skill:11111111-1111-1111-1111-111111111111:sample]\n"
+        : "";
+      await setTextareaValue(textarea, prefix + "Read @src/");
+      const option = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(".selector-option"),
+      );
+      await act(async () => option.click());
+      await waitFor(() => document.querySelector(".composer-references"));
+      assert.equal(sends.length, 0);
+      assert.doesNotMatch(
+        textarea.value,
+        /zenx-references|relative path|space root/,
+      );
+      await dispatchComposerKey(textarea, { key: "Enter" });
+      await waitFor(() => sends.length === 1);
+      const send = sends[0]!;
+      assert.equal(send.method, includeSkill ? "zen/turn/send" : "turn/start");
+      const text = send.params.input.find(
+        (part: any) => part.type === "text",
+      ).text;
+      assert.match(text, /File reference/);
+      assert.ok(text.includes(JSON.stringify('src/文 [x]".ts')));
+      assert.ok(text.includes("C:/space root"));
+      assert.doesNotMatch(text, /zenx-references/);
+      assert.equal(send.params.model, undefined);
+      assert.equal(send.params.approvalPolicy, undefined);
+      assert.equal(send.params.reasoningEffort, undefined);
+      if (includeSkill)
+        assert.ok(
+          send.params.input.some(
+            (part: any) =>
+              part.type === "skill" &&
+              part.id === "11111111-1111-1111-1111-111111111111",
+          ),
+        );
+      assert.ok(titles.some((title) => title.includes('文 [x]".ts')));
+      assert.ok(
+        titles.every(
+          (title) =>
+            !title.includes("zenx-references") &&
+            !title.includes("C:/space root"),
+        ),
+      );
+    } finally {
+      await unmountApp(harness);
+    }
+  }
+});

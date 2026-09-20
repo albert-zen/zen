@@ -897,3 +897,28 @@ Tool image content already returned by `view_image` appears in its expanded tool
 ## Skills
 
 Import standard Skill directories and choose manual, automatic or disabled mode in Settings → Skills. See [Skills](docs/skills.md) for configuration precedence, explicit slash references, resource copies and replay budgets.
+
+### Composer commands and references
+
+Type `/` at the caret to search enabled custom commands and imported Skills by
+name or description. Select with the mouse, Up/Down and Enter/Tab; Escape closes
+the picker. Custom commands expand into an editable draft; Skills use their
+existing native IDs. Exact `/compact` keeps its existing one-Enter behavior.
+
+Type `@` after whitespace to find workspace files or other Agent threads.
+References appear as removable name chips; hover for the workspace and exact
+path or thread ID. Sending expands them to explicit locator text for the agent
+to read with its existing tools. Selecting a reference does not send a message,
+automatically include another thread's history, or change runtime settings.
+
+File search is bounded to 80 results, 10,000 entries, depth 32 and a 500ms scan
+budget (checked between I/O), omits symlinks/dependency folders, and reports partial
+results and inaccessible subdirectories. A query such as `src/view` prioritizes
+that parent folder. Files become available after a real thread is created, so
+the Host can derive its root from the authoritative cwd. Thread search filters
+all Native summaries; additional matching results are available via Show more.
+Missing or inaccessible selections fail visibly and preserve the draft.
+
+For the standalone selector visual fixture, run from the repository root:
+`node node_modules/vite/bin/vite.js apps/zenx/test/fixtures/selector --host 127.0.0.1 --port 5189`.
+It uses the actual composer with fixture Host responses; it does not start ZAS.
