@@ -1,3 +1,4 @@
+import { Dialog } from "./ui/controls.js";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import type {
@@ -56,12 +57,6 @@ export function DirectoryPicker({
   };
 
   useEffect(() => {
-    const previousFocus = document.activeElement as HTMLElement | null;
-    dialogRef.current?.focus();
-    return () => previousFocus?.focus();
-  }, []);
-
-  useEffect(() => {
     let active = true;
     void directorySettings()
       .getDirectoryBrowser()
@@ -111,42 +106,20 @@ export function DirectoryPicker({
     }
   };
 
-  const onDialogKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      onCancel();
-      return;
-    }
-    if (event.key !== "Tab") return;
-    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
-      'button:not(:disabled), [href], input:not(:disabled), [tabindex]:not([tabindex="-1"])',
-    );
-    if (focusable === undefined || focusable.length === 0) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    const active = document.activeElement;
-    if (!Array.from(focusable).includes(active as HTMLElement)) {
-      event.preventDefault();
-      (event.shiftKey ? last : first)?.focus();
-    } else if (event.shiftKey && active === first) {
-      event.preventDefault();
-      last?.focus();
-    } else if (!event.shiftKey && active === last) {
-      event.preventDefault();
-      first?.focus();
-    }
-  };
-
   return (
-    <div className="directory-picker-backdrop" role="presentation">
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onCancel();
+      }}
+      title="Choose project folder"
+      className="directory-picker-shell"
+    >
       <section
         className="directory-picker-dialog"
         ref={dialogRef}
-        role="dialog"
         tabIndex={-1}
-        aria-modal="true"
         aria-labelledby="directory-picker-title"
-        onKeyDown={onDialogKeyDown}
       >
         <header>
           <div>
@@ -262,6 +235,6 @@ export function DirectoryPicker({
           </button>
         </footer>
       </section>
-    </div>
+    </Dialog>
   );
 }

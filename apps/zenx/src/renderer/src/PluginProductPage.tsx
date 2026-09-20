@@ -215,6 +215,7 @@ export function useAppearance(): "light" | "dark" {
     document.documentElement.dataset.appearance === "dark" ? "dark" : "light";
   const [theme, setTheme] = useState<"light" | "dark">(read);
   useEffect(() => {
+    setTheme(read());
     if (typeof MutationObserver === "undefined") return;
     const observer = new MutationObserver(() => setTheme(read()));
     observer.observe(document.documentElement, {

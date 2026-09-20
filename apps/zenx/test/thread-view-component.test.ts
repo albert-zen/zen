@@ -1,3 +1,4 @@
+import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import * as React from "react";
@@ -214,10 +215,25 @@ test("compaction progress is a transcript item and completed items reveal exact 
     const event = requiredElement(".context-compaction-event");
     assert.match(event.textContent ?? "", /Context compacted/u);
     assert.match(event.textContent ?? "", /Human initiated/u);
+    assert.match(event.textContent ?? "", /Full input size unknown/u);
+    assert.doesNotMatch(event.textContent ?? "", /effective messages/u);
     await act(async () => requiredButton(".context-compaction-toggle").click());
     assert.match(event.textContent ?? "", /Keep this request/u);
     assert.match(event.textContent ?? "", /Kept answer/u);
     assert.match(event.textContent ?? "", /Continue with the accepted plan/u);
+    assert.match(
+      requiredElement(".compaction-summary").textContent ?? "",
+      /Continue with the accepted plan/u,
+    );
+    assert.equal(
+      requiredElement(".compaction-projection").hasAttribute("open"),
+      false,
+    );
+    assert.match(event.textContent ?? "", /not tokens/u);
+    assert.match(
+      event.textContent ?? "",
+      /request inputs may be added separately/u,
+    );
 
     await act(async () =>
       root.render(

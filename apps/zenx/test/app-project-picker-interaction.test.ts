@@ -1,3 +1,4 @@
+import "./dom-primitives.js";
 /// <reference path="../src/renderer/src/env.d.ts" />
 
 import assert from "node:assert/strict";
@@ -2741,6 +2742,7 @@ async function mountApp(
     observeTitle?(): Promise<undefined>;
     pickImages?(): Promise<ZenXImageDraft[]>;
     threads?(archived: boolean): Promise<NativeThreadSummary[]>;
+    plugins?: Partial<Window["zenx"]["plugins"]>;
   } = {},
 ): Promise<AppHarness> {
   const dom = new JSDOM(
@@ -2906,7 +2908,9 @@ async function mountApp(
     plugins: {
       get: async () => ({ plugins: [], sidebar: [], pages: [] }),
       onChange: () => () => undefined,
+      ...options.plugins,
     },
+    marketplace: { get: async () => ({ entries: [], builtIns: [] }) },
   } as unknown as Window["zenx"];
   Object.defineProperty(dom.window, "zenx", { value: zenx });
   const container = document.getElementById("root");
@@ -3316,9 +3320,16 @@ test("Settings and thread navigation are mutually exclusive, including return to
       await act(async () =>
         document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
       );
-      await waitFor(() =>
-        document.querySelector('[aria-label="ZenX settings"]'),
+      await waitFor(
+        () =>
+          document
+            .querySelector('[aria-label="ZenX settings"]')
+            ?.closest("[hidden]") === null,
       );
+      const settingsSurface = document.querySelector(
+        '[aria-label="ZenX settings"]',
+      );
+      assert.ok(settingsSurface);
       assert.equal(
         document.querySelectorAll('.thread-row[aria-current="page"]').length,
         0,
@@ -3338,8 +3349,15 @@ test("Settings and thread navigation are mutually exclusive, including return to
       );
       await waitFor(() => document.querySelector("#thread-composer"));
       assert.equal(
-        document.querySelector('[aria-label="ZenX settings"]'),
-        null,
+        document.querySelector('[aria-label="ZenX settings"]') ===
+          settingsSurface,
+        true,
+      );
+      assert.equal(
+        document
+          .querySelector('[aria-label="ZenX settings"]')
+          ?.closest("[hidden]") !== null,
+        true,
       );
       assert.equal(
         document.querySelectorAll('.thread-row[aria-current="page"]').length,
@@ -3542,3 +3560,151 @@ function exactButtonByAria(label: string): HTMLButtonElement {
   assert(button);
   return button;
 }
+
+test("Ctrl+1 releases hidden plugin control portals while retaining the isolated bridge", async () => {
+  const snapshot = {
+    plugins: [],
+    bundles: [
+      {
+        key: "sample:ui",
+        pluginId: "sample",
+        id: "ui",
+        apiVersion: 1,
+        kind: "isolated",
+        entry: "<input value='draft'>",
+      },
+    ],
+    surfaces: [
+      {
+        key: "sample:settings",
+        pluginId: "sample",
+        id: "settings",
+        bundleId: "ui",
+        exportName: "settings",
+      },
+    ],
+    settings: [
+      {
+        key: "sample:settings",
+        pluginId: "sample",
+        id: "settings",
+        title: "Sample settings",
+        surfaceId: "settings",
+      },
+    ],
+    sidebar: [],
+    pages: [],
+    subroutes: [],
+    panels: [],
+    commands: [],
+    menus: [],
+  };
+  let reads = 0;
+  const harness = await mountThreadApp({
+    threads: async () => [summary(false)],
+    request: async () => resumed(liveThread()),
+    plugins: {
+      get: async () => snapshot as any,
+      readHandle: async () => ++reads,
+    },
+  });
+  try {
+    await selectedComposer();
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
+    );
+    const pluginTab = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
+        (button) => button.textContent === "Plugins",
+      ),
+    );
+    await act(async () => pluginTab.click());
+    const frame = await waitFor(() => document.querySelector("iframe"));
+    const messages: any[] = [];
+    frame.contentWindow!.postMessage = (message) => {
+      messages.push(message);
+    };
+    await act(async () =>
+      frame.dispatchEvent(new harness.dom.window.Event("load")),
+    );
+    const channel = JSON.parse(
+      messages
+        .find((message) => message.type === "zenx-plugin-ui:document")
+        .html.match(/const init=(.*?);const deepFreeze/s)[1],
+    ).channel;
+    await act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent === "Install from source…")!
+        .click(),
+    );
+    const source = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Plugin source"]',
+    )!;
+    await act(async () =>
+      source.dispatchEvent(
+        new harness.dom.window.KeyboardEvent("keydown", {
+          key: "ArrowDown",
+          bubbles: true,
+        }),
+      ),
+    );
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+    assert.equal(document.body.style.pointerEvents, "none");
+    Object.assign(window.zenx, { platform: "win32" });
+    await act(async () =>
+      document.activeElement!.dispatchEvent(
+        new harness.dom.window.KeyboardEvent("keydown", {
+          key: "1",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    await waitFor(() => document.querySelector("#thread-composer"));
+    assert.equal(
+      document.querySelector<HTMLElement>(".settings-view")?.hidden,
+      true,
+    );
+    assert.notEqual(document.body.style.pointerEvents, "none");
+    assert.equal(
+      document
+        .querySelector('[role="listbox"]')
+        ?.contains(document.activeElement) ?? false,
+      false,
+    );
+    const composer =
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!;
+    composer.focus();
+    assert.equal(document.activeElement === composer, true);
+    await act(async () =>
+      window.dispatchEvent(
+        new harness.dom.window.MessageEvent("message", {
+          source: frame.contentWindow,
+          data: {
+            channel,
+            type: "zenx-plugin-ui:request",
+            requestId: "hidden",
+            operation: "handles.read",
+            id: "sample:context",
+          },
+        }),
+      ),
+    );
+    assert.equal(reads, 1);
+    assert.equal(
+      messages.some(
+        (message) =>
+          message.requestId === "hidden" &&
+          message.type === "zenx-plugin-ui:result",
+      ),
+      true,
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
+    );
+    assert.equal(document.querySelector("iframe") === frame, true);
+  } finally {
+    await unmountApp(harness);
+  }
+});

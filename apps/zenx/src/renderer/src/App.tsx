@@ -2187,20 +2187,21 @@ export function App() {
       ) : null}
 
       <main className="workspace">
-        {page === "settings" ? (
-          <SettingsView
-            archivedError={threadListErrors.archived}
-            archivedLoading={!threadListLoaded.archived}
-            archivedThreads={archivedSummaries}
-            onRetryArchived={() => void loadThreadSummaries(true)}
-            onTabChange={setSettingsTab}
-            onUnarchive={performThreadLifecycle}
-            onOpenSidebar={() => setSidebarOpen(true)}
-            tab={settingsTab}
-            pluginSnapshot={pluginSnapshot}
-            showHeader={false}
-          />
-        ) : genericPluginTarget !== undefined && pluginSnapshot !== null ? (
+        <SettingsView
+          active={page === "settings"}
+          archivedError={threadListErrors.archived}
+          archivedLoading={!threadListLoaded.archived}
+          archivedThreads={archivedSummaries}
+          onRetryArchived={() => void loadThreadSummaries(true)}
+          onTabChange={setSettingsTab}
+          onUnarchive={performThreadLifecycle}
+          onOpenSidebar={() => setSidebarOpen(true)}
+          tab={settingsTab}
+          pluginSnapshot={pluginSnapshot}
+          showHeader={false}
+        />
+        {page === "settings" ? null : genericPluginTarget !== undefined &&
+          pluginSnapshot !== null ? (
           <PluginProductPage
             snapshot={pluginSnapshot}
             route={page}
@@ -2470,6 +2471,9 @@ function WindowTitleBar({
             onClick={onToggleInbox}
           >
             <Icon name="inbox" />
+            <span className="inbox-label">
+              {mode === "inbox" ? "Projects" : "Inbox"}
+            </span>
             {pendingApprovalCount > 0 ? (
               <span className="inbox-dot" aria-hidden="true" />
             ) : null}

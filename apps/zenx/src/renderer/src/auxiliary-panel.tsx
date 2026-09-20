@@ -347,6 +347,7 @@ export function AuxiliaryPanel({
       id="thread-workspace-panel"
       className="auxiliary-panel"
       data-open={open === true}
+      inert={!open}
       data-expanded={expanded}
       aria-label={`Side panel for ${title}`}
       style={{ "--auxiliary-width": `${width}px` } as React.CSSProperties}
@@ -522,9 +523,16 @@ export function AuxiliaryPanel({
             />
           ) : (
             <div className="workspace-tab-types" aria-label="New tab type">
+              <header>
+                <h3>Open beside this conversation</h3>
+                <p>Files, pages and observations share this workspace.</p>
+              </header>
               <button type="button" onClick={() => void add("file")}>
                 <Icon name="file" />
-                <span>File</span>
+                <span>
+                  <strong>File</strong>
+                  <small>Read or edit a file in this project</small>
+                </span>
               </button>
               <button
                 type="button"
@@ -532,18 +540,27 @@ export function AuxiliaryPanel({
                 onClick={() => void add("browser")}
               >
                 <Icon name="browser" />
-                <span>Browser</span>
+                <span>
+                  <strong>Browser</strong>
+                  <small>Browse a shared page with the agent</small>
+                </span>
               </button>
               {computer ? (
                 <button type="button" onClick={() => void add("computer")}>
                   <Icon name="computer" />
-                  <span>Computer</span>
+                  <span>
+                    <strong>Computer</strong>
+                    <small>Observe the agent’s desktop activity</small>
+                  </span>
                 </button>
               ) : null}
               {browser ? (
                 <button type="button" onClick={() => void add("attached")}>
                   <Icon name="browser" />
-                  <span>Attached browser</span>
+                  <span>
+                    <strong>Attached browser</strong>
+                    <small>Inspect connected browser activity</small>
+                  </span>
                 </button>
               ) : null}
               {panels.map((panel) => (
@@ -553,7 +570,9 @@ export function AuxiliaryPanel({
                   onClick={() => void add(`plugin:${panel.key}`)}
                 >
                   <Icon name="layers" />
-                  <span>{panel.title}</span>
+                  <span>
+                    <strong>{panel.title}</strong>
+                  </span>
                 </button>
               ))}
             </div>

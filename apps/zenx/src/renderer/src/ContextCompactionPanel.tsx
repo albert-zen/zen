@@ -1,3 +1,4 @@
+import { Select } from "./ui/controls.js";
 import {
   CONTEXT_COMPACTION_SUMMARY_INSTRUCTION,
   type ContextCompactionConfig,
@@ -122,12 +123,11 @@ export function ContextCompactionPanel({
         <h3>Original items to retain</h3>
         <label className="field">
           <span>Retention mode</span>
-          <select
+          <Select
             value={mode}
-            onChange={(event) =>
+            onValueChange={(value) =>
               retention({
-                mode: event.target.value as
-                  "budget" | "recent-items" | "selected-items",
+                mode: value as "budget" | "recent-items" | "selected-items",
               })
             }
           >
@@ -138,7 +138,7 @@ export function ContextCompactionPanel({
             <option value="selected-items">
               Keep only the types selected below
             </option>
-          </select>
+          </Select>
         </label>
         {mode === "recent-items" ? (
           <div className="compaction-count-control">
@@ -177,13 +177,16 @@ export function ContextCompactionPanel({
             </div>
           </div>
         ) : null}
-        <p className="settings-note">
-          Items include user and agent messages, reasoning, tool calls, and tool
-          results. Execution markers do not count. Related tool items are kept
-          together, so the actual count can be higher. Budget mode fills from
-          the latest completed turn; the count and type rules consider the full
-          history.
-        </p>
+        <details className="settings-explanation">
+          <summary>How original items are counted</summary>
+          <p className="settings-note">
+            Items include user and agent messages, reasoning, tool calls, and
+            tool results. Execution markers do not count. Related tool items are
+            kept together, so the actual count can be higher. Budget mode fills
+            from the latest completed turn; the count and type rules consider
+            the full history.
+          </p>
+        </details>
         <label className="compaction-checkbox">
           <input
             type="checkbox"
@@ -197,11 +200,11 @@ export function ContextCompactionPanel({
         </label>
         <label className="field">
           <span>Agent final messages</span>
-          <select
+          <Select
             value={finals}
-            onChange={(event) =>
+            onValueChange={(value) =>
               retention({
-                finalMessages: event.target.value as "none" | "all" | "recent",
+                finalMessages: value as "none" | "all" | "recent",
               })
             }
           >
@@ -210,7 +213,7 @@ export function ContextCompactionPanel({
             <option value="recent">
               Preserve the most recent N final messages
             </option>
-          </select>
+          </Select>
         </label>
         {finals === "recent" ? (
           <label className="field">
@@ -236,13 +239,16 @@ export function ContextCompactionPanel({
           turn. Intermediate tool commentary and partial replies from failed
           turns do not count.
         </p>
-        <p className="settings-note">
-          These rules combine: selecting user messages or final replies adds
-          them to the retained items. Explicitly retained items will not be
-          silently dropped to fit the budget; if they cannot fit, compaction
-          reports a failure. Selecting no types in the last mode keeps only the
-          summary.
-        </p>
+        <details className="settings-explanation">
+          <summary>How retention rules combine</summary>
+          <p className="settings-note">
+            These rules combine: selecting user messages or final replies adds
+            them to the retained items. Explicitly retained items will not be
+            silently dropped to fit the budget; if they cannot fit, compaction
+            reports a failure. Selecting no types in the last mode keeps only
+            the summary.
+          </p>
+        </details>
       </section>
       <section
         className="settings-card compaction-settings"

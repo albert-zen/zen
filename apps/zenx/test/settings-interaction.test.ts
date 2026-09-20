@@ -1,3 +1,4 @@
+import "./dom-primitives.js";
 /// <reference path="../src/renderer/src/env.d.ts" />
 
 import assert from "node:assert/strict";
@@ -140,7 +141,7 @@ test("Settings saves global model routing by Provider profile identity", async (
     const apply = exactButton("Apply");
     assert.ok(apply);
     assert.equal(apply.disabled, true);
-    const defaultModel = labeledSelect("Default model");
+    const defaultModel = await labeledSelect("Default model");
     assert.ok(defaultModel);
     const betaShared = Array.from(defaultModel.options).find(
       (option) => option.textContent?.trim() === "Beta · shared-model",
@@ -168,7 +169,7 @@ test("Save feedback is transient, does not move focus, and clears on navigation"
   const harness = await mountSettings("models");
   try {
     await waitFor(() => exactButton("Apply"));
-    const control = labeledSelect("Default model");
+    const control = await labeledSelect("Default model");
     assert.ok(control);
     await changeControl(control, control.options[1]!.value);
     const apply = exactButtonRequired("Apply");
@@ -209,7 +210,7 @@ for (const status of ["unchanged", "pending-restart", "unconfirmed"] as const) {
     });
     try {
       await waitFor(() => exactButton("Apply"));
-      const control = labeledSelect("Default model");
+      const control = await labeledSelect("Default model");
       assert.ok(control);
       await changeControl(control, control.options[1]!.value);
       await click(exactButtonRequired("Apply"));
@@ -235,7 +236,7 @@ test("A save completed after leaving its section does not show a stale toast", a
       }),
   });
   try {
-    const control = labeledSelect("Default model")!;
+    const control = (await labeledSelect("Default model"))!;
     await changeControl(control, control.options[1]!.value);
     await click(exactButtonRequired("Apply"));
     await click(exactButtonRequired("General"));
@@ -250,7 +251,7 @@ test("A save completed after leaving its section does not show a stale toast", a
 test("Repeated successful saves restart the toast lifetime", async (t) => {
   const harness = await mountSettings("models");
   try {
-    const control = labeledSelect("Default model")!;
+    const control = (await labeledSelect("Default model"))!;
     t.mock.timers.enable({ apis: ["setTimeout"] });
     await changeControl(control, control.options[1]!.value);
     await click(exactButtonRequired("Apply"));
@@ -324,7 +325,7 @@ test("Models lists every profile and keeps duplicate model IDs distinguishable a
     assert.match(document.body.textContent ?? "", /API key saved/u);
     assert.doesNotMatch(document.body.textContent ?? "", /Connected/u);
 
-    const defaultModel = labeledSelect("Default model");
+    const defaultModel = await labeledSelect("Default model");
     assert.ok(defaultModel);
     const sharedOptions = Array.from(defaultModel.options).filter((option) =>
       option.textContent?.includes("shared-model"),
@@ -406,7 +407,7 @@ test("Provider discovery starts text-only and manual overrides persist", async (
       /no reasoning strength control · text · context required/u,
     );
     assert.equal(
-      Array.from(labeledSelect("Default model")?.options ?? []).some(
+      Array.from((await labeledSelect("Default model"))?.options ?? []).some(
         (option) => option.textContent?.trim() === "Alpha · alpha-vision",
       ),
       false,
@@ -419,8 +420,8 @@ test("Provider discovery starts text-only and manual overrides persist", async (
     );
     assert.equal(editCalls, 0);
 
-    const reasoningMode = labeledSelect("Model 3 reasoning metadata");
-    const modalities = labeledSelect("Model 3 input modalities");
+    const reasoningMode = await labeledSelect("Model 3 reasoning metadata");
+    const modalities = await labeledSelect("Model 3 input modalities");
     assert.ok(reasoningMode);
     assert.ok(modalities);
     await changeControl(reasoningMode, "configured");
@@ -429,7 +430,7 @@ test("Provider discovery starts text-only and manual overrides persist", async (
       "low, high",
     );
     await changeControl(
-      labeledSelect("Model 3 default reasoning effort")!,
+      (await labeledSelect("Model 3 default reasoning effort"))!,
       "high",
     );
     await changeControl(modalities, "text-image");
@@ -452,7 +453,7 @@ test("Provider discovery starts text-only and manual overrides persist", async (
       source: "manual",
     });
     assert.ok(
-      Array.from(labeledSelect("Default model")?.options ?? []).some(
+      Array.from((await labeledSelect("Default model"))?.options ?? []).some(
         (option) => option.textContent?.trim() === "Alpha · alpha-vision",
       ),
     );
@@ -916,8 +917,8 @@ test("Delete submits required default and title replacements atomically without 
   try {
     await waitFor(() => labeledButton("Delete Alpha"));
     await click(labeledButtonRequired("Delete Alpha"));
-    const defaultReplacement = labeledSelect("Replacement default model");
-    const titleReplacement = labeledSelect("Replacement title model");
+    const defaultReplacement = await labeledSelect("Replacement default model");
+    const titleReplacement = await labeledSelect("Replacement title model");
     assert.ok(defaultReplacement);
     assert.ok(titleReplacement);
     const beta = Array.from(defaultReplacement.options).find(
@@ -942,7 +943,10 @@ test("Delete submits required default and title replacements atomically without 
         },
       },
     });
-    assert.doesNotMatch(document.body.textContent ?? "", /scan|rewrite/u);
+    assert.doesNotMatch(
+      document.querySelector(".provider-section")?.textContent ?? "",
+      /scan|rewrite/u,
+    );
   } finally {
     await unmount(harness);
   }
@@ -971,8 +975,8 @@ test("Delete removes an unreferenced Provider without replacement selections", a
   try {
     await waitFor(() => labeledButton("Delete Local demo"));
     await click(labeledButtonRequired("Delete Local demo"));
-    assert.equal(labeledSelect("Replacement default model"), undefined);
-    assert.equal(labeledSelect("Replacement title model"), undefined);
+    assert.equal(await labeledSelect("Replacement default model"), undefined);
+    assert.equal(await labeledSelect("Replacement title model"), undefined);
     await click(exactButtonRequired("Delete provider"));
     await waitFor(() => deletion);
     assert.deepEqual(deletion, {
@@ -1402,7 +1406,7 @@ test("General names both browser modes and reports an extension-folder failure",
     },
   });
   try {
-    const mode = await waitFor(() => labeledSelect("Browser mode"));
+    const mode = await waitFor(async () => await labeledSelect("Browser mode"));
     assert.deepEqual(
       Array.from(mode.options).map((option) => option.textContent?.trim()),
       ["ZenX browser", "Connected Chrome tab"],
@@ -1432,8 +1436,8 @@ test("General exposes and saves the Host-owned tool presentation mode", async ()
     },
   });
   try {
-    const presentation = await waitFor(() =>
-      labeledSelect("Tool presentation"),
+    const presentation = await waitFor(
+      async () => await labeledSelect("Tool presentation"),
     );
     assert.equal(presentation.value, "both");
     assert.deepEqual(
@@ -1635,15 +1639,26 @@ function SettingsHarness({
   onUnarchive(thread: NativeThreadSummary): Promise<void>;
 }) {
   const [tab, setTab] = useState(initialTab);
-  return createElement(SettingsView, {
-    archivedError: null,
-    archivedLoading: false,
-    archivedThreads,
-    onRetryArchived: () => undefined,
-    onTabChange: setTab,
-    onUnarchive,
-    tab,
-  });
+  const [visible, setVisible] = useState(true);
+  return createElement(
+    React.Fragment,
+    null,
+    createElement(
+      "button",
+      { onClick: () => setVisible(!visible) },
+      "Toggle settings visibility",
+    ),
+    createElement(SettingsView, {
+      active: visible,
+      archivedError: null,
+      archivedLoading: false,
+      archivedThreads,
+      onRetryArchived: () => undefined,
+      onTabChange: setTab,
+      onUnarchive,
+      tab,
+    }),
+  );
 }
 
 async function unmount(harness: Harness): Promise<void> {
@@ -1679,7 +1694,11 @@ function labeledButtonRequired(label: string): HTMLButtonElement {
 }
 
 function labelControl<
-  T extends HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement,
+  T extends
+    | HTMLInputElement
+    | HTMLSelectElement
+    | HTMLTextAreaElement
+    | HTMLButtonElement,
 >(label: string, selector: string): T | undefined {
   return (
     Array.from(document.querySelectorAll<HTMLLabelElement>("label"))
@@ -1697,8 +1716,50 @@ function requiredInput(label: string): HTMLInputElement {
   return input;
 }
 
-function labeledSelect(label: string): HTMLSelectElement | undefined {
-  return labelControl<HTMLSelectElement>(label, "select");
+type ChoiceButton = HTMLButtonElement & {
+  options: Array<{ value: string; textContent: string }>;
+  value: string;
+};
+async function labeledSelect(label: string): Promise<ChoiceButton | undefined> {
+  const button = labelControl<HTMLButtonElement>(label, "button.ui-select");
+  if (!button) return undefined;
+  await openChoice(button);
+  const options = Array.from(
+    document.querySelectorAll<HTMLElement>('[role="option"]'),
+  ).map((option) => ({
+    value: option.dataset.value ?? "",
+    textContent: option.textContent ?? "",
+  }));
+  await act(async () => {
+    document.activeElement?.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+  });
+  Object.defineProperty(button, "options", {
+    configurable: true,
+    value: options,
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  });
+  Object.defineProperty(button, "value", {
+    configurable: true,
+    get: () => button.dataset.value ?? "",
+  });
+  return button as ChoiceButton;
+}
+async function openChoice(button: HTMLButtonElement) {
+  await act(async () => {
+    button.focus();
+    if (button.getAttribute("role") === "combobox")
+      button.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "ArrowDown",
+          bubbles: true,
+        }),
+      );
+    else button.click();
+  });
 }
 
 async function click(button: HTMLElement): Promise<void> {
@@ -1709,9 +1770,33 @@ async function click(button: HTMLElement): Promise<void> {
 }
 
 async function changeControl(
-  control: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement,
+  control:
+    HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | ChoiceButton,
   value: string,
 ): Promise<void> {
+  if (control.tagName === "BUTTON") {
+    await openChoice(control as HTMLButtonElement);
+    const option = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ).find((entry) => entry.dataset.value === value);
+    assert.ok(
+      option,
+      `Missing option ${value}; expanded=${control.getAttribute("aria-expanded")}; choices=${Array.from(
+        document.querySelectorAll('[role="option"]'),
+      )
+        .map((node) => node.textContent)
+        .join("|")}`,
+    );
+    await act(async () => {
+      option.focus();
+      if (option.hasAttribute("data-radix-collection-item"))
+        option.dispatchEvent(
+          new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+        );
+      else option.click();
+    });
+    return;
+  }
   await act(async () => {
     const previous = control.value;
     control.value = value;
@@ -1746,9 +1831,11 @@ function appearanceChoice(
   ).find((input) => input.value === value);
 }
 
-async function waitFor<T>(read: () => T | null | undefined): Promise<T> {
+async function waitFor<T>(
+  read: () => T | null | undefined | Promise<T | null | undefined>,
+): Promise<T> {
   for (let attempt = 0; attempt < 60; attempt += 1) {
-    const value = read();
+    const value = await read();
     if (value !== null && value !== undefined) return value;
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -1852,15 +1939,21 @@ test("Context compaction has a dedicated tab and saves selectable retention and 
     },
   });
   try {
-    await waitFor(() => labeledSelect("Retention mode"));
-    await changeControl(labeledSelect("Retention mode")!, "recent-items");
+    await waitFor(async () => await labeledSelect("Retention mode"));
+    await changeControl(
+      (await labeledSelect("Retention mode"))!,
+      "recent-items",
+    );
     await click(exactButtonRequired("Last 10 items"));
     await click(
       document.querySelector<HTMLInputElement>(
         'input[aria-label="Preserve all user messages"]',
       )!,
     );
-    await changeControl(labeledSelect("Agent final messages")!, "recent");
+    await changeControl(
+      (await labeledSelect("Agent final messages"))!,
+      "recent",
+    );
     await changeControl(requiredInput("Number of final messages"), "7");
     await changeControl(requiredInput("Compaction trigger (%)"), "85");
     await changeControl(requiredInput("Post-compaction budget (%)"), "60");
@@ -1902,15 +1995,18 @@ test("Compaction rejects invalid budgets and supports selected-only retention an
     },
   });
   try {
-    await waitFor(() => labeledSelect("Retention mode"));
+    await waitFor(async () => await labeledSelect("Retention mode"));
     await changeControl(requiredInput("Post-compaction budget (%)"), "95");
     assert.equal(exactButtonRequired("Apply").disabled, true);
     assert.ok(document.querySelector('[role="alert"]'));
     assert.equal(saves, 0);
     await changeControl(requiredInput("Post-compaction budget (%)"), "50");
-    await changeControl(labeledSelect("Retention mode")!, "selected-items");
+    await changeControl(
+      (await labeledSelect("Retention mode"))!,
+      "selected-items",
+    );
     assert.equal(labelControl("Number of recent items", "input"), undefined);
-    await changeControl(labeledSelect("Agent final messages")!, "all");
+    await changeControl((await labeledSelect("Agent final messages"))!, "all");
     assert.equal(labelControl("Number of final messages", "input"), undefined);
     const prompt = labelControl<HTMLTextAreaElement>(
       "Compaction prompt",
@@ -1923,9 +2019,12 @@ test("Compaction rejects invalid budgets and supports selected-only retention an
       labelControl<HTMLTextAreaElement>("Compaction prompt", "textarea")!.value,
       defaultPrompt,
     );
-    assert.equal(labeledSelect("Retention mode")?.value, "selected-items");
+    assert.equal(
+      (await labeledSelect("Retention mode"))?.value,
+      "selected-items",
+    );
     await click(exactButtonRequired("Reset all compaction settings"));
-    assert.equal(labeledSelect("Retention mode")?.value, "budget");
+    assert.equal((await labeledSelect("Retention mode"))?.value, "budget");
     assert.equal(requiredInput("Post-compaction budget (%)").value, "80");
     assert.equal(saves, 0);
   } finally {
@@ -1942,7 +2041,7 @@ test("Agentic compaction is opt-in, saves alongside automatic settings, and rese
     },
   });
   try {
-    await waitFor(() => labeledSelect("Retention mode"));
+    await waitFor(async () => await labeledSelect("Retention mode"));
     const toggle = document.querySelector<HTMLButtonElement>(
       'button[role="switch"][aria-label="Enable Agentic compaction (experimental)"]',
     );
@@ -1989,7 +2088,7 @@ test("manual reasoning fills real defaults, preserves custom values across modes
     await waitFor(() => labeledButton("Edit Alpha"));
     await click(labeledButtonRequired("Edit Alpha"));
     await changeControl(
-      labeledSelect("Model 1 reasoning metadata")!,
+      (await labeledSelect("Model 1 reasoning metadata"))!,
       "configured",
     );
     assert.equal(
@@ -1997,7 +2096,7 @@ test("manual reasoning fills real defaults, preserves custom values across modes
       "low, medium, high",
     );
     assert.equal(
-      labeledSelect("Model 1 default reasoning effort")!.value,
+      (await labeledSelect("Model 1 default reasoning effort"))!.value,
       "medium",
     );
     await changeControl(
@@ -2005,15 +2104,15 @@ test("manual reasoning fills real defaults, preserves custom values across modes
       "minimal, deep",
     );
     await changeControl(
-      labeledSelect("Model 1 default reasoning effort")!,
+      (await labeledSelect("Model 1 default reasoning effort"))!,
       "deep",
     );
     await changeControl(
-      labeledSelect("Model 1 reasoning metadata")!,
+      (await labeledSelect("Model 1 reasoning metadata"))!,
       "unknown",
     );
     await changeControl(
-      labeledSelect("Model 1 reasoning metadata")!,
+      (await labeledSelect("Model 1 reasoning metadata"))!,
       "configured",
     );
     assert.equal(
@@ -2021,7 +2120,7 @@ test("manual reasoning fills real defaults, preserves custom values across modes
       "minimal, deep",
     );
     assert.equal(
-      labeledSelect("Model 1 default reasoning effort")!.value,
+      (await labeledSelect("Model 1 default reasoning effort"))!.value,
       "deep",
     );
     await changeControl(requiredInput("Model 1 reasoning efforts"), "");
@@ -2087,7 +2186,7 @@ for (const completeAfterNavigation of [false, true]) {
       },
     });
     try {
-      const control = labeledSelect("Default model")!;
+      const control = (await labeledSelect("Default model"))!;
       await changeControl(control, control.options[1]!.value);
       await click(exactButtonRequired("Apply"));
       const empty = {
@@ -2261,6 +2360,39 @@ test("Agentic switch retains its unsaved state after save failure and can return
       "Enable Agentic compaction (experimental)",
     );
     assert.equal(document.querySelector(".settings-toast"), null);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("settings retain unsaved edits across hidden Activity and saves do not overwrite newer input", async () => {
+  let resolveSave: (value: PublicHostSettings) => void = () => {};
+  const harness = await mountSettings("general", {
+    save: async () =>
+      new Promise((resolve) => {
+        resolveSave = resolve;
+      }),
+  });
+  try {
+    await changeControl(requiredInput("Maximum tool rounds"), "12");
+    await click(exactButton("Toggle settings visibility")!);
+    await click(exactButton("Toggle settings visibility")!);
+    assert.equal(requiredInput("Maximum tool rounds").value, "12");
+    await click(exactButton("Apply")!);
+    await changeControl(requiredInput("Maximum tool rounds"), "18");
+    await act(async () =>
+      resolveSave({
+        ...settings,
+        profile: { ...settings.profile, maxToolRounds: 12, revision: 2 },
+      }),
+    );
+    assert.equal(requiredInput("Maximum tool rounds").value, "18");
+    assert.equal(exactButton("Apply")?.disabled, false);
+    await click(exactButton("Appearance")!);
+    assert.match(
+      document.querySelector(".settings-apply-bar")?.textContent ?? "",
+      /Unsaved/,
+    );
   } finally {
     await unmount(harness);
   }

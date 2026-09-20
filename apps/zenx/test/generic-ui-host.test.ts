@@ -1,3 +1,4 @@
+import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { JSDOM } from "jsdom";
@@ -574,6 +575,11 @@ test("isolated UI drops old replies after replacing the document, even with reus
   const pending: Array<(value: unknown) => void> = [];
   const readHandle = () => new Promise((resolve) => pending.push(resolve));
   const render = async (theme: "light" | "dark") => {
+    // An actual bundle replacement creates a new document; theme changes no longer do.
+    isolated.bundles[0] = {
+      ...isolated.bundles[0]!,
+      entry: `<main>${theme}</main>`,
+    };
     await act(async () =>
       root.render(
         React.createElement(GenericPluginUiHost, {
@@ -630,6 +636,61 @@ test("isolated UI drops old replies after replacing the document, even with reus
     });
     assert.equal(newMessages.length, 1);
     assert.deepEqual(newMessages[0]!.value, { current: true });
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
+
+test("isolated theme and context updates preserve the frame and publish the read-only appearance contract", async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  document.documentElement.style.setProperty("--color-accent", "#123456");
+  const isolated = structuredClone(snapshot);
+  isolated.bundles[0] = {
+    ...isolated.bundles[0]!,
+    kind: "isolated",
+    entry: '<input value="Keep my draft">',
+  };
+  const root = createRoot(document.getElementById("root")!);
+  const registry = createPluginUiRegistry();
+  const render = async (theme: "light" | "dark") =>
+    act(async () =>
+      root.render(
+        React.createElement(GenericPluginUiHost, {
+          registry,
+          snapshot: isolated,
+          pluginId: "workbench",
+          surfaceId: "overview",
+          context: { threadId: "thread", theme },
+          theme,
+          executeCommand: async () => null,
+          readHandle: async () => null,
+        }),
+      ),
+    );
+  try {
+    await render("light");
+    const frame = document.querySelector("iframe")!;
+    const messages: any[] = [];
+    frame.contentWindow!.postMessage = (message) => messages.push(message);
+    await render("dark");
+    assert.equal(document.querySelector("iframe") === frame, true);
+    const update = messages.find(
+      (message) => message.type === "zenx-plugin-ui:update",
+    );
+    assert.equal(update.theme, "dark");
+    assert.equal(update.appearance.version, 1);
+    assert.equal(update.appearance.variables["--color-accent"], "#123456");
+    assert.equal(
+      messages.some((message) => message.type === "zenx-plugin-ui:document"),
+      false,
+    );
+    assert.equal(frame.getAttribute("sandbox"), "allow-scripts");
   } finally {
     await act(async () => root.unmount());
     dom.window.close();

@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { ThreadCandidate } from "../../main/thread-target.js";
+import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
+import { threadTitle } from "./thread-list.js";
+import { Select, Combobox } from "./ui/controls.js";
 
 import type {
   TriggerKind,
@@ -125,10 +128,10 @@ export function TriggersPage({ sdk }: PluginUiSurfaceProps) {
         <div className="form-grid">
           <label className="field">
             <span>Type</span>
-            <select
+            <Select
               value={kind}
-              onChange={(event) => {
-                const next = event.target.value as TriggerKind;
+              onValueChange={(value) => {
+                const next = value as TriggerKind;
                 setKind(next);
                 setCondition(next === "timer" ? "5" : "");
               }}
@@ -137,7 +140,7 @@ export function TriggersPage({ sdk }: PluginUiSurfaceProps) {
               <option value="thread">Thread turn ended</option>
               <option value="roomMention">Room mention</option>
               <option value="signal">External signal</option>
-            </select>
+            </Select>
           </label>
           <Field label="Label" value={label} onChange={setLabel} />
           <ThreadPicker
@@ -149,9 +152,9 @@ export function TriggersPage({ sdk }: PluginUiSurfaceProps) {
           {kind === "roomMention" ? (
             <label className="field">
               <span>Room member</span>
-              <select
+              <Select
                 value={condition}
-                onChange={(event) => setCondition(event.target.value)}
+                onValueChange={(value) => setCondition(value)}
               >
                 <option value="">Choose membership</option>
                 {(data.rooms ?? []).flatMap((room) =>
@@ -164,7 +167,7 @@ export function TriggersPage({ sdk }: PluginUiSurfaceProps) {
                     </option>
                   )),
                 )}
-              </select>
+              </Select>
             </label>
           ) : kind === "thread" ? (
             <ThreadPicker
@@ -435,9 +438,9 @@ function ThreadPicker({
       </label>
       <label className="field">
         <span>{label}</span>
-        <select
+        <Select
           value={value}
-          onChange={(event) => onChange(event.target.value)}
+          onValueChange={onChange}
         >
           <option value="">Choose a Thread</option>
           {visible.map((thread) => (
@@ -445,7 +448,7 @@ function ThreadPicker({
               {threadLabel(threads, thread.threadId)}
             </option>
           ))}
-        </select>
+        </Select>
       </label>
       {visible.length === 0 ? (
         <small>No matching Threads. Try another title or workspace.</small>
@@ -506,6 +509,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const [memberName, setMemberName] = useState("");
   const [threadId, setThreadId] = useState("");
   const [draft, setDraft] = useState("");
+  const [threads, setThreads] = useState<NativeThreadSummary[]>([]);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const refresh = async () => {
     const next = (await sdk.commands.execute("list")) as RoomListResult;
@@ -517,26 +522,36 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     );
   };
   useEffect(() => {
+    void window.zenx.threads
+      .list()
+      .then(setThreads)
+      .catch((reason: unknown) => setError(describeError(reason)));
     void refresh().catch((reason: unknown) => setError(describeError(reason)));
   }, [sdk]);
   const room = data.rooms.find((candidate) => candidate.id === selected);
   const run = async (command: string, input: unknown) => {
+    if (busy) return false;
+    setBusy(true);
     setError(null);
     try {
       await sdk.commands.execute(command, input);
       await refresh();
+      return true;
     } catch (reason) {
       setError(describeError(reason));
+      return false;
+    } finally {
+      setBusy(false);
     }
   };
   return (
     <div className="page-scroll rooms-overview">
       <div className="page-intro">
         <div>
-          <h2>Coordinate without merging contexts.</h2>
+          <h2>Rooms</h2>
           <p>
-            Room CRUD stays in plugin storage. A message only starts an Agent
-            Turn when an explicit registered mention matches.
+            Bring conversations together. Mention a registered member to wake
+            its agent; other messages stay in the room.
           </p>
         </div>
       </div>
@@ -548,15 +563,34 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           value={memberName}
           onChange={setMemberName}
         />
-        <Field label="Member Thread" value={threadId} onChange={setThreadId} />
+        <label className="field">
+          <span>Member conversation</span>
+          <Combobox
+            label="Member conversation"
+            value={threadId}
+            onValueChange={setThreadId}
+          >
+            {threads.map((thread) => (
+              <option key={thread.threadId} value={thread.threadId}>
+                {threadTitle(thread)} · {thread.threadId} ·{" "}
+                {"currentMetadata" in thread
+                  ? thread.currentMetadata.cwd
+                  : "Unavailable workspace"}
+              </option>
+            ))}
+          </Combobox>
+        </label>
         <button
           className="primary-button"
+          disabled={busy || !name.trim() || !memberName.trim() || !threadId}
           type="button"
           onClick={() =>
             void run("create", {
               name,
               members: [{ name: memberName, threadId }],
-            }).then(() => setName(""))
+            }).then((saved) => {
+              if (saved) setName("");
+            })
           }
         >
           Create Room
@@ -568,6 +602,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           {data.rooms.map((candidate) => (
             <button
               key={candidate.id}
+              aria-current={candidate.id === selected ? "true" : undefined}
               type="button"
               onClick={() => setSelected(candidate.id)}
             >
@@ -576,7 +611,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           ))}
         </nav>
         {room === undefined ? (
-          <p>No Rooms yet.</p>
+          <p>Create a room above to start a shared conversation.</p>
         ) : (
           <section className="page-card" aria-label={`Room ${room.name}`}>
             <h2>#{room.name}</h2>
@@ -592,11 +627,23 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 value={memberName}
                 onChange={setMemberName}
               />
-              <Field
-                label="Member Thread"
-                value={threadId}
-                onChange={setThreadId}
-              />
+              <label className="field">
+                <span>Member conversation</span>
+                <Combobox
+                  label="Member conversation"
+                  value={threadId}
+                  onValueChange={setThreadId}
+                >
+                  {threads.map((thread) => (
+                    <option key={thread.threadId} value={thread.threadId}>
+                      {threadTitle(thread)} · {thread.threadId} ·{" "}
+                      {"currentMetadata" in thread
+                        ? thread.currentMetadata.cwd
+                        : "Unavailable workspace"}
+                    </option>
+                  ))}
+                </Combobox>
+              </label>
             </div>
             <button
               type="button"
@@ -638,9 +685,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             <Field label="Message" value={draft} onChange={setDraft} />
             <button
               type="button"
+              disabled={busy || !draft.trim()}
               onClick={() =>
                 void run("post-message", { roomId: room.id, text: draft }).then(
-                  () => setDraft(""),
+                  (saved) => {
+                    if (saved) setDraft("");
+                  },
                 )
               }
             >

@@ -1,3 +1,4 @@
+import { Select, ActionMenu } from "./ui/controls.js";
 import React, { useEffect, useMemo, useState } from "react";
 
 import type {
@@ -271,21 +272,19 @@ function MarketplaceSettings({
           </div>
           <label>
             Source
-            <select
+            <Select
               aria-label="Plugin source"
               value={sourceMode}
               disabled={busy !== null}
-              onChange={(event) =>
-                setSourceMode(
-                  event.target.value as ZenXPluginPackageSource["mode"],
-                )
+              onValueChange={(value) =>
+                setSourceMode(value as ZenXPluginPackageSource["mode"])
               }
             >
               <option value="npm">npm registry</option>
               <option value="git">Git (commit pinned)</option>
               <option value="local-copy">Local directory copy</option>
               <option value="dev-link">Development link</option>
-            </select>
+            </Select>
           </label>
           <label>
             Package or path
@@ -476,11 +475,11 @@ function MarketplaceInventoryCard({
         {entry.source === "catalog" && entry.versions.length > 0 ? (
           <label className="marketplace-version">
             <span className="sr-only">{entry.name} version</span>
-            <select
+            <Select
               aria-label={`${entry.name} version`}
               value={selectedVersion}
               disabled={busy !== null}
-              onChange={(event) => setSelectedVersion(event.target.value)}
+              onValueChange={(value) => setSelectedVersion(value)}
             >
               {entry.versions.map((version) => (
                 <option key={version.version} value={version.version}>
@@ -490,7 +489,7 @@ function MarketplaceInventoryCard({
                     : ""}
                 </option>
               ))}
-            </select>
+            </Select>
           </label>
         ) : null}
 
@@ -585,31 +584,39 @@ function MarketplaceInventoryCard({
                 {busy === `update:${pluginId}` ? "Opening…" : "Update…"}
               </button>
             ) : null}
-            <button
-              className="danger-button"
-              type="button"
-              disabled={busy !== null}
-              onClick={() => setConfirmation({ pluginId, action: "uninstall" })}
-            >
-              Uninstall
-            </button>
           </>
         )}
 
         {pluginId !== undefined && plugin !== undefined ? (
-          <button
-            className="danger-button quiet-danger"
-            type="button"
-            disabled={busy !== null || active}
-            title={
-              active
-                ? "Disable or uninstall this plugin before deleting its data"
-                : undefined
-            }
-            onClick={() => setConfirmation({ pluginId, action: "delete-data" })}
-          >
-            Delete data
-          </button>
+          <ActionMenu
+            label={`Manage ${entry.name}`}
+            items={[
+              ...(entry.lifecycle !== "uninstalled"
+                ? [
+                    {
+                      label: "Uninstall",
+                      disabled: busy !== null,
+                      description: "Remove the plugin; keep its saved data.",
+                      onSelect: () =>
+                        setConfirmation({
+                          pluginId,
+                          action: "uninstall" as const,
+                        }),
+                    },
+                  ]
+                : []),
+              {
+                label: "Delete data",
+                disabled: busy !== null || active,
+                danger: true,
+                description: active
+                  ? "Disable the plugin before deleting its data."
+                  : "Permanently delete this plugin’s saved data.",
+                onSelect: () =>
+                  setConfirmation({ pluginId, action: "delete-data" }),
+              },
+            ]}
+          />
         ) : null}
       </div>
       {confirming ? (
@@ -627,6 +634,7 @@ function MarketplaceInventoryCard({
             <button
               type="button"
               className="secondary-button"
+              autoFocus
               onClick={() => setConfirmation(null)}
             >
               Cancel
@@ -634,7 +642,6 @@ function MarketplaceInventoryCard({
             <button
               type="button"
               className="danger-button"
-              autoFocus
               onClick={() =>
                 void run(
                   `${confirming}:${pluginId}`,

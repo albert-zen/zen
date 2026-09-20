@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Select } from "./ui/controls.js";
 import type { SkillsSnapshot, SkillMode } from "../../../../cli/src/skills.js";
 import { DirectoryPicker } from "./DirectoryPicker.js";
 
@@ -147,16 +148,16 @@ export function SkillsSettingsPanel() {
                         ? "Package policy"
                         : "Default"}
                   </span>
-                  <select
+                  <Select
                     aria-label={`Mode for ${skill.name} (${skill.id})`}
                     disabled={busy}
                     value={skill.mode}
-                    onChange={(event) =>
+                    onValueChange={(value) =>
                       void perform(
                         () =>
                           window.zenx.skills.setMode(
                             skill.id,
-                            event.target.value as SkillMode,
+                            value as SkillMode,
                           ),
                         `${skill.name} mode saved.`,
                       )
@@ -165,7 +166,7 @@ export function SkillsSettingsPanel() {
                     <option value="manual">Manual use</option>
                     <option value="auto">Automatically visible</option>
                     <option value="disabled">Disabled</option>
-                  </select>
+                  </Select>
                 </label>
                 <details>
                   <summary>Source and configuration</summary>
