@@ -1647,17 +1647,15 @@ function SettingsHarness({
       { onClick: () => setVisible(!visible) },
       "Toggle settings visibility",
     ),
-    createElement(React.Activity, {
-      mode: visible ? "visible" : "hidden",
-      children: createElement(SettingsView, {
-        archivedError: null,
-        archivedLoading: false,
-        archivedThreads,
-        onRetryArchived: () => undefined,
-        onTabChange: setTab,
-        onUnarchive,
-        tab,
-      }),
+    createElement(SettingsView, {
+      active: visible,
+      archivedError: null,
+      archivedLoading: false,
+      archivedThreads,
+      onRetryArchived: () => undefined,
+      onTabChange: setTab,
+      onUnarchive,
+      tab,
     }),
   );
 }

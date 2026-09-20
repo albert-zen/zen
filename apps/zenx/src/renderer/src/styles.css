@@ -5648,8 +5648,8 @@ a:focus-visible {
 .imzenx-page select:focus-visible,
 .imzenx-page button:focus-visible,
 .imzenx-page summary:focus-visible {
-  outline: none;
-  filter: brightness(0.9);
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 3px;
 }
 .imzenx-page .imzenx-hint {
   margin: 12px 0 16px;
@@ -7948,6 +7948,13 @@ a:focus-visible {
 }
 .workspace-tab-types strong {
   font-weight: 500;
+}
+.settings-view[hidden],
+.preserved-plugin-settings[hidden] {
+  display: none;
+}
+.preserved-plugin-settings:not([hidden]) {
+  display: contents;
 }
 
 /* Native WebContentsView bounds are owned by Electron; do not visually translate

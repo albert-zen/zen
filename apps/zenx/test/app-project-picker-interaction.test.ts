@@ -3321,7 +3321,7 @@ test("Settings and thread navigation are mutually exclusive, including return to
         () =>
           document
             .querySelector('[aria-label="ZenX settings"]')
-            ?.closest('[style*="display: none"]') === null,
+            ?.closest("[hidden]") === null,
       );
       const settingsSurface = document.querySelector(
         '[aria-label="ZenX settings"]',
@@ -3353,7 +3353,7 @@ test("Settings and thread navigation are mutually exclusive, including return to
       assert.equal(
         document
           .querySelector('[aria-label="ZenX settings"]')
-          ?.closest('[style*="display: none"]') !== null,
+          ?.closest("[hidden]") !== null,
         true,
       );
       assert.equal(

@@ -67,6 +67,7 @@ export function SettingsView({
   showHeader = true,
   tab,
   pluginSnapshot = null,
+  active = true,
 }: {
   archivedError: string | null;
   archivedLoading: boolean;
@@ -78,15 +79,23 @@ export function SettingsView({
   showHeader?: boolean;
   tab: SettingsTab;
   pluginSnapshot?: ZenXPluginSnapshot | null;
+  active?: boolean;
 }) {
   const [settings, setSettings] = useState<PublicHostSettings | null>(null);
   const [draft, setDraft] = useState<ZenXHostProfile | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatusState] = useState<{ message: string } | null>(null);
-  const feedbackScope = useRef({ tab, version: 0 });
-  if (feedbackScope.current.tab !== tab) {
-    feedbackScope.current = { tab, version: feedbackScope.current.version + 1 };
+  const feedbackScope = useRef({ tab, active, version: 0 });
+  if (
+    feedbackScope.current.tab !== tab ||
+    feedbackScope.current.active !== active
+  ) {
+    feedbackScope.current = {
+      tab,
+      active,
+      version: feedbackScope.current.version + 1,
+    };
   }
   const feedbackVersion = feedbackScope.current.version;
   const setStatus = (message: string | null) => {
@@ -94,14 +103,19 @@ export function SettingsView({
     setStatusState(message === null ? null : { message });
   };
   const [manualCode, setManualCode] = useState(false);
+  const [pluginsVisited, setPluginsVisited] = useState(
+    active && tab === "plugins",
+  );
+  if (active && tab === "plugins" && !pluginsVisited) setPluginsVisited(true);
   const navRef = useRef<HTMLElement>(null);
   const draftSnapshot = useRef({ settings, draft });
   draftSnapshot.current = { settings, draft };
 
   useEffect(() => {
-    let active = true;
+    if (!active) return;
+    let subscribed = true;
     const dispose = window.zenx.settings.onManualCodeRequested(() => {
-      if (active) setManualCode(true);
+      if (subscribed) setManualCode(true);
     });
     const current = draftSnapshot.current;
     const hasUnsaved =
@@ -110,24 +124,26 @@ export function SettingsView({
         JSON.stringify(current.settings.profile);
     if (hasUnsaved)
       return () => {
-        active = false;
+        subscribed = false;
         dispose();
       };
     void window.zenx.settings
       .get()
       .then((value) => {
-        if (!active) return;
+        if (!subscribed) return;
         setSettings(value);
         setDraft((latest) =>
           latest === current.draft ? value.profile : latest,
         );
       })
-      .catch((reason: unknown) => active && setError(describeError(reason)));
+      .catch(
+        (reason: unknown) => subscribed && setError(describeError(reason)),
+      );
     return () => {
-      active = false;
+      subscribed = false;
       dispose();
     };
-  }, []);
+  }, [active]);
 
   useEffect(() => {
     if (status === null) return;
@@ -189,6 +205,8 @@ export function SettingsView({
   if (draft === null || settings === null) {
     return (
       <section
+        hidden={!active}
+        inert={!active}
         className={`product-page settings-view${showHeader ? "" : " settings-view-embedded"}`}
       >
         <div className="page-loading">
@@ -232,6 +250,8 @@ export function SettingsView({
   ];
   return (
     <section
+      hidden={!active}
+      inert={!active}
       className={`product-page settings-view${showHeader ? "" : " settings-view-embedded"}`}
       aria-label="ZenX settings"
     >
@@ -316,7 +336,7 @@ export function SettingsView({
             aria-labelledby={`settings-tab-${tab}`}
             tabIndex={0}
           >
-            <Activity mode={tab === "account" ? "visible" : "hidden"}>
+            <Activity mode={active && tab === "account" ? "visible" : "hidden"}>
               <AccountPanel
                 settings={settings}
                 busy={busy}
@@ -327,7 +347,7 @@ export function SettingsView({
                 setSettings={setSettings}
               />
             </Activity>
-            <Activity mode={tab === "models" ? "visible" : "hidden"}>
+            <Activity mode={active && tab === "models" ? "visible" : "hidden"}>
               <ModelsPanel
                 busy={busy}
                 draft={draft}
@@ -340,30 +360,37 @@ export function SettingsView({
                 setStatus={setStatus}
               />
             </Activity>
-            <Activity mode={tab === "plugins" ? "visible" : "hidden"}>
-              <>
-                <header>
-                  <h2>Plugins</h2>
-                  <p>
-                    Install, update, disable, or remove trusted packages.
-                    Uninstall keeps plugin data until you explicitly delete it.
-                  </p>
-                </header>
-                <PluginSettings
-                  onFeedback={(message) => {
-                    if (feedbackScope.current.version !== feedbackVersion)
-                      return;
-                    setError(null);
-                    setStatus(message);
-                  }}
-                />
-                {pluginSnapshot === null ? null : (
-                  <PluginSettingsSurfaces snapshot={pluginSnapshot} />
-                )}
-              </>
-            </Activity>
-            {tab === "appearance" ? <AppearancePanel /> : null}
-            <Activity mode={tab === "general" ? "visible" : "hidden"}>
+            {pluginsVisited ? (
+              <div
+                className="preserved-plugin-settings"
+                hidden={tab !== "plugins"}
+                inert={tab !== "plugins"}
+              >
+                <>
+                  <header>
+                    <h2>Plugins</h2>
+                    <p>
+                      Install, update, disable, or remove trusted packages.
+                      Uninstall keeps plugin data until you explicitly delete
+                      it.
+                    </p>
+                  </header>
+                  <PluginSettings
+                    onFeedback={(message) => {
+                      if (feedbackScope.current.version !== feedbackVersion)
+                        return;
+                      setError(null);
+                      setStatus(message);
+                    }}
+                  />
+                  {pluginSnapshot === null ? null : (
+                    <PluginSettingsSurfaces snapshot={pluginSnapshot} />
+                  )}
+                </>
+              </div>
+            ) : null}
+            {active && tab === "appearance" ? <AppearancePanel /> : null}
+            <Activity mode={active && tab === "general" ? "visible" : "hidden"}>
               <>
                 <GeneralPanel draft={draft} setDraft={setDraft} />
                 <ChromeConnectionSettings draft={draft} setDraft={setDraft} />
@@ -377,7 +404,9 @@ export function SettingsView({
                 />
               </>
             </Activity>
-            <Activity mode={tab === "compaction" ? "visible" : "hidden"}>
+            <Activity
+              mode={active && tab === "compaction" ? "visible" : "hidden"}
+            >
               <ContextCompactionPanel
                 config={draft.contextCompaction}
                 onChange={(contextCompaction) =>
@@ -385,7 +414,9 @@ export function SettingsView({
                 }
               />
             </Activity>
-            <Activity mode={tab === "workflows" ? "visible" : "hidden"}>
+            <Activity
+              mode={active && tab === "workflows" ? "visible" : "hidden"}
+            >
               <WorkflowSettingsPanel
                 commands={draft.workflowCommands ?? []}
                 titlePrompt={draft.titlePrompt}
@@ -408,7 +439,9 @@ export function SettingsView({
                 {workflowError}
               </div>
             ) : null}
-            <Activity mode={tab === "archived" ? "visible" : "hidden"}>
+            <Activity
+              mode={active && tab === "archived" ? "visible" : "hidden"}
+            >
               <ArchivedThreadsPanel
                 error={archivedError}
                 loading={archivedLoading}

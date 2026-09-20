@@ -1,4 +1,3 @@
-import { Activity } from "react";
 import {
   handleCompactCommand,
   isCompactCommand,
@@ -2153,20 +2152,19 @@ export function App() {
       ) : null}
 
       <main className="workspace">
-        <Activity mode={page === "settings" ? "visible" : "hidden"}>
-          <SettingsView
-            archivedError={threadListErrors.archived}
-            archivedLoading={!threadListLoaded.archived}
-            archivedThreads={archivedSummaries}
-            onRetryArchived={() => void loadThreadSummaries(true)}
-            onTabChange={setSettingsTab}
-            onUnarchive={performThreadLifecycle}
-            onOpenSidebar={() => setSidebarOpen(true)}
-            tab={settingsTab}
-            pluginSnapshot={pluginSnapshot}
-            showHeader={false}
-          />
-        </Activity>
+        <SettingsView
+          active={page === "settings"}
+          archivedError={threadListErrors.archived}
+          archivedLoading={!threadListLoaded.archived}
+          archivedThreads={archivedSummaries}
+          onRetryArchived={() => void loadThreadSummaries(true)}
+          onTabChange={setSettingsTab}
+          onUnarchive={performThreadLifecycle}
+          onOpenSidebar={() => setSidebarOpen(true)}
+          tab={settingsTab}
+          pluginSnapshot={pluginSnapshot}
+          showHeader={false}
+        />
         {page === "settings" ? null : genericPluginTarget !== undefined &&
           pluginSnapshot !== null ? (
           <PluginProductPage

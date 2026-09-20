@@ -295,7 +295,7 @@ export function Combobox({
   const filtered = items.filter(
     (item) =>
       !item.disabled &&
-      `${choiceText(item.label)} ${item.group ?? ""}`
+      `${choiceText(item.label)} ${item.group ?? ""} ${item.value}`
         .toLocaleLowerCase()
         .includes(query.toLocaleLowerCase()),
   );
@@ -321,6 +321,7 @@ export function Combobox({
           data-value={value}
           disabled={disabled}
           aria-label={label}
+          title={choiceText(items.find((item) => item.value === value)?.label)}
           aria-describedby={`${id}-value`}
           aria-haspopup="listbox"
           onKeyDown={(event) => {

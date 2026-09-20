@@ -346,7 +346,10 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           >
             {threads.map((thread) => (
               <option key={thread.threadId} value={thread.threadId}>
-                {threadTitle(thread)}
+                {threadTitle(thread)} · {thread.threadId} ·{" "}
+                {"currentMetadata" in thread
+                  ? thread.currentMetadata.cwd
+                  : "Unavailable workspace"}
               </option>
             ))}
           </Combobox>
@@ -407,7 +410,10 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 >
                   {threads.map((thread) => (
                     <option key={thread.threadId} value={thread.threadId}>
-                      {threadTitle(thread)}
+                      {threadTitle(thread)} · {thread.threadId} ·{" "}
+                      {"currentMetadata" in thread
+                        ? thread.currentMetadata.cwd
+                        : "Unavailable workspace"}
                     </option>
                   ))}
                 </Combobox>
