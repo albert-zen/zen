@@ -58,7 +58,13 @@ test("Computer shares the workspace tabs and captures only while selected and op
       root.render(React.createElement(Harness, { threadId: "a" })),
     );
     assert.deepEqual(requests, []);
-    await act(async () => tab("Computer").click());
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          ".workspace-tab-types button:last-child",
+        )!
+        .click(),
+    );
     assert.deepEqual(requests, ["a"]);
     assert.equal(
       document
@@ -67,7 +73,11 @@ test("Computer shares the workspace tabs and captures only while selected and op
         ?.getAttribute("hidden"),
       null,
     );
-    await act(async () => tab("Browser").click());
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
+        .click(),
+    );
     assert.equal(stopped, 1);
     await act(async () => tab("Computer").click());
     await act(async () =>

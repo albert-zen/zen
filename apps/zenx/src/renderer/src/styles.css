@@ -6027,7 +6027,7 @@ select:focus-visible {
   border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--surface-raised);
-  box-shadow: 0 16px 42px rgb(0 0 0 / 18%);
+  box-shadow: 0 16px 42px var(--shadow-color-strong);
 }
 
 .workflow-command-menu > button {
@@ -6890,7 +6890,7 @@ select:focus-visible {
   border: 1px solid var(--border-soft);
   border-radius: 6px;
   color: var(--text-1);
-  background: var(--surface-1);
+  background: var(--color-surface-main);
   font: inherit;
   font-size: 12px;
 }
@@ -6911,7 +6911,7 @@ select:focus-visible {
   justify-content: center;
   padding: 8px;
   gap: 6px;
-  background: var(--surface-1);
+  background: var(--color-surface-main);
 }
 .computer-live-frame {
   display: block;
@@ -6926,7 +6926,7 @@ select:focus-visible {
 .computer-live-placeholder {
   flex: 1;
   min-height: 0;
-  background: var(--surface-1);
+  background: var(--color-surface-main);
 }
 
 .workspace-files-panel .markdown-live-editor {
@@ -7029,4 +7029,130 @@ select:focus-visible {
 .workspace-files-panel .file-conflict > details {
   flex: 1;
   min-width: 0;
+}
+
+/* Content instances share one tab strip; type selection is a temporary view. */
+.auxiliary-heading {
+  min-height: 40px;
+  padding: 4px 6px;
+}
+.auxiliary-heading [role="tablist"] {
+  gap: 3px;
+  scrollbar-width: thin;
+  align-items: center;
+}
+.workspace-content-tab {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  max-width: 220px;
+  border-radius: 7px;
+}
+.workspace-content-tab[data-active="true"] {
+  background: var(--color-surface-hover);
+}
+.auxiliary-heading .workspace-content-tab [role="tab"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 7px 3px 7px 8px;
+  background: transparent;
+}
+.workspace-content-tab [role="tab"] > span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 150px;
+}
+.workspace-content-tab svg {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+}
+.workspace-tab-close {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 28px;
+  padding: 4px;
+  border: 0;
+  color: var(--color-text-muted);
+  background: transparent;
+  cursor: pointer;
+  border-radius: 5px;
+}
+.workspace-tab-close:hover {
+  color: var(--color-text-primary);
+  background: var(--color-surface-active);
+}
+.workspace-tab-dirty {
+  color: var(--color-text-accent);
+}
+.workspace-add-tab {
+  font-size: 20px;
+  font-weight: 300;
+}
+.workspace-new-tab {
+  align-items: center;
+  justify-content: center;
+}
+.workspace-tab-types {
+  width: min(320px, calc(100% - 48px));
+  display: grid;
+  gap: 6px;
+  padding-block: 24px;
+}
+.workspace-tab-types > button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--color-surface-wash);
+  color: var(--color-text-secondary);
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.workspace-tab-types > button:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+.workspace-tab-types svg {
+  width: 16px;
+  height: 16px;
+}
+.workspace-file-picker {
+  align-self: stretch;
+  width: 100%;
+}
+.workspace-picker-heading {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  align-items: center;
+  font-size: 13px;
+}
+.workspace-picker-heading .icon-button {
+  width: 28px;
+  height: 28px;
+}
+.workspace-file-picker .file-list {
+  padding: 8px 12px;
+}
+.workspace-panel-error {
+  margin: 0;
+  padding: 9px 14px;
+  color: var(--danger);
+  font-size: 12px;
+}
+.file-toolbar[hidden],
+.file-save-status[hidden] {
+  display: none;
+}
+.auxiliary-content > .workspace-files-panel {
+  width: 100%;
 }

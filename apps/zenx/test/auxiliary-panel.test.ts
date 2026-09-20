@@ -31,6 +31,8 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
   (dom.window.HTMLElement.prototype as any).detachEvent = () => {};
   const requests: { threadId: string; frames: boolean }[] = [];
   let stopped = 0;
+  let finishSave: ((value: any) => void) | undefined;
+  let savingText = "";
   (dom.window as any).zenx = {
     browserObservation: {
       subscribe(request: any) {
@@ -42,6 +44,12 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
     },
     plugins: { executeCommand: async () => null, readHandle: async () => null },
     workspaceFiles: {
+      save: async (_threadId: string, _path: string, text: string) => {
+        savingText = text;
+        return await new Promise((resolve) => {
+          finishSave = resolve;
+        });
+      },
       list: async () => ({
         path: ".",
         entries: [{ name: "README.md", path: "README.md", kind: "file" }],
@@ -50,6 +58,8 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
       read: async () => ({
         path: "README.md",
         text: "# Workspace guide\n\n<script>alert(1)</script>",
+        revision: "r1",
+        editable: true,
       }),
     },
   };
@@ -106,12 +116,24 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
   const root = createRoot(document.getElementById("root")!);
   try {
     await act(async () => root.render(React.createElement(Harness)));
+    const choose = (name: string) =>
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          ".workspace-tab-types > button",
+        ),
+      ].find((e) => e.textContent === name)!;
+    await act(async () => choose("Attached browser").click());
     assert.equal(requests.at(-1)?.frames, true);
     const tab = (name: string) =>
       [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
-        (e) => e.textContent === name,
+        (e) => e.querySelector("span")?.textContent === name,
       )!;
-    await act(async () => tab("Files").click());
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
+        .click(),
+    );
+    await act(async () => choose("File").click());
     assert.equal(requests.at(-1)?.frames, false);
     assert.ok(stopped > 0);
     await act(async () =>
@@ -131,8 +153,20 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
         ?.state.doc.toString()
         .includes("<script>"),
     );
+    assert.equal(document.querySelectorAll('[role="tablist"]').length, 1);
+    assert.equal(
+      document.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
+      "README.md",
+    );
     await act(async () =>
-      tab("Files").dispatchEvent(
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
+        .click(),
+    );
+    await act(async () => choose("Notes").click());
+    await act(async () => tab("README.md").click());
+    await act(async () =>
+      tab("README.md").dispatchEvent(
         new dom.window.KeyboardEvent("keydown", {
           key: "ArrowRight",
           bubbles: true,
@@ -150,6 +184,39 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
       frame.dispatchEvent(new dom.window.Event("load"));
     });
     assert.ok(html.includes('"threadId":"thread-a"'));
+    await act(async () => tab("README.md").click());
+    const editor = EditorView.findFromDOM(
+      document.querySelector<HTMLElement>(".cm-editor")!,
+    )!;
+    await act(async () =>
+      editor.dispatch({
+        changes: { from: editor.state.doc.length, insert: "\nA final edit" },
+      }),
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="Close tab README.md"]')!
+        .click(),
+    );
+    assert.ok(tab("README.md"), "closing must wait for the current autosave");
+    assert.match(savingText, /A final edit/u);
+    await act(async () =>
+      finishSave!({
+        status: "saved",
+        file: {
+          path: "README.md",
+          text: savingText,
+          revision: "r2",
+          editable: true,
+        },
+      }),
+    );
+    assert.equal(
+      tab("README.md"),
+      undefined,
+      "successful autosave completes the close without another action",
+    );
+
     await act(async () =>
       document
         .querySelector<HTMLButtonElement>('[aria-label="Close side panel"]')!

@@ -117,7 +117,7 @@
 - **ZenXImageAttachmentProjection** — ZenX Electron main 通过既有 host-local 边界从 canonical
   `user_message` 投影按 Item 顺序排列的 `AttachmentRef`，并以只接受这些引用的 typed preload IPC
   导入和读取 Attachment Store payload；renderer 只持有草稿引用与短时 object URL，不取得任意文件读取权。
-- **ZenXThreadWorkspace** — Thread 右侧唯一的浏览器、文件与插件视图容器；打开、选项卡、宽度和编辑草稿是本机 UI 状态，真实文件写入仍由 Host 校验并使用版本冲突保护，不引入会话语义。
+- **ZenXThreadWorkspace** — Thread 右侧唯一的平级内容选项卡容器；每个文件、共享浏览器页面、Computer 观察或插件注册的 panel 直接占一个顶层 Tab，通过加号选择内容类型，不增加 Browser/Files 分类路由层。Host 持有打开顺序与选中项，插件仍用自身 surface 渲染内容；打开、宽度和编辑草稿是本机 UI 状态，真实文件写入由 Host 校验并使用版本冲突保护，不引入会话语义。
 - **ZenXSidebarMenuPopover** — 项目与会话菜单共用锚点定位的临时浮层，在侧栏右侧显示并按视口边界回退，不参与列表布局或持久化状态。
 - **ZenXProjectNamePreference** — host-profile 按已配置 workspace 保存可编辑显示名称；名称不改变目录身份、Thread cwd 或 journal，修改只刷新 Project 投影，不重启 Host。
 - **ZenXProjectProjection** — ZenX main 的同一个实例把 host-profile workspace 与 ZAS

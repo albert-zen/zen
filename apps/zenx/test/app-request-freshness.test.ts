@@ -395,11 +395,11 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
     });
     const contextUsageText = (): string | null =>
       document
-        .querySelector(".context-usage-indicator")
-        ?.getAttribute("aria-valuetext") ?? null;
+        .querySelector(".context-usage-trigger")
+        ?.getAttribute("aria-label") ?? null;
     assert.equal(
       contextUsageText(),
-      "Context 9% · 9 / 100\nThread cache unknown",
+      "Open context details. Context 9% · 9 / 100\nThread cache unknown",
     );
     await act(async () => {
       usageRequests[1]?.response.resolve(projectedUsage(4));
@@ -407,7 +407,7 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
     });
     assert.equal(
       contextUsageText(),
-      "Context 9% · 9 / 100\nThread cache unknown",
+      "Open context details. Context 9% · 9 / 100\nThread cache unknown",
     );
 
     await act(async () => {
@@ -433,7 +433,7 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
     });
     assert.equal(
       contextUsageText(),
-      "Context 2% · 2 / 100\nThread cache unknown",
+      "Open context details. Context 2% · 2 / 100\nThread cache unknown",
     );
     await act(async () => {
       usageRequests[3]?.response.resolve(projectedUsage(12));
@@ -441,7 +441,7 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
     });
     assert.equal(
       contextUsageText(),
-      "Context 2% · 2 / 100\nThread cache unknown",
+      "Open context details. Context 2% · 2 / 100\nThread cache unknown",
     );
   } finally {
     await act(async () => root.unmount());

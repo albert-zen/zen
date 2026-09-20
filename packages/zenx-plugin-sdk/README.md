@@ -41,7 +41,7 @@ The fixture Host keeps query, UI, and storage behavior in memory. Tests using it
 
 Declare a `contributions.panels` entry with `id`, `title`, `surfaceId`, and optional
 `order`, and a matching `ui.surfaces` / `ui.bundles` definition. ZenX places the
-surface beside Browser and Files in the selected Thread's right panel. The
+surface as a peer content tab in the selected Thread's right panel. Registered panels appear in the `+` type picker; the Host does not add a Browser/Files category layer above plugin content. The
 existing UI SDK supplies `context.threadId`, theme, handles, and commands;
 isolated HTML stays inside an `allow-scripts` sandbox. The separate Host-owned
 frame document supplies its own restrictive CSP so the parent renderer never

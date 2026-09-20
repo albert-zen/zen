@@ -119,7 +119,7 @@ New thread 可保留独立 row；它相对 Plugin spaces / Projects 的精确视
 - 桌面窗口使用与产品壳连续的 integrated title bar，并把产品行、会话行与原生窗口控件分成明确的命中区域：macOS 顶行左侧为 traffic lights 留出空间并紧接 Sidebar 展开 / 收起入口，右侧直接承载 Thread 标题、cwd 与 Thread actions；ZenX mark / wordmark 与 Inbox 共同位于其下方的 Sidebar 产品行，因此左侧原生控件不会把右侧会话行整体下压。Windows 在顶行左侧显示 ZenX 品牌与 Inbox，并把 Sidebar 展开 / 收起保持为独立的顶行按钮，中间承载会话行，右侧为 minimize / maximize-restore / close 保留原生命中区；紧凑宽度可以把会话行移到原生控件下方的第二行，但不得重叠。展开时左侧顶行与整列 Sidebar 使用同一 Sidebar surface，右侧会话标题栏与 Workspace 使用同一 main surface；唯一的 1px 语义竖分割线从窗口顶部贯穿到底，右侧标题栏底线必须精确从该竖线开始，不使用圆角或 card 式壳层过渡。系统窗口控制仍由 Electron/OS 持有，产品按钮与 Thread 标题控件均是 no-drag，剩余表面才是 drag region。Sidebar 收起后 Chat 使用完整内容宽度，标题栏保留可恢复 Sidebar 的明确入口；该偏好只属于本机产品壳，不进入 Thread 或 canonical Items。
 - 不提供常驻右侧 Activity rail。Tool details 留在聊天流内；Workspace/Artifact 使用按需面板。
 - Thread header 只保留一个按需工作区 icon entry；上下文与 cache telemetry 位于 Composer。不显示 Search 或 Archive 控件，也不使用常驻 “Workspace” 文本按钮、空 overflow 或装饰性状态控件。归档能力继续位于 Thread 管理菜单与 Settings。
-- 右侧工作区只有一个并排容器和一个顶部入口，不再叠加旧 Workspace 模态抽屉。Browser / Files 与已启用插件贡献的视图共用容器；关闭和展开位于内容区，始终避开原生标题栏控件。Trigger 与 Room 的视图来自 plugin contribution，不能硬编码为核心 tabs。Files 的 Markdown 默认预览，明确提供 Edit / Preview、显式 Save、未保存状态和磁盘冲突保护。
+- 右侧工作区只有一个并排容器和一个顶部入口，不再叠加旧 Workspace 模态抽屉。顶层只显示实际内容 Tab（文件名、浏览器页面、Computer 或插件注册的视图），加号选择新内容类型；不再先按 Browser / Files 分类再选择二级内容。插件贡献进入加号选择器，打开后按自身 surface 展示；Trigger 与 Room 不硬编码为核心 tabs。关闭和展开始终避开原生标题栏控件。Markdown 使用连续可编辑的实时预览：光标进入或触及格式节点时局部露出源码，离开后恢复渲染，自动保存，不提供常规 Edit / Preview / Save 按钮；失败与磁盘冲突在文件内处理，不覆盖未保存输入。
 
 ## 4. Interaction 与 state rules
 

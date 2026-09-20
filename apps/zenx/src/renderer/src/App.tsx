@@ -435,6 +435,9 @@ export function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   const fileDrafts = useWorkspaceFileDrafts();
   const [panelTabs, setPanelTabs] = useState<Record<string, string>>({});
+  const [workspaceTabOrder, setWorkspaceTabOrder] = useState<
+    Record<string, string[]>
+  >({});
   useEffect(
     () =>
       window.zenx.panels.onOpen((request) => {
@@ -2308,6 +2311,13 @@ export function App() {
               }))
             }
             snapshot={pluginSnapshot}
+            openedTabs={workspaceTabOrder[threadDetail.id]}
+            onTabsChange={(tabs) =>
+              setWorkspaceTabOrder((current) => ({
+                ...current,
+                [threadDetail.id]: tabs,
+              }))
+            }
             selectedTab={panelTabs[threadDetail.id]}
             onSelectTab={(tab) =>
               setPanelTabs((current) => ({

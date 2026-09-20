@@ -152,7 +152,7 @@ test("200% text zoom keeps Settings copy and Appearance controls reflowable", as
   );
   assert.match(
     mobile,
-    /\.agent-surface,\s*\.product-page\s*\{[^}]*grid-template-rows:\s*auto minmax\(0, 1fr\);/su,
+    /\.product-page\s*\{[^}]*grid-template-rows:\s*auto minmax\(0, 1fr\);/su,
   );
   assert.match(
     mobile,

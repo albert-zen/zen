@@ -17,15 +17,19 @@ export function WorkspaceFilesPanel({
   threadId,
   drafts,
   workspacePath,
+  initialPath,
+  standalone = false,
 }: {
   threadId: string;
   drafts: WorkspaceFileDrafts;
   workspacePath?: string;
+  initialPath?: string;
+  standalone?: boolean;
 }) {
   const entries = useSyncExternalStore(drafts.subscribe, drafts.snapshot);
   const [directory, setDirectory] = useState(".");
   const [listing, setListing] = useState<WorkspaceFileListing>();
-  const [filePath, setFilePath] = useState<string>();
+  const [filePath, setFilePath] = useState<string | undefined>(initialPath);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [revision, setRevision] = useState(0);
@@ -42,6 +46,12 @@ export function WorkspaceFilesPanel({
     ([key]) => JSON.parse(key)[0] === threadId,
   );
   useEffect(() => {
+    if (initialPath !== undefined) {
+      void read(initialPath);
+      return () => {
+        sequence.current++;
+      };
+    }
     const request = ++sequence.current;
     setLoading(true);
     setError("");
@@ -65,7 +75,7 @@ export function WorkspaceFilesPanel({
     return () => {
       sequence.current++;
     };
-  }, [threadId, directory, revision]);
+  }, [threadId, directory, revision, initialPath]);
   const read = async (path: string, reload = false) => {
     const request = ++sequence.current;
     setError("");
@@ -143,7 +153,11 @@ export function WorkspaceFilesPanel({
         }
       }}
     >
-      <nav className="file-breadcrumbs" aria-label="File path" hidden={!!file}>
+      <nav
+        className="file-breadcrumbs"
+        aria-label="File path"
+        hidden={standalone || !!file}
+      >
         <button type="button" title={workspacePath} onClick={() => browse(".")}>
           {workspacePath?.split(/[\\/]/).filter(Boolean).at(-1) ?? "Workspace"}
         </button>
@@ -162,7 +176,7 @@ export function WorkspaceFilesPanel({
         ))}
       </nav>
       <form
-        hidden={!!file}
+        hidden={standalone || !!file}
         className="file-path-form"
         onSubmit={(event) => {
           event.preventDefault();
@@ -180,7 +194,7 @@ export function WorkspaceFilesPanel({
           Open
         </button>
       </form>
-      {opened.length > 0 ? (
+      {!standalone && opened.length > 0 ? (
         <div className="file-open-tabs" role="tablist" aria-label="Open files">
           {opened.map(([entryKey, draft], index) => (
             <span className="file-open-tab" key={entryKey}>
@@ -231,7 +245,7 @@ export function WorkspaceFilesPanel({
           ))}
         </div>
       ) : null}
-      <header className="file-toolbar">
+      <header className="file-toolbar" hidden={standalone}>
         <button
           type="button"
           disabled={loading}
@@ -278,7 +292,17 @@ export function WorkspaceFilesPanel({
         {error ? <p role="alert">{error}</p> : null}
         {!loading && file ? (
           <>
-            <p className="file-save-status" role="status">
+            <p
+              className={standalone ? "sr-only" : "file-save-status"}
+              role="status"
+              hidden={
+                standalone &&
+                !dirty &&
+                !file.saving &&
+                !file.error &&
+                !file.conflict
+              }
+            >
               {file.saving
                 ? "Saving…"
                 : file.conflict
