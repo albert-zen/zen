@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import {
   access,
   mkdir,
@@ -8,21 +9,32 @@ import {
   readlink,
   readdir,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 
 import {
   applicationIconForPlatform,
+  assertMacNativeHelperDeploymentTarget,
   copyChromeExtensionResource,
   copyBundledPnpmResource,
   copyFirstPartyPluginResources,
   copyMarketplaceCatalogResource,
   copyPackagedProviderResources,
+  compileMacNativeHelpers,
   createBuildSnapshot,
+  extractMacNativeHelperSources,
+  MACOS_MINIMUM_VERSION,
+  macAdHocSignOptionsForFile,
+  macNativeHelperSignOptions,
+  macOsPackagerOptions,
+  macPackagedProviderSignIgnore,
+  macSwiftTargetTriple,
   packageManifest,
   publishPackagedArtifact,
   stagePackage,
@@ -34,6 +46,7 @@ import {
 } from "../src/main/plugin-profile.js";
 
 const placeholder = "__ZENX_PACKAGED_PROVIDER_MANIFEST_SHA256__";
+const run = promisify(execFile);
 
 test("uses production platform icons only for packaged applications", () => {
   assert.equal(
@@ -47,6 +60,174 @@ test("uses production platform icons only for packaged applications", () => {
   );
   assert.equal(applicationIconForPlatform("win32", "smoke"), undefined);
   assert.equal(applicationIconForPlatform("linux", "app"), undefined);
+});
+
+test("uses a stable macOS bundle ID and fail-closed ad-hoc signing by default", () => {
+  assert.deepEqual(macOsPackagerOptions("linux", "app", {}), {});
+  const adHoc = macOsPackagerOptions("darwin", "app", {});
+  assert.equal(adHoc.appBundleId, "com.electron.zenx");
+  assert.deepEqual(adHoc.osxSign, {
+    identity: "-",
+    identityValidation: false,
+    continueOnError: false,
+    ignore: macPackagedProviderSignIgnore,
+    optionsForFile: macAdHocSignOptionsForFile,
+    preAutoEntitlements: false,
+    strictVerify: true,
+  });
+  assert.deepEqual(
+    macOsPackagerOptions("darwin", "app", {
+      ZENX_CODESIGN_IDENTITY: "Developer ID Application: Example",
+    }).osxSign,
+    {
+      identity: "Developer ID Application: Example",
+      continueOnError: false,
+      ignore: macPackagedProviderSignIgnore,
+      optionsForFile: macNativeHelperSignOptions,
+      preAutoEntitlements: false,
+      strictVerify: true,
+    },
+  );
+  assert.equal(
+    macOsPackagerOptions("darwin", "smoke", {}).appBundleId,
+    "com.electron.zenx-provider-smoke",
+  );
+  assert.deepEqual(
+    macNativeHelperSignOptions(
+      "/Applications/ZenX.app/Contents/Resources/native-helpers/zenx-accessibility",
+    ),
+    { entitlements: [] },
+  );
+  assert.equal(
+    macNativeHelperSignOptions("/Applications/ZenX.app/Contents/MacOS/ZenX"),
+    null,
+  );
+  assert.deepEqual(
+    macAdHocSignOptionsForFile(
+      "/Applications/ZenX.app/Contents/Resources/native-helpers/zenx-accessibility",
+    ),
+    { entitlements: [], hardenedRuntime: false },
+  );
+  assert.deepEqual(
+    macAdHocSignOptionsForFile(
+      "/Applications/ZenX.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    ),
+    { entitlements: [], hardenedRuntime: false },
+  );
+  assert.equal(
+    macPackagedProviderSignIgnore(
+      "/tmp/ZenX.app/Contents/Resources/providers/runtime/node",
+    ),
+    true,
+  );
+  assert.equal(
+    macPackagedProviderSignIgnore(
+      "/tmp/ZenX.app/Contents/Resources/native-helpers/zenx-accessibility",
+    ),
+    false,
+  );
+  assert.equal(
+    macPackagedProviderSignIgnore(
+      "/tmp/ZenX.app/Contents/Frameworks/Electron Framework.framework/Electron Framework",
+    ),
+    false,
+  );
+});
+
+test("pins helper architecture and deployment target to the app minimum", () => {
+  assert.equal(MACOS_MINIMUM_VERSION, "12.0");
+  assert.equal(macSwiftTargetTriple("arm64"), "arm64-apple-macos12.0");
+  assert.equal(macSwiftTargetTriple("x64"), "x86_64-apple-macos12.0");
+  assert.throws(
+    () => macSwiftTargetTriple("ia32"),
+    /Unsupported macOS helper architecture/u,
+  );
+  assert.doesNotThrow(() =>
+    assertMacNativeHelperDeploymentTarget(`Load command 11
+      cmd LC_BUILD_VERSION
+ platform MACOS
+   minos 12.0
+     sdk 26.5`),
+  );
+  assert.throws(
+    () =>
+      assertMacNativeHelperDeploymentTarget(`platform MACOS
+ minos 26.0`),
+    /minimum system 26\.0; expected 12\.0/u,
+  );
+  assert.throws(
+    () => assertMacNativeHelperDeploymentTarget("platform IOS\n minos 12.0"),
+    /no MACOS build platform/u,
+  );
+});
+
+test("extracts and compiles both fixed macOS Computer helpers into App Resources", async () => {
+  const providerSource = await readFile(
+    new URL("../src/main/capabilities/computer-provider.ts", import.meta.url),
+    "utf8",
+  );
+  const sources = extractMacNativeHelperSources(providerSource);
+  assert.match(sources.MAC_ACCESSIBILITY_SOURCE, /AXIsProcessTrusted/u);
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /current ZenX\.app is already enabled/u,
+  );
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /visitLimit: Int = 1024, maxDepth: Int = 24/u,
+  );
+  assert.match(sources.MAC_ACCESSIBILITY_SOURCE, /prefix\(120\)/u);
+  const displayLabel = sources.MAC_ACCESSIBILITY_SOURCE.match(
+    /func displayLabel[\s\S]*?func isContainerRole/u,
+  )?.[0];
+  assert.ok(displayLabel);
+  assert.match(displayLabel, /kAXDescriptionAttribute/u);
+  assert.match(displayLabel, /kAXHelpAttribute/u);
+  assert.doesNotMatch(displayLabel, /kAXValueAttribute/u);
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /kCGWindowOwnerPID[\s\S]*?kCGWindowLayer[\s\S]*?cgWindowBounds/u,
+  );
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /geometryMatches\.count > 1[\s\S]*?mapping is ambiguous/u,
+  );
+
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-native-helper-resource-"),
+  );
+  try {
+    const destinationDirectory = path.join(directory, "native-helpers");
+    const compiled = [];
+    await compileMacNativeHelpers({
+      destinationDirectory,
+      providerSource,
+      compile: async (sourcePath, executablePath) => {
+        if (process.platform === "darwin") {
+          await run("/usr/bin/swiftc", ["-typecheck", sourcePath]);
+        }
+        compiled.push({
+          name: path.basename(executablePath),
+          source: await readFile(sourcePath, "utf8"),
+        });
+        await writeFile(executablePath, "fixture", { mode: 0o600 });
+      },
+    });
+    assert.deepEqual(
+      compiled.map(({ name }) => name),
+      ["zenx-accessibility", "zenx-foreground-input"],
+    );
+    assert.equal(compiled[0].source, sources.MAC_ACCESSIBILITY_SOURCE);
+    assert.equal(compiled[1].source, sources.MAC_FOREGROUND_INPUT_SOURCE);
+    assert.equal((await stat(destinationDirectory)).mode & 0o777, 0o755);
+    for (const { name } of compiled) {
+      const mode = (await stat(path.join(destinationDirectory, name))).mode;
+      assert.notEqual(mode & 0o100, 0);
+    }
+    assert.deepEqual((await readdir(directory)).sort(), ["native-helpers"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("copies packaged provider symlinks verbatim into the platform resources directory", async () => {

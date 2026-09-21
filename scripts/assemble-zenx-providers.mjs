@@ -242,6 +242,13 @@ export async function assemblePlaywrightBrowser(options) {
       `${archive.sha256}\n`,
       { mode: 0o600 },
     );
+    const browserSha256 = await hashBrowserPayloadDirectory(
+      browserDirectory,
+      playwrightBrowserRuntimeStatePaths,
+    );
+    await writeFile(path.join(browserDirectory, "DEPENDENCIES_VALIDATED"), "", {
+      mode: 0o600,
+    });
     return {
       archiveSha256: archive.sha256,
       browserDirectory,
@@ -249,10 +256,7 @@ export async function assemblePlaywrightBrowser(options) {
       assets: [
         {
           path: path.relative(options.providersDirectory, browserDirectory),
-          sha256: await hashBrowserPayloadDirectory(
-            browserDirectory,
-            playwrightBrowserRuntimeStatePaths,
-          ),
+          sha256: browserSha256,
           kind: "directory",
           ignoredPaths: playwrightBrowserRuntimeStatePaths,
         },

@@ -26,8 +26,9 @@ cache, extracts it directly, and never invokes Playwright's downloader. The
 final provider manifest pins both the browser executable and a deterministic
 digest of the complete extracted payload. Bundled-provider selection and
 launch verification re-hash them. The manifest explicitly excludes only
-Playwright's root `DEPENDENCIES_VALIDATED`
-host-validation state file; all archive entries and any other additions remain
+Playwright's root `DEPENDENCIES_VALIDATED` host-validation state file. Assembly
+creates that empty file before app signing so Playwright's later empty marker
+does not add a path to the sealed bundle; all archive entries and any other additions remain
 inside the fail-closed digest boundary. The complete directory is re-hashed at
 selection and immediately before each browser launch; later commands against
 that running browser continue to re-hash the provider, runtime, browser

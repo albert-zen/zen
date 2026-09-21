@@ -2,6 +2,7 @@ import { prepareRtkResource } from "./prepare-rtk.mjs";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+  chmod,
   cp,
   mkdir,
   mkdtemp,
@@ -15,6 +16,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { packZenXFirstPartyPlugins } from "./pack-first-party-plugins.mjs";
+import ts from "typescript";
 
 const run = promisify(execFile);
 const zenx = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -23,6 +25,7 @@ const packagedRoot = path.join(zenx, ".packaged");
 const runsRoot = path.join(packagedRoot, "runs");
 const artifactRoot = path.join(packagedRoot, "artifact");
 const artifactCache = path.join(packagedRoot, "cache", "artifacts");
+export const MACOS_MINIMUM_VERSION = "12.0";
 
 if (isDirectExecution()) await packageZenX(process.argv.slice(2));
 
@@ -76,6 +79,7 @@ async function packageZenX(arguments_) {
         arch: process.arch,
         name: productName,
         electronVersion: "43.2.0",
+        ...macOsPackagerOptions(process.platform, target),
         ...(applicationIconForPlatform(process.platform, target) === undefined
           ? {}
           : { icon: applicationIconForPlatform(process.platform, target) }),
@@ -121,6 +125,14 @@ async function packageZenX(arguments_) {
                 "chrome-native-host",
               ),
             });
+            if (process.platform === "darwin") {
+              await compileMacNativeHelpers({
+                destinationDirectory: path.join(
+                  path.dirname(buildPath),
+                  "native-helpers",
+                ),
+              });
+            }
           },
         ],
         asar: false,
@@ -165,6 +177,173 @@ export function applicationIconForPlatform(platform, target = "app") {
   if (platform === "win32")
     return path.join(zenx, "resources", "icons", "zenx.ico");
   return undefined;
+}
+
+export function macOsPackagerOptions(
+  platform,
+  target = "app",
+  environment = process.env,
+) {
+  if (platform !== "darwin") return {};
+  const configuredIdentity = environment.ZENX_CODESIGN_IDENTITY?.trim();
+  const identity = configuredIdentity || "-";
+  return {
+    appBundleId:
+      target === "app"
+        ? "com.electron.zenx"
+        : "com.electron.zenx-provider-smoke",
+    osxSign: {
+      identity,
+      ...(identity === "-" ? { identityValidation: false } : {}),
+      continueOnError: false,
+      ignore: macPackagedProviderSignIgnore,
+      optionsForFile:
+        identity === "-"
+          ? macAdHocSignOptionsForFile
+          : macNativeHelperSignOptions,
+      preAutoEntitlements: false,
+      strictVerify: true,
+    },
+  };
+}
+
+export function macPackagedProviderSignIgnore(filePath) {
+  return filePath
+    .split(path.sep)
+    .join("/")
+    .includes("/Contents/Resources/providers/");
+}
+
+export function macAdHocSignOptionsForFile(filePath) {
+  return {
+    entitlements: [],
+    hardenedRuntime: false,
+  };
+}
+
+export function macNativeHelperSignOptions(filePath) {
+  return filePath.split(path.sep).includes("native-helpers")
+    ? { entitlements: [] }
+    : null;
+}
+
+export function extractMacNativeHelperSources(source) {
+  const sourceFile = ts.createSourceFile(
+    "computer-provider.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const names = new Set([
+    "MAC_ACCESSIBILITY_SOURCE",
+    "MAC_FOREGROUND_INPUT_SOURCE",
+  ]);
+  const sources = {};
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (
+        ts.isIdentifier(declaration.name) &&
+        names.has(declaration.name.text) &&
+        declaration.initializer !== undefined &&
+        ts.isNoSubstitutionTemplateLiteral(declaration.initializer)
+      ) {
+        sources[declaration.name.text] = declaration.initializer.text;
+      }
+    }
+  }
+  for (const name of names) {
+    if (typeof sources[name] !== "string" || sources[name].length === 0) {
+      throw new Error(
+        `Could not extract ${name} from Computer provider source`,
+      );
+    }
+  }
+  return sources;
+}
+
+export async function compileMacNativeHelpers(options) {
+  const providerSource =
+    options.providerSource ??
+    (await readFile(
+      path.join(zenx, "src", "main", "capabilities", "computer-provider.ts"),
+      "utf8",
+    ));
+  const sources = extractMacNativeHelperSources(providerSource);
+  const compile =
+    options.compile ??
+    ((sourcePath, executablePath) =>
+      compileSwiftHelper(
+        sourcePath,
+        executablePath,
+        options.arch ?? process.arch,
+      ));
+  await mkdir(options.destinationDirectory, { recursive: true, mode: 0o755 });
+  await chmod(options.destinationDirectory, 0o755);
+  const sourceDirectory = await mkdtemp(
+    path.join(
+      path.dirname(options.destinationDirectory),
+      ".native-helper-source-",
+    ),
+  );
+  try {
+    for (const [name, source] of [
+      ["zenx-accessibility", sources.MAC_ACCESSIBILITY_SOURCE],
+      ["zenx-foreground-input", sources.MAC_FOREGROUND_INPUT_SOURCE],
+    ]) {
+      const sourcePath = path.join(sourceDirectory, `${name}.swift`);
+      const executablePath = path.join(options.destinationDirectory, name);
+      await writeFile(sourcePath, source, { encoding: "utf8", mode: 0o600 });
+      await compile(sourcePath, executablePath);
+      await chmod(executablePath, 0o755);
+    }
+  } finally {
+    await rm(sourceDirectory, { recursive: true, force: true });
+  }
+  return options.destinationDirectory;
+}
+
+export function macSwiftTargetTriple(arch) {
+  if (arch === "arm64") return `arm64-apple-macos${MACOS_MINIMUM_VERSION}`;
+  if (arch === "x64") return `x86_64-apple-macos${MACOS_MINIMUM_VERSION}`;
+  throw new Error(`Unsupported macOS helper architecture: ${arch}`);
+}
+
+export function assertMacNativeHelperDeploymentTarget(
+  buildMetadata,
+  expectedMinimum = MACOS_MINIMUM_VERSION,
+) {
+  if (!/^\s*platform MACOS\s*$/mu.test(buildMetadata)) {
+    throw new Error("macOS Computer helper has no MACOS build platform");
+  }
+  const minimum = /^\s*minos\s+([0-9.]+)\s*$/mu.exec(buildMetadata)?.[1];
+  if (minimum !== expectedMinimum) {
+    throw new Error(
+      `macOS Computer helper minimum system ${minimum ?? "missing"}; expected ${expectedMinimum}`,
+    );
+  }
+}
+
+async function compileSwiftHelper(sourcePath, executablePath, arch) {
+  await run(
+    "/usr/bin/swiftc",
+    [
+      "-O",
+      "-target",
+      macSwiftTargetTriple(arch),
+      sourcePath,
+      "-o",
+      executablePath,
+    ],
+    { timeout: 60_000 },
+  );
+  const { stdout } = await run(
+    "/usr/bin/vtool",
+    ["-show-build", executablePath],
+    { timeout: 10_000 },
+  );
+  assertMacNativeHelperDeploymentTarget(stdout);
 }
 
 /** Build only into the current packaging run before anything snapshots it. */

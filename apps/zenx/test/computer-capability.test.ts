@@ -6,6 +6,7 @@ import {
   ComputerObservationLedger,
   ComputerZenXCapabilityPackage,
   MacForegroundInputDriver,
+  resolveMacNativeHelperExecutable,
   runProcess,
   selectComputerInspectionControls,
   type ComputerControlSelector,
@@ -284,6 +285,57 @@ test("computer process runner rejects a pre-aborted signal before spawn", async 
   assert.equal(spawnCount, 0);
 });
 
+test("packaged macOS Computer uses its fixed helper and never compiles a fallback", async () => {
+  const calls: string[] = [];
+  const executable = await resolveMacNativeHelperExecutable(
+    "zenx-accessibility",
+    async () => {
+      calls.push("compile");
+      return "/tmp/development-helper";
+    },
+    { resourcesPath: "/Applications/ZenX.app/Contents/Resources" },
+    async (candidate, mode) => {
+      calls.push(`access:${candidate}:${String(mode)}`);
+    },
+  );
+  assert.equal(
+    executable,
+    "/Applications/ZenX.app/Contents/Resources/native-helpers/zenx-accessibility",
+  );
+  assert.deepEqual(calls, [
+    "access:/Applications/ZenX.app/Contents/Resources/native-helpers/zenx-accessibility:1",
+  ]);
+});
+
+test("development macOS Computer retains an explicit compilation fallback", async () => {
+  const executable = await resolveMacNativeHelperExecutable(
+    "zenx-foreground-input",
+    async () => "/tmp/development-helper",
+    { resourcesPath: "/Electron.app/Contents/Resources", defaultApp: true },
+    async () => assert.fail("development must not inspect packaged resources"),
+  );
+  assert.equal(executable, "/tmp/development-helper");
+});
+
+test("packaged macOS Computer reports a missing fixed helper without compiling", async () => {
+  let compiled = false;
+  await assert.rejects(
+    resolveMacNativeHelperExecutable(
+      "zenx-accessibility",
+      async () => {
+        compiled = true;
+        return "/tmp/development-helper";
+      },
+      { resourcesPath: "/Applications/ZenX.app/Contents/Resources" },
+      async () => {
+        throw new Error("missing");
+      },
+    ),
+    /Packaged macOS Computer helper is missing or not executable/u,
+  );
+  assert.equal(compiled, false);
+});
+
 function computerBackend(calls: string[]): ZenXComputerBackend {
   const resolvedTarget = {
     pid: 42,
@@ -397,5 +449,38 @@ test("computer observation budget preserves source order and prioritizes enabled
   assert.deepEqual(
     selectComputerInspectionControls(controls.slice(0, 3), () => true),
     controls.slice(0, 3),
+  );
+
+  const chromeLikeControls = [
+    ...Array.from({ length: 120 }, (_, index) => ({
+      role: index === 1 ? "AXToolbar" : "AXGroup",
+      title: "",
+      enabled: false,
+      actions: [] as string[],
+    })),
+    {
+      role: "AXButton",
+      title: "Fixture B action",
+      enabled: true,
+      actions: ["AXPress"],
+    },
+    {
+      role: "AXTextField",
+      title: "Fixture B name",
+      enabled: true,
+      actions: ["AXSetValue"],
+    },
+  ];
+  const chromeSelection = selectComputerInspectionControls(
+    chromeLikeControls,
+    (control) => control.enabled && control.actions.length > 0,
+  );
+  assert.equal(chromeSelection.length, 32);
+  assert.deepEqual(
+    chromeSelection.slice(-2).map(({ role, title }) => ({ role, title })),
+    [
+      { role: "AXButton", title: "Fixture B action" },
+      { role: "AXTextField", title: "Fixture B name" },
+    ],
   );
 });

@@ -25,6 +25,7 @@ const portServer = createServer((_request, response) => {
 
 void app.whenReady().then(async () => {
   let failure: unknown;
+  let smokeUserDataDirectory: string | undefined;
   try {
     assert.equal(
       app.isPackaged,
@@ -46,8 +47,11 @@ void app.whenReady().then(async () => {
       PACKAGED_PROVIDER_MANIFEST_SHA256,
       "packaged manifest must match the immutable build-time digest",
     );
+    smokeUserDataDirectory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-packaged-provider-smoke-"),
+    );
     const browser = await selectBrowserProvider({
-      userDataDirectory: path.join(process.resourcesPath, "smoke-user-data"),
+      userDataDirectory: smokeUserDataDirectory,
       resourcesDirectory: process.resourcesPath,
       bundledProvidersOnly: true,
       bundledManifestSha256: PACKAGED_PROVIDER_MANIFEST_SHA256,
@@ -84,7 +88,7 @@ void app.whenReady().then(async () => {
     await browser.backend.close();
 
     const computer = await selectComputerProvider({
-      userDataDirectory: path.join(process.resourcesPath, "smoke-user-data"),
+      userDataDirectory: smokeUserDataDirectory,
       resourcesDirectory: process.resourcesPath,
       bundledProvidersOnly: true,
       bundledManifestSha256: PACKAGED_PROVIDER_MANIFEST_SHA256,
@@ -131,6 +135,9 @@ void app.whenReady().then(async () => {
   } finally {
     try {
       await closeServer();
+      if (smokeUserDataDirectory !== undefined) {
+        await rm(smokeUserDataDirectory, { recursive: true, force: true });
+      }
     } catch (error) {
       failure ??= error;
       console.error("ZenX packaged provider smoke cleanup failed", error);
