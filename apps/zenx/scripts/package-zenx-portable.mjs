@@ -196,10 +196,28 @@ export function macOsPackagerOptions(
       identity,
       ...(identity === "-" ? { identityValidation: false } : {}),
       continueOnError: false,
-      optionsForFile: macNativeHelperSignOptions,
+      ignore: macPackagedProviderSignIgnore,
+      optionsForFile:
+        identity === "-"
+          ? macAdHocSignOptionsForFile
+          : macNativeHelperSignOptions,
       preAutoEntitlements: false,
       strictVerify: true,
     },
+  };
+}
+
+export function macPackagedProviderSignIgnore(filePath) {
+  return filePath
+    .split(path.sep)
+    .join("/")
+    .includes("/Contents/Resources/providers/");
+}
+
+export function macAdHocSignOptionsForFile(filePath) {
+  return {
+    ...(macNativeHelperSignOptions(filePath) ?? {}),
+    hardenedRuntime: false,
   };
 }
 

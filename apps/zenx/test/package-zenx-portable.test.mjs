@@ -28,8 +28,10 @@ import {
   createBuildSnapshot,
   extractMacNativeHelperSources,
   MACOS_MINIMUM_VERSION,
+  macAdHocSignOptionsForFile,
   macNativeHelperSignOptions,
   macOsPackagerOptions,
+  macPackagedProviderSignIgnore,
   macSwiftTargetTriple,
   packageManifest,
   publishPackagedArtifact,
@@ -65,7 +67,8 @@ test("uses a stable macOS bundle ID and fail-closed ad-hoc signing by default", 
     identity: "-",
     identityValidation: false,
     continueOnError: false,
-    optionsForFile: macNativeHelperSignOptions,
+    ignore: macPackagedProviderSignIgnore,
+    optionsForFile: macAdHocSignOptionsForFile,
     preAutoEntitlements: false,
     strictVerify: true,
   });
@@ -76,6 +79,7 @@ test("uses a stable macOS bundle ID and fail-closed ad-hoc signing by default", 
     {
       identity: "Developer ID Application: Example",
       continueOnError: false,
+      ignore: macPackagedProviderSignIgnore,
       optionsForFile: macNativeHelperSignOptions,
       preAutoEntitlements: false,
       strictVerify: true,
@@ -94,6 +98,36 @@ test("uses a stable macOS bundle ID and fail-closed ad-hoc signing by default", 
   assert.equal(
     macNativeHelperSignOptions("/Applications/ZenX.app/Contents/MacOS/ZenX"),
     null,
+  );
+  assert.deepEqual(
+    macAdHocSignOptionsForFile(
+      "/Applications/ZenX.app/Contents/Resources/native-helpers/zenx-accessibility",
+    ),
+    { entitlements: [], hardenedRuntime: false },
+  );
+  assert.deepEqual(
+    macAdHocSignOptionsForFile(
+      "/Applications/ZenX.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    ),
+    { hardenedRuntime: false },
+  );
+  assert.equal(
+    macPackagedProviderSignIgnore(
+      "/tmp/ZenX.app/Contents/Resources/providers/runtime/node",
+    ),
+    true,
+  );
+  assert.equal(
+    macPackagedProviderSignIgnore(
+      "/tmp/ZenX.app/Contents/Resources/native-helpers/zenx-accessibility",
+    ),
+    false,
+  );
+  assert.equal(
+    macPackagedProviderSignIgnore(
+      "/tmp/ZenX.app/Contents/Frameworks/Electron Framework.framework/Electron Framework",
+    ),
+    false,
   );
 });
 

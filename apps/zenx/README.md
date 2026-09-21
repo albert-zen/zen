@@ -217,10 +217,20 @@ The result is an **unpacked portable directory**, not an installer or a
 single-file executable. On macOS it is signed during packaging with
 `ZENX_CODESIGN_IDENTITY` when configured, or with an ad-hoc identity when no
 Developer ID is available; the ad-hoc fallback verifies package integrity but
-does not promise stable Accessibility authorization across rebuilt updates. It is written below
+keeps hardened runtime disabled because an ad-hoc app and its nested Electron
+frameworks have no common Team ID for library validation. A configured Developer
+ID uses the signer's standard hardened-runtime behavior. The package does not
+disable library validation with an entitlement. Ad-hoc signing does not promise
+stable Accessibility authorization across rebuilt updates. It is written below
 `apps/zenx/.packaged/artifact/ZenX-<platform>-<arch>/`; keep that directory
 together and start `ZenX.exe` on Windows, `ZenX.app` on macOS, or `ZenX` on
 Linux.
+
+macOS signing excludes the assembled `Contents/Resources/providers/` payload
+from re-signing. Those provider executables retain their verified upstream bytes
+and signatures, while the outer app resource seal still covers them. This keeps
+the pinned provider manifest valid after signing; provider selection continues
+to fail closed on any byte mismatch.
 
 Each packaging command builds a private output snapshot, validates and packs
 the first-party Rooms package with the public plugin developer kit, assembles resources,
