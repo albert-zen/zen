@@ -221,7 +221,14 @@ async function mountPicker(
 }
 
 async function unmountPicker(harness: PickerHarness): Promise<void> {
+  const previous = harness.dom.window.document.querySelector(
+    '[data-before="picker"]',
+  );
+  assert.ok(previous);
   await act(async () => harness.root.unmount());
+  // Radix FocusScope restores focus in a deferred unmount callback. React act
+  // does not guarantee that timer has run; drain it before replacing the DOM.
+  await waitFor(() => harness.dom.window.document.activeElement === previous);
 }
 
 function listing(
