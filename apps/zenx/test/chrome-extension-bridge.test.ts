@@ -128,7 +128,7 @@ test("bundled extension key has the native-host allowlisted extension ID", async
   assert.equal(digest, ZENX_CHROME_EXTENSION_ID);
 });
 
-test("Chrome bridge exposes only the explicitly attached tab over authenticated CDP", async () => {
+test("Chrome bridge routes authenticated CDP across the connected browser", async () => {
   const runtimeDirectory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-chrome-bridge-"),
   );
@@ -156,32 +156,49 @@ test("Chrome bridge exposes only the explicitly attached tab over authenticated 
       native!.once("open", resolve);
       native!.once("error", reject);
     });
-    native.send(JSON.stringify({ type: "hello", protocolVersion: 1 }));
+    native.send(
+      JSON.stringify({ type: "hello", protocolVersion: 2, scope: "browser" }),
+    );
     native.send(
       JSON.stringify({
-        type: "tab-attached",
-        tab: {
-          id: 42,
-          title: "Signed in account",
-          url: "https://example.test/account",
-        },
+        type: "browser-connected",
+        tabs: [
+          {
+            id: 42,
+            title: "Signed in account",
+            url: "https://example.test/account",
+          },
+          { id: 43, title: "Other tab", url: "https://other.test/" },
+        ],
       }),
     );
     const forwardedMethods: string[] = [];
+    const forwardedTargets: number[] = [];
     let documentUrl = "https://example.test/account";
     native.on("message", (data) => {
       const message = JSON.parse(data.toString()) as {
         type?: string;
         requestId?: string;
         method?: string;
+        tabId?: number;
         params?: Record<string, unknown>;
       };
       if (message.type !== "cdp-command" || message.requestId === undefined)
         return;
       const method = message.method ?? "";
       forwardedMethods.push(method);
+      if (message.tabId !== undefined) forwardedTargets.push(message.tabId);
       let result: unknown = {};
-      if (method === "Page.getFrameTree") {
+      if (method === "Target.createTarget") {
+        documentUrl = String(message.params?.url);
+        native!.send(
+          JSON.stringify({
+            type: "tab-updated",
+            tab: { id: 44, title: "New tab", url: documentUrl },
+          }),
+        );
+        result = { targetId: "chrome-tab-44" };
+      } else if (method === "Page.getFrameTree") {
         result = {
           frameTree: {
             frame: { id: "main", loaderId: "loader", url: documentUrl },
@@ -260,6 +277,13 @@ test("Chrome bridge exposes only the explicitly attached tab over authenticated 
           url: "https://example.test/account",
           loading: false,
         },
+        {
+          sessionId: "thread-1",
+          tabId: "chrome-tab-43",
+          title: "Other tab",
+          url: "https://other.test/",
+          loading: false,
+        },
       ]);
       assert.deepEqual(await connection.backend.listTabs("thread-2"), []);
       const inspection = await connection.backend.inspect(
@@ -282,6 +306,15 @@ test("Chrome bridge exposes only the explicitly attached tab over authenticated 
         "https://example.test/next",
       );
       assert.equal(navigated.url, "https://example.test/next");
+      await connection.backend.inspect("thread-1", "chrome-tab-43");
+      assert.ok(forwardedTargets.includes(42));
+      assert.ok(forwardedTargets.includes(43));
+      const created = await connection.backend.open(
+        "thread-1",
+        "https://example.test/new",
+      );
+      assert.equal(created.tabId, "chrome-tab-44");
+      assert.equal(created.url, "https://example.test/new");
       for (const method of [
         "Page.enable",
         "Runtime.enable",
@@ -312,13 +345,15 @@ test("Chrome bridge exposes only the explicitly attached tab over authenticated 
           },
         }),
       );
-      await waitFor(
-        () =>
-          bridge.status().connectedTab?.url ===
-          "https://example.test/human-navigation",
+      await waitFor(() => bridge.status().tabCount === 3);
+      assert.equal(
+        (await connection.backend.listTabs("thread-1")).find(
+          (tab) => tab.tabId === "chrome-tab-42",
+        )?.url,
+        "https://example.test/human-navigation",
       );
       await connection.backend.closeSession("thread-1");
-      assert.equal(bridge.status().connectedTab?.title, "Signed in account");
+      assert.deepEqual(bridge.status(), { state: "connected", tabCount: 3 });
     } finally {
       await connection.backend.close();
     }
@@ -350,6 +385,9 @@ test("replacing the native connection revokes its tab, sessions, and pending com
         socket.once("open", resolve);
         socket.once("error", reject);
       });
+      socket.send(
+        JSON.stringify({ type: "hello", protocolVersion: 2, scope: "browser" }),
+      );
       return socket;
     };
     const oldSocket = await connect();
@@ -376,11 +414,11 @@ test("replacing the native connection revokes its tab, sessions, and pending com
     });
     oldSocket.send(
       JSON.stringify({
-        type: "tab-attached",
-        tab: { id: 7, title: "Old", url: "https://old.test/" },
+        type: "browser-connected",
+        tabs: [{ id: 7, title: "Old", url: "https://old.test/" }],
       }),
     );
-    await waitFor(() => bridge.status().connectedTab?.id === 7);
+    await waitFor(() => bridge.status().tabCount === 1);
     connection = await bridge.connectProvider();
     assert.equal(
       (await connection.backend.listTabs("thread"))[0]?.tabId,
@@ -401,19 +439,140 @@ test("replacing the native connection revokes its tab, sessions, and pending com
 
     currentSocket.send(
       JSON.stringify({
-        type: "tab-attached",
-        tab: { id: 8, title: "Current", url: "https://current.test/" },
+        type: "browser-connected",
+        tabs: [{ id: 8, title: "Current", url: "https://current.test/" }],
       }),
     );
-    await waitFor(() => bridge.status().connectedTab?.id === 8);
-    assert.deepEqual(bridge.status().connectedTab, {
-      id: 8,
-      title: "Current",
-      url: "https://current.test/",
-    });
+    await waitFor(() => bridge.status().tabCount === 1);
+    assert.deepEqual(bridge.status(), { state: "connected", tabCount: 1 });
   } finally {
     await connection?.backend.close();
     for (const socket of sockets) socket.close();
+    await bridge.close();
+    await rm(runtimeDirectory, { recursive: true, force: true });
+  }
+});
+
+test("removing one tab rejects only its commands and zero-tab browser stays connected", async () => {
+  const runtimeDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-chrome-multiple-"),
+  );
+  const bridge = await ChromeExtensionBridge.start({ runtimeDirectory });
+  let native: WebSocket | undefined;
+  let connection:
+    Awaited<ReturnType<typeof bridge.connectProvider>> | undefined;
+  let otherConnection:
+    Awaited<ReturnType<typeof bridge.connectProvider>> | undefined;
+  try {
+    const descriptor = JSON.parse(
+      await readFile(path.join(runtimeDirectory, "chrome-bridge.json"), "utf8"),
+    ) as { nativeWebSocketUrl: string };
+    native = new WebSocket(descriptor.nativeWebSocketUrl, {
+      headers: { origin: ZENX_CHROME_EXTENSION_ORIGIN },
+    });
+    await new Promise<void>((resolve, reject) => {
+      native!.once("open", resolve);
+      native!.once("error", reject);
+    });
+    const pending = new Map<number, string>();
+    native.on("message", (data) => {
+      const message = JSON.parse(data.toString()) as {
+        type: string;
+        method: string;
+        tabId: number;
+        requestId: string;
+      };
+      if (message.type !== "cdp-command") return;
+      if (message.method === "Page.navigate") {
+        pending.set(message.tabId, message.requestId);
+        return;
+      }
+      native!.send(
+        JSON.stringify({
+          type: "cdp-result",
+          requestId: message.requestId,
+          result: {},
+        }),
+      );
+    });
+    native.send(
+      JSON.stringify({ type: "hello", protocolVersion: 2, scope: "browser" }),
+    );
+    native.send(
+      JSON.stringify({
+        type: "browser-connected",
+        tabs: [
+          { id: 1, title: "One", url: "https://one.test/" },
+          { id: 2, title: "Two", url: "https://two.test/" },
+        ],
+      }),
+    );
+    await waitFor(() => bridge.status().tabCount === 2);
+    connection = await bridge.connectProvider();
+    await connection.backend.listTabs("thread");
+    const first = connection.backend.navigate(
+      "thread",
+      "chrome-tab-1",
+      "https://one.test/next",
+    );
+    const rejectedFirst = assert.rejects(first);
+    otherConnection = await bridge.connectProvider();
+    await otherConnection.backend.listTabs("other-thread");
+    const second = otherConnection.backend.navigate(
+      "other-thread",
+      "chrome-tab-2",
+      "https://two.test/next",
+    );
+    await waitFor(() => pending.size === 2);
+    native.send(JSON.stringify({ type: "tab-removed", tabId: 1 }));
+    await rejectedFirst;
+    native.send(
+      JSON.stringify({
+        type: "cdp-result",
+        requestId: pending.get(2),
+        result: {},
+      }),
+    );
+    assert.equal((await second).url, "https://two.test/next");
+    native.send(JSON.stringify({ type: "tab-removed", tabId: 2 }));
+    await waitFor(() => bridge.status().tabCount === 0);
+    assert.deepEqual(bridge.status(), { state: "connected", tabCount: 0 });
+    native.close();
+    await waitFor(() => bridge.status().state === "waiting");
+  } finally {
+    native?.close();
+    await connection?.backend.close();
+    await otherConnection?.backend.close();
+    await bridge.close();
+    await rm(runtimeDirectory, { recursive: true, force: true });
+  }
+});
+
+test("old single-tab extensions cannot imply browser-wide consent", async () => {
+  const runtimeDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-chrome-old-extension-"),
+  );
+  const bridge = await ChromeExtensionBridge.start({ runtimeDirectory });
+  let native: WebSocket | undefined;
+  try {
+    const descriptor = JSON.parse(
+      await readFile(path.join(runtimeDirectory, "chrome-bridge.json"), "utf8"),
+    ) as { nativeWebSocketUrl: string };
+    native = new WebSocket(descriptor.nativeWebSocketUrl, {
+      headers: { origin: ZENX_CHROME_EXTENSION_ORIGIN },
+    });
+    await new Promise<void>((resolve, reject) => {
+      native!.once("open", resolve);
+      native!.once("error", reject);
+    });
+    const closed = new Promise<number>((resolve) =>
+      native!.once("close", (code) => resolve(code)),
+    );
+    native.send(JSON.stringify({ type: "hello", protocolVersion: 1 }));
+    assert.equal(await closed, 1008);
+    assert.deepEqual(bridge.status(), { state: "waiting", tabCount: 0 });
+  } finally {
+    native?.close();
     await bridge.close();
     await rm(runtimeDirectory, { recursive: true, force: true });
   }

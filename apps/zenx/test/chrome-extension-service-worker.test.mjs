@@ -5,45 +5,203 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 
-test("extension serializes rapid tab choices and ignores an old port disconnect", async () => {
+test("one browser connection discovers all web tabs without attaching debuggers", async () => {
+  const fixture = await workerFixture();
+  fixture.clicked.emit(tab(1));
+  await waitFor(() =>
+    fixture.ports[0]?.messages.some(
+      (message) => message.type === "browser-connected",
+    ),
+  );
+  const connected = fixture.ports[0].messages.find(
+    (message) => message.type === "browser-connected",
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(connected.tabs)).map((entry) => entry.id),
+    [1, 2],
+  );
+  assert.deepEqual(fixture.attachCalls, []);
+  fixture.clicked.emit(tab(2));
+  await waitFor(() => fixture.ports[0].disconnected);
+  assert.deepEqual(fixture.removed, []);
+});
+
+test("commands attach lazily to independent tabs, discover new tabs, and create provider tabs", async () => {
+  const fixture = await workerFixture();
+  fixture.clicked.emit(tab(1));
+  await waitFor(() =>
+    fixture.ports[0]?.messages.some(
+      (message) => message.type === "browser-connected",
+    ),
+  );
+  const port = fixture.ports[0];
+  for (const id of [1, 2])
+    port.onMessage.emit({
+      type: "cdp-command",
+      requestId: `inspect-${id}`,
+      tabId: id,
+      method: "Page.enable",
+    });
+  await waitFor(() => fixture.commands.length === 2);
+  assert.deepEqual(fixture.attachCalls.sort(), [1, 2]);
+  fixture.chrome.tabs.onCreated.emit(tab(4));
+  assert.equal(port.messages.at(-1).tab.id, 4);
+  port.onMessage.emit({
+    type: "cdp-command",
+    requestId: "create",
+    method: "Target.createTarget",
+    params: { url: "about:blank#zenx-pending-1234-abcd" },
+  });
+  await waitFor(() =>
+    port.messages.some((message) => message.requestId === "create"),
+  );
+  assert.equal(
+    port.messages.find((message) => message.requestId === "create").result
+      .targetId,
+    "chrome-tab-100",
+  );
+  assert.equal(
+    port.messages.some(
+      (message) => message.type === "tab-updated" && message.tab.id === 100,
+    ),
+    true,
+  );
+  fixture.chrome.tabs.onRemoved.emit(1);
+  await waitFor(() => !fixture.attached.has(1));
+  assert.equal(fixture.attached.has(2), true);
+  fixture.clicked.emit(tab(4));
+  await waitFor(() => port.disconnected && fixture.attached.size === 0);
+  assert.deepEqual(fixture.removed, []);
+});
+
+test("Chrome debugger cancel revokes all tabs and reconnect rejects late old-port results", async () => {
+  let release;
+  const pending = new Promise((resolve) => {
+    release = resolve;
+  });
+  const fixture = await workerFixture({
+    command: async (_tabId, method) =>
+      method === "Runtime.evaluate" ? await pending : {},
+  });
+  fixture.clicked.emit(tab(1));
+  await waitFor(() =>
+    fixture.ports[0]?.messages.some(
+      (message) => message.type === "browser-connected",
+    ),
+  );
+  const old = fixture.ports[0];
+  old.onMessage.emit({
+    type: "cdp-command",
+    requestId: "late",
+    tabId: 1,
+    method: "Runtime.evaluate",
+  });
+  old.onMessage.emit({
+    type: "cdp-command",
+    requestId: "other",
+    tabId: 2,
+    method: "Page.enable",
+  });
+  await waitFor(() => fixture.commands.length === 2);
+  fixture.chrome.debugger.onDetach.emit({ tabId: 1 }, "canceled_by_user");
+  await waitFor(() => old.disconnected && fixture.attached.size === 0);
+  fixture.clicked.emit(tab(2));
+  await waitFor(() =>
+    fixture.ports[1]?.messages.some(
+      (message) => message.type === "browser-connected",
+    ),
+  );
+  old.onDisconnect.emit();
+  release({ secret: "old-generation" });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(fixture.ports[1].disconnected, false);
+  assert.equal(
+    old.messages.some((message) => message.requestId === "late"),
+    false,
+  );
+  assert.equal(
+    fixture.ports[1].messages.some((message) => message.requestId === "late"),
+    false,
+  );
+  fixture.clicked.emit(tab(1));
+  await waitFor(() => fixture.ports[1].disconnected);
+});
+
+test("disconnect waits for a pending attach before allowing the next browser connection", async () => {
+  let release;
+  const pending = new Promise((resolve) => {
+    release = resolve;
+  });
+  const fixture = await workerFixture({ attach: async () => await pending });
+  fixture.clicked.emit(tab(1));
+  await waitFor(() =>
+    fixture.ports[0]?.messages.some(
+      (message) => message.type === "browser-connected",
+    ),
+  );
+  fixture.ports[0].onMessage.emit({
+    type: "cdp-command",
+    requestId: "late",
+    tabId: 1,
+    method: "Page.enable",
+  });
+  await waitFor(() => fixture.attachCalls.length === 1);
+  fixture.chrome.tabs.onRemoved.emit(1); // Starts detach while attach is pending.
+  fixture.clicked.emit(tab(2));
+  fixture.clicked.emit(tab(2));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(fixture.ports.length, 1);
+  release();
+  await waitFor(() =>
+    fixture.ports[1]?.messages.some(
+      (message) => message.type === "browser-connected",
+    ),
+  );
+  assert.equal(fixture.attached.size, 0);
+  assert.equal(fixture.commands.length, 0);
+  fixture.clicked.emit(tab(2));
+  await waitFor(() => fixture.ports[1].disconnected);
+});
+
+async function workerFixture(options = {}) {
   const clicked = event();
-  const debuggerDetached = event();
-  const tabUpdated = event();
-  const tabRemoved = event();
   const ports = [];
-  const attached = new Set();
   const attachCalls = [];
   const detachCalls = [];
-  let activeAttaches = 0;
-  let maximumActiveAttaches = 0;
-  let releaseFirstAttach;
-  const firstAttach = new Promise((resolve) => {
-    releaseFirstAttach = resolve;
-  });
+  const removed = [];
+  const commands = [];
+  const attached = new Set();
+  const debuggerDetached = event();
+  const tabs = new Map(
+    [tab(1), tab(2), { ...tab(3), url: "chrome://settings/" }].map((entry) => [
+      entry.id,
+      entry,
+    ]),
+  );
   const chrome = {
     action: {
       onClicked: clicked,
-      setBadgeBackgroundColor: async () => undefined,
-      setBadgeText: async () => undefined,
-      setTitle: async () => undefined,
+      setBadgeBackgroundColor: async () => {},
+      setBadgeText: async () => {},
+      setTitle: async () => {},
     },
     debugger: {
       onEvent: event(),
       onDetach: debuggerDetached,
       attach: async ({ tabId }) => {
         attachCalls.push(tabId);
-        activeAttaches += 1;
-        maximumActiveAttaches = Math.max(maximumActiveAttaches, activeAttaches);
-        if (tabId === 1) await firstAttach;
+        await options.attach?.(tabId);
         attached.add(tabId);
-        activeAttaches -= 1;
       },
       detach: async ({ tabId }) => {
         detachCalls.push(tabId);
         attached.delete(tabId);
-        debuggerDetached.emit({ tabId }, "target_closed");
+        debuggerDetached.emit({ tabId }, "canceled_by_user");
       },
-      sendCommand: async () => ({}),
+      sendCommand: async ({ tabId }, method, params) => {
+        commands.push({ tabId, method, params });
+        return (await options.command?.(tabId, method)) ?? {};
+      },
     },
     runtime: {
       connectNative: () => {
@@ -51,10 +209,29 @@ test("extension serializes rapid tab choices and ignores an old port disconnect"
         ports.push(port);
         return port;
       },
-      getManifest: () => ({ version: "1.0.0" }),
-      lastError: undefined,
+      getManifest: () => ({ version: "2.0.0" }),
     },
-    tabs: { onUpdated: tabUpdated, onRemoved: tabRemoved },
+    tabs: {
+      onCreated: event(),
+      onUpdated: event(),
+      onRemoved: event(),
+      query: async () => [...tabs.values()],
+      get: async (id) => {
+        if (!tabs.has(id)) throw new Error("Tab closed");
+        return tabs.get(id);
+      },
+      create: async ({ url }) => {
+        const entry = { ...tab(100), url: "", pendingUrl: url };
+        tabs.set(entry.id, entry);
+        chrome.tabs.onCreated.emit(entry);
+        return entry;
+      },
+      remove: async (id) => {
+        removed.push(id);
+        tabs.delete(id);
+        chrome.tabs.onRemoved.emit(id);
+      },
+    },
   };
   const source = await readFile(
     path.join(
@@ -63,35 +240,19 @@ test("extension serializes rapid tab choices and ignores an old port disconnect"
     ),
     "utf8",
   );
-  vm.runInNewContext(source, {
+  vm.runInNewContext(source, { chrome, clearTimeout, setTimeout, URL });
+  return {
+    clicked,
+    ports,
+    attachCalls,
+    detachCalls,
+    attached,
+    removed,
+    commands,
     chrome,
-    clearTimeout,
-    setTimeout,
-  });
-
-  clicked.emit(tab(1));
-  clicked.emit(tab(2));
-  await waitFor(() => attachCalls.length === 1);
-  assert.deepEqual(attachCalls, [1]);
-  releaseFirstAttach();
-  await waitFor(() => attached.has(2));
-  assert.deepEqual(attachCalls, [1, 2]);
-  assert.deepEqual(detachCalls, [1]);
-  assert.equal(maximumActiveAttaches, 1);
-  assert.deepEqual([...attached], [2]);
-
-  clicked.emit(tab(2));
-  await waitFor(() => attached.size === 0 && ports[0]?.disconnected === true);
-  clicked.emit(tab(3));
-  await waitFor(() => attached.has(3) && ports.length === 2);
-  ports[0].onDisconnect.emit();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.deepEqual([...attached], [3]);
-
-  clicked.emit(tab(3));
-  await waitFor(() => attached.size === 0);
-  assert.deepEqual(detachCalls, [1, 2, 3]);
-});
+    tabs,
+  };
+}
 
 function event() {
   const listeners = [];
@@ -112,10 +273,16 @@ function nativePort() {
     onMessage,
     onDisconnect,
     disconnected: false,
+    messages: [],
     postMessage(message) {
+      this.messages.push(message);
       if (message?.type === "hello") {
         queueMicrotask(() =>
-          onMessage.emit({ type: "ready", protocolVersion: 1 }),
+          onMessage.emit({
+            type: "ready",
+            protocolVersion: 2,
+            scope: "browser",
+          }),
         );
       }
     },

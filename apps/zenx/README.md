@@ -497,22 +497,30 @@ cleanup, and advances the partition generation; reopening the same `sessionId`
 therefore starts without the prior cookies or session storage. Generation state
 exists only for active/pending sessions, so logical session bookkeeping is bounded.
 User-browser attachment is a separate explicit opt-in mode. In Settings →
-General → Browser, choose **Connected Chrome tab**, apply, and restart
-ZenX. Register the local connector, load the bundled unpacked extension from the
-folder shown by ZenX, open the signed-in page in ordinary Chrome, then click the
-extension action. The action grants ZenX debugger access to that one tab. Click
-it again, disable the extension, or quit ZenX to revoke the connection. The
-original page remains in Chrome; ZenX does not embed or clone it into its own
-Chromium profile.
+General → Browser, choose **Connected Chrome**, apply, and restart ZenX.
+Register the local connector and load the bundled unpacked extension from the
+folder shown by ZenX. Click the extension once to connect the Chrome browser.
+Existing and newly opened HTTP(S) tabs are discoverable through Browser tools;
+Agent operations attach to the requested tab as needed, without a separate
+extension click for each tab. The Agent can also open new web tabs. Human tab
+switching leaves the connection and other tabs available.
 
-The extension declares `debugger`, `nativeMessaging`, and `activeTab`, has no
-host wildcard, and talks only to a Native Messaging manifest pinned to its
-fixed extension ID. The native host connects to an authenticated ephemeral
-loopback bridge owned by the running ZenX process. Only the explicitly attached
-tab is projected to the existing user-browser provider. Cookies, storage,
-headers, other tabs, and the rest of the Chrome profile are neither requested
-nor exported. Agent close detaches ZenX's logical session without closing the
-user tab; extension or app disconnect detaches `chrome.debugger`.
+Click the extension again, cancel Chrome's debugging connection, disable the
+extension, or quit ZenX to disconnect the browser. The original windows, tabs,
+and signed-in state stay in Chrome. The sidebar follows the selected tab with a
+live, read-only view; interact directly in the original Chrome window.
+
+The extension declares `debugger`, `nativeMessaging`, and `tabs`, and talks only
+to a Native Messaging manifest pinned to its fixed extension ID. Its native
+host connects to an authenticated ephemeral loopback bridge owned by the
+running ZenX process. The connected profile's web-tab metadata is projected to
+the existing user-browser provider; debugger attachment is lazy per target.
+Chrome internal pages and other extensions' pages are not exposed as web tabs.
+Cookies, storage, headers, and profile files are not copied or exported. Agent
+close detaches its logical session without closing user tabs; browser disconnect
+revokes all debugger attachments and old observations. Reconnecting starts a new
+connection lifetime, so late work from the previous connection cannot publish
+into it. An older single-tab extension must be reloaded from the updated folder.
 
 For development and compatibility testing, an independently started Chrome,
 Edge, or Chromium 100+ instance may still expose an explicit loopback CDP
@@ -587,10 +595,14 @@ User-browser CDP supports one live panel per provider at a time; opening another
 live view explicitly marks the previous observer unavailable. Playwright and
 Electron show the latest timestamped Agent inspection screenshot, labeled as
 non-live. Thread/provider changes discard old subscription events and images.
-The Attached browser panel remains an observation surface; selecting a Chrome
-tab does not turn it into an embedded WebContentsView or by itself establish
-continuous live mirroring. Use the original Chrome tab as the authoritative
-human view.
+The Attached browser panel remains a read-only observation surface. Connected
+Chrome displays fresh compositor captures while the panel is visible. Native
+screencast events request a refresh but their unbound pixel payloads are not
+displayed; when Chrome emits no events, capture continues at a bounded 500 ms
+cadence. Captures are single-flight and scoped to the current page and observer.
+The panel reports Live only after an actual frame arrives, and stops capturing
+when hidden or disconnected. Human input still goes through the original Chrome
+tab, which shares the same page with the Agent.
 The Browser 1.0.1 bundled package removes the global sidebar contribution; its
 legacy route explains the thread-panel entry point.
 

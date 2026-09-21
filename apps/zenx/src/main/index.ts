@@ -100,6 +100,7 @@ import { createElectronWorkspaceBrowser } from "./workspace-browser-electron.js"
 import { useWorkspaceBrowserProvider } from "./workspace-browser-provider-policy.js";
 import {
   ChromeExtensionBridge,
+  type ChromeBridgeSettingsSnapshot,
   ZENX_CHROME_EXTENSION_ID,
   ZENX_CHROME_EXTENSION_ORIGIN,
 } from "./chrome-extension-bridge.js";
@@ -1160,7 +1161,7 @@ function installChromeBridgeIpc(options: {
       "zenx-native-host.cmd",
     ),
   };
-  const snapshot = async () => {
+  const snapshot = async (): Promise<ChromeBridgeSettingsSnapshot> => {
     const configuredMode =
       (await options.settings.publicSettings()).profile.browserMode ??
       "isolated";
@@ -1184,7 +1185,7 @@ function installChromeBridgeIpc(options: {
       nativeHostRegistered: await chromeNativeHostRegistered(registration),
       extensionDirectory,
       extensionId: ZENX_CHROME_EXTENSION_ID,
-      connection: options.bridge?.status() ?? { state: "waiting" as const },
+      connection: options.bridge?.status() ?? { state: "waiting", tabCount: 0 },
     };
   };
   ipcMain.handle(ipcChannels.chromeBridgeGet, snapshot);

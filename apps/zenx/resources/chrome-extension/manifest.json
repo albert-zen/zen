@@ -1,14 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "ZenX Current Tab Bridge",
-  "version": "1.0.0",
-  "description": "Connect one tab you explicitly choose to the local ZenX browser tools.",
+  "name": "ZenX Browser Bridge",
+  "version": "2.0.0",
+  "description": "Connect Chrome to ZenX once to work together across existing and new web tabs.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzLlvUihGMkgVLWbHIcjdKHRuWeR+UQgiRuFWF5ixOgAVSnmIOS+wcXnks8N7QczDJDlSjCm3KmLpuR2wX7tXlurG/jZUicCkSExPlWbDFjYNoHFlUjyYpH3ITCF//PkCyCmbf+lEtleYpry/uUaXOLd6GScm/57tCg23Ua+gN+cqrykB1vsLDDDgpKUg1deuALPAi7t014hppabM2WKgRWP2xRFKbUzMYkU03zwogKTK5AYxCotIvrA+c8ibmuJAtG8DnPvlsoT4EJR64+KfSUTqZIDhMji2Hiq6D+NzbKAaxMSF9I770JzMpQ64RWjAuEiomhvtKsEOOfl3E/b/rQIDAQAB",
-  "permissions": ["activeTab", "debugger", "nativeMessaging"],
+  "permissions": ["tabs", "debugger", "nativeMessaging"],
   "background": {
     "service_worker": "service-worker.js"
   },
   "action": {
-    "default_title": "Connect this tab to ZenX"
+    "default_title": "Connect Chrome to ZenX"
   }
 }

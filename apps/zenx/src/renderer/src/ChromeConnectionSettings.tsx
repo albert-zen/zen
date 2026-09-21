@@ -50,7 +50,8 @@ export function ChromeConnectionSettings({
   };
 
   const selectedMode = draft.browserMode ?? "isolated";
-  const connected = snapshot?.connection.connectedTab;
+  const connected = snapshot?.connection.state === "connected";
+  const tabCount = snapshot?.connection.tabCount ?? 0;
   return (
     <div className="page-card settings-card chrome-connection-settings">
       <div className="settings-card-head">
@@ -59,11 +60,10 @@ export function ChromeConnectionSettings({
           <p>Choose where Browser tools work.</p>
         </div>
         <span
-          className={connected === undefined ? "status-muted" : "status-good"}
+          role="status"
+          className={connected ? "status-good" : "status-muted"}
         >
-          {connected === undefined
-            ? "No Chrome tab connected"
-            : "Chrome tab connected"}
+          {connected ? "Chrome connected" : "Chrome not connected"}
         </span>
       </div>
       <label className="field">
@@ -78,7 +78,7 @@ export function ChromeConnectionSettings({
           }
         >
           <option value="isolated">ZenX browser</option>
-          <option value="user-session">Connected Chrome tab</option>
+          <option value="user-session">Connected Chrome</option>
         </Select>
         <small className="settings-note">
           Changing this mode takes effect after restarting ZenX.
@@ -141,29 +141,24 @@ export function ChromeConnectionSettings({
           </div>
           <div className="settings-row">
             <div>
-              <strong>3. Connect one current tab</strong>
+              <strong>3. Connect your browser</strong>
               <span>
-                Open the signed-in page in Chrome and click the ZenX extension.
-                Click it again to revoke access. Closing ZenX or disabling the
-                extension also disconnects the debugger.
+                Click the ZenX extension once in Chrome. Existing and new web
+                tabs become available without connecting each tab. Click the
+                extension again to disconnect the whole browser.
               </span>
             </div>
-            <span
-              className={
-                connected === undefined ? "status-muted" : "status-good"
-              }
-            >
-              {connected === undefined
-                ? "Waiting for a tab"
-                : `${connected.title || "Untitled tab"} · ${safeHost(connected.url)}`}
+            <span className={connected ? "status-good" : "status-muted"}>
+              {connected
+                ? `${tabCount} ${tabCount === 1 ? "tab" : "tabs"} available`
+                : "Waiting for Chrome"}
             </span>
           </div>
           <p className="settings-note">
-            The original page stays in Chrome and keeps its existing login
-            state. ZenX receives debugger access only to the selected tab; it
-            does not copy cookies or enumerate the rest of the profile. The
-            Attached browser panel is an observation surface, not an embedded
-            copy of the Chrome tab.
+            Keep using your usual Chrome windows and signed-in pages. You and
+            the Agent work in the same tabs; the sidebar shows the Agent’s
+            latest view. Closing ZenX or disabling the extension ends the
+            connection.
           </p>
         </>
       ) : null}
@@ -174,14 +169,6 @@ export function ChromeConnectionSettings({
       )}
     </div>
   );
-}
-
-function safeHost(value: string): string {
-  try {
-    return new URL(value).host || value;
-  } catch {
-    return value;
-  }
 }
 
 function describeError(error: unknown): string {

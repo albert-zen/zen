@@ -1,234 +1,297 @@
 const NATIVE_HOST = "com.zenx.chrome_bridge";
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 const READY_TIMEOUT_MS = 5000;
-
-let nativePort;
-let connectedTabId;
-let readyPromise;
-let readyResolve;
-let readyReject;
-let disconnecting = false;
-let detachingTabId;
-let nativeGeneration = 0;
+let connection;
 let actionChain = Promise.resolve();
 
-chrome.action.onClicked.addListener((tab) => {
-  actionChain = actionChain.then(
-    () => handleAction(tab),
-    () => handleAction(tab),
-  );
+chrome.action.onClicked.addListener(() => {
+  actionChain = actionChain.then(handleAction, handleAction);
 });
 
-async function handleAction(tab) {
-  if (typeof tab.id !== "number") return;
-  if (connectedTabId === tab.id) {
-    await disconnectTab("Disconnected by user");
+async function handleAction() {
+  if (connection !== undefined) {
+    await disconnect(connection);
     return;
   }
+  const session = {
+    port: chrome.runtime.connectNative(NATIVE_HOST),
+    tabs: new Map(),
+    changed: new Set(),
+    owned: new Set(),
+    attachments: new Map(),
+    detaching: new Map(),
+    published: false,
+  };
+  connection = session;
   try {
-    await ensureNativeReady();
-    await detachSelectedTab("A different tab was selected");
-    await chrome.debugger.attach({ tabId: tab.id }, "1.3");
-    connectedTabId = tab.id;
-    nativePort.postMessage({ type: "tab-attached", tab: publicTab(tab) });
-    await showConnected(tab.id);
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("ZenX did not answer the Chrome connector")),
+        READY_TIMEOUT_MS,
+      );
+      session.rejectReady = reject;
+      session.port.onMessage.addListener((message) => {
+        if (connection !== session) return;
+        if (
+          message?.type === "ready" &&
+          message.protocolVersion === PROTOCOL_VERSION &&
+          message.scope === "browser"
+        ) {
+          clearTimeout(timer);
+          resolve();
+        } else if (message?.type === "cdp-command" && session.published) {
+          void runCommand(session, message);
+        }
+      });
+      session.port.onDisconnect.addListener(() => {
+        if (connection !== session) return;
+        clearTimeout(timer);
+        reject(
+          new Error(
+            chrome.runtime.lastError?.message ?? "ZenX connector closed",
+          ),
+        );
+        // Invalidate immediately. Cleanup joins the action chain so a new connection
+        // cannot inherit an attach that is still completing for this generation.
+        void disconnect(session);
+      });
+      session.port.postMessage({
+        type: "hello",
+        protocolVersion: PROTOCOL_VERSION,
+        scope: "browser",
+        extensionVersion: chrome.runtime.getManifest().version,
+      });
+    });
+    const tabs = await chrome.tabs.query({});
+    if (connection !== session) return;
+    for (const tab of tabs) {
+      if (!session.changed.has(tab.id) && supported(tab, session))
+        session.tabs.set(tab.id, publicTab(tab));
+    }
+    session.published = true;
+    session.port.postMessage({
+      type: "browser-connected",
+      tabs: [...session.tabs.values()],
+    });
+    await chrome.action.setBadgeBackgroundColor({ color: "#16784a" });
+    await chrome.action.setBadgeText({ text: "ON" });
+    await chrome.action.setTitle({ title: "Disconnect Chrome from ZenX" });
   } catch (error) {
-    await showError(tab.id, error);
-    await disconnectTab("Connection failed");
+    await disconnect(session);
+    if (connection !== undefined) return;
+    await chrome.action.setBadgeBackgroundColor({ color: "#a33a3a" });
+    await chrome.action.setBadgeText({ text: "!" });
+    await chrome.action.setTitle({
+      title: `ZenX connection failed: ${describeError(error)}`,
+    });
   }
 }
 
+chrome.tabs.onCreated.addListener(updateTab);
+chrome.tabs.onUpdated.addListener((_tabId, _changeInfo, tab) => updateTab(tab));
+chrome.tabs.onRemoved.addListener((tabId) => {
+  const session = connection;
+  if (session === undefined) return;
+  session.changed.add(tabId);
+  removeTab(session, tabId);
+});
 chrome.debugger.onEvent.addListener((source, method, params) => {
-  if (source.tabId !== connectedTabId || nativePort === undefined) return;
-  nativePort.postMessage({
-    type: "cdp-event",
-    tabId: source.tabId,
-    method,
-    params: params ?? {},
-  });
-});
-
-chrome.debugger.onDetach.addListener((source, reason) => {
-  if (source.tabId === detachingTabId) return;
-  if (source.tabId !== connectedTabId) return;
-  const previous = connectedTabId;
-  connectedTabId = undefined;
-  nativePort?.postMessage({ type: "tab-detached", tabId: previous, reason });
-  void showDisconnected(previous);
-});
-
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  const session = connection;
   if (
-    tabId !== connectedTabId ||
-    nativePort === undefined ||
-    (changeInfo.title === undefined && changeInfo.url === undefined)
+    session?.tabs.has(source.tabId) &&
+    session.attachments.has(source.tabId)
+  ) {
+    session.port.postMessage({
+      type: "cdp-event",
+      tabId: source.tabId,
+      method,
+      params: params ?? {},
+    });
+  }
+});
+chrome.debugger.onDetach.addListener((source, reason) => {
+  const session = connection;
+  if (
+    session === undefined ||
+    session.detaching.has(source.tabId) ||
+    !session.attachments.has(source.tabId)
   )
     return;
-  nativePort.postMessage({ type: "tab-updated", tab: publicTab(tab) });
+  if (reason === "target_closed") {
+    session.attachments.delete(source.tabId);
+    removeTab(session, source.tabId);
+    return;
+  }
+  // Cancel in Chrome's debugger banner revokes the entire browser connection.
+  void disconnect(session);
 });
 
-chrome.tabs.onRemoved.addListener((tabId) => {
-  if (tabId === connectedTabId) void disconnectTab("Tab closed");
-});
-
-function ensureNativeReady() {
-  if (readyPromise !== undefined) return readyPromise;
-  const port = chrome.runtime.connectNative(NATIVE_HOST);
-  const generation = ++nativeGeneration;
-  nativePort = port;
-  readyPromise = new Promise((resolve, reject) => {
-    readyResolve = resolve;
-    readyReject = reject;
-    const timer = setTimeout(
-      () => reject(new Error("ZenX did not answer the Chrome connector")),
-      READY_TIMEOUT_MS,
-    );
-    port.onMessage.addListener((message) => {
-      if (nativePort !== port || nativeGeneration !== generation) return;
-      if (
-        message?.type === "ready" &&
-        message.protocolVersion === PROTOCOL_VERSION
-      ) {
-        clearTimeout(timer);
-        readyResolve?.();
-        return;
-      }
-      if (message?.type === "cdp-command")
-        void runCdpCommand(message, port, generation);
-    });
-    port.onDisconnect.addListener(() => {
-      if (nativePort !== port || nativeGeneration !== generation) return;
-      const detail = chrome.runtime.lastError?.message;
-      clearTimeout(timer);
-      readyReject?.(new Error(detail ?? "ZenX connector closed"));
-      nativePort = undefined;
-      readyPromise = undefined;
-      readyResolve = undefined;
-      readyReject = undefined;
-      nativeGeneration += 1;
-      if (!disconnecting) {
-        actionChain = actionChain.then(
-          () => detachSelectedTab("ZenX connector closed"),
-          () => detachSelectedTab("ZenX connector closed"),
-        );
-      }
-    });
-    port.postMessage({
-      type: "hello",
-      protocolVersion: PROTOCOL_VERSION,
-      extensionVersion: chrome.runtime.getManifest().version,
-    });
-  });
-  return readyPromise;
+function updateTab(tab) {
+  const session = connection;
+  if (session === undefined) return;
+  session.changed.add(tab.id);
+  if (!supported(tab, session)) {
+    removeTab(session, tab.id);
+    return;
+  }
+  const next = publicTab(tab);
+  const previous = session.tabs.get(tab.id);
+  session.tabs.set(tab.id, next);
+  if (
+    session.published &&
+    (previous?.url !== next.url || previous?.title !== next.title)
+  ) {
+    session.port.postMessage({ type: "tab-updated", tab: next });
+  }
 }
 
-async function runCdpCommand(message, port, generation) {
+function removeTab(session, tabId) {
   if (
-    typeof connectedTabId !== "number" ||
-    message.tabId !== connectedTabId ||
+    session.tabs.delete(tabId) &&
+    session.published &&
+    connection === session
+  ) {
+    session.port.postMessage({ type: "tab-removed", tabId });
+  }
+  void detach(session, tabId);
+}
+
+async function attach(session, tabId) {
+  let operation = session.attachments.get(tabId);
+  if (operation === undefined) {
+    operation = chrome.debugger.attach({ tabId }, "1.3");
+    session.attachments.set(tabId, operation);
+    operation.catch(() => {
+      if (session.attachments.get(tabId) === operation)
+        session.attachments.delete(tabId);
+    });
+  }
+  await operation;
+  if (
+    connection !== session ||
+    !session.tabs.has(tabId) ||
+    session.detaching.has(tabId)
+  ) {
+    await detach(session, tabId);
+    throw new Error("Chrome browser connection changed");
+  }
+}
+
+function detach(session, tabId) {
+  const existing = session.detaching.get(tabId);
+  if (existing !== undefined) return existing;
+  const operation = session.attachments.get(tabId);
+  if (operation === undefined) return Promise.resolve();
+  const cleanup = (async () => {
+    try {
+      await operation;
+      await chrome.debugger.detach({ tabId });
+    } catch {
+      // Closed tabs and failed attaches already have no debugger connection.
+    } finally {
+      session.attachments.delete(tabId);
+      session.detaching.delete(tabId);
+    }
+  })();
+  session.detaching.set(tabId, cleanup);
+  return cleanup;
+}
+
+async function runCommand(session, message) {
+  if (
     typeof message.requestId !== "string" ||
     typeof message.method !== "string"
   )
     return;
-  const tabId = connectedTabId;
   try {
-    const result = await chrome.debugger.sendCommand(
-      { tabId },
-      message.method,
-      message.params ?? {},
-    );
-    if (
-      nativePort !== port ||
-      nativeGeneration !== generation ||
-      connectedTabId !== tabId
-    )
-      return;
-    port.postMessage({
-      type: "cdp-result",
-      requestId: message.requestId,
-      result: result ?? {},
-    });
-  } catch (error) {
-    if (
-      nativePort !== port ||
-      nativeGeneration !== generation ||
-      connectedTabId !== tabId
-    )
-      return;
-    port.postMessage({
-      type: "cdp-result",
-      requestId: message.requestId,
-      error: { code: -32000, message: describeError(error) },
-    });
-  }
-}
-
-async function disconnectTab(reason) {
-  if (disconnecting) return;
-  disconnecting = true;
-  const port = nativePort;
-  try {
-    await detachSelectedTab(reason);
-    port?.disconnect();
-  } finally {
-    if (nativePort === port) {
-      nativePort = undefined;
-      readyPromise = undefined;
-      readyResolve = undefined;
-      readyReject = undefined;
-      nativeGeneration += 1;
+    let result;
+    if (message.method === "Target.createTarget") {
+      const url = message.params?.url;
+      if (
+        typeof url !== "string" ||
+        !/^about:blank#zenx-pending-[a-f0-9-]+$/u.test(url)
+      )
+        throw new Error("Invalid ZenX browser creation marker");
+      const tab = await chrome.tabs.create({ url, active: false });
+      if (connection !== session) return; // Never remove a tab on disconnect, including a late create.
+      session.owned.add(tab.id);
+      updateTab(tab);
+      result = { targetId: `chrome-tab-${tab.id}` };
+    } else {
+      const tabId = message.tabId;
+      if (!session.tabs.has(tabId))
+        throw new Error("Chrome tab is unavailable");
+      // Recheck the actual URL before debugger access; tab navigation events can lag.
+      const tab = await chrome.tabs.get(tabId);
+      if (connection !== session || !supported(tab, session))
+        throw new Error("Chrome tab is unavailable");
+      await attach(session, tabId);
+      result = await chrome.debugger.sendCommand(
+        { tabId },
+        message.method,
+        message.params ?? {},
+      );
+      if (!session.tabs.has(tabId)) throw new Error("Chrome tab was removed");
     }
-    disconnecting = false;
+    if (connection === session)
+      session.port.postMessage({
+        type: "cdp-result",
+        requestId: message.requestId,
+        result: result ?? {},
+      });
+  } catch (error) {
+    if (connection === session)
+      session.port.postMessage({
+        type: "cdp-result",
+        requestId: message.requestId,
+        error: { code: -32000, message: describeError(error) },
+      });
   }
 }
 
-async function detachSelectedTab(reason) {
-  const tabId = connectedTabId;
-  if (typeof tabId !== "number") return;
-  connectedTabId = undefined;
-  detachingTabId = tabId;
-  try {
-    nativePort?.postMessage({ type: "tab-detached", tabId, reason });
-    await chrome.debugger.detach({ tabId }).catch(() => undefined);
-    await showDisconnected(tabId);
-  } finally {
-    detachingTabId = undefined;
-  }
+function disconnect(session) {
+  if (session.closing !== undefined) return session.closing;
+  if (connection === session) connection = undefined;
+  session.rejectReady?.(new Error("Chrome disconnected"));
+  session.port.disconnect();
+  session.closing = Promise.all(
+    [...session.attachments.keys()].map((tabId) => detach(session, tabId)),
+  ).then(async () => {
+    if (connection !== undefined) return;
+    await chrome.action.setBadgeText({ text: "" });
+    await chrome.action.setTitle({ title: "Connect Chrome to ZenX" });
+  });
+  // Reconnect waits for old pending debugger attaches to be released.
+  actionChain = actionChain.then(
+    () => session.closing,
+    () => session.closing,
+  );
+  return session.closing;
 }
 
+function supported(tab, session) {
+  return (
+    Number.isInteger(tab?.id) &&
+    !tab.incognito &&
+    (/^https?:\/\//u.test(tabUrl(tab)) ||
+      (session.owned.has(tab.id) &&
+        /^about:blank(?:#zenx-pending-[a-f0-9-]+)?$/u.test(tabUrl(tab))))
+  );
+}
+function tabUrl(tab) {
+  // Newly created tabs can report only pendingUrl until the first commit.
+  return (!tab.url || tab.url === "about:blank") &&
+    typeof tab.pendingUrl === "string"
+    ? tab.pendingUrl
+    : (tab.url ?? "");
+}
 function publicTab(tab) {
   return {
     id: tab.id,
     title: typeof tab.title === "string" ? tab.title.slice(0, 4096) : "",
-    url: typeof tab.url === "string" ? tab.url.slice(0, 32768) : "",
+    url: tabUrl(tab).slice(0, 32768),
   };
 }
-
-async function showConnected(tabId) {
-  await chrome.action.setBadgeBackgroundColor({ tabId, color: "#16784a" });
-  await chrome.action.setBadgeText({ tabId, text: "ON" });
-  await chrome.action.setTitle({
-    tabId,
-    title: "Disconnect this tab from ZenX",
-  });
-}
-
-async function showDisconnected(tabId) {
-  await chrome.action.setBadgeText({ tabId, text: "" }).catch(() => undefined);
-  await chrome.action
-    .setTitle({ tabId, title: "Connect this tab to ZenX" })
-    .catch(() => undefined);
-}
-
-async function showError(tabId, error) {
-  await chrome.action.setBadgeBackgroundColor({ tabId, color: "#a33a3a" });
-  await chrome.action.setBadgeText({ tabId, text: "!" });
-  await chrome.action.setTitle({
-    tabId,
-    title: `ZenX connection failed: ${describeError(error)}`,
-  });
-}
-
 function describeError(error) {
   return (error instanceof Error ? error.message : String(error)).slice(0, 300);
 }

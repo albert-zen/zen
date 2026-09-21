@@ -1392,7 +1392,7 @@ test("General names both browser modes and reports an extension-folder failure",
     extensionDirectory:
       "/Applications/ZenX.app/Contents/Resources/chrome-extension",
     extensionId: "fixture",
-    connection: { state: "waiting" as const },
+    connection: { state: "waiting" as const, tabCount: 0 },
   };
   const harness = await mountSettings("general", {
     initialSettings: browserSettings,
@@ -1409,7 +1409,7 @@ test("General names both browser modes and reports an extension-folder failure",
     const mode = await waitFor(async () => await labeledSelect("Browser mode"));
     assert.deepEqual(
       Array.from(mode.options).map((option) => option.textContent?.trim()),
-      ["ZenX browser", "Connected Chrome tab"],
+      ["ZenX browser", "Connected Chrome"],
     );
     assert.doesNotMatch(
       document.body.textContent ?? "",
@@ -1421,6 +1421,49 @@ test("General names both browser modes and reports an extension-folder failure",
         document.querySelector<HTMLElement>('[role="alert"]'),
       ).then((element) => element.textContent ?? ""),
       /Extension folder is unavailable/u,
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("General reports a browser connection with multiple available tabs", async () => {
+  const snapshot = {
+    configuredMode: "user-session" as const,
+    effectiveMode: "user-session" as const,
+    environmentOverride: false,
+    connector: "chrome-extension" as const,
+    packaged: true,
+    nativeHostRegistered: true,
+    extensionDirectory:
+      "/Applications/ZenX.app/Contents/Resources/chrome-extension",
+    extensionId: "fixture",
+    connection: { state: "connected" as const, tabCount: 3 },
+  };
+  const harness = await mountSettings("general", {
+    initialSettings: {
+      ...settings,
+      profile: { ...settings.profile, browserMode: "user-session" },
+    },
+    chromeBridge: {
+      get: async () => snapshot,
+      prepare: async () => snapshot,
+      remove: async () => snapshot,
+      openExtension: async () => undefined,
+    },
+  });
+  try {
+    await waitFor(() =>
+      document.querySelector('[role="status"]')?.textContent ===
+      "Chrome connected"
+        ? true
+        : undefined,
+    );
+    assert.match(document.body.textContent ?? "", /3 tabs available/u);
+    assert.match(document.body.textContent ?? "", /Existing and new web tabs/u);
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /one current tab|only to the selected tab/u,
     );
   } finally {
     await unmount(harness);

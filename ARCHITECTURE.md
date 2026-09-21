@@ -275,9 +275,11 @@
   attach attempt/incarnation 关联一次瞬时 attachment ownership，并在移除任何映射前把无法证明闭合的生命周期证据
   单调提升为有界 session taint；target 只在发布点原子授予一个逻辑 session/incarnation，且每次操作与清理都重验该
   owner；它不进入 Zen Core、durable journal，也绝不取得关闭用户 target 或 profile 的权限。
-- **ZenX Chrome 当前标签桥** — 用户以 Chrome 扩展按钮显式选择一个现有标签后，固定扩展 ID 的 Native Messaging
-  Host 通过鉴权 loopback bridge 将该标签的受限 `chrome.debugger` CDP surface 适配给既有 user-browser provider；
-  连接随扩展、ZenX 或用户断开而撤销，不枚举其它 profile 标签、不复制会话材料，也不取得关闭浏览器或用户标签的权限。
+- **ZenX Chrome 浏览器桥** — 用户点击扩展一次连接当前普通 Chrome profile，固定扩展 ID 的 Native Messaging
+  Host 通过鉴权 loopback bridge 发布该 profile 的普通 HTTP(S) 标签及后续新增标签；受限 `chrome.debugger`
+  surface 按实际操作目标惰性附加，并支持 provider 以唯一 about:blank marker 创建新标签后导航。扩展按钮、
+  Chrome 调试取消、扩展或 ZenX 断开会撤销整个连接；不访问隐身或其它 profile、不复制会话材料，不关闭用户标签。
+  浏览器连接、标签目录、debugger attachment 与世代栅栏仅是瞬时 host 状态，不进入 Core 或 durable journal。
 - **ZenXUserBrowserDocumentExecutionFence** — ZenX user-browser provider 把 target、精确 attachment epoch/session、逻辑
   session owner/incarnation、main-frame loader/url/revision、isolated execution context 与 provider revision 绑定为一次
   瞬时且 fail-closed 的 acquire→dispatch fence，先把 Page/Runtime domain enable 作为精确 attachment setup barrier，
@@ -293,7 +295,10 @@
   artifact，并把 observation identity 与 artifact metadata 一起投影；文件是外部瞬时观测，不进入 Zen Core 或 durable journal。
 - **ZenXBrowserLiveObservation** — ZenX user-browser provider 把当前线程面板选择的同一 CDP target 作为
   observer-scoped、只读、host-local 的有界 latest-frame/status 投影交给当前 renderer；它逐帧 ack、在无观察者、页面隐藏、
-  target/document/provider 生命周期变化时停止，且不进入 plugin storage、Core、ItemList、ZAS protocol、磁盘或历史。
+  target/document/provider 生命周期变化时停止；只发布由当前观察世代的请求直接采集、并沿同一 document/attachment
+  fence 校验的 viewport compositor JPEG。无 document/世代绑定的 screencast 事件仅 ack 并触发新采集，绝不发布其像素；
+  采集保持单次串行，事件触发间隔至少 100ms，静默时每 500ms 采集；收到真实帧后才标记 Live。
+  此投影不进入 plugin storage、Core、ItemList、ZAS protocol、磁盘或历史。
 - **ZenXBrowserThreadObservation** — Browser 插件沿可信工具上下文接收 threadId，在 Host 内将每线程的逻辑 session 隔离为独立 provider session，并把目标集合、最近观察截图和定向实时订阅投影到线程右栏；这些瞬时资源随 provider 退役失效，不从模型参数或当前选中线程推断归属，不增加会话历史权威。
 - **ZenXCapabilityTransientReset** — ZenX 主进程在 App Server/settings restart、provider replacement 或 close 时
   单调使 provider-owned artifacts 失效并重建可重建 backend；它不改写 canonical ItemList、Catalog lifecycle
