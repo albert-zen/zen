@@ -974,3 +974,5 @@ SettingsService 串行校验配置草稿与 baseRevision，经 Host prepare 后�
 Provider 删除、能力更新与连接替换只改变后续执行目录。AppServer 在接纳时固定 selection、目录条目、adapter 与本轮压缩和执行限制，保留至包括压缩在内的真实 finally；全局默认不改写已有 canonical selection。工具权限仍沿既有授权边界更新。
 
 源码模式的 ZenX Host 通过仅开发期的 Worker 入口注册 tsx 模块解析，再加载同一 Code Runtime Worker；打包模式继续使用编译后的 Worker，不继承 Host 的任意 execArgv。
+
+- **ZenX scrollbar visibility** — one renderer document controller reveals native scrollbars on scrolling, edge pointer and keyboard activity; this transient presentation state never replaces native scrolling or changes layout geometry.

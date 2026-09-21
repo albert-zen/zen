@@ -1,3 +1,4 @@
+import { installScrollbarVisibility } from "../../../src/renderer/src/scrollbar-visibility.js";
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ThreadView } from "../../../src/renderer/src/ThreadView";
@@ -7,6 +8,7 @@ import {
 } from "../../../src/renderer/src/composer-state";
 import "../../../src/renderer/src/theme.css";
 import "../../../src/renderer/src/styles.css";
+installScrollbarVisibility(document);
 import "../../../src/renderer/src/skills.css";
 Object.assign(globalThis, { React });
 const noop = async () => {};
