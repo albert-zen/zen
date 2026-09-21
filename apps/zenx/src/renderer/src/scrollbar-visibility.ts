@@ -67,9 +67,16 @@ export function installScrollbarVisibility(document: Document): () => void {
     )
       onFocus(event);
   };
-  const onMove = (event: PointerEvent) => {
-    const next = ancestors(event.target).find((element) => {
+  const updateEdge = (event: PointerEvent, target: EventTarget | null) => {
+    const next = ancestors(target).find((element) => {
       const rect = element.getBoundingClientRect();
+      if (
+        event.clientX < rect.left ||
+        event.clientX > rect.right ||
+        event.clientY < rect.top ||
+        event.clientY > rect.bottom
+      )
+        return false;
       const style = view.getComputedStyle(element);
       const { vertical, horizontal } = axes(element);
       return (
@@ -85,23 +92,36 @@ export function installScrollbarVisibility(document: Document): () => void {
     if (previous && previous !== next) reveal(previous);
     if (next) reveal(next);
   };
+  const onMove = (event: PointerEvent) => updateEdge(event, event.target);
   const onDown = (event: PointerEvent) => {
     onMove(event);
     dragging = edge;
   };
-  const onUp = () => {
+  const endDrag = () => {
     const previous = dragging;
     dragging = undefined;
     if (previous) reveal(previous);
+  };
+  const onUp = (event: PointerEvent) => {
+    // Native scrollbar drags can consume all pointermoves, and their release
+    // target can still be the original scroller. Reconcile actual release hit
+    // position before expiry so stale edge state cannot keep the thumb painted.
+    updateEdge(
+      event,
+      document.elementFromPoint
+        ? document.elementFromPoint(event.clientX, event.clientY)
+        : event.target,
+    );
+    endDrag();
   };
   const onLeave = () => {
     const previous = edge;
     edge = undefined;
     if (previous) reveal(previous);
   };
-  const onBlur = () => {
+  const onCancel = () => {
     onLeave();
-    onUp();
+    endDrag();
   };
   document.documentElement.setAttribute("data-scrollbar-autohide", "");
   document.addEventListener("scroll", onScroll, true);
@@ -109,10 +129,10 @@ export function installScrollbarVisibility(document: Document): () => void {
   document.addEventListener("keydown", onKey);
   document.addEventListener("pointermove", onMove, { passive: true });
   document.addEventListener("pointerdown", onDown, { passive: true });
-  document.addEventListener("pointerup", onUp);
-  document.addEventListener("pointercancel", onUp);
+  document.addEventListener("pointerup", onUp, true);
+  document.addEventListener("pointercancel", onCancel, true);
   document.documentElement.addEventListener("pointerleave", onLeave);
-  view.addEventListener("blur", onBlur);
+  view.addEventListener("blur", onCancel);
   return () => {
     document.documentElement.removeAttribute("data-scrollbar-autohide");
     document.removeEventListener("scroll", onScroll, true);
@@ -120,10 +140,10 @@ export function installScrollbarVisibility(document: Document): () => void {
     document.removeEventListener("keydown", onKey);
     document.removeEventListener("pointermove", onMove);
     document.removeEventListener("pointerdown", onDown);
-    document.removeEventListener("pointerup", onUp);
-    document.removeEventListener("pointercancel", onUp);
+    document.removeEventListener("pointerup", onUp, true);
+    document.removeEventListener("pointercancel", onCancel, true);
     document.documentElement.removeEventListener("pointerleave", onLeave);
-    view.removeEventListener("blur", onBlur);
+    view.removeEventListener("blur", onCancel);
     for (const timer of timers.values()) clearTimeout(timer);
     document
       .querySelectorAll("[data-scrollbar-active]")

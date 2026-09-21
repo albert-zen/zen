@@ -60,12 +60,32 @@ test("native scrollbar reveals on activity, stays draggable, and hides at rest",
     t.mock.timers.tick(2000);
     assert.equal(active(), true, "stationary edge remains discoverable");
     pointer("pointerdown", 195);
-    pointer("pointermove", 70);
+    // Chromium consumes moves during native thumb dragging. Only release tells
+    // the page that the pointer is now in the center rather than at the edge.
     t.mock.timers.tick(2000);
     assert.equal(active(), true, "drag out of gutter must not disappear");
     pointer("pointerup", 70);
     t.mock.timers.tick(1001);
-    assert.equal(active(), false);
+    assert.equal(
+      active(),
+      false,
+      "release in center clears stale native-drag edge",
+    );
+    pointer("pointerdown", 195);
+    pointer("pointerup", 195);
+    t.mock.timers.tick(1001);
+    assert.equal(active(), true, "release at edge remains discoverable");
+    pointer("pointercancel", 195);
+    t.mock.timers.tick(1001);
+    assert.equal(active(), false, "cancel clears both drag and edge state");
+    pointer("pointerdown", 195);
+    pointer("pointerup", 230);
+    t.mock.timers.tick(1001);
+    assert.equal(
+      active(),
+      false,
+      "captured release outside bounds is not an edge",
+    );
     pointer("pointermove", 50, 96);
     assert.equal(active(), true, "horizontal code scrollbar edge works");
     dom.window.dispatchEvent(new Event("blur"));
