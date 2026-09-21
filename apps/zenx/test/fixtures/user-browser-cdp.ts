@@ -64,6 +64,7 @@ export async function createFakeCdpServer(): Promise<{
       | "before-post-isolated-world-barrier-response",
     event?: { method: string; params: Record<string, unknown> },
   ): void;
+  nextLiveCaptureData(data: string): void;
   holdNextLiveCaptureReply(): void;
   releaseLiveCaptureReply(): void;
   loseNextCreateReply(): void;
@@ -139,6 +140,7 @@ export async function createFakeCdpServer(): Promise<{
         event: { method: string; params: Record<string, unknown> };
       }
     | undefined;
+  let nextCaptureData: string | undefined;
   let holdLiveCapture = false;
   let liveCaptureReply: (() => void) | undefined;
   let loseCreateReply = false;
@@ -327,10 +329,13 @@ export async function createFakeCdpServer(): Promise<{
         request.params.format === "jpeg"
       ) {
         result = {
-          data: Buffer.from(
-            `capture-${methods.filter((method) => method === "Page.captureScreenshot").length}`,
-          ).toString("base64"),
+          data:
+            nextCaptureData ??
+            Buffer.from(
+              `capture-${methods.filter((method) => method === "Page.captureScreenshot").length}`,
+            ).toString("base64"),
         };
+        nextCaptureData = undefined;
         if (holdLiveCapture) {
           holdLiveCapture = false;
           liveCaptureReply = () =>
@@ -527,6 +532,9 @@ export async function createFakeCdpServer(): Promise<{
           },
         },
       };
+    },
+    nextLiveCaptureData: (data) => {
+      nextCaptureData = data;
     },
     holdNextLiveCaptureReply: () => {
       holdLiveCapture = true;

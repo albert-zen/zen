@@ -91,6 +91,8 @@ interface UserBrowserScreencastState {
   latestFrame?: Extract<BrowserLiveObservationEvent, { type: "frame" }>;
   publishTimer?: NodeJS.Timeout;
   captureTimer?: NodeJS.Timeout;
+  captureDueAt?: number;
+  captureInFlight?: boolean;
   lastPublishedAt: number;
   nextSequence: number;
 }
@@ -2279,6 +2281,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     if (state.captureTimer !== undefined) clearTimeout(state.captureTimer);
     state.publishTimer = undefined;
     state.captureTimer = undefined;
+    state.captureDueAt = undefined;
     state.latestFrame = undefined;
     if (this.#screencast === state) this.#screencast = undefined;
   }
@@ -2301,11 +2304,25 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       { sessionId: frameSessionId },
       cdpSessionId,
     ).catch((error: unknown) => {
-      if (state !== undefined && this.#screencast === state)
+      if (
+        state !== undefined &&
+        state.sessionId === cdpSessionId &&
+        this.#screencast === state
+      )
         this.#failScreencast(state, error);
     });
     if (state === undefined || state.sessionId !== cdpSessionId) return;
-    this.#publishScreencastFrame(state, params);
+    // CDP events contain no document or screencast generation. A queued event
+    // can outlive navigation/resubscription on this same attachment: its pixels
+    // are never authoritative. Use it only to request a fresh fenced capture.
+    this.#scheduleLiveCapture(
+      state,
+      Math.max(
+        0,
+        USER_BROWSER_LIVE_FRAME_INTERVAL_MS -
+          (Date.now() - state.lastPublishedAt),
+      ),
+    );
   }
 
   #publishScreencastFrame(
@@ -2380,88 +2397,88 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     }
   }
 
-  #scheduleLiveCapture(state: UserBrowserScreencastState): void {
-    if (this.#screencast !== state || state.captureTimer !== undefined) return;
+  #scheduleLiveCapture(
+    state: UserBrowserScreencastState,
+    delay = USER_BROWSER_LIVE_CAPTURE_INTERVAL_MS,
+  ): void {
+    if (this.#screencast !== state || state.captureInFlight) return;
+    const dueAt = Date.now() + delay;
+    if (state.captureDueAt !== undefined && state.captureDueAt <= dueAt) return;
+    if (state.captureTimer !== undefined) clearTimeout(state.captureTimer);
+    state.captureDueAt = dueAt;
     state.captureTimer = setTimeout(() => {
       state.captureTimer = undefined;
-      void this.#captureSilentScreencast(state);
-    }, USER_BROWSER_LIVE_CAPTURE_INTERVAL_MS);
+      state.captureDueAt = undefined;
+      void this.#captureLiveFrame(state);
+    }, delay);
     state.captureTimer.unref();
   }
 
-  async #captureSilentScreencast(
-    state: UserBrowserScreencastState,
-  ): Promise<void> {
-    if (this.#screencast !== state) return;
+  async #captureLiveFrame(state: UserBrowserScreencastState): Promise<void> {
+    if (this.#screencast !== state || state.captureInFlight) return;
+    state.captureInFlight = true;
     try {
-      // Chrome may acknowledge startScreencast without emitting frames (including
-      // occluded/background tabs). Capture the same live surface on a bounded,
-      // single-flight cadence while the observer is open; never reuse an inspect artifact.
+      // Every displayed image belongs to this request's exact observation state.
+      // Native events merely accelerate this bounded single-flight capture loop.
+      this.#assertDocumentFence(state.fence, true);
+      const metrics = asRecord(
+        await this.#send("Page.getLayoutMetrics", {}, state.sessionId),
+      );
+      if (this.#screencast !== state) return;
+      this.#assertDocumentFence(state.fence, true);
+      const viewport = asRecord(metrics?.cssLayoutViewport);
+      const width = viewport?.clientWidth;
+      const height = viewport?.clientHeight;
+      const x = viewport?.pageX;
+      const y = viewport?.pageY;
       if (
-        Date.now() - state.lastPublishedAt >=
-        USER_BROWSER_LIVE_CAPTURE_INTERVAL_MS
-      ) {
-        this.#assertDocumentFence(state.fence, true);
-        const sequenceBeforeCapture = state.nextSequence;
-        const metrics = asRecord(
-          await this.#send("Page.getLayoutMetrics", {}, state.sessionId),
-        );
-        if (this.#screencast !== state) return;
-        this.#assertDocumentFence(state.fence, true);
-        const viewport = asRecord(metrics?.cssLayoutViewport);
-        const width = viewport?.clientWidth;
-        const height = viewport?.clientHeight;
-        const x = viewport?.pageX;
-        const y = viewport?.pageY;
-        if (
-          typeof width !== "number" ||
-          !Number.isFinite(width) ||
-          width <= 0 ||
-          typeof height !== "number" ||
-          !Number.isFinite(height) ||
-          height <= 0 ||
-          typeof x !== "number" ||
-          !Number.isFinite(x) ||
-          x < 0 ||
-          typeof y !== "number" ||
-          !Number.isFinite(y) ||
-          y < 0
-        )
-          throw new Error("Browser live viewport is invalid");
-        const scale = Math.min(1, 1600 / width, 1000 / height);
-        const result = asRecord(
-          await this.#send(
-            "Page.captureScreenshot",
-            {
-              format: "jpeg",
-              quality: 70,
-              fromSurface: true,
-              captureBeyondViewport: false,
-              clip: { x, y, width, height, scale },
-            },
-            state.sessionId,
-            undefined,
-            USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS,
-            undefined,
-            undefined,
-            () => this.#assertDocumentFence(state.fence, true),
-          ),
-        );
-        if (this.#screencast !== state) return;
-        this.#assertDocumentFence(state.fence, true);
-        if (state.nextSequence === sequenceBeforeCapture) {
-          this.#publishScreencastFrame(state, {
-            data: result?.data,
-            metadata: {
-              deviceWidth: Math.round(width * scale),
-              deviceHeight: Math.round(height * scale),
-            },
-          });
-        }
-      }
-      this.#scheduleLiveCapture(state);
+        typeof width !== "number" ||
+        !Number.isFinite(width) ||
+        width <= 0 ||
+        typeof height !== "number" ||
+        !Number.isFinite(height) ||
+        height <= 0 ||
+        typeof x !== "number" ||
+        !Number.isFinite(x) ||
+        x < 0 ||
+        typeof y !== "number" ||
+        !Number.isFinite(y) ||
+        y < 0
+      )
+        throw new Error("Browser live viewport is invalid");
+      const scale = Math.min(1, 1600 / width, 1000 / height);
+      const result = asRecord(
+        await this.#send(
+          "Page.captureScreenshot",
+          {
+            format: "jpeg",
+            quality: 70,
+            fromSurface: true,
+            captureBeyondViewport: false,
+            clip: { x, y, width, height, scale },
+          },
+          state.sessionId,
+          undefined,
+          USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS,
+          undefined,
+          undefined,
+          () => this.#assertDocumentFence(state.fence, true),
+        ),
+      );
+      if (this.#screencast !== state) return;
+      this.#assertDocumentFence(state.fence, true);
+      this.#publishScreencastFrame(state, {
+        data: result?.data,
+        metadata: {
+          deviceWidth: Math.round(width * scale),
+          deviceHeight: Math.round(height * scale),
+        },
+      });
     } catch (error) {
       if (this.#screencast === state) this.#failScreencast(state, error);
+    } finally {
+      state.captureInFlight = false;
+      this.#scheduleLiveCapture(state);
     }
   }
 
