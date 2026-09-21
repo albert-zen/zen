@@ -876,6 +876,12 @@ third-party AX window/action smoke remains permission- and target-dependent; its
 opaque latest-observation and forged/stale paths are unit-covered. The
 compiled helper enforces semantic fingerprint/geometry revalidation and rejects
 ambiguous matches, but that path is not claimed as a live third-party-app smoke.
+macOS inspection bounds traversal separately from its returned controls so deep
+web controls are not displaced by shallow AX layout containers. Display labels
+may fall back from AX title to description, help, or identifier, but never to an
+AX value. Scoped capture maps the already selected AX window to one on-screen,
+layer-zero CGWindow from the same PID, using bounds only as a unique fallback;
+missing or ambiguous matches fail closed.
 On Windows, `smoke:windows-computer` launches a deterministic WinForms fixture
 with a real UIA-editable control and drives the real
 `WinAppCliComputerBackend` through the profile-managed Computer package and

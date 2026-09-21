@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import {
   access,
   mkdir,
@@ -15,6 +16,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 
 import {
   applicationIconForPlatform,
@@ -44,6 +46,7 @@ import {
 } from "../src/main/plugin-profile.js";
 
 const placeholder = "__ZENX_PACKAGED_PROVIDER_MANIFEST_SHA256__";
+const run = promisify(execFile);
 
 test("uses production platform icons only for packaged applications", () => {
   assert.equal(
@@ -169,6 +172,26 @@ test("extracts and compiles both fixed macOS Computer helpers into App Resources
     sources.MAC_ACCESSIBILITY_SOURCE,
     /current ZenX\.app is already enabled/u,
   );
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /visitLimit: Int = 1024, maxDepth: Int = 24/u,
+  );
+  assert.match(sources.MAC_ACCESSIBILITY_SOURCE, /prefix\(120\)/u);
+  const displayLabel = sources.MAC_ACCESSIBILITY_SOURCE.match(
+    /func displayLabel[\s\S]*?func isContainerRole/u,
+  )?.[0];
+  assert.ok(displayLabel);
+  assert.match(displayLabel, /kAXDescriptionAttribute/u);
+  assert.match(displayLabel, /kAXHelpAttribute/u);
+  assert.doesNotMatch(displayLabel, /kAXValueAttribute/u);
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /kCGWindowOwnerPID[\s\S]*?kCGWindowLayer[\s\S]*?cgWindowBounds/u,
+  );
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /geometryMatches\.count > 1[\s\S]*?mapping is ambiguous/u,
+  );
 
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-native-helper-resource-"),
@@ -180,6 +203,9 @@ test("extracts and compiles both fixed macOS Computer helpers into App Resources
       destinationDirectory,
       providerSource,
       compile: async (sourcePath, executablePath) => {
+        if (process.platform === "darwin") {
+          await run("/usr/bin/swiftc", ["-typecheck", sourcePath]);
+        }
         compiled.push({
           name: path.basename(executablePath),
           source: await readFile(sourcePath, "utf8"),

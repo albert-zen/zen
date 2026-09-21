@@ -450,4 +450,37 @@ test("computer observation budget preserves source order and prioritizes enabled
     selectComputerInspectionControls(controls.slice(0, 3), () => true),
     controls.slice(0, 3),
   );
+
+  const chromeLikeControls = [
+    ...Array.from({ length: 120 }, (_, index) => ({
+      role: index === 1 ? "AXToolbar" : "AXGroup",
+      title: "",
+      enabled: false,
+      actions: [] as string[],
+    })),
+    {
+      role: "AXButton",
+      title: "Fixture B action",
+      enabled: true,
+      actions: ["AXPress"],
+    },
+    {
+      role: "AXTextField",
+      title: "Fixture B name",
+      enabled: true,
+      actions: ["AXSetValue"],
+    },
+  ];
+  const chromeSelection = selectComputerInspectionControls(
+    chromeLikeControls,
+    (control) => control.enabled && control.actions.length > 0,
+  );
+  assert.equal(chromeSelection.length, 32);
+  assert.deepEqual(
+    chromeSelection.slice(-2).map(({ role, title }) => ({ role, title })),
+    [
+      { role: "AXButton", title: "Fixture B action" },
+      { role: "AXTextField", title: "Fixture B name" },
+    ],
+  );
 });

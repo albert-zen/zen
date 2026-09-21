@@ -484,6 +484,7 @@ export interface ComputerControlFingerprint {
   subrole?: string;
   title?: string;
   description?: string;
+  help?: string;
   frame?: string;
   actions: ComputerControlAction[];
 }
@@ -560,6 +561,7 @@ interface MacRawControl {
     subrole?: string;
     title?: string;
     description?: string;
+    help?: string;
     frame?: string;
   };
   role: string;
@@ -1079,18 +1081,26 @@ func isSettable(_ element: AXUIElement, _ name: String) -> Bool {
   return AXUIElementIsAttributeSettable(element, name as CFString, &settable) == .success && settable.boolValue
 }
 
-func frameFingerprint(_ element: AXUIElement) -> String {
+func elementFrame(_ element: AXUIElement) -> CGRect? {
   guard let rawPosition = attribute(element, kAXPositionAttribute),
         let rawSize = attribute(element, kAXSizeAttribute),
         CFGetTypeID(rawPosition) == AXValueGetTypeID(),
-        CFGetTypeID(rawSize) == AXValueGetTypeID() else { return "" }
+        CFGetTypeID(rawSize) == AXValueGetTypeID() else { return nil }
   let positionValue = unsafeBitCast(rawPosition, to: AXValue.self)
   let sizeValue = unsafeBitCast(rawSize, to: AXValue.self)
   var position = CGPoint.zero
   var size = CGSize.zero
   guard AXValueGetValue(positionValue, .cgPoint, &position),
-        AXValueGetValue(sizeValue, .cgSize, &size) else { return "" }
-  return String(format: "%.1f,%.1f,%.1f,%.1f", position.x, position.y, size.width, size.height)
+        AXValueGetValue(sizeValue, .cgSize, &size),
+        position.x.isFinite, position.y.isFinite,
+        size.width.isFinite, size.height.isFinite,
+        size.width > 0, size.height > 0 else { return nil }
+  return CGRect(origin: position, size: size)
+}
+
+func frameFingerprint(_ element: AXUIElement) -> String {
+  guard let frame = elementFrame(element) else { return "" }
+  return String(format: "%.1f,%.1f,%.1f,%.1f", frame.origin.x, frame.origin.y, frame.size.width, frame.size.height)
 }
 
 let data = FileHandle.standardInput.readDataToEndOfFile()
@@ -1180,6 +1190,33 @@ func children(_ element: AXUIElement) -> [AXUIElement] {
   return elementArrayAttribute(element, "AXChildrenInNavigationOrder")
 }
 
+func supportedActions(_ element: AXUIElement) -> [String] {
+  var result = actions(element)
+  if isSettable(element, kAXValueAttribute) { result.append("AXSetValue") }
+  return Array(Set(result)).sorted()
+}
+
+func displayLabel(_ element: AXUIElement) -> String {
+  for name in [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute, kAXIdentifierAttribute] {
+    let value = textAttribute(element, name)
+    if !value.isEmpty { return value }
+  }
+  return ""
+}
+
+func isContainerRole(_ role: String) -> Bool {
+  return [
+    kAXWindowRole,
+    kAXGroupRole,
+    kAXToolbarRole,
+    kAXScrollAreaRole,
+    kAXSplitGroupRole,
+    "AXWebArea",
+    "AXLayoutArea",
+    "AXLayoutItem"
+  ].contains(role)
+}
+
 func selector(_ element: AXUIElement) -> [String: String] {
   var result: [String: String] = [:]
   let identifier = textAttribute(element, kAXIdentifierAttribute)
@@ -1187,12 +1224,14 @@ func selector(_ element: AXUIElement) -> [String: String] {
   let subrole = textAttribute(element, kAXSubroleAttribute)
   let title = textAttribute(element, kAXTitleAttribute)
   let description = textAttribute(element, kAXDescriptionAttribute)
+  let help = textAttribute(element, kAXHelpAttribute)
   let frame = frameFingerprint(element)
   if !identifier.isEmpty { result["identifier"] = identifier }
   if !role.isEmpty { result["role"] = role }
   if !subrole.isEmpty { result["subrole"] = subrole }
   if !title.isEmpty { result["title"] = title }
   if !description.isEmpty { result["description"] = description }
+  if !help.isEmpty { result["help"] = help }
   if !frame.isEmpty { result["frame"] = frame }
   return result
 }
@@ -1203,19 +1242,46 @@ func matches(_ element: AXUIElement, _ wanted: [String: Any]) -> Bool {
   if let value = string(wanted["subrole"]), textAttribute(element, kAXSubroleAttribute) != value { return false }
   if let value = string(wanted["title"]), textAttribute(element, kAXTitleAttribute) != value { return false }
   if let value = string(wanted["description"]), textAttribute(element, kAXDescriptionAttribute) != value { return false }
+  if let value = string(wanted["help"]), textAttribute(element, kAXHelpAttribute) != value { return false }
   if let value = string(wanted["frame"]), frameFingerprint(element) != value { return false }
-  return string(wanted["identifier"]) != nil || string(wanted["role"]) != nil || string(wanted["subrole"]) != nil || string(wanted["title"]) != nil || string(wanted["description"]) != nil || string(wanted["frame"]) != nil
+  return string(wanted["identifier"]) != nil || string(wanted["role"]) != nil || string(wanted["subrole"]) != nil || string(wanted["title"]) != nil || string(wanted["description"]) != nil || string(wanted["help"]) != nil || string(wanted["frame"]) != nil
 }
 
-func walk(_ root: AXUIElement, limit: Int = 120) -> ([AXUIElement], Bool) {
+func walk(_ root: AXUIElement, visitLimit: Int = 1024, maxDepth: Int = 24) -> ([AXUIElement], Bool) {
   var queue: [(AXUIElement, Int)] = [(root, 0)]
   var result: [AXUIElement] = []
-  while !queue.isEmpty && result.count < limit {
-    let (element, depth) = queue.removeFirst()
+  var cursor = 0
+  var depthTruncated = false
+  while cursor < queue.count && result.count < visitLimit {
+    let (element, depth) = queue[cursor]
+    cursor += 1
     result.append(element)
-    if depth < 8 { queue.append(contentsOf: children(element).map { ($0, depth + 1) }) }
+    let descendants = children(element)
+    if depth < maxDepth {
+      queue.append(contentsOf: descendants.map { ($0, depth + 1) })
+    } else if !descendants.isEmpty {
+      depthTruncated = true
+    }
   }
-  return (result, !queue.isEmpty)
+  return (result, cursor < queue.count || depthTruncated)
+}
+
+func cgWindowBounds(_ entry: [String: Any]) -> CGRect? {
+  guard let raw = entry[kCGWindowBounds as String] as? [String: Any],
+        let x = (raw["X"] as? NSNumber)?.doubleValue,
+        let y = (raw["Y"] as? NSNumber)?.doubleValue,
+        let width = (raw["Width"] as? NSNumber)?.doubleValue,
+        let height = (raw["Height"] as? NSNumber)?.doubleValue,
+        x.isFinite, y.isFinite, width.isFinite, height.isFinite,
+        width > 0, height > 0 else { return nil }
+  return CGRect(x: x, y: y, width: width, height: height)
+}
+
+func windowBoundsMatch(_ candidate: CGRect, _ expected: CGRect, tolerance: CGFloat = 24) -> Bool {
+  return abs(candidate.origin.x - expected.origin.x) <= tolerance &&
+    abs(candidate.origin.y - expected.origin.y) <= tolerance &&
+    abs(candidate.size.width - expected.size.width) <= tolerance &&
+    abs(candidate.size.height - expected.size.height) <= tolerance
 }
 
 func findControl(_ wanted: [String: Any]) -> AXUIElement {
@@ -1229,21 +1295,42 @@ func findControl(_ wanted: [String: Any]) -> AXUIElement {
 var response: [String: Any]
 switch operation {
 case "inspect":
-  let (elements, truncated) = walk(root)
-  let controls = elements.compactMap { element -> [String: Any]? in
+  let (elements, traversalTruncated) = walk(root)
+  var actionableControls: [[String: Any]] = []
+  var semanticControls: [[String: Any]] = []
+  var fallbackControls: [[String: Any]] = []
+  var fallbackTruncated = false
+  for element in elements {
     let controlSelector = selector(element)
-    if controlSelector.isEmpty { return nil }
-    var supportedActions = actions(element)
-    if isSettable(element, kAXValueAttribute) { supportedActions.append("AXSetValue") }
-    return [
+    if controlSelector.isEmpty { continue }
+    let role = textAttribute(element, kAXRoleAttribute)
+    let label = displayLabel(element)
+    let enabled = boolAttribute(element, kAXEnabledAttribute)
+    let elementActions = supportedActions(element)
+    let control: [String: Any] = [
       "selector": controlSelector,
-      "role": textAttribute(element, kAXRoleAttribute),
-      "title": textAttribute(element, kAXTitleAttribute),
-      "enabled": boolAttribute(element, kAXEnabledAttribute),
-      "actions": supportedActions.sorted(),
+      "role": role,
+      "title": label,
+      "enabled": enabled,
+      "actions": elementActions,
     ]
+    if enabled && (elementActions.contains("AXPress") || elementActions.contains("AXSetValue")) {
+      actionableControls.append(control)
+    } else if !isContainerRole(role) && !label.isEmpty {
+      semanticControls.append(control)
+    } else if fallbackControls.count < 120 {
+      fallbackControls.append(control)
+    } else {
+      fallbackTruncated = true
+    }
   }
-  response = ["target": resolvedTarget, "controls": controls, "truncated": truncated]
+  let orderedControls = actionableControls + semanticControls + fallbackControls
+  let controls = Array(orderedControls.prefix(120))
+  response = [
+    "target": resolvedTarget,
+    "controls": controls,
+    "truncated": traversalTruncated || fallbackTruncated || orderedControls.count > controls.count
+  ]
 case "press":
   let wanted = dictionary(request["control"], "control")
   let element = findControl(wanted)
@@ -1264,11 +1351,38 @@ case "setValue":
   response = ["target": resolvedTarget, "control": selector(element), "characterCount": value.count]
 case "resolveWindow":
   guard let title = requestedWindowTitle else { fail("windowTitle is required") }
+  guard let selectedWindow, let selectedBounds = elementFrame(selectedWindow) else {
+    fail("target AXWindow has no valid bounds for scoped capture")
+  }
   let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-  guard let window = info.first(where: {
-    ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == running.processIdentifier &&
-    ($0[kCGWindowName as String] as? String ?? "") == title
-  }), let number = window[kCGWindowNumber as String] as? NSNumber else { fail("target window is not available for scoped capture") }
+  let candidates = info.compactMap { entry -> ([String: Any], CGRect)? in
+    guard (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == running.processIdentifier,
+          (entry[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+          let bounds = cgWindowBounds(entry) else { return nil }
+    return (entry, bounds)
+  }
+  let titleMatches = candidates.filter {
+    ($0.0[kCGWindowName as String] as? String ?? "") == title
+  }
+  let scopedCandidates = titleMatches.isEmpty ? candidates : titleMatches
+  let window: [String: Any]
+  if titleMatches.count == 1 {
+    window = titleMatches[0].0
+  } else {
+    let geometryMatches = scopedCandidates.filter {
+      windowBoundsMatch($0.1, selectedBounds)
+    }
+    if geometryMatches.count > 1 {
+      fail("target window mapping is ambiguous for scoped capture")
+    }
+    guard let matched = geometryMatches.first else {
+      fail("target window is not available for scoped capture")
+    }
+    window = matched.0
+  }
+  guard let number = window[kCGWindowNumber as String] as? NSNumber else {
+    fail("target window has no CGWindow identifier for scoped capture")
+  }
   response = ["target": resolvedTarget, "windowId": number]
 default:
   fail("unsupported accessibility operation")
