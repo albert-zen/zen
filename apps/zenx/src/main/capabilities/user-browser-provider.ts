@@ -3398,6 +3398,10 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       method === "Runtime.executionContextDestroyed" &&
       typeof params.executionContextId === "number"
     ) {
+      if (document.isolatedExecutionContextId === params.executionContextId) {
+        this.#invalidateTarget(targetId, false);
+        return;
+      }
       if (
         document.invalidExecutionContextIds.size <
           USER_BROWSER_MAX_OPERATION_EVIDENCE ||
@@ -3442,9 +3446,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
           document.isolatedExecutionContextId !== undefined &&
           document.isolatedExecutionContextId !== context.id
         ) {
-          document.invalidExecutionContextIds.add(
-            document.isolatedExecutionContextId,
-          );
+          this.#invalidateTarget(targetId, false);
         }
       }
       return;

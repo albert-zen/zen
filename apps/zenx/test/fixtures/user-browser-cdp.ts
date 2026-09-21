@@ -102,6 +102,7 @@ export async function createFakeCdpServer(): Promise<{
   emitScreencastFrame(value: string, frameNumber: number): void;
   emitRawScreencastFrame(data: string, frameNumber: number): void;
   emitMainDocumentChange(): void;
+  replaceMainDocument(url: string): void;
   close(): Promise<void>;
 }> {
   const sockets = new Set<WebSocket>();
@@ -116,6 +117,8 @@ export async function createFakeCdpServer(): Promise<{
   let nextSession = 1;
   let latestSession = "";
   let nextContext = 100;
+  let mainDocumentLoader = 1;
+  let mainDocumentUrl = "https://example.test/account";
   let endpoint = "";
   let invalidateNextAttachment = false;
   let actionInvalidation:
@@ -347,8 +350,8 @@ export async function createFakeCdpServer(): Promise<{
           frameTree: {
             frame: {
               id: "main",
-              loaderId: "loader",
-              url: "https://example.test/account",
+              loaderId: `loader-${String(mainDocumentLoader)}`,
+              url: mainDocumentUrl,
             },
           },
         };
@@ -731,6 +734,25 @@ export async function createFakeCdpServer(): Promise<{
               url: "https://example.test/next",
               navigationType: "differentDocument",
             },
+          }),
+        );
+      }
+    },
+    replaceMainDocument: (url) => {
+      const oldContext = sessionContexts.get(latestSession);
+      const targetId = sessionTargets.get(latestSession);
+      assert.ok(targetId);
+      mainDocumentLoader += 1;
+      mainDocumentUrl = url;
+      targets.set(targetId, url);
+      sessionContexts.delete(latestSession);
+      if (oldContext === undefined) return;
+      for (const socket of sockets) {
+        socket.send(
+          JSON.stringify({
+            method: "Runtime.executionContextDestroyed",
+            sessionId: latestSession,
+            params: { executionContextId: oldContext },
           }),
         );
       }

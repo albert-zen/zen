@@ -356,6 +356,48 @@ test("live observation fences document changes and becomes unavailable on exact 
   }
 });
 
+test("live observation replaces the old frame when the same tab navigates to a new document", async () => {
+  const cdp = await createFakeCdpServer();
+  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const backend = connection.backend;
+  try {
+    const events: Array<{
+      type: string;
+      status?: string;
+      frame?: { data: string };
+    }> = [];
+    await backend.listTabs("work");
+    const unsubscribe = backend.observeTab!("work", "target-1", (event) =>
+      events.push(event),
+    );
+    await waitUntil(() => events.some((event) => event.type === "frame"));
+    const framesBeforeNavigation = events.filter(
+      (event) => event.type === "frame",
+    ).length;
+
+    cdp.replaceMainDocument("https://example.test/next");
+
+    await waitUntil(
+      () =>
+        cdp.count("Page.startScreencast") === 2 &&
+        events.filter((event) => event.type === "frame").length >
+          framesBeforeNavigation,
+    );
+    const statuses = events
+      .filter((event) => event.type === "status")
+      .map((event) => event.status);
+    assert.equal(statuses.includes("connecting"), true);
+    assert.equal(statuses.at(-1), "live");
+    assert.equal(statuses.includes("failed"), false);
+
+    unsubscribe();
+  } finally {
+    await backend.closeSession("work");
+    await backend.close();
+    await cdp.close();
+  }
+});
+
 test("live observation rejects oversized capture results then recovers on the next Agent operation", async () => {
   const cdp = await createFakeCdpServer();
   const connection = await connectUserBrowserCdp(cdp.endpoint);
