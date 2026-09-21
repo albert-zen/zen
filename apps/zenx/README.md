@@ -596,8 +596,10 @@ live view explicitly marks the previous observer unavailable. Playwright and
 Electron show the latest timestamped Agent inspection screenshot, labeled as
 non-live. Thread/provider changes discard old subscription events and images.
 The Attached browser panel remains a read-only observation surface. Connected
-Chrome delivers compositor frames while the panel is visible; when Chrome emits
-no screencast frames, a single-flight capture runs at a bounded 500 ms cadence.
+Chrome displays fresh compositor captures while the panel is visible. Native
+screencast events request a refresh but their unbound pixel payloads are not
+displayed; when Chrome emits no events, capture continues at a bounded 500 ms
+cadence. Captures are single-flight and scoped to the current page and observer.
 The panel reports Live only after an actual frame arrives, and stops capturing
 when hidden or disconnected. Human input still goes through the original Chrome
 tab, which shares the same page with the Agent.
