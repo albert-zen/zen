@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   access,
   cp,
@@ -13,6 +13,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
 import { validatePluginPackage } from "@zenx/plugin-sdk";
 
@@ -129,6 +130,7 @@ export async function stagePluginPackage(options: {
   pnpmCliPath: string;
   pnpmEnvironment?: NodeJS.ProcessEnv;
   currentGeneration?: string;
+  bundledManifests?: Readonly<Record<string, ZenXPluginManifestV2>>;
   expectedPackageName?: string;
   allowBuilds?: Readonly<Record<string, boolean>>;
   removeGeneration?: (directory: string) => Promise<void>;
@@ -156,6 +158,8 @@ export async function stagePluginPackage(options: {
         current,
         generationDirectory,
         options.allowBuilds,
+        options.bundledManifests,
+        options.expectedPackageName,
       );
       // The add/update below materializes this staged generation from the
       // copied lockfile. Installing the old dependency set first would require
@@ -259,6 +263,7 @@ export async function stagePluginRemoval(options: {
   pnpmCliPath: string;
   pnpmEnvironment?: NodeJS.ProcessEnv;
   currentGeneration: string;
+  bundledManifests?: Readonly<Record<string, ZenXPluginManifestV2>>;
   removeGeneration?: (directory: string) => Promise<void>;
 }): Promise<StagedProfileRemoval> {
   const paths = pluginProfilePaths(options.userDataDirectory);
@@ -269,6 +274,9 @@ export async function stagePluginRemoval(options: {
     const before = await stageProfileDependencyState(
       generationPath(paths, options.currentGeneration),
       generationDirectory,
+      undefined,
+      options.bundledManifests,
+      options.packageName,
     );
     if (before.dependencies[options.packageName] === undefined) {
       throw new Error(
@@ -389,7 +397,19 @@ async function prepareInstallSpec(
     }
     return packageSpec;
   }
-  if (source.mode === "tarball" || source.mode === "bundled") {
+  if (source.mode === "bundled") {
+    // App Resources are replaceable; a committed generation must retain the
+    // exact archive bytes it resolved. Catalog provenance remains the resource
+    // path while pnpm uses this generation-relative transport snapshot.
+    const bytes = await readFile(await realpath(path.resolve(packageSpec)));
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    const relative = `.zenx-sources/bundled/${digest}.tgz`;
+    const snapshot = path.join(generationDirectory, relative);
+    await mkdir(path.dirname(snapshot), { recursive: true, mode: 0o700 });
+    await writeFile(snapshot, bytes, { mode: 0o600 });
+    return `file:${relative}`;
+  }
+  if (source.mode === "tarball") {
     return await realpath(path.resolve(packageSpec));
   }
   if (source.mode === "local-copy" || source.mode === "dev-link") {
@@ -668,6 +688,8 @@ async function stageProfileDependencyState(
   currentGenerationDirectory: string,
   stagedGenerationDirectory: string,
   allowBuilds?: Readonly<Record<string, boolean>>,
+  bundledManifests: Readonly<Record<string, ZenXPluginManifestV2>> = {},
+  replacedPackageName?: string,
 ): Promise<{
   dependencies: Record<string, string>;
   pnpm?: { allowBuilds?: Record<string, boolean> };
@@ -688,6 +710,61 @@ async function stageProfileDependencyState(
     );
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  // Older generations predate archive snapshots. Preserve an unchanged
+  // bundled sibling from its already admitted package, never substitute the
+  // new app's version behind the Catalog's back.
+  for (const [packageName, manifest] of Object.entries(bundledManifests)) {
+    if (packageName === replacedPackageName) continue;
+    const spec = currentPackage.dependencies[packageName];
+    if (spec === undefined || !spec.startsWith("file:")) continue;
+    try {
+      await access(path.resolve(currentGenerationDirectory, spec.slice(5)));
+      continue;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const packageRoot = await containedRealpath(
+      await realpath(currentGenerationDirectory),
+      path.join(
+        currentGenerationDirectory,
+        "node_modules",
+        ...packageName.split("/"),
+      ),
+      `Committed bundled dependency ${packageName}`,
+    );
+    const validated = await validatePluginPackage(packageRoot);
+    if (
+      validated.packageName !== packageName ||
+      !isDeepStrictEqual(validated.manifest, manifest)
+    ) {
+      throw new Error(
+        `Committed bundled dependency ${packageName} does not match its Catalog manifest`,
+      );
+    }
+    const metadata = JSON.parse(
+      await readFile(path.join(packageRoot, "package.json"), "utf8"),
+    );
+    if (
+      [
+        metadata.dependencies,
+        metadata.optionalDependencies,
+        metadata.peerDependencies,
+      ].some(
+        (dependencies) =>
+          dependencies !== undefined && Object.keys(dependencies).length > 0,
+      )
+    ) {
+      throw new Error(
+        `Missing bundled archive for ${packageName}; legacy package has dependencies and cannot be snapshotted`,
+      );
+    }
+    const relative = `.zenx-sources/bundled/legacy-${randomUUID()}`;
+    await cp(packageRoot, path.join(stagedGenerationDirectory, relative), {
+      recursive: true,
+      filter: (source) => path.basename(source) !== "node_modules",
+    });
+    currentPackage.dependencies[packageName] = `file:${relative}`;
   }
   await writeProfilePackageJson(
     stagedGenerationDirectory,

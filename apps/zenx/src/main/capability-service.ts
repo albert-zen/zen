@@ -887,6 +887,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       pnpmCliPath,
       pnpmEnvironment: this.#pnpmEnvironment,
       currentGeneration: this.#registry.profileGeneration(),
+      bundledManifests: this.#bundledProfileManifests(),
       expectedPackageName: expectedDescriptor?.profilePackageName,
       removeGeneration: this.#removeProfileGeneration,
       trustedLoaders: this.#trustedProfileLoaders,
@@ -928,6 +929,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
             pnpmCliPath,
             pnpmEnvironment: this.#pnpmEnvironment,
             currentGeneration: staged.generation,
+            bundledManifests: this.#bundledProfileManifests(),
             removeGeneration: this.#removeProfileGeneration,
           });
           generation = removed.generation;
@@ -1056,6 +1058,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
         pnpmCliPath,
         pnpmEnvironment: this.#pnpmEnvironment,
         currentGeneration: generation,
+        bundledManifests: this.#bundledProfileManifests(),
         removeGeneration: this.#removeProfileGeneration,
       });
       try {
@@ -1094,6 +1097,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
         pnpmCliPath: await this.#resolvePnpm(),
         pnpmEnvironment: this.#pnpmEnvironment,
         currentGeneration: this.#registry.profileGeneration(),
+        bundledManifests: this.#bundledProfileManifests(),
         expectedPackageName: descriptor.profilePackageName,
         removeGeneration: this.#removeProfileGeneration,
         trustedLoaders: this.#trustedProfileLoaders,
@@ -1118,6 +1122,22 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       }
       return this.pluginSnapshot();
     });
+  }
+
+  #bundledProfileManifests(): Record<string, ZenXPluginManifestV2> {
+    return Object.fromEntries(
+      Object.values(this.#registry.packageDescriptors())
+        .filter(
+          (descriptor) =>
+            descriptor.source === "bundled" &&
+            descriptor.profileSource?.mode === "bundled" &&
+            descriptor.profilePackageName !== undefined,
+        )
+        .map((descriptor) => [
+          descriptor.profilePackageName!,
+          descriptor.manifest,
+        ]),
+    );
   }
 
   async #trustedBundledSource(

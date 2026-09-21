@@ -217,6 +217,24 @@ test("Chrome bridge exposes only the explicitly attached tab over authenticated 
           },
         };
       } else if (method === "Page.captureScreenshot") {
+        // chrome.debugger rejects view captures; real attached Chrome requires
+        // a compositor-surface capture, bounded to the viewport.
+        if (
+          message.params?.fromSurface !== true ||
+          message.params?.captureBeyondViewport !== false
+        ) {
+          native!.send(
+            JSON.stringify({
+              type: "cdp-result",
+              requestId: message.requestId,
+              error: {
+                code: -32000,
+                message: "Only screenshots from surface are allowed.",
+              },
+            }),
+          );
+          return;
+        }
         result = {
           data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
         };
