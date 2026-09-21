@@ -1,6 +1,12 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  constants as fsConstants,
+  mkdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -879,7 +885,12 @@ export class MacForegroundInputDriver {
     } = {},
   ) {
     this.#directory = directory;
-    this.#compileHelper = dependencies.compile ?? (() => this.#compile());
+    this.#compileHelper =
+      dependencies.compile ??
+      (() =>
+        resolveMacNativeHelperExecutable("zenx-foreground-input", () =>
+          this.#compile(),
+        ));
     this.#runProcess = dependencies.runProcess ?? runProcess;
   }
 
@@ -938,7 +949,10 @@ class MacAccessibilityDriver {
     signal?: AbortSignal,
   ): Promise<unknown> {
     signal?.throwIfAborted();
-    const executable = await (this.#executable ??= this.#compile());
+    const executable = await (this.#executable ??=
+      resolveMacNativeHelperExecutable("zenx-accessibility", () =>
+        this.#compile(),
+      ));
     const output = await runProcess(
       executable,
       [],
@@ -970,7 +984,38 @@ class MacAccessibilityDriver {
   }
 }
 
-const MAC_ACCESSIBILITY_SOURCE = `import AppKit
+export async function resolveMacNativeHelperExecutable(
+  helperName: "zenx-accessibility" | "zenx-foreground-input",
+  compileDevelopmentHelper: () => Promise<string>,
+  runtime: {
+    resourcesPath?: string;
+    defaultApp?: boolean;
+  } = process as typeof process & {
+    resourcesPath?: string;
+    defaultApp?: boolean;
+  },
+  assertExecutable: (path: string, mode: number) => Promise<void> = access,
+): Promise<string> {
+  if (runtime.resourcesPath !== undefined && runtime.defaultApp !== true) {
+    const executable = path.join(
+      runtime.resourcesPath,
+      "native-helpers",
+      helperName,
+    );
+    try {
+      await assertExecutable(executable, fsConstants.X_OK);
+    } catch (error) {
+      throw new Error(
+        `Packaged macOS Computer helper is missing or not executable: ${executable}`,
+        { cause: error },
+      );
+    }
+    return executable;
+  }
+  return await compileDevelopmentHelper();
+}
+
+export const MAC_ACCESSIBILITY_SOURCE = `import AppKit
 import ApplicationServices
 import Foundation
 
@@ -1064,7 +1109,7 @@ if operation == "desktopContext" {
   exit(0)
 }
 guard AXIsProcessTrusted() else {
-  fail("macOS Accessibility permission is required for background-safe computer operations")
+  fail("macOS Accessibility denied for helper at " + CommandLine.arguments[0] + ". If the current ZenX.app is already enabled in System Settings > Privacy & Security > Accessibility, remove the old ZenX entry, add the current ZenX.app again, and relaunch ZenX.")
 }
 if operation == "listWindows" {
   var targets: [[String: Any]] = []
@@ -1233,7 +1278,7 @@ guard let output = try? JSONSerialization.data(withJSONObject: response) else { 
 FileHandle.standardOutput.write(output)
 `;
 
-const MAC_FOREGROUND_INPUT_SOURCE = `import ApplicationServices
+export const MAC_FOREGROUND_INPUT_SOURCE = `import ApplicationServices
 import Foundation
 
 func fail(_ message: String) -> Never {
@@ -1242,7 +1287,7 @@ func fail(_ message: String) -> Never {
 }
 
 guard AXIsProcessTrusted() else {
-  fail("macOS Accessibility permission is required for foreground takeover")
+  fail("macOS Accessibility denied for helper at " + CommandLine.arguments[0] + ". If the current ZenX.app is already enabled in System Settings > Privacy & Security > Accessibility, remove the old ZenX entry, add the current ZenX.app again, and relaunch ZenX.")
 }
 let data = FileHandle.standardInput.readDataToEndOfFile()
 guard let raw = try? JSONSerialization.jsonObject(with: data),

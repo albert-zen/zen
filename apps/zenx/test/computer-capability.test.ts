@@ -6,6 +6,7 @@ import {
   ComputerObservationLedger,
   ComputerZenXCapabilityPackage,
   MacForegroundInputDriver,
+  resolveMacNativeHelperExecutable,
   runProcess,
   selectComputerInspectionControls,
   type ComputerControlSelector,
@@ -282,6 +283,57 @@ test("computer process runner rejects a pre-aborted signal before spawn", async 
     /revoked before spawn/u,
   );
   assert.equal(spawnCount, 0);
+});
+
+test("packaged macOS Computer uses its fixed helper and never compiles a fallback", async () => {
+  const calls: string[] = [];
+  const executable = await resolveMacNativeHelperExecutable(
+    "zenx-accessibility",
+    async () => {
+      calls.push("compile");
+      return "/tmp/development-helper";
+    },
+    { resourcesPath: "/Applications/ZenX.app/Contents/Resources" },
+    async (candidate, mode) => {
+      calls.push(`access:${candidate}:${String(mode)}`);
+    },
+  );
+  assert.equal(
+    executable,
+    "/Applications/ZenX.app/Contents/Resources/native-helpers/zenx-accessibility",
+  );
+  assert.deepEqual(calls, [
+    "access:/Applications/ZenX.app/Contents/Resources/native-helpers/zenx-accessibility:1",
+  ]);
+});
+
+test("development macOS Computer retains an explicit compilation fallback", async () => {
+  const executable = await resolveMacNativeHelperExecutable(
+    "zenx-foreground-input",
+    async () => "/tmp/development-helper",
+    { resourcesPath: "/Electron.app/Contents/Resources", defaultApp: true },
+    async () => assert.fail("development must not inspect packaged resources"),
+  );
+  assert.equal(executable, "/tmp/development-helper");
+});
+
+test("packaged macOS Computer reports a missing fixed helper without compiling", async () => {
+  let compiled = false;
+  await assert.rejects(
+    resolveMacNativeHelperExecutable(
+      "zenx-accessibility",
+      async () => {
+        compiled = true;
+        return "/tmp/development-helper";
+      },
+      { resourcesPath: "/Applications/ZenX.app/Contents/Resources" },
+      async () => {
+        throw new Error("missing");
+      },
+    ),
+    /Packaged macOS Computer helper is missing or not executable/u,
+  );
+  assert.equal(compiled, false);
 });
 
 function computerBackend(calls: string[]): ZenXComputerBackend {

@@ -213,8 +213,11 @@ integrity-checked provider assembly used by `smoke:packaged`:
 npm --workspace apps/zenx run package:portable
 ```
 
-The result is an **unsigned, unpacked portable directory**, not an installer or
-a single-file executable. It is written below
+The result is an **unpacked portable directory**, not an installer or a
+single-file executable. On macOS it is signed during packaging with
+`ZENX_CODESIGN_IDENTITY` when configured, or with an ad-hoc identity when no
+Developer ID is available; the ad-hoc fallback verifies package integrity but
+does not promise stable Accessibility authorization across rebuilt updates. It is written below
 `apps/zenx/.packaged/artifact/ZenX-<platform>-<arch>/`; keep that directory
 together and start `ZenX.exe` on Windows, `ZenX.app` on macOS, or `ZenX` on
 Linux.
@@ -623,9 +626,14 @@ terminates the helper. A background-safe action never falls back to foreground
 input: missing accessibility semantics is reported as
 unsupported/foreground-required.
 
-The macOS provider requires Accessibility permission; window capture also
-requires Screen Recording, and first-use helper compilation requires Apple
-Command Line Tools. On Windows, ZenX selects an optional thin adapter over
+The macOS provider requires Accessibility permission and window capture also
+requires Screen Recording. Packaged apps execute fixed AX and foreground-input
+helpers compiled into App Resources before the complete app is signed; they do
+not compile Swift on the user's machine. Development mode retains an explicit
+temporary compilation fallback and therefore requires Apple Command Line Tools.
+If a helper reports Accessibility denial while the ZenX toggle is already on,
+remove the old ZenX entry, add the current `ZenX.app` again, and relaunch it; an
+older code identity may no longer match the current app. On Windows, ZenX selects an optional thin adapter over
 Microsoft's Public Preview `winapp` CLI 0.3.1 or newer. Install it explicitly with
 `winget install Microsoft.winappcli --source winget`; ZenX probes `winapp
 --version` plus a read-only JSON schema probe at startup and does not expose the
@@ -848,8 +856,9 @@ open/inspect/navigate/click/type/close, including forged/stale/changed/hidden
 rejection and ordinary password-field input dispatch. It also seeds a cookie and session storage, closes
 the session, reopens the same ID, and verifies both are absent. It asserts those
 background-safe browser operations
-leave the real pointer position and foreground application unchanged. The macOS
-AX helper and foreground helper compile in that packaged run, but arbitrary
+leave the real pointer position and foreground application unchanged. The
+packaged macOS AX helper and foreground helper are compiled into fixed App
+Resources before signing, but arbitrary
 third-party AX window/action smoke remains permission- and target-dependent; its
 opaque latest-observation and forged/stale paths are unit-covered. The
 compiled helper enforces semantic fingerprint/geometry revalidation and rejects

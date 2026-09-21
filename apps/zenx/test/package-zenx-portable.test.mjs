@@ -8,6 +8,7 @@ import {
   readlink,
   readdir,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -22,7 +23,11 @@ import {
   copyFirstPartyPluginResources,
   copyMarketplaceCatalogResource,
   copyPackagedProviderResources,
+  compileMacNativeHelpers,
   createBuildSnapshot,
+  extractMacNativeHelperSources,
+  macNativeHelperSignOptions,
+  macOsPackagerOptions,
   packageManifest,
   publishPackagedArtifact,
   stagePackage,
@@ -47,6 +52,92 @@ test("uses production platform icons only for packaged applications", () => {
   );
   assert.equal(applicationIconForPlatform("win32", "smoke"), undefined);
   assert.equal(applicationIconForPlatform("linux", "app"), undefined);
+});
+
+test("uses a stable macOS bundle ID and fail-closed ad-hoc signing by default", () => {
+  assert.deepEqual(macOsPackagerOptions("linux", "app", {}), {});
+  const adHoc = macOsPackagerOptions("darwin", "app", {});
+  assert.equal(adHoc.appBundleId, "com.electron.zenx");
+  assert.deepEqual(adHoc.osxSign, {
+    identity: "-",
+    identityValidation: false,
+    continueOnError: false,
+    optionsForFile: macNativeHelperSignOptions,
+    preAutoEntitlements: false,
+    strictVerify: true,
+  });
+  assert.deepEqual(
+    macOsPackagerOptions("darwin", "app", {
+      ZENX_CODESIGN_IDENTITY: "Developer ID Application: Example",
+    }).osxSign,
+    {
+      identity: "Developer ID Application: Example",
+      continueOnError: false,
+      optionsForFile: macNativeHelperSignOptions,
+      preAutoEntitlements: false,
+      strictVerify: true,
+    },
+  );
+  assert.equal(
+    macOsPackagerOptions("darwin", "smoke", {}).appBundleId,
+    "com.electron.zenx-provider-smoke",
+  );
+  assert.deepEqual(
+    macNativeHelperSignOptions(
+      "/Applications/ZenX.app/Contents/Resources/native-helpers/zenx-accessibility",
+    ),
+    { entitlements: [] },
+  );
+  assert.equal(
+    macNativeHelperSignOptions("/Applications/ZenX.app/Contents/MacOS/ZenX"),
+    null,
+  );
+});
+
+test("extracts and compiles both fixed macOS Computer helpers into App Resources", async () => {
+  const providerSource = await readFile(
+    new URL("../src/main/capabilities/computer-provider.ts", import.meta.url),
+    "utf8",
+  );
+  const sources = extractMacNativeHelperSources(providerSource);
+  assert.match(sources.MAC_ACCESSIBILITY_SOURCE, /AXIsProcessTrusted/u);
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /current ZenX\.app is already enabled/u,
+  );
+
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-native-helper-resource-"),
+  );
+  try {
+    const destinationDirectory = path.join(directory, "native-helpers");
+    const compiled = [];
+    await compileMacNativeHelpers({
+      destinationDirectory,
+      providerSource,
+      compile: async (sourcePath, executablePath) => {
+        compiled.push({
+          name: path.basename(executablePath),
+          source: await readFile(sourcePath, "utf8"),
+        });
+        await writeFile(executablePath, "fixture", { mode: 0o600 });
+      },
+    });
+    assert.deepEqual(
+      compiled.map(({ name }) => name),
+      ["zenx-accessibility", "zenx-foreground-input"],
+    );
+    assert.equal(compiled[0].source, sources.MAC_ACCESSIBILITY_SOURCE);
+    assert.equal(compiled[1].source, sources.MAC_FOREGROUND_INPUT_SOURCE);
+    assert.equal((await stat(destinationDirectory)).mode & 0o777, 0o755);
+    for (const { name } of compiled) {
+      const mode = (await stat(path.join(destinationDirectory, name))).mode;
+      assert.notEqual(mode & 0o100, 0);
+    }
+    assert.deepEqual((await readdir(directory)).sort(), ["native-helpers"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("copies packaged provider symlinks verbatim into the platform resources directory", async () => {
