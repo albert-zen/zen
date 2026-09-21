@@ -119,6 +119,83 @@ test("attached document acquisition enables Runtime before reading the frame tre
   }
 });
 
+test("silent background screencasts produce continuous fresh frames and stop capture on unsubscribe", async () => {
+  const cdp = await createFakeCdpServer();
+  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const events: Array<{
+    type: string;
+    status?: string;
+    frame?: { data: string };
+  }> = [];
+  try {
+    await connection.backend.listTabs("work");
+    const unsubscribe = connection.backend.observeTab!(
+      "work",
+      "target-1",
+      (event) => events.push(event),
+    );
+    await waitUntil(() => cdp.count("Page.startScreencast") === 1);
+    assert.equal(
+      events.some((event) => event.status === "live"),
+      false,
+      "start acknowledgement alone is not a live image",
+    );
+    await waitUntil(
+      () => events.filter((event) => event.type === "frame").length >= 2,
+    );
+    const frames = events.filter((event) => event.type === "frame");
+    assert.notEqual(frames[0]?.frame?.data, frames[1]?.frame?.data);
+    assert.equal(
+      events.some((event) => event.status === "live"),
+      true,
+    );
+    const captures = cdp.requests("Page.captureScreenshot");
+    assert.ok(
+      captures.every(
+        (capture) =>
+          capture.fromSurface === true &&
+          capture.captureBeyondViewport === false,
+      ),
+    );
+    unsubscribe();
+    await waitUntil(() => cdp.count("Page.stopScreencast") === 1);
+    const count = cdp.count("Page.captureScreenshot");
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    assert.equal(cdp.count("Page.captureScreenshot"), count);
+  } finally {
+    await connection.backend.close();
+    await cdp.close();
+  }
+});
+
+test("a late live capture cannot publish after observer cancellation", async () => {
+  const cdp = await createFakeCdpServer();
+  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const events: Array<{ type: string; status?: string }> = [];
+  try {
+    await connection.backend.listTabs("work");
+    cdp.holdNextLiveCaptureReply();
+    const unsubscribe = connection.backend.observeTab!(
+      "work",
+      "target-1",
+      (event) => events.push(event),
+    );
+    await waitUntil(() => cdp.count("Page.captureScreenshot") === 1);
+    unsubscribe();
+    await waitUntil(() => cdp.count("Page.stopScreencast") === 1);
+    cdp.releaseLiveCaptureReply();
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    assert.equal(
+      events.some((event) => event.type === "frame" || event.status === "live"),
+      false,
+    );
+    assert.equal(cdp.count("Page.captureScreenshot"), 1);
+  } finally {
+    await connection.backend.close();
+    await cdp.close();
+  }
+});
+
 test("live observation acks every screencast frame and publishes only the bounded latest frame", async () => {
   const cdp = await createFakeCdpServer();
   const connection = await connectUserBrowserCdp(cdp.endpoint);
@@ -188,7 +265,7 @@ test("live observation fences document changes and becomes unavailable on exact 
             (event as { type?: unknown }).type === "status",
         )
         .map((event) => event.status);
-    assert.deepEqual(statuses().slice(-2), ["connecting", "live"]);
+    assert.deepEqual(statuses().slice(-2), ["connecting", "connecting"]);
 
     cdp.detachSession();
     await waitUntil(() => statuses().at(-1) === "unavailable");
@@ -266,7 +343,7 @@ test("live observation acks and rejects oversized frames then recovers on the ne
       events.push(event),
     );
     await waitUntil(() => cdp.count("Page.startScreencast") === 2);
-    assert.equal(statuses().at(-1), "live");
+    assert.equal(statuses().at(-1), "connecting");
     cdp.emitScreencastFrame("recovered", 2);
     await waitUntil(() =>
       events.some(

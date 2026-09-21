@@ -19,6 +19,7 @@ const ALLOWED_TAB_COMMANDS = new Set([
   "Page.createIsolatedWorld",
   "Page.enable",
   "Page.getFrameTree",
+  "Page.getLayoutMetrics",
   "Page.navigate",
   "Page.screencastFrameAck",
   "Page.startScreencast",

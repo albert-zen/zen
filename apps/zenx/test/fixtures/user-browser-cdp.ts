@@ -64,6 +64,8 @@ export async function createFakeCdpServer(): Promise<{
       | "before-post-isolated-world-barrier-response",
     event?: { method: string; params: Record<string, unknown> },
   ): void;
+  holdNextLiveCaptureReply(): void;
+  releaseLiveCaptureReply(): void;
   loseNextCreateReply(): void;
   dropNextCreateReply(): void;
   dropNextAttachReply(): void;
@@ -137,6 +139,8 @@ export async function createFakeCdpServer(): Promise<{
         event: { method: string; params: Record<string, unknown> };
       }
     | undefined;
+  let holdLiveCapture = false;
+  let liveCaptureReply: (() => void) | undefined;
   let loseCreateReply = false;
   let dropCreateReply = false;
   let dropAttachReply = false;
@@ -309,6 +313,30 @@ export async function createFakeCdpServer(): Promise<{
           return;
         }
         runtimeEnabledSessions.add(request.sessionId ?? "");
+      } else if (request.method === "Page.getLayoutMetrics") {
+        result = {
+          cssLayoutViewport: {
+            clientWidth: 1600,
+            clientHeight: 900,
+            pageX: 0,
+            pageY: 0,
+          },
+        };
+      } else if (
+        request.method === "Page.captureScreenshot" &&
+        request.params.format === "jpeg"
+      ) {
+        result = {
+          data: Buffer.from(
+            `capture-${methods.filter((method) => method === "Page.captureScreenshot").length}`,
+          ).toString("base64"),
+        };
+        if (holdLiveCapture) {
+          holdLiveCapture = false;
+          liveCaptureReply = () =>
+            socket.send(JSON.stringify({ id: request.id, result }));
+          return;
+        }
       } else if (request.method === "Page.getFrameTree") {
         result = {
           frameTree: {
@@ -499,6 +527,13 @@ export async function createFakeCdpServer(): Promise<{
           },
         },
       };
+    },
+    holdNextLiveCaptureReply: () => {
+      holdLiveCapture = true;
+    },
+    releaseLiveCaptureReply: () => {
+      liveCaptureReply?.();
+      liveCaptureReply = undefined;
     },
     loseNextCreateReply: () => {
       loseCreateReply = true;
