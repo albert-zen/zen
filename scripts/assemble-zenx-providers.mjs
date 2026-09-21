@@ -246,11 +246,9 @@ export async function assemblePlaywrightBrowser(options) {
       browserDirectory,
       playwrightBrowserRuntimeStatePaths,
     );
-    await writeFile(
-      path.join(browserDirectory, "DEPENDENCIES_VALIDATED"),
-      "",
-      { mode: 0o600 },
-    );
+    await writeFile(path.join(browserDirectory, "DEPENDENCIES_VALIDATED"), "", {
+      mode: 0o600,
+    });
     return {
       archiveSha256: archive.sha256,
       browserDirectory,

@@ -172,9 +172,7 @@ test("browser assembly rejects a wrong archive mapping and reuses verified cache
     assert.equal(online.archiveSha256, archiveSha256);
     assert.equal(online.assets[0].kind, "directory");
     assert.deepEqual(online.assets[0].ignoredPaths, ["DEPENDENCIES_VALIDATED"]);
-    await access(
-      path.join(online.browserDirectory, "DEPENDENCIES_VALIDATED"),
-    );
+    await access(path.join(online.browserDirectory, "DEPENDENCIES_VALIDATED"));
     assert.equal(
       online.assets[0].sha256,
       await hashBundledDirectoryAsset(
