@@ -629,7 +629,9 @@ unsupported/foreground-required.
 The macOS provider requires Accessibility permission and window capture also
 requires Screen Recording. Packaged apps execute fixed AX and foreground-input
 helpers compiled into App Resources before the complete app is signed; they do
-not compile Swift on the user's machine. Development mode retains an explicit
+not compile Swift on the user's machine. Packaging fixes and verifies the helper
+deployment target at the app's macOS 12.0 minimum instead of inheriting the
+build host's current SDK default. Development mode retains an explicit
 temporary compilation fallback and therefore requires Apple Command Line Tools.
 If a helper reports Accessibility denial while the ZenX toggle is already on,
 remove the old ZenX entry, add the current `ZenX.app` again, and relaunch it; an

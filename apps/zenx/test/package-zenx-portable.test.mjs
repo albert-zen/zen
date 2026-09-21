@@ -18,6 +18,7 @@ import test from "node:test";
 
 import {
   applicationIconForPlatform,
+  assertMacNativeHelperDeploymentTarget,
   copyChromeExtensionResource,
   copyBundledPnpmResource,
   copyFirstPartyPluginResources,
@@ -26,8 +27,10 @@ import {
   compileMacNativeHelpers,
   createBuildSnapshot,
   extractMacNativeHelperSources,
+  MACOS_MINIMUM_VERSION,
   macNativeHelperSignOptions,
   macOsPackagerOptions,
+  macSwiftTargetTriple,
   packageManifest,
   publishPackagedArtifact,
   stagePackage,
@@ -91,6 +94,33 @@ test("uses a stable macOS bundle ID and fail-closed ad-hoc signing by default", 
   assert.equal(
     macNativeHelperSignOptions("/Applications/ZenX.app/Contents/MacOS/ZenX"),
     null,
+  );
+});
+
+test("pins helper architecture and deployment target to the app minimum", () => {
+  assert.equal(MACOS_MINIMUM_VERSION, "12.0");
+  assert.equal(macSwiftTargetTriple("arm64"), "arm64-apple-macos12.0");
+  assert.equal(macSwiftTargetTriple("x64"), "x86_64-apple-macos12.0");
+  assert.throws(
+    () => macSwiftTargetTriple("ia32"),
+    /Unsupported macOS helper architecture/u,
+  );
+  assert.doesNotThrow(() =>
+    assertMacNativeHelperDeploymentTarget(`Load command 11
+      cmd LC_BUILD_VERSION
+ platform MACOS
+   minos 12.0
+     sdk 26.5`),
+  );
+  assert.throws(
+    () =>
+      assertMacNativeHelperDeploymentTarget(`platform MACOS
+ minos 26.0`),
+    /minimum system 26\.0; expected 12\.0/u,
+  );
+  assert.throws(
+    () => assertMacNativeHelperDeploymentTarget("platform IOS\n minos 12.0"),
+    /no MACOS build platform/u,
   );
 });
 

@@ -25,6 +25,7 @@ const packagedRoot = path.join(zenx, ".packaged");
 const runsRoot = path.join(packagedRoot, "runs");
 const artifactRoot = path.join(packagedRoot, "artifact");
 const artifactCache = path.join(packagedRoot, "cache", "artifacts");
+export const MACOS_MINIMUM_VERSION = "12.0";
 
 if (isDirectExecution()) await packageZenX(process.argv.slice(2));
 
@@ -252,7 +253,14 @@ export async function compileMacNativeHelpers(options) {
       "utf8",
     ));
   const sources = extractMacNativeHelperSources(providerSource);
-  const compile = options.compile ?? compileSwiftHelper;
+  const compile =
+    options.compile ??
+    ((sourcePath, executablePath) =>
+      compileSwiftHelper(
+        sourcePath,
+        executablePath,
+        options.arch ?? process.arch,
+      ));
   await mkdir(options.destinationDirectory, { recursive: true, mode: 0o755 });
   await chmod(options.destinationDirectory, 0o755);
   const sourceDirectory = await mkdtemp(
@@ -278,10 +286,46 @@ export async function compileMacNativeHelpers(options) {
   return options.destinationDirectory;
 }
 
-async function compileSwiftHelper(sourcePath, executablePath) {
-  await run("/usr/bin/swiftc", ["-O", sourcePath, "-o", executablePath], {
-    timeout: 60_000,
-  });
+export function macSwiftTargetTriple(arch) {
+  if (arch === "arm64") return `arm64-apple-macos${MACOS_MINIMUM_VERSION}`;
+  if (arch === "x64") return `x86_64-apple-macos${MACOS_MINIMUM_VERSION}`;
+  throw new Error(`Unsupported macOS helper architecture: ${arch}`);
+}
+
+export function assertMacNativeHelperDeploymentTarget(
+  buildMetadata,
+  expectedMinimum = MACOS_MINIMUM_VERSION,
+) {
+  if (!/^\s*platform MACOS\s*$/mu.test(buildMetadata)) {
+    throw new Error("macOS Computer helper has no MACOS build platform");
+  }
+  const minimum = /^\s*minos\s+([0-9.]+)\s*$/mu.exec(buildMetadata)?.[1];
+  if (minimum !== expectedMinimum) {
+    throw new Error(
+      `macOS Computer helper minimum system ${minimum ?? "missing"}; expected ${expectedMinimum}`,
+    );
+  }
+}
+
+async function compileSwiftHelper(sourcePath, executablePath, arch) {
+  await run(
+    "/usr/bin/swiftc",
+    [
+      "-O",
+      "-target",
+      macSwiftTargetTriple(arch),
+      sourcePath,
+      "-o",
+      executablePath,
+    ],
+    { timeout: 60_000 },
+  );
+  const { stdout } = await run(
+    "/usr/bin/vtool",
+    ["-show-build", executablePath],
+    { timeout: 10_000 },
+  );
+  assertMacNativeHelperDeploymentTarget(stdout);
 }
 
 /** Build only into the current packaging run before anything snapshots it. */
