@@ -507,8 +507,8 @@ switching leaves the connection and other tabs available.
 
 Click the extension again, cancel Chrome's debugging connection, disable the
 extension, or quit ZenX to disconnect the browser. The original windows, tabs,
-and signed-in state stay in Chrome. The sidebar displays the Agent's latest
-observation; it does not embed a duplicate of Chrome.
+and signed-in state stay in Chrome. The sidebar follows the selected tab with a
+live, read-only view; interact directly in the original Chrome window.
 
 The extension declares `debugger`, `nativeMessaging`, and `tabs`, and talks only
 to a Native Messaging manifest pinned to its fixed extension ID. Its native
@@ -595,10 +595,12 @@ User-browser CDP supports one live panel per provider at a time; opening another
 live view explicitly marks the previous observer unavailable. Playwright and
 Electron show the latest timestamped Agent inspection screenshot, labeled as
 non-live. Thread/provider changes discard old subscription events and images.
-The Attached browser panel remains an observation surface; selecting a Chrome
-tab does not turn it into an embedded WebContentsView or by itself establish
-continuous live mirroring. Use the original Chrome tab as the authoritative
-human view.
+The Attached browser panel remains a read-only observation surface. Connected
+Chrome delivers compositor frames while the panel is visible; when Chrome emits
+no screencast frames, a single-flight capture runs at a bounded 500 ms cadence.
+The panel reports Live only after an actual frame arrives, and stops capturing
+when hidden or disconnected. Human input still goes through the original Chrome
+tab, which shares the same page with the Agent.
 The Browser 1.0.1 bundled package removes the global sidebar contribution; its
 legacy route explains the thread-panel entry point.
 
