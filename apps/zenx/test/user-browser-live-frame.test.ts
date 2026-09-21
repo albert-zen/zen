@@ -39,7 +39,7 @@ class FakeImage implements UserBrowserLiveImage {
 
 test("live Chrome frames resize locally and report the decoded output dimensions", async () => {
   const result = await processUserBrowserLiveFrame(
-    Buffer.from("native-capture").toString("base64"),
+    jpegData(3_200, 1_800),
     async () => new FakeImage(3_200, 1_800, Buffer.from("jpeg"), 1),
   );
 
@@ -65,11 +65,34 @@ test("live Chrome frame input byte and decoded pixel bounds are independent", as
   assert.equal(decoded, false);
 
   await assert.rejects(
-    processUserBrowserLiveFrame(
-      Buffer.from("small-input").toString("base64"),
-      async () => new FakeImage(8_193, 8_193),
-    ),
+    processUserBrowserLiveFrame(jpegData(8_193, 8_193), async () => {
+      decoded = true;
+      return new FakeImage(8_193, 8_193);
+    }),
     /pixel bound/u,
   );
+  assert.equal(decoded, false);
   assert.ok(8_193 * 8_193 > USER_BROWSER_MAX_LIVE_CAPTURE_PIXELS);
 });
+
+function jpegData(width: number, height: number): string {
+  return Buffer.from([
+    0xff,
+    0xd8,
+    0xff,
+    0xc0,
+    0x00,
+    0x0b,
+    0x08,
+    (height >> 8) & 0xff,
+    height & 0xff,
+    (width >> 8) & 0xff,
+    width & 0xff,
+    0x01,
+    0x01,
+    0x11,
+    0x00,
+    0xff,
+    0xd9,
+  ]).toString("base64");
+}

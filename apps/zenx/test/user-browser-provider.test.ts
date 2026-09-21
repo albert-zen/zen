@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import test from "node:test";
 import {
   deferred,
+  fakeJpegCaptureData,
   nextTurn,
   waitUntil,
   listen,
@@ -248,8 +249,7 @@ test("a locally decoded frame cannot cross a document change", async () => {
     await waitUntil(() => events.some((event) => event.type === "frame"));
     assert.equal(
       events.some(
-        (event) =>
-          event.frame?.data === Buffer.from("capture-1").toString("base64"),
+        (event) => event.frame?.data === fakeJpegCaptureData("capture-1"),
       ),
       false,
     );
@@ -296,8 +296,7 @@ test("queued screencast pixels from an old document or subscription never publis
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(
       events.some(
-        (event) =>
-          event.frame?.data === Buffer.from("capture-1").toString("base64"),
+        (event) => event.frame?.data === fakeJpegCaptureData("capture-1"),
       ),
       false,
     );
@@ -509,7 +508,9 @@ test("live observation rejects oversized capture results then recovers on the ne
     await waitUntil(() => cdp.count("Page.startScreencast") === 1);
 
     cdp.nextLiveCaptureData(
-      Buffer.alloc(USER_BROWSER_MAX_LIVE_FRAME_BYTES + 1).toString("base64"),
+      fakeJpegCaptureData("oversized", {
+        trailingBytes: USER_BROWSER_MAX_LIVE_FRAME_BYTES + 1,
+      }),
     );
     cdp.emitScreencastFrame("notification", 1);
     await waitUntil(

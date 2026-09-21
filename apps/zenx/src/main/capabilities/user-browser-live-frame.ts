@@ -46,7 +46,9 @@ export async function processUserBrowserLiveFrame(
     throw new Error("Browser live capture exceeded its input size bound");
   }
 
-  let image = await decode(Buffer.from(data, "base64"));
+  const encoded = Buffer.from(data, "base64");
+  assertBoundedJpegDimensions(encoded);
+  let image = await decode(encoded);
   if (image.isEmpty()) throw new Error("Browser live capture is empty");
   const source = image.getSize();
   if (
@@ -93,4 +95,64 @@ export async function processUserBrowserLiveFrame(
 
 function validDimension(value: number): boolean {
   return Number.isSafeInteger(value) && value > 0;
+}
+
+function assertBoundedJpegDimensions(encoded: Buffer): void {
+  if (encoded.length < 4 || encoded[0] !== 0xff || encoded[1] !== 0xd8) {
+    throw new Error("Browser live capture is not a valid JPEG");
+  }
+  let offset = 2;
+  while (offset < encoded.length) {
+    if (encoded[offset] !== 0xff) {
+      throw new Error("Browser live capture is not a valid JPEG");
+    }
+    while (encoded[offset] === 0xff) offset += 1;
+    if (offset >= encoded.length) break;
+    const marker = encoded[offset]!;
+    offset += 1;
+    if (marker === 0x00) {
+      throw new Error("Browser live capture is not a valid JPEG");
+    }
+    if (
+      marker === 0xd8 ||
+      marker === 0x01 ||
+      (marker >= 0xd0 && marker <= 0xd7)
+    )
+      continue;
+    if (marker === 0xd9 || marker === 0xda || offset + 2 > encoded.length)
+      break;
+    const length = encoded.readUInt16BE(offset);
+    if (length < 2 || offset + length > encoded.length) {
+      throw new Error("Browser live capture is not a valid JPEG");
+    }
+    if (isStartOfFrame(marker)) {
+      if (length < 8) {
+        throw new Error("Browser live capture is not a valid JPEG");
+      }
+      const height = encoded.readUInt16BE(offset + 3);
+      const width = encoded.readUInt16BE(offset + 5);
+      if (
+        !validDimension(width) ||
+        !validDimension(height) ||
+        width > USER_BROWSER_MAX_LIVE_CAPTURE_DIMENSION ||
+        height > USER_BROWSER_MAX_LIVE_CAPTURE_DIMENSION ||
+        width * height > USER_BROWSER_MAX_LIVE_CAPTURE_PIXELS
+      ) {
+        throw new Error("Browser live capture exceeded its pixel bound");
+      }
+      return;
+    }
+    offset += length;
+  }
+  throw new Error("Browser live capture is not a valid JPEG");
+}
+
+function isStartOfFrame(marker: number): boolean {
+  return (
+    marker >= 0xc0 &&
+    marker <= 0xcf &&
+    marker !== 0xc4 &&
+    marker !== 0xc8 &&
+    marker !== 0xcc
+  );
 }
