@@ -109,7 +109,7 @@ test("uses a stable macOS bundle ID and fail-closed ad-hoc signing by default", 
     macAdHocSignOptionsForFile(
       "/Applications/ZenX.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
     ),
-    { hardenedRuntime: false },
+    { entitlements: [], hardenedRuntime: false },
   );
   assert.equal(
     macPackagedProviderSignIgnore(

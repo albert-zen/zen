@@ -217,10 +217,11 @@ The result is an **unpacked portable directory**, not an installer or a
 single-file executable. On macOS it is signed during packaging with
 `ZENX_CODESIGN_IDENTITY` when configured, or with an ad-hoc identity when no
 Developer ID is available; the ad-hoc fallback verifies package integrity but
-keeps hardened runtime disabled because an ad-hoc app and its nested Electron
-frameworks have no common Team ID for library validation. A configured Developer
-ID uses the signer's standard hardened-runtime behavior. The package does not
-disable library validation with an entitlement. Ad-hoc signing does not promise
+keeps hardened runtime disabled and signs with empty entitlements because an
+ad-hoc app and its nested Electron frameworks have no common Team ID for library
+validation. A configured Developer ID uses the signer's standard hardened-runtime
+and Electron entitlement behavior. The package does not disable library validation
+with an entitlement. Ad-hoc signing does not promise
 stable Accessibility authorization across rebuilt updates. It is written below
 `apps/zenx/.packaged/artifact/ZenX-<platform>-<arch>/`; keep that directory
 together and start `ZenX.exe` on Windows, `ZenX.app` on macOS, or `ZenX` on

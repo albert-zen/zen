@@ -216,7 +216,7 @@ export function macPackagedProviderSignIgnore(filePath) {
 
 export function macAdHocSignOptionsForFile(filePath) {
   return {
-    ...(macNativeHelperSignOptions(filePath) ?? {}),
+    entitlements: [],
     hardenedRuntime: false,
   };
 }
