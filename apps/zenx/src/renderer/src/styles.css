@@ -12,6 +12,27 @@
   scrollbar-color: var(--border-control) transparent;
 }
 
+/* Keep native hit targets and gutter geometry on Windows. Only the paint changes;
+   no hover rule on an entire panel can leave its scrollbar permanently lit. */
+:root[data-scrollbar-autohide],
+:root[data-scrollbar-autohide] * {
+  scrollbar-color: transparent transparent;
+}
+
+:root[data-scrollbar-autohide][data-scrollbar-active],
+:root[data-scrollbar-autohide] [data-scrollbar-active] {
+  scrollbar-color: var(--color-text-muted) transparent;
+}
+
+@media (forced-colors: active) {
+  :root[data-scrollbar-autohide],
+  :root[data-scrollbar-autohide] *,
+  :root[data-scrollbar-autohide][data-scrollbar-active],
+  :root[data-scrollbar-autohide] [data-scrollbar-active] {
+    scrollbar-color: auto;
+  }
+}
+
 .plugin-page-scroll {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);

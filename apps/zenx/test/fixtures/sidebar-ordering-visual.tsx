@@ -1,3 +1,4 @@
+import { installScrollbarVisibility } from "../../src/renderer/src/scrollbar-visibility.js";
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { NativeThreadSummary } from "../../../../src/thread-summary.js";
@@ -11,6 +12,7 @@ import {
 } from "../../src/renderer/src/thread-list.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
+installScrollbarVisibility(document);
 const { createElement } = React;
 const noop = () => undefined;
 const projection: ZenXProjectProjectionSnapshot = {

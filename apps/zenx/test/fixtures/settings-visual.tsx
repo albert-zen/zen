@@ -1,3 +1,4 @@
+import { installScrollbarVisibility } from "../../src/renderer/src/scrollbar-visibility.js";
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import type {
@@ -10,6 +11,7 @@ import {
 } from "../../src/renderer/src/SettingsView.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
+installScrollbarVisibility(document);
 const settings: PublicHostSettings = {
   profile: {
     version: 3,

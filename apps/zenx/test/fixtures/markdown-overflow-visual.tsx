@@ -1,8 +1,10 @@
+import { installScrollbarVisibility } from "../../src/renderer/src/scrollbar-visibility.js";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { Markdown } from "../../src/renderer/src/Markdown.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
+installScrollbarVisibility(document);
 
 Object.assign(globalThis, { React });
 const token = "long_identifier_".repeat(24);
