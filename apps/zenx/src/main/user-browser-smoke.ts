@@ -9,10 +9,12 @@ import WebSocket, { type RawData } from "ws";
 
 import { selectBrowserProvider } from "./capabilities/provider-catalog.js";
 import {
+  connectUserBrowserCdp,
   UserBrowserDocumentChangedBeforeDispatchError,
   UserBrowserCdpOutcomeUnknownError,
   windowsBrowserExecutableCandidates,
 } from "./capabilities/user-browser-provider.js";
+import type { UserBrowserLiveImageDecoder } from "./capabilities/user-browser-live-frame.js";
 import {
   observeOwnedChild,
   type OwnedChildObservation,
@@ -25,6 +27,16 @@ if (process.platform !== "win32") {
 }
 
 const fixtureRequests: string[] = [];
+const decodeNodeSmokeLiveImage: UserBrowserLiveImageDecoder = async (
+  encoded,
+) => ({
+  isEmpty: () => false,
+  getSize: () => ({ width: 800, height: 600 }),
+  resize: () => {
+    throw new Error("The bounded Node smoke image does not need resizing");
+  },
+  toJPEG: () => encoded,
+});
 const server = createServer((request, response) => {
   if (fixtureRequests.length < 32) fixtureRequests.push(request.url ?? "");
   if (request.url === "/seed") {
@@ -91,6 +103,12 @@ try {
       ZENX_BROWSER_MODE: "user-session",
       ZENX_USER_BROWSER_CDP_ENDPOINT: endpoint,
     },
+    // This smoke runs under Node/tsx to validate real Chrome CDP behavior.
+    // Electron nativeImage has its own main-process smoke and is unavailable here.
+    userBrowserConnector: async (candidateEndpoint, signal) =>
+      await connectUserBrowserCdp(candidateEndpoint, signal, {
+        liveFrameImageDecoder: decodeNodeSmokeLiveImage,
+      }),
   });
   const backend = selection.backend;
   assert.ok(
