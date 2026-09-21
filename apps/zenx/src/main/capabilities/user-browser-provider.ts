@@ -2070,7 +2070,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       response = asRecord(
         await this.#send(
           "Page.captureScreenshot",
-          { format: "png", fromSurface: false, captureBeyondViewport: false },
+          { format: "png", fromSurface: true, captureBeyondViewport: false },
           before.sessionId,
           signal,
           USER_BROWSER_SCREENSHOT_TIMEOUT_MS,
