@@ -219,9 +219,9 @@ single-file executable. On macOS it is signed during packaging with
 Developer ID is available; the ad-hoc fallback verifies package integrity but
 keeps hardened runtime disabled and signs with empty entitlements because an
 ad-hoc app and its nested Electron frameworks have no common Team ID for library
-validation. A configured Developer ID uses the signer's standard hardened-runtime
-and Electron entitlement behavior. The package does not disable library validation
-with an entitlement. Ad-hoc signing does not promise
+validation. The ad-hoc path does not disable library validation with an
+entitlement. A configured Developer ID keeps the signer's standard hardened-runtime
+behavior and per-helper Electron entitlements. Ad-hoc signing does not promise
 stable Accessibility authorization across rebuilt updates. It is written below
 `apps/zenx/.packaged/artifact/ZenX-<platform>-<arch>/`; keep that directory
 together and start `ZenX.exe` on Windows, `ZenX.app` on macOS, or `ZenX` on
