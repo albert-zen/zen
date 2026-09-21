@@ -264,6 +264,186 @@ test("a plugin upgrade succeeds after the previous App Resource tarball is remov
   }
 });
 
+test("two removed bundled resources preserve committed siblings across upgrade and restart", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-two-removed-"));
+  const userData = path.join(directory, "user-data");
+  const resourcesDirectory = path.join(directory, "resources");
+  const pluginResources = path.join(resourcesDirectory, "plugins");
+  const names = ["removed-browser", "removed-computer"];
+  const old = await Promise.all(
+    names.map((id) =>
+      createTarballFixture(pluginResources, {
+        id,
+        packageName: `@zenx-test/${id}`,
+        version: "1.0.0",
+      }),
+    ),
+  );
+  const updated = await Promise.all(
+    names.map((id) =>
+      createTarballFixture(pluginResources, {
+        id,
+        packageName: `@zenx-test/${id}`,
+        version: "1.0.1",
+      }),
+    ),
+  );
+  let service = profileService(userData, {
+    pnpmCliPath: pnpmCli,
+    resourcesDirectory,
+  });
+  try {
+    await service.initialize();
+    for (const [index, id] of names.entries()) {
+      await service.installBundledPluginPackage(old[index]!, {
+        pluginId: id,
+        packageName: `@zenx-test/${id}`,
+      });
+    }
+    await service.setEnabled(names[1]!, false);
+    const previousCatalog = await readCatalog(userData);
+    const previousGeneration = path.join(
+      userData,
+      "plugin-profile",
+      "generations",
+      previousCatalog.profileGeneration,
+    );
+    // Simulate a pre-fix installation: its dependency specs still reference
+    // App Resources, with no generation-owned copy of either archive.
+    const packageFile = path.join(previousGeneration, "package.json");
+    const profile = JSON.parse(await readFile(packageFile, "utf8"));
+    for (const [index, id] of names.entries())
+      profile.dependencies[`@zenx-test/${id}`] = `file:${old[index]}`;
+    await writeFile(packageFile, JSON.stringify(profile));
+    await rm(path.join(previousGeneration, ".zenx-sources"), {
+      recursive: true,
+      force: true,
+    });
+    const before = await readFile(packageFile, "utf8");
+    await Promise.all(old.map((tarball) => rm(tarball)));
+    const siblingManifestFile = path.join(
+      previousGeneration,
+      "node_modules",
+      "@zenx-test",
+      names[1]!,
+      "zenx.plugin.json",
+    );
+    const siblingManifest = await readFile(siblingManifestFile, "utf8");
+    await writeFile(
+      siblingManifestFile,
+      JSON.stringify({
+        ...JSON.parse(siblingManifest),
+        description: "uncommitted replacement",
+      }),
+    );
+    await assert.rejects(
+      service.installBundledPluginPackage(updated[0]!, {
+        pluginId: names[0]!,
+        packageName: `@zenx-test/${names[0]}`,
+      }),
+      /does not match its Catalog manifest/u,
+    );
+    assert.deepEqual(await readCatalog(userData), previousCatalog);
+    assert.equal(await readFile(packageFile, "utf8"), before);
+    await writeFile(siblingManifestFile, siblingManifest);
+    await service.installBundledPluginPackage(updated[0]!, {
+      pluginId: names[0]!,
+      packageName: `@zenx-test/${names[0]}`,
+    });
+    assert.equal(await readFile(packageFile, "utf8"), before);
+    assert.deepEqual(
+      (await readCatalog(userData)).packages[names[1]!],
+      previousCatalog.packages[names[1]!],
+    );
+    assert.equal(
+      service.pluginSnapshot().plugins.find((plugin) => plugin.id === names[1])
+        ?.version,
+      "1.0.0",
+    );
+    assert.equal(
+      service.pluginSnapshot().plugins.find((plugin) => plugin.id === names[1])
+        ?.lifecycle,
+      "installed",
+    );
+    await service.close();
+    service = profileService(userData, {
+      pnpmCliPath: pnpmCli,
+      resourcesDirectory,
+    });
+    await service.initialize();
+    assert.equal(
+      service.pluginSnapshot().plugins.find((plugin) => plugin.id === names[1])
+        ?.lifecycle,
+      "installed",
+    );
+    await service.installBundledPluginPackage(updated[1]!, {
+      pluginId: names[1]!,
+      packageName: `@zenx-test/${names[1]}`,
+    });
+    await Promise.all(updated.map((tarball) => rm(tarball)));
+    // Newly installed bundled packages must be portable even when a later
+    // application update removes all their original tarballs again.
+    await service.uninstall(names[0]!);
+    assert.equal(
+      service.pluginSnapshot().plugins.find((plugin) => plugin.id === names[0])
+        ?.lifecycle,
+      "uninstalled",
+    );
+    assert.equal(
+      service.pluginSnapshot().plugins.find((plugin) => plugin.id === names[1])
+        ?.version,
+      "1.0.1",
+    );
+    await service.close();
+    service = profileService(userData, {
+      pnpmCliPath: pnpmCli,
+      resourcesDirectory,
+    });
+    await service.initialize();
+    assert.equal(
+      service.pluginSnapshot().plugins.find((plugin) => plugin.id === names[1])
+        ?.lifecycle,
+      "installed",
+    );
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("missing user-selected tarballs are not silently replaced with bundled snapshots", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-missing-override-"),
+  );
+  const userData = path.join(directory, "user-data");
+  const override = await createTarballFixture(directory, {
+    id: "user-override",
+    packageName: "@zenx-test/user-override",
+  });
+  const candidate = await createTarballFixture(directory, {
+    id: "unrelated-plugin",
+    packageName: "@zenx-test/unrelated-plugin",
+  });
+  const service = profileService(userData, { pnpmCliPath: pnpmCli });
+  try {
+    await service.initialize();
+    await service.installPluginTarball(override);
+    const previous = await readCatalog(userData);
+    await rm(override);
+    await assert.rejects(service.installPluginTarball(candidate), /ENOENT/u);
+    assert.deepEqual(await readCatalog(userData), previous);
+    assert.equal(
+      service
+        .pluginSnapshot()
+        .plugins.find((plugin) => plugin.id === "user-override")?.version,
+      "1.0.0",
+    );
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a second profile install rebuilds links inside the new generation", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-profile-generation-links-"),
