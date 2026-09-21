@@ -27,6 +27,18 @@ import type {
   BrowserTargetFingerprint,
   ZenXBrowserBackend,
 } from "../src/main/capabilities/browser-provider.js";
+import type { UserBrowserLiveImageDecoder } from "../src/main/capabilities/user-browser-live-frame.js";
+
+const decodeTestLiveImage: UserBrowserLiveImageDecoder = async (encoded) => ({
+  isEmpty: () => false,
+  getSize: () => ({ width: 800, height: 600 }),
+  resize: () => {
+    throw new Error("test capture does not need resizing");
+  },
+  toJPEG: () => encoded,
+});
+
+const liveConnectionOptions = { liveFrameImageDecoder: decodeTestLiveImage };
 
 test("user browser scroll consumes observations and guards document identity before dispatch", async () => {
   const client = new FakeUserBrowserClient();
@@ -121,7 +133,11 @@ test("attached document acquisition enables Runtime before reading the frame tre
 
 test("silent background screencasts produce continuous fresh frames and stop capture on unsubscribe", async () => {
   const cdp = await createFakeCdpServer();
-  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const connection = await connectUserBrowserCdp(
+    cdp.endpoint,
+    undefined,
+    liveConnectionOptions,
+  );
   const events: Array<{
     type: string;
     status?: string;
@@ -154,9 +170,11 @@ test("silent background screencasts produce continuous fresh frames and stop cap
       captures.every(
         (capture) =>
           capture.fromSurface === true &&
-          capture.captureBeyondViewport === false,
+          capture.captureBeyondViewport === false &&
+          capture.clip === undefined,
       ),
     );
+    assert.equal(cdp.count("Page.getLayoutMetrics"), 0);
     unsubscribe();
     await waitUntil(() => cdp.count("Page.stopScreencast") === 1);
     const count = cdp.count("Page.captureScreenshot");
@@ -170,7 +188,11 @@ test("silent background screencasts produce continuous fresh frames and stop cap
 
 test("a late live capture cannot publish after observer cancellation", async () => {
   const cdp = await createFakeCdpServer();
-  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const connection = await connectUserBrowserCdp(
+    cdp.endpoint,
+    undefined,
+    liveConnectionOptions,
+  );
   const events: Array<{ type: string; status?: string }> = [];
   try {
     await connection.backend.listTabs("work");
@@ -196,9 +218,56 @@ test("a late live capture cannot publish after observer cancellation", async () 
   }
 });
 
+test("a locally decoded frame cannot cross a document change", async () => {
+  const cdp = await createFakeCdpServer();
+  const decodeStarted = deferred<void>();
+  const releaseDecode = deferred<void>();
+  let holdFirstDecode = true;
+  const connection = await connectUserBrowserCdp(cdp.endpoint, undefined, {
+    liveFrameImageDecoder: async (encoded) => {
+      if (holdFirstDecode) {
+        holdFirstDecode = false;
+        decodeStarted.resolve();
+        await releaseDecode.promise;
+      }
+      return await decodeTestLiveImage(encoded);
+    },
+  });
+  const events: Array<{ type: string; frame?: { data: string } }> = [];
+  try {
+    await connection.backend.listTabs("work");
+    const unsubscribe = connection.backend.observeTab!(
+      "work",
+      "target-1",
+      (event) => events.push(event),
+    );
+    await decodeStarted.promise;
+    cdp.emitMainDocumentChange();
+    await waitUntil(() => cdp.count("Page.startScreencast") === 2);
+    releaseDecode.resolve();
+    await waitUntil(() => events.some((event) => event.type === "frame"));
+    assert.equal(
+      events.some(
+        (event) =>
+          event.frame?.data === Buffer.from("capture-1").toString("base64"),
+      ),
+      false,
+    );
+    unsubscribe();
+  } finally {
+    releaseDecode.resolve();
+    await connection.backend.close();
+    await cdp.close();
+  }
+});
+
 test("queued screencast pixels from an old document or subscription never publish in its replacement", async () => {
   const cdp = await createFakeCdpServer();
-  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const connection = await connectUserBrowserCdp(
+    cdp.endpoint,
+    undefined,
+    liveConnectionOptions,
+  );
   const events: Array<{ type: string; frame?: { data: string } }> = [];
   try {
     await connection.backend.listTabs("work");
@@ -257,9 +326,13 @@ test("queued screencast pixels from an old document or subscription never publis
   }
 });
 
-test("live observation acks screencast notifications and publishes fresh bounded captures", async () => {
+test("live observation acks screencast notifications without accelerating fixed captures", async () => {
   const cdp = await createFakeCdpServer();
-  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const connection = await connectUserBrowserCdp(
+    cdp.endpoint,
+    undefined,
+    liveConnectionOptions,
+  );
   const backend = connection.backend;
   try {
     assert.equal(typeof backend.observeTab, "function");
@@ -271,11 +344,27 @@ test("live observation acks screencast notifications and publishes fresh bounded
       events.push(event),
     );
     await waitUntil(() => cdp.count("Page.startScreencast") === 1);
+    await waitUntil(() => cdp.count("Page.captureScreenshot") === 1);
+    const capturesBeforeNotifications = cdp.count("Page.captureScreenshot");
 
     for (let frame = 1; frame <= 64; frame += 1)
       cdp.emitScreencastFrame(`latest-${frame}`, frame);
     await waitUntil(() => cdp.count("Page.screencastFrameAck") === 64);
-    await new Promise((resolve) => setTimeout(resolve, 140));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(
+      cdp.count("Page.captureScreenshot"),
+      capturesBeforeNotifications,
+      "native frame notifications must not preempt the fixed capture interval",
+    );
+    await waitUntil(
+      () =>
+        events.filter(
+          (event) =>
+            typeof event === "object" &&
+            event !== null &&
+            (event as { type?: unknown }).type === "frame",
+        ).length >= 2,
+    );
 
     const frames = events.filter(
       (event): event is { type: "frame"; frame: { data: string } } =>
@@ -283,11 +372,7 @@ test("live observation acks screencast notifications and publishes fresh bounded
         event !== null &&
         (event as { type?: unknown }).type === "frame",
     );
-    assert.ok(frames.length > 0 && frames.length <= 2, JSON.stringify(frames));
-    assert.equal(
-      frames.at(-1)?.frame.data,
-      Buffer.from("capture-2").toString("base64"),
-    );
+    assert.ok(frames.length >= 2, JSON.stringify(frames));
 
     unsubscribe();
     await waitUntil(() => cdp.count("Page.stopScreencast") === 1);
@@ -300,7 +385,11 @@ test("live observation acks screencast notifications and publishes fresh bounded
 
 test("live observation fences document changes and becomes unavailable on exact detach", async () => {
   const cdp = await createFakeCdpServer();
-  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const connection = await connectUserBrowserCdp(
+    cdp.endpoint,
+    undefined,
+    liveConnectionOptions,
+  );
   const backend = connection.backend;
   try {
     const events: unknown[] = [];
@@ -358,7 +447,11 @@ test("live observation fences document changes and becomes unavailable on exact 
 
 test("live observation replaces the old frame when the same tab navigates to a new document", async () => {
   const cdp = await createFakeCdpServer();
-  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const connection = await connectUserBrowserCdp(
+    cdp.endpoint,
+    undefined,
+    liveConnectionOptions,
+  );
   const backend = connection.backend;
   try {
     const events: Array<{
@@ -400,7 +493,11 @@ test("live observation replaces the old frame when the same tab navigates to a n
 
 test("live observation rejects oversized capture results then recovers on the next Agent operation", async () => {
   const cdp = await createFakeCdpServer();
-  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const connection = await connectUserBrowserCdp(
+    cdp.endpoint,
+    undefined,
+    liveConnectionOptions,
+  );
   const backend = connection.backend;
   try {
     const events: unknown[] = [];

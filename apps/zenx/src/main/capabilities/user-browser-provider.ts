@@ -4,6 +4,12 @@ import path from "node:path";
 import WebSocket from "ws";
 
 import {
+  processUserBrowserLiveFrame,
+  USER_BROWSER_MAX_LIVE_FRAME_BYTES,
+  type UserBrowserLiveImageDecoder,
+} from "./user-browser-live-frame.js";
+
+import {
   browserActionScript,
   browserScrollScript,
   assertBrowserObservation,
@@ -34,7 +40,6 @@ const USER_BROWSER_LATE_RESPONSE_RETENTION_MS = 5_000;
 const USER_BROWSER_DOCUMENT_WORLD_NAME = "__zenx_user_browser_document__";
 export const USER_BROWSER_LIVE_FRAME_INTERVAL_MS = 100;
 const USER_BROWSER_LIVE_CAPTURE_INTERVAL_MS = 500;
-export const USER_BROWSER_MAX_LIVE_FRAME_BYTES = 1024 * 1024;
 const USER_BROWSER_MAX_LIVE_FRAME_WIDTH = 1920;
 const USER_BROWSER_MAX_LIVE_FRAME_HEIGHT = 1200;
 const FALLBACK_SCREENSHOT_PNG_BASE64 =
@@ -46,6 +51,8 @@ export class UserBrowserScreenshotMalformedError extends Error {
     this.name = "UserBrowserScreenshotMalformedError";
   }
 }
+
+export { USER_BROWSER_MAX_LIVE_FRAME_BYTES };
 
 type UserBrowserCdpOutcome =
   "known-success" | "known-failure" | "outcome-unknown";
@@ -1633,7 +1640,10 @@ export interface UserBrowserConnection {
 export async function connectUserBrowserCdp(
   endpoint: string,
   signal?: AbortSignal,
-  options: { authorization?: string } = {},
+  options: {
+    authorization?: string;
+    liveFrameImageDecoder?: UserBrowserLiveImageDecoder;
+  } = {},
 ): Promise<UserBrowserConnection> {
   const base = validateCdpEndpoint(endpoint);
   const timeout = AbortSignal.timeout(5_000);
@@ -1720,6 +1730,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   readonly #socket: WebSocket;
   readonly #httpBase: URL;
   readonly #authorization?: string;
+  readonly #liveFrameImageDecoder?: UserBrowserLiveImageDecoder;
   readonly #pending = new Map<
     number,
     {
@@ -1778,10 +1789,12 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     socket: WebSocket,
     httpBase: URL,
     authorization?: string,
+    liveFrameImageDecoder?: UserBrowserLiveImageDecoder,
   ) {
     this.#socket = socket;
     this.#httpBase = httpBase;
     this.#authorization = authorization;
+    this.#liveFrameImageDecoder = liveFrameImageDecoder;
     socket.on("message", (data) => this.#receive(data.toString()));
     socket.on("close", () =>
       this.#failAll(new Error("User browser CDP connection closed")),
@@ -1793,7 +1806,10 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     url: string,
     httpBase: URL,
     signal?: AbortSignal,
-    options: { authorization?: string } = {},
+    options: {
+      authorization?: string;
+      liveFrameImageDecoder?: UserBrowserLiveImageDecoder;
+    } = {},
   ): Promise<JsonRpcUserBrowserCdpClient> {
     const socket = new WebSocket(url, {
       handshakeTimeout: 5_000,
@@ -1825,6 +1841,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       socket,
       httpBase,
       options.authorization,
+      options.liveFrameImageDecoder,
     );
     try {
       await client.#send("Target.setDiscoverTargets", { discover: true });
@@ -2311,18 +2328,9 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       )
         this.#failScreencast(state, error);
     });
-    if (state === undefined || state.sessionId !== cdpSessionId) return;
     // CDP events contain no document or screencast generation. A queued event
-    // can outlive navigation/resubscription on this same attachment: its pixels
-    // are never authoritative. Use it only to request a fresh fenced capture.
-    this.#scheduleLiveCapture(
-      state,
-      Math.max(
-        0,
-        USER_BROWSER_LIVE_FRAME_INTERVAL_MS -
-          (Date.now() - state.lastPublishedAt),
-      ),
-    );
+    // can outlive navigation or resubscription, so acknowledge it without
+    // publishing its pixels or accelerating the fixed fenced capture loop.
   }
 
   #publishScreencastFrame(
@@ -2419,34 +2427,8 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     state.captureInFlight = true;
     try {
       // Every displayed image belongs to this request's exact observation state.
-      // Native events merely accelerate this bounded single-flight capture loop.
+      // Native events are acknowledged separately from this fixed single-flight loop.
       this.#assertDocumentFence(state.fence, true);
-      const metrics = asRecord(
-        await this.#send("Page.getLayoutMetrics", {}, state.sessionId),
-      );
-      if (this.#screencast !== state) return;
-      this.#assertDocumentFence(state.fence, true);
-      const viewport = asRecord(metrics?.cssLayoutViewport);
-      const width = viewport?.clientWidth;
-      const height = viewport?.clientHeight;
-      const x = viewport?.pageX;
-      const y = viewport?.pageY;
-      if (
-        typeof width !== "number" ||
-        !Number.isFinite(width) ||
-        width <= 0 ||
-        typeof height !== "number" ||
-        !Number.isFinite(height) ||
-        height <= 0 ||
-        typeof x !== "number" ||
-        !Number.isFinite(x) ||
-        x < 0 ||
-        typeof y !== "number" ||
-        !Number.isFinite(y) ||
-        y < 0
-      )
-        throw new Error("Browser live viewport is invalid");
-      const scale = Math.min(1, 1600 / width, 1000 / height);
       const result = asRecord(
         await this.#send(
           "Page.captureScreenshot",
@@ -2455,7 +2437,6 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
             quality: 70,
             fromSurface: true,
             captureBeyondViewport: false,
-            clip: { x, y, width, height, scale },
           },
           state.sessionId,
           undefined,
@@ -2467,11 +2448,17 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       );
       if (this.#screencast !== state) return;
       this.#assertDocumentFence(state.fence, true);
+      const frame = await processUserBrowserLiveFrame(
+        result?.data,
+        this.#liveFrameImageDecoder,
+      );
+      if (this.#screencast !== state) return;
+      this.#assertDocumentFence(state.fence, true);
       this.#publishScreencastFrame(state, {
-        data: result?.data,
+        data: frame.data,
         metadata: {
-          deviceWidth: Math.round(width * scale),
-          deviceHeight: Math.round(height * scale),
+          deviceWidth: frame.width,
+          deviceHeight: frame.height,
         },
       });
     } catch (error) {
