@@ -117,6 +117,62 @@ test("tab update deltas replace stale same-tab navigation metadata", async () =>
   );
 });
 
+test("stale tab objects cannot expose or revive internal and file navigations", async () => {
+  const fixture = await workerFixture();
+  fixture.clicked.emit(tab(1));
+  await waitFor(() =>
+    fixture.ports[0]?.messages.some(
+      (message) => message.type === "browser-connected",
+    ),
+  );
+  const port = fixture.ports[0];
+  for (const [tabId, url] of [
+    [1, "chrome://settings/"],
+    [2, "file:///tmp/private.html"],
+  ]) {
+    const stale = tab(tabId);
+    fixture.chrome.tabs.onUpdated.emit(tabId, { url }, stale);
+    fixture.chrome.tabs.onUpdated.emit(
+      tabId,
+      { title: "Late private title" },
+      stale,
+    );
+  }
+  assert.deepEqual(
+    port.messages
+      .filter((message) => message.type === "tab-removed")
+      .map((message) => message.tabId),
+    [1, 2],
+  );
+  assert.equal(
+    port.messages.some(
+      (message) =>
+        message.type === "tab-updated" &&
+        (message.tab.id === 1 || message.tab.id === 2),
+    ),
+    false,
+  );
+  fixture.chrome.tabs.onUpdated.emit(
+    1,
+    { url: "https://tab-1.test/returned" },
+    tab(1),
+  );
+  assert.deepEqual(
+    JSON.parse(
+      JSON.stringify(
+        port.messages.findLast(
+          (message) => message.type === "tab-updated" && message.tab.id === 1,
+        ).tab,
+      ),
+    ),
+    {
+      id: 1,
+      title: "Tab 1",
+      url: "https://tab-1.test/returned",
+    },
+  );
+});
+
 test("Chrome debugger cancel revokes all tabs and reconnect rejects late old-port results", async () => {
   let release;
   const pending = new Promise((resolve) => {
