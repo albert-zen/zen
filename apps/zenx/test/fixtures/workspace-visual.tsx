@@ -11,6 +11,9 @@ Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
 document.documentElement.dataset.appearance = params.get("theme") ?? "light";
 document.documentElement.dataset.platform = params.get("platform") ?? "win32";
+// Slow the same production transition for inspectable intermediate-frame QA.
+if (params.has("slowMotion"))
+  document.documentElement.style.setProperty("--motion-layout", "1600ms");
 let compactions = 0;
 // Controlled browser state for toolbar layout; no external site is loaded.
 let previewTabs: import("../../src/main/workspace-browser.js").WorkspaceBrowserTab[] =
