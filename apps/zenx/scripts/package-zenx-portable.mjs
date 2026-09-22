@@ -15,6 +15,7 @@ import {
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import os from "node:os";
 import { packZenXFirstPartyPlugins } from "./pack-first-party-plugins.mjs";
 import ts from "typescript";
 
@@ -26,6 +27,7 @@ const runsRoot = path.join(packagedRoot, "runs");
 const artifactRoot = path.join(packagedRoot, "artifact");
 const artifactCache = path.join(packagedRoot, "cache", "artifacts");
 export const MACOS_MINIMUM_VERSION = "12.0";
+export const MACOS_CODESIGN_MODE_ENV = "ZENX_CODESIGN_MODE";
 
 if (isDirectExecution()) await packageZenX(process.argv.slice(2));
 
@@ -70,6 +72,9 @@ async function packageZenX(arguments_) {
         path.join(appDir, "package.json"),
         `${JSON.stringify(packageManifest(target, zenxPackage), null, 2)}\n`,
       );
+      const macOsSigningConfiguration = await resolveMacOsSigningConfiguration({
+        platform: process.platform,
+      });
       const { packager } = await import("@electron/packager");
       const packaged = await packager({
         dir: appDir,
@@ -79,7 +84,11 @@ async function packageZenX(arguments_) {
         arch: process.arch,
         name: productName,
         electronVersion: "43.2.0",
-        ...macOsPackagerOptions(process.platform, target),
+        ...macOsPackagerOptions(
+          process.platform,
+          target,
+          macOsSigningConfiguration,
+        ),
         ...(applicationIconForPlatform(process.platform, target) === undefined
           ? {}
           : { icon: applicationIconForPlatform(process.platform, target) }),
@@ -182,11 +191,20 @@ export function applicationIconForPlatform(platform, target = "app") {
 export function macOsPackagerOptions(
   platform,
   target = "app",
-  environment = process.env,
+  signingConfiguration = { identity: "-", mode: "ad-hoc" },
 ) {
   if (platform !== "darwin") return {};
-  const configuredIdentity = environment.ZENX_CODESIGN_IDENTITY?.trim();
-  const identity = configuredIdentity || "-";
+  const { identity, mode } = signingConfiguration;
+  if (!["ad-hoc", "local", "developer-id"].includes(mode)) {
+    throw new Error(`Unsupported ZenX macOS signing mode: ${String(mode)}`);
+  }
+  if (mode === "ad-hoc" && identity !== "-") {
+    throw new Error('Ad-hoc ZenX macOS signing requires identity "-"');
+  }
+  if (mode === "local") normalizeLocalSigningIdentity(identity);
+  if (mode === "developer-id" && !identity?.trim()) {
+    throw new Error("Developer ID signing requires a configured identity");
+  }
   return {
     appBundleId:
       target === "app"
@@ -194,17 +212,113 @@ export function macOsPackagerOptions(
         : "com.electron.zenx-provider-smoke",
     osxSign: {
       identity,
-      ...(identity === "-" ? { identityValidation: false } : {}),
+      ...(mode === "ad-hoc" || mode === "local"
+        ? { identityValidation: false }
+        : {}),
       continueOnError: false,
       ignore: macPackagedProviderSignIgnore,
       optionsForFile:
-        identity === "-"
-          ? macAdHocSignOptionsForFile
-          : macNativeHelperSignOptions,
+        mode === "developer-id"
+          ? macNativeHelperSignOptions
+          : mode === "local"
+            ? macLocalSignOptionsForFile
+            : macAdHocSignOptionsForFile,
       preAutoEntitlements: false,
       strictVerify: true,
     },
   };
+}
+
+export async function resolveMacOsSigningConfiguration({
+  platform = process.platform,
+  environment = process.env,
+  homeDirectory = os.homedir(),
+  readFile: readSigningFile = readFile,
+} = {}) {
+  if (platform !== "darwin") return { identity: "-", mode: "ad-hoc" };
+
+  const explicitIdentity = environment.ZENX_CODESIGN_IDENTITY?.trim();
+  const explicitMode = environment[MACOS_CODESIGN_MODE_ENV]?.trim();
+  if (
+    explicitMode !== undefined &&
+    explicitMode !== "" &&
+    explicitMode !== "local"
+  ) {
+    throw new Error(
+      `${MACOS_CODESIGN_MODE_ENV} must be "local" when it is configured`,
+    );
+  }
+  if (explicitMode === "local") {
+    if (!explicitIdentity) {
+      throw new Error(
+        `ZENX_CODESIGN_IDENTITY is required when ${MACOS_CODESIGN_MODE_ENV}=local`,
+      );
+    }
+    return {
+      identity: normalizeLocalSigningIdentity(explicitIdentity),
+      mode: "local",
+    };
+  }
+  if (explicitIdentity === "-") {
+    return { identity: "-", mode: "ad-hoc" };
+  }
+  if (explicitIdentity) {
+    return { identity: explicitIdentity, mode: "developer-id" };
+  }
+
+  const configurationPath = path.join(
+    homeDirectory,
+    "Library",
+    "Application Support",
+    "ZenX",
+    "signing.json",
+  );
+  let source;
+  try {
+    source = await readSigningFile(configurationPath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return { identity: "-", mode: "ad-hoc" };
+    throw new Error(
+      `Could not read ZenX macOS signing configuration at ${configurationPath}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+
+  let configuration;
+  try {
+    configuration = JSON.parse(source);
+  } catch (error) {
+    throw new Error(
+      `Invalid ZenX macOS signing configuration at ${configurationPath}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+  if (
+    configuration === null ||
+    typeof configuration !== "object" ||
+    Array.isArray(configuration) ||
+    configuration.mode !== "local"
+  ) {
+    throw new Error(
+      `Invalid ZenX macOS signing configuration at ${configurationPath}: mode must be "local"`,
+    );
+  }
+  return {
+    identity: normalizeLocalSigningIdentity(configuration.identity),
+    mode: "local",
+  };
+}
+
+function normalizeLocalSigningIdentity(identity) {
+  if (
+    typeof identity !== "string" ||
+    !/^[a-f\d]{40}$/iu.test(identity.trim())
+  ) {
+    throw new Error(
+      "A local ZenX signing identity must be a 40-character SHA-1 certificate fingerprint",
+    );
+  }
+  return identity.trim().toUpperCase();
 }
 
 export function macPackagedProviderSignIgnore(filePath) {
@@ -218,6 +332,30 @@ export function macAdHocSignOptionsForFile(filePath) {
   return {
     entitlements: [],
     hardenedRuntime: false,
+  };
+}
+
+export function macLocalSignOptionsForFile(filePath) {
+  const pathComponents = filePath.split(/[\\/]/u);
+  const executableName = pathComponents.at(-1);
+  const helperIdentifiers = {
+    "zenx-accessibility": "com.electron.zenx.native-helper.zenx-accessibility",
+    "zenx-foreground-input":
+      "com.electron.zenx.native-helper.zenx-foreground-input",
+  };
+  return {
+    entitlements: [],
+    hardenedRuntime: false,
+    timestamp: "none",
+    ...(!pathComponents.includes("native-helpers") ||
+    helperIdentifiers[executableName] === undefined
+      ? {}
+      : {
+          additionalArguments: [
+            "--identifier",
+            helperIdentifiers[executableName],
+          ],
+        }),
   };
 }
 

@@ -312,6 +312,7 @@
 - **ZenXPackagedProviderSmoke** — ZenX 构建验证用真实 resources/providers manifest、asset hash、version pin 与 bundled-only catalog path 检查离线 packaged provisioning；它是一次性测试流程，不是运行时 coordinator 或 durable state。
 - **VerifiedArtifactAcquisition** — ZenX release assembly 只以 artifact name、URL、SHA-256、deadline 与 cache location 取得 digest-addressed immutable file，并在内部以 per-digest 跨进程 transaction 收口 proxy-aware bounded transport、stream size、partial cleanup、no-follow cache revalidation 与 atomic publication；它不成为运行时下载器或第二条 packaging pipeline。
 - **ZenXPackagingRunStaging** — portable app 与 packaged smoke 继续复用同一 provider assembly、digest injection 与 Electron packager，但每次只在私有 run directory 内写 build/resources/app/artifact，以 target lock 拒绝同目标并发并在完整 staging 后发布稳定产物；它不复制 release pipeline。
+- **ZenXMacLocalSigningProfile** — macOS portable packaging 可从 host-local `signing.json` 读取稳定自签名证书指纹，并以无 Apple Team ID 的空 entitlements、非 hardened-runtime 参数统一签署 app、Electron nested code 与原生 helper；显式环境变量优先，配置或签名错误 fail closed，证书与私钥不进入仓库、Core 或 ItemList。
 - **ZenXSelfControlCapabilityPackage** — ZenX 产品层通过 profile-managed Plugin Runtime 暴露 Project/Thread 自控工具，
   只从 workspace 与 canonical Thread 投影派生结果，并经进程内可替换的 typed App Server request port 执行操作，
   不持有第二套 Project、Thread、Turn、transcript 或调度状态。

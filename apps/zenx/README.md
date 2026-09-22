@@ -215,17 +215,41 @@ npm --workspace apps/zenx run package:portable
 
 The result is an **unpacked portable directory**, not an installer or a
 single-file executable. On macOS it is signed during packaging with
-`ZENX_CODESIGN_IDENTITY` when configured, or with an ad-hoc identity when no
-Developer ID is available; the ad-hoc fallback verifies package integrity but
-keeps hardened runtime disabled and signs with empty entitlements because an
-ad-hoc app and its nested Electron frameworks have no common Team ID for library
-validation. The ad-hoc path does not disable library validation with an
-entitlement. A configured Developer ID keeps the signer's standard hardened-runtime
-behavior and per-helper Electron entitlements. Ad-hoc signing does not promise
-stable Accessibility authorization across rebuilt updates. It is written below
-`apps/zenx/.packaged/artifact/ZenX-<platform>-<arch>/`; keep that directory
-together and start `ZenX.exe` on Windows, `ZenX.app` on macOS, or `ZenX` on
-Linux.
+`ZENX_CODESIGN_IDENTITY` when configured, a machine-local identity from
+`~/Library/Application Support/ZenX/signing.json`, or an ad-hoc identity when
+neither is available. The local file has this shape; `identity` is the
+certificate's 40-character SHA-1 fingerprint:
+
+```json
+{ "identity": "0123456789ABCDEF0123456789ABCDEF01234567", "mode": "local" }
+```
+
+Local signing is intended for repeated builds on one development Mac. The same
+identity signs the app, nested Electron code, `zenx-accessibility`, and
+`zenx-foreground-input`, giving macOS a stable code-signing identity for
+Accessibility authorization. The two native helpers also receive fixed signing
+identifiers, and local signing disables network timestamping. The certificate
+and private key stay in the machine's Keychain and are not stored in the
+repository. A missing file keeps the existing ad-hoc behavior. A present but
+malformed file, missing local identity, or signing failure stops packaging
+instead of falling back to ad-hoc.
+
+An explicit `ZENX_CODESIGN_IDENTITY` overrides the machine file and retains the
+existing Developer ID behavior; the explicit value `-` selects ad-hoc signing.
+To explicitly select a local SHA-1 identity without the file, set both
+`ZENX_CODESIGN_IDENTITY` and
+`ZENX_CODESIGN_MODE=local`; local mode requires the fingerprint and fails if it
+is missing or malformed.
+
+Local and ad-hoc signing keep hardened runtime disabled and sign with empty
+entitlements because the app and its nested Electron frameworks do not share an
+Apple Team ID. Neither path adds the disable-library-validation entitlement. A
+configured Developer ID keeps the signer's standard hardened-runtime behavior
+and per-helper Electron entitlements. Ad-hoc signing does not promise stable
+Accessibility authorization across rebuilt updates. The artifact is written
+below `apps/zenx/.packaged/artifact/ZenX-<platform>-<arch>/`; keep that
+directory together and start `ZenX.exe` on Windows, `ZenX.app` on macOS, or
+`ZenX` on Linux.
 
 macOS signing excludes the assembled `Contents/Resources/providers/` payload
 from re-signing. Those provider executables retain their verified upstream bytes
