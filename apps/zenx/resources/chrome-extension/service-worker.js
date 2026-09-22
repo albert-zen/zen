@@ -16,6 +16,8 @@ async function handleAction() {
   const session = {
     port: chrome.runtime.connectNative(NATIVE_HOST),
     tabs: new Map(),
+    recentUrls: new Map(),
+    removed: new Set(),
     changed: new Set(),
     owned: new Set(),
     attachments: new Map(),
@@ -65,8 +67,10 @@ async function handleAction() {
     const tabs = await chrome.tabs.query({});
     if (connection !== session) return;
     for (const tab of tabs) {
-      if (!session.changed.has(tab.id) && supported(tab, session))
+      if (!session.changed.has(tab.id) && supported(tab, session)) {
         session.tabs.set(tab.id, publicTab(tab));
+        session.recentUrls.set(tab.id, tabUrl(tab));
+      }
     }
     session.published = true;
     session.port.postMessage({
@@ -87,12 +91,23 @@ async function handleAction() {
   }
 }
 
-chrome.tabs.onCreated.addListener(updateTab);
-chrome.tabs.onUpdated.addListener((_tabId, _changeInfo, tab) => updateTab(tab));
+chrome.tabs.onCreated.addListener((tab) => {
+  const session = connection;
+  if (session === undefined) return;
+  session.removed.delete(tab.id);
+  session.recentUrls.delete(tab.id);
+  updateTab(tab);
+});
+chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) =>
+  updateTab(tab, changeInfo),
+);
 chrome.tabs.onRemoved.addListener((tabId) => {
   const session = connection;
   if (session === undefined) return;
   session.changed.add(tabId);
+  session.removed.add(tabId);
+  session.recentUrls.delete(tabId);
+  session.owned.delete(tabId);
   removeTab(session, tabId);
 });
 chrome.debugger.onEvent.addListener((source, method, params) => {
@@ -119,6 +134,9 @@ chrome.debugger.onDetach.addListener((source, reason) => {
     return;
   if (reason === "target_closed") {
     session.attachments.delete(source.tabId);
+    session.removed.add(source.tabId);
+    session.recentUrls.delete(source.tabId);
+    session.owned.delete(source.tabId);
     removeTab(session, source.tabId);
     return;
   }
@@ -126,16 +144,28 @@ chrome.debugger.onDetach.addListener((source, reason) => {
   void disconnect(session);
 });
 
-function updateTab(tab) {
+function updateTab(tab, changeInfo = {}) {
   const session = connection;
   if (session === undefined) return;
+  if (session.removed.has(tab.id)) return;
   session.changed.add(tab.id);
-  if (!supported(tab, session)) {
+  const previous = session.tabs.get(tab.id);
+  const candidate = {
+    ...tab,
+    title: changeInfo.title ?? previous?.title ?? tab.title,
+    url:
+      changeInfo.url ??
+      session.recentUrls.get(tab.id) ??
+      previous?.url ??
+      tab.url,
+  };
+  if (Number.isInteger(tab.id))
+    session.recentUrls.set(tab.id, tabUrl(candidate));
+  if (!supported(candidate, session)) {
     removeTab(session, tab.id);
     return;
   }
-  const next = publicTab(tab);
-  const previous = session.tabs.get(tab.id);
+  const next = publicTab(candidate);
   session.tabs.set(tab.id, next);
   if (
     session.published &&

@@ -140,6 +140,58 @@ test("thread subscriptions, manual page selection, late frames and provider reti
   stopB();
 });
 
+test("live target metadata refreshes the open thread sidebar without restarting its view", async () => {
+  const listeners: Array<{
+    send: (event: any) => void;
+    stopped: boolean;
+  }> = [];
+  const backend = {
+    async open(sessionId: string) {
+      return {
+        sessionId,
+        tabId: "tab-1",
+        url: "https://example.test/old",
+        title: "Old page",
+        loading: false,
+      };
+    },
+    observeTab(_session: string, _tab: string, send: (event: any) => void) {
+      const listener = { send, stopped: false };
+      listeners.push(listener);
+      return () => {
+        listener.stopped = true;
+      };
+    },
+    async close() {},
+  } as unknown as ZenXBrowserBackend;
+  const capability = new BrowserZenXCapabilityPackage(backend);
+  const events: any[] = [];
+  const stop = capability.observeThread(
+    { threadId: "thread-a", frames: true },
+    (event) => events.push(event),
+  );
+  await capability.invoke("browser_open", invocation("thread-a"));
+  const live = listeners.at(-1)!;
+  live.send({
+    type: "metadata",
+    title: "New page",
+    url: "https://example.test/new",
+  });
+  assert.equal(live.stopped, false);
+  assert.equal(listeners.length, 1, "metadata must not restart the live view");
+  assert.deepEqual(
+    events
+      .findLast((event) => event.type === "targets")
+      .targets.map(({ title, url }: { title: string; url: string }) => ({
+        title,
+        url,
+      })),
+    [{ title: "New page", url: "https://example.test/new" }],
+  );
+  stop();
+  await capability.close();
+});
+
 test("an unattributed tool call never becomes a selected thread's Browser resource", async () => {
   const { package_ } = fixture();
   const events: any[] = [];

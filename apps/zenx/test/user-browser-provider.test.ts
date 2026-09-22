@@ -132,6 +132,41 @@ test("attached document acquisition enables Runtime before reading the frame tre
   }
 });
 
+test("target info changes reach the live browser metadata projection", async () => {
+  const cdp = await createFakeCdpServer();
+  const connection = await connectUserBrowserCdp(
+    cdp.endpoint,
+    undefined,
+    liveConnectionOptions,
+  );
+  const events: Array<{ type: string; title?: string; url?: string }> = [];
+  try {
+    await connection.backend.listTabs("work");
+    const unsubscribe = connection.backend.observeTab!(
+      "work",
+      "target-1",
+      (event) => events.push(event),
+    );
+    cdp.emitTargetInfoChanged(
+      "target-1",
+      "Updated account",
+      "https://example.test/updated",
+    );
+    await waitUntil(() =>
+      events.some(
+        (event) =>
+          event.type === "metadata" &&
+          event.title === "Updated account" &&
+          event.url === "https://example.test/updated",
+      ),
+    );
+    unsubscribe();
+  } finally {
+    await connection.backend.close();
+    await cdp.close();
+  }
+});
+
 test("silent background screencasts produce continuous fresh frames and stop capture on unsubscribe", async () => {
   const cdp = await createFakeCdpServer();
   const connection = await connectUserBrowserCdp(

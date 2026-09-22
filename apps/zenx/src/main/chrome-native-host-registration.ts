@@ -18,6 +18,15 @@ export interface ChromeNativeHostRegistrationOptions {
   windowsLauncherPath?: string;
 }
 
+export function configureChromeNativeHostActivationPolicy(options: {
+  platform: NodeJS.Platform;
+  nativeHostMode: boolean;
+  setActivationPolicy(policy: "accessory"): void;
+}): void {
+  if (options.platform === "darwin" && options.nativeHostMode)
+    options.setActivationPolicy("accessory");
+}
+
 export function chromeNativeHostExecutablePath(
   options: ChromeNativeHostRegistrationOptions,
 ): string {

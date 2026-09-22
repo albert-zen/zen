@@ -991,7 +991,11 @@ export function App() {
           }
           if (
             projected.event.type === "item_completed" &&
-            projected.event.item.type === "user_message" &&
+            (projected.event.item.type === "user_message" ||
+              (projected.event.item.type === "tool_result" &&
+                projected.event.item.modelContent?.some(
+                  (part) => part.type === "image",
+                ))) &&
             selectedThreadIdRef.current === projected.threadId
           ) {
             void window.zenx.imageAttachments
@@ -2482,9 +2486,6 @@ function WindowTitleBar({
             onClick={onToggleInbox}
           >
             <Icon name="inbox" />
-            <span className="inbox-label">
-              {mode === "inbox" ? "Projects" : "Inbox"}
-            </span>
             {pendingApprovalCount > 0 ? (
               <span className="inbox-dot" aria-hidden="true" />
             ) : null}
@@ -2583,7 +2584,7 @@ function ConversationTitleBar({
         {browserEnabled ? (
           <button
             id="thread-browser-toggle"
-            className="icon-button"
+            className="icon-button thread-panel-toggle"
             type="button"
             aria-label={browserOpen ? "Close side panel" : "Open side panel"}
             title="Workspace"

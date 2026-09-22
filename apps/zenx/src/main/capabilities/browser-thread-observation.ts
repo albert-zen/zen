@@ -17,7 +17,7 @@ export interface BrowserThreadRequest {
   frames: boolean;
 }
 export type BrowserThreadEvent =
-  | BrowserLiveObservationEvent
+  | Exclude<BrowserLiveObservationEvent, { type: "metadata" }>
   | { type: "targets"; targets: BrowserThreadTarget[]; selectedId?: string }
   | {
       type: "snapshot";
@@ -230,7 +230,26 @@ export class BrowserThreadObservation {
         observer.stop = this.#backend.observeTab(
           selected.session.providerSessionId,
           selected.target.summary.tabId,
-          send,
+          (event) => {
+            if (event.type !== "metadata") {
+              send(event);
+              return;
+            }
+            const current = selected.session.targets.get(
+              selected.target.summary.tabId,
+            );
+            if (current === undefined) return;
+            current.summary = {
+              ...current.summary,
+              title: event.title,
+              url: event.url,
+            };
+            for (const candidate of [...this.#observers]) {
+              if (candidate.request.threadId !== selected.session.threadId)
+                continue;
+              this.#sendTargetSnapshot(candidate);
+            }
+          },
         );
         if (!this.#observers.has(observer)) this.#stop(observer);
       } catch {
@@ -291,5 +310,29 @@ export class BrowserThreadObservation {
             "The last screenshot is no longer available. Ask the Agent to inspect this page again.",
         }),
       );
+  }
+
+  #sendTargetSnapshot(observer: Observer): void {
+    const targets = [...this.#sessions.values()]
+      .filter((session) => session.threadId === observer.request.threadId)
+      .flatMap((session) =>
+        [...session.targets.values()].map((target) => target.summary),
+      );
+    const requestedId =
+      observer.request.targetId ?? this.#latest.get(observer.request.threadId);
+    const selected =
+      targets.find((target) => target.id === requestedId) ??
+      (observer.request.targetId === undefined ? targets.at(-1) : undefined);
+    try {
+      observer.listener({
+        type: "targets",
+        targets,
+        ...(selected === undefined ? {} : { selectedId: selected.id }),
+      });
+    } catch {
+      this.#observers.delete(observer);
+      observer.generation += 1;
+      this.#stop(observer);
+    }
   }
 }

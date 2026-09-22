@@ -51,19 +51,11 @@ export function WorkflowCommandMenu({
       ref={panel}
       onMouseDown={(event) => event.preventDefault()}
     >
-      <div className="selector-heading">
-        <Icon name={selector.referenceMode ? "paperclip" : "terminal"} />
-        <strong>
-          {selector.referenceMode ? "Add a reference" : "Commands & Skills"}
-        </strong>
-        {selector.loading || selector.busy ? (
-          <span role="status">
-            {selector.busy ? "Checking…" : "Searching…"}
-          </span>
-        ) : (
-          <span>{selector.rows.length} results</span>
-        )}
-      </div>
+      {selector.loading || selector.busy ? (
+        <div className="selector-heading" role="status">
+          {selector.busy ? "Checking…" : "Searching…"}
+        </div>
+      ) : null}
       <div
         className="selector-results"
         role="listbox"
@@ -95,8 +87,10 @@ export function WorkflowCommandMenu({
                 <Icon name={icons[row.kind]} />
               </span>
               <span className="selector-copy">
-                <strong>{row.name}</strong>
-                <span>{row.description}</span>
+                <span className="selector-summary">
+                  <strong title={row.name}>{row.name}</strong>
+                  <span title={row.description}>{row.description}</span>
+                </span>
                 {row.detail ? (
                   <small title={row.detail}>{row.detail}</small>
                 ) : null}
@@ -124,7 +118,7 @@ export function WorkflowCommandMenu({
         <p className="selector-status">{selector.note}</p>
       ) : null}
       <footer id={`${id}-hint`}>
-        <span>
+        <span className="sr-only">
           {selector.referenceMode
             ? "Adds a locator; the agent reads it when needed."
             : "Choose to edit before sending."}

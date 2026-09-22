@@ -19,6 +19,7 @@ import type { ZenXSidebarOrder } from "../../main/host-profile.js";
 import type { AppServerHostStatus } from "../../main/app-server-manager.js";
 import { Icon } from "./icons.js";
 import type { LoadedPluginContribution } from "./plugin-contributions.js";
+import { ProviderLogo } from "./ProviderLogo.js";
 import {
   deriveInboxSections,
   deriveProjectGroups,
@@ -34,6 +35,9 @@ import {
 import { startSidebarDrag } from "./sidebar-drag.js";
 
 import { useSidebarExpansion } from "./sidebar-expansion.js";
+
+const THREAD_DENSITY_STORAGE_KEY = "zenx.sidebar.thread-density";
+type ThreadDensity = "compact" | "detailed";
 
 interface SidebarProps {
   collapsed?: boolean;
@@ -124,6 +128,16 @@ export function Sidebar({
   >(null);
   const [projectsOpen, toggleProjects, expansionError] =
     useSidebarExpansion("projects");
+  const [threadDensity, setThreadDensity] = useState<ThreadDensity>(() => {
+    try {
+      return window.localStorage.getItem(THREAD_DENSITY_STORAGE_KEY) ===
+        "compact"
+        ? "compact"
+        : "detailed";
+    } catch {
+      return "detailed";
+    }
+  });
   const lastUsedProject =
     projects.lastUsedWorkspace === null
       ? undefined
@@ -180,8 +194,81 @@ export function Sidebar({
     setPendingPinFocus(null);
   }, [mode, pendingPinFocus, pinnedThreads]);
   useEffect(() => {
+    let shortcutObserver: MutationObserver | null = null;
+    const shortcutTargets = () => {
+      const sidebar = document.getElementById("primary-sidebar");
+      return {
+        newThread:
+          sidebar?.querySelector<HTMLButtonElement>(".new-thread-action") ??
+          null,
+        threads:
+          sidebar === null
+            ? []
+            : Array.from(
+                sidebar.querySelectorAll<HTMLButtonElement>(
+                  ".thread-row-shell > button.thread-row",
+                ),
+              ).filter((row) => !row.closest("[inert]")),
+      };
+    };
+    const clearShortcutHints = () => {
+      shortcutObserver?.disconnect();
+      shortcutObserver = null;
+      document
+        .querySelectorAll("#primary-sidebar [data-shortcut-key]")
+        .forEach((target) => target.removeAttribute("data-shortcut-key"));
+    };
+    const projectShortcutHints = () => {
+      const sidebar = document.getElementById("primary-sidebar");
+      if (sidebar === null) return;
+      sidebar
+        .querySelectorAll("[data-shortcut-key]")
+        .forEach((target) => target.removeAttribute("data-shortcut-key"));
+      const targets = shortcutTargets();
+      if (targets.newThread?.disabled === false)
+        targets.newThread.setAttribute("data-shortcut-key", "N");
+      targets.threads
+        .slice(0, 9)
+        .forEach((row, index) =>
+          row.setAttribute("data-shortcut-key", String(index + 1)),
+        );
+    };
+    const shortcutsBlocked = (event: KeyboardEvent) =>
+      event.isComposing ||
+      document.querySelector(
+        '[role="dialog"], dialog[open], [aria-modal="true"]',
+      ) !== null ||
+      (event.target instanceof window.Element &&
+        event.target.closest(
+          '[role="menu"], .project-menu, .thread-menu-rename',
+        ) !== null);
+    const showShortcutHints = () => {
+      projectShortcutHints();
+      if (shortcutObserver !== null) return;
+      shortcutObserver = new window.MutationObserver(projectShortcutHints);
+      const sidebar = document.getElementById("primary-sidebar");
+      if (sidebar !== null)
+        shortcutObserver.observe(sidebar, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["inert"],
+        });
+    };
     const switchThread = (event: KeyboardEvent) => {
       const mac = window.zenx?.platform === "darwin";
+      const modifierOnly = mac
+        ? event.key === "Meta" && event.metaKey && !event.ctrlKey
+        : event.key === "Control" && event.ctrlKey && !event.metaKey;
+      if (
+        modifierOnly &&
+        !event.defaultPrevented &&
+        !event.altKey &&
+        !event.shiftKey &&
+        !event.repeat &&
+        !shortcutsBlocked(event)
+      )
+        showShortcutHints();
       if (
         event.defaultPrevented ||
         event.isComposing ||
@@ -194,37 +281,32 @@ export function Sidebar({
         !(/^[1-9]$/u.test(event.key) || event.key.toLowerCase() === "n")
       )
         return;
-      if (
-        document.querySelector(
-          '[role="dialog"], dialog[open], [aria-modal="true"]',
-        ) !== null ||
-        (event.target instanceof window.Element &&
-          event.target.closest(
-            '[role="menu"], .project-menu, .thread-menu-rename',
-          ))
-      )
-        return;
+      if (shortcutsBlocked(event)) return;
       if (event.key.toLowerCase() === "n") {
-        const button = document.querySelector<HTMLButtonElement>(
-          "#primary-sidebar .new-thread-action",
-        );
+        const button = shortcutTargets().newThread;
         if (button === null || button.disabled) return;
         event.preventDefault();
         button.click();
         return;
       }
-      const rows = Array.from(
-        document.querySelectorAll<HTMLButtonElement>(
-          "#primary-sidebar .thread-row-shell > button.thread-row",
-        ),
-      ).filter((row) => !row.closest("[inert]"));
+      const rows = shortcutTargets().threads;
       const target = rows[Number(event.key) - 1];
       if (target === undefined) return;
       event.preventDefault();
       target.click();
     };
+    const releaseShortcutHints = (event: KeyboardEvent) => {
+      if (event.key === "Meta" || event.key === "Control") clearShortcutHints();
+    };
     document.addEventListener("keydown", switchThread);
-    return () => document.removeEventListener("keydown", switchThread);
+    document.addEventListener("keyup", releaseShortcutHints);
+    window.addEventListener("blur", clearShortcutHints);
+    return () => {
+      clearShortcutHints();
+      document.removeEventListener("keydown", switchThread);
+      document.removeEventListener("keyup", releaseShortcutHints);
+      window.removeEventListener("blur", clearShortcutHints);
+    };
   }, []);
   const watchingThreadIds = new Set<string>();
   return (
@@ -232,17 +314,12 @@ export function Sidebar({
       <aside
         id="primary-sidebar"
         className={`sidebar${open ? " open" : ""}`}
+        data-thread-density={threadDensity}
         aria-label="Projects and threads"
         aria-hidden={collapsed && !open ? true : undefined}
         inert={collapsed && !open}
       >
         <header className="sidebar-header">
-          <PluginSpaces
-            contributions={pluginContributions}
-            onOpen={onOpenContribution}
-            selectedPage={selectedPage}
-          />
-
           <div className="new-thread-control">
             <button
               className="new-thread-action"
@@ -281,6 +358,12 @@ export function Sidebar({
             </button>
           </div>
 
+          <PluginSpaces
+            contributions={pluginContributions}
+            onOpen={onOpenContribution}
+            selectedPage={selectedPage}
+          />
+
           <div className="sidebar-view-head">
             {mode === "projects" ? (
               <button
@@ -302,19 +385,45 @@ export function Sidebar({
                 Inbox
               </strong>
             )}
-            {mode === "projects" ? (
+            <span className="sidebar-view-actions">
+              {mode === "inbox" ? <span>{threads.length}</span> : null}
               <button
-                className="sidebar-inline-action"
+                className="sidebar-density-toggle"
                 type="button"
-                aria-label="Add project"
-                title="Add project"
-                onClick={onAddProject}
+                aria-label={`Thread rows: ${threadDensity}. Switch to ${threadDensity === "detailed" ? "compact" : "detailed"}`}
+                aria-pressed={threadDensity === "compact"}
+                title={`Thread rows: ${threadDensity}`}
+                onClick={() => {
+                  const next =
+                    threadDensity === "detailed" ? "compact" : "detailed";
+                  setThreadDensity(next);
+                  try {
+                    window.localStorage.setItem(
+                      THREAD_DENSITY_STORAGE_KEY,
+                      next,
+                    );
+                  } catch {
+                    // The preference remains valid for this window.
+                  }
+                }}
               >
-                <Icon name="folder-plus" size={14} />
+                <Icon name="layers" size={13} />
+                <span>
+                  {threadDensity === "detailed" ? "Detailed" : "Compact"}
+                </span>
               </button>
-            ) : (
-              <span>{threads.length}</span>
-            )}
+              {mode === "projects" ? (
+                <button
+                  className="sidebar-inline-action"
+                  type="button"
+                  aria-label="Add project"
+                  title="Add project"
+                  onClick={onAddProject}
+                >
+                  <Icon name="folder-plus" size={14} />
+                </button>
+              ) : null}
+            </span>
           </div>
         </header>
 
@@ -1443,6 +1552,8 @@ function ThreadRow({
     menuTriggerRef.current?.focus();
   }, [menuOpen]);
   const identity = threadModelIdentity(thread);
+  const modelProvider =
+    thread.status === "systemError" ? null : thread.currentMetadata.provider;
   const contents = (
     <>
       {inbox ? (
@@ -1460,6 +1571,17 @@ function ThreadRow({
           <Icon name="moon" size={12} aria-label="Watching" />
         ) : null}
       </span>
+      {identity === null || modelProvider === null ? null : (
+        <span
+          className="thread-model"
+          title={`${identity.label} · ${modelProvider}`}
+        >
+          <ProviderLogo kind={identity.providerKind} />
+          <span>{identity.label}</span>
+          <span aria-hidden="true">·</span>
+          <span>{modelProvider}</span>
+        </span>
+      )}
       {pendingApproval || thread.status === "active" ? (
         <span className="thread-state-label">
           {pendingApproval ? "Needs your approval" : "Working"}

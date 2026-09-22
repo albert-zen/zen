@@ -120,6 +120,10 @@ export interface UserBrowserCdpTarget {
 }
 
 export interface UserBrowserCdpClient {
+  observeTargetMetadata?(
+    targetId: string,
+    listener: (target: UserBrowserCdpTarget) => void,
+  ): () => void;
   observeScreencast?(
     targetId: string,
     owner: UserBrowserAttachmentOwner,
@@ -331,12 +335,24 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     }
     let active = true;
     let stop: (() => Promise<void>) | undefined;
+    const stopMetadata = this.#client.observeTargetMetadata?.(
+      tabId,
+      (target) => {
+        if (active)
+          listener({
+            type: "metadata",
+            title: target.title.slice(0, 256),
+            url: redactBrowserUrl(target.url),
+          });
+      },
+    );
     const entry = {
       sessionId,
       tabId,
       listener,
       stop: () => {
         active = false;
+        stopMetadata?.();
         this.#liveSubscriptions.delete(entry);
         this.#liveQueue = this.#liveQueue
           .then(async () => {
@@ -1763,6 +1779,11 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     }
   >();
   readonly #connectionTaints: string[] = [];
+  readonly #targetMetadata = new Map<string, UserBrowserCdpTarget>();
+  readonly #targetMetadataListeners = new Map<
+    string,
+    Set<(target: UserBrowserCdpTarget) => void>
+  >();
   readonly #targetDocuments = new Map<
     string,
     {
@@ -1863,7 +1884,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     if (infos.length > USER_BROWSER_MAX_DISCOVERED_TARGETS) {
       throw new Error("User browser CDP target list exceeded its bound");
     }
-    return infos.map((value) => {
+    const targets = infos.map((value) => {
       const target = asRecord(value);
       if (
         target === undefined ||
@@ -1881,6 +1902,27 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         url: target.url,
       };
     });
+    for (const target of targets)
+      this.#targetMetadata.set(target.targetId, target);
+    return targets;
+  }
+
+  observeTargetMetadata(
+    targetId: string,
+    listener: (target: UserBrowserCdpTarget) => void,
+  ): () => void {
+    let listeners = this.#targetMetadataListeners.get(targetId);
+    if (listeners === undefined) {
+      listeners = new Set();
+      this.#targetMetadataListeners.set(targetId, listeners);
+    }
+    listeners.add(listener);
+    const current = this.#targetMetadata.get(targetId);
+    if (current !== undefined) listener(current);
+    return () => {
+      listeners!.delete(listener);
+      if (listeners!.size === 0) this.#targetMetadataListeners.delete(targetId);
+    };
   }
 
   async createTarget(url: string, signal?: AbortSignal): Promise<string> {
@@ -3314,10 +3356,21 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       this.#receiveScreencastFrame(message, params);
       return;
     }
+    if (method === "Target.targetInfoChanged") {
+      const target = readUserBrowserTarget(params.targetInfo);
+      if (target === undefined) return;
+      this.#targetMetadata.set(target.targetId, target);
+      for (const listener of this.#targetMetadataListeners.get(
+        target.targetId,
+      ) ?? [])
+        listener(target);
+      return;
+    }
     if (
       method === "Target.targetDestroyed" &&
       typeof params.targetId === "string"
     ) {
+      this.#targetMetadata.delete(params.targetId);
       this.#reapTarget(params.targetId, true);
       return;
     }
@@ -3623,6 +3676,8 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     this.#targetSessions.clear();
     this.#sessionTargets.clear();
     this.#targetDocuments.clear();
+    this.#targetMetadata.clear();
+    this.#targetMetadataListeners.clear();
     for (const late of this.#lateResponses.values()) {
       clearTimeout(late.expires);
       late.expire();
@@ -3870,6 +3925,25 @@ function summarizeTarget(
     title: target.title.slice(0, 256),
     url: redactBrowserUrl(target.url),
     loading: false,
+  };
+}
+
+function readUserBrowserTarget(
+  value: unknown,
+): UserBrowserCdpTarget | undefined {
+  const target = asRecord(value);
+  if (
+    typeof target?.targetId !== "string" ||
+    typeof target.type !== "string" ||
+    typeof target.title !== "string" ||
+    typeof target.url !== "string"
+  )
+    return undefined;
+  return {
+    targetId: target.targetId,
+    type: target.type,
+    title: target.title,
+    url: target.url,
   };
 }
 

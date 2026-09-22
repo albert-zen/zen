@@ -86,7 +86,8 @@ export type BrowserLiveObservationEvent =
       status: BrowserLiveObservationStatus;
       message: string;
     }
-  | { type: "frame"; frame: BrowserLiveObservationFrame };
+  | { type: "frame"; frame: BrowserLiveObservationFrame }
+  | { type: "metadata"; title: string; url: string };
 
 export type BrowserLiveObservationListener = (
   event: BrowserLiveObservationEvent,

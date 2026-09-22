@@ -55,8 +55,9 @@ function turnWithItems(
     itemsView: "full",
     status,
     error: null,
-    startedAt: 10,
-    completedAt: status === "inProgress" ? null : 11,
+    startedAt: Math.floor(Date.now() / 1_000) - 3,
+    completedAt:
+      status === "inProgress" ? null : Math.floor(Date.now() / 1_000),
     durationMs,
   };
 }
@@ -136,6 +137,41 @@ const values: ThreadItem[] = [
 ];
 const params = new URLSearchParams(location.search);
 const compactStatus = params.get("compact");
+const toolShowcase = params.has("tools");
+const imageBytes = Uint8Array.from(
+  atob(
+    "iVBORw0KGgoAAAANSUhEUgAAAPAAAAB4CAIAAABD1OhwAAAB3UlEQVR4nO3SAQ2AMADAsHtBBA4whF1EIOEu/mRvMgfr+J9bC7reTwsa208f0vbThwQ00KmABjoV0ECnAhroVEADnQpooFMBDXQqoIFOBTTQqYAGOhXQQKcCGuhUQAOdCmigUwENdCqggU4FNNCpgAY6FdBApwIa6FRAA50KaKBTAQ10KqCBTgU00KmABjoV0ECnAhroVEADnQpooFMBDXQqoIFOBTTQqYAGOhXQQKcCGuhUQAOdCmigUwENdCqggU4FNNCpgAY6FdBApwIa6FRAA50KaKBTAQ10KqCBTgU00KmABjoV0ECnAhroVEADnQpooFMBDXQqoIFOBTTQqYAGOhXQQKcCGuhUQAOdCmigUwENdCqggU4FNNCpgAY6FdBApwIa6FRAA50KaKBTAQ10KqCBTgU00KmABjoV0ECnAhroVEADnQpooFMBDXQqoIFOBTTQqYAGOhXQQKcCGuhUQAOdCmigUwENdCqggU4FNNCpgAY6FdBApwIa6FRAA50KaKBTAQ10KqCBTgU00KmABjoV0ECnAhroVEADnQpooFMBDXQqoIFOBTTQqYAGOhXQQKcCGuhUQAOdCmigUwENdCqggU4FNNCpgAY6FdBApwIa6FRAA50KaKBTTbZOiTBX1IIvAAAAAElFTkSuQmCC",
+  ),
+  (char) => char.charCodeAt(0),
+);
+const showcaseValues: ThreadItem[] = [
+  user("Inspect the tool details and image preview."),
+  agent("Checking the changed files and their results."),
+  commandItem(
+    "inspect",
+    "rg -n 'trace-input|trace-output' apps/zenx/src/renderer/src/styles.css",
+  ),
+  {
+    ...commandItem(
+      "shell",
+      "npm run check --workspace @zen/zenx\n# Verify keyboard navigation, tool details, and image preview before packaging.",
+    ),
+    aggregatedOutput: Array.from(
+      { length: 65 },
+      (_, index) =>
+        `PASS ${String(index + 1).padStart(2, "0")} — component verification completed`,
+    ).join("\n"),
+  },
+  {
+    ...commandItem(
+      "image",
+      'view_image {"path":"/workspace/design-preview.png"}',
+    ),
+    toolName: "view_image",
+    aggregatedOutput: "Viewed design-preview.png · 240 × 120",
+  },
+];
+
 const composer = emptyComposerState();
 if (
   compactStatus === "pending" ||
@@ -160,8 +196,28 @@ createRoot(document.getElementById("root")!).render(
       approvals={[]}
       composer={composer}
       thread={thread([
-        turnWithItems(compactStatus ? "completed" : "inProgress", values),
+        turnWithItems(
+          compactStatus ? "completed" : "inProgress",
+          toolShowcase ? showcaseValues : values,
+        ),
       ])}
+      threadAttachments={
+        toolShowcase
+          ? {
+              image: [
+                {
+                  type: "attachment",
+                  sha256: "f".repeat(64),
+                  mediaType: "image/png",
+                  byteLength: imageBytes.length,
+                  width: 240,
+                  height: 120,
+                },
+              ],
+            }
+          : {}
+      }
+      onReadAttachment={async () => imageBytes}
       onDraftChange={() => {}}
       onInterrupt={async () => {}}
       onRespondToApproval={async () => {}}

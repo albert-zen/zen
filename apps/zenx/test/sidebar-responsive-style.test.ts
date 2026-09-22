@@ -68,6 +68,46 @@ test("Settings footer hugs its single navigation row", async () => {
   );
 });
 
+test("side panel keeps one fixed toggle and an interruptible width transition", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /\.thread-panel-toggle\s*\{[^}]*position:\s*fixed;[^}]*right:\s*8px;/su,
+  );
+  assert.match(
+    styles,
+    /\.workspace:has\(> \.auxiliary-panel\)\s*\{[^}]*display:\s*flex;/su,
+  );
+  assert.match(
+    styles,
+    /\.auxiliary-panel\[data-open="false"\]\s*\{[^}]*flex-basis:\s*0;[^}]*width:\s*0;[^}]*min-width:\s*0;/su,
+  );
+  assert.doesNotMatch(
+    styles,
+    /\.app-shell:has\(\.auxiliary-panel\[data-open="true"\]\) #thread-browser-toggle\s*\{[^}]*display:\s*none;/su,
+  );
+  assert.match(
+    styles,
+    /:root\[data-platform="win32"\] \.thread-panel-toggle\s*\{[^}]*right:\s*calc\(var\(--windows-control-region\) \+ 4px\);/su,
+  );
+  const narrow = styles.slice(styles.indexOf("@media (max-width: 720px)"));
+  assert.match(
+    narrow,
+    /\.workspace:has\(> \.auxiliary-panel\)\s*\{[^}]*display:\s*block;/su,
+  );
+  assert.match(
+    narrow,
+    /:root\[data-platform="win32"\] \.thread-panel-toggle\s*\{[^}]*top:\s*calc\(var\(--native-titlebar-height\) \+ 4px\);[^}]*right:\s*8px;/su,
+  );
+  assert.match(
+    styles,
+    /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*:root\s*\{[^}]*--motion-layout:\s*0ms;/su,
+  );
+});
+
 test("plugin page and panel collapse to one usable narrow desktop column", async () => {
   const styles = await readFile(
     new URL("../src/renderer/src/styles.css", import.meta.url),

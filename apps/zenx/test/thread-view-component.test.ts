@@ -1854,7 +1854,7 @@ test("partial canonical reasoning remains visibly interrupted after reopening", 
   assert.equal((item as { status?: string }).status, "interrupted");
 });
 
-test("tool image thumbnails are a display projection beside unchanged call and output", async () => {
+test("tool images appear only inside expanded tool details beside unchanged call and output", async () => {
   await withDom(async (root) => {
     const value = commandItem(
       "view-call",
@@ -1889,6 +1889,7 @@ test("tool image thumbnails are a display projection beside unchanged call and o
         }),
       ),
     );
+    assert.equal(document.querySelector('[aria-label="Tool images"]'), null);
     await act(async () => requiredButton(".trace-item-toggle").click());
     assert.ok(document.querySelector('[aria-label="Tool images"]'));
     assert.ok(document.querySelector('[aria-label="Preview Tool image 1"]'));
@@ -1901,6 +1902,49 @@ test("tool image thumbnails are a display projection beside unchanged call and o
       /Viewed image \/tmp\/image.png/,
     );
     assert.equal(JSON.stringify(value), original);
+    await act(async () => requiredButton(".trace-item-toggle").click());
+    assert.equal(document.querySelector('[aria-label="Tool images"]'), null);
+  });
+});
+
+test("tool details disclose full input independently of scrollable output", async () => {
+  await withDom(async (root) => {
+    const value = commandItem(
+      "long-tool",
+      "printf 'first line\\nsecond line\\nlast line'".repeat(20),
+    );
+    if (value.type !== "commandExecution") return;
+    value.aggregatedOutput = Array.from(
+      { length: 80 },
+      (_, index) => `Result ${index}`,
+    ).join("\n");
+    await renderInteractive(root, turnWithItems("inProgress", [value]));
+    await act(async () => requiredButton(".trace-item-toggle").click());
+    const input = requiredElement(".trace-input") as HTMLDetailsElement;
+    const summary = requiredElement(".trace-input summary") as HTMLElement;
+    assert.equal(input.open, false);
+    assert.equal(
+      requiredElement(".trace-input-preview code").textContent,
+      value.command,
+    );
+    await act(async () => summary.click());
+    assert.equal(input.open, true);
+    assert.equal(
+      requiredElement(".trace-command code").textContent,
+      value.command,
+    );
+    const output = requiredElement('[role="region"][aria-label="Tool output"]');
+    assert.equal(output.getAttribute("tabindex"), "0");
+    assert.equal(
+      output.querySelector("pre")?.textContent,
+      value.aggregatedOutput,
+    );
+    await act(async () => summary.click());
+    assert.equal(input.open, false);
+    assert.equal(
+      output.querySelector("pre")?.textContent,
+      value.aggregatedOutput,
+    );
   });
 });
 

@@ -21,6 +21,7 @@ import {
   encodeChromeNativeMessage,
 } from "../src/main/chrome-native-host.js";
 import {
+  configureChromeNativeHostActivationPolicy,
   chromeNativeHostManifestPath,
   chromeNativeHostExecutablePath,
   chromeNativeHostRegistered,
@@ -615,6 +616,22 @@ test("Windows native host manifest selects the no-console launcher", () => {
     chromeNativeHostExecutablePath(options),
     options.windowsLauncherPath,
   );
+});
+
+test("only the macOS native host process becomes a Dockless accessory", () => {
+  const policies: string[] = [];
+  for (const [platform, nativeHostMode] of [
+    ["darwin", true],
+    ["darwin", false],
+    ["linux", true],
+  ] as const) {
+    configureChromeNativeHostActivationPolicy({
+      platform,
+      nativeHostMode,
+      setActivationPolicy: (policy) => policies.push(policy),
+    });
+  }
+  assert.deepEqual(policies, ["accessory"]);
 });
 
 async function waitFor(predicate: () => boolean): Promise<void> {
