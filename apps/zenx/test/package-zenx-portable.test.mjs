@@ -30,13 +30,16 @@ import {
   createBuildSnapshot,
   extractMacNativeHelperSources,
   MACOS_MINIMUM_VERSION,
+  MACOS_CODESIGN_MODE_ENV,
   macAdHocSignOptionsForFile,
+  macLocalSignOptionsForFile,
   macNativeHelperSignOptions,
   macOsPackagerOptions,
   macPackagedProviderSignIgnore,
   macSwiftTargetTriple,
   packageManifest,
   publishPackagedArtifact,
+  resolveMacOsSigningConfiguration,
   stagePackage,
   withPackagingTargetLock,
 } from "../scripts/package-zenx-portable.mjs";
@@ -63,8 +66,8 @@ test("uses production platform icons only for packaged applications", () => {
 });
 
 test("uses a stable macOS bundle ID and fail-closed ad-hoc signing by default", () => {
-  assert.deepEqual(macOsPackagerOptions("linux", "app", {}), {});
-  const adHoc = macOsPackagerOptions("darwin", "app", {});
+  assert.deepEqual(macOsPackagerOptions("linux", "app"), {});
+  const adHoc = macOsPackagerOptions("darwin", "app");
   assert.equal(adHoc.appBundleId, "com.electron.zenx");
   assert.deepEqual(adHoc.osxSign, {
     identity: "-",
@@ -77,7 +80,8 @@ test("uses a stable macOS bundle ID and fail-closed ad-hoc signing by default", 
   });
   assert.deepEqual(
     macOsPackagerOptions("darwin", "app", {
-      ZENX_CODESIGN_IDENTITY: "Developer ID Application: Example",
+      identity: "Developer ID Application: Example",
+      mode: "developer-id",
     }).osxSign,
     {
       identity: "Developer ID Application: Example",
@@ -89,7 +93,7 @@ test("uses a stable macOS bundle ID and fail-closed ad-hoc signing by default", 
     },
   );
   assert.equal(
-    macOsPackagerOptions("darwin", "smoke", {}).appBundleId,
+    macOsPackagerOptions("darwin", "smoke").appBundleId,
     "com.electron.zenx-provider-smoke",
   );
   assert.deepEqual(
@@ -131,6 +135,212 @@ test("uses a stable macOS bundle ID and fail-closed ad-hoc signing by default", 
       "/tmp/ZenX.app/Contents/Frameworks/Electron Framework.framework/Electron Framework",
     ),
     false,
+  );
+});
+
+test("uses stable local identity signing without Apple Team ID assumptions", () => {
+  const identity = "0123456789ABCDEF0123456789ABCDEF01234567";
+  const local = macOsPackagerOptions("darwin", "app", {
+    identity,
+    mode: "local",
+  });
+  assert.equal(local.appBundleId, "com.electron.zenx");
+  assert.deepEqual(local.osxSign, {
+    identity,
+    identityValidation: false,
+    continueOnError: false,
+    ignore: macPackagedProviderSignIgnore,
+    optionsForFile: macLocalSignOptionsForFile,
+    preAutoEntitlements: false,
+    strictVerify: true,
+  });
+  assert.deepEqual(
+    macLocalSignOptionsForFile(
+      "/Applications/ZenX.app/Contents/Resources/native-helpers/zenx-accessibility",
+    ),
+    {
+      entitlements: [],
+      hardenedRuntime: false,
+      timestamp: "none",
+      additionalArguments: [
+        "--identifier",
+        "com.electron.zenx.native-helper.zenx-accessibility",
+      ],
+    },
+  );
+  assert.deepEqual(
+    macLocalSignOptionsForFile(
+      "/Applications/ZenX.app/Contents/Resources/native-helpers/zenx-foreground-input",
+    ),
+    {
+      entitlements: [],
+      hardenedRuntime: false,
+      timestamp: "none",
+      additionalArguments: [
+        "--identifier",
+        "com.electron.zenx.native-helper.zenx-foreground-input",
+      ],
+    },
+  );
+  assert.deepEqual(
+    macLocalSignOptionsForFile(
+      "/Applications/ZenX.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    ),
+    {
+      entitlements: [],
+      hardenedRuntime: false,
+      timestamp: "none",
+    },
+  );
+  assert.deepEqual(
+    macLocalSignOptionsForFile(
+      "/Applications/ZenX.app/Contents/MacOS/zenx-accessibility",
+    ),
+    {
+      entitlements: [],
+      hardenedRuntime: false,
+      timestamp: "none",
+    },
+  );
+});
+
+test("resolves local macOS signing config and lets an explicit identity override it", async () => {
+  const localIdentity = "0123456789abcdef0123456789abcdef01234567";
+  const readCalls = [];
+  const local = await resolveMacOsSigningConfiguration({
+    platform: "darwin",
+    environment: {},
+    homeDirectory: "/Users/example",
+    readFile: async (filePath, encoding) => {
+      readCalls.push([filePath, encoding]);
+      return JSON.stringify({ identity: localIdentity, mode: "local" });
+    },
+  });
+  assert.deepEqual(local, {
+    identity: localIdentity.toUpperCase(),
+    mode: "local",
+  });
+  assert.deepEqual(readCalls, [
+    ["/Users/example/Library/Application Support/ZenX/signing.json", "utf8"],
+  ]);
+
+  let configRead = false;
+  const developerId = await resolveMacOsSigningConfiguration({
+    platform: "darwin",
+    environment: {
+      ZENX_CODESIGN_IDENTITY: "Developer ID Application: Example",
+    },
+    readFile: async () => {
+      configRead = true;
+      throw new Error("config should not be read");
+    },
+  });
+  assert.deepEqual(developerId, {
+    identity: "Developer ID Application: Example",
+    mode: "developer-id",
+  });
+  assert.equal(configRead, false);
+
+  const adHoc = await resolveMacOsSigningConfiguration({
+    platform: "darwin",
+    environment: { ZENX_CODESIGN_IDENTITY: "-" },
+    readFile: async () => {
+      throw new Error("config should not be read");
+    },
+  });
+  assert.deepEqual(adHoc, { identity: "-", mode: "ad-hoc" });
+
+  const explicitLocal = await resolveMacOsSigningConfiguration({
+    platform: "darwin",
+    environment: {
+      ZENX_CODESIGN_IDENTITY: localIdentity,
+      [MACOS_CODESIGN_MODE_ENV]: "local",
+    },
+    readFile: async () => {
+      throw new Error("config should not be read");
+    },
+  });
+  assert.deepEqual(explicitLocal, {
+    identity: localIdentity.toUpperCase(),
+    mode: "local",
+  });
+});
+
+test("keeps missing local config ad-hoc but rejects malformed or incomplete explicit config", async () => {
+  const missing = Object.assign(new Error("missing"), { code: "ENOENT" });
+  assert.deepEqual(
+    await resolveMacOsSigningConfiguration({
+      platform: "darwin",
+      environment: {},
+      readFile: async () => {
+        throw missing;
+      },
+    }),
+    { identity: "-", mode: "ad-hoc" },
+  );
+  assert.deepEqual(
+    await resolveMacOsSigningConfiguration({
+      platform: "linux",
+      environment: {},
+      readFile: async () => {
+        throw new Error("non-macOS must not read signing config");
+      },
+    }),
+    { identity: "-", mode: "ad-hoc" },
+  );
+
+  await assert.rejects(
+    resolveMacOsSigningConfiguration({
+      platform: "darwin",
+      environment: {},
+      readFile: async () => "{bad json",
+    }),
+    /Invalid ZenX macOS signing configuration/u,
+  );
+  await assert.rejects(
+    resolveMacOsSigningConfiguration({
+      platform: "darwin",
+      environment: {},
+      readFile: async () => JSON.stringify({ mode: "local" }),
+    }),
+    /40-character SHA-1/u,
+  );
+  await assert.rejects(
+    resolveMacOsSigningConfiguration({
+      platform: "darwin",
+      environment: {},
+      readFile: async () =>
+        JSON.stringify({
+          identity: "0123456789ABCDEF0123456789ABCDEF01234567",
+          mode: "developer-id",
+        }),
+    }),
+    /mode must be "local"/u,
+  );
+  await assert.rejects(
+    resolveMacOsSigningConfiguration({
+      platform: "darwin",
+      environment: {
+        [MACOS_CODESIGN_MODE_ENV]: "local",
+      },
+      readFile: async () => {
+        throw new Error("config should not be read");
+      },
+    }),
+    /ZENX_CODESIGN_IDENTITY is required/u,
+  );
+  await assert.rejects(
+    resolveMacOsSigningConfiguration({
+      platform: "darwin",
+      environment: {
+        ZENX_CODESIGN_IDENTITY: "not-a-sha",
+        [MACOS_CODESIGN_MODE_ENV]: "local",
+      },
+      readFile: async () => {
+        throw new Error("config should not be read");
+      },
+    }),
+    /40-character SHA-1/u,
   );
 });
 
