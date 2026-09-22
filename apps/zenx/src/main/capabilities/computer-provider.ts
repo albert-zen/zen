@@ -54,6 +54,24 @@ export interface ComputerInspection {
     actions: ComputerControlAction[];
   }>;
   truncated: boolean;
+  diagnostics?: ComputerInspectionDiagnostics;
+}
+
+export interface ComputerInspectionDiagnostics {
+  visitedCount: number;
+  visitLimit: number;
+  visitLimitReached: boolean;
+  maxDepth: number;
+  maxDepthVisited: number;
+  depthLimitReached: boolean;
+  outputLimit: number;
+  outputLimitReached: boolean;
+  selectionLimit: number;
+  selectionLimitReached: boolean;
+  actionableCount: number;
+  semanticCount: number;
+  fallbackCount: number;
+  encounteredWebArea: boolean;
 }
 
 export interface ComputerLiveObservationFrame {
@@ -574,6 +592,10 @@ interface MacInspectionResult {
   target: ComputerInspection["target"];
   controls: MacRawControl[];
   truncated: boolean;
+  diagnostics: Omit<
+    ComputerInspectionDiagnostics,
+    "selectionLimit" | "selectionLimitReached"
+  >;
 }
 
 function rawControlFingerprint(
@@ -674,6 +696,11 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
       })),
       truncated:
         result.truncated || result.controls.length > boundedControls.length,
+      diagnostics: {
+        ...result.diagnostics,
+        selectionLimit: MAX_COMPUTER_INSPECTION_CONTROLS,
+        selectionLimitReached: result.controls.length > boundedControls.length,
+      },
     };
   }
 
@@ -1160,6 +1187,10 @@ if let expectedBundle = string(targetRequest["bundleId"]), running.bundleIdentif
 }
 
 let appElement = AXUIElementCreateApplication(running.processIdentifier)
+// Chromium enables its native macOS accessibility surface on demand when an
+// assistive client requests the application role. Query it before resolving
+// windows so the first scoped inspection can include the web-area subtree.
+_ = textAttribute(appElement, kAXRoleAttribute)
 let requestedWindowTitle = string(targetRequest["windowTitle"])
 var windows = elementArrayAttribute(appElement, kAXWindowsAttribute)
 if let focused = elementAttribute(appElement, kAXFocusedWindowAttribute) { windows.append(focused) }
@@ -1247,23 +1278,41 @@ func matches(_ element: AXUIElement, _ wanted: [String: Any]) -> Bool {
   return string(wanted["identifier"]) != nil || string(wanted["role"]) != nil || string(wanted["subrole"]) != nil || string(wanted["title"]) != nil || string(wanted["description"]) != nil || string(wanted["help"]) != nil || string(wanted["frame"]) != nil
 }
 
-func walk(_ root: AXUIElement, visitLimit: Int = 1024, maxDepth: Int = 24) -> ([AXUIElement], Bool) {
+struct WalkResult {
+  let elements: [AXUIElement]
+  let visitLimit: Int
+  let visitLimitReached: Bool
+  let maxDepth: Int
+  let maxDepthVisited: Int
+  let depthLimitReached: Bool
+}
+
+func walk(_ root: AXUIElement, visitLimit: Int = 1024, maxDepth: Int = 24) -> WalkResult {
   var queue: [(AXUIElement, Int)] = [(root, 0)]
   var result: [AXUIElement] = []
   var cursor = 0
-  var depthTruncated = false
+  var maxDepthVisited = 0
+  var depthLimitReached = false
   while cursor < queue.count && result.count < visitLimit {
     let (element, depth) = queue[cursor]
     cursor += 1
     result.append(element)
+    maxDepthVisited = max(maxDepthVisited, depth)
     let descendants = children(element)
     if depth < maxDepth {
       queue.append(contentsOf: descendants.map { ($0, depth + 1) })
     } else if !descendants.isEmpty {
-      depthTruncated = true
+      depthLimitReached = true
     }
   }
-  return (result, cursor < queue.count || depthTruncated)
+  return WalkResult(
+    elements: result,
+    visitLimit: visitLimit,
+    visitLimitReached: cursor < queue.count,
+    maxDepth: maxDepth,
+    maxDepthVisited: maxDepthVisited,
+    depthLimitReached: depthLimitReached
+  )
 }
 
 func cgWindowBounds(_ entry: [String: Any]) -> CGRect? {
@@ -1285,8 +1334,8 @@ func windowBoundsMatch(_ candidate: CGRect, _ expected: CGRect, tolerance: CGFlo
 }
 
 func findControl(_ wanted: [String: Any]) -> AXUIElement {
-  let (elements, _) = walk(root)
-  let found = elements.filter { matches($0, wanted) }
+  let traversal = walk(root)
+  let found = traversal.elements.filter { matches($0, wanted) }
   if found.isEmpty { fail("accessibility control was not found") }
   if found.count > 1 { fail("accessibility selector is ambiguous") }
   return found[0]
@@ -1295,15 +1344,16 @@ func findControl(_ wanted: [String: Any]) -> AXUIElement {
 var response: [String: Any]
 switch operation {
 case "inspect":
-  let (elements, traversalTruncated) = walk(root)
+  let traversal = walk(root)
   var actionableControls: [[String: Any]] = []
   var semanticControls: [[String: Any]] = []
   var fallbackControls: [[String: Any]] = []
-  var fallbackTruncated = false
-  for element in elements {
+  var encounteredWebArea = false
+  for element in traversal.elements {
     let controlSelector = selector(element)
     if controlSelector.isEmpty { continue }
     let role = textAttribute(element, kAXRoleAttribute)
+    if role == "AXWebArea" { encounteredWebArea = true }
     let label = displayLabel(element)
     let enabled = boolAttribute(element, kAXEnabledAttribute)
     let elementActions = supportedActions(element)
@@ -1318,18 +1368,32 @@ case "inspect":
       actionableControls.append(control)
     } else if !isContainerRole(role) && !label.isEmpty {
       semanticControls.append(control)
-    } else if fallbackControls.count < 120 {
-      fallbackControls.append(control)
     } else {
-      fallbackTruncated = true
+      fallbackControls.append(control)
     }
   }
   let orderedControls = actionableControls + semanticControls + fallbackControls
-  let controls = Array(orderedControls.prefix(120))
+  let outputLimit = 120
+  let controls = Array(orderedControls.prefix(outputLimit))
+  let outputLimitReached = orderedControls.count > controls.count
   response = [
     "target": resolvedTarget,
     "controls": controls,
-    "truncated": traversalTruncated || fallbackTruncated || orderedControls.count > controls.count
+    "truncated": traversal.visitLimitReached || traversal.depthLimitReached || outputLimitReached,
+    "diagnostics": [
+      "visitedCount": traversal.elements.count,
+      "visitLimit": traversal.visitLimit,
+      "visitLimitReached": traversal.visitLimitReached,
+      "maxDepth": traversal.maxDepth,
+      "maxDepthVisited": traversal.maxDepthVisited,
+      "depthLimitReached": traversal.depthLimitReached,
+      "outputLimit": outputLimit,
+      "outputLimitReached": outputLimitReached,
+      "actionableCount": actionableControls.count,
+      "semanticCount": semanticControls.count,
+      "fallbackCount": fallbackControls.count,
+      "encounteredWebArea": encounteredWebArea
+    ]
   ]
 case "press":
   let wanted = dictionary(request["control"], "control")

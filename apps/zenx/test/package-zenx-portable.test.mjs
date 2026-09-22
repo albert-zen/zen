@@ -176,7 +176,30 @@ test("extracts and compiles both fixed macOS Computer helpers into App Resources
     sources.MAC_ACCESSIBILITY_SOURCE,
     /visitLimit: Int = 1024, maxDepth: Int = 24/u,
   );
-  assert.match(sources.MAC_ACCESSIBILITY_SOURCE, /prefix\(120\)/u);
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /let outputLimit = 120[\s\S]*?prefix\(outputLimit\)/u,
+  );
+  const roleActivation = sources.MAC_ACCESSIBILITY_SOURCE.indexOf(
+    "_ = textAttribute(appElement, kAXRoleAttribute)",
+  );
+  const windowResolution = sources.MAC_ACCESSIBILITY_SOURCE.indexOf(
+    "elementArrayAttribute(appElement, kAXWindowsAttribute)",
+  );
+  assert.ok(roleActivation >= 0);
+  assert.ok(windowResolution > roleActivation);
+  for (const field of [
+    "visitedCount",
+    "visitLimitReached",
+    "depthLimitReached",
+    "outputLimitReached",
+    "actionableCount",
+    "semanticCount",
+    "fallbackCount",
+    "encounteredWebArea",
+  ]) {
+    assert.match(sources.MAC_ACCESSIBILITY_SOURCE, new RegExp(field));
+  }
   const displayLabel = sources.MAC_ACCESSIBILITY_SOURCE.match(
     /func displayLabel[\s\S]*?func isContainerRole/u,
   )?.[0];
