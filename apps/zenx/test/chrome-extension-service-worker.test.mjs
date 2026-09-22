@@ -173,6 +173,56 @@ test("stale tab objects cannot expose or revive internal and file navigations", 
   );
 });
 
+test("removed tab updates stay fenced until a new onCreated lifecycle", async () => {
+  const fixture = await workerFixture();
+  fixture.clicked.emit(tab(1));
+  await waitFor(() =>
+    fixture.ports[0]?.messages.some(
+      (message) => message.type === "browser-connected",
+    ),
+  );
+  const port = fixture.ports[0];
+  const stale = tab(1);
+  fixture.chrome.tabs.onRemoved.emit(1);
+  fixture.chrome.tabs.onUpdated.emit(1, { title: "Late title" }, stale);
+  fixture.chrome.tabs.onUpdated.emit(
+    1,
+    { url: "https://tab-1.test/late" },
+    stale,
+  );
+  assert.equal(
+    port.messages.filter(
+      (message) => message.type === "tab-removed" && message.tabId === 1,
+    ).length,
+    1,
+  );
+  assert.equal(
+    port.messages.some(
+      (message) => message.type === "tab-updated" && message.tab.id === 1,
+    ),
+    false,
+  );
+  fixture.chrome.tabs.onCreated.emit({
+    ...tab(1),
+    title: "Recreated",
+    url: "https://tab-1.test/recreated",
+  });
+  assert.deepEqual(
+    JSON.parse(
+      JSON.stringify(
+        port.messages.findLast(
+          (message) => message.type === "tab-updated" && message.tab.id === 1,
+        ).tab,
+      ),
+    ),
+    {
+      id: 1,
+      title: "Recreated",
+      url: "https://tab-1.test/recreated",
+    },
+  );
+});
+
 test("Chrome debugger cancel revokes all tabs and reconnect rejects late old-port results", async () => {
   let release;
   const pending = new Promise((resolve) => {

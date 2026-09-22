@@ -17,6 +17,7 @@ async function handleAction() {
     port: chrome.runtime.connectNative(NATIVE_HOST),
     tabs: new Map(),
     recentUrls: new Map(),
+    removed: new Set(),
     changed: new Set(),
     owned: new Set(),
     attachments: new Map(),
@@ -90,7 +91,13 @@ async function handleAction() {
   }
 }
 
-chrome.tabs.onCreated.addListener(updateTab);
+chrome.tabs.onCreated.addListener((tab) => {
+  const session = connection;
+  if (session === undefined) return;
+  session.removed.delete(tab.id);
+  session.recentUrls.delete(tab.id);
+  updateTab(tab);
+});
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) =>
   updateTab(tab, changeInfo),
 );
@@ -98,7 +105,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   const session = connection;
   if (session === undefined) return;
   session.changed.add(tabId);
+  session.removed.add(tabId);
   session.recentUrls.delete(tabId);
+  session.owned.delete(tabId);
   removeTab(session, tabId);
 });
 chrome.debugger.onEvent.addListener((source, method, params) => {
@@ -125,7 +134,9 @@ chrome.debugger.onDetach.addListener((source, reason) => {
     return;
   if (reason === "target_closed") {
     session.attachments.delete(source.tabId);
+    session.removed.add(source.tabId);
     session.recentUrls.delete(source.tabId);
+    session.owned.delete(source.tabId);
     removeTab(session, source.tabId);
     return;
   }
@@ -136,6 +147,7 @@ chrome.debugger.onDetach.addListener((source, reason) => {
 function updateTab(tab, changeInfo = {}) {
   const session = connection;
   if (session === undefined) return;
+  if (session.removed.has(tab.id)) return;
   session.changed.add(tab.id);
   const previous = session.tabs.get(tab.id);
   const candidate = {
