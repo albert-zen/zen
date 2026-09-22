@@ -8138,6 +8138,160 @@ a:focus-visible {
 .settings-explanation > summary {
   padding-block: 6px;
 }
+
+/* Settings use one spacing rhythm across navigation, sections, and fields. */
+.settings-view {
+  --settings-gap-field: 6px;
+  --settings-gap-row: 16px;
+  --settings-gap-section: 16px;
+  --settings-card-padding: 18px;
+  --settings-control-height: 38px;
+}
+.settings-view > .page-scroll {
+  padding-top: 24px;
+  padding-bottom: 32px;
+}
+.settings-view .settings-layout {
+  grid-template-columns: 168px minmax(0, 1fr);
+  gap: 24px;
+}
+.settings-view .settings-nav {
+  gap: 4px;
+  padding-block: 0;
+}
+.settings-view .settings-nav button {
+  min-height: 36px;
+  gap: 8px;
+  padding: 7px 10px;
+}
+.settings-view .settings-nav button:last-child {
+  margin-top: 8px;
+}
+.settings-view .settings-panel {
+  gap: var(--settings-gap-section);
+  padding-bottom: 8px;
+}
+.settings-view .settings-panel > header,
+.settings-view .preserved-plugin-settings > header {
+  padding: 0 0 4px;
+}
+.settings-view .settings-panel > header h2,
+.settings-view .preserved-plugin-settings > header h2 {
+  margin-bottom: 6px;
+}
+.settings-view .settings-card {
+  padding: var(--settings-card-padding);
+}
+.settings-view .settings-card-head {
+  align-items: flex-start;
+  gap: var(--settings-gap-row);
+  margin-bottom: var(--settings-gap-row);
+}
+.settings-view .settings-row {
+  align-items: center;
+  gap: var(--settings-gap-row);
+}
+.settings-view .settings-card-head > div,
+.settings-view .settings-row > div {
+  gap: var(--settings-gap-field);
+}
+.settings-view .settings-row + .settings-row {
+  margin-top: var(--settings-gap-row);
+  padding-top: var(--settings-gap-row);
+}
+.settings-view .settings-panel .form-grid {
+  gap: 14px 12px;
+}
+.settings-view .settings-panel .field,
+.settings-view .settings-field {
+  gap: var(--settings-gap-field);
+}
+.settings-view .settings-panel .field input,
+.settings-view .settings-panel .field select {
+  min-height: var(--settings-control-height);
+}
+.settings-view
+  :where(
+    .primary-button,
+    .secondary-button,
+    .quiet-button,
+    .danger-button,
+    .ui-select
+  ) {
+  min-height: var(--settings-control-height);
+}
+.settings-view .settings-actions,
+.settings-view .provider-section-actions,
+.settings-view .provider-editor-actions {
+  gap: 8px;
+}
+.settings-view .provider-editor,
+.settings-view .delete-provider-panel {
+  gap: var(--settings-gap-row);
+  padding: var(--settings-card-padding);
+}
+.settings-view .provider-editor form {
+  gap: var(--settings-gap-row);
+}
+.settings-view .settings-card > .settings-empty {
+  gap: 8px;
+  padding: 14px 0 0;
+  border: 0;
+  border-top: 1px solid var(--border-soft);
+  border-radius: 0;
+  background: transparent;
+}
+.settings-view .workflow-command-editors {
+  gap: var(--settings-gap-row);
+  margin-top: var(--settings-gap-row);
+}
+.settings-view .workflow-command-editor {
+  padding-top: var(--settings-gap-row);
+}
+.settings-view .workflow-command-editor-head {
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.settings-view > .settings-apply-bar {
+  min-height: 60px;
+  gap: var(--settings-gap-row);
+  padding: 10px 24px;
+}
+@media (max-width: 940px) {
+  .settings-view .settings-layout {
+    grid-template-columns: 1fr;
+    gap: var(--settings-gap-section);
+  }
+  .settings-view .settings-nav {
+    position: static;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    margin-bottom: 0;
+  }
+  .settings-view .settings-nav button:last-child {
+    margin-top: 0;
+  }
+}
+@media (max-width: 640px) {
+  .settings-view {
+    --settings-card-padding: 16px;
+  }
+  .settings-view .settings-nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .settings-view .settings-card-head,
+  .settings-view .settings-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .settings-view .settings-card-head > :is(button, .status-muted),
+  .settings-view .settings-row > button {
+    align-self: flex-start;
+  }
+  .settings-view > .settings-apply-bar {
+    padding-inline: 14px;
+  }
+}
 .composer-model-search {
   box-sizing: border-box;
   width: calc(100% - 12px);
