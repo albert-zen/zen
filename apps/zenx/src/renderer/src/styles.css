@@ -1138,7 +1138,7 @@ a:focus-visible {
 }
 .thread-row[data-shortcut-key]::after,
 .new-thread-action[data-shortcut-key]::after {
-  content: "⌘" attr(data-shortcut-key);
+  content: "Ctrl+" attr(data-shortcut-key);
   justify-self: end;
   min-width: 24px;
   padding: 2px 6px;
@@ -1149,9 +1149,9 @@ a:focus-visible {
   line-height: 1.25;
   text-align: center;
 }
-:root[data-platform="win32"] .thread-row[data-shortcut-key]::after,
-:root[data-platform="win32"] .new-thread-action[data-shortcut-key]::after {
-  content: "Ctrl+" attr(data-shortcut-key);
+:root[data-platform="darwin"] .thread-row[data-shortcut-key]::after,
+:root[data-platform="darwin"] .new-thread-action[data-shortcut-key]::after {
+  content: "⌘" attr(data-shortcut-key);
 }
 .thread-row[data-shortcut-key]::after {
   position: absolute;
