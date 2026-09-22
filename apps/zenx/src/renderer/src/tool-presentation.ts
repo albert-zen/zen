@@ -28,6 +28,9 @@ export function toolPresentation(name: string): {
   action?: string;
 } {
   const key = name.replace(/^zenx_/u, "");
+  if (/^view_image(?:\s|$)/u.test(key)) {
+    return { category: "Image", icon: "image", action: "View images" };
+  }
   const action = actions[key];
   if (action)
     return {

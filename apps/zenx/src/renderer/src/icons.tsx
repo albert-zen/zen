@@ -25,6 +25,7 @@ export type IconName =
   | "folder"
   | "file"
   | "inbox"
+  | "image"
   | "folder-plus"
   | "grip"
   | "layers"
@@ -56,6 +57,13 @@ type IconProps = SVGProps<SVGSVGElement> & {
 };
 
 const paths: Record<IconName, ReactNode> = {
+  image: (
+    <>
+      <rect x="1.5" y="1.5" width="13" height="13" rx="2" />
+      <circle cx="5" cy="5" r="1" />
+      <path d="m2 12 4-4 3 3 2-2 3 3" />
+    </>
+  ),
   browser: (
     <>
       <rect x="1.5" y="2" width="13" height="12" rx="2" />

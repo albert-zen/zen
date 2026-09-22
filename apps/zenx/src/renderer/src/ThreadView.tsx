@@ -1382,7 +1382,7 @@ function TraceSequence({
         >
           <Icon name="layers" size={15} />
           <span>{node.summary}</span>
-          <small>{node.items.length} items</small>
+          <small className="sr-only">{node.items.length} items</small>
           <Icon name="chevron-down" size={13} />
         </button>
       ) : singletonExpandable ? (
@@ -1407,7 +1407,12 @@ function TraceSequence({
         />
       ) : null}
       {grouped && expanded ? (
-        <div className="trace-items">
+        <div
+          className="trace-items"
+          role="region"
+          aria-label="Execution details"
+          tabIndex={0}
+        >
           {traceDisplayRows(node.items).map(
             ({ item, nested, parentToolName }) => {
               const open = openItems.has(item.id);
@@ -1482,7 +1487,7 @@ function TraceItemHeader({
           ? "Think"
           : toolPresentation(item.toolName ?? item.command).category}
       </strong>
-      <span>{traceItemLabel(item)}</span>
+      <span title={traceItemLabel(item)}>{traceItemLabel(item)}</span>
       <span className="trace-item-status">
         <StatusMark item={item} />
       </span>
@@ -1537,21 +1542,40 @@ function TraceDetail({
   }
   if (item.type !== "commandExecution") return null;
   return (
-    <div className="trace-detail">
-      <pre className="trace-command">
-        <code>{item.command}</code>
-      </pre>
+    <div className="trace-detail trace-tool-detail">
       <ToolImages itemId={item.id} />
-      <ToolResultRenderer
-        item={item}
-        snapshot={pluginSnapshot}
-        registry={pluginUiRegistry}
-        theme={
-          document.documentElement.dataset.appearance === "dark"
-            ? "dark"
-            : "light"
-        }
-      />
+      <div className="trace-tool-card">
+        <details className="trace-input">
+          <summary>
+            <span className="trace-input-heading">
+              Input <Icon name="chevron-down" size={13} />
+            </span>
+            <span className="trace-input-preview">
+              <code>{item.command}</code>
+            </span>
+          </summary>
+          <pre className="trace-command">
+            <code>{item.command}</code>
+          </pre>
+        </details>
+        <div
+          className="trace-output"
+          role="region"
+          aria-label="Tool output"
+          tabIndex={0}
+        >
+          <ToolResultRenderer
+            item={item}
+            snapshot={pluginSnapshot}
+            registry={pluginUiRegistry}
+            theme={
+              document.documentElement.dataset.appearance === "dark"
+                ? "dark"
+                : "light"
+            }
+          />
+        </div>
+      </div>
     </div>
   );
 }
@@ -1822,7 +1846,11 @@ function traceItemLabel(item: ThreadItem): string {
       typeof item.toolArguments?.description === "string"
       ? item.toolArguments.description
       : (toolPresentation(item.toolName ?? item.command).action ??
-        commandLabel(item.toolName ?? item.command))
+        (typeof item.toolArguments?.command === "string"
+          ? item.toolArguments.command
+          : item.toolName === undefined
+            ? item.command
+            : commandLabel(item.toolName)))
     : "Item details";
 }
 

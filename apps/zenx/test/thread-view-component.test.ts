@@ -1907,6 +1907,47 @@ test("tool images appear only inside expanded tool details beside unchanged call
   });
 });
 
+test("tool details disclose full input independently of scrollable output", async () => {
+  await withDom(async (root) => {
+    const value = commandItem(
+      "long-tool",
+      "printf 'first line\\nsecond line\\nlast line'".repeat(20),
+    );
+    if (value.type !== "commandExecution") return;
+    value.aggregatedOutput = Array.from(
+      { length: 80 },
+      (_, index) => `Result ${index}`,
+    ).join("\n");
+    await renderInteractive(root, turnWithItems("inProgress", [value]));
+    await act(async () => requiredButton(".trace-item-toggle").click());
+    const input = requiredElement(".trace-input") as HTMLDetailsElement;
+    const summary = requiredElement(".trace-input summary") as HTMLElement;
+    assert.equal(input.open, false);
+    assert.equal(
+      requiredElement(".trace-input-preview code").textContent,
+      value.command,
+    );
+    await act(async () => summary.click());
+    assert.equal(input.open, true);
+    assert.equal(
+      requiredElement(".trace-command code").textContent,
+      value.command,
+    );
+    const output = requiredElement('[role="region"][aria-label="Tool output"]');
+    assert.equal(output.getAttribute("tabindex"), "0");
+    assert.equal(
+      output.querySelector("pre")?.textContent,
+      value.aggregatedOutput,
+    );
+    await act(async () => summary.click());
+    assert.equal(input.open, false);
+    assert.equal(
+      output.querySelector("pre")?.textContent,
+      value.aggregatedOutput,
+    );
+  });
+});
+
 test("running and completed durations share second, minute and hour formatting", async (t) => {
   t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 10_000 });
   await withDom(async (root) => {
