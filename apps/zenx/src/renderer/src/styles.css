@@ -1940,10 +1940,13 @@ a:focus-visible {
   border-radius: 10px;
   background: var(--surface-wash-subtle);
 }
-.trace-input summary {
+.trace-input-summary {
+  position: relative;
   padding: 10px 12px;
-  cursor: pointer;
   list-style: none;
+}
+.trace-input summary {
+  cursor: pointer;
 }
 .trace-input summary::-webkit-details-marker {
   display: none;
@@ -1974,7 +1977,13 @@ a:focus-visible {
   overflow-wrap: anywhere;
 }
 .trace-input[open] .trace-input-preview {
-  display: none;
+  /* Keep the collapsed geometry measurable when the full input is open. */
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  visibility: hidden;
+  pointer-events: none;
+  user-select: none;
 }
 .trace-input[open] .trace-input-heading {
   margin-bottom: 0;

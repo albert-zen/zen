@@ -919,7 +919,10 @@ test("renders canonical run_code children as nested rows with full code", async 
     )[0];
     assert.ok(outerToggle);
     await act(async () => outerToggle.click());
-    assert.equal(requiredElement(".trace-command code").textContent, fullCode);
+    assert.equal(
+      requiredElement(".trace-input-preview code").textContent,
+      fullCode,
+    );
     assert.match(document.body.textContent ?? "", /Inspect nested output/u);
   });
 });
@@ -1894,7 +1897,7 @@ test("tool images appear only inside expanded tool details beside unchanged call
     assert.ok(document.querySelector('[aria-label="Tool images"]'));
     assert.ok(document.querySelector('[aria-label="Preview Tool image 1"]'));
     assert.equal(
-      document.querySelector(".trace-command")?.textContent,
+      document.querySelector(".trace-input-preview")?.textContent,
       value.command,
     );
     assert.match(
@@ -1907,44 +1910,129 @@ test("tool images appear only inside expanded tool details beside unchanged call
   });
 });
 
+test("tool input offers disclosure only while its two-line preview overflows", async () => {
+  await withDom(async (root) => {
+    await withInputPreviewLayout(async (resize) => {
+      const value = commandItem(
+        "short-input",
+        'zenx_plugin {"operation":"read","pluginId":"computer"}',
+      );
+      await renderInteractive(root, turnWithItems("inProgress", [value]));
+      await act(async () => requiredButton(".trace-item-toggle").click());
+      assert.ok(!document.querySelector(".trace-input summary"));
+      assert.ok(!document.querySelector(".trace-input-heading svg"));
+      assert.equal(
+        requiredElement(".trace-input-preview code").textContent,
+        value.type === "commandExecution" ? value.command : "",
+      );
+
+      await act(async () => resize(60));
+      const input = requiredElement<HTMLDetailsElement>("details.trace-input");
+      assert.equal(input.open, false);
+      await act(async () =>
+        requiredElement<HTMLElement>(".trace-input summary").click(),
+      );
+      assert.equal(input.open, true);
+      // Widening while expanded must remove the obsolete control too.
+      await act(async () => resize(40));
+      assert.ok(!document.querySelector(".trace-input summary"));
+      assert.ok(!document.querySelector(".trace-input-heading svg"));
+      await act(async () => resize(60));
+      assert.equal(
+        requiredElement<HTMLDetailsElement>("details.trace-input").open,
+        false,
+      );
+    });
+  });
+});
+
+async function withInputPreviewLayout(
+  run: (resize: (height: number) => void) => Promise<void>,
+  initialHeight = 40,
+) {
+  let contentHeight = initialHeight;
+  const callbacks = new Set<() => void>();
+  const previous = globalThis.ResizeObserver;
+  Object.defineProperties(window.HTMLElement.prototype, {
+    clientHeight: {
+      configurable: true,
+      get() {
+        return this.classList.contains("trace-input-preview") ? 40 : 0;
+      },
+    },
+    scrollHeight: {
+      configurable: true,
+      get() {
+        return this.classList.contains("trace-input-preview")
+          ? contentHeight
+          : 0;
+      },
+    },
+  });
+  globalThis.ResizeObserver = class {
+    constructor(private callback: () => void) {}
+    observe() {
+      callbacks.add(this.callback);
+    }
+    unobserve() {
+      callbacks.delete(this.callback);
+    }
+    disconnect() {
+      callbacks.delete(this.callback);
+    }
+  } as unknown as typeof ResizeObserver;
+  try {
+    await run((height) => {
+      contentHeight = height;
+      for (const callback of [...callbacks]) callback();
+    });
+  } finally {
+    globalThis.ResizeObserver = previous;
+  }
+}
+
 test("tool details disclose full input independently of scrollable output", async () => {
   await withDom(async (root) => {
-    const value = commandItem(
-      "long-tool",
-      "printf 'first line\\nsecond line\\nlast line'".repeat(20),
-    );
-    if (value.type !== "commandExecution") return;
-    value.aggregatedOutput = Array.from(
-      { length: 80 },
-      (_, index) => `Result ${index}`,
-    ).join("\n");
-    await renderInteractive(root, turnWithItems("inProgress", [value]));
-    await act(async () => requiredButton(".trace-item-toggle").click());
-    const input = requiredElement(".trace-input") as HTMLDetailsElement;
-    const summary = requiredElement(".trace-input summary") as HTMLElement;
-    assert.equal(input.open, false);
-    assert.equal(
-      requiredElement(".trace-input-preview code").textContent,
-      value.command,
-    );
-    await act(async () => summary.click());
-    assert.equal(input.open, true);
-    assert.equal(
-      requiredElement(".trace-command code").textContent,
-      value.command,
-    );
-    const output = requiredElement('[role="region"][aria-label="Tool output"]');
-    assert.equal(output.getAttribute("tabindex"), "0");
-    assert.equal(
-      output.querySelector("pre")?.textContent,
-      value.aggregatedOutput,
-    );
-    await act(async () => summary.click());
-    assert.equal(input.open, false);
-    assert.equal(
-      output.querySelector("pre")?.textContent,
-      value.aggregatedOutput,
-    );
+    await withInputPreviewLayout(async () => {
+      const value = commandItem(
+        "long-tool",
+        "printf 'first line\\nsecond line\\nlast line'".repeat(20),
+      );
+      if (value.type !== "commandExecution") return;
+      value.aggregatedOutput = Array.from(
+        { length: 80 },
+        (_, index) => `Result ${index}`,
+      ).join("\n");
+      await renderInteractive(root, turnWithItems("inProgress", [value]));
+      await act(async () => requiredButton(".trace-item-toggle").click());
+      const input = requiredElement(".trace-input") as HTMLDetailsElement;
+      const summary = requiredElement(".trace-input summary") as HTMLElement;
+      assert.equal(input.open, false);
+      assert.equal(
+        requiredElement(".trace-input-preview code").textContent,
+        value.command,
+      );
+      await act(async () => summary.click());
+      assert.equal(input.open, true);
+      assert.equal(
+        requiredElement(".trace-command code").textContent,
+        value.command,
+      );
+      const output = requiredElement(
+        '[role="region"][aria-label="Tool output"]',
+      );
+      assert.equal(output.getAttribute("tabindex"), "0");
+      assert.equal(
+        output.querySelector("pre")?.textContent,
+        value.aggregatedOutput,
+      );
+      await act(async () => summary.click());
+      assert.equal(input.open, false);
+      assert.equal(
+        output.querySelector("pre")?.textContent,
+        value.aggregatedOutput,
+      );
+    }, 80);
   });
 });
 
