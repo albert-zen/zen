@@ -72,6 +72,8 @@ export interface ComputerInspectionDiagnostics {
   semanticCount: number;
   fallbackCount: number;
   encounteredWebArea: boolean;
+  webAreaControlCount: number;
+  webAreaActionableCount: number;
 }
 
 export interface ComputerLiveObservationFrame {
@@ -186,18 +188,26 @@ export type ComputerKey =
 
 export const MAX_COMPUTER_INSPECTION_CONTROLS = 32;
 
-/** Preserve source order, reserving the bounded result for usable actions first. */
+/** Preserve source order within each tier while keeping preferred semantics visible. */
 export function selectComputerInspectionControls<T>(
   controls: readonly T[],
   actionable: (control: T) => boolean,
+  preferred: (control: T) => boolean = () => false,
 ): T[] {
   if (controls.length <= MAX_COMPUTER_INSPECTION_CONTROLS) return [...controls];
-  const flags = controls.map(actionable);
+  const actionableFlags = controls.map(actionable);
+  const preferredFlags = controls.map(preferred);
   const selected = new Set<number>();
-  for (const priority of [true, false]) {
+  const tiers = [
+    (index: number) => preferredFlags[index] && actionableFlags[index],
+    (index: number) => preferredFlags[index] && !actionableFlags[index],
+    (index: number) => !preferredFlags[index] && actionableFlags[index],
+    (index: number) => !preferredFlags[index] && !actionableFlags[index],
+  ];
+  for (const tier of tiers) {
     for (let index = 0; index < controls.length; index += 1) {
       if (selected.size === MAX_COMPUTER_INSPECTION_CONTROLS) break;
-      if (flags[index] === priority) selected.add(index);
+      if (tier(index)) selected.add(index);
     }
   }
   return controls.filter((_, index) => selected.has(index));
@@ -586,6 +596,26 @@ interface MacRawControl {
   title: string;
   enabled: boolean;
   actions: string[];
+  inWebArea: boolean;
+}
+
+const MAC_CONTAINER_ROLES = new Set([
+  "AXWindow",
+  "AXGroup",
+  "AXToolbar",
+  "AXScrollArea",
+  "AXSplitGroup",
+  "AXWebArea",
+  "AXLayoutArea",
+  "AXLayoutItem",
+]);
+
+function preferredMacWebControl(control: MacRawControl): boolean {
+  if (!control.inWebArea) return false;
+  return (
+    canonicalComputerActions(control.actions).length > 0 ||
+    (control.title.length > 0 && !MAC_CONTAINER_ROLES.has(control.role))
+  );
 }
 
 interface MacInspectionResult {
@@ -678,6 +708,7 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
       result.controls,
       (control) =>
         control.enabled && canonicalComputerActions(control.actions).length > 0,
+      preferredMacWebControl,
     );
     const observation = this.#observations.observe(
       computerTargetKey(target),
@@ -1221,9 +1252,15 @@ func children(_ element: AXUIElement) -> [AXUIElement] {
   return elementArrayAttribute(element, "AXChildrenInNavigationOrder")
 }
 
+func supportsTextValue(_ element: AXUIElement) -> Bool {
+  let role = textAttribute(element, kAXRoleAttribute)
+  return ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"].contains(role) &&
+    isSettable(element, kAXValueAttribute)
+}
+
 func supportedActions(_ element: AXUIElement) -> [String] {
   var result = actions(element)
-  if isSettable(element, kAXValueAttribute) { result.append("AXSetValue") }
+  if supportsTextValue(element) { result.append("AXSetValue") }
   return Array(Set(result)).sorted()
 }
 
@@ -1278,8 +1315,14 @@ func matches(_ element: AXUIElement, _ wanted: [String: Any]) -> Bool {
   return string(wanted["identifier"]) != nil || string(wanted["role"]) != nil || string(wanted["subrole"]) != nil || string(wanted["title"]) != nil || string(wanted["description"]) != nil || string(wanted["help"]) != nil || string(wanted["frame"]) != nil
 }
 
+struct WalkEntry {
+  let element: AXUIElement
+  let inWebArea: Bool
+}
+
 struct WalkResult {
-  let elements: [AXUIElement]
+  let entries: [WalkEntry]
+  var elements: [AXUIElement] { entries.map { $0.element } }
   let visitLimit: Int
   let visitLimitReached: Bool
   let maxDepth: Int
@@ -1288,25 +1331,26 @@ struct WalkResult {
 }
 
 func walk(_ root: AXUIElement, visitLimit: Int = 1024, maxDepth: Int = 24) -> WalkResult {
-  var queue: [(AXUIElement, Int)] = [(root, 0)]
-  var result: [AXUIElement] = []
+  var queue: [(AXUIElement, Int, Bool)] = [(root, 0, false)]
+  var result: [WalkEntry] = []
   var cursor = 0
   var maxDepthVisited = 0
   var depthLimitReached = false
   while cursor < queue.count && result.count < visitLimit {
-    let (element, depth) = queue[cursor]
+    let (element, depth, inheritedWebArea) = queue[cursor]
     cursor += 1
-    result.append(element)
+    let inWebArea = inheritedWebArea || textAttribute(element, kAXRoleAttribute) == "AXWebArea"
+    result.append(WalkEntry(element: element, inWebArea: inWebArea))
     maxDepthVisited = max(maxDepthVisited, depth)
     let descendants = children(element)
     if depth < maxDepth {
-      queue.append(contentsOf: descendants.map { ($0, depth + 1) })
+      queue.append(contentsOf: descendants.map { ($0, depth + 1, inWebArea) })
     } else if !descendants.isEmpty {
       depthLimitReached = true
     }
   }
   return WalkResult(
-    elements: result,
+    entries: result,
     visitLimit: visitLimit,
     visitLimitReached: cursor < queue.count,
     maxDepth: maxDepth,
@@ -1349,7 +1393,10 @@ case "inspect":
   var semanticControls: [[String: Any]] = []
   var fallbackControls: [[String: Any]] = []
   var encounteredWebArea = false
-  for element in traversal.elements {
+  var webAreaControlCount = 0
+  var webAreaActionableCount = 0
+  for entry in traversal.entries {
+    let element = entry.element
     let controlSelector = selector(element)
     if controlSelector.isEmpty { continue }
     let role = textAttribute(element, kAXRoleAttribute)
@@ -1357,14 +1404,17 @@ case "inspect":
     let label = displayLabel(element)
     let enabled = boolAttribute(element, kAXEnabledAttribute)
     let elementActions = supportedActions(element)
+    if entry.inWebArea { webAreaControlCount += 1 }
     let control: [String: Any] = [
       "selector": controlSelector,
       "role": role,
       "title": label,
       "enabled": enabled,
       "actions": elementActions,
+      "inWebArea": entry.inWebArea,
     ]
     if enabled && (elementActions.contains("AXPress") || elementActions.contains("AXSetValue")) {
+      if entry.inWebArea { webAreaActionableCount += 1 }
       actionableControls.append(control)
     } else if !isContainerRole(role) && !label.isEmpty {
       semanticControls.append(control)
@@ -1392,7 +1442,9 @@ case "inspect":
       "actionableCount": actionableControls.count,
       "semanticCount": semanticControls.count,
       "fallbackCount": fallbackControls.count,
-      "encounteredWebArea": encounteredWebArea
+      "encounteredWebArea": encounteredWebArea,
+      "webAreaControlCount": webAreaControlCount,
+      "webAreaActionableCount": webAreaActionableCount
     ]
   ]
 case "press":
@@ -1406,8 +1458,7 @@ case "setValue":
   let wanted = dictionary(request["control"], "control")
   guard let value = request["value"] as? String else { fail("value must be a string") }
   let element = findControl(wanted)
-  var settable: DarwinBoolean = false
-  guard AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success, settable.boolValue else {
+  guard supportsTextValue(element) else {
     fail("control does not support background-safe AXValue; foreground_required")
   }
   let error = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFTypeRef)

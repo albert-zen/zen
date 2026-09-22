@@ -483,4 +483,55 @@ test("computer observation budget preserves source order and prioritizes enabled
       { role: "AXTextField", title: "Fixture B name" },
     ],
   );
+
+  const installedChromeControls = [
+    ...Array.from({ length: 53 }, (_, index) => ({
+      role: "AXGroup",
+      title: index === 0 ? "Chrome shell" : "",
+      enabled: true,
+      actions: ["AXSetValue"],
+      inWebArea: false,
+    })),
+    {
+      role: "AXTextField",
+      title: "协作文本",
+      enabled: true,
+      actions: ["AXSetValue"],
+      inWebArea: true,
+    },
+    {
+      role: "AXButton",
+      title: "更新结果",
+      enabled: true,
+      actions: ["AXPress"],
+      inWebArea: true,
+    },
+    {
+      role: "AXStaticText",
+      title: "等待更新",
+      enabled: true,
+      actions: [] as string[],
+      inWebArea: true,
+    },
+  ];
+  const installedChromeSelection = selectComputerInspectionControls(
+    installedChromeControls,
+    (control) => control.enabled && control.actions.length > 0,
+    (control) =>
+      control.inWebArea &&
+      (control.actions.length > 0 ||
+        (control.title.length > 0 && control.role !== "AXGroup")),
+  );
+  assert.equal(installedChromeSelection.length, 32);
+  assert.deepEqual(
+    installedChromeSelection.slice(-3).map(({ role, title }) => ({
+      role,
+      title,
+    })),
+    [
+      { role: "AXTextField", title: "协作文本" },
+      { role: "AXButton", title: "更新结果" },
+      { role: "AXStaticText", title: "等待更新" },
+    ],
+  );
 });
