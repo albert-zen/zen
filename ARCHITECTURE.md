@@ -985,3 +985,5 @@ Provider 删除、能力更新与连接替换只改变后续执行目录。AppSe
 源码模式的 ZenX Host 通过仅开发期的 Worker 入口注册 tsx 模块解析，再加载同一 Code Runtime Worker；打包模式继续使用编译后的 Worker，不继承 Host 的任意 execArgv。
 
 - **ZenX scrollbar visibility** — one renderer document controller reveals native scrollbars on scrolling, edge pointer and keyboard activity; this transient presentation state never replaces native scrolling or changes layout geometry.
+
+- **ZenX tool input disclosure** — tool details measure their two-line input preview at the current width; only overflowing input gains an expandable disclosure, with no change to canonical call arguments.

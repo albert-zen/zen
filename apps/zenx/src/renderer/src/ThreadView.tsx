@@ -1545,19 +1545,7 @@ function TraceDetail({
     <div className="trace-detail trace-tool-detail">
       <ToolImages itemId={item.id} />
       <div className="trace-tool-card">
-        <details className="trace-input">
-          <summary>
-            <span className="trace-input-heading">
-              Input <Icon name="chevron-down" size={13} />
-            </span>
-            <span className="trace-input-preview">
-              <code>{item.command}</code>
-            </span>
-          </summary>
-          <pre className="trace-command">
-            <code>{item.command}</code>
-          </pre>
-        </details>
+        <ToolInput command={item.command} />
         <div
           className="trace-output"
           role="region"
@@ -1577,6 +1565,62 @@ function TraceDetail({
         </div>
       </div>
     </div>
+  );
+}
+
+function ToolInput({ command }: { command: string }) {
+  const preview = useRef<HTMLSpanElement>(null);
+  const [overflows, setOverflows] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  useLayoutEffect(() => {
+    const element = preview.current;
+    if (!element) return;
+    const measure = () => {
+      const next = element.scrollHeight > element.clientHeight + 1;
+      setOverflows(next);
+      if (!next) setExpanded(false);
+    };
+    measure();
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(element);
+    return () => observer?.disconnect();
+  }, [command, overflows]);
+
+  const Heading = overflows ? "summary" : "div";
+  const content = (
+    <>
+      <Heading className="trace-input-summary">
+        <span className="trace-input-heading">
+          Input {overflows ? <Icon name="chevron-down" size={13} /> : null}
+        </span>
+        <span
+          className="trace-input-preview"
+          ref={preview}
+          aria-hidden={expanded || undefined}
+        >
+          <code>{command}</code>
+        </span>
+      </Heading>
+      {overflows ? (
+        <pre className="trace-command">
+          <code>{command}</code>
+        </pre>
+      ) : null}
+    </>
+  );
+  return overflows ? (
+    <details
+      className="trace-input"
+      open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      {content}
+    </details>
+  ) : (
+    <div className="trace-input">{content}</div>
   );
 }
 
