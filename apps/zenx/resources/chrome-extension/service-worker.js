@@ -88,7 +88,9 @@ async function handleAction() {
 }
 
 chrome.tabs.onCreated.addListener(updateTab);
-chrome.tabs.onUpdated.addListener((_tabId, _changeInfo, tab) => updateTab(tab));
+chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) =>
+  updateTab(tab, changeInfo),
+);
 chrome.tabs.onRemoved.addListener((tabId) => {
   const session = connection;
   if (session === undefined) return;
@@ -126,7 +128,7 @@ chrome.debugger.onDetach.addListener((source, reason) => {
   void disconnect(session);
 });
 
-function updateTab(tab) {
+function updateTab(tab, changeInfo = {}) {
   const session = connection;
   if (session === undefined) return;
   session.changed.add(tab.id);
@@ -134,8 +136,12 @@ function updateTab(tab) {
     removeTab(session, tab.id);
     return;
   }
-  const next = publicTab(tab);
   const previous = session.tabs.get(tab.id);
+  const next = publicTab({
+    ...tab,
+    title: changeInfo.title ?? previous?.title ?? tab.title,
+    url: changeInfo.url ?? previous?.url ?? tab.url,
+  });
   session.tabs.set(tab.id, next);
   if (
     session.published &&

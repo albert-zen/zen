@@ -112,6 +112,7 @@ import {
   type ChromeNativeHostStage,
 } from "./chrome-native-host.js";
 import {
+  configureChromeNativeHostActivationPolicy,
   chromeNativeHostRegistered,
   registerChromeNativeHost,
   unregisterChromeNativeHost,
@@ -122,6 +123,11 @@ const nativeHostCaller = chromeNativeHostOrigin(
   ZENX_CHROME_EXTENSION_ORIGIN,
 );
 const nativeHostMode = nativeHostCaller !== undefined;
+configureChromeNativeHostActivationPolicy({
+  platform: process.platform,
+  nativeHostMode,
+  setActivationPolicy: (policy) => app.setActivationPolicy(policy),
+});
 if (nativeHostCaller !== undefined) {
   void (async () => {
     let stage: ChromeNativeHostStage = "resolve-user-data";

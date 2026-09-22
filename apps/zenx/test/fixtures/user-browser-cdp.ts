@@ -132,6 +132,7 @@ export async function createFakeCdpServer(): Promise<{
   disconnect(): void;
   emitScreencastFrame(value: string, frameNumber: number): void;
   emitRawScreencastFrame(data: string, frameNumber: number): void;
+  emitTargetInfoChanged(targetId: string, title: string, url: string): void;
   emitMainDocumentChange(): void;
   replaceMainDocument(url: string): void;
   close(): Promise<void>;
@@ -753,6 +754,17 @@ export async function createFakeCdpServer(): Promise<{
           }),
         );
       }
+    },
+    emitTargetInfoChanged: (targetId, title, url) => {
+      for (const socket of sockets)
+        socket.send(
+          JSON.stringify({
+            method: "Target.targetInfoChanged",
+            params: {
+              targetInfo: { targetId, type: "page", title, url },
+            },
+          }),
+        );
     },
     emitMainDocumentChange: () => {
       for (const socket of sockets) {

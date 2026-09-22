@@ -74,6 +74,49 @@ test("commands attach lazily to independent tabs, discover new tabs, and create 
   assert.deepEqual(fixture.removed, []);
 });
 
+test("tab update deltas replace stale same-tab navigation metadata", async () => {
+  const fixture = await workerFixture();
+  fixture.clicked.emit(tab(1));
+  await waitFor(() =>
+    fixture.ports[0]?.messages.some(
+      (message) => message.type === "browser-connected",
+    ),
+  );
+  const port = fixture.ports[0];
+  const stale = tab(1);
+  fixture.chrome.tabs.onUpdated.emit(
+    1,
+    {
+      url: "https://tab-1.test/next",
+    },
+    stale,
+  );
+  fixture.chrome.tabs.onUpdated.emit(1, { title: "Next page" }, stale);
+  assert.deepEqual(
+    JSON.parse(
+      JSON.stringify(
+        port.messages
+          .filter(
+            (message) => message.type === "tab-updated" && message.tab.id === 1,
+          )
+          .map((message) => message.tab),
+      ),
+    ),
+    [
+      {
+        id: 1,
+        title: "Tab 1",
+        url: "https://tab-1.test/next",
+      },
+      {
+        id: 1,
+        title: "Next page",
+        url: "https://tab-1.test/next",
+      },
+    ],
+  );
+});
+
 test("Chrome debugger cancel revokes all tabs and reconnect rejects late old-port results", async () => {
   let release;
   const pending = new Promise((resolve) => {
