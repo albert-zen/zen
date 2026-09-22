@@ -498,7 +498,7 @@ export function AuxiliaryPanel({
         </button>
         <button
           type="button"
-          className="icon-button"
+          className="icon-button auxiliary-close-button"
           aria-label="Close side panel"
           onClick={close}
         >

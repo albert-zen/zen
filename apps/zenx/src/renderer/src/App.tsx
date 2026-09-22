@@ -2486,9 +2486,6 @@ function WindowTitleBar({
             onClick={onToggleInbox}
           >
             <Icon name="inbox" />
-            <span className="inbox-label">
-              {mode === "inbox" ? "Projects" : "Inbox"}
-            </span>
             {pendingApprovalCount > 0 ? (
               <span className="inbox-dot" aria-hidden="true" />
             ) : null}
@@ -2587,7 +2584,7 @@ function ConversationTitleBar({
         {browserEnabled ? (
           <button
             id="thread-browser-toggle"
-            className="icon-button"
+            className="icon-button thread-panel-toggle"
             type="button"
             aria-label={browserOpen ? "Close side panel" : "Open side panel"}
             title="Workspace"

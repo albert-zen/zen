@@ -219,9 +219,13 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
     );
 
     await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>('[aria-label="Close side panel"]')!
-        .click(),
+      document.querySelector<HTMLElement>(".auxiliary-panel")!.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
     );
     assert.equal(
       document.querySelector(".auxiliary-panel")?.getAttribute("data-open"),

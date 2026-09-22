@@ -566,10 +566,7 @@ a:focus-visible {
 .plugin-spaces {
   display: grid;
   gap: 3px;
-  margin-top: 8px;
-  padding: 8px 0;
-  border-top: 1px solid var(--border-soft);
-  border-bottom: 1px solid var(--border-soft);
+  padding: 0;
 }
 .plugin-spaces-toggle {
   display: flex;
@@ -637,23 +634,17 @@ a:focus-visible {
   grid-template-columns: 20px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  margin: 9px 0 2px;
-  padding: 0 9px;
-  border: 1px solid var(--color-border-control);
+  margin: 0 0 3px;
+  padding: 0 10px;
+  border: 0;
   border-radius: 9px;
-  background: linear-gradient(
-    180deg,
-    var(--color-surface-elevated),
-    var(--color-surface-control)
-  );
+  background: transparent;
   color: var(--color-text-primary);
   font-size: var(--font-size-caption);
   text-align: left;
-  box-shadow: inset 0 1px var(--color-surface-highlight);
 }
 .new-thread-action:hover {
-  border-color: var(--color-border-focus);
-  background: var(--color-surface-control-hover);
+  background: var(--color-surface-hover);
 }
 .new-thread-action small {
   max-width: 74px;
@@ -662,6 +653,9 @@ a:focus-visible {
   font-size: var(--font-size-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.new-thread-action[data-shortcut-key] small {
+  display: none;
 }
 .sidebar-view-head {
   min-height: 32px;
@@ -674,6 +668,29 @@ a:focus-visible {
   color: var(--text-2);
   font-size: 13px;
   font-weight: 500;
+}
+.sidebar-view-actions,
+.sidebar-density-toggle {
+  display: flex;
+  align-items: center;
+}
+.sidebar-view-actions {
+  gap: 3px;
+}
+.sidebar-density-toggle {
+  min-height: 28px;
+  gap: 5px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+}
+.sidebar-density-toggle:hover,
+.sidebar-density-toggle:focus-visible {
+  color: var(--color-text-primary);
+  background: var(--color-surface-hover);
 }
 .projects-section-toggle {
   display: flex;
@@ -951,7 +968,7 @@ a:focus-visible {
 .thread-menu-trigger {
   position: absolute;
   z-index: 2;
-  top: 12px;
+  top: 50%;
   right: 5px;
   width: 36px;
   height: 36px;
@@ -969,6 +986,7 @@ a:focus-visible {
     opacity 140ms ease,
     color 160ms ease,
     background 160ms ease;
+  transform: translateY(-50%);
 }
 .thread-row-shell:hover .thread-menu-trigger,
 .thread-row-shell:focus-within .thread-menu-trigger,
@@ -1062,17 +1080,10 @@ a:focus-visible {
   background: var(--surface-wash-strong);
 }
 .thread-row.selected {
-  background: var(--color-surface-hover);
+  background: var(--color-accent-soft);
 }
 .thread-row.selected::before {
-  content: "";
-  position: absolute;
-  left: -1px;
-  top: 14px;
-  bottom: 14px;
-  width: 2px;
-  border-radius: 2px;
-  background: var(--color-accent);
+  content: none;
 }
 .thread-row.inbox {
   min-height: 80px;
@@ -1080,6 +1091,7 @@ a:focus-visible {
 }
 .thread-project,
 .model-line,
+.thread-model,
 .thread-title {
   min-width: 0;
   display: flex;
@@ -1087,7 +1099,8 @@ a:focus-visible {
   gap: 7px;
 }
 .thread-project,
-.model-line {
+.model-line,
+.thread-model {
   color: var(--color-text-muted);
   font-size: var(--font-size-caption);
 }
@@ -1098,11 +1111,58 @@ a:focus-visible {
   line-height: 1.35;
 }
 .thread-title > span:first-child,
-.model-line > span:last-child {
+.model-line > span:last-child,
+.thread-model > span:not(.provider-logo) {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.thread-model .provider-logo {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+}
+.sidebar[data-thread-density="compact"] .thread-model {
+  display: none;
+}
+.sidebar[data-thread-density="compact"] .thread-row {
+  min-height: 34px;
+  padding-block: 7px;
+}
+.sidebar[data-thread-density="compact"] .thread-row.inbox {
+  min-height: 56px;
+}
+.sidebar[data-thread-density="detailed"] .thread-row:not(.inbox) {
+  min-height: 56px;
+}
+.thread-row[data-shortcut-key]::after,
+.new-thread-action[data-shortcut-key]::after {
+  content: "⌘" attr(data-shortcut-key);
+  justify-self: end;
+  min-width: 24px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--color-surface-elevated);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  line-height: 1.25;
+  text-align: center;
+}
+:root[data-platform="win32"] .thread-row[data-shortcut-key]::after,
+:root[data-platform="win32"] .new-thread-action[data-shortcut-key]::after {
+  content: "Ctrl+" attr(data-shortcut-key);
+}
+.thread-row[data-shortcut-key]::after {
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.thread-row-shell:has(.thread-row[data-shortcut-key]) .thread-menu-trigger {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 .needs-dot,
 .live-dot {
@@ -4889,6 +4949,24 @@ a:focus-visible {
     grid-column: 1;
     grid-row: 2;
   }
+  .workspace:has(> .auxiliary-panel) {
+    display: block;
+  }
+  .workspace:has(> .auxiliary-panel) > .agent-surface {
+    width: 100%;
+    height: 100%;
+  }
+  .auxiliary-panel {
+    position: absolute;
+    z-index: 4;
+    inset: 0 0 0 auto;
+    width: min(100%, var(--auxiliary-width, 520px));
+    min-width: 0;
+    max-width: 100%;
+  }
+  .auxiliary-panel[data-open="false"] {
+    width: 0;
+  }
   .mobile-menu {
     display: inline-grid;
   }
@@ -4946,6 +5024,10 @@ a:focus-visible {
   :root[data-platform="win32"] .window-titlebar-session {
     grid-column: 1;
     grid-row: 2;
+  }
+  :root[data-platform="win32"] .thread-panel-toggle {
+    top: calc(var(--native-titlebar-height) + 4px);
+    right: 8px;
   }
   .mobile-menu {
     display: inline-grid;
@@ -6442,12 +6524,12 @@ a:focus-visible {
 }
 
 /* Shared Thread auxiliary views: local UI state only. */
-.workspace:has(> .auxiliary-panel[data-open="true"]) {
+.workspace:has(> .auxiliary-panel) {
   display: flex;
   position: relative;
   overflow: hidden;
 }
-.workspace:has(> .auxiliary-panel[data-open="true"]) > .agent-surface {
+.workspace:has(> .auxiliary-panel) > .agent-surface {
   flex: 1;
   min-width: 0;
   width: 0;
@@ -6464,9 +6546,13 @@ a:focus-visible {
   border-left: 1px solid var(--color-border-subtle);
   background: var(--color-surface-main);
   color: var(--color-text-primary);
+  overflow: hidden;
 }
 .auxiliary-panel[data-open="false"] {
-  display: none;
+  flex-basis: 0;
+  width: 0;
+  min-width: 0;
+  border-left-color: transparent;
 }
 .auxiliary-heading {
   min-height: 45px;
@@ -6502,6 +6588,9 @@ a:focus-visible {
   width: 28px;
   height: 28px;
   flex-shrink: 0;
+}
+.auxiliary-heading .auxiliary-close-button {
+  display: none;
 }
 .auxiliary-content {
   flex: 1;
@@ -7275,11 +7364,8 @@ a:focus-visible {
   .workspace:has(> .auxiliary-panel[data-open="true"]) > .agent-surface {
     padding-top: var(--titlebar-height);
   }
-  .app-shell:has(.auxiliary-panel[data-open="true"]) #thread-browser-toggle {
-    display: none;
-  }
   .app-shell:has(.auxiliary-panel[data-open="true"][data-expanded="true"])
-    .window-titlebar-session {
+    .thread-heading {
     visibility: hidden;
   }
   :root[data-platform="win32"] .auxiliary-heading {
@@ -7287,7 +7373,7 @@ a:focus-visible {
   }
 }
 @media (min-width: 721px) and (max-width: 1099px) {
-  .app-shell:has(.auxiliary-panel[data-open="true"]) .window-titlebar-session {
+  .app-shell:has(.auxiliary-panel[data-open="true"]) .thread-heading {
     visibility: hidden;
   }
 }
@@ -7724,7 +7810,7 @@ a:focus-visible {
 }
 .plugin-space-link[aria-current="page"],
 .settings-nav-row[aria-current="page"] {
-  box-shadow: inset 3px 0 var(--color-accent);
+  box-shadow: none;
   background: var(--color-accent-soft);
   color: var(--color-text-primary);
 }
@@ -8009,20 +8095,17 @@ a:focus-visible {
 
 .auxiliary-panel {
   transition:
+    flex-basis var(--motion-layout) var(--ease-standard),
+    width var(--motion-layout) var(--ease-standard),
+    min-width var(--motion-layout) var(--ease-standard),
+    border-color var(--motion-layout) var(--ease-standard),
     opacity var(--motion-layout) var(--ease-standard),
-    translate var(--motion-layout) var(--ease-standard),
-    display var(--motion-layout) allow-discrete;
+    translate var(--motion-layout) var(--ease-standard);
 }
 .auxiliary-panel[data-open="false"] {
   opacity: 0;
   translate: 12px 0;
   pointer-events: none;
-}
-@starting-style {
-  .auxiliary-panel[data-open="true"] {
-    opacity: 0;
-    translate: 12px 0;
-  }
 }
 .sidebar {
   transition:
@@ -8145,10 +8228,22 @@ a:focus-visible {
   opacity: 0;
 }
 .window-titlebar-inbox .inbox-button {
-  width: auto;
-  padding-inline: 8px;
-  gap: 5px;
+  width: 36px;
+  padding: 0;
+  gap: 0;
   font-size: var(--font-size-caption);
+}
+.thread-panel-toggle {
+  position: fixed;
+  z-index: 80;
+  top: 4px;
+  right: 8px;
+}
+:root[data-platform="win32"] .thread-panel-toggle {
+  right: calc(var(--windows-control-region) + 4px);
+}
+.window-titlebar {
+  transition: width var(--motion-layout) var(--ease-standard);
 }
 .workspace-tab-types strong {
   font-weight: 500;
@@ -8165,7 +8260,6 @@ a:focus-visible {
    its DOM placeholder independently of the actual page. */
 .auxiliary-panel:has(.workspace-browser-panel) {
   translate: none;
-  transition: none;
 }
 
 .composer-references {
