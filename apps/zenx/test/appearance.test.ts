@@ -286,11 +286,11 @@ test("light and dark semantic text, actions, boundaries, and focus meet contrast
   );
   assert.match(
     styles,
-    /\.thread-row\.selected\s*\{[^}]*background:\s*var\(--color-surface-hover\)/u,
+    /\.thread-row\.selected\s*\{[^}]*background:\s*var\(--color-accent-soft\)/u,
   );
   assert.match(
     styles,
-    /\.thread-project,\s*\.model-line\s*\{[^}]*color:\s*var\(--color-text-muted\)/u,
+    /\.thread-project,\s*\.model-line,\s*\.thread-model\s*\{[^}]*color:\s*var\(--color-text-muted\)/u,
   );
   assert.doesNotMatch(
     styles,
