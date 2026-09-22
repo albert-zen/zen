@@ -1088,11 +1088,6 @@ function TurnBlock({
             )
             .map((node) => renderUserItem(node.item))
         : null}
-      {complete && !expanded
-        ? turn.items
-            .filter((item) => item.type === "commandExecution")
-            .map((item) => <ToolImages key={item.id} itemId={item.id} />)
-        : null}
       {complete && projection.finalItem !== null ? (
         <div className="turn-final">
           <AgentMessage
@@ -1404,14 +1399,6 @@ function TraceSequence({
           pluginUiRegistry={pluginUiRegistry}
         />
       ) : null}
-      {!grouped && singleton?.type === "commandExecution" ? (
-        <ToolImages itemId={singleton.id} />
-      ) : null}
-      {grouped && !expanded
-        ? node.items
-            .filter((item) => item.type === "commandExecution")
-            .map((item) => <ToolImages key={item.id} itemId={item.id} />)
-        : null}
       {grouped && expanded ? (
         <div className="trace-items">
           {traceDisplayRows(node.items).map(
@@ -1455,9 +1442,6 @@ function TraceSequence({
                       pluginSnapshot={pluginSnapshot}
                       pluginUiRegistry={pluginUiRegistry}
                     />
-                  ) : null}
-                  {item.type === "commandExecution" ? (
-                    <ToolImages itemId={item.id} />
                   ) : null}
                 </div>
               );
@@ -1550,6 +1534,7 @@ function TraceDetail({
       <pre className="trace-command">
         <code>{item.command}</code>
       </pre>
+      <ToolImages itemId={item.id} />
       <ToolResultRenderer
         item={item}
         snapshot={pluginSnapshot}
