@@ -1273,7 +1273,14 @@ export function ContextUsageIndicator({
           >
             <span style={{ width: `${String(visualPercent)}%` }} />
           </div>
-          <p>{contextLabel}</p>
+          <p>
+            {context.inputTokens === null
+              ? "Usage unknown"
+              : `${formatTokenCount(context.inputTokens)}${context.inputTokenSource === "estimated" ? " estimated" : ""}`}
+            {context.contextWindow === null
+              ? " tokens"
+              : ` / ${formatTokenCount(context.contextWindow)} tokens`}
+          </p>
           <p>{threadCacheUsageLabel(threadCacheHitRate)}</p>
           <p className="context-usage-explanation">
             Condense earlier context for the next reply. Your conversation stays

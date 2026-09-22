@@ -105,6 +105,22 @@ function Fixture() {
           onInterrupt={noop}
           onRespondToApproval={noop}
           onSubmit={noop}
+          threadUsage={{
+            thread: {
+              responseCount: 1,
+              inputTokens: 38_400,
+              outputTokens: 400,
+              cacheHitRate: 0.75,
+            },
+            turns: {},
+            context: {
+              inputTokens: 38_400,
+              inputTokenSource: "estimated",
+              contextWindow: 128_000,
+              ratio: 0.3,
+            },
+          }}
+          onCompact={noop}
           workflowCommands={[
             {
               name: "review",
