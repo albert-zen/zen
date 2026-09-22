@@ -991,7 +991,11 @@ export function App() {
           }
           if (
             projected.event.type === "item_completed" &&
-            projected.event.item.type === "user_message" &&
+            (projected.event.item.type === "user_message" ||
+              (projected.event.item.type === "tool_result" &&
+                projected.event.item.modelContent?.some(
+                  (part) => part.type === "image",
+                ))) &&
             selectedThreadIdRef.current === projected.threadId
           ) {
             void window.zenx.imageAttachments

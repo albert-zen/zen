@@ -1889,6 +1889,10 @@ test("tool image thumbnails are a display projection beside unchanged call and o
         }),
       ),
     );
+    assert.equal(
+      document.querySelectorAll('[aria-label="Preview Tool image 1"]').length,
+      1,
+    );
     await act(async () => requiredButton(".trace-item-toggle").click());
     assert.ok(document.querySelector('[aria-label="Tool images"]'));
     assert.ok(document.querySelector('[aria-label="Preview Tool image 1"]'));
@@ -1901,6 +1905,55 @@ test("tool image thumbnails are a display projection beside unchanged call and o
       /Viewed image \/tmp\/image.png/,
     );
     assert.equal(JSON.stringify(value), original);
+  });
+});
+
+test("completed tool images remain visible once through turn and tool-group disclosures", async () => {
+  await withDom(async (root) => {
+    const items = [
+      reasoningItem("before-image", ["Inspect the image"], ["Details"]),
+      commandItem("visible-image", 'view_image {"path":"/tmp/visible.png"}'),
+    ];
+    const props = {
+      approvals: [],
+      composer: emptyComposerState(),
+      thread: thread([turnWithItems("completed", items)]),
+      threadAttachments: {
+        "visible-image": [
+          {
+            type: "attachment" as const,
+            sha256: "b".repeat(64),
+            mediaType: "image/png" as const,
+            byteLength: 68,
+            width: 1,
+            height: 1,
+          },
+        ],
+      },
+      onDraftChange: () => {},
+      onInterrupt: noop,
+      onRespondToApproval: noop,
+      onSubmit: noop,
+    };
+    await act(async () => root.render(createElement(ThreadView, props)));
+    const visibleOnce = () =>
+      assert.equal(
+        document.querySelectorAll('[aria-label="Preview Tool image 1"]').length,
+        1,
+      );
+    visibleOnce();
+    await act(async () => requiredButton(".turn-toggle").click());
+    visibleOnce();
+    await act(async () => requiredButton(".trace-toggle").click());
+    visibleOnce();
+    const tool = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".trace-item-toggle"),
+    ).find((button) => button.textContent?.includes("view image"));
+    assert.ok(tool);
+    await act(async () => tool.click());
+    visibleOnce();
+    await act(async () => requiredButton(".turn-toggle").click());
+    visibleOnce();
   });
 });
 

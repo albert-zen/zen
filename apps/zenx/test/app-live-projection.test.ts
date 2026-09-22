@@ -27,6 +27,93 @@ import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 
+test("canonical image tool completion refreshes the visible attachment projection", async () => {
+  let notify: NotificationListener | undefined;
+  const image = {
+    type: "attachment" as const,
+    sha256: "a".repeat(64),
+    mediaType: "image/png" as const,
+    byteLength: 68,
+    width: 1,
+    height: 1,
+  };
+  let images: ZenXThreadAttachmentProjection = {};
+  const harness = await mountApp({
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(thread());
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+    attachments: async () => images,
+    onNotification: (listener) => {
+      notify = listener;
+      return () => {
+        notify = undefined;
+      };
+    },
+  });
+  try {
+    const row = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".thread-row"),
+    );
+    await act(async () => row.click());
+    await waitFor(() =>
+      document.querySelector("#thread-browser-toggle:not(:disabled)"),
+    );
+    await act(async () => {
+      notify?.(
+        "zen/thread/event",
+        nativeEvent(1, {
+          type: "turn_started",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        }),
+      );
+      notify?.(
+        "zen/thread/event",
+        nativeEvent(2, {
+          type: "item_completed",
+          item: {
+            id: "image-call",
+            type: "tool_call",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            createdAt: new Date(20_000).toISOString(),
+            callId: "image-call-id",
+            name: "view_image",
+            arguments: { path: "/tmp/image.png" },
+          },
+        }),
+      );
+      images = { "image-call": [image] };
+      notify?.(
+        "zen/thread/event",
+        nativeEvent(3, {
+          type: "item_completed",
+          item: {
+            id: "image-result",
+            type: "tool_result",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            createdAt: new Date(21_000).toISOString(),
+            callId: "image-call-id",
+            output: "Viewed image",
+            exitCode: 0,
+            modelContent: [{ type: "image", attachment: image }],
+          },
+        }),
+      );
+    });
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".trace-item-toggle")?.click(),
+    );
+    await waitFor(() =>
+      document.querySelector('[aria-label="Preview Tool image 1"]'),
+    );
+  } finally {
+    await harness.unmount();
+  }
+});
+
 test("thread exposes one working side panel instead of the legacy workspace drawer", async () => {
   const harness = await mountApp({
     request: async (method) => {
@@ -693,7 +780,13 @@ async function mountApp(options: MountOptions) {
       onChange: () => () => undefined,
     },
     plugins: {
-      get: async () => ({ plugins: [], sidebar: [], pages: [] }),
+      get: async () => ({
+        plugins: [],
+        sidebar: [],
+        pages: [],
+        surfaces: [],
+        bundles: [],
+      }),
       onChange: () => () => undefined,
     },
   };
