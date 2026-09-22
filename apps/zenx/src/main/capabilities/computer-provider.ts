@@ -1183,6 +1183,9 @@ if operation == "listWindows" {
   var targets: [[String: Any]] = []
   for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
     let element = AXUIElementCreateApplication(app.processIdentifier)
+    // Chromium publishes its current AX window surface on demand. Requesting
+    // the application role before AXWindows keeps list and inspect consistent.
+    _ = textAttribute(element, kAXRoleAttribute)
     for window in elementArrayAttribute(element, kAXWindowsAttribute) {
       var target: [String: Any] = [
         "pid": Int(app.processIdentifier),
