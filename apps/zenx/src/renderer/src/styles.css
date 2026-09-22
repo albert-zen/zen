@@ -8257,6 +8257,14 @@ a:focus-visible {
   gap: var(--settings-gap-row);
   padding: 10px 24px;
 }
+@media (pointer: coarse) {
+  .settings-view {
+    --settings-control-height: 44px;
+  }
+  .settings-view .settings-nav button {
+    min-height: var(--settings-control-height);
+  }
+}
 @media (max-width: 940px) {
   .settings-view .settings-layout {
     grid-template-columns: 1fr;
