@@ -780,6 +780,7 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
           (manifest.contributions?.commands?.length ?? 0) +
           (manifest.contributions?.menus?.length ?? 0) +
           (manifest.contributions?.resultRenderers?.length ?? 0),
+        permissions: structuredClone(manifest.permissions),
       };
     });
     const enabled = [...this.#registered.values()].filter(

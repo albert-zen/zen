@@ -382,6 +382,7 @@ export function SettingsView({
                     mode={active && tab === "plugins" ? "visible" : "hidden"}
                   >
                     <PluginSettings
+                      onOpenGeneral={() => onTabChange("general")}
                       onFeedback={(message) => {
                         if (feedbackScope.current.version !== feedbackVersion)
                           return;

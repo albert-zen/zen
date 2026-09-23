@@ -12,6 +12,7 @@ import {
   PluginSettings,
   pluginSpacesForSettings,
 } from "../src/renderer/src/PluginSettings.js";
+import { PluginAccessReview } from "../src/renderer/src/PluginAccessReview.js";
 
 // SettingsView owns transient feedback; this harness observes that public callback.
 function PluginSettingsHarness() {
@@ -23,6 +24,176 @@ function PluginSettingsHarness() {
     React.createElement("div", { role: "status" }, message),
   );
 }
+
+test("Computer enablement first explains requested access and keeps OS setup explicit", async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: "https://zenx.local" });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    value: dom.window.navigator,
+    configurable: true,
+  });
+  const enabled: Array<[string, boolean]> = [];
+  const opened: string[] = [];
+  const installed: ZenXPluginSnapshot = {
+    ...emptyPluginSnapshot,
+    plugins: [
+      {
+        id: "computer",
+        displayName: "Computer",
+        version: "1.0.0",
+        source: "bundled",
+        lifecycle: "installed",
+        enabled: false,
+        available: true,
+        contributionCount: 0,
+        permissions: [
+          {
+            id: "computer.window.capture",
+            title: "Capture a targeted window",
+            description: "Capture one selected window.",
+            scope: "local-device",
+          },
+        ],
+      },
+    ],
+  };
+  Object.defineProperty(dom.window, "zenx", {
+    configurable: true,
+    value: {
+      marketplace: {
+        get: async () => ({
+          entries: [],
+          builtIns: [builtIn("computer", "@zenx/computer", "Computer", true)],
+        }),
+      },
+      computerReadiness: {
+        get: async () => ({
+          platform: "darwin",
+          accessibility: "needs-setup",
+          screenRecording: "denied",
+          foregroundControlEnabled: false,
+        }),
+        openSettings: async (kind: string) => {
+          opened.push(kind);
+        },
+      },
+      plugins: {
+        get: async () => installed,
+        onChange: () => () => {},
+        setEnabled: async (pluginId: string, next: boolean) => {
+          enabled.push([pluginId, next]);
+          return {
+            snapshot: {
+              ...installed,
+              plugins: [
+                {
+                  ...installed.plugins[0]!,
+                  lifecycle: "enabled",
+                  enabled: true,
+                },
+              ],
+            },
+            capabilityRefresh: { status: "refreshed" },
+          };
+        },
+      },
+    },
+  });
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => {
+    root.render(React.createElement(PluginSettingsHarness));
+    await Promise.resolve();
+  });
+  const button = (label: string) =>
+    [...dom.window.document.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent === label,
+    ) as HTMLButtonElement;
+  await act(async () => button("Enable").click());
+  assert.deepEqual(enabled, []);
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /Capture a targeted window/u,
+  );
+  assert.match(dom.window.document.body.textContent ?? "", /Needs setup/u);
+  await act(async () => {
+    button("Open Accessibility settings").click();
+    await Promise.resolve();
+  });
+  assert.deepEqual(opened, ["accessibility"]);
+  assert.deepEqual(enabled, []);
+  await act(async () => {
+    button("Continue enabling Computer").click();
+    await Promise.resolve();
+  });
+  assert.deepEqual(enabled, [["computer", true]]);
+  await act(async () => root.unmount());
+});
+
+test("Browser setup distinguishes the isolated session from Connected Chrome", async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: "https://zenx.local" });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  let connectedMode = false;
+  let openedGeneral = 0;
+  Object.defineProperty(dom.window, "zenx", {
+    configurable: true,
+    value: {
+      chromeBridge: {
+        get: async () => ({
+          configuredMode: connectedMode ? "user-session" : "isolated",
+          effectiveMode: connectedMode ? "user-session" : "isolated",
+          environmentOverride: false,
+          connector: connectedMode ? "chrome-extension" : "inactive",
+          packaged: true,
+          nativeHostRegistered: false,
+          extensionDirectory: "/tmp/extension",
+          extensionId: "fixture",
+          connection: { state: "waiting", tabCount: 0 },
+        }),
+      },
+    },
+  });
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => {
+    root.render(
+      React.createElement(PluginAccessReview, {
+        pluginId: "browser",
+        permissions: [],
+        onOpenGeneral: () => {
+          openedGeneral += 1;
+        },
+      }),
+    );
+    await Promise.resolve();
+  });
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /No Chrome connector/u,
+  );
+  connectedMode = true;
+  const button = (label: string) =>
+    [...dom.window.document.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent === label,
+    ) as HTMLButtonElement;
+  await act(async () => {
+    button("Refresh status").click();
+    await Promise.resolve();
+  });
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /Register the local connector/u,
+  );
+  await act(async () => button("Open Browser settings").click());
+  assert.equal(openedGeneral, 1);
+  await act(async () => root.unmount());
+});
 
 test("Plugin Settings does not offer enable for an uninstalled catalog package", () => {
   const plugins: ZenXPluginSnapshot = {

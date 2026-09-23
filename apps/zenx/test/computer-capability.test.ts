@@ -7,6 +7,7 @@ import {
   ComputerZenXCapabilityPackage,
   MacForegroundInputDriver,
   resolveMacNativeHelperExecutable,
+  retryDesktopSourceEnumeration,
   runProcess,
   selectComputerInspectionControls,
   type ComputerControlSelector,
@@ -24,6 +25,47 @@ const buttonControl: ComputerControlSelector = {
   observationId: "observation-1",
   targetId: "button",
 };
+
+test("window source enumeration retries one transient Electron failure", async () => {
+  let attempts = 0;
+  const result = await retryDesktopSourceEnumeration(async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("Failed to get sources");
+    return ["window:42:0"];
+  });
+  assert.deepEqual(result, ["window:42:0"]);
+  assert.equal(attempts, 2);
+});
+
+test("window source enumeration preserves persistent failure after one retry", async () => {
+  let attempts = 0;
+  await assert.rejects(
+    retryDesktopSourceEnumeration(async () => {
+      attempts += 1;
+      throw new Error("Failed to get sources");
+    }),
+    /Window source enumeration failed after retry: Failed to get sources/u,
+  );
+  assert.equal(attempts, 2);
+});
+
+test("window source errors remain readable and bounded", async () => {
+  await assert.rejects(
+    retryDesktopSourceEnumeration(async () => {
+      throw new Error(`source\n${"x".repeat(500)}`);
+    }),
+    (error: unknown) => {
+      assert(error instanceof Error);
+      assert.match(
+        error.message,
+        /^Window source enumeration failed: source x/u,
+      );
+      assert.ok(error.message.length < 250);
+      assert.doesNotMatch(error.message, /\n/u);
+      return true;
+    },
+  );
+});
 
 test("computer vertical slice uses only targeted AX operations and does not echo set values", async () => {
   const calls: string[] = [];
@@ -481,6 +523,57 @@ test("computer observation budget preserves source order and prioritizes enabled
     [
       { role: "AXButton", title: "Fixture B action" },
       { role: "AXTextField", title: "Fixture B name" },
+    ],
+  );
+
+  const installedChromeControls = [
+    ...Array.from({ length: 53 }, (_, index) => ({
+      role: "AXGroup",
+      title: index === 0 ? "Chrome shell" : "",
+      enabled: true,
+      actions: ["AXSetValue"],
+      inWebArea: false,
+    })),
+    {
+      role: "AXTextField",
+      title: "协作文本",
+      enabled: true,
+      actions: ["AXSetValue"],
+      inWebArea: true,
+    },
+    {
+      role: "AXButton",
+      title: "更新结果",
+      enabled: true,
+      actions: ["AXPress"],
+      inWebArea: true,
+    },
+    {
+      role: "AXStaticText",
+      title: "等待更新",
+      enabled: true,
+      actions: [] as string[],
+      inWebArea: true,
+    },
+  ];
+  const installedChromeSelection = selectComputerInspectionControls(
+    installedChromeControls,
+    (control) => control.enabled && control.actions.length > 0,
+    (control) =>
+      control.inWebArea &&
+      (control.actions.length > 0 ||
+        (control.title.length > 0 && control.role !== "AXGroup")),
+  );
+  assert.equal(installedChromeSelection.length, 32);
+  assert.deepEqual(
+    installedChromeSelection.slice(-3).map(({ role, title }) => ({
+      role,
+      title,
+    })),
+    [
+      { role: "AXTextField", title: "协作文本" },
+      { role: "AXButton", title: "更新结果" },
+      { role: "AXStaticText", title: "等待更新" },
     ],
   );
 });

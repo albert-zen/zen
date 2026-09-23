@@ -390,6 +390,18 @@ test("extracts and compiles both fixed macOS Computer helpers into App Resources
     sources.MAC_ACCESSIBILITY_SOURCE,
     /let outputLimit = 120[\s\S]*?prefix\(outputLimit\)/u,
   );
+  const listWindows = sources.MAC_ACCESSIBILITY_SOURCE.match(
+    /if operation == "listWindows"[\s\S]*?exit\(0\)/u,
+  )?.[0];
+  assert.ok(listWindows);
+  const listRoleActivation = listWindows.indexOf(
+    "_ = textAttribute(element, kAXRoleAttribute)",
+  );
+  const listWindowResolution = listWindows.indexOf(
+    "elementArrayAttribute(element, kAXWindowsAttribute)",
+  );
+  assert.ok(listRoleActivation >= 0);
+  assert.ok(listWindowResolution > listRoleActivation);
   const roleActivation = sources.MAC_ACCESSIBILITY_SOURCE.indexOf(
     "_ = textAttribute(appElement, kAXRoleAttribute)",
   );
@@ -407,6 +419,8 @@ test("extracts and compiles both fixed macOS Computer helpers into App Resources
     "semanticCount",
     "fallbackCount",
     "encounteredWebArea",
+    "webAreaControlCount",
+    "webAreaActionableCount",
   ]) {
     assert.match(sources.MAC_ACCESSIBILITY_SOURCE, new RegExp(field));
   }
@@ -417,6 +431,14 @@ test("extracts and compiles both fixed macOS Computer helpers into App Resources
   assert.match(displayLabel, /kAXDescriptionAttribute/u);
   assert.match(displayLabel, /kAXHelpAttribute/u);
   assert.doesNotMatch(displayLabel, /kAXValueAttribute/u);
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /func supportsTextValue[\s\S]*?AXTextField[\s\S]*?isSettable/u,
+  );
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /guard supportsTextValue\(element\) else/u,
+  );
   assert.match(
     sources.MAC_ACCESSIBILITY_SOURCE,
     /kCGWindowOwnerPID[\s\S]*?kCGWindowLayer[\s\S]*?cgWindowBounds/u,

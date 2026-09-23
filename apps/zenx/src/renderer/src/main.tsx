@@ -5,6 +5,7 @@ import { getAppearanceController } from "./appearance";
 import { installScrollbarVisibility } from "./scrollbar-visibility";
 import "./theme.css";
 import "./styles.css";
+import "./agent-readiness-notice.css";
 import "./trigger-ui.css";
 import "./skills.css";
 
