@@ -674,17 +674,29 @@ export async function retryDesktopSourceEnumeration<T>(
       !(error instanceof Error) ||
       error.message !== "Failed to get sources"
     ) {
-      throw new Error("Window source enumeration failed", { cause: error });
+      throw new Error(
+        `Window source enumeration failed: ${boundedDesktopCaptureError(error)}`,
+        { cause: error },
+      );
     }
   }
   await new Promise<void>((resolve) => setTimeout(resolve, 150));
   try {
     return await getSources();
   } catch (error) {
-    throw new Error("Window source enumeration failed after retry", {
-      cause: error,
-    });
+    throw new Error(
+      `Window source enumeration failed after retry: ${boundedDesktopCaptureError(error)}`,
+      { cause: error },
+    );
   }
+}
+
+function boundedDesktopCaptureError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const printable = message.replace(/[\x00-\x1f\x7f]/gu, " ").trim();
+  return printable.length > 200
+    ? `${printable.slice(0, 200)}…`
+    : printable || "unknown error";
 }
 
 export class ElectronMacComputerBackend implements ZenXComputerBackend {

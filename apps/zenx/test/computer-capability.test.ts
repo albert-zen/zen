@@ -44,9 +44,27 @@ test("window source enumeration preserves persistent failure after one retry", a
       attempts += 1;
       throw new Error("Failed to get sources");
     }),
-    /Window source enumeration failed after retry/u,
+    /Window source enumeration failed after retry: Failed to get sources/u,
   );
   assert.equal(attempts, 2);
+});
+
+test("window source errors remain readable and bounded", async () => {
+  await assert.rejects(
+    retryDesktopSourceEnumeration(async () => {
+      throw new Error(`source\n${"x".repeat(500)}`);
+    }),
+    (error: unknown) => {
+      assert(error instanceof Error);
+      assert.match(
+        error.message,
+        /^Window source enumeration failed: source x/u,
+      );
+      assert.ok(error.message.length < 250);
+      assert.doesNotMatch(error.message, /\n/u);
+      return true;
+    },
+  );
 });
 
 test("computer vertical slice uses only targeted AX operations and does not echo set values", async () => {
