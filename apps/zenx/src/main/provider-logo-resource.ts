@@ -243,6 +243,11 @@ function pngFormatAndSize(data: Buffer): {
   let colorType = 0;
   let interlace = 0;
   let sawHeader = false;
+  let sawPalette = false;
+  let paletteEntries = 0;
+  let sawTransparency = false;
+  let sawImageData = false;
+  let finishedImageData = false;
   let sawEnd = false;
   const imageData: Buffer[] = [];
   while (offset + 12 <= data.length) {
@@ -255,7 +260,9 @@ function pngFormatAndSize(data: Buffer): {
       data.readUInt32BE(offset + 8 + length)
     )
       break;
+    if (!/^[A-Za-z]{4}$/u.test(type) || !/[A-Z]/u.test(type[2]!)) break;
     if (offset === 8 && type !== "IHDR") break;
+    if (sawImageData && type !== "IDAT") finishedImageData = true;
     if (type === "IHDR") {
       if (sawHeader || length !== 13) break;
       width = data.readUInt32BE(offset + 8);
@@ -265,11 +272,42 @@ function pngFormatAndSize(data: Buffer): {
       if (data[offset + 18] !== 0 || data[offset + 19] !== 0) break;
       interlace = data[offset + 20]!;
       sawHeader = true;
+    } else if (type === "PLTE") {
+      paletteEntries = length / 3;
+      if (
+        sawPalette ||
+        sawImageData ||
+        length === 0 ||
+        length > 768 ||
+        length % 3 !== 0 ||
+        colorType === 0 ||
+        colorType === 4 ||
+        (colorType === 3 && paletteEntries > 2 ** bitDepth)
+      )
+        break;
+      sawPalette = true;
+    } else if (type === "tRNS") {
+      if (
+        sawTransparency ||
+        sawImageData ||
+        (colorType === 3 &&
+          (!sawPalette || length === 0 || length > paletteEntries)) ||
+        (colorType === 0 && length !== 2) ||
+        (colorType === 2 && length !== 6) ||
+        (colorType !== 0 && colorType !== 2 && colorType !== 3)
+      )
+        break;
+      sawTransparency = true;
     } else if (type === "IDAT") {
+      if (finishedImageData || (colorType === 3 && !sawPalette)) break;
       imageData.push(data.subarray(offset + 8, offset + 8 + length));
+      sawImageData = true;
     } else if (type === "IEND") {
-      if (length !== 0 || end !== data.length) break;
+      if (!sawImageData || length !== 0 || end !== data.length) break;
       sawEnd = true;
+      break;
+    } else if (/[A-Z]/u.test(type[0]!)) {
+      // A decoder cannot safely ignore an unknown critical chunk.
       break;
     }
     offset = end;

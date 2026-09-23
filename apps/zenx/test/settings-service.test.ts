@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   mkdir,
   mkdtemp,
@@ -1519,8 +1520,81 @@ test("Provider Logo validates PNG bit depth and row shape while accepting Adam7"
   }
 });
 
+test("Provider Logo requires a valid indexed palette before consecutive image data", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-indexed-logo-"));
+  try {
+    // A real 1×1 indexed PNG; macOS sips decodes it successfully.
+    const valid = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAABlBMVEX/AAAA/wDSh+9xAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    const signatureAndHeader = valid.subarray(0, 33);
+    const palette = valid.subarray(33, 51);
+    const imageData = valid.subarray(51, 73);
+    const end = valid.subarray(73);
+    const missingPalette = Buffer.concat([signatureAndHeader, imageData, end]);
+    const invalid = [
+      missingPalette,
+      Buffer.concat([signatureAndHeader, imageData, palette, end]),
+      Buffer.concat([
+        signatureAndHeader,
+        pngChunk("PLTE", Buffer.alloc(4)),
+        imageData,
+        end,
+      ]),
+      Buffer.concat([
+        signatureAndHeader,
+        pngChunk("PLTE", Buffer.alloc(9)),
+        imageData,
+        end,
+      ]),
+      Buffer.concat([signatureAndHeader, palette, palette, imageData, end]),
+      Buffer.concat([
+        signatureAndHeader,
+        palette,
+        pngChunk("ABCD", Buffer.alloc(0)),
+        imageData,
+        end,
+      ]),
+      Buffer.concat([
+        signatureAndHeader,
+        palette,
+        pngChunk("IDAT", imageData.subarray(8, 13)),
+        pngChunk("raNd", Buffer.alloc(0)),
+        pngChunk("IDAT", imageData.subarray(13, 18)),
+        end,
+      ]),
+    ];
+    const logos = new ProviderLogoResources(directory);
+    for (const png of invalid)
+      await assert.rejects(logos.import(png), /valid PNG, JPEG, or WebP/u);
+    const resource = `${createHash("sha256").update(missingPalette).digest("hex")}.png`;
+    await mkdir(path.join(directory, "provider-logos"));
+    await writeFile(
+      path.join(directory, "provider-logos", resource),
+      missingPalette,
+    );
+    assert.equal(await logos.dataUrl(resource), undefined);
+    const imported = await logos.import(valid);
+    assert.match(
+      (await logos.dataUrl(imported.resource)) ?? "",
+      /^data:image\/png;base64,/u,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 function pngWithAncillaryChunk(png: Buffer, payload: Buffer): Buffer {
-  const type = Buffer.from("raNd");
+  return Buffer.concat([
+    png.subarray(0, png.length - 12),
+    pngChunk("raNd", payload),
+    png.subarray(png.length - 12),
+  ]);
+}
+
+function pngChunk(name: string, payload: Buffer): Buffer {
+  const type = Buffer.from(name);
   const length = Buffer.alloc(4);
   length.writeUInt32BE(payload.length);
   let crc = 0xffffffff;
@@ -1531,14 +1605,7 @@ function pngWithAncillaryChunk(png: Buffer, payload: Buffer): Buffer {
   }
   const checksum = Buffer.alloc(4);
   checksum.writeUInt32BE((crc ^ 0xffffffff) >>> 0);
-  return Buffer.concat([
-    png.subarray(0, png.length - 12),
-    length,
-    type,
-    payload,
-    checksum,
-    png.subarray(png.length - 12),
-  ]);
+  return Buffer.concat([length, type, payload, checksum]);
 }
 
 test("general Settings save cannot replace Host-owned Logo references and cleans removed Provider assets", async () => {
