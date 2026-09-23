@@ -171,7 +171,7 @@ export function PluginAccessReview({
             }
             detail={
               computer?.verification?.screenCapture.detail ??
-              "ZenX checks a small window preview and discards it immediately. Screen access is needed for targeted images."
+              "ZenX checks a small window preview and discards it immediately. If Screen Recording is already enabled for ZenX, quit and reopen the app to apply the change."
             }
             action={
               computer?.platform === "darwin" &&

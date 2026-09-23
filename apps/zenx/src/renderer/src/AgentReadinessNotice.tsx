@@ -263,7 +263,7 @@ function computerIssues(
       "screen-recording",
       "Screen Recording",
       screenCapture,
-      "In macOS Screen & System Audio Recording, enable this ZenX app. If absent, add the ZenX.app you launched, then check again.",
+      "Enable ZenX in macOS Screen & System Audio Recording. If it is already on, quit and reopen ZenX to apply the change, then check again.",
       "ZenX could not complete the window preview check. Select Check again; the error details may help diagnose it.",
       "Open Screen Recording settings",
     ),
@@ -282,7 +282,9 @@ function computerIssue(
     return [];
   const status =
     verification.state === "needs-setup"
-      ? "Needs permission"
+      ? kind === "screen-recording"
+        ? "Check permission or restart"
+        : "Needs permission"
       : verification.state === "failed"
         ? "Check failed"
         : "Could not verify";
