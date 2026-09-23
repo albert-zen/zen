@@ -439,7 +439,7 @@ test("Provider discovery starts text-only and manual overrides persist", async (
     await click(exactButtonRequired("Save provider"));
     assert.match(
       document.querySelector('[role="alert"]')?.textContent ?? "",
-      /model alpha-vision requires a positive context window/u,
+      /Model 3 \(alpha-vision\): enter a positive whole number for context window/u,
     );
     assert.equal(editCalls, 0);
 
@@ -480,6 +480,83 @@ test("Provider discovery starts text-only and manual overrides persist", async (
         (option) => option.textContent?.trim() === "Alpha · alpha-vision",
       ),
     );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("model discovery and manual addition stop at the Host limit of 1024 rows", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.providerProfiles[0]!.models.push(
+    ...Array.from({ length: 1021 }, (_, index) => model(`extra-${index}`)),
+  );
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    discoverProvider: async () => ({
+      providerProfileId: "profile-alpha",
+      models: [model("new-one"), model("new-two")],
+    }),
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Get available models"));
+    const first = await waitFor(() =>
+      document.querySelector<HTMLInputElement>(
+        'input[aria-label="Select new-one"]',
+      ),
+    );
+    await click(first);
+    const second = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Select new-two"]',
+    );
+    assert.ok(second);
+    assert.equal(second.disabled, true);
+    await click(exactButtonRequired("Add selected models (1)"));
+    assert.equal(document.querySelectorAll(".provider-model-row").length, 1024);
+    const addModel = exactButtonRequired("Add model");
+    assert.equal(addModel.disabled, true);
+    assert.match(
+      document.body.textContent ?? "",
+      /Model limit reached.*1,024/u,
+    );
+    await click(addModel);
+    assert.equal(document.querySelectorAll(".provider-model-row").length, 1024);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("removing a model keeps local reasoning editor state with its original row", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.providerProfiles[0]!.models = [
+    {
+      ...model("first"),
+      supportedReasoningEfforts: [],
+      defaultReasoningEffort: null,
+    },
+    {
+      ...model("second"),
+      supportedReasoningEfforts: [],
+      defaultReasoningEffort: null,
+    },
+  ];
+  const harness = await mountSettings("models", { initialSettings: initial });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await changeControl(
+      (await labeledSelect("Model 1 reasoning metadata"))!,
+      "configured",
+    );
+    assert.ok(requiredInput("Model 1 reasoning efforts"));
+    await click(labeledButtonRequired("Remove model 1"));
+    assert.equal(requiredInput("Model 1").value, "second");
+    assert.equal(
+      (await labeledSelect("Model 1 reasoning metadata"))!.value,
+      "text-only",
+    );
+    assert.equal(labelControl("Model 1 reasoning efforts", "input"), undefined);
   } finally {
     await unmount(harness);
   }
@@ -680,7 +757,7 @@ test("invalid Logo selection blocks submit instead of reusing an earlier upload"
   }
 });
 
-test("uploaded Logo reconciles a saved Provider after Host startup fails", async () => {
+test("uploaded Logo refreshes a Host-confirmed save after startup fails", async () => {
   let authoritative = settings;
   let calls = 0;
   const png = Buffer.from(
@@ -690,7 +767,7 @@ test("uploaded Logo reconciles a saved Provider after Host startup fails", async
   const harness = await mountSettings("models", {
     initialSettings: settings,
     get: async () => authoritative,
-    addProvider: async (provider) => {
+    addProvider: async (provider, _apiKey, _revision, _logo, attemptId) => {
       calls += 1;
       authoritative = {
         ...settings,
@@ -711,7 +788,12 @@ test("uploaded Logo reconciles a saved Provider after Host startup fails", async
           pendingRestart: [],
         },
       };
-      throw new Error("Host startup failed");
+      return {
+        ok: false,
+        outcome: "committed-error",
+        code: "save-finalization-failed",
+        attemptId: attemptId!,
+      };
     },
   });
   try {
@@ -745,14 +827,14 @@ test("uploaded Logo reconciles a saved Provider after Host startup fails", async
     );
     assert.match(
       document.body.textContent ?? "",
-      /Settings were saved, but finalization failed/u,
+      /Provider settings were saved, but finalization failed/u,
     );
   } finally {
     await unmount(harness);
   }
 });
 
-test("removed Logo reconciles a saved Provider after Host startup fails", async () => {
+test("removed Logo refreshes a Host-confirmed save after startup fails", async () => {
   const original: PublicHostSettings = {
     ...multiProviderSettings,
     profile: {
@@ -771,7 +853,7 @@ test("removed Logo reconciles a saved Provider after Host startup fails", async 
   const harness = await mountSettings("models", {
     initialSettings: original,
     get: async () => authoritative,
-    editProvider: async (id, provider, options) => {
+    editProvider: async (id, provider, options, attemptId) => {
       calls += 1;
       assert.equal(options?.logoUpload, null);
       authoritative = {
@@ -793,7 +875,12 @@ test("removed Logo reconciles a saved Provider after Host startup fails", async 
           pendingRestart: [],
         },
       };
-      throw new Error("Host startup failed");
+      return {
+        ok: false,
+        outcome: "committed-error",
+        code: "save-finalization-failed",
+        attemptId: attemptId!,
+      };
     },
   });
   try {
@@ -808,7 +895,7 @@ test("removed Logo reconciles a saved Provider after Host startup fails", async 
     );
     assert.match(
       document.body.textContent ?? "",
-      /Settings were saved, but finalization failed/u,
+      /Provider settings were saved, but finalization failed/u,
     );
   } finally {
     await unmount(harness);
@@ -1310,7 +1397,7 @@ test("Validation and mutation failures keep the provider editor recoverable", as
     await click(exactButtonRequired("Add provider"));
     assert.match(
       document.querySelector('[role="alert"]')?.textContent ?? "",
-      /Display name is required/u,
+      /Enter a display name/u,
     );
     assert.equal(attempts, 0);
 
@@ -1620,6 +1707,27 @@ test("General exposes an optional maximum tool round setting", async () => {
   }
 });
 
+test("General opens the local diagnostics folder only after an explicit click", async () => {
+  let opens = 0;
+  const harness = await mountSettings("general", {
+    openDiagnosticsFolder: async () => {
+      opens += 1;
+    },
+  });
+  try {
+    const open = await waitFor(() => exactButton("Open diagnostics folder"));
+    assert.equal(opens, 0);
+    assert.match(
+      document.body.textContent ?? "",
+      /Stored on this device and never shared automatically/u,
+    );
+    await click(open);
+    assert.equal(opens, 1);
+  } finally {
+    await unmount(harness);
+  }
+});
+
 test("General names both browser modes and reports an extension-folder failure", async () => {
   const browserSettings: PublicHostSettings = {
     ...settings,
@@ -1793,6 +1901,24 @@ interface Harness {
   previous: Record<string, unknown>;
 }
 
+type ProviderReply = Awaited<
+  ReturnType<Window["zenx"]["settings"]["addProvider"]>
+>;
+
+function providerReply(
+  value: PublicHostSettings | ProviderReply,
+  attemptId?: string,
+): ProviderReply {
+  if ("ok" in value) return value;
+  return {
+    ok: true,
+    settings: value,
+    outcome:
+      value.configuration?.status === "unconfirmed" ? "unconfirmed" : "success",
+    attemptId: attemptId ?? globalThis.crypto.randomUUID(),
+  };
+}
+
 async function mountSettings(
   initialTab: SettingsTab,
   options: {
@@ -1809,12 +1935,15 @@ async function mountSettings(
       apiKey?: string,
       baseRevision?: number,
       logoUpload?: Uint8Array,
-    ): Promise<PublicHostSettings>;
+      diagnosticAttemptId?: string,
+    ): Promise<PublicHostSettings | ProviderReply>;
     editProvider?(
       providerProfileId: string,
       provider: ZenXProviderProfile,
       options?: ZenXProviderEditOptions,
-    ): Promise<PublicHostSettings>;
+      diagnosticAttemptId?: string,
+    ): Promise<PublicHostSettings | ProviderReply>;
+    recordDiagnostic?: Window["zenx"]["settings"]["recordDiagnostic"];
     deleteProvider?(
       providerProfileId: string,
       replacements?: ZenXProviderDeleteReplacements,
@@ -1826,6 +1955,7 @@ async function mountSettings(
       providerProfileId: string,
       modelId: string,
     ): Promise<ZenXImageCapabilityProbeResult>;
+    openDiagnosticsFolder?(): Promise<void>;
     chromeBridge?: Window["zenx"]["chromeBridge"];
     browserSettingsFocusRequest?: number;
     archivedThreads?: NativeThreadSummary[];
@@ -1874,16 +2004,38 @@ async function mountSettings(
           ...initialSettings,
           profile: { ...initialSettings.profile, ...profile },
         })),
-      addProvider:
-        options.addProvider ??
-        (async () => {
-          throw new Error("Unexpected addProvider call");
-        }),
-      editProvider:
-        options.editProvider ??
-        (async () => {
-          throw new Error("Unexpected editProvider call");
-        }),
+      addProvider: async (
+        provider: ZenXProviderProfile,
+        apiKey?: string,
+        baseRevision?: number,
+        logoUpload?: Uint8Array,
+        diagnosticAttemptId?: string,
+      ) =>
+        providerReply(
+          await (
+            options.addProvider ??
+            (async () => {
+              throw new Error("Unexpected addProvider call");
+            })
+          )(provider, apiKey, baseRevision, logoUpload, diagnosticAttemptId),
+          diagnosticAttemptId,
+        ),
+      editProvider: async (
+        providerProfileId: string,
+        provider: ZenXProviderProfile,
+        optionsValue?: ZenXProviderEditOptions,
+        diagnosticAttemptId?: string,
+      ) =>
+        providerReply(
+          await (
+            options.editProvider ??
+            (async () => {
+              throw new Error("Unexpected editProvider call");
+            })
+          )(providerProfileId, provider, optionsValue, diagnosticAttemptId),
+          diagnosticAttemptId,
+        ),
+      recordDiagnostic: options.recordDiagnostic ?? (async () => undefined),
       deleteProvider:
         options.deleteProvider ??
         (async () => {
@@ -1899,6 +2051,8 @@ async function mountSettings(
         (async () => {
           throw new Error("Unexpected probeProviderImage call");
         }),
+      openDiagnosticsFolder:
+        options.openDiagnosticsFolder ?? (async () => undefined),
       onManualCodeRequested: () => () => undefined,
     },
   } as unknown as Window["zenx"];
@@ -2421,8 +2575,496 @@ test("manual reasoning fills real defaults, preserves custom values across modes
     assert.equal(saved, undefined);
     assert.match(
       document.body.textContent ?? "",
-      /requires supported efforts and a valid default/,
+      /Model 1 \(shared-model\): enter at least one supported reasoning effort/,
     );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("provider validation names each invalid model field and links to an editable control", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.providerProfiles[0]!.models = [
+    {
+      ...model("shared-model"),
+      reasoningConfiguration: "manual",
+      supportedReasoningEfforts: [],
+      defaultReasoningEffort: null,
+    },
+    { ...model("alpha-only"), contextWindow: null },
+  ];
+  let saves = 0;
+  const events: Parameters<
+    Window["zenx"]["settings"]["recordDiagnostic"]
+  >[0][] = [];
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    recordDiagnostic: async (event) => {
+      events.push(event);
+    },
+    editProvider: async () => {
+      saves += 1;
+      return initial;
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Save provider"));
+
+    const summary = document.querySelector<HTMLElement>(
+      ".provider-editor-error-summary",
+    );
+    assert.ok(summary);
+    assert.equal(document.activeElement, summary);
+    const links = [...summary.querySelectorAll<HTMLAnchorElement>("a")];
+    assert.equal(links.length, 2);
+    assert.match(
+      links[0]!.textContent ?? "",
+      /Model 1 \(shared-model\): enter at least one supported reasoning effort/u,
+    );
+    assert.match(
+      links[1]!.textContent ?? "",
+      /Model 2 \(alpha-only\): enter a positive whole number for context window/u,
+    );
+    const effortInput = requiredInput("Model 1 reasoning efforts");
+    const contextInput = requiredInput("Model 2 context window (Required)");
+    assert.equal(links[0]!.getAttribute("href"), `#${effortInput.id}`);
+    assert.equal(links[1]!.getAttribute("href"), `#${contextInput.id}`);
+    assert.equal(effortInput.getAttribute("aria-invalid"), "true");
+    assert.equal(contextInput.getAttribute("aria-invalid"), "true");
+    assert.match(
+      document.getElementById(effortInput.getAttribute("aria-describedby")!)
+        ?.textContent ?? "",
+      /enter at least one supported reasoning effort/u,
+    );
+    assert.equal(effortInput.closest("details")?.open, false);
+    await click(links[0]!);
+    assert.equal(effortInput.closest("details")?.open, true);
+    assert.equal(document.activeElement, effortInput);
+    assert.equal(saves, 0);
+    assert.deepEqual(
+      events.map((event) =>
+        "reason" in event ? [event.reason, event.modelIndex] : [],
+      ),
+      [
+        ["reasoning_efforts_missing", 0],
+        ["context_window_invalid", 1],
+      ],
+    );
+    assert.equal(events[0]!.attemptId, events[1]!.attemptId);
+    assert.equal(JSON.stringify(events).includes("shared-model"), false);
+    assert.equal(JSON.stringify(events).includes("alpha-only"), false);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("duplicate manual reasoning efforts stay in the editor and emit a field diagnostic", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.providerProfiles[0]!.models[0] = {
+    ...model("shared-model"),
+    reasoningConfiguration: "manual",
+    supportedReasoningEfforts: ["low", "low"],
+    defaultReasoningEffort: "low",
+  };
+  let saves = 0;
+  const events: Parameters<
+    Window["zenx"]["settings"]["recordDiagnostic"]
+  >[0][] = [];
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    recordDiagnostic: async (event) => {
+      events.push(event);
+    },
+    editProvider: async () => {
+      saves += 1;
+      return initial;
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Save provider"));
+    assert.equal(saves, 0);
+    assert.match(
+      document.querySelector(".provider-editor-error-summary")?.textContent ??
+        "",
+      /Model 1 \(shared-model\): use each reasoning effort only once/u,
+    );
+    assert.equal(
+      requiredInput("Model 1 reasoning efforts").getAttribute("aria-invalid"),
+      "true",
+    );
+    assert.equal(events.length, 1);
+    assert.deepEqual(
+      {
+        event: events[0]!.event,
+        reason: "reason" in events[0]! ? events[0]!.reason : undefined,
+        modelIndex:
+          "modelIndex" in events[0]! ? events[0]!.modelIndex : undefined,
+      },
+      {
+        event: "provider-validation-rejected",
+        reason: "reasoning_efforts_duplicate",
+        modelIndex: 0,
+      },
+    );
+    assert.equal(JSON.stringify(events).includes("shared-model"), false);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("oversized model ID is rejected at its field before Host validation", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  const events: Parameters<
+    Window["zenx"]["settings"]["recordDiagnostic"]
+  >[0][] = [];
+  let saves = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    recordDiagnostic: async (event) => {
+      events.push(event);
+    },
+    editProvider: async () => {
+      saves += 1;
+      return initial;
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await changeControl(requiredInput("Model 1"), "x".repeat(513));
+    await click(exactButtonRequired("Save provider"));
+    assert.equal(saves, 0);
+    assert.equal(requiredInput("Model 1").getAttribute("aria-invalid"), "true");
+    assert.match(
+      document.querySelector(".provider-editor-error-summary")?.textContent ??
+        "",
+      /model ID must be 512 characters or fewer/u,
+    );
+    assert.equal(
+      events.some(
+        (event) =>
+          "reason" in event &&
+          event.reason === "model_id_too_long" &&
+          event.modelIndex === 0,
+      ),
+      true,
+    );
+    assert.equal(JSON.stringify(events).includes("x".repeat(513)), false);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("many invalid model rows keep diagnostics bounded while all errors remain visible", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.providerProfiles[0]!.models = Array.from(
+    { length: 40 },
+    (_, index) => ({ ...model(`row-${index}`), contextWindow: null }),
+  );
+  const events: Parameters<
+    Window["zenx"]["settings"]["recordDiagnostic"]
+  >[0][] = [];
+  let saves = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    recordDiagnostic: async (event) => {
+      events.push(event);
+    },
+    editProvider: async () => {
+      saves += 1;
+      return initial;
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Save provider"));
+    assert.equal(saves, 0);
+    assert.equal(
+      document.querySelectorAll(".provider-editor-error-summary a").length,
+      40,
+    );
+    assert.equal(events.length, 17);
+    assert.deepEqual(
+      events.map((event) => ("reason" in event ? event.reason : "other")),
+      [
+        ...Array.from({ length: 16 }, () => "context_window_invalid"),
+        "validation_issues_truncated",
+      ],
+    );
+    assert.equal(new Set(events.map((event) => event.attemptId)).size, 1);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("one Base URL field exposes one matching summary and inline error", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  const provider = initial.profile.providerProfiles[0]!;
+  if (provider.type !== "openai-compatible")
+    throw new Error("Expected compatible provider");
+  provider.baseUrl = "http://user:pass@remote.example/v1?secret=1";
+  const events: Parameters<
+    Window["zenx"]["settings"]["recordDiagnostic"]
+  >[0][] = [];
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    recordDiagnostic: async (event) => {
+      events.push(event);
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Save provider"));
+    const links = [
+      ...document.querySelectorAll<HTMLAnchorElement>(
+        ".provider-editor-error-summary a",
+      ),
+    ];
+    assert.equal(links.length, 1);
+    const input = requiredInput("Base URL");
+    assert.equal(
+      links[0]!.textContent,
+      document.getElementById(input.getAttribute("aria-describedby")!)
+        ?.textContent,
+    );
+    assert.equal(events.length, 1);
+    assert.equal(JSON.stringify(events).includes("remote.example"), false);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Host-rejected stale API key edit keeps the draft despite another window's revision", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.revision = 2;
+  let authoritative = initial;
+  let calls = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    get: async () => authoritative,
+    editProvider: async (_id, _provider, _options, attemptId) => {
+      calls += 1;
+      authoritative = {
+        ...initial,
+        profile: { ...initial.profile, revision: 3 },
+        configuration: {
+          status: "applied",
+          revision: 3,
+          pendingRestart: [],
+        },
+      };
+      return {
+        ok: false,
+        outcome: "failed",
+        code: "revision-conflict",
+        attemptId: attemptId!,
+      } as unknown as PublicHostSettings;
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await changeControl(requiredInput("API key"), "new-secret-key");
+    await click(exactButtonRequired("Save provider"));
+    await waitFor(() => calls === 1);
+    assert.ok(document.querySelector('[aria-label="Edit Alpha"]'));
+    assert.equal(requiredInput("API key").value, "new-secret-key");
+    assert.match(
+      document.body.textContent ?? "",
+      /changed.*reload|reload.*changed/iu,
+    );
+    assert.equal(
+      (document.body.textContent ?? "").includes("new-secret-key"),
+      false,
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Provider IPC failure stays unconfirmed even if another window now has matching fields", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.revision = 2;
+  let authoritative = initial;
+  let calls = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    get: async () => authoritative,
+    editProvider: async () => {
+      calls += 1;
+      authoritative = {
+        ...initial,
+        profile: { ...initial.profile, revision: 3 },
+        configuration: {
+          status: "applied",
+          revision: 3,
+          pendingRestart: [],
+        },
+      };
+      throw new Error("IPC reply lost");
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Save provider"));
+    await waitFor(() => calls === 1);
+    assert.ok(document.querySelector('[aria-label="Edit Alpha"]'));
+    assert.match(
+      document.body.textContent ?? "",
+      /could not confirm|unknown/iu,
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("provider validation survives unrelated edits and clears each issue only when repaired", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.providerProfiles[0]!.models = [
+    {
+      ...model("shared-model"),
+      reasoningConfiguration: "manual",
+      supportedReasoningEfforts: [],
+      defaultReasoningEffort: null,
+    },
+    { ...model("alpha-only"), contextWindow: null },
+  ];
+  let saved: ZenXProviderProfile | undefined;
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    editProvider: async (_id, provider) => {
+      saved = provider;
+      return {
+        ...initial,
+        profile: {
+          ...initial.profile,
+          providerProfiles: [
+            provider,
+            ...initial.profile.providerProfiles.slice(1),
+          ],
+        },
+      };
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Save provider"));
+    const issueCount = () =>
+      document.querySelectorAll(".provider-editor-error-summary a").length;
+    assert.equal(issueCount(), 2);
+
+    await changeControl(requiredInput("Model 1 display name"), "Renamed model");
+    assert.equal(issueCount(), 2);
+    await changeControl(
+      requiredInput("Model 1 reasoning efforts"),
+      "low, high",
+    );
+    assert.equal(issueCount(), 2);
+    await changeControl(
+      (await labeledSelect("Model 1 default reasoning effort"))!,
+      "high",
+    );
+    assert.equal(issueCount(), 1);
+    assert.match(
+      document.querySelector(".provider-editor-error-summary")?.textContent ??
+        "",
+      /Model 2 \(alpha-only\)/u,
+    );
+    await changeControl(
+      requiredInput("Model 2 context window (Required)"),
+      "128000",
+    );
+    assert.equal(issueCount(), 0);
+    await click(exactButtonRequired("Save provider"));
+    await waitFor(() => saved);
+    assert.equal(saved?.models[0]?.displayName, "Renamed model");
+    assert.equal(saved?.models[1]?.contextWindow, 128000);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("invalid default reasoning effort and zero context identify the correct controls", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.providerProfiles[0]!.models = [
+    {
+      ...model("shared-model"),
+      reasoningConfiguration: "manual",
+      supportedReasoningEfforts: ["low"],
+      defaultReasoningEffort: "high",
+    },
+    { ...model("alpha-only"), contextWindow: 0 },
+  ];
+  const harness = await mountSettings("models", { initialSettings: initial });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Save provider"));
+    const links = [
+      ...document.querySelectorAll<HTMLAnchorElement>(
+        ".provider-editor-error-summary a",
+      ),
+    ];
+    assert.equal(links.length, 2);
+    assert.match(
+      links[0]!.textContent ?? "",
+      /Model 1 \(shared-model\).*choose a default/u,
+    );
+    assert.match(
+      links[1]!.textContent ?? "",
+      /Model 2 \(alpha-only\).*context window/u,
+    );
+    await click(links[0]!);
+    const defaultSelect = labelControl<HTMLButtonElement>(
+      "Model 1 default reasoning effort",
+      "button.ui-select",
+    );
+    assert.ok(defaultSelect);
+    assert.equal(defaultSelect.closest("details")?.open, true);
+    assert.equal(document.activeElement, defaultSelect);
+    assert.equal(links[0]!.getAttribute("href"), `#${defaultSelect.id}`);
+    assert.equal(defaultSelect.getAttribute("aria-invalid"), "true");
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("a provider without model rows stays invalid and offers a focused add action", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.providerProfiles[0]!.models = [];
+  let saves = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    editProvider: async () => {
+      saves += 1;
+      return initial;
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Save provider"));
+    const link = document.querySelector<HTMLAnchorElement>(
+      ".provider-editor-error-summary a",
+    );
+    const addModel = exactButtonRequired("Add model");
+    assert.ok(link);
+    assert.match(link.textContent ?? "", /Add at least one model/u);
+    assert.equal(link.getAttribute("href"), `#${addModel.id}`);
+    assert.equal(saves, 0);
+    await click(link);
+    assert.equal(document.activeElement, addModel);
+    await click(addModel);
+    assert.ok(requiredInput("Model 1"));
+    assert.equal(saves, 0);
   } finally {
     await unmount(harness);
   }

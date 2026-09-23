@@ -14,6 +14,7 @@ import {
   systemPreferences,
 } from "electron";
 import { randomUUID } from "node:crypto";
+import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { windowBackdropOptions } from "./window-appearance.js";
 import { FileAttachmentStore } from "../../../../src/attachment.js";
@@ -28,13 +29,24 @@ import { AppServerManager } from "./app-server-manager.js";
 import type { ApprovalDecision } from "./app-server-manager.js";
 import { ZenXCredentialVault } from "./credential-vault.js";
 import type {
+  PublicHostSettings,
   ZenXProviderDeleteReplacements,
   ZenXProviderEditOptions,
   ZenXProviderProfile,
   ZenXSettingsUpdate,
   ZenXSidebarOrder,
 } from "./host-profile.js";
-import { ZenXSettingsService } from "./settings-service.js";
+import {
+  ConfigurationPreCommitError,
+  ZenXSettingsService,
+} from "./settings-service.js";
+import {
+  isRendererSettingsDiagnostic,
+  SettingsDiagnosticLog,
+  runDiagnosedProviderMutation,
+  type ProviderKnownRejectionCode,
+} from "./settings-diagnostic-log.js";
+import { OperationalDiagnosticLog } from "./operational-diagnostic-log.js";
 import {
   computerReadinessSnapshot,
   probeComputerAccess,
@@ -357,6 +369,15 @@ async function bootstrapZenX(): Promise<void> {
       safeStorage,
     ),
   });
+  const settingsDiagnostics = new SettingsDiagnosticLog(userDataDirectory);
+  const operationalDiagnostics = new OperationalDiagnosticLog(
+    userDataDirectory,
+  );
+  const observeAppServer = (manager: AppServerManager) => {
+    manager.onStatus((status) => {
+      void operationalDiagnostics.observeAppServer(status);
+    });
+  };
   try {
     await settingsService.initialize(process.env);
     bootstrapFence.throwIfCancelled();
@@ -458,6 +479,15 @@ async function bootstrapZenX(): Promise<void> {
       projectProjection,
       appServerPort: selfControlPort,
     });
+    capabilityService.onChange(() => {
+      try {
+        void operationalDiagnostics
+          .observePlugins(capabilityService!.diagnostics())
+          .catch(() => undefined);
+      } catch {
+        // Diagnostic observation cannot interrupt plugin state changes.
+      }
+    });
     await syncProjectProjection(settingsService);
     bootstrapFence.throwIfCancelled();
     let startupError: unknown;
@@ -489,6 +519,7 @@ async function bootstrapZenX(): Promise<void> {
       execPath: process.execPath,
       capabilityHost: capabilityService,
     });
+    observeAppServer(appServerManager);
     await selfControlPort.attach(appServerManager);
     bootstrapFence.throwIfCancelled();
     titleCoordinator = new ZenXThreadTitleCoordinator({
@@ -543,8 +574,22 @@ async function bootstrapZenX(): Promise<void> {
     });
     bootstrapFence.throwIfCancelled();
     triggersPackage = new ZenXTriggersCapabilityPackage(automationService);
-    await capabilityService.initialize();
+    try {
+      await capabilityService.initialize();
+    } catch (error) {
+      void operationalDiagnostics.recordPluginStartupFailure();
+      throw error;
+    }
+    try {
+      await operationalDiagnostics.observePlugins(
+        capabilityService.diagnostics(),
+      );
+    } catch {
+      // Diagnostic observation cannot interrupt startup.
+    }
     bootstrapFence.throwIfCancelled();
+    const startupFailureCountBeforeSync =
+      capabilityService.diagnostics().bundledStartupFailureCount;
     try {
       await capabilityService.syncProfileManagedProviderVariants();
     } catch (error) {
@@ -552,9 +597,14 @@ async function bootstrapZenX(): Promise<void> {
       // Provider profile synchronization is optional plugin state. Keep the
       // core App Server available with the previously committed provider and
       // expose the failure through the normal capability diagnostics.
-      capabilityService.recordDiscoveryError(
-        `Provider profile synchronization is unavailable: ${describeError(error)}`,
-      );
+      if (
+        capabilityService.diagnostics().bundledStartupFailureCount ===
+        startupFailureCountBeforeSync
+      )
+        capabilityService.recordBundledPluginStartupError(
+          "Provider profile synchronization",
+          error,
+        );
     }
     bootstrapFence.throwIfCancelled();
     await installZenXBundledPluginsAtStartup(
@@ -587,8 +637,14 @@ async function bootstrapZenX(): Promise<void> {
     }
   } catch (error) {
     bootstrapFence.rethrowIfCancelled(error);
-    console.error("Could not start Zen App Server", error);
+    console.error(
+      appServerManager === undefined
+        ? "Could not start ZenX"
+        : "Could not start Zen App Server",
+      error,
+    );
     if (appServerManager === undefined) {
+      void operationalDiagnostics.recordBootstrapFailure();
       installFailedProtocolIpc(
         error instanceof Error ? error.message : String(error),
       );
@@ -657,6 +713,9 @@ async function bootstrapZenX(): Promise<void> {
   installSettingsIpc(
     settingsService,
     directoryBrowser,
+    settingsDiagnostics,
+    operationalDiagnostics,
+    join(userDataDirectory, "diagnostics"),
     async () => {
       if (appServerManager?.status.type === "ready") return;
       const hostConfig = await withZenXProviderTransports(
@@ -673,6 +732,7 @@ async function bootstrapZenX(): Promise<void> {
           execPath: process.execPath,
           capabilityHost: capabilityService,
         });
+        observeAppServer(appServerManager);
         await selfControlPort.attach(appServerManager);
         await appServerManager.start();
       } else await appServerManager.restart(hostConfig);
@@ -1284,6 +1344,9 @@ function readProjectThreadStartOptions(
 function installSettingsIpc(
   settings: ZenXSettingsService,
   directoryBrowser: ZenXDirectoryBrowser,
+  diagnostics: SettingsDiagnosticLog,
+  operationalDiagnostics: OperationalDiagnosticLog,
+  diagnosticsDirectory: string,
   startHostIfNeeded: () => Promise<void>,
   refreshProjects: () => Promise<void>,
 ): void {
@@ -1299,6 +1362,23 @@ function installSettingsIpc(
     ipcChannels.settingsGet,
     async () => await settings.publicSettings(),
   );
+  ipcMain.handle(
+    ipcChannels.settingsDiagnosticRecord,
+    async (_event, input: unknown) => {
+      try {
+        if (!isRendererSettingsDiagnostic(input)) return;
+        await diagnostics.record(input);
+      } catch {
+        // A support log failure must never interrupt Settings.
+      }
+    },
+  );
+  ipcMain.handle(ipcChannels.settingsDiagnosticsOpenFolder, async () => {
+    await mkdir(diagnosticsDirectory, { recursive: true, mode: 0o700 });
+    const failure = await shell.openPath(diagnosticsDirectory);
+    if (failure.length > 0)
+      throw new Error("Could not open diagnostics folder");
+  });
   let computerVerification: ZenXComputerAccessVerification | undefined;
   let verificationStatus: string | undefined;
   let pendingComputerProbe: Promise<ZenXComputerReadinessSnapshot> | undefined;
@@ -1326,9 +1406,12 @@ function installSettingsIpc(
     });
     const status = `${snapshot.accessibility}:${snapshot.screenRecording}`;
     if (verificationStatus !== status) computerVerification = undefined;
-    return computerVerification === undefined
-      ? snapshot
-      : { ...snapshot, verification: computerVerification };
+    const result =
+      computerVerification === undefined
+        ? snapshot
+        : { ...snapshot, verification: computerVerification };
+    void operationalDiagnostics.observeComputer(result);
+    return result;
   };
   ipcMain.handle(ipcChannels.computerReadinessGet, readComputerReadiness);
   ipcMain.handle(ipcChannels.computerReadinessProbe, () => {
@@ -1362,7 +1445,9 @@ function installSettingsIpc(
       const updated = readComputerReadiness();
       computerVerification = verification;
       verificationStatus = `${updated.accessibility}:${updated.screenRecording}`;
-      return { ...updated, verification };
+      const result = { ...updated, verification };
+      void operationalDiagnostics.observeComputer(result);
+      return result;
     })().finally(() => {
       pendingComputerProbe = undefined;
     });
@@ -1512,21 +1597,37 @@ function installSettingsIpc(
       apiKey?: unknown,
       baseRevision?: number,
       logoUpload?: unknown,
+      diagnosticAttemptId?: unknown,
     ) => {
-      if (apiKey !== undefined && typeof apiKey !== "string") {
-        throw new Error("Invalid API key");
-      }
-      requireConfigurationRevision(baseRevision);
-      if (logoUpload !== undefined && !(logoUpload instanceof Uint8Array))
-        throw new Error("Invalid Provider Logo upload");
-      await settings.addProviderProfile(
-        provider,
-        apiKey,
-        baseRevision,
-        logoUpload,
-      );
-      await startHostIfNeeded();
-      return await settings.publicSettings();
+      return await runDiagnosedProviderMutation<PublicHostSettings>({
+        log: diagnostics,
+        operation: "add",
+        attemptId:
+          typeof diagnosticAttemptId === "string"
+            ? diagnosticAttemptId
+            : undefined,
+        configurationStatusFromResult: (result) => result.configuration?.status,
+        knownRejectionCode: providerKnownRejectionCode,
+        preflight: () => {
+          if (apiKey !== undefined && typeof apiKey !== "string") {
+            throw new Error("Invalid API key");
+          }
+          requireConfigurationRevision(baseRevision);
+          if (logoUpload !== undefined && !(logoUpload instanceof Uint8Array))
+            throw new Error("Invalid Provider Logo upload");
+        },
+        mutate: async ({ markCommitted }) => {
+          await settings.addProviderProfile(
+            provider,
+            apiKey as string | undefined,
+            baseRevision,
+            logoUpload as Uint8Array | undefined,
+          );
+          markCommitted();
+          await startHostIfNeeded();
+          return await settings.publicSettings();
+        },
+      });
     },
   );
   ipcMain.handle(
@@ -1536,23 +1637,46 @@ function installSettingsIpc(
       providerProfileId: unknown,
       provider: ZenXProviderProfile,
       options?: ZenXProviderEditOptions,
+      diagnosticAttemptId?: unknown,
     ) => {
-      if (typeof providerProfileId !== "string") {
-        throw new Error("Invalid Provider profile id");
-      }
-      if (options?.apiKey !== undefined && typeof options.apiKey !== "string") {
-        throw new Error("Invalid API key");
-      }
-      if (
-        options?.logoUpload !== undefined &&
-        options.logoUpload !== null &&
-        !(options.logoUpload instanceof Uint8Array)
-      )
-        throw new Error("Invalid Provider Logo upload");
-      requireConfigurationRevision(options?.baseRevision);
-      await settings.editProviderProfile(providerProfileId, provider, options);
-      await startHostIfNeeded();
-      return await settings.publicSettings();
+      return await runDiagnosedProviderMutation<PublicHostSettings>({
+        log: diagnostics,
+        operation: "edit",
+        attemptId:
+          typeof diagnosticAttemptId === "string"
+            ? diagnosticAttemptId
+            : undefined,
+        configurationStatusFromResult: (result) => result.configuration?.status,
+        knownRejectionCode: providerKnownRejectionCode,
+        preflight: () => {
+          if (typeof providerProfileId !== "string") {
+            throw new Error("Invalid Provider profile id");
+          }
+          if (
+            options?.apiKey !== undefined &&
+            typeof options.apiKey !== "string"
+          ) {
+            throw new Error("Invalid API key");
+          }
+          if (
+            options?.logoUpload !== undefined &&
+            options.logoUpload !== null &&
+            !(options.logoUpload instanceof Uint8Array)
+          )
+            throw new Error("Invalid Provider Logo upload");
+          requireConfigurationRevision(options?.baseRevision);
+        },
+        mutate: async ({ markCommitted }) => {
+          await settings.editProviderProfile(
+            providerProfileId as string,
+            provider,
+            options,
+          );
+          markCommitted();
+          await startHostIfNeeded();
+          return await settings.publicSettings();
+        },
+      });
     },
   );
   ipcMain.handle(
@@ -1883,6 +2007,16 @@ function isApprovalDecision(value: unknown): value is ApprovalDecision {
     value === "decline" ||
     value === "cancel"
   );
+}
+
+function providerKnownRejectionCode(
+  error: unknown,
+): ProviderKnownRejectionCode | undefined {
+  if (!(error instanceof ConfigurationPreCommitError)) return undefined;
+  const reason = "reason" in error ? error.reason : undefined;
+  if (reason === "conflict") return "revision-conflict";
+  if (reason === "validation") return "validation-rejected";
+  return "save-rejected";
 }
 
 function requireConfigurationRevision(value: unknown): void {

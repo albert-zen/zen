@@ -3693,6 +3693,39 @@ a:focus-visible {
 .provider-editor-error {
   margin-top: -3px;
 }
+.provider-editor-error-summary {
+  align-items: flex-start;
+  margin: 0;
+  line-height: 1.5;
+}
+.provider-editor-error-summary:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 2px;
+}
+.provider-editor-error-summary > div {
+  min-width: 0;
+}
+.provider-editor-error-summary ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+.provider-editor-error-summary a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+.provider-editor .provider-field-hint {
+  color: var(--text-3);
+  line-height: 1.4;
+}
+.provider-editor .provider-field-error {
+  color: var(--danger);
+  line-height: 1.4;
+}
+.provider-editor :is(input, .ui-select)[aria-invalid="true"] {
+  border-color: var(--danger);
+}
 .delete-provider-panel > div:first-child {
   display: grid;
   gap: 5px;

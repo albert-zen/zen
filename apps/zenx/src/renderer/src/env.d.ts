@@ -21,6 +21,7 @@ import type {
   ZenXSidebarOrder,
   ZenXSettingsUpdate,
 } from "../../main/host-profile.js";
+import type { ProviderMutationReply } from "../../main/settings-diagnostic-log.js";
 import type {
   ZenXPluginSnapshot,
   ZenXPluginTarballSelectionResult,
@@ -197,17 +198,23 @@ declare global {
           settings: ZenXSettingsUpdate,
           apiKey?: string,
         ): Promise<PublicHostSettings>;
+        recordDiagnostic(
+          event: import("../../main/settings-diagnostic-log.js").SettingsDiagnosticEvent,
+        ): Promise<void>;
+        openDiagnosticsFolder(): Promise<void>;
         addProvider(
           provider: ZenXProviderProfile,
           apiKey?: string,
           baseRevision?: number,
           logoUpload?: Uint8Array,
-        ): Promise<PublicHostSettings>;
+          diagnosticAttemptId?: string,
+        ): Promise<ProviderMutationReply<PublicHostSettings>>;
         editProvider(
           providerProfileId: string,
           provider: ZenXProviderProfile,
           options?: ZenXProviderEditOptions,
-        ): Promise<PublicHostSettings>;
+          diagnosticAttemptId?: string,
+        ): Promise<ProviderMutationReply<PublicHostSettings>>;
         deleteProvider(
           providerProfileId: string,
           replacements?: ZenXProviderDeleteReplacements,

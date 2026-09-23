@@ -23,6 +23,7 @@ import type {
   ZenXSidebarOrder,
   ZenXSettingsUpdate,
 } from "../main/host-profile.js";
+import type { ProviderMutationReply } from "../main/settings-diagnostic-log.js";
 import type {
   ZenXImageCapabilityProbeResult,
   ZenXProviderCatalogSnapshot,
@@ -291,29 +292,41 @@ contextBridge.exposeInMainWorld("zenx", {
       apiKey?: string,
     ): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.settingsSave, settings, apiKey),
+    recordDiagnostic: async (
+      event: import("../main/settings-diagnostic-log.js").SettingsDiagnosticEvent,
+    ): Promise<void> => {
+      await ipcRenderer.invoke(ipcChannels.settingsDiagnosticRecord, event);
+    },
+    openDiagnosticsFolder: async (): Promise<void> => {
+      await ipcRenderer.invoke(ipcChannels.settingsDiagnosticsOpenFolder);
+    },
     addProvider: async (
       provider: ZenXProviderProfile,
       apiKey?: string,
       baseRevision?: number,
       logoUpload?: Uint8Array,
-    ): Promise<PublicHostSettings> =>
+      diagnosticAttemptId?: string,
+    ): Promise<ProviderMutationReply<PublicHostSettings>> =>
       await ipcRenderer.invoke(
         ipcChannels.providerAdd,
         provider,
         apiKey,
         baseRevision,
         logoUpload,
+        diagnosticAttemptId,
       ),
     editProvider: async (
       providerProfileId: string,
       provider: ZenXProviderProfile,
       options?: ZenXProviderEditOptions,
-    ): Promise<PublicHostSettings> =>
+      diagnosticAttemptId?: string,
+    ): Promise<ProviderMutationReply<PublicHostSettings>> =>
       await ipcRenderer.invoke(
         ipcChannels.providerEdit,
         providerProfileId,
         provider,
         options,
+        diagnosticAttemptId,
       ),
     deleteProvider: async (
       providerProfileId: string,

@@ -839,12 +839,22 @@ test("restart keeps a committed Browser backend isolated from a different curren
             assert.equal(candidate.closed(), 0);
             const generation = await committedGeneration(userData);
             if (outcome !== "success") {
+              const diagnosticsBeforeSync = restarted.diagnostics();
               if (outcome === "catalog-failure") store.failNextSave();
               await assert.rejects(
                 restarted.syncProfileManagedProviderVariants(),
                 outcome === "catalog-failure"
                   ? /fixture Catalog save failure/u
                   : /fixture Browser runtime admission failure/u,
+              );
+              const diagnosticsAfterSync = restarted.diagnostics();
+              assert.equal(
+                diagnosticsAfterSync.bundledStartupFailureCount,
+                diagnosticsBeforeSync.bundledStartupFailureCount + 1,
+              );
+              assert.equal(
+                diagnosticsAfterSync.discoveryErrors.length,
+                diagnosticsBeforeSync.discoveryErrors.length + 1,
               );
               assert.equal(await committedGeneration(userData), generation);
               assert.equal(

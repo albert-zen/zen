@@ -73,6 +73,32 @@ import type { WorkflowCommand } from "./workflow-configuration.js";
 
 const MAX_WORKSPACE_IDENTITY_ATTEMPTS = 2;
 
+/** Rejected before the settings mutation can write a new configuration. */
+export class ConfigurationPreCommitError extends Error {
+  constructor(
+    message: string,
+    readonly reason:
+      | "conflict"
+      | "application-unconfirmed"
+      | "validation"
+      | "save-rejected" = "save-rejected",
+  ) {
+    super(message);
+  }
+}
+
+function asConfigurationPreCommitError(
+  error: unknown,
+  reason: "validation" | "save-rejected",
+): ConfigurationPreCommitError {
+  return error instanceof ConfigurationPreCommitError
+    ? error
+    : new ConfigurationPreCommitError(
+        error instanceof Error ? error.message : String(error),
+        reason,
+      );
+}
+
 type SubscriptionAuth = Pick<
   OpenAiSubscriptionAuthProfile,
   "login" | "logout" | "status"
@@ -242,15 +268,17 @@ export class ZenXSettingsService {
   }
   #assertBaseRevision(baseRevision: number | undefined): void {
     if (this.#pendingConfiguration)
-      throw new Error(
+      throw new ConfigurationPreCommitError(
         "Configuration application is unconfirmed; check or retry its application before saving again",
+        "application-unconfirmed",
       );
     if (
       baseRevision !== undefined &&
       baseRevision !== (this.#requireProfile().revision ?? 0)
     )
-      throw new Error(
+      throw new ConfigurationPreCommitError(
         "Configuration conflict: another window saved changes. Your draft was preserved; reload before applying it",
+        "conflict",
       );
   }
   #credentialReference(id: string, profile = this.#requireProfile()): string {
@@ -1056,52 +1084,69 @@ export class ZenXSettingsService {
     baseRevision?: number,
     logoUpload?: Uint8Array,
   ): Promise<void> {
-    await this.#queueProfileOperation(async () => {
-      this.#assertBaseRevision(baseRevision);
-      const current = this.#requireProfile();
-      if (provider.logoResource !== undefined)
-        throw new Error("Provider Logo resource is Host-owned");
-      const imported =
-        logoUpload === undefined
-          ? undefined
-          : await this.#providerLogos.import(logoUpload);
-      const withLogo =
-        imported === undefined
-          ? provider
-          : { ...provider, logoResource: imported.resource };
-      try {
-        const next = validateHostProfile({
-          ...current,
-          providerProfiles: [...current.providerProfiles, withLogo],
-        });
-        validateConfiguredModelContexts(next, [
-          next.providerProfiles.find(
-            (candidate) =>
-              candidate.providerProfileId === provider.providerProfileId,
-          )!,
-        ]);
-        await this.#assertProviderLogoBudget(next.providerProfiles);
-        if (
-          provider.type === "openai-compatible" &&
-          (apiKey === undefined || apiKey.length === 0)
-        ) {
-          throw new Error(
-            `Provider profile ${provider.providerProfileId} has no API key`,
+    let persistenceStarted = false;
+    try {
+      await this.#queueProfileOperation(async () => {
+        this.#assertBaseRevision(baseRevision);
+        const current = this.#requireProfile();
+        if (provider.logoResource !== undefined)
+          throw new ConfigurationPreCommitError(
+            "Provider Logo resource is Host-owned",
+            "validation",
           );
-        }
-        await this.#persistProfile(
-          next,
-          apiKey === undefined
+        const imported =
+          logoUpload === undefined
             ? undefined
-            : { providerProfileId: provider.providerProfileId, apiKey },
-        );
-        this.#profile = next;
-      } catch (error) {
-        if (imported?.created)
-          await this.#providerLogos.remove(imported.resource);
-        throw error;
-      }
-    });
+            : await this.#providerLogos.import(logoUpload);
+        const withLogo =
+          imported === undefined
+            ? provider
+            : { ...provider, logoResource: imported.resource };
+        try {
+          let next: ZenXHostProfile;
+          try {
+            next = validateHostProfile({
+              ...current,
+              providerProfiles: [...current.providerProfiles, withLogo],
+            });
+            validateConfiguredModelContexts(next, [
+              next.providerProfiles.find(
+                (candidate) =>
+                  candidate.providerProfileId === provider.providerProfileId,
+              )!,
+            ]);
+          } catch (error) {
+            throw asConfigurationPreCommitError(error, "validation");
+          }
+          await this.#assertProviderLogoBudget(next.providerProfiles);
+          if (
+            provider.type === "openai-compatible" &&
+            (apiKey === undefined || apiKey.length === 0)
+          ) {
+            throw new ConfigurationPreCommitError(
+              `Provider profile ${provider.providerProfileId} has no API key`,
+              "validation",
+            );
+          }
+          persistenceStarted = true;
+          await this.#persistProfile(
+            next,
+            apiKey === undefined
+              ? undefined
+              : { providerProfileId: provider.providerProfileId, apiKey },
+          );
+          this.#profile = next;
+        } catch (error) {
+          if (imported?.created)
+            await this.#providerLogos.remove(imported.resource);
+          throw error;
+        }
+      });
+    } catch (error) {
+      if (!persistenceStarted)
+        throw asConfigurationPreCommitError(error, "save-rejected");
+      throw error;
+    }
   }
 
   async editProviderProfile(
@@ -1109,74 +1154,97 @@ export class ZenXSettingsService {
     provider: ZenXProviderProfile,
     options: ZenXProviderEditOptions = {},
   ): Promise<void> {
-    await this.#queueProfileOperation(async () => {
-      this.#assertBaseRevision(options.baseRevision);
-      const current = this.#requireProfile();
-      const index = current.providerProfiles.findIndex(
-        (candidate) => candidate.providerProfileId === providerProfileId,
-      );
-      if (index < 0)
-        throw new Error(
-          `Provider profile ${providerProfileId} is not configured`,
+    let persistenceStarted = false;
+    try {
+      await this.#queueProfileOperation(async () => {
+        this.#assertBaseRevision(options.baseRevision);
+        const current = this.#requireProfile();
+        const index = current.providerProfiles.findIndex(
+          (candidate) => candidate.providerProfileId === providerProfileId,
         );
-      if (provider.providerProfileId !== providerProfileId) {
-        throw new Error("Provider profile id cannot be changed by edit");
-      }
-      const oldLogo = current.providerProfiles[index]!.logoResource;
-      if (
-        provider.logoResource !== undefined &&
-        provider.logoResource !== oldLogo
-      )
-        throw new Error("Provider Logo resource is Host-owned");
-      const imported =
-        options.logoUpload instanceof Uint8Array
-          ? await this.#providerLogos.import(options.logoUpload)
-          : undefined;
-      const withLogo = {
-        ...provider,
-        ...(options.logoUpload === null
-          ? { logoResource: undefined }
-          : imported === undefined
-            ? { logoResource: oldLogo }
-            : { logoResource: imported.resource }),
-      };
-      try {
-        const providerProfiles = [...current.providerProfiles];
-        providerProfiles[index] = withLogo;
-        const next = validateHostProfile({
-          ...current,
-          providerProfiles,
-          defaultModel: options.defaultModel ?? current.defaultModel,
-          titleModel: options.titleModel ?? current.titleModel,
-        });
-        validateConfiguredModelContexts(next, [next.providerProfiles[index]!]);
-        await this.#assertProviderLogoBudget(next.providerProfiles);
-        if (
-          provider.type === "openai-compatible" &&
-          (options.apiKey === undefined || options.apiKey.length === 0) &&
-          !(await this.#vault.hasApiKey(
-            this.#credentialReference(providerProfileId),
-          ))
-        ) {
-          throw new Error(
-            `Provider profile ${providerProfileId} has no API key`,
+        if (index < 0)
+          throw new ConfigurationPreCommitError(
+            `Provider profile ${providerProfileId} is not configured`,
+            "validation",
+          );
+        if (provider.providerProfileId !== providerProfileId) {
+          throw new ConfigurationPreCommitError(
+            "Provider profile id cannot be changed by edit",
+            "validation",
           );
         }
-        await this.#persistProfile(
-          next,
-          options.apiKey === undefined || options.apiKey.length === 0
-            ? undefined
-            : { providerProfileId, apiKey: options.apiKey },
-        );
-        this.#profile = next;
-      } catch (error) {
-        if (imported?.created)
-          await this.#providerLogos.remove(imported.resource);
-        throw error;
-      }
-      if (oldLogo !== undefined && oldLogo !== withLogo.logoResource)
-        await this.#removeUnusedProviderLogo(oldLogo);
-    });
+        const oldLogo = current.providerProfiles[index]!.logoResource;
+        if (
+          provider.logoResource !== undefined &&
+          provider.logoResource !== oldLogo
+        )
+          throw new ConfigurationPreCommitError(
+            "Provider Logo resource is Host-owned",
+            "validation",
+          );
+        const imported =
+          options.logoUpload instanceof Uint8Array
+            ? await this.#providerLogos.import(options.logoUpload)
+            : undefined;
+        const withLogo = {
+          ...provider,
+          ...(options.logoUpload === null
+            ? { logoResource: undefined }
+            : imported === undefined
+              ? { logoResource: oldLogo }
+              : { logoResource: imported.resource }),
+        };
+        try {
+          const providerProfiles = [...current.providerProfiles];
+          providerProfiles[index] = withLogo;
+          let next: ZenXHostProfile;
+          try {
+            next = validateHostProfile({
+              ...current,
+              providerProfiles,
+              defaultModel: options.defaultModel ?? current.defaultModel,
+              titleModel: options.titleModel ?? current.titleModel,
+            });
+            validateConfiguredModelContexts(next, [
+              next.providerProfiles[index]!,
+            ]);
+          } catch (error) {
+            throw asConfigurationPreCommitError(error, "validation");
+          }
+          await this.#assertProviderLogoBudget(next.providerProfiles);
+          if (
+            provider.type === "openai-compatible" &&
+            (options.apiKey === undefined || options.apiKey.length === 0) &&
+            !(await this.#vault.hasApiKey(
+              this.#credentialReference(providerProfileId),
+            ))
+          ) {
+            throw new ConfigurationPreCommitError(
+              `Provider profile ${providerProfileId} has no API key`,
+              "validation",
+            );
+          }
+          persistenceStarted = true;
+          await this.#persistProfile(
+            next,
+            options.apiKey === undefined || options.apiKey.length === 0
+              ? undefined
+              : { providerProfileId, apiKey: options.apiKey },
+          );
+          this.#profile = next;
+        } catch (error) {
+          if (imported?.created)
+            await this.#providerLogos.remove(imported.resource);
+          throw error;
+        }
+        if (oldLogo !== undefined && oldLogo !== withLogo.logoResource)
+          await this.#removeUnusedProviderLogo(oldLogo);
+      });
+    } catch (error) {
+      if (!persistenceStarted)
+        throw asConfigurationPreCommitError(error, "save-rejected");
+      throw error;
+    }
   }
 
   async deleteProviderProfile(
@@ -1260,8 +1328,9 @@ export class ZenXSettingsService {
       }
       totalBytes += size;
       if (totalBytes > MAX_PROVIDER_LOGO_TOTAL_BYTES)
-        throw new Error(
+        throw new ConfigurationPreCommitError(
           "Provider Logos exceed 4 MiB total across Provider profiles",
+          "validation",
         );
     }
   }
@@ -1803,7 +1872,11 @@ export class ZenXSettingsService {
 
   #queueProfileOperation<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.#profileOperations.then(async () => {
-      if (this.#maintenance) throw new Error("host_restarting");
+      if (this.#maintenance)
+        throw new ConfigurationPreCommitError(
+          "host_restarting",
+          "save-rejected",
+        );
       this.#profileInFlight++;
       try {
         return await operation();
@@ -1856,111 +1929,122 @@ export class ZenXSettingsService {
     credential?: { providerProfileId: string; apiKey: string },
     clearCredentialProfileIds: readonly string[] = [],
   ): Promise<void> {
-    const previous = this.#profile;
-    if (this.#pendingConfiguration)
-      throw new Error(
-        "Configuration application is unconfirmed; check or retry before saving again",
-      );
-    const oldKey = credential
-      ? await this.#vault.readApiKey(
+    let profileWriteStarted = false;
+    try {
+      const previous = this.#profile;
+      if (this.#pendingConfiguration)
+        throw new Error(
+          "Configuration application is unconfirmed; check or retry before saving again",
+        );
+      const oldKey = credential
+        ? await this.#vault.readApiKey(
+            this.#credentialReference(
+              credential.providerProfileId,
+              previous ?? profile,
+            ),
+          )
+        : undefined;
+      const keyChanged =
+        credential !== undefined && credential.apiKey !== oldKey;
+      if (previous && !keyChanged && isDeepStrictEqual(profile, previous)) {
+        this.#configurationResult = {
+          status: "unchanged",
+          revision: previous.revision ?? 0,
+          pendingRestart: this.#configurationResult?.pendingRestart ?? [],
+        };
+        return;
+      }
+      const revision = (previous?.revision ?? 0) + 1;
+      profile.revision = revision;
+      profile.credentialReferences = { ...previous?.credentialReferences };
+      for (const id of clearCredentialProfileIds)
+        delete profile.credentialReferences[id];
+      const newReference = keyChanged
+        ? oldKey === undefined
+          ? credential!.providerProfileId
+          : `credential-${randomUUID()}`
+        : undefined;
+      if (newReference && credential)
+        profile.credentialReferences[credential.providerProfileId] =
+          newReference;
+      let candidate: SettingsConfigurationCandidate | undefined;
+      try {
+        if (newReference && credential)
+          await this.#vault.writeApiKey(newReference, credential.apiKey);
+        if (this.#configurationControl)
+          candidate = await this.#configurationControl.prepare(
+            await this.#hostConfigForProfile(profile),
+            revision,
+          );
+        profileWriteStarted = true;
+        await this.#profileStore.write(profile);
+      } catch (error) {
+        const cleanupErrors: unknown[] = [];
+        if (candidate)
+          await this.#configurationControl
+            ?.discard(candidate)
+            .catch((reason) => cleanupErrors.push(reason));
+        if (newReference)
+          await this.#vault
+            .clearApiKey(newReference)
+            .catch((reason) => cleanupErrors.push(reason));
+        if (cleanupErrors.length)
+          throw new AggregateError(
+            [error, ...cleanupErrors],
+            "Settings were not saved; unused candidate cleanup failed. Previous configuration and credentials are unchanged",
+          );
+        throw error;
+      }
+      this.#profile = profile;
+      if (candidate && this.#configurationControl) {
+        this.#pendingConfiguration = candidate;
+        this.#configurationResult = {
+          status: "unconfirmed",
+          revision,
+          processEpoch: candidate.processEpoch,
+          pendingRestart: candidate.pendingRestart,
+        };
+        try {
+          const current = await this.#configurationControl.publish(candidate);
+          if (
+            current.processEpoch === candidate.processEpoch &&
+            current.revision === revision
+          )
+            this.#acceptConfiguration(current);
+        } catch {
+          try {
+            const current = await this.#configurationControl.current();
+            if (current.revision === revision)
+              this.#acceptConfiguration(current);
+          } catch {
+            /* A lost acknowledgement is not proof of failure. */
+          }
+        }
+      } else {
+        this.#appliedProfile = profile;
+        this.#configurationResult = {
+          status: "pending-restart",
+          revision,
+          pendingRestart: ["host"],
+        };
+      }
+      for (const id of clearCredentialProfileIds)
+        this.#retiredCredentials.add(
+          this.#credentialReference(id, previous ?? profile),
+        );
+      if (keyChanged && credential && oldKey !== undefined)
+        this.#retiredCredentials.add(
           this.#credentialReference(
             credential.providerProfileId,
             previous ?? profile,
           ),
-        )
-      : undefined;
-    const keyChanged = credential !== undefined && credential.apiKey !== oldKey;
-    if (previous && !keyChanged && isDeepStrictEqual(profile, previous)) {
-      this.#configurationResult = {
-        status: "unchanged",
-        revision: previous.revision ?? 0,
-        pendingRestart: this.#configurationResult?.pendingRestart ?? [],
-      };
-      return;
-    }
-    const revision = (previous?.revision ?? 0) + 1;
-    profile.revision = revision;
-    profile.credentialReferences = { ...previous?.credentialReferences };
-    for (const id of clearCredentialProfileIds)
-      delete profile.credentialReferences[id];
-    const newReference = keyChanged
-      ? oldKey === undefined
-        ? credential!.providerProfileId
-        : `credential-${randomUUID()}`
-      : undefined;
-    if (newReference && credential)
-      profile.credentialReferences[credential.providerProfileId] = newReference;
-    let candidate: SettingsConfigurationCandidate | undefined;
-    try {
-      if (newReference && credential)
-        await this.#vault.writeApiKey(newReference, credential.apiKey);
-      if (this.#configurationControl)
-        candidate = await this.#configurationControl.prepare(
-          await this.#hostConfigForProfile(profile),
-          revision,
         );
-      await this.#profileStore.write(profile);
+      await this.#cleanupRetiredCredentials();
     } catch (error) {
-      const cleanupErrors: unknown[] = [];
-      if (candidate)
-        await this.#configurationControl
-          ?.discard(candidate)
-          .catch((reason) => cleanupErrors.push(reason));
-      if (newReference)
-        await this.#vault
-          .clearApiKey(newReference)
-          .catch((reason) => cleanupErrors.push(reason));
-      if (cleanupErrors.length)
-        throw new AggregateError(
-          [error, ...cleanupErrors],
-          "Settings were not saved; unused candidate cleanup failed. Previous configuration and credentials are unchanged",
-        );
+      if (!profileWriteStarted)
+        throw asConfigurationPreCommitError(error, "save-rejected");
       throw error;
     }
-    this.#profile = profile;
-    if (candidate && this.#configurationControl) {
-      this.#pendingConfiguration = candidate;
-      this.#configurationResult = {
-        status: "unconfirmed",
-        revision,
-        processEpoch: candidate.processEpoch,
-        pendingRestart: candidate.pendingRestart,
-      };
-      try {
-        const current = await this.#configurationControl.publish(candidate);
-        if (
-          current.processEpoch === candidate.processEpoch &&
-          current.revision === revision
-        )
-          this.#acceptConfiguration(current);
-      } catch {
-        try {
-          const current = await this.#configurationControl.current();
-          if (current.revision === revision) this.#acceptConfiguration(current);
-        } catch {
-          /* A lost acknowledgement is not proof of failure. */
-        }
-      }
-    } else {
-      this.#appliedProfile = profile;
-      this.#configurationResult = {
-        status: "pending-restart",
-        revision,
-        pendingRestart: ["host"],
-      };
-    }
-    for (const id of clearCredentialProfileIds)
-      this.#retiredCredentials.add(
-        this.#credentialReference(id, previous ?? profile),
-      );
-    if (keyChanged && credential && oldKey !== undefined)
-      this.#retiredCredentials.add(
-        this.#credentialReference(
-          credential.providerProfileId,
-          previous ?? profile,
-        ),
-      );
-    await this.#cleanupRetiredCredentials();
   }
 }
 

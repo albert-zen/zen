@@ -24,7 +24,10 @@ import {
   ZenXHostProfileStore,
 } from "../src/main/host-profile.js";
 import { ProviderLogoResources } from "../src/main/provider-logo-resource.js";
-import { ZenXSettingsService } from "../src/main/settings-service.js";
+import {
+  ConfigurationPreCommitError,
+  ZenXSettingsService,
+} from "../src/main/settings-service.js";
 import type { OpenAiSubscriptionAuthProfile } from "../../cli/src/subscription-auth.js";
 
 const encryption: LocalEncryption = {
@@ -81,7 +84,9 @@ test("persists one user-scoped workflow configuration for Settings and self-cont
         baseRevision: before.revision,
         commands: [],
       }),
-      /Configuration conflict/u,
+      (error: unknown) =>
+        error instanceof ConfigurationPreCommitError &&
+        /Configuration conflict/u.test(error.message),
     );
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -1688,12 +1693,22 @@ test("provider add, edit, and settings save reject incomplete context metadata w
 
     await assert.rejects(
       service.addProviderProfile(incomplete, "required-key"),
-      /Provider profile required.*model required-model.*positive context window/u,
+      (error: unknown) =>
+        error instanceof ConfigurationPreCommitError &&
+        error.reason === "validation" &&
+        /Provider profile required.*model required-model.*positive context window/u.test(
+          error.message,
+        ),
     );
     await service.addProviderProfile(configured, "required-key");
     await assert.rejects(
       service.editProviderProfile("required", incomplete),
-      /Provider profile required.*model required-model.*positive context window/u,
+      (error: unknown) =>
+        error instanceof ConfigurationPreCommitError &&
+        error.reason === "validation" &&
+        /Provider profile required.*model required-model.*positive context window/u.test(
+          error.message,
+        ),
     );
     const before = await service.publicSettings();
     await assert.rejects(
@@ -1710,6 +1725,200 @@ test("provider add, edit, and settings save reject incomplete context metadata w
         (provider) => provider.providerProfileId === "required",
       )?.models[0]?.contextWindow,
       32_768,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Provider add and edit prepare failures are known rejected saves before profile write", async () => {
+  for (const operation of ["add", "edit"] as const) {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-provider-prepare-"),
+    );
+    try {
+      const service = settingsFor(directory, inactiveSubscription());
+      await service.initialize({ ZENX_PROVIDER: "fake" });
+      const provider = compatibleProfile("prepare").providerProfiles[0]!;
+      if (operation === "edit")
+        await service.addProviderProfile(provider, "first-key");
+      const before = (await service.publicSettings()).profile;
+      service.setConfigurationControl({
+        prepare: async () => {
+          throw new Error("prepare rejected");
+        },
+        publish: async () => {
+          throw new Error("unexpected publish");
+        },
+        discard: async () => {},
+        current: async () => {
+          throw new Error("unexpected current");
+        },
+      });
+      const save =
+        operation === "add"
+          ? service.addProviderProfile(provider, "first-key", before.revision)
+          : service.editProviderProfile(
+              provider.providerProfileId,
+              { ...provider, displayName: "Changed" },
+              { baseRevision: before.revision },
+            );
+      await assert.rejects(
+        save,
+        (error: unknown) =>
+          error instanceof ConfigurationPreCommitError &&
+          error.reason === "save-rejected" &&
+          /prepare rejected/u.test(error.message),
+      );
+      assert.deepEqual((await service.publicSettings()).profile, before);
+      assert.equal(
+        (
+          await new ZenXHostProfileStore(
+            path.join(directory, "host-profile.json"),
+          ).readOptional()
+        )?.revision,
+        before.revision,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("a vault read failure before Provider profile write is a known rejected save", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-provider-vault-"),
+  );
+  class FailingReadVault extends ZenXCredentialVault {
+    failRead = false;
+    override async readApiKey(id: string): Promise<string | undefined> {
+      if (this.failRead) throw new Error("vault read failed");
+      return await super.readApiKey(id);
+    }
+  }
+  try {
+    const vault = new FailingReadVault(
+      path.join(directory, "credentials.vault"),
+      encryption,
+    );
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault,
+      subscription: inactiveSubscription(),
+    });
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    const provider = compatibleProfile("vault").providerProfiles[0]!;
+    await service.addProviderProfile(provider, "first-key");
+    const before = (await service.publicSettings()).profile;
+    vault.failRead = true;
+    await assert.rejects(
+      service.editProviderProfile(
+        provider.providerProfileId,
+        { ...provider, displayName: "Changed" },
+        { apiKey: "replacement-key", baseRevision: before.revision },
+      ),
+      (error: unknown) =>
+        error instanceof ConfigurationPreCommitError &&
+        error.reason === "save-rejected" &&
+        error.message === "vault read failed",
+    );
+    vault.failRead = false;
+    assert.deepEqual((await service.publicSettings()).profile, before);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Provider saves refused during maintenance are not classified as form validation", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-provider-maintenance-"),
+  );
+  try {
+    const service = settingsFor(directory, inactiveSubscription());
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    const existing = compatibleProfile("existing").providerProfiles[0]!;
+    await service.addProviderProfile(existing, "key");
+    const before = (await service.publicSettings()).profile;
+    assert.equal(service.tryBeginMaintenance(), true);
+    try {
+      for (const save of [
+        service.addProviderProfile(
+          compatibleProfile("another").providerProfiles[0]!,
+          "key",
+          before.revision,
+        ),
+        service.editProviderProfile(
+          existing.providerProfileId,
+          { ...existing, displayName: "Changed" },
+          { baseRevision: before.revision },
+        ),
+      ]) {
+        await assert.rejects(
+          save,
+          (error: unknown) =>
+            error instanceof ConfigurationPreCommitError &&
+            error.reason === "save-rejected" &&
+            error.message === "host_restarting",
+        );
+      }
+    } finally {
+      service.endMaintenance();
+    }
+    assert.deepEqual((await service.publicSettings()).profile, before);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Provider profile write that may have committed remains unconfirmed", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-provider-write-"),
+  );
+  class LostWriteAcknowledgementStore extends ZenXHostProfileStore {
+    rejectAfterWrite = false;
+    override async write(profile: ZenXHostProfile): Promise<void> {
+      await super.write(profile);
+      if (this.rejectAfterWrite) throw new Error("write acknowledgement lost");
+    }
+  }
+  try {
+    const profileStore = new LostWriteAcknowledgementStore(
+      path.join(directory, "host-profile.json"),
+    );
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault: new ZenXCredentialVault(
+        path.join(directory, "credentials.vault"),
+        encryption,
+      ),
+      profileStore,
+      subscription: inactiveSubscription(),
+    });
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    const provider = compatibleProfile("write-phase").providerProfiles[0]!;
+    await service.addProviderProfile(provider, "key");
+    const before = (await service.publicSettings()).profile;
+    profileStore.rejectAfterWrite = true;
+    await assert.rejects(
+      service.editProviderProfile(
+        provider.providerProfileId,
+        { ...provider, displayName: "Persisted before error" },
+        { baseRevision: before.revision },
+      ),
+      (error: unknown) =>
+        !(error instanceof ConfigurationPreCommitError) &&
+        error instanceof Error &&
+        error.message === "write acknowledgement lost",
+    );
+    const persisted = await profileStore.readOptional();
+    assert.equal(persisted?.revision, (before.revision ?? 0) + 1);
+    assert.equal(
+      persisted?.providerProfiles.find(
+        (entry) => entry.providerProfileId === provider.providerProfileId,
+      )?.displayName,
+      "Persisted before error",
     );
   } finally {
     await rm(directory, { recursive: true, force: true });

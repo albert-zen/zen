@@ -49,6 +49,7 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
   readonly #listeners = new Set<(snapshot: ZenXPluginSnapshot) => void>();
   readonly #providerDiagnostics: ZenXCapabilityProviderDiagnostic[] = [];
   readonly #discoveryErrors: string[] = [];
+  #bundledStartupFailureCount = 0;
   readonly #options: ZenXPluginCatalogOptions;
   #allowForegroundRequired: boolean;
   #disabled = new Set<string>();
@@ -691,6 +692,12 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
     this.#emit();
   }
 
+  recordBundledStartupError(message: string): void {
+    this.#discoveryErrors.push(message);
+    this.#bundledStartupFailureCount++;
+    this.#emit();
+  }
+
   recordProviderDiagnostic(diagnostic: ZenXCapabilityProviderDiagnostic): void {
     const index = this.#providerDiagnostics.findIndex(
       (candidate) =>
@@ -864,6 +871,7 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
     return {
       providerDiagnostics: structuredClone(this.#providerDiagnostics),
       discoveryErrors: [...this.#discoveryErrors],
+      bundledStartupFailureCount: this.#bundledStartupFailureCount,
     };
   }
 
