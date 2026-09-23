@@ -12,6 +12,7 @@ export type IconName =
   | "arrow-down"
   | "archive"
   | "browser"
+  | "book"
   | "computer"
   | "compress"
   | "expand"
@@ -29,6 +30,7 @@ export type IconName =
   | "folder-plus"
   | "grip"
   | "layers"
+  | "list-detail"
   | "lock"
   | "moon"
   | "more"
@@ -49,7 +51,8 @@ export type IconName =
   | "terminal"
   | "users"
   | "x"
-  | "warning";
+  | "warning"
+  | "window-restore";
 
 type IconProps = SVGProps<SVGSVGElement> & {
   name: IconName;
@@ -57,6 +60,24 @@ type IconProps = SVGProps<SVGSVGElement> & {
 };
 
 const paths: Record<IconName, ReactNode> = {
+  book: (
+    <>
+      <path d="M8 4.2C6.2 2.9 4.2 2.5 2 3v9.5c2.2-.5 4.2-.1 6 1.2 1.8-1.3 3.8-1.7 6-1.2V3c-2.2-.5-4.2-.1-6 1.2Z" />
+      <path d="M8 4.2v9.5" />
+    </>
+  ),
+  "list-detail": (
+    <>
+      <path d="M5.6 4h8M5.6 8h8M5.6 12h8" />
+      <path d="M2.5 4h.1M2.5 8h.1M2.5 12h.1" strokeWidth="2.5" />
+    </>
+  ),
+  "window-restore": (
+    <>
+      <path d="M5.2 2h7.3c.8 0 1.5.7 1.5 1.5v7.3" />
+      <rect x="2" y="5.2" width="8.8" height="8.8" rx="1.2" />
+    </>
+  ),
   image: (
     <>
       <rect x="1.5" y="1.5" width="13" height="13" rx="2" />

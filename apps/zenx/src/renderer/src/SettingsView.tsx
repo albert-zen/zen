@@ -247,7 +247,7 @@ export function SettingsView({
     { id: "appearance", label: "Appearance", icon: "moon" },
     { id: "general", label: "General", icon: "settings" },
     { id: "compaction", label: "Context compaction", icon: "compress" },
-    { id: "skills", label: "Skills", icon: "compose" },
+    { id: "skills", label: "Skills", icon: "book" },
     { id: "workflows", label: "Workflows", icon: "compose" },
     { id: "archived", label: "Archived threads", icon: "archive" },
   ];

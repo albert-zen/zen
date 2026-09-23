@@ -85,7 +85,7 @@ test("side panel keeps one fixed toggle and an interruptible width transition", 
     styles,
     /\.auxiliary-panel\[data-open="false"\]\s*\{[^}]*flex-basis:\s*0;[^}]*width:\s*0;[^}]*min-width:\s*0;/su,
   );
-  assert.doesNotMatch(
+  assert.match(
     styles,
     /\.app-shell:has\(\.auxiliary-panel\[data-open="true"\]\) #thread-browser-toggle\s*\{[^}]*display:\s*none;/su,
   );

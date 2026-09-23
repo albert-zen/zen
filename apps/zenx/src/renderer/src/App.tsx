@@ -2596,7 +2596,7 @@ function ConversationTitleBar({
             className="icon-button thread-panel-toggle"
             type="button"
             aria-label={browserOpen ? "Close side panel" : "Open side panel"}
-            title="Workspace"
+            title={browserOpen ? "Close side panel" : "Open side panel"}
             aria-controls="thread-workspace-panel"
             aria-expanded={browserOpen}
             disabled={threadDetail === null}

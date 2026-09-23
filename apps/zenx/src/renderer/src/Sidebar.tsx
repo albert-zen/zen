@@ -357,7 +357,12 @@ export function Sidebar({
               </small>
             </button>
           </div>
+        </header>
 
+        <div
+          className="sidebar-scroll"
+          aria-labelledby="sidebar-thread-list-heading"
+        >
           <PluginSpaces
             contributions={pluginContributions}
             onOpen={onOpenContribution}
@@ -407,7 +412,7 @@ export function Sidebar({
                   }
                 }}
               >
-                <Icon name="layers" size={13} />
+                <Icon name="list-detail" size={13} />
                 <span>
                   {threadDensity === "detailed" ? "Detailed" : "Compact"}
                 </span>
@@ -425,12 +430,6 @@ export function Sidebar({
               ) : null}
             </span>
           </div>
-        </header>
-
-        <div
-          className="sidebar-scroll"
-          aria-labelledby="sidebar-thread-list-heading"
-        >
           {expansionError !== null ? (
             <p role="alert">{expansionError}</p>
           ) : null}
@@ -1572,14 +1571,9 @@ function ThreadRow({
         ) : null}
       </span>
       {identity === null || modelProvider === null ? null : (
-        <span
-          className="thread-model"
-          title={`${identity.label} · ${modelProvider}`}
-        >
+        <span className="thread-model" title={identity.label}>
           <ProviderLogo kind={identity.providerKind} />
           <span>{identity.label}</span>
-          <span aria-hidden="true">·</span>
-          <span>{modelProvider}</span>
         </span>
       )}
       {pendingApproval || thread.status === "active" ? (
