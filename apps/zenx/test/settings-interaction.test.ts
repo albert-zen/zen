@@ -1630,6 +1630,27 @@ test("General exposes an optional maximum tool round setting", async () => {
   }
 });
 
+test("General opens the local diagnostics folder only after an explicit click", async () => {
+  let opens = 0;
+  const harness = await mountSettings("general", {
+    openDiagnosticsFolder: async () => {
+      opens += 1;
+    },
+  });
+  try {
+    const open = await waitFor(() => exactButton("Open diagnostics folder"));
+    assert.equal(opens, 0);
+    assert.match(
+      document.body.textContent ?? "",
+      /Stored on this device and never shared automatically/u,
+    );
+    await click(open);
+    assert.equal(opens, 1);
+  } finally {
+    await unmount(harness);
+  }
+});
+
 test("General names both browser modes and reports an extension-folder failure", async () => {
   const browserSettings: PublicHostSettings = {
     ...settings,
@@ -1857,6 +1878,7 @@ async function mountSettings(
       providerProfileId: string,
       modelId: string,
     ): Promise<ZenXImageCapabilityProbeResult>;
+    openDiagnosticsFolder?(): Promise<void>;
     chromeBridge?: Window["zenx"]["chromeBridge"];
     browserSettingsFocusRequest?: number;
     archivedThreads?: NativeThreadSummary[];
@@ -1952,6 +1974,8 @@ async function mountSettings(
         (async () => {
           throw new Error("Unexpected probeProviderImage call");
         }),
+      openDiagnosticsFolder:
+        options.openDiagnosticsFolder ?? (async () => undefined),
       onManualCodeRequested: () => () => undefined,
     },
   } as unknown as Window["zenx"];

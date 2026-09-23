@@ -35,6 +35,7 @@ export const ipcChannels = {
   settingsReconcile: "zenx:settings:reconcile",
   settingsSave: "zenx:settings:save",
   settingsDiagnosticRecord: "zenx:settings:diagnostic-record",
+  settingsDiagnosticsOpenFolder: "zenx:settings:diagnostics-open-folder",
   settingsChanged: "zenx:settings:changed",
   providerAdd: "zenx:settings:provider-add",
   providerEdit: "zenx:settings:provider-edit",

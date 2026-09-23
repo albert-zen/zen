@@ -3059,6 +3059,7 @@ function GeneralPanel({
     draft.maxToolRounds?.toString() ?? "",
   );
   const [maximumError, setMaximumError] = useState<string | null>(null);
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
   useEffect(() => {
     setMaximumInput(draft.maxToolRounds?.toString() ?? "");
   }, [draft.maxToolRounds]);
@@ -3253,6 +3254,31 @@ function GeneralPanel({
           </div>
           <span className="status-good">Local</span>
         </div>
+        <div className="settings-row">
+          <div>
+            <strong>Local diagnostics</strong>
+            <span>Stored on this device and never shared automatically.</span>
+          </div>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => {
+              setDiagnosticsError(null);
+              void window.zenx.settings
+                .openDiagnosticsFolder()
+                .catch(() =>
+                  setDiagnosticsError("Could not open diagnostics folder."),
+                );
+            }}
+          >
+            Open diagnostics folder
+          </button>
+        </div>
+        {diagnosticsError === null ? null : (
+          <p className="settings-error" role="alert">
+            {diagnosticsError}
+          </p>
+        )}
       </div>
     </>
   );

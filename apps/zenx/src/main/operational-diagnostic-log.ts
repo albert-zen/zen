@@ -1,0 +1,246 @@
+import { BoundedLocalDiagnosticLog } from "./bounded-diagnostic-log.js";
+import type { AppServerHostStatus } from "./app-server-manager.js";
+import type { ZenXComputerReadinessSnapshot } from "./computer-readiness.js";
+import type { ZenXPluginDiagnostics } from "./capabilities/types.js";
+
+type AppServerCode =
+  "starting" | "ready" | "reconnected" | "reconnecting" | "error" | "stopped";
+type ComputerAccessCode = ZenXComputerReadinessSnapshot["accessibility"];
+type ScreenRecordingCode = ZenXComputerReadinessSnapshot["screenRecording"];
+type ComputerProbeCode =
+  | "not-checked"
+  | "ready"
+  | "needs-setup"
+  | "failed"
+  | "unknown"
+  | "not-applicable";
+type PluginCapabilityCode = "browser" | "computer" | "other";
+type PluginFailureCode =
+  | "discovery-error"
+  | "provider-unavailable"
+  | "provider-fallback"
+  | "provider-integrity-failed";
+
+type OperationalEvent =
+  | { event: "app-server"; status: AppServerCode }
+  | {
+      event: "computer-readiness";
+      status: ScreenRecordingCode;
+      accessibility: ComputerAccessCode;
+      accessibilityProbe: ComputerProbeCode;
+      screenCaptureProbe: ComputerProbeCode;
+    }
+  | {
+      event: "plugin";
+      reason: PluginFailureCode;
+      capability: PluginCapabilityCode;
+    };
+
+type OperationalRecord = OperationalEvent & { timestamp: string };
+
+const appServerCodes = new Set<AppServerCode>([
+  "starting",
+  "ready",
+  "reconnected",
+  "reconnecting",
+  "error",
+  "stopped",
+]);
+const computerAccessCodes = new Set<ComputerAccessCode>([
+  "granted",
+  "needs-setup",
+  "unknown",
+  "not-applicable",
+]);
+const screenRecordingCodes = new Set<ScreenRecordingCode>([
+  "granted",
+  "denied",
+  "restricted",
+  "not-determined",
+  "unknown",
+  "not-applicable",
+]);
+const probeCodes = new Set<ComputerProbeCode>([
+  "not-checked",
+  "ready",
+  "needs-setup",
+  "failed",
+  "unknown",
+  "not-applicable",
+]);
+const pluginCapabilities = new Set<PluginCapabilityCode>([
+  "browser",
+  "computer",
+  "other",
+]);
+const pluginFailures = new Set<PluginFailureCode>([
+  "discovery-error",
+  "provider-unavailable",
+  "provider-fallback",
+  "provider-integrity-failed",
+]);
+
+/** Strictly project fixed operational codes; never persist arbitrary source fields. */
+export function normalizeOperationalDiagnostic(
+  input: unknown,
+  now = new Date(),
+): OperationalRecord | null {
+  if (input === null || typeof input !== "object") return null;
+  const value = input as Record<string, unknown>;
+  const timestamp = now.toISOString();
+  if (value.event === "app-server") {
+    if (!appServerCodes.has(value.status as AppServerCode)) return null;
+    return {
+      timestamp,
+      event: "app-server",
+      status: value.status as AppServerCode,
+    };
+  }
+  if (value.event === "computer-readiness") {
+    if (
+      !screenRecordingCodes.has(value.status as ScreenRecordingCode) ||
+      !computerAccessCodes.has(value.accessibility as ComputerAccessCode) ||
+      !probeCodes.has(value.accessibilityProbe as ComputerProbeCode) ||
+      !probeCodes.has(value.screenCaptureProbe as ComputerProbeCode)
+    )
+      return null;
+    return {
+      timestamp,
+      event: "computer-readiness",
+      status: value.status as ScreenRecordingCode,
+      accessibility: value.accessibility as ComputerAccessCode,
+      accessibilityProbe: value.accessibilityProbe as ComputerProbeCode,
+      screenCaptureProbe: value.screenCaptureProbe as ComputerProbeCode,
+    };
+  }
+  if (value.event === "plugin") {
+    if (
+      !pluginFailures.has(value.reason as PluginFailureCode) ||
+      !pluginCapabilities.has(value.capability as PluginCapabilityCode)
+    )
+      return null;
+    return {
+      timestamp,
+      event: "plugin",
+      reason: value.reason as PluginFailureCode,
+      capability: value.capability as PluginCapabilityCode,
+    };
+  }
+  return null;
+}
+
+function computerEvent(
+  snapshot: ZenXComputerReadinessSnapshot,
+): Extract<OperationalEvent, { event: "computer-readiness" }> {
+  return {
+    event: "computer-readiness",
+    status: snapshot.screenRecording,
+    accessibility: snapshot.accessibility,
+    accessibilityProbe:
+      snapshot.verification?.accessibility.state ?? "not-checked",
+    screenCaptureProbe:
+      snapshot.verification?.screenCapture.state ?? "not-checked",
+  };
+}
+
+function appServerCode(status: AppServerHostStatus): AppServerCode {
+  return status.type === "ready" && status.reconnected
+    ? "reconnected"
+    : status.type;
+}
+
+function pluginCapabilityCode(value: string): PluginCapabilityCode {
+  return value === "browser" || value === "computer" ? value : "other";
+}
+
+/** Best-effort support observations. No operation depends on diagnostic I/O. */
+export class OperationalDiagnosticLog {
+  readonly #sink: BoundedLocalDiagnosticLog<OperationalRecord>;
+  #lastAppServer?: AppServerCode;
+  #lastComputer?: string;
+  #discoveryErrorCount = 0;
+  #providerFailures = new Map<string, PluginFailureCode | "healthy">();
+
+  constructor(userDataDirectory: string, options: { maxBytes?: number } = {}) {
+    this.#sink = new BoundedLocalDiagnosticLog({
+      userDataDirectory,
+      fileName: "operations.jsonl",
+      normalize: normalizeOperationalDiagnostic,
+      maxBytes: options.maxBytes,
+    });
+  }
+
+  async observeAppServer(status: AppServerHostStatus): Promise<void> {
+    const code = appServerCode(status);
+    if (code === this.#lastAppServer) return;
+    this.#lastAppServer = code;
+    await this.#append({ event: "app-server", status: code });
+  }
+
+  async observeComputer(
+    snapshot: ZenXComputerReadinessSnapshot,
+  ): Promise<void> {
+    const event = computerEvent(snapshot);
+    const signature = [
+      event.status,
+      event.accessibility,
+      event.accessibilityProbe,
+      event.screenCaptureProbe,
+    ].join(":");
+    if (signature === this.#lastComputer) return;
+    this.#lastComputer = signature;
+    await this.#append(event);
+  }
+
+  async observePlugins(diagnostics: ZenXPluginDiagnostics): Promise<void> {
+    const events: Array<Extract<OperationalEvent, { event: "plugin" }>> = [];
+    if (diagnostics.discoveryErrors.length < this.#discoveryErrorCount)
+      this.#discoveryErrorCount = 0;
+    if (diagnostics.discoveryErrors.length > this.#discoveryErrorCount) {
+      this.#discoveryErrorCount = diagnostics.discoveryErrors.length;
+      events.push({
+        event: "plugin",
+        reason: "discovery-error",
+        capability: "other",
+      });
+    }
+    const current = new Map<string, PluginFailureCode | "healthy">();
+    for (const diagnostic of diagnostics.providerDiagnostics) {
+      const key = `${diagnostic.capabilityId}\0${diagnostic.providerId}`;
+      const reason: PluginFailureCode | "healthy" =
+        diagnostic.integrity === "failed"
+          ? "provider-integrity-failed"
+          : diagnostic.status === "unavailable"
+            ? "provider-unavailable"
+            : diagnostic.status === "fallback"
+              ? "provider-fallback"
+              : "healthy";
+      current.set(key, reason);
+      if (reason === "healthy" || this.#providerFailures.get(key) === reason)
+        continue;
+      events.push({
+        event: "plugin",
+        reason,
+        capability: pluginCapabilityCode(diagnostic.capabilityId),
+      });
+    }
+    this.#providerFailures = current;
+    for (const event of events) await this.#append(event);
+  }
+
+  async recordPluginStartupFailure(): Promise<void> {
+    await this.#append({
+      event: "plugin",
+      reason: "discovery-error",
+      capability: "other",
+    });
+  }
+
+  async #append(event: OperationalEvent): Promise<void> {
+    try {
+      await this.#sink.record(event);
+    } catch {
+      // Support logging must never change a product operation's outcome.
+    }
+  }
+}

@@ -14,6 +14,7 @@ import {
   systemPreferences,
 } from "electron";
 import { randomUUID } from "node:crypto";
+import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { windowBackdropOptions } from "./window-appearance.js";
 import { FileAttachmentStore } from "../../../../src/attachment.js";
@@ -44,6 +45,7 @@ import {
   runDiagnosedProviderMutation,
   type ProviderKnownRejectionCode,
 } from "./settings-diagnostic-log.js";
+import { OperationalDiagnosticLog } from "./operational-diagnostic-log.js";
 import {
   computerReadinessSnapshot,
   probeComputerAccess,
@@ -367,6 +369,14 @@ async function bootstrapZenX(): Promise<void> {
     ),
   });
   const settingsDiagnostics = new SettingsDiagnosticLog(userDataDirectory);
+  const operationalDiagnostics = new OperationalDiagnosticLog(
+    userDataDirectory,
+  );
+  const observeAppServer = (manager: AppServerManager) => {
+    manager.onStatus((status) => {
+      void operationalDiagnostics.observeAppServer(status);
+    });
+  };
   try {
     await settingsService.initialize(process.env);
     bootstrapFence.throwIfCancelled();
@@ -468,6 +478,15 @@ async function bootstrapZenX(): Promise<void> {
       projectProjection,
       appServerPort: selfControlPort,
     });
+    capabilityService.onChange(() => {
+      try {
+        void operationalDiagnostics
+          .observePlugins(capabilityService!.diagnostics())
+          .catch(() => undefined);
+      } catch {
+        // Diagnostic observation cannot interrupt plugin state changes.
+      }
+    });
     await syncProjectProjection(settingsService);
     bootstrapFence.throwIfCancelled();
     let startupError: unknown;
@@ -499,6 +518,7 @@ async function bootstrapZenX(): Promise<void> {
       execPath: process.execPath,
       capabilityHost: capabilityService,
     });
+    observeAppServer(appServerManager);
     await selfControlPort.attach(appServerManager);
     bootstrapFence.throwIfCancelled();
     titleCoordinator = new ZenXThreadTitleCoordinator({
@@ -553,7 +573,19 @@ async function bootstrapZenX(): Promise<void> {
     });
     bootstrapFence.throwIfCancelled();
     triggersPackage = new ZenXTriggersCapabilityPackage(automationService);
-    await capabilityService.initialize();
+    try {
+      await capabilityService.initialize();
+    } catch (error) {
+      void operationalDiagnostics.recordPluginStartupFailure();
+      throw error;
+    }
+    try {
+      await operationalDiagnostics.observePlugins(
+        capabilityService.diagnostics(),
+      );
+    } catch {
+      // Diagnostic observation cannot interrupt startup.
+    }
     bootstrapFence.throwIfCancelled();
     try {
       await capabilityService.syncProfileManagedProviderVariants();
@@ -599,6 +631,10 @@ async function bootstrapZenX(): Promise<void> {
     bootstrapFence.rethrowIfCancelled(error);
     console.error("Could not start Zen App Server", error);
     if (appServerManager === undefined) {
+      void operationalDiagnostics.observeAppServer({
+        type: "error",
+        message: "",
+      });
       installFailedProtocolIpc(
         error instanceof Error ? error.message : String(error),
       );
@@ -668,6 +704,8 @@ async function bootstrapZenX(): Promise<void> {
     settingsService,
     directoryBrowser,
     settingsDiagnostics,
+    operationalDiagnostics,
+    join(userDataDirectory, "diagnostics"),
     async () => {
       if (appServerManager?.status.type === "ready") return;
       const hostConfig = await withZenXProviderTransports(
@@ -684,6 +722,7 @@ async function bootstrapZenX(): Promise<void> {
           execPath: process.execPath,
           capabilityHost: capabilityService,
         });
+        observeAppServer(appServerManager);
         await selfControlPort.attach(appServerManager);
         await appServerManager.start();
       } else await appServerManager.restart(hostConfig);
@@ -1296,6 +1335,8 @@ function installSettingsIpc(
   settings: ZenXSettingsService,
   directoryBrowser: ZenXDirectoryBrowser,
   diagnostics: SettingsDiagnosticLog,
+  operationalDiagnostics: OperationalDiagnosticLog,
+  diagnosticsDirectory: string,
   startHostIfNeeded: () => Promise<void>,
   refreshProjects: () => Promise<void>,
 ): void {
@@ -1322,6 +1363,12 @@ function installSettingsIpc(
       }
     },
   );
+  ipcMain.handle(ipcChannels.settingsDiagnosticsOpenFolder, async () => {
+    await mkdir(diagnosticsDirectory, { recursive: true, mode: 0o700 });
+    const failure = await shell.openPath(diagnosticsDirectory);
+    if (failure.length > 0)
+      throw new Error("Could not open diagnostics folder");
+  });
   let computerVerification: ZenXComputerAccessVerification | undefined;
   let verificationStatus: string | undefined;
   let pendingComputerProbe: Promise<ZenXComputerReadinessSnapshot> | undefined;
@@ -1349,9 +1396,12 @@ function installSettingsIpc(
     });
     const status = `${snapshot.accessibility}:${snapshot.screenRecording}`;
     if (verificationStatus !== status) computerVerification = undefined;
-    return computerVerification === undefined
-      ? snapshot
-      : { ...snapshot, verification: computerVerification };
+    const result =
+      computerVerification === undefined
+        ? snapshot
+        : { ...snapshot, verification: computerVerification };
+    void operationalDiagnostics.observeComputer(result);
+    return result;
   };
   ipcMain.handle(ipcChannels.computerReadinessGet, readComputerReadiness);
   ipcMain.handle(ipcChannels.computerReadinessProbe, () => {
@@ -1385,7 +1435,9 @@ function installSettingsIpc(
       const updated = readComputerReadiness();
       computerVerification = verification;
       verificationStatus = `${updated.accessibility}:${updated.screenRecording}`;
-      return { ...updated, verification };
+      const result = { ...updated, verification };
+      void operationalDiagnostics.observeComputer(result);
+      return result;
     })().finally(() => {
       pendingComputerProbe = undefined;
     });
