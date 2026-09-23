@@ -1332,8 +1332,9 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
         selection.diagnostics,
       );
     } catch (error) {
-      this.#registry.recordDiscoveryError(
-        `${pluginId === "browser" ? "Browser" : "Computer"} provider variant: ${describeError(error)}`,
+      this.recordBundledPluginStartupError(
+        `${pluginId === "browser" ? "Browser" : "Computer"} provider variant`,
+        error,
       );
       throw error;
     }

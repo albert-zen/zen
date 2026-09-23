@@ -588,6 +588,8 @@ async function bootstrapZenX(): Promise<void> {
       // Diagnostic observation cannot interrupt startup.
     }
     bootstrapFence.throwIfCancelled();
+    const startupFailureCountBeforeSync =
+      capabilityService.diagnostics().bundledStartupFailureCount;
     try {
       await capabilityService.syncProfileManagedProviderVariants();
     } catch (error) {
@@ -595,9 +597,14 @@ async function bootstrapZenX(): Promise<void> {
       // Provider profile synchronization is optional plugin state. Keep the
       // core App Server available with the previously committed provider and
       // expose the failure through the normal capability diagnostics.
-      capabilityService.recordDiscoveryError(
-        `Provider profile synchronization is unavailable: ${describeError(error)}`,
-      );
+      if (
+        capabilityService.diagnostics().bundledStartupFailureCount ===
+        startupFailureCountBeforeSync
+      )
+        capabilityService.recordBundledPluginStartupError(
+          "Provider profile synchronization",
+          error,
+        );
     }
     bootstrapFence.throwIfCancelled();
     await installZenXBundledPluginsAtStartup(
