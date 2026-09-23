@@ -241,7 +241,7 @@ test("Browser setup distinguishes the isolated session from Connected Chrome", a
     IS_REACT_ACT_ENVIRONMENT: true,
   });
   let connectedMode = false;
-  let openedGeneral = 0;
+  const openedGeneral: string[] = [];
   Object.defineProperty(dom.window, "zenx", {
     configurable: true,
     value: {
@@ -266,9 +266,7 @@ test("Browser setup distinguishes the isolated session from Connected Chrome", a
       React.createElement(PluginAccessReview, {
         pluginId: "browser",
         permissions: [],
-        onOpenGeneral: () => {
-          openedGeneral += 1;
-        },
+        onOpenGeneral: (pluginId) => openedGeneral.push(pluginId),
       }),
     );
     await Promise.resolve();
@@ -291,7 +289,7 @@ test("Browser setup distinguishes the isolated session from Connected Chrome", a
     /Register the local connector/u,
   );
   await act(async () => button("Open Browser settings").click());
-  assert.equal(openedGeneral, 1);
+  assert.deepEqual(openedGeneral, ["browser"]);
   await act(async () => root.unmount());
 });
 

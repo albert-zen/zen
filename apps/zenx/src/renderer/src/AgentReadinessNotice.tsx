@@ -168,7 +168,15 @@ export function AgentReadinessNotice({
       <div className="agent-readiness-heading">
         <div>
           <span className="agent-readiness-eyebrow">TOOL ACCESS</span>
-          <h2>Finish tool setup</h2>
+          <h2>
+            {issues.some(
+              (issue) =>
+                issue.status === "Check failed" ||
+                issue.status === "Could not verify",
+            )
+              ? "Check tool access"
+              : "Finish tool setup"}
+          </h2>
         </div>
         <button
           type="button"
@@ -248,7 +256,7 @@ function computerIssues(
       "Accessibility",
       accessibility,
       "In macOS Accessibility, enable this ZenX app and any separate ZenX helper entry. If absent, add the ZenX.app you launched, then check again.",
-      "ZenX tried to inspect controls but could not confirm access. Check the macOS permission, then retry.",
+      "ZenX could not complete the native window check. Select Check again; the error details may help diagnose it.",
       "Open Accessibility settings",
     ),
     ...computerIssue(
@@ -256,7 +264,7 @@ function computerIssues(
       "Screen Recording",
       screenCapture,
       "In macOS Screen & System Audio Recording, enable this ZenX app. If absent, add the ZenX.app you launched, then check again.",
-      "ZenX tried to capture a window but the check failed. Review the macOS permission, then retry.",
+      "ZenX could not complete the window preview check. Select Check again; the error details may help diagnose it.",
       "Open Screen Recording settings",
     ),
   ];
@@ -290,7 +298,10 @@ function computerIssue(
             ? `${failureDetail} Details: ${verification.detail}`
             : failureDetail,
       icon: kind === "accessibility" ? "lock" : "image",
-      action: { label: actionLabel, kind },
+      action:
+        verification.state === "needs-setup"
+          ? { label: actionLabel, kind }
+          : undefined,
     },
   ];
 }

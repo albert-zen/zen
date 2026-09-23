@@ -41,7 +41,10 @@ import {
   type ZenXComputerAccessVerification,
   type ZenXComputerReadinessSnapshot,
 } from "./computer-readiness.js";
-import { ElectronMacComputerBackend } from "./capabilities/computer-provider.js";
+import {
+  ElectronMacComputerBackend,
+  retryDesktopSourceEnumeration,
+} from "./capabilities/computer-provider.js";
 import {
   withZenXProviderTransports,
   zenXProviderDiscoveryTransport,
@@ -1343,11 +1346,13 @@ function installSettingsIpc(
           }
         },
         screenCapture: async () => {
-          const sources = await desktopCapturer.getSources({
-            types: ["window"],
-            thumbnailSize: { width: 32, height: 32 },
-            fetchWindowIcons: false,
-          });
+          const sources = await retryDesktopSourceEnumeration(() =>
+            desktopCapturer.getSources({
+              types: ["window"],
+              thumbnailSize: { width: 32, height: 32 },
+              fetchWindowIcons: false,
+            }),
+          );
           if (!sources.some((source) => !source.thumbnail.isEmpty()))
             throw new Error("No window preview was available for capture");
         },

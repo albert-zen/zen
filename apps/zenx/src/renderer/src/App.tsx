@@ -436,6 +436,8 @@ export function App() {
     });
   }, []);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
+  const [browserSettingsFocusRequest, setBrowserSettingsFocusRequest] =
+    useState(0);
   const fileDrafts = useWorkspaceFileDrafts();
   const [panelTabs, setPanelTabs] = useState<Record<string, string>>({});
   const [workspaceTabOrder, setWorkspaceTabOrder] = useState<
@@ -2214,6 +2216,7 @@ export function App() {
           onOpenSidebar={() => setSidebarOpen(true)}
           tab={settingsTab}
           pluginSnapshot={pluginSnapshot}
+          browserSettingsFocusRequest={browserSettingsFocusRequest}
           showHeader={false}
         />
         {page === "settings" ? null : genericPluginTarget !== undefined &&
@@ -2230,12 +2233,8 @@ export function App() {
             pluginSnapshot={pluginSnapshot}
             onOpenBrowserSettings={() => {
               setSettingsTab("general");
+              setBrowserSettingsFocusRequest((value) => value + 1);
               openPage("settings");
-              window.requestAnimationFrame(() => {
-                const section = document.getElementById("browser-settings");
-                section?.scrollIntoView?.({ block: "start" });
-                section?.focus({ preventScroll: true });
-              });
             }}
             composerStates={composerStates}
             configuredProjects={configuredProjects}

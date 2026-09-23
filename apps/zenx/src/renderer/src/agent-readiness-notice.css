@@ -3,6 +3,7 @@
 }
 
 .agent-readiness-notice {
+  container-type: inline-size;
   width: min(760px, calc(100% - 32px));
   min-width: 0;
   max-height: 42vh;
@@ -151,12 +152,7 @@
   line-height: 1.45;
 }
 
-@media (max-width: 700px) {
-  .agent-readiness-notice {
-    width: min(calc(100% - 24px), 760px);
-    margin-top: 12px;
-  }
-
+@container (max-width: 620px) {
   .agent-readiness-issue {
     grid-template-columns: 30px minmax(0, 1fr);
   }
@@ -167,5 +163,16 @@
     margin-top: 0;
     white-space: normal;
     text-align: left;
+  }
+}
+
+@media (max-width: 700px) {
+  .agent-surface:has(> .new-thread-draft-mobile) > .agent-readiness-notice {
+    margin-top: 64px;
+  }
+
+  .agent-readiness-notice {
+    width: min(calc(100% - 24px), 760px);
+    margin-top: 12px;
   }
 }

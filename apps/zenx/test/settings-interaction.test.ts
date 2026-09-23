@@ -120,6 +120,29 @@ const multiProviderSettings: PublicHostSettings = {
   apiKeyProviderProfileIds: ["profile-alpha", "profile-beta"],
 };
 
+test("Browser setup focus waits for settings to finish loading", async () => {
+  let finishLoading: ((value: PublicHostSettings) => void) | undefined;
+  const pendingSettings = new Promise<PublicHostSettings>((resolve) => {
+    finishLoading = resolve;
+  });
+  const harness = await mountSettings("general", {
+    get: async () => await pendingSettings,
+    browserSettingsFocusRequest: 1,
+  });
+  try {
+    assert.equal(document.getElementById("browser-settings"), null);
+    await act(async () => {
+      finishLoading?.(settings);
+      await pendingSettings;
+    });
+    const browser = document.getElementById("browser-settings");
+    assert.ok(browser);
+    assert.equal(document.activeElement, browser);
+  } finally {
+    await unmount(harness);
+  }
+});
+
 test("Settings saves global model routing by Provider profile identity", async () => {
   const saved: ZenXSettingsUpdate[] = [];
   const harness = await mountSettings("models", {
@@ -1804,6 +1827,7 @@ async function mountSettings(
       modelId: string,
     ): Promise<ZenXImageCapabilityProbeResult>;
     chromeBridge?: Window["zenx"]["chromeBridge"];
+    browserSettingsFocusRequest?: number;
     archivedThreads?: NativeThreadSummary[];
     onUnarchive?(thread: NativeThreadSummary): Promise<void>;
   } = {},
@@ -1886,6 +1910,7 @@ async function mountSettings(
     root.render(
       createElement(SettingsHarness, {
         archivedThreads: options.archivedThreads ?? [],
+        browserSettingsFocusRequest: options.browserSettingsFocusRequest ?? 0,
         initialTab,
         onUnarchive: options.onUnarchive ?? (async () => undefined),
       }),
@@ -1896,10 +1921,12 @@ async function mountSettings(
 
 function SettingsHarness({
   archivedThreads,
+  browserSettingsFocusRequest,
   initialTab,
   onUnarchive,
 }: {
   archivedThreads: NativeThreadSummary[];
+  browserSettingsFocusRequest: number;
   initialTab: SettingsTab;
   onUnarchive(thread: NativeThreadSummary): Promise<void>;
 }) {
@@ -1918,6 +1945,7 @@ function SettingsHarness({
       archivedError: null,
       archivedLoading: false,
       archivedThreads,
+      browserSettingsFocusRequest,
       onRetryArchived: () => undefined,
       onTabChange: setTab,
       onUnarchive,

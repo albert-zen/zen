@@ -11,7 +11,7 @@ export function PluginAccessReview({
 }: {
   pluginId: "computer" | "browser";
   permissions: readonly ZenXCapabilityPermission[];
-  onOpenGeneral?(): void;
+  onOpenGeneral?(pluginId: "computer" | "browser"): void;
 }) {
   const [computer, setComputer] =
     useState<ZenXComputerReadinessSnapshot | null>(null);
@@ -206,7 +206,7 @@ export function PluginAccessReview({
                 <button
                   type="button"
                   className="secondary-button"
-                  onClick={onOpenGeneral}
+                  onClick={() => onOpenGeneral("computer")}
                 >
                   Open General settings
                 </button>
@@ -262,7 +262,7 @@ export function PluginAccessReview({
                 <button
                   type="button"
                   className="secondary-button"
-                  onClick={onOpenGeneral}
+                  onClick={() => onOpenGeneral("browser")}
                 >
                   Open Browser settings
                 </button>

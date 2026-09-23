@@ -188,7 +188,14 @@ test("A capture probe failure is shown as a failed check, not a missing grant", 
     /Screen Recording.*Check failed.*test window could not be captured/su,
   );
   assert.doesNotMatch(card.textContent ?? "", /Needs permission/u);
-  assert.ok(view.button("Open Screen Recording settings"));
+  assert.match(card.textContent ?? "", /Check tool access/u);
+  assert.equal(
+    [...card.querySelectorAll("button")].some((button) =>
+      button.textContent?.includes("Open Screen Recording settings"),
+    ),
+    false,
+  );
+  assert.doesNotMatch(card.textContent ?? "", /Review the macOS permission/u);
   await view.close();
 });
 

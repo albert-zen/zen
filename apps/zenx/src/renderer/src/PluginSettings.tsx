@@ -26,7 +26,7 @@ export function PluginSettings({
   onOpenGeneral,
 }: {
   onFeedback?(message: string | null): void;
-  onOpenGeneral?(): void;
+  onOpenGeneral?(pluginId: "computer" | "browser"): void;
 }) {
   const [plugins, setPlugins] = useState<ZenXPluginSnapshot | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -119,7 +119,7 @@ function MarketplaceSettings({
   run,
 }: {
   plugins: ZenXPluginSnapshot;
-  onOpenGeneral?(): void;
+  onOpenGeneral?(pluginId: "computer" | "browser"): void;
   busy: string | null;
   confirmation: Confirmation | null;
   setConfirmation(value: Confirmation | null): void;
@@ -381,7 +381,7 @@ function MarketplaceInventoryCard({
   run,
 }: {
   entry: MarketplaceInventoryViewEntry;
-  onOpenGeneral?(): void;
+  onOpenGeneral?(pluginId: "computer" | "browser"): void;
   busy: string | null;
   confirmation: Confirmation | null;
   setConfirmation(value: Confirmation | null): void;

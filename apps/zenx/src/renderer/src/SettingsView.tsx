@@ -70,6 +70,7 @@ export function SettingsView({
   tab,
   pluginSnapshot = null,
   active = true,
+  browserSettingsFocusRequest = 0,
 }: {
   archivedError: string | null;
   archivedLoading: boolean;
@@ -82,6 +83,7 @@ export function SettingsView({
   tab: SettingsTab;
   pluginSnapshot?: ZenXPluginSnapshot | null;
   active?: boolean;
+  browserSettingsFocusRequest?: number;
 }) {
   const [settings, setSettings] = useState<PublicHostSettings | null>(null);
   const [draft, setDraft] = useState<ZenXHostProfile | null>(null);
@@ -105,6 +107,8 @@ export function SettingsView({
     setStatusState(message === null ? null : { message });
   };
   const [manualCode, setManualCode] = useState(false);
+  const [localBrowserFocusRequest, setLocalBrowserFocusRequest] = useState(0);
+  const handledBrowserFocusRequest = useRef("0:0");
   const [pluginsVisited, setPluginsVisited] = useState(
     active && tab === "plugins",
   );
@@ -154,6 +158,25 @@ export function SettingsView({
   }, [status]);
 
   useEffect(() => setStatusState(null), [tab]);
+
+  useEffect(() => {
+    if (!active || tab !== "general" || settings === null || draft === null)
+      return;
+    const request = `${browserSettingsFocusRequest}:${localBrowserFocusRequest}`;
+    if (handledBrowserFocusRequest.current === request) return;
+    const section = document.getElementById("browser-settings");
+    if (section === null) return;
+    handledBrowserFocusRequest.current = request;
+    section.scrollIntoView?.({ block: "start" });
+    section.focus({ preventScroll: true });
+  }, [
+    active,
+    tab,
+    settings,
+    draft,
+    browserSettingsFocusRequest,
+    localBrowserFocusRequest,
+  ]);
 
   const save = async () => {
     if (draft === null) return;
@@ -382,7 +405,11 @@ export function SettingsView({
                     mode={active && tab === "plugins" ? "visible" : "hidden"}
                   >
                     <PluginSettings
-                      onOpenGeneral={() => onTabChange("general")}
+                      onOpenGeneral={(pluginId) => {
+                        onTabChange("general");
+                        if (pluginId === "browser")
+                          setLocalBrowserFocusRequest((value) => value + 1);
+                      }}
                       onFeedback={(message) => {
                         if (feedbackScope.current.version !== feedbackVersion)
                           return;
