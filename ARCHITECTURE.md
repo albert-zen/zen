@@ -249,6 +249,7 @@
   Renderer 原文、Provider/模型身份、URL、凭证和错误文本都不进入该日志，写入失败不改变保存结果。
   诊断记录只用于排查本机产品操作，不是 Thread、Turn 或工具执行事实，不替代 canonical ItemList，
   也不成为配置、凭证或会话状态的第二份权威。后续其他 Host 操作可复用有界存储，事件仍需各自的严格白名单。
+- **ConfigurationPreCommitError** — 设置服务用这个有类型的错误表示配置变更在写入前被版本冲突或待确认状态拒绝，让诊断日志能准确区分确定失败与结果未确认。
 - **ZenXSystemProxyProjection** — ZenX 主进程把操作系统为当前 Provider endpoint
   解析出的代理投影为 host 子进程的 Provider transport；它是可丢弃的外部连接配置，不进入
   Zen Core、Thread、journal 或 credential store。
@@ -627,7 +628,8 @@ Package 分发与 profile transaction 遵守以下边界：
 | -------------- | ------------------------------------------------------- | ------------------------------ |
 | 会话语义状态   | Turn 生命周期、消息、模型输出、工具调用、工具结果、失败 | Thread ItemList（唯一权威）    |
 | 外部运行配置   | API Key、Provider 账户、默认模型、workspace 配置        | Zen Core 外部的配置层          |
-| 观测与展示状态 | 流式 delta、延迟指标、debug log、UI 状态                | 临时事件 / telemetry，不持久化 |
+| 观测与展示状态 | 流式 delta、延迟指标、UI 状态                           | 临时事件 / telemetry，不持久化 |
+| 本机支持诊断   | 严格白名单的设置操作事件                                | Zen Core 外侧的定额本地文件    |
 
 图片 payload 是 canonical Item 所引用的不可变数据，而不是可独立解释的会话状态：
 本地路径或 wire data URI 只在 ZAS 导入边界存在；导入先校验受支持的图片 MIME、格式、

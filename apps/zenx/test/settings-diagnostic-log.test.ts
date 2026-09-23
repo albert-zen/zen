@@ -122,7 +122,7 @@ test("invalid reason and out-of-range row cannot be written", async () => {
         attemptId,
         operation: "add",
         reason: "model_id_missing",
-        modelIndex: 1000,
+        modelIndex: 1024,
       },
       {
         event: "provider-save-outcome",
@@ -137,6 +137,32 @@ test("invalid reason and out-of-range row cannot be written", async () => {
       lstat(path.join(root, "diagnostics", "settings.jsonl")),
       { code: "ENOENT" },
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("valid highest model row can be diagnosed", async () => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-settings-diagnostic-"),
+  );
+  try {
+    const log = new SettingsDiagnosticLog(root);
+    assert.equal(
+      await log.record({
+        event: "provider-validation-rejected",
+        attemptId,
+        operation: "edit",
+        reason: "reasoning_efforts_duplicate",
+        modelIndex: 1023,
+      }),
+      true,
+    );
+    const raw = await readFile(
+      path.join(root, "diagnostics", "settings.jsonl"),
+      "utf8",
+    );
+    assert.equal(JSON.parse(raw.trim()).modelIndex, 1023);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -226,6 +252,19 @@ test("host outcome distinguishes rejected, committed error, and unconfirmed save
         log,
         operation: "edit",
         attemptId,
+        knownRejection: (error) => error === failed,
+        configurationStatus: async () => configurationStatus,
+        mutate: async () => {
+          throw failed;
+        },
+      }),
+      (error: unknown) => error === failed,
+    );
+    await assert.rejects(
+      runDiagnosedProviderMutation({
+        log,
+        operation: "edit",
+        attemptId,
         configurationStatus: async () => configurationStatus,
         mutate: async ({ markCommitted }) => {
           markCommitted();
@@ -257,7 +296,14 @@ test("host outcome distinguishes rejected, committed error, and unconfirmed save
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line).outcome),
-      ["success", "failed", "unconfirmed", "committed-error", "unconfirmed"],
+      [
+        "success",
+        "failed",
+        "unconfirmed",
+        "failed",
+        "committed-error",
+        "unconfirmed",
+      ],
     );
     assert.ok(
       raw

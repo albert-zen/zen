@@ -1537,6 +1537,30 @@ function ProviderEditor({
     validationIssues.find(
       (issue) => issue.field === field && issue.modelIndex === modelIndex,
     )?.message;
+  const recordValidationRejection = (
+    attemptId: string,
+    reason:
+      | ProviderEditorIssue["code"]
+      | "logo_invalid"
+      | "logo_loading"
+      | "replacement_default_missing"
+      | "replacement_title_missing",
+    modelIndex?: number,
+  ) => {
+    try {
+      void window.zenx.settings
+        .recordDiagnostic({
+          event: "provider-validation-rejected",
+          attemptId,
+          operation: mode,
+          reason,
+          ...(modelIndex === undefined ? {} : { modelIndex }),
+        })
+        .catch(() => undefined);
+    } catch {
+      // Diagnostics must not interrupt editing.
+    }
+  };
   useEffect(() => {
     if (validationAttempt > 0) validationSummary.current?.focus();
   }, [validationAttempt]);
@@ -1597,7 +1621,12 @@ function ProviderEditor({
         noValidate
         onSubmit={(event) => {
           event.preventDefault();
+          const diagnosticAttemptId = globalThis.crypto.randomUUID();
           if (logoSelectionError !== null || logoReading) {
+            recordValidationRejection(
+              diagnosticAttemptId,
+              logoSelectionError === null ? "logo_loading" : "logo_invalid",
+            );
             setValidationError(
               logoSelectionError ??
                 "Wait for the Provider Logo to finish loading",
@@ -1611,6 +1640,12 @@ function ProviderEditor({
             hasApiKey,
           );
           if (issues.length > 0) {
+            for (const issue of issues)
+              recordValidationRejection(
+                diagnosticAttemptId,
+                issue.code,
+                issue.modelIndex,
+              );
             setValidationError(null);
             setValidationAttempt((current) => current + 1);
             return;
@@ -1622,6 +1657,10 @@ function ProviderEditor({
               replacementProfiles,
             );
             if (reference === undefined) {
+              recordValidationRejection(
+                diagnosticAttemptId,
+                "replacement_default_missing",
+              );
               setValidationError("Choose a replacement default model");
               return;
             }
@@ -1633,6 +1672,10 @@ function ProviderEditor({
               replacementProfiles,
             );
             if (reference === undefined) {
+              recordValidationRejection(
+                diagnosticAttemptId,
+                "replacement_title_missing",
+              );
               setValidationError("Choose a replacement title model");
               return;
             }
@@ -1643,6 +1686,7 @@ function ProviderEditor({
             apiKey.trim().length === 0 ? undefined : apiKey,
             replacements,
             logoUpload,
+            diagnosticAttemptId,
           );
         }}
       >
@@ -2320,11 +2364,13 @@ function ModelCapabilityEditor({
                 }
               >
                 <option value="">Choose a default</option>
-                {(model.supportedReasoningEfforts ?? []).map((effort) => (
-                  <option key={effort} value={effort}>
-                    {effort}
-                  </option>
-                ))}
+                {[...new Set(model.supportedReasoningEfforts ?? [])].map(
+                  (effort) => (
+                    <option key={effort} value={effort}>
+                      {effort}
+                    </option>
+                  ),
+                )}
               </Select>
               {issueFor("defaultReasoningEffort") === undefined ? null : (
                 <small
@@ -2599,6 +2645,7 @@ interface ProviderEditorIssue {
     | "model_id_missing"
     | "model_id_duplicate"
     | "reasoning_efforts_missing"
+    | "reasoning_efforts_duplicate"
     | "reasoning_default_invalid"
     | "context_window_invalid"
     | "provider_name_missing"
@@ -2666,6 +2713,16 @@ function validateProviderEditor(
           field: "reasoningEfforts",
           modelIndex,
           message: `${row}: enter at least one supported reasoning effort`,
+        });
+      } else if (
+        new Set(model.supportedReasoningEfforts).size !==
+        model.supportedReasoningEfforts.length
+      ) {
+        issues.push({
+          code: "reasoning_efforts_duplicate",
+          field: "reasoningEfforts",
+          modelIndex,
+          message: `${row}: use each reasoning effort only once`,
         });
       } else if (
         !model.supportedReasoningEfforts.includes(

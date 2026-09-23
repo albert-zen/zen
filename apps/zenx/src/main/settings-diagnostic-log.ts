@@ -6,6 +6,7 @@ export const providerValidationReasons = [
   "model_id_missing",
   "model_id_duplicate",
   "reasoning_efforts_missing",
+  "reasoning_efforts_duplicate",
   "reasoning_default_invalid",
   "context_window_invalid",
   "provider_name_missing",
@@ -86,7 +87,7 @@ export function normalizeSettingsDiagnostic(
       value.modelIndex !== undefined &&
       (!Number.isInteger(value.modelIndex) ||
         (value.modelIndex as number) < 0 ||
-        (value.modelIndex as number) > 255)
+        (value.modelIndex as number) > 1023)
     )
       return null;
     return {
@@ -159,6 +160,7 @@ export async function runDiagnosedProviderMutation<T>(options: {
   operation: ProviderOperation;
   attemptId?: string;
   preflight?(): void;
+  knownRejection?(error: unknown): boolean;
   configurationStatus(): Promise<string | undefined>;
   mutate(context: { markCommitted(): void }): Promise<T>;
 }): Promise<T> {
@@ -187,17 +189,26 @@ export async function runDiagnosedProviderMutation<T>(options: {
     });
     return result;
   } catch (error) {
+    let knownRejected = false;
+    if (preflightPassed && !committed) {
+      try {
+        knownRejected = options.knownRejection?.(error) === true;
+      } catch {
+        // A diagnostic classifier must not replace the mutation error.
+      }
+    }
     const status = committed
       ? await readAsyncSafely(options.configurationStatus)
       : undefined;
-    const outcome: ProviderSaveOutcome = !preflightPassed
-      ? "failed"
-      : committed &&
-          (status === "applied" ||
-            status === "pending-restart" ||
-            status === "unchanged")
-        ? "committed-error"
-        : "unconfirmed";
+    const outcome: ProviderSaveOutcome =
+      !preflightPassed || knownRejected
+        ? "failed"
+        : committed &&
+            (status === "applied" ||
+              status === "pending-restart" ||
+              status === "unchanged")
+          ? "committed-error"
+          : "unconfirmed";
     await recordSafely(options.log, {
       event: "provider-save-outcome",
       attemptId,

@@ -1814,7 +1814,9 @@ async function mountSettings(
       providerProfileId: string,
       provider: ZenXProviderProfile,
       options?: ZenXProviderEditOptions,
+      diagnosticAttemptId?: string,
     ): Promise<PublicHostSettings>;
+    recordDiagnostic?: Window["zenx"]["settings"]["recordDiagnostic"];
     deleteProvider?(
       providerProfileId: string,
       replacements?: ZenXProviderDeleteReplacements,
@@ -1884,6 +1886,7 @@ async function mountSettings(
         (async () => {
           throw new Error("Unexpected editProvider call");
         }),
+      recordDiagnostic: options.recordDiagnostic ?? (async () => undefined),
       deleteProvider:
         options.deleteProvider ??
         (async () => {
@@ -2440,8 +2443,14 @@ test("provider validation names each invalid model field and links to an editabl
     { ...model("alpha-only"), contextWindow: null },
   ];
   let saves = 0;
+  const events: Parameters<
+    Window["zenx"]["settings"]["recordDiagnostic"]
+  >[0][] = [];
   const harness = await mountSettings("models", {
     initialSettings: initial,
+    recordDiagnostic: async (event) => {
+      events.push(event);
+    },
     editProvider: async () => {
       saves += 1;
       return initial;
@@ -2483,6 +2492,74 @@ test("provider validation names each invalid model field and links to an editabl
     assert.equal(effortInput.closest("details")?.open, true);
     assert.equal(document.activeElement, effortInput);
     assert.equal(saves, 0);
+    assert.deepEqual(
+      events.map((event) =>
+        "reason" in event ? [event.reason, event.modelIndex] : [],
+      ),
+      [
+        ["reasoning_efforts_missing", 0],
+        ["context_window_invalid", 1],
+      ],
+    );
+    assert.equal(events[0]!.attemptId, events[1]!.attemptId);
+    assert.equal(JSON.stringify(events).includes("shared-model"), false);
+    assert.equal(JSON.stringify(events).includes("alpha-only"), false);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("duplicate manual reasoning efforts stay in the editor and emit a field diagnostic", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.providerProfiles[0]!.models[0] = {
+    ...model("shared-model"),
+    reasoningConfiguration: "manual",
+    supportedReasoningEfforts: ["low", "low"],
+    defaultReasoningEffort: "low",
+  };
+  let saves = 0;
+  const events: Parameters<
+    Window["zenx"]["settings"]["recordDiagnostic"]
+  >[0][] = [];
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    recordDiagnostic: async (event) => {
+      events.push(event);
+    },
+    editProvider: async () => {
+      saves += 1;
+      return initial;
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Save provider"));
+    assert.equal(saves, 0);
+    assert.match(
+      document.querySelector(".provider-editor-error-summary")?.textContent ??
+        "",
+      /Model 1 \(shared-model\): use each reasoning effort only once/u,
+    );
+    assert.equal(
+      requiredInput("Model 1 reasoning efforts").getAttribute("aria-invalid"),
+      "true",
+    );
+    assert.equal(events.length, 1);
+    assert.deepEqual(
+      {
+        event: events[0]!.event,
+        reason: "reason" in events[0]! ? events[0]!.reason : undefined,
+        modelIndex:
+          "modelIndex" in events[0]! ? events[0]!.modelIndex : undefined,
+      },
+      {
+        event: "provider-validation-rejected",
+        reason: "reasoning_efforts_duplicate",
+        modelIndex: 0,
+      },
+    );
+    assert.equal(JSON.stringify(events).includes("shared-model"), false);
   } finally {
     await unmount(harness);
   }

@@ -34,7 +34,10 @@ import type {
   ZenXSettingsUpdate,
   ZenXSidebarOrder,
 } from "./host-profile.js";
-import { ZenXSettingsService } from "./settings-service.js";
+import {
+  ConfigurationPreCommitError,
+  ZenXSettingsService,
+} from "./settings-service.js";
 import {
   isRendererSettingsDiagnostic,
   SettingsDiagnosticLog,
@@ -1542,6 +1545,7 @@ function installSettingsIpc(
             : undefined,
         configurationStatus: async () =>
           (await settings.publicSettings()).configuration?.status,
+        knownRejection: (error) => error instanceof ConfigurationPreCommitError,
         preflight: () => {
           if (apiKey !== undefined && typeof apiKey !== "string") {
             throw new Error("Invalid API key");
@@ -1582,6 +1586,7 @@ function installSettingsIpc(
             : undefined,
         configurationStatus: async () =>
           (await settings.publicSettings()).configuration?.status,
+        knownRejection: (error) => error instanceof ConfigurationPreCommitError,
         preflight: () => {
           if (typeof providerProfileId !== "string") {
             throw new Error("Invalid Provider profile id");

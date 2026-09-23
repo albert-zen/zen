@@ -24,7 +24,10 @@ import {
   ZenXHostProfileStore,
 } from "../src/main/host-profile.js";
 import { ProviderLogoResources } from "../src/main/provider-logo-resource.js";
-import { ZenXSettingsService } from "../src/main/settings-service.js";
+import {
+  ConfigurationPreCommitError,
+  ZenXSettingsService,
+} from "../src/main/settings-service.js";
 import type { OpenAiSubscriptionAuthProfile } from "../../cli/src/subscription-auth.js";
 
 const encryption: LocalEncryption = {
@@ -81,7 +84,9 @@ test("persists one user-scoped workflow configuration for Settings and self-cont
         baseRevision: before.revision,
         commands: [],
       }),
-      /Configuration conflict/u,
+      (error: unknown) =>
+        error instanceof ConfigurationPreCommitError &&
+        /Configuration conflict/u.test(error.message),
     );
   } finally {
     await rm(directory, { recursive: true, force: true });

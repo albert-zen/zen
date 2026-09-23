@@ -73,6 +73,9 @@ import type { WorkflowCommand } from "./workflow-configuration.js";
 
 const MAX_WORKSPACE_IDENTITY_ATTEMPTS = 2;
 
+/** Rejected before the settings mutation can write a new configuration. */
+export class ConfigurationPreCommitError extends Error {}
+
 type SubscriptionAuth = Pick<
   OpenAiSubscriptionAuthProfile,
   "login" | "logout" | "status"
@@ -242,14 +245,14 @@ export class ZenXSettingsService {
   }
   #assertBaseRevision(baseRevision: number | undefined): void {
     if (this.#pendingConfiguration)
-      throw new Error(
+      throw new ConfigurationPreCommitError(
         "Configuration application is unconfirmed; check or retry its application before saving again",
       );
     if (
       baseRevision !== undefined &&
       baseRevision !== (this.#requireProfile().revision ?? 0)
     )
-      throw new Error(
+      throw new ConfigurationPreCommitError(
         "Configuration conflict: another window saved changes. Your draft was preserved; reload before applying it",
       );
   }
