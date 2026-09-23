@@ -413,6 +413,11 @@ export class ZenXSettingsService {
     return this.#hostConfigForProfile(this.#requireProfile());
   }
 
+  async configuredBrowserMode(): Promise<"isolated" | "user-session"> {
+    await this.#profileOperations;
+    return this.#requireProfile().browserMode ?? "isolated";
+  }
+
   async workflowConfiguration(): Promise<{
     revision: number;
     commands: WorkflowCommand[];

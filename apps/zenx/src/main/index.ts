@@ -1170,9 +1170,7 @@ function installChromeBridgeIpc(options: {
     ),
   };
   const snapshot = async (): Promise<ChromeBridgeSettingsSnapshot> => {
-    const configuredMode =
-      (await options.settings.publicSettings()).profile.browserMode ??
-      "isolated";
+    const configuredMode = await options.settings.configuredBrowserMode();
     const environmentMode = process.env.ZENX_BROWSER_MODE;
     const effectiveMode =
       environmentMode === "user-session" || environmentMode === "isolated"
