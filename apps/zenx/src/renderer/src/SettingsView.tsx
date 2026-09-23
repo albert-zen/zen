@@ -1628,7 +1628,7 @@ function ProviderEditor({
             <label className="field">
               <span>
                 Provider Logo (PNG, JPEG, or WebP; up to 512 KiB and 1024 ×
-                1024)
+                1024; 4 MiB total)
               </span>
               <input
                 ref={logoFileInput}

@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { mkdir, open, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { inflateSync } from "node:zlib";
 
 export const MAX_PROVIDER_LOGO_BYTES = 512 * 1024;
 export const MAX_PROVIDER_LOGO_SIDE = 1024;
+export const MAX_PROVIDER_LOGO_TOTAL_BYTES = 4 * 1024 * 1024;
 const RESOURCE_NAME = /^[a-f0-9]{64}\.(png|jpg|webp)$/u;
 
 export function validProviderLogoResource(value: unknown): value is string {
@@ -85,6 +86,21 @@ export class ProviderLogoResources {
       return undefined;
     } finally {
       await file?.close().catch(() => undefined);
+    }
+  }
+
+  async size(resource: string): Promise<number | undefined> {
+    if (!validProviderLogoResource(resource)) return undefined;
+    try {
+      const file = await lstat(path.join(this.#directory, resource));
+      return file.isFile() &&
+        file.size > 0 &&
+        file.size <= MAX_PROVIDER_LOGO_BYTES
+        ? file.size
+        : undefined;
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") return undefined;
+      throw error;
     }
   }
 
@@ -223,6 +239,9 @@ function pngFormatAndSize(data: Buffer): {
   let offset = 8;
   let width = 0;
   let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  let interlace = 0;
   let sawHeader = false;
   let sawEnd = false;
   const imageData: Buffer[] = [];
@@ -241,6 +260,10 @@ function pngFormatAndSize(data: Buffer): {
       if (sawHeader || length !== 13) break;
       width = data.readUInt32BE(offset + 8);
       height = data.readUInt32BE(offset + 12);
+      bitDepth = data[offset + 16]!;
+      colorType = data[offset + 17]!;
+      if (data[offset + 18] !== 0 || data[offset + 19] !== 0) break;
+      interlace = data[offset + 20]!;
       sawHeader = true;
     } else if (type === "IDAT") {
       imageData.push(data.subarray(offset + 8, offset + 8 + length));
@@ -253,17 +276,75 @@ function pngFormatAndSize(data: Buffer): {
   }
   if (!sawHeader || !sawEnd || imageData.length === 0)
     throw new Error("Provider Logo must be a valid PNG, JPEG, or WebP image");
+  const channels = pngChannels(colorType, bitDepth);
+  if (
+    width < 1 ||
+    height < 1 ||
+    width > MAX_PROVIDER_LOGO_SIDE ||
+    height > MAX_PROVIDER_LOGO_SIDE
+  )
+    throw new Error(
+      "Provider Logo dimensions must be between 1 and 1024 pixels",
+    );
+  if (channels === undefined || (interlace !== 0 && interlace !== 1))
+    throw new Error("Provider Logo must be a valid PNG, JPEG, or WebP image");
   try {
-    if (
-      inflateSync(Buffer.concat(imageData), {
-        maxOutputLength: 16 * 1024 * 1024,
-      }).length === 0
-    )
-      throw new Error("Empty PNG image data");
+    const pixels = inflateSync(Buffer.concat(imageData), {
+      maxOutputLength: 16 * 1024 * 1024,
+    });
+    validatePngRows(pixels, width, height, channels * bitDepth, interlace);
   } catch {
     throw new Error("Provider Logo must be a valid PNG, JPEG, or WebP image");
   }
   return { extension: "png", mime: "image/png", width, height };
+}
+
+function pngChannels(colorType: number, bitDepth: number): number | undefined {
+  const validDepths: Record<number, readonly number[]> = {
+    0: [1, 2, 4, 8, 16],
+    2: [8, 16],
+    3: [1, 2, 4, 8],
+    4: [8, 16],
+    6: [8, 16],
+  };
+  if (!validDepths[colorType]?.includes(bitDepth)) return undefined;
+  return ({ 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 } as Record<number, number>)[
+    colorType
+  ];
+}
+
+function validatePngRows(
+  pixels: Buffer,
+  width: number,
+  height: number,
+  bitsPerPixel: number,
+  interlace: number,
+): void {
+  const passes: readonly (readonly [number, number, number, number])[] =
+    interlace === 0
+      ? [[0, 0, 1, 1]]
+      : [
+          [0, 0, 8, 8],
+          [4, 0, 8, 8],
+          [0, 4, 4, 8],
+          [2, 0, 4, 4],
+          [0, 2, 2, 4],
+          [1, 0, 2, 2],
+          [0, 1, 1, 2],
+        ];
+  let offset = 0;
+  for (const [x, y, dx, dy] of passes) {
+    if (width <= x || height <= y) continue;
+    const passWidth = Math.ceil((width - x) / dx);
+    const passHeight = Math.ceil((height - y) / dy);
+    const rowBytes = Math.ceil((passWidth * bitsPerPixel) / 8);
+    for (let row = 0; row < passHeight; row++) {
+      if (offset + rowBytes + 1 > pixels.length || pixels[offset]! > 4)
+        throw new Error("Invalid PNG row");
+      offset += rowBytes + 1;
+    }
+  }
+  if (offset !== pixels.length) throw new Error("Invalid PNG row length");
 }
 
 function pngCrc32(bytes: Uint8Array): number {

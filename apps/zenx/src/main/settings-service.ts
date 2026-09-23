@@ -6,7 +6,10 @@ import {
 import { inspectRtkResource, rtkExecutable } from "./rtk-resource.js";
 import { RTK_EXPERIMENT_SHA256 } from "../../../../src/shell-output-filter.js";
 import { createHash, randomUUID } from "node:crypto";
-import { ProviderLogoResources } from "./provider-logo-resource.js";
+import {
+  MAX_PROVIDER_LOGO_TOTAL_BYTES,
+  ProviderLogoResources,
+} from "./provider-logo-resource.js";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
@@ -386,28 +389,34 @@ export class ZenXSettingsService {
     );
     const subscriptionProviderProfileId =
       this.#configuredSubscriptionProfileId(profile);
-    const logos = await Promise.all(
-      profile.providerProfiles.map(
-        async (provider) =>
-          [
-            provider.providerProfileId,
-            provider.logoResource === undefined
-              ? undefined
-              : await this.#providerLogos.dataUrl(provider.logoResource),
-          ] as const,
-      ),
-    );
+    const providerLogoDataUrls: Record<string, string> = {};
+    const logoCache = new Map<string, { size: number; url?: string | null }>();
+    let projectedLogoBytes = 0;
+    for (const provider of profile.providerProfiles) {
+      const resource = provider.logoResource;
+      if (resource === undefined) continue;
+      let cached = logoCache.get(resource);
+      if (cached === undefined) {
+        const size = await this.#providerLogos.size(resource);
+        if (size === undefined) continue;
+        cached = { size };
+        logoCache.set(resource, cached);
+      }
+      if (projectedLogoBytes + cached.size > MAX_PROVIDER_LOGO_TOTAL_BYTES)
+        continue;
+      if (cached.url === undefined)
+        cached.url = (await this.#providerLogos.dataUrl(resource)) ?? null;
+      if (cached.url === null) continue;
+      providerLogoDataUrls[provider.providerProfileId] = cached.url;
+      projectedLogoBytes += cached.size;
+    }
     return {
       ...(this.#configurationResult
         ? { configuration: this.#configurationResult }
         : {}),
       rtk: await inspectRtkResource(this.#rtkResourcesDirectory),
       profile: structuredClone(profile),
-      providerLogoDataUrls: Object.fromEntries(
-        logos.filter(
-          (entry): entry is readonly [string, string] => entry[1] !== undefined,
-        ),
-      ),
+      providerLogoDataUrls,
       hasApiKey: await this.#vault.hasApiKey(
         this.#credentialReference(
           profile.defaultModel.providerProfileId,
@@ -989,6 +998,7 @@ export class ZenXSettingsService {
         )
       ).profile;
       validateConfiguredModelContexts(validated);
+      await this.#assertProviderLogoBudget(validated.providerProfiles);
       for (const provider of validated.providerProfiles) {
         const previous = current.providerProfiles.find(
           (candidate) =>
@@ -1070,6 +1080,7 @@ export class ZenXSettingsService {
               candidate.providerProfileId === provider.providerProfileId,
           )!,
         ]);
+        await this.#assertProviderLogoBudget(next.providerProfiles);
         if (
           provider.type === "openai-compatible" &&
           (apiKey === undefined || apiKey.length === 0)
@@ -1139,6 +1150,7 @@ export class ZenXSettingsService {
           titleModel: options.titleModel ?? current.titleModel,
         });
         validateConfiguredModelContexts(next, [next.providerProfiles[index]!]);
+        await this.#assertProviderLogoBudget(next.providerProfiles);
         if (
           provider.type === "openai-compatible" &&
           (options.apiKey === undefined || options.apiKey.length === 0) &&
@@ -1231,6 +1243,27 @@ export class ZenXSettingsService {
           error,
         ),
       );
+  }
+
+  async #assertProviderLogoBudget(
+    providers: readonly ZenXProviderProfile[],
+  ): Promise<void> {
+    let totalBytes = 0;
+    const sizes = new Map<string, number>();
+    for (const provider of providers) {
+      const resource = provider.logoResource;
+      if (resource === undefined) continue;
+      let size = sizes.get(resource);
+      if (size === undefined) {
+        size = (await this.#providerLogos.size(resource)) ?? 0;
+        sizes.set(resource, size);
+      }
+      totalBytes += size;
+      if (totalBytes > MAX_PROVIDER_LOGO_TOTAL_BYTES)
+        throw new Error(
+          "Provider Logos exceed 4 MiB total across Provider profiles",
+        );
+    }
   }
 
   async addWorkspace(workspace: string): Promise<boolean> {

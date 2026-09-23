@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rm,
   symlink,
@@ -21,6 +22,7 @@ import {
   type ZenXHostProfile,
   ZenXHostProfileStore,
 } from "../src/main/host-profile.js";
+import { ProviderLogoResources } from "../src/main/provider-logo-resource.js";
 import { ZenXSettingsService } from "../src/main/settings-service.js";
 import type { OpenAiSubscriptionAuthProfile } from "../../cli/src/subscription-auth.js";
 
@@ -1354,6 +1356,14 @@ test("custom Provider Logo survives restart, rejects invalid uploads, and falls 
       ),
       /valid PNG, JPEG, or WebP/u,
     );
+    const invalidFilter = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nMtIzcnJBwAGLAIV5wb2PAAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    await assert.rejects(
+      first.addProviderProfile(provider, "key", before.revision, invalidFilter),
+      /valid PNG, JPEG, or WebP/u,
+    );
     assert.equal(
       (await first.publicSettings()).profile.providerProfiles.some(
         (entry) => entry.providerProfileId === provider.providerProfileId,
@@ -1404,6 +1414,132 @@ test("custom Provider Logo survives restart, rejects invalid uploads, and falls 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("Provider Logo IPC projection stays bounded and shared resources count for each profile", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-provider-logo-budget-"),
+  );
+  try {
+    const service = settingsFor(directory, inactiveSubscription());
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    const large = Array.from({ length: 8 }, (_, index) =>
+      pngWithAncillaryChunk(png, Buffer.alloc(470 * 1024, index + 1)),
+    );
+    for (let index = 0; index < large.length; index++)
+      await service.addProviderProfile(
+        compatibleProfile(`quota-${index}`).providerProfiles[0]!,
+        "key",
+        undefined,
+        large[index],
+      );
+    await assert.rejects(
+      service.addProviderProfile(
+        compatibleProfile("quota-8").providerProfiles[0]!,
+        "key",
+        undefined,
+        large[0],
+      ),
+      /exceed 4 MiB total/u,
+    );
+    await assert.rejects(
+      service.addProviderProfile(
+        compatibleProfile("quota-unique").providerProfiles[0]!,
+        "key",
+        undefined,
+        pngWithAncillaryChunk(png, Buffer.alloc(470 * 1024, 9)),
+      ),
+      /exceed 4 MiB total/u,
+    );
+    assert.equal(
+      (await readdir(path.join(directory, "provider-logos"))).length,
+      8,
+    );
+    const saved = (await service.publicSettings()).profile;
+    assert.equal(saved.providerProfiles.length, 9);
+    const duplicate = saved.providerProfiles.find(
+      (provider) => provider.providerProfileId === "quota-0",
+    )?.logoResource;
+    assert.ok(duplicate);
+    const legacy = {
+      ...saved,
+      providerProfiles: saved.providerProfiles.map((provider) =>
+        provider.providerProfileId === "fake"
+          ? { ...provider, logoResource: duplicate }
+          : provider,
+      ),
+    };
+    await writeFile(
+      path.join(directory, "host-profile.json"),
+      JSON.stringify(legacy),
+    );
+    const reloaded = settingsFor(directory, inactiveSubscription());
+    await reloaded.initialize({});
+    const projected = (await reloaded.publicSettings()).providerLogoDataUrls;
+    assert.equal(Object.keys(projected ?? {}).length, 8);
+    assert.equal(projected?.["quota-7"], undefined);
+    assert.ok(
+      Object.values(projected ?? {}).reduce(
+        (length, url) => length + url.length,
+        0,
+      ) <
+        5.5 * 1024 * 1024,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Provider Logo validates PNG bit depth and row shape while accepting Adam7", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-adam7-logo-"));
+  try {
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAFoEvQfAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    const logos = new ProviderLogoResources(directory);
+    const imported = await logos.import(png);
+    assert.match(
+      (await logos.dataUrl(imported.resource)) ?? "",
+      /^data:image\/png;base64,/u,
+    );
+    for (const invalid of [
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAwYAAABoxfWYAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+    ])
+      await assert.rejects(
+        logos.import(Buffer.from(invalid, "base64")),
+        /valid PNG, JPEG, or WebP/u,
+      );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+function pngWithAncillaryChunk(png: Buffer, payload: Buffer): Buffer {
+  const type = Buffer.from("raNd");
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(payload.length);
+  let crc = 0xffffffff;
+  for (const byte of Buffer.concat([type, payload])) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++)
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+  }
+  const checksum = Buffer.alloc(4);
+  checksum.writeUInt32BE((crc ^ 0xffffffff) >>> 0);
+  return Buffer.concat([
+    png.subarray(0, png.length - 12),
+    length,
+    type,
+    payload,
+    checksum,
+    png.subarray(png.length - 12),
+  ]);
+}
 
 test("general Settings save cannot replace Host-owned Logo references and cleans removed Provider assets", async () => {
   const directory = await mkdtemp(
