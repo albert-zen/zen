@@ -171,7 +171,8 @@ test("Thread notices a Chrome disconnect while ZenX stays focused", async () => 
     poll = callback;
     return 1;
   }) as typeof dom.window.setInterval;
-  dom.window.clearInterval = (() => undefined) as typeof dom.window.clearInterval;
+  dom.window.clearInterval = (() =>
+    undefined) as typeof dom.window.clearInterval;
   Object.defineProperty(dom.window, "zenx", {
     value: {
       chromeBridge: {
