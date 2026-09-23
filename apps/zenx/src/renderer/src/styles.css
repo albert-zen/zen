@@ -1112,11 +1112,25 @@ a:focus-visible {
 }
 .thread-title > span:first-child,
 .model-line > span:last-child,
-.thread-model > span:not(.provider-logo) {
+.thread-model-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.thread-model-name {
+  flex: 0 1 auto;
+}
+.thread-state-inline {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+}
+.sidebar[data-thread-density="detailed"] .thread-title-status {
+  display: none;
 }
 .thread-model .provider-logo {
   width: 14px;
@@ -7928,10 +7942,8 @@ a:focus-visible {
 .thread-title {
   font-size: var(--font-size-label);
 }
-.thread-state-label {
+.thread-state-inline {
   font-size: var(--font-size-caption);
-  color: var(--color-text-secondary);
-  margin-top: 4px;
 }
 .thread-menu-trigger {
   min-width: 28px;

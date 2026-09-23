@@ -1609,24 +1609,45 @@ function ThreadRow({
       <span className="thread-title">
         <span>{threadTitle(thread)}</span>
         {pendingApproval ? (
-          <span className="needs-dot" aria-label="Needs you" />
+          <span
+            className="thread-title-status needs-dot"
+            aria-label="Needs you"
+          />
         ) : thread.status === "active" ? (
-          <span className="live-dot ready" aria-label="Running" />
+          <span
+            className="thread-title-status live-dot ready"
+            aria-label="Running"
+          />
         ) : watching ? (
           <Icon name="moon" size={12} aria-label="Watching" />
         ) : null}
       </span>
-      {identity === null || modelProvider === null ? null : (
-        <span className="thread-model" title={identity.label}>
-          <ProviderLogo kind={logoKind ?? "generic"} customSrc={customLogo} />
-          <span>{identity.label}</span>
+      {(identity === null || modelProvider === null) &&
+      !pendingApproval &&
+      thread.status !== "active" ? null : (
+        <span className="thread-model">
+          {identity === null || modelProvider === null ? null : (
+            <>
+              <ProviderLogo
+                kind={logoKind ?? "generic"}
+                customSrc={customLogo}
+              />
+              <span className="thread-model-name" title={identity.label}>
+                {identity.label}
+              </span>
+            </>
+          )}
+          {pendingApproval || thread.status === "active" ? (
+            <span className="thread-state-inline">
+              <span
+                className={pendingApproval ? "needs-dot" : "live-dot ready"}
+                aria-hidden="true"
+              />
+              {pendingApproval ? "Needs your approval" : "Working"}
+            </span>
+          ) : null}
         </span>
       )}
-      {pendingApproval || thread.status === "active" ? (
-        <span className="thread-state-label">
-          {pendingApproval ? "Needs your approval" : "Working"}
-        </span>
-      ) : null}
     </>
   );
   const runAction = async (
