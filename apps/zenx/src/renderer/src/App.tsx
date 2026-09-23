@@ -7,6 +7,7 @@ import {
 } from "./compact-command.js";
 import { useWorkspaceFileDrafts } from "./workspace-file-drafts.js";
 import { AuxiliaryPanel } from "./auxiliary-panel.js";
+import { AgentReadinessNotice } from "./AgentReadinessNotice.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
 import {
   default as React,
@@ -2227,6 +2228,14 @@ export function App() {
             composerSendMode={composerSendMode}
             approvals={approvals}
             pluginSnapshot={pluginSnapshot}
+            onOpenPluginSettings={() => {
+              setSettingsTab("plugins");
+              openPage("settings");
+            }}
+            onOpenGeneralSettings={() => {
+              setSettingsTab("general");
+              openPage("settings");
+            }}
             composerStates={composerStates}
             configuredProjects={configuredProjects}
             newThreadDraft={newThreadDraft}
@@ -2634,6 +2643,8 @@ function AgentSurface({
   composerSendMode,
   approvals,
   pluginSnapshot,
+  onOpenPluginSettings,
+  onOpenGeneralSettings,
   composerStates,
   configuredProjects,
   newThreadDraft,
@@ -2681,6 +2692,8 @@ function AgentSurface({
   composerSendMode: "queue" | "soft" | "hard";
   approvals: ApprovalCardState[];
   pluginSnapshot: ZenXPluginSnapshot | null;
+  onOpenPluginSettings(): void;
+  onOpenGeneralSettings(): void;
   composerStates: Record<string, ComposerState>;
   configuredProjects: ZenXProjectProjectionEntry[];
   newThreadDraft: NewThreadDraft | null;
@@ -2754,6 +2767,11 @@ function AgentSurface({
     <section
       className={`agent-surface${newThreadDraft === null ? "" : " new-thread-draft-surface"}`}
     >
+      <AgentReadinessNotice
+        pluginSnapshot={pluginSnapshot}
+        onOpenPlugins={onOpenPluginSettings}
+        onOpenGeneral={onOpenGeneralSettings}
+      />
       {newThreadDraft !== null || selectedSummary === null ? (
         <button
           className="icon-button mobile-menu new-thread-draft-mobile"

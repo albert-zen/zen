@@ -1,0 +1,60 @@
+.agent-surface:has(> .agent-readiness-notice) {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.agent-readiness-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  min-width: 0;
+  padding: 11px 20px;
+  background: var(--color-surface-warning);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.agent-readiness-copy {
+  min-width: 220px;
+  flex: 1 1 420px;
+}
+
+.agent-readiness-copy strong {
+  display: block;
+  font-size: 13px;
+}
+
+.agent-readiness-copy p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.agent-readiness-copy small {
+  display: block;
+  margin-top: 5px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.agent-readiness-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-readiness-actions button {
+  border: 1px solid var(--color-border-control);
+  border-radius: 6px;
+  background: var(--color-surface-control);
+  color: var(--color-text-primary);
+  padding: 5px 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.agent-readiness-actions button:hover,
+.agent-readiness-actions button:focus-visible {
+  border-color: var(--color-border-accent);
+  background: var(--color-surface-control-hover);
+}
