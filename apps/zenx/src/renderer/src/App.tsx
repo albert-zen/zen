@@ -2228,13 +2228,14 @@ export function App() {
             composerSendMode={composerSendMode}
             approvals={approvals}
             pluginSnapshot={pluginSnapshot}
-            onOpenPluginSettings={() => {
-              setSettingsTab("plugins");
-              openPage("settings");
-            }}
-            onOpenGeneralSettings={() => {
+            onOpenBrowserSettings={() => {
               setSettingsTab("general");
               openPage("settings");
+              window.requestAnimationFrame(() => {
+                const section = document.getElementById("browser-settings");
+                section?.scrollIntoView?.({ block: "start" });
+                section?.focus({ preventScroll: true });
+              });
             }}
             composerStates={composerStates}
             configuredProjects={configuredProjects}
@@ -2643,8 +2644,7 @@ function AgentSurface({
   composerSendMode,
   approvals,
   pluginSnapshot,
-  onOpenPluginSettings,
-  onOpenGeneralSettings,
+  onOpenBrowserSettings,
   composerStates,
   configuredProjects,
   newThreadDraft,
@@ -2692,8 +2692,7 @@ function AgentSurface({
   composerSendMode: "queue" | "soft" | "hard";
   approvals: ApprovalCardState[];
   pluginSnapshot: ZenXPluginSnapshot | null;
-  onOpenPluginSettings(): void;
-  onOpenGeneralSettings(): void;
+  onOpenBrowserSettings(): void;
   composerStates: Record<string, ComposerState>;
   configuredProjects: ZenXProjectProjectionEntry[];
   newThreadDraft: NewThreadDraft | null;
@@ -2769,8 +2768,7 @@ function AgentSurface({
     >
       <AgentReadinessNotice
         pluginSnapshot={pluginSnapshot}
-        onOpenPlugins={onOpenPluginSettings}
-        onOpenGeneral={onOpenGeneralSettings}
+        onOpenBrowserSettings={onOpenBrowserSettings}
       />
       {newThreadDraft !== null || selectedSummary === null ? (
         <button

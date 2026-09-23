@@ -53,7 +53,11 @@ export function ChromeConnectionSettings({
   const connected = snapshot?.connection.state === "connected";
   const tabCount = snapshot?.connection.tabCount ?? 0;
   return (
-    <div className="page-card settings-card chrome-connection-settings">
+    <div
+      id="browser-settings"
+      className="page-card settings-card chrome-connection-settings"
+      tabIndex={-1}
+    >
       <div className="settings-card-head">
         <div>
           <h3>Browser</h3>
