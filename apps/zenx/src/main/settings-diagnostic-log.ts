@@ -27,6 +27,24 @@ export type ProviderValidationReason =
 export type ProviderOperation = "add" | "edit";
 export type ProviderSaveOutcome =
   "success" | "failed" | "committed-error" | "unconfirmed";
+export type ProviderKnownRejectionCode =
+  "revision-conflict" | "validation-rejected" | "save-rejected";
+export type ProviderMutationFailureCode =
+  ProviderKnownRejectionCode | "save-finalization-failed" | "save-unconfirmed";
+
+export type ProviderMutationReply<T> =
+  | {
+      ok: true;
+      settings: T;
+      outcome: "success" | "unconfirmed";
+      attemptId: string;
+    }
+  | {
+      ok: false;
+      outcome: Exclude<ProviderSaveOutcome, "success">;
+      code: ProviderMutationFailureCode;
+      attemptId: string;
+    };
 
 export type SettingsDiagnosticEvent =
   | {
@@ -161,13 +179,13 @@ export async function runDiagnosedProviderMutation<T>(options: {
   operation: ProviderOperation;
   attemptId?: string;
   preflight?(): void;
-  knownRejection?(error: unknown): boolean;
+  knownRejectionCode?(error: unknown): ProviderKnownRejectionCode | undefined;
   configurationStatus(): Promise<string | undefined>;
   mutate(context: { markCommitted(): void }): Promise<T>;
-}): Promise<T> {
+}): Promise<ProviderMutationReply<T>> {
   const attemptId =
     options.attemptId && uuidPattern.test(options.attemptId)
-      ? options.attemptId
+      ? options.attemptId.toLowerCase()
       : randomUUID();
   let preflightPassed = false;
   let committed = false;
@@ -179,21 +197,22 @@ export async function runDiagnosedProviderMutation<T>(options: {
         committed = true;
       },
     });
+    const outcome =
+      (await readAsyncSafely(options.configurationStatus)) === "unconfirmed"
+        ? "unconfirmed"
+        : "success";
     await recordSafely(options.log, {
       event: "provider-save-outcome",
       attemptId,
       operation: options.operation,
-      outcome:
-        (await readAsyncSafely(options.configurationStatus)) === "unconfirmed"
-          ? "unconfirmed"
-          : "success",
+      outcome,
     });
-    return result;
+    return { ok: true, settings: result, outcome, attemptId };
   } catch (error) {
-    let knownRejected = false;
+    let rejectionCode: ProviderKnownRejectionCode | undefined;
     if (preflightPassed && !committed) {
       try {
-        knownRejected = options.knownRejection?.(error) === true;
+        rejectionCode = options.knownRejectionCode?.(error);
       } catch {
         // A diagnostic classifier must not replace the mutation error.
       }
@@ -202,7 +221,7 @@ export async function runDiagnosedProviderMutation<T>(options: {
       ? await readAsyncSafely(options.configurationStatus)
       : undefined;
     const outcome: ProviderSaveOutcome =
-      !preflightPassed || knownRejected
+      !preflightPassed || rejectionCode !== undefined
         ? "failed"
         : committed &&
             (status === "applied" ||
@@ -216,7 +235,17 @@ export async function runDiagnosedProviderMutation<T>(options: {
       operation: options.operation,
       outcome,
     });
-    throw error;
+    return {
+      ok: false,
+      outcome,
+      code:
+        outcome === "failed"
+          ? (rejectionCode ?? "save-rejected")
+          : outcome === "committed-error"
+            ? "save-finalization-failed"
+            : "save-unconfirmed",
+      attemptId,
+    };
   }
 }
 

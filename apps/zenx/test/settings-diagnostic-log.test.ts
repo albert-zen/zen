@@ -31,6 +31,50 @@ test("renderer cannot submit a forged Host save outcome", () => {
   );
 });
 
+test("a rejected Provider mutation returns the same safe outcome and attempt as its Host log", async () => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-settings-diagnostic-"),
+  );
+  try {
+    const log = new SettingsDiagnosticLog(root);
+    const failure = new Error(
+      "secret-api-key https://private.example/model-id",
+    );
+    const reply = await runDiagnosedProviderMutation({
+      log,
+      operation: "edit",
+      attemptId,
+      knownRejectionCode: (error) =>
+        error === failure ? "revision-conflict" : undefined,
+      configurationStatus: async () => "applied",
+      mutate: async () => {
+        throw failure;
+      },
+    });
+    assert.deepEqual(reply, {
+      ok: false,
+      outcome: "failed",
+      code: "revision-conflict",
+      attemptId,
+    });
+    const raw = await readFile(
+      path.join(root, "diagnostics", "settings.jsonl"),
+      "utf8",
+    );
+    assert.deepEqual(JSON.parse(raw.trim()), {
+      timestamp: JSON.parse(raw.trim()).timestamp,
+      event: "provider-save-outcome",
+      attemptId,
+      operation: "edit",
+      outcome: reply.outcome,
+    });
+    assert.equal(JSON.stringify(reply).includes(failure.message), false);
+    assert.equal(raw.includes(failure.message), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("shared diagnostic storage refuses one record larger than its file limit", async () => {
   const root = await mkdtemp(
     path.join(os.tmpdir(), "zenx-settings-diagnostic-"),
@@ -208,7 +252,7 @@ test("host outcome distinguishes rejected, committed error, and unconfirmed save
   try {
     const log = new SettingsDiagnosticLog(root);
     let configurationStatus: string | undefined = "applied";
-    assert.equal(
+    const replies = [
       await runDiagnosedProviderMutation({
         log,
         operation: "add",
@@ -219,11 +263,10 @@ test("host outcome distinguishes rejected, committed error, and unconfirmed save
           return "saved";
         },
       }),
-      "saved",
-    );
+    ];
     const failed = new Error("do not persist this error text");
-    await assert.rejects(
-      runDiagnosedProviderMutation({
+    replies.push(
+      await runDiagnosedProviderMutation({
         log,
         operation: "edit",
         attemptId,
@@ -233,10 +276,9 @@ test("host outcome distinguishes rejected, committed error, and unconfirmed save
         configurationStatus: async () => configurationStatus,
         mutate: async () => "never reached",
       }),
-      (error: unknown) => error === failed,
     );
-    await assert.rejects(
-      runDiagnosedProviderMutation({
+    replies.push(
+      await runDiagnosedProviderMutation({
         log,
         operation: "edit",
         attemptId,
@@ -245,23 +287,22 @@ test("host outcome distinguishes rejected, committed error, and unconfirmed save
           throw failed;
         },
       }),
-      (error: unknown) => error === failed,
     );
-    await assert.rejects(
-      runDiagnosedProviderMutation({
+    replies.push(
+      await runDiagnosedProviderMutation({
         log,
         operation: "edit",
         attemptId,
-        knownRejection: (error) => error === failed,
+        knownRejectionCode: (error) =>
+          error === failed ? "validation-rejected" : undefined,
         configurationStatus: async () => configurationStatus,
         mutate: async () => {
           throw failed;
         },
       }),
-      (error: unknown) => error === failed,
     );
-    await assert.rejects(
-      runDiagnosedProviderMutation({
+    replies.push(
+      await runDiagnosedProviderMutation({
         log,
         operation: "edit",
         attemptId,
@@ -271,11 +312,10 @@ test("host outcome distinguishes rejected, committed error, and unconfirmed save
           throw failed;
         },
       }),
-      (error: unknown) => error === failed,
     );
     configurationStatus = "unconfirmed";
-    await assert.rejects(
-      runDiagnosedProviderMutation({
+    replies.push(
+      await runDiagnosedProviderMutation({
         log,
         operation: "edit",
         attemptId,
@@ -285,8 +325,50 @@ test("host outcome distinguishes rejected, committed error, and unconfirmed save
           throw failed;
         },
       }),
-      (error: unknown) => error === failed,
     );
+    replies.push(
+      await runDiagnosedProviderMutation({
+        log,
+        operation: "edit",
+        attemptId,
+        configurationStatus: async () => configurationStatus,
+        mutate: async () => "saved but application unconfirmed",
+      }),
+    );
+    assert.deepEqual(replies, [
+      { ok: true, settings: "saved", outcome: "success", attemptId },
+      { ok: false, outcome: "failed", code: "save-rejected", attemptId },
+      {
+        ok: false,
+        outcome: "unconfirmed",
+        code: "save-unconfirmed",
+        attemptId,
+      },
+      {
+        ok: false,
+        outcome: "failed",
+        code: "validation-rejected",
+        attemptId,
+      },
+      {
+        ok: false,
+        outcome: "committed-error",
+        code: "save-finalization-failed",
+        attemptId,
+      },
+      {
+        ok: false,
+        outcome: "unconfirmed",
+        code: "save-unconfirmed",
+        attemptId,
+      },
+      {
+        ok: true,
+        settings: "saved but application unconfirmed",
+        outcome: "unconfirmed",
+        attemptId,
+      },
+    ]);
     const raw = await readFile(
       path.join(root, "diagnostics", "settings.jsonl"),
       "utf8",
@@ -303,7 +385,15 @@ test("host outcome distinguishes rejected, committed error, and unconfirmed save
         "failed",
         "committed-error",
         "unconfirmed",
+        "unconfirmed",
       ],
+    );
+    assert.deepEqual(
+      raw
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line).outcome),
+      replies.map((reply) => reply.outcome),
     );
     assert.ok(
       raw
@@ -312,6 +402,7 @@ test("host outcome distinguishes rejected, committed error, and unconfirmed save
         .every((line) => JSON.parse(line).attemptId === attemptId),
     );
     assert.equal(raw.includes(failed.message), false);
+    assert.equal(JSON.stringify(replies).includes(failed.message), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -326,17 +417,18 @@ test("diagnostic write failure never changes a save result", async () => {
     await writeFile(occupiedPath, "file blocks directory creation");
     const log = new SettingsDiagnosticLog(occupiedPath);
     // The mutation result must win even when the diagnostic sink is unusable.
-    assert.equal(
+    assert.deepEqual(
       await runDiagnosedProviderMutation({
         log,
         operation: "add",
+        attemptId,
         configurationStatus: async () => "applied",
         mutate: async ({ markCommitted }) => {
           markCommitted();
           return 42;
         },
       }),
-      42,
+      { ok: true, settings: 42, outcome: "success", attemptId },
     );
   } finally {
     await rm(root, { recursive: true, force: true });

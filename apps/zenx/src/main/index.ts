@@ -42,6 +42,7 @@ import {
   isRendererSettingsDiagnostic,
   SettingsDiagnosticLog,
   runDiagnosedProviderMutation,
+  type ProviderKnownRejectionCode,
 } from "./settings-diagnostic-log.js";
 import {
   computerReadinessSnapshot,
@@ -1545,7 +1546,7 @@ function installSettingsIpc(
             : undefined,
         configurationStatus: async () =>
           (await settings.publicSettings()).configuration?.status,
-        knownRejection: (error) => error instanceof ConfigurationPreCommitError,
+        knownRejectionCode: providerKnownRejectionCode,
         preflight: () => {
           if (apiKey !== undefined && typeof apiKey !== "string") {
             throw new Error("Invalid API key");
@@ -1586,7 +1587,7 @@ function installSettingsIpc(
             : undefined,
         configurationStatus: async () =>
           (await settings.publicSettings()).configuration?.status,
-        knownRejection: (error) => error instanceof ConfigurationPreCommitError,
+        knownRejectionCode: providerKnownRejectionCode,
         preflight: () => {
           if (typeof providerProfileId !== "string") {
             throw new Error("Invalid Provider profile id");
@@ -1946,6 +1947,16 @@ function isApprovalDecision(value: unknown): value is ApprovalDecision {
     value === "decline" ||
     value === "cancel"
   );
+}
+
+function providerKnownRejectionCode(
+  error: unknown,
+): ProviderKnownRejectionCode | undefined {
+  if (!(error instanceof ConfigurationPreCommitError)) return undefined;
+  const reason = "reason" in error ? error.reason : undefined;
+  if (reason === "conflict") return "revision-conflict";
+  if (reason === "validation") return "validation-rejected";
+  return "save-rejected";
 }
 
 function requireConfigurationRevision(value: unknown): void {

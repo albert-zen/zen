@@ -23,6 +23,7 @@ import type {
   ZenXSidebarOrder,
   ZenXSettingsUpdate,
 } from "../main/host-profile.js";
+import type { ProviderMutationReply } from "../main/settings-diagnostic-log.js";
 import type {
   ZenXImageCapabilityProbeResult,
   ZenXProviderCatalogSnapshot,
@@ -302,7 +303,7 @@ contextBridge.exposeInMainWorld("zenx", {
       baseRevision?: number,
       logoUpload?: Uint8Array,
       diagnosticAttemptId?: string,
-    ): Promise<PublicHostSettings> =>
+    ): Promise<ProviderMutationReply<PublicHostSettings>> =>
       await ipcRenderer.invoke(
         ipcChannels.providerAdd,
         provider,
@@ -316,7 +317,7 @@ contextBridge.exposeInMainWorld("zenx", {
       provider: ZenXProviderProfile,
       options?: ZenXProviderEditOptions,
       diagnosticAttemptId?: string,
-    ): Promise<PublicHostSettings> =>
+    ): Promise<ProviderMutationReply<PublicHostSettings>> =>
       await ipcRenderer.invoke(
         ipcChannels.providerEdit,
         providerProfileId,
