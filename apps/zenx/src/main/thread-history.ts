@@ -1,3 +1,4 @@
+import { publicItemValue } from "../public-item.js";
 import type { ThreadSnapshot } from "../../../../src/app-server.js";
 import type { CanonicalItem } from "../../../../src/item.js";
 
@@ -173,31 +174,6 @@ function previewItem(item: CanonicalItem): Record<string, unknown> {
     truncated,
     read: { target: item.threadId, granularity: "item", itemId: item.id },
   };
-}
-
-/** Respect structured visibility at every depth without interpreting text strings. */
-function publicItemValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(publicItemValue);
-  if (value === null || typeof value !== "object") return value;
-  const record = value as Record<string, unknown>;
-  const entries =
-    record.contentVisibility === "opaque"
-      ? [
-          "id",
-          "threadId",
-          "turnId",
-          "createdAt",
-          "type",
-          "role",
-          "contentVisibility",
-          "summary",
-        ]
-          .filter((key) => Object.hasOwn(record, key))
-          .map((key) => [key, record[key]] as const)
-      : Object.entries(record);
-  return Object.fromEntries(
-    entries.map(([key, child]) => [key, publicItemValue(child)]),
-  );
 }
 
 function beforeIndex(ids: string[], before: string | null): number {

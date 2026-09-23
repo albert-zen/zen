@@ -8,6 +8,7 @@ import "./styles.css";
 import "./agent-readiness-notice.css";
 import "./trigger-ui.css";
 import "./skills.css";
+import "./cockpit.css";
 
 getAppearanceController();
 const disposeScrollbars = installScrollbarVisibility(document);

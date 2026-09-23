@@ -1,4 +1,5 @@
 import { parseSkillDraft } from "./skill-draft.js";
+import { Cockpit } from "./Cockpit.js";
 import { referenceMessage, referenceTitle } from "./reference-draft.js";
 import {
   handleCompactCommand,
@@ -119,6 +120,9 @@ import { ZenXBrand } from "./ZenXBrand.js";
 
 type ProductPage = string;
 const MODEL_CATALOG_LOADING = "Models are still loading. Try again.";
+const COCKPIT_ENABLED =
+  (import.meta as ImportMeta & { env?: Record<string, string> }).env
+    ?.RENDERER_VITE_COCKPIT === "1";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "zenx.sidebar-collapsed";
 
 interface NewThreadDraft {
@@ -351,7 +355,11 @@ function updateThreadProjectionCache(
   return next;
 }
 
-export function App() {
+export function App({
+  cockpitEnabled = COCKPIT_ENABLED,
+}: {
+  cockpitEnabled?: boolean;
+}) {
   const selectionEpoch = useRef(0);
   const pendingResumeProjectionRef = useRef<{
     epoch: number;
@@ -382,6 +390,10 @@ export function App() {
   );
   const threadUsageLoadEpoch = useRef(0);
   const threadSummaryLoadEpoch = useRef(0);
+  const threadSummaryReads = useRef(0);
+  const [threadSummaryReadAt, setThreadSummaryReadAt] = useState<number | null>(
+    null,
+  );
   const projectLoadEpoch = useRef(0);
   const modelCatalogLoadEpoch = useRef(0);
   const projectsRef = useRef<ZenXProjectProjectionSnapshot>({
@@ -641,34 +653,66 @@ export function App() {
     return result;
   };
 
-  const loadThreadSummaries = async (showLoading = false) => {
-    const epoch = ++threadSummaryLoadEpoch.current;
-    if (showLoading) setThreadListLoaded({ active: false, archived: false });
-    const [active, archived] = await Promise.allSettled([
-      window.zenx.threads.list({ archived: false }),
-      window.zenx.threads.list({ archived: true }),
-    ]);
-    if (threadSummaryLoadEpoch.current !== epoch) return;
-    if (active.status === "fulfilled") {
-      setThreadSummaries(active.value);
-      setThreadListErrors((current) => ({ ...current, active: null }));
-    } else {
-      setThreadListErrors((current) => ({
-        ...current,
-        active: describeError(active.reason),
-      }));
-    }
-    if (archived.status === "fulfilled") {
-      setArchivedThreadSummaries(archived.value);
-      setThreadListErrors((current) => ({ ...current, archived: null }));
-    } else {
-      setThreadListErrors((current) => ({
-        ...current,
-        archived: describeError(archived.reason),
-      }));
-    }
-    setThreadListLoaded({ active: true, archived: true });
-  };
+  const loadThreadSummaries = useCallback(
+    async (showLoading = false, isCurrent: () => boolean = () => true) => {
+      threadSummaryReads.current++;
+      const epoch = ++threadSummaryLoadEpoch.current;
+      if (showLoading) setThreadListLoaded({ active: false, archived: false });
+      const [active, archived] = await Promise.allSettled([
+        window.zenx.threads.list({ archived: false }),
+        window.zenx.threads.list({ archived: true }),
+      ]);
+      threadSummaryReads.current--;
+      if (threadSummaryLoadEpoch.current !== epoch || !isCurrent()) return;
+      if (active.status === "fulfilled") {
+        setThreadSummaries(active.value);
+        setThreadSummaryReadAt(Date.now());
+        setThreadListErrors((current) => ({ ...current, active: null }));
+      } else {
+        setThreadListErrors((current) => ({
+          ...current,
+          active: describeError(active.reason),
+        }));
+      }
+      if (archived.status === "fulfilled") {
+        setArchivedThreadSummaries(archived.value);
+        setThreadListErrors((current) => ({ ...current, archived: null }));
+      } else {
+        setThreadListErrors((current) => ({
+          ...current,
+          archived: describeError(archived.reason),
+        }));
+      }
+      setThreadListLoaded({ active: true, archived: true });
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!cockpitEnabled || page !== "cockpit" || serverStatus.type !== "ready")
+      return;
+    let active = true;
+    const refresh = () => {
+      if (!document.hidden && threadSummaryReads.current === 0) {
+        void loadThreadSummaries(false, () => active);
+      }
+    };
+    refresh();
+    const timer = setInterval(refresh, 5000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      active = false;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [cockpitEnabled, page, serverStatus.type, loadThreadSummaries]);
+
+  useEffect(
+    () => () => {
+      threadSummaryLoadEpoch.current++;
+    },
+    [],
+  );
 
   const loadProjects = async () => {
     const epoch = ++projectLoadEpoch.current;
@@ -2048,6 +2092,12 @@ export function App() {
             threadDetail={threadDetail}
             titleProjection={titleProjection}
           />
+        ) : cockpitEnabled && page === "cockpit" ? (
+          <PageTitleBar
+            onOpenSidebar={() => setSidebarOpen(true)}
+            subtitle="Experimental · canonical task evidence"
+            title="Cockpit"
+          />
         ) : page === "settings" ? (
           <PageTitleBar
             onOpenSidebar={() => setSidebarOpen(true)}
@@ -2063,6 +2113,7 @@ export function App() {
         ) : null}
       </WindowTitleBar>
       <Sidebar
+        onOpenCockpit={cockpitEnabled ? () => openPage("cockpit") : undefined}
         collapsed={sidebarCollapsed}
         liveThread={threadDetail}
         mode={sidebarMode}
@@ -2216,7 +2267,18 @@ export function App() {
           pluginSnapshot={pluginSnapshot}
           showHeader={false}
         />
-        {page === "settings" ? null : genericPluginTarget !== undefined &&
+        {cockpitEnabled && page === "cockpit" ? (
+          <Cockpit
+            summaries={activeSummaries}
+            approvals={pendingThreadIds}
+            connected={serverStatus.type === "ready"}
+            loading={!threadListLoaded.active}
+            overviewReadAt={threadSummaryReadAt}
+            error={threadListErrors.active}
+            onRefresh={() => void loadThreadSummaries(true)}
+            onOpenThread={(id) => void resumeThread(id)}
+          />
+        ) : page === "settings" ? null : genericPluginTarget !== undefined &&
           pluginSnapshot !== null ? (
           <PluginProductPage
             snapshot={pluginSnapshot}

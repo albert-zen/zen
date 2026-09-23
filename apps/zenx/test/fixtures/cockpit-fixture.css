@@ -1,0 +1,22 @@
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+  background: #172934;
+}
+.fixture-controls {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 10px 20px;
+  background: #edf3f4;
+  color: #172934;
+  font: 12px/1.6 system-ui;
+}
+.fixture-controls select,
+.fixture-controls button {
+  min-height: 36px;
+  margin-left: 8px;
+}
