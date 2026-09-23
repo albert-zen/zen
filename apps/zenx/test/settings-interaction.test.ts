@@ -439,7 +439,7 @@ test("Provider discovery starts text-only and manual overrides persist", async (
     await click(exactButtonRequired("Save provider"));
     assert.match(
       document.querySelector('[role="alert"]')?.textContent ?? "",
-      /model alpha-vision requires a positive context window/u,
+      /Model 3 \(alpha-vision\): enter a positive whole number for context window/u,
     );
     assert.equal(editCalls, 0);
 
@@ -1310,7 +1310,7 @@ test("Validation and mutation failures keep the provider editor recoverable", as
     await click(exactButtonRequired("Add provider"));
     assert.match(
       document.querySelector('[role="alert"]')?.textContent ?? "",
-      /Display name is required/u,
+      /Enter a display name/u,
     );
     assert.equal(attempts, 0);
 
@@ -2421,8 +2421,213 @@ test("manual reasoning fills real defaults, preserves custom values across modes
     assert.equal(saved, undefined);
     assert.match(
       document.body.textContent ?? "",
-      /requires supported efforts and a valid default/,
+      /Model 1 \(shared-model\): enter at least one supported reasoning effort/,
     );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("provider validation names each invalid model field and links to an editable control", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.providerProfiles[0]!.models = [
+    {
+      ...model("shared-model"),
+      reasoningConfiguration: "manual",
+      supportedReasoningEfforts: [],
+      defaultReasoningEffort: null,
+    },
+    { ...model("alpha-only"), contextWindow: null },
+  ];
+  let saves = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    editProvider: async () => {
+      saves += 1;
+      return initial;
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Save provider"));
+
+    const summary = document.querySelector<HTMLElement>(
+      ".provider-editor-error-summary",
+    );
+    assert.ok(summary);
+    assert.equal(document.activeElement, summary);
+    const links = [...summary.querySelectorAll<HTMLAnchorElement>("a")];
+    assert.equal(links.length, 2);
+    assert.match(
+      links[0]!.textContent ?? "",
+      /Model 1 \(shared-model\): enter at least one supported reasoning effort/u,
+    );
+    assert.match(
+      links[1]!.textContent ?? "",
+      /Model 2 \(alpha-only\): enter a positive whole number for context window/u,
+    );
+    const effortInput = requiredInput("Model 1 reasoning efforts");
+    const contextInput = requiredInput("Model 2 context window (Required)");
+    assert.equal(links[0]!.getAttribute("href"), `#${effortInput.id}`);
+    assert.equal(links[1]!.getAttribute("href"), `#${contextInput.id}`);
+    assert.equal(effortInput.getAttribute("aria-invalid"), "true");
+    assert.equal(contextInput.getAttribute("aria-invalid"), "true");
+    assert.match(
+      document.getElementById(effortInput.getAttribute("aria-describedby")!)
+        ?.textContent ?? "",
+      /enter at least one supported reasoning effort/u,
+    );
+    assert.equal(effortInput.closest("details")?.open, false);
+    await click(links[0]!);
+    assert.equal(effortInput.closest("details")?.open, true);
+    assert.equal(document.activeElement, effortInput);
+    assert.equal(saves, 0);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("provider validation survives unrelated edits and clears each issue only when repaired", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.providerProfiles[0]!.models = [
+    {
+      ...model("shared-model"),
+      reasoningConfiguration: "manual",
+      supportedReasoningEfforts: [],
+      defaultReasoningEffort: null,
+    },
+    { ...model("alpha-only"), contextWindow: null },
+  ];
+  let saved: ZenXProviderProfile | undefined;
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    editProvider: async (_id, provider) => {
+      saved = provider;
+      return {
+        ...initial,
+        profile: {
+          ...initial.profile,
+          providerProfiles: [
+            provider,
+            ...initial.profile.providerProfiles.slice(1),
+          ],
+        },
+      };
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Save provider"));
+    const issueCount = () =>
+      document.querySelectorAll(".provider-editor-error-summary a").length;
+    assert.equal(issueCount(), 2);
+
+    await changeControl(requiredInput("Model 1 display name"), "Renamed model");
+    assert.equal(issueCount(), 2);
+    await changeControl(
+      requiredInput("Model 1 reasoning efforts"),
+      "low, high",
+    );
+    assert.equal(issueCount(), 2);
+    await changeControl(
+      (await labeledSelect("Model 1 default reasoning effort"))!,
+      "high",
+    );
+    assert.equal(issueCount(), 1);
+    assert.match(
+      document.querySelector(".provider-editor-error-summary")?.textContent ??
+        "",
+      /Model 2 \(alpha-only\)/u,
+    );
+    await changeControl(
+      requiredInput("Model 2 context window (Required)"),
+      "128000",
+    );
+    assert.equal(issueCount(), 0);
+    await click(exactButtonRequired("Save provider"));
+    await waitFor(() => saved);
+    assert.equal(saved?.models[0]?.displayName, "Renamed model");
+    assert.equal(saved?.models[1]?.contextWindow, 128000);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("invalid default reasoning effort and zero context identify the correct controls", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.providerProfiles[0]!.models = [
+    {
+      ...model("shared-model"),
+      reasoningConfiguration: "manual",
+      supportedReasoningEfforts: ["low"],
+      defaultReasoningEffort: "high",
+    },
+    { ...model("alpha-only"), contextWindow: 0 },
+  ];
+  const harness = await mountSettings("models", { initialSettings: initial });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Save provider"));
+    const links = [
+      ...document.querySelectorAll<HTMLAnchorElement>(
+        ".provider-editor-error-summary a",
+      ),
+    ];
+    assert.equal(links.length, 2);
+    assert.match(
+      links[0]!.textContent ?? "",
+      /Model 1 \(shared-model\).*choose a default/u,
+    );
+    assert.match(
+      links[1]!.textContent ?? "",
+      /Model 2 \(alpha-only\).*context window/u,
+    );
+    await click(links[0]!);
+    const defaultSelect = labelControl<HTMLButtonElement>(
+      "Model 1 default reasoning effort",
+      "button.ui-select",
+    );
+    assert.ok(defaultSelect);
+    assert.equal(defaultSelect.closest("details")?.open, true);
+    assert.equal(document.activeElement, defaultSelect);
+    assert.equal(links[0]!.getAttribute("href"), `#${defaultSelect.id}`);
+    assert.equal(defaultSelect.getAttribute("aria-invalid"), "true");
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("a provider without model rows stays invalid and offers a focused add action", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.providerProfiles[0]!.models = [];
+  let saves = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    editProvider: async () => {
+      saves += 1;
+      return initial;
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Save provider"));
+    const link = document.querySelector<HTMLAnchorElement>(
+      ".provider-editor-error-summary a",
+    );
+    const addModel = exactButtonRequired("Add model");
+    assert.ok(link);
+    assert.match(link.textContent ?? "", /Add at least one model/u);
+    assert.equal(link.getAttribute("href"), `#${addModel.id}`);
+    assert.equal(saves, 0);
+    await click(link);
+    assert.equal(document.activeElement, addModel);
+    await click(addModel);
+    assert.ok(requiredInput("Model 1"));
+    assert.equal(saves, 0);
   } finally {
     await unmount(harness);
   }

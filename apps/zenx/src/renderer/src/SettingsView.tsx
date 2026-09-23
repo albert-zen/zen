@@ -2,7 +2,7 @@ import { SkillsSettingsPanel } from "./SkillsSettingsPanel.js";
 import { Select, Combobox } from "./ui/controls.js";
 import { SubscriptionUsageCard } from "./SubscriptionUsageCard.js";
 import { RtkSettingsCard } from "./RtkSettingsCard.js";
-import { Activity, useEffect, useRef, useState } from "react";
+import { Activity, useEffect, useId, useRef, useState } from "react";
 import { normalizeContextCompactionConfig } from "../../../../../src/context-compaction.js";
 import { ContextCompactionPanel } from "./ContextCompactionPanel.js";
 import { WorkflowSettingsPanel } from "./WorkflowSettingsPanel.js";
@@ -1483,12 +1483,28 @@ function ProviderEditor({
   const logoReadVersion = useRef(0);
   const logoFileInput = useRef<HTMLInputElement>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [validationAttempt, setValidationAttempt] = useState(0);
+  const validationSummary = useRef<HTMLDivElement>(null);
+  const editorId = useId();
   const [defaultReplacement, setDefaultReplacement] = useState("");
   const [titleReplacement, setTitleReplacement] = useState("");
   const normalizedProvider = {
     ...provider,
     models: models.map(normalizedDraftModel),
   } as ZenXProviderProfile;
+  const validationIssues =
+    validationAttempt === 0
+      ? []
+      : validateProviderEditor(normalizedProvider, apiKey, mode, hasApiKey);
+  const fieldId = (field: ProviderEditorIssue["field"], modelIndex?: number) =>
+    `${editorId}-${modelIndex === undefined ? "provider" : `model-${modelIndex}`}-${field}`;
+  const issueFor = (field: ProviderEditorIssue["field"], modelIndex?: number) =>
+    validationIssues.find(
+      (issue) => issue.field === field && issue.modelIndex === modelIndex,
+    )?.message;
+  useEffect(() => {
+    if (validationAttempt > 0) validationSummary.current?.focus();
+  }, [validationAttempt]);
   const replacementProfiles =
     mode === "edit"
       ? allProfiles.map((candidate) =>
@@ -1543,6 +1559,7 @@ function ProviderEditor({
         </button>
       </div>
       <form
+        noValidate
         onSubmit={(event) => {
           event.preventDefault();
           if (logoSelectionError !== null || logoReading) {
@@ -1552,14 +1569,15 @@ function ProviderEditor({
             );
             return;
           }
-          const error = validateProviderEditor(
+          const issues = validateProviderEditor(
             normalizedProvider,
             apiKey,
             mode,
             hasApiKey,
           );
-          if (error !== null) {
-            setValidationError(error);
+          if (issues.length > 0) {
+            setValidationError(null);
+            setValidationAttempt((current) => current + 1);
             return;
           }
           const replacements: ZenXProviderEditOptions = {};
@@ -1593,9 +1611,47 @@ function ProviderEditor({
           );
         }}
       >
+        {validationIssues.length === 0 ? null : (
+          <div
+            ref={validationSummary}
+            className="settings-error provider-editor-error-summary"
+            role="alert"
+            tabIndex={-1}
+          >
+            <Icon name="warning" />
+            <div>
+              <strong>Check these fields</strong>
+              <ul>
+                {validationIssues.map((issue) => {
+                  const targetId = fieldId(issue.field, issue.modelIndex);
+                  return (
+                    <li key={`${targetId}-${issue.code}`}>
+                      <a
+                        href={`#${targetId}`}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          const target = document.getElementById(targetId);
+                          const details = target?.closest("details");
+                          if (details !== null && details !== undefined)
+                            details.open = true;
+                          target?.scrollIntoView?.({ block: "center" });
+                          target?.focus();
+                        }}
+                      >
+                        {issue.message}
+                      </a>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          </div>
+        )}
         <div className="form-grid">
           <Field
             autoFocus
+            id={fieldId("displayName")}
+            error={issueFor("displayName")}
             label="Display name"
             value={provider.displayName}
             onChange={(displayName) => {
@@ -1606,6 +1662,8 @@ function ProviderEditor({
           {provider.type === "openai-compatible" ? (
             <>
               <Field
+                id={fieldId("providerName")}
+                error={issueFor("providerName")}
                 label="Provider name"
                 value={provider.name}
                 onChange={(name) => {
@@ -1615,6 +1673,8 @@ function ProviderEditor({
               />
               <Field
                 wide
+                id={fieldId("baseUrl")}
+                error={issueFor("baseUrl")}
                 label="Base URL"
                 value={provider.baseUrl}
                 onChange={(baseUrl) => {
@@ -1625,6 +1685,8 @@ function ProviderEditor({
               <Field
                 wide
                 secret
+                id={fieldId("apiKey")}
+                error={issueFor("apiKey")}
                 label="API key"
                 placeholder={
                   mode === "edit" && hasApiKey
@@ -1925,6 +1987,13 @@ function ProviderEditor({
               <label className="field">
                 <span>{`Model ${index + 1}`}</span>
                 <input
+                  id={fieldId("modelId", index)}
+                  aria-invalid={issueFor("modelId", index) ? true : undefined}
+                  aria-describedby={
+                    issueFor("modelId", index)
+                      ? `${fieldId("modelId", index)}-error`
+                      : undefined
+                  }
                   value={model.id}
                   onChange={(event) => {
                     const id = event.target.value;
@@ -1939,6 +2008,14 @@ function ProviderEditor({
                     }));
                   }}
                 />
+                {issueFor("modelId", index) === undefined ? null : (
+                  <small
+                    id={`${fieldId("modelId", index)}-error`}
+                    className="provider-field-error"
+                  >
+                    {issueFor("modelId", index)}
+                  </small>
+                )}
               </label>
               <button
                 className="quiet-button"
@@ -1957,6 +2034,8 @@ function ProviderEditor({
               <ModelCapabilityEditor
                 index={index}
                 model={model}
+                fieldId={(field) => fieldId(field, index)}
+                issueFor={(field) => issueFor(field, index)}
                 onChange={(next) => updateModel(index, () => next)}
                 probing={probingModel === model.id}
                 onProbe={
@@ -2005,6 +2084,7 @@ function ProviderEditor({
           <button
             className="quiet-button add-model-button"
             type="button"
+            id={fieldId("addModel")}
             onClick={() =>
               setModels((current) => [...current, manualModelCatalogEntry("")])
             }
@@ -2030,10 +2110,10 @@ function ProviderEditor({
             onChangeValue={setTitleReplacement}
           />
         ) : null}
-        {validationError === null ? null : (
+        {logoSelectionError === null && validationError === null ? null : (
           <div className="settings-error provider-editor-error" role="alert">
             <Icon name="warning" />
-            {validationError}
+            {logoSelectionError ?? validationError}
           </div>
         )}
         <div className="provider-editor-actions">
@@ -2062,12 +2142,16 @@ function ProviderEditor({
 function ModelCapabilityEditor({
   index,
   model,
+  fieldId,
+  issueFor,
   onChange,
   onProbe,
   probing = false,
 }: {
   index: number;
   model: ZenXModelCatalogEntry;
+  fieldId(field: ProviderEditorIssue["field"]): string;
+  issueFor(field: ProviderEditorIssue["field"]): string | undefined;
   onChange(model: ZenXModelCatalogEntry): void;
   onProbe?(): Promise<void>;
   probing?: boolean;
@@ -2081,13 +2165,15 @@ function ModelCapabilityEditor({
     update: Partial<ZenXModelCatalogEntry>,
   ): ZenXModelCatalogEntry => ({ ...model, ...update, source: "manual" });
   const reasoningMode =
-    model.supportedReasoningEfforts === null
-      ? "unknown"
-      : model.supportedReasoningEfforts.length === 0
-        ? configuringReasoning
-          ? "configured"
-          : "text-only"
-        : "configured";
+    model.reasoningConfiguration === "manual"
+      ? "configured"
+      : model.supportedReasoningEfforts === null
+        ? "unknown"
+        : model.supportedReasoningEfforts.length === 0
+          ? configuringReasoning
+            ? "configured"
+            : "text-only"
+          : "configured";
   return (
     <details className="provider-model-capabilities">
       <summary>{modelCapabilitySummary(model)}</summary>
@@ -2162,6 +2248,8 @@ function ModelCapabilityEditor({
         {reasoningMode === "configured" ? (
           <>
             <Field
+              id={fieldId("reasoningEfforts")}
+              error={issueFor("reasoningEfforts")}
               label={`Model ${index + 1} reasoning efforts`}
               placeholder="low, medium, high"
               value={model.supportedReasoningEfforts?.join(", ") ?? ""}
@@ -2177,6 +2265,15 @@ function ModelCapabilityEditor({
             <label className="field">
               <span>{`Model ${index + 1} default reasoning effort`}</span>
               <Select
+                id={fieldId("defaultReasoningEffort")}
+                aria-invalid={
+                  issueFor("defaultReasoningEffort") ? true : undefined
+                }
+                aria-describedby={
+                  issueFor("defaultReasoningEffort")
+                    ? `${fieldId("defaultReasoningEffort")}-error`
+                    : undefined
+                }
                 aria-label={`Model ${index + 1} default reasoning effort`}
                 value={model.defaultReasoningEffort ?? ""}
                 onValueChange={(value) =>
@@ -2194,16 +2291,15 @@ function ModelCapabilityEditor({
                   </option>
                 ))}
               </Select>
+              {issueFor("defaultReasoningEffort") === undefined ? null : (
+                <small
+                  id={`${fieldId("defaultReasoningEffort")}-error`}
+                  className="provider-field-error"
+                >
+                  {issueFor("defaultReasoningEffort")}
+                </small>
+              )}
             </label>
-            {!model.supportedReasoningEfforts?.length ||
-            !model.supportedReasoningEfforts.includes(
-              model.defaultReasoningEffort ?? "",
-            ) ? (
-              <p className="settings-error" role="alert">
-                Enter at least one supported effort and choose its default
-                before applying.
-              </p>
-            ) : null}
           </>
         ) : null}
         <label className="field">
@@ -2228,10 +2324,17 @@ function ModelCapabilityEditor({
         <label className="field">
           <span>{`Model ${index + 1} context window (Required)`}</span>
           <input
+            id={fieldId("contextWindow")}
+            aria-invalid={issueFor("contextWindow") ? true : undefined}
+            aria-describedby={
+              issueFor("contextWindow")
+                ? `${fieldId("contextWindow")}-error`
+                : undefined
+            }
             min="1"
             step="1"
             type="number"
-            placeholder="Required"
+            placeholder="e.g. 128000"
             value={model.contextWindow ?? ""}
             onChange={(event) =>
               onChange(
@@ -2244,6 +2347,17 @@ function ModelCapabilityEditor({
               )
             }
           />
+          <small className="provider-field-hint">
+            Use the model provider&apos;s published token limit.
+          </small>
+          {issueFor("contextWindow") === undefined ? null : (
+            <small
+              id={`${fieldId("contextWindow")}-error`}
+              className="provider-field-error"
+            >
+              {issueFor("contextWindow")}
+            </small>
+          )}
         </label>
         <label className="model-hidden-control">
           <input
@@ -2444,72 +2558,162 @@ function ModelReferenceSelect({
   );
 }
 
+interface ProviderEditorIssue {
+  code:
+    | "display_name_missing"
+    | "model_id_missing"
+    | "model_id_duplicate"
+    | "reasoning_efforts_missing"
+    | "reasoning_default_invalid"
+    | "context_window_invalid"
+    | "provider_name_missing"
+    | "api_key_missing"
+    | "base_url_invalid"
+    | "base_url_scheme_invalid"
+    | "base_url_credentials"
+    | "base_url_query_fragment";
+  field:
+    | "displayName"
+    | "addModel"
+    | "modelId"
+    | "reasoningEfforts"
+    | "defaultReasoningEffort"
+    | "contextWindow"
+    | "providerName"
+    | "apiKey"
+    | "baseUrl";
+  modelIndex?: number;
+  message: string;
+}
+
 function validateProviderEditor(
   provider: ZenXProviderProfile,
   apiKey: string,
   mode: "add" | "edit",
   hasApiKey: boolean,
-): string | null {
+): ProviderEditorIssue[] {
+  const issues: ProviderEditorIssue[] = [];
   if (provider.displayName.trim().length === 0)
-    return "Display name is required";
-  if (
-    provider.models.length === 0 ||
-    provider.models.some((model) => model.id.length === 0)
-  ) {
-    return "Every configured model row needs a model ID";
-  }
-  if (
-    new Set(provider.models.map((model) => model.id)).size !==
-    provider.models.length
-  ) {
-    return "Model IDs must be unique within this Provider profile";
-  }
-  if (
-    provider.models.some(
-      (model) =>
-        model.reasoningConfiguration === "manual" &&
-        (!model.supportedReasoningEfforts?.length ||
-          !model.supportedReasoningEfforts.includes(
-            model.defaultReasoningEffort ?? "",
-          )),
-    )
-  )
-    return "Manual reasoning configuration requires supported efforts and a valid default";
-  const missingContext = provider.models.find(
-    (model) =>
+    issues.push({
+      code: "display_name_missing",
+      field: "displayName",
+      message: "Enter a display name",
+    });
+  const seenModelIds = new Set<string>();
+  if (provider.models.length === 0)
+    issues.push({
+      code: "model_id_missing",
+      field: "addModel",
+      message: "Add at least one model",
+    });
+  provider.models.forEach((model, modelIndex) => {
+    const row = `Model ${modelIndex + 1} (${model.id || "no ID"})`;
+    if (model.id.length === 0) {
+      issues.push({
+        code: "model_id_missing",
+        field: "modelId",
+        modelIndex,
+        message: `Model ${modelIndex + 1}: enter a model ID`,
+      });
+    } else if (seenModelIds.has(model.id)) {
+      issues.push({
+        code: "model_id_duplicate",
+        field: "modelId",
+        modelIndex,
+        message: `${row}: use a unique model ID`,
+      });
+    }
+    seenModelIds.add(model.id);
+    if (model.reasoningConfiguration === "manual") {
+      if (!model.supportedReasoningEfforts?.length) {
+        issues.push({
+          code: "reasoning_efforts_missing",
+          field: "reasoningEfforts",
+          modelIndex,
+          message: `${row}: enter at least one supported reasoning effort`,
+        });
+      } else if (
+        !model.supportedReasoningEfforts.includes(
+          model.defaultReasoningEffort ?? "",
+        )
+      ) {
+        issues.push({
+          code: "reasoning_default_invalid",
+          field: "defaultReasoningEffort",
+          modelIndex,
+          message: `${row}: choose a default from the supported reasoning efforts`,
+        });
+      }
+    }
+    if (
       model.contextWindow === null ||
       !Number.isSafeInteger(model.contextWindow) ||
-      model.contextWindow <= 0,
-  );
-  if (missingContext !== undefined) {
-    return `Provider profile ${provider.providerProfileId} model ${missingContext.id} requires a positive context window`;
-  }
-  if (provider.type !== "openai-compatible") return null;
-  if (provider.name.trim().length === 0) return "Provider name is required";
+      model.contextWindow <= 0
+    ) {
+      issues.push({
+        code: "context_window_invalid",
+        field: "contextWindow",
+        modelIndex,
+        message: `${row}: enter a positive whole number for context window`,
+      });
+    }
+  });
+  if (provider.type !== "openai-compatible") return issues;
+  if (provider.name.trim().length === 0)
+    issues.push({
+      code: "provider_name_missing",
+      field: "providerName",
+      message: "Enter a provider name",
+    });
   if (mode === "add" && apiKey.trim().length === 0)
-    return "API key is required";
+    issues.push({
+      code: "api_key_missing",
+      field: "apiKey",
+      message: "Enter an API key",
+    });
   if (mode === "edit" && !hasApiKey && apiKey.trim().length === 0) {
-    return "API key is required because this profile has no saved key";
+    issues.push({
+      code: "api_key_missing",
+      field: "apiKey",
+      message: "Enter an API key because this profile has no saved key",
+    });
   }
   let url: URL;
   try {
     url = new URL(provider.baseUrl);
   } catch {
-    return "Base URL must be a valid URL";
+    issues.push({
+      code: "base_url_invalid",
+      field: "baseUrl",
+      message: "Enter a valid Base URL",
+    });
+    return issues;
   }
   const loopbackHttp =
     url.protocol === "http:" &&
     (url.hostname === "127.0.0.1" || url.hostname === "localhost");
   if (url.protocol !== "https:" && !loopbackHttp) {
-    return "Base URL must use HTTPS (loopback HTTP is allowed)";
+    issues.push({
+      code: "base_url_scheme_invalid",
+      field: "baseUrl",
+      message: "Base URL must use HTTPS (loopback HTTP is allowed)",
+    });
   }
   if (url.username.length > 0 || url.password.length > 0) {
-    return "Base URL must not contain credentials";
+    issues.push({
+      code: "base_url_credentials",
+      field: "baseUrl",
+      message: "Remove credentials from the Base URL",
+    });
   }
   if (url.search.length > 0 || url.hash.length > 0) {
-    return "Base URL must not contain a query or fragment";
+    issues.push({
+      code: "base_url_query_fragment",
+      field: "baseUrl",
+      message: "Remove the query or fragment from the Base URL",
+    });
   }
-  return null;
+  return issues;
 }
 
 function providerStatus(
@@ -3127,6 +3331,8 @@ function modelCapabilitySummary(model: ZenXModelCatalogEntry): string {
 
 function Field({
   autoFocus = false,
+  error,
+  id,
   label,
   value,
   onChange,
@@ -3135,6 +3341,8 @@ function Field({
   wide = false,
 }: {
   autoFocus?: boolean;
+  error?: string;
+  id?: string;
   label: string;
   value: string;
   onChange(value: string): void;
@@ -3147,11 +3355,19 @@ function Field({
       <span>{label}</span>
       <input
         autoFocus={autoFocus}
+        id={id}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error && id ? `${id}-error` : undefined}
         type={secret ? "password" : "text"}
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
       />
+      {error === undefined || id === undefined ? null : (
+        <small id={`${id}-error`} className="provider-field-error">
+          {error}
+        </small>
+      )}
     </label>
   );
 }
