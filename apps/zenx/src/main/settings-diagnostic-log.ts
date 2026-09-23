@@ -4,6 +4,7 @@ import { BoundedLocalDiagnosticLog } from "./bounded-diagnostic-log.js";
 export const providerValidationReasons = [
   "display_name_missing",
   "model_id_missing",
+  "model_id_too_long",
   "model_id_duplicate",
   "reasoning_efforts_missing",
   "reasoning_efforts_duplicate",
@@ -59,12 +60,6 @@ export type SettingsDiagnosticEvent =
       attemptId: string;
       operation: ProviderOperation;
       outcome: ProviderSaveOutcome;
-    }
-  | {
-      event: "provider-save-reconciled";
-      attemptId: string;
-      operation: ProviderOperation;
-      outcome: Exclude<ProviderSaveOutcome, "success">;
     };
 
 type DiagnosticRecord = SettingsDiagnosticEvent & { timestamp: string };
@@ -130,31 +125,13 @@ export function normalizeSettingsDiagnostic(
       outcome: value.outcome as ProviderSaveOutcome,
     };
   }
-  if (value.event === "provider-save-reconciled") {
-    if (
-      value.outcome !== "failed" &&
-      value.outcome !== "committed-error" &&
-      value.outcome !== "unconfirmed"
-    )
-      return null;
-    return {
-      timestamp: common.timestamp,
-      event: "provider-save-reconciled",
-      attemptId: common.attemptId,
-      operation: common.operation,
-      outcome: value.outcome,
-    };
-  }
   return null;
 }
 
 export function isRendererSettingsDiagnostic(input: unknown): boolean {
   if (input === null || typeof input !== "object") return false;
   const event = (input as { event?: unknown }).event;
-  return (
-    event === "provider-validation-rejected" ||
-    event === "provider-save-reconciled"
-  );
+  return event === "provider-validation-rejected";
 }
 
 export class SettingsDiagnosticLog {
@@ -217,16 +194,10 @@ export async function runDiagnosedProviderMutation<T>(options: {
         // A diagnostic classifier must not replace the mutation error.
       }
     }
-    const status = committed
-      ? await readAsyncSafely(options.configurationStatus)
-      : undefined;
     const outcome: ProviderSaveOutcome =
       !preflightPassed || rejectionCode !== undefined
         ? "failed"
-        : committed &&
-            (status === "applied" ||
-              status === "pending-restart" ||
-              status === "unchanged")
+        : committed
           ? "committed-error"
           : "unconfirmed";
     await recordSafely(options.log, {

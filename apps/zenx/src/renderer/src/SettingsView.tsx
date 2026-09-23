@@ -968,29 +968,7 @@ function ModelsPanel({
     message: string,
     mutation: () => Promise<PublicHostSettings>,
     committed: (value: PublicHostSettings) => boolean,
-    diagnosticAttemptId?: string,
   ): Promise<"success" | "committed-error" | "failed"> => {
-    const recordReconciled = (
-      outcome: "failed" | "committed-error" | "unconfirmed",
-    ) => {
-      if (
-        diagnosticAttemptId === undefined ||
-        (operation !== "provider-add" && operation !== "provider-edit")
-      )
-        return;
-      try {
-        void window.zenx.settings
-          .recordDiagnostic({
-            event: "provider-save-reconciled",
-            attemptId: diagnosticAttemptId,
-            operation: operation === "provider-add" ? "add" : "edit",
-            outcome,
-          })
-          .catch(() => undefined);
-      } catch {
-        // Diagnostics must not change the save result.
-      }
-    };
     setBusy(operation);
     setError(null);
     setStatus(null);
@@ -1013,17 +991,70 @@ function ModelsPanel({
           setError(
             `Settings were saved, but finalization failed: ${originalError}`,
           );
-          recordReconciled("committed-error");
           return "committed-error";
         }
         setError(originalError);
-        recordReconciled("unconfirmed");
       } catch (reconciliationReason) {
         setError(
           `Settings mutation failed: ${originalError}. Authoritative state could not be reconciled: ${describeError(reconciliationReason)}. Outcome is unknown.`,
         );
-        recordReconciled("unconfirmed");
       }
+      return "failed";
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const runProviderMutation = async (
+    operation: "provider-add" | "provider-edit",
+    message: string,
+    mutation: () => ReturnType<Window["zenx"]["settings"]["addProvider"]>,
+  ): Promise<"success" | "committed-error" | "failed"> => {
+    setBusy(operation);
+    setError(null);
+    setStatus(null);
+    try {
+      const reply = await mutation();
+      if (reply.ok) {
+        acceptSettings(reply.settings, message);
+        if (reply.outcome === "unconfirmed")
+          setError(
+            "Provider settings were saved, but applying them is unconfirmed. Check application status before using the provider.",
+          );
+        return "success";
+      }
+      if (reply.outcome === "committed-error") {
+        try {
+          const authoritative = await window.zenx.settings.get();
+          setSettings(authoritative);
+          setDraft(authoritative.profile);
+          setStatus(configurationSaveToast(authoritative));
+        } catch {
+          // Host confirmed the commit; a failed refresh does not undo it.
+        }
+        setError(
+          "Provider settings were saved, but finalization failed. Check application status before using the provider.",
+        );
+        return "committed-error";
+      }
+      const messageByCode = {
+        "revision-conflict":
+          "Another window changed settings. This provider was not saved. Your edits are still here; reload settings before trying again.",
+        "validation-rejected":
+          "This provider was not saved. Review its connection and model fields, then try again.",
+        "save-rejected":
+          "This provider was not saved. Check application status, then try again.",
+        "save-finalization-failed":
+          "Provider settings were saved, but finalization failed. Check application status before using the provider.",
+        "save-unconfirmed":
+          "Could not confirm whether this provider was saved. Check application status before trying again.",
+      } as const;
+      setError(messageByCode[reply.code]);
+      return "failed";
+    } catch {
+      setError(
+        "Could not confirm whether this provider was saved. Check application status before trying again.",
+      );
       return "failed";
     } finally {
       setBusy(null);
@@ -1259,7 +1290,7 @@ function ModelsPanel({
               logoUpload,
               diagnosticAttemptId,
             ) => {
-              const success = await runMutation(
+              const success = await runProviderMutation(
                 editor.mode === "add" ? "provider-add" : "provider-edit",
                 editor.mode === "add" ? "Provider added" : "Provider saved",
                 async () =>
@@ -1282,29 +1313,6 @@ function ModelsPanel({
                         },
                         diagnosticAttemptId,
                       ),
-                (authoritative) => {
-                  const current = authoritative.profile.providerProfiles.find(
-                    (candidate) =>
-                      candidate.providerProfileId ===
-                      provider.providerProfileId,
-                  );
-                  return (
-                    current !== undefined &&
-                    providerProfilesEquivalent(current, {
-                      ...provider,
-                      logoResource: current.logoResource,
-                    }) &&
-                    (logoUpload === null
-                      ? current.logoResource === undefined
-                      : logoUpload === undefined
-                        ? current.logoResource === editor.provider.logoResource
-                        : current.logoResource !== undefined &&
-                          authoritative.providerLogoDataUrls?.[
-                            current.providerProfileId
-                          ]?.split(",", 2)[1] === base64FromBytes(logoUpload))
-                  );
-                },
-                diagnosticAttemptId,
               );
               if (success !== "failed") setEditor(null);
               return success;
@@ -2653,6 +2661,7 @@ interface ProviderEditorIssue {
   code:
     | "display_name_missing"
     | "model_id_missing"
+    | "model_id_too_long"
     | "model_id_duplicate"
     | "reasoning_efforts_missing"
     | "reasoning_efforts_duplicate"
@@ -2699,13 +2708,22 @@ function validateProviderEditor(
       message: "Add at least one model",
     });
   provider.models.forEach((model, modelIndex) => {
-    const row = `Model ${modelIndex + 1} (${model.id || "no ID"})`;
+    const shortModelId =
+      model.id.length > 48 ? `${model.id.slice(0, 45)}…` : model.id;
+    const row = `Model ${modelIndex + 1} (${shortModelId || "no ID"})`;
     if (model.id.length === 0) {
       issues.push({
         code: "model_id_missing",
         field: "modelId",
         modelIndex,
         message: `Model ${modelIndex + 1}: enter a model ID`,
+      });
+    } else if (model.id.length > 512) {
+      issues.push({
+        code: "model_id_too_long",
+        field: "modelId",
+        modelIndex,
+        message: `Model ${modelIndex + 1}: model ID must be 512 characters or fewer`,
       });
     } else if (seenModelIds.has(model.id)) {
       issues.push({
@@ -2849,41 +2867,6 @@ function providerLogoKind(provider: ZenXProviderProfile) {
   if (provider.type === "fake") return "local";
   if (provider.type === "openai-subscription") return "openai";
   return providerLogoKindForIdentity(provider.name, provider.displayName);
-}
-
-function providerProfilesEquivalent(
-  left: ZenXProviderProfile,
-  right: ZenXProviderProfile,
-): boolean {
-  const normalize = (provider: ZenXProviderProfile): ZenXProviderProfile => {
-    if (provider.type === "openai-compatible") {
-      return {
-        ...provider,
-        providerProfileId: provider.providerProfileId.trim(),
-        displayName: provider.displayName.trim(),
-        models: provider.models.map((model) => ({
-          ...model,
-          id: model.id.trim(),
-          displayName: model.displayName.trim(),
-          description: model.description.trim(),
-        })),
-        name: provider.name.trim(),
-        baseUrl: provider.baseUrl.trim().replace(/\/$/u, ""),
-      };
-    }
-    return {
-      ...provider,
-      providerProfileId: provider.providerProfileId.trim(),
-      displayName: provider.displayName.trim(),
-      models: provider.models.map((model) => ({
-        ...model,
-        id: model.id.trim(),
-        displayName: model.displayName.trim(),
-        description: model.description.trim(),
-      })),
-    };
-  };
-  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
 }
 
 function modelReferenceValue(reference: ZenXModelReference): string {

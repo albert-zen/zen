@@ -26,6 +26,10 @@ test("renderer cannot submit a forged Host save outcome", () => {
     false,
   );
   assert.equal(
+    isRendererSettingsDiagnostic({ event: "provider-save-reconciled" }),
+    false,
+  );
+  assert.equal(
     isRendererSettingsDiagnostic({ event: "provider-validation-rejected" }),
     true,
   );
@@ -358,8 +362,8 @@ test("host outcome distinguishes rejected, committed error, and unconfirmed save
       },
       {
         ok: false,
-        outcome: "unconfirmed",
-        code: "save-unconfirmed",
+        outcome: "committed-error",
+        code: "save-finalization-failed",
         attemptId,
       },
       {
@@ -384,7 +388,7 @@ test("host outcome distinguishes rejected, committed error, and unconfirmed save
         "unconfirmed",
         "failed",
         "committed-error",
-        "unconfirmed",
+        "committed-error",
         "unconfirmed",
       ],
     );

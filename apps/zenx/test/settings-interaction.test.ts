@@ -680,7 +680,7 @@ test("invalid Logo selection blocks submit instead of reusing an earlier upload"
   }
 });
 
-test("uploaded Logo reconciles a saved Provider after Host startup fails", async () => {
+test("uploaded Logo refreshes a Host-confirmed save after startup fails", async () => {
   let authoritative = settings;
   let calls = 0;
   const png = Buffer.from(
@@ -690,7 +690,7 @@ test("uploaded Logo reconciles a saved Provider after Host startup fails", async
   const harness = await mountSettings("models", {
     initialSettings: settings,
     get: async () => authoritative,
-    addProvider: async (provider) => {
+    addProvider: async (provider, _apiKey, _revision, _logo, attemptId) => {
       calls += 1;
       authoritative = {
         ...settings,
@@ -711,7 +711,12 @@ test("uploaded Logo reconciles a saved Provider after Host startup fails", async
           pendingRestart: [],
         },
       };
-      throw new Error("Host startup failed");
+      return {
+        ok: false,
+        outcome: "committed-error",
+        code: "save-finalization-failed",
+        attemptId: attemptId!,
+      };
     },
   });
   try {
@@ -745,14 +750,14 @@ test("uploaded Logo reconciles a saved Provider after Host startup fails", async
     );
     assert.match(
       document.body.textContent ?? "",
-      /Settings were saved, but finalization failed/u,
+      /Provider settings were saved, but finalization failed/u,
     );
   } finally {
     await unmount(harness);
   }
 });
 
-test("removed Logo reconciles a saved Provider after Host startup fails", async () => {
+test("removed Logo refreshes a Host-confirmed save after startup fails", async () => {
   const original: PublicHostSettings = {
     ...multiProviderSettings,
     profile: {
@@ -771,7 +776,7 @@ test("removed Logo reconciles a saved Provider after Host startup fails", async 
   const harness = await mountSettings("models", {
     initialSettings: original,
     get: async () => authoritative,
-    editProvider: async (id, provider, options) => {
+    editProvider: async (id, provider, options, attemptId) => {
       calls += 1;
       assert.equal(options?.logoUpload, null);
       authoritative = {
@@ -793,7 +798,12 @@ test("removed Logo reconciles a saved Provider after Host startup fails", async 
           pendingRestart: [],
         },
       };
-      throw new Error("Host startup failed");
+      return {
+        ok: false,
+        outcome: "committed-error",
+        code: "save-finalization-failed",
+        attemptId: attemptId!,
+      };
     },
   });
   try {
@@ -808,7 +818,7 @@ test("removed Logo reconciles a saved Provider after Host startup fails", async 
     );
     assert.match(
       document.body.textContent ?? "",
-      /Settings were saved, but finalization failed/u,
+      /Provider settings were saved, but finalization failed/u,
     );
   } finally {
     await unmount(harness);
@@ -1793,6 +1803,24 @@ interface Harness {
   previous: Record<string, unknown>;
 }
 
+type ProviderReply = Awaited<
+  ReturnType<Window["zenx"]["settings"]["addProvider"]>
+>;
+
+function providerReply(
+  value: PublicHostSettings | ProviderReply,
+  attemptId?: string,
+): ProviderReply {
+  if ("ok" in value) return value;
+  return {
+    ok: true,
+    settings: value,
+    outcome:
+      value.configuration?.status === "unconfirmed" ? "unconfirmed" : "success",
+    attemptId: attemptId ?? globalThis.crypto.randomUUID(),
+  };
+}
+
 async function mountSettings(
   initialTab: SettingsTab,
   options: {
@@ -1809,13 +1837,14 @@ async function mountSettings(
       apiKey?: string,
       baseRevision?: number,
       logoUpload?: Uint8Array,
-    ): Promise<PublicHostSettings>;
+      diagnosticAttemptId?: string,
+    ): Promise<PublicHostSettings | ProviderReply>;
     editProvider?(
       providerProfileId: string,
       provider: ZenXProviderProfile,
       options?: ZenXProviderEditOptions,
       diagnosticAttemptId?: string,
-    ): Promise<PublicHostSettings>;
+    ): Promise<PublicHostSettings | ProviderReply>;
     recordDiagnostic?: Window["zenx"]["settings"]["recordDiagnostic"];
     deleteProvider?(
       providerProfileId: string,
@@ -1876,16 +1905,37 @@ async function mountSettings(
           ...initialSettings,
           profile: { ...initialSettings.profile, ...profile },
         })),
-      addProvider:
-        options.addProvider ??
-        (async () => {
-          throw new Error("Unexpected addProvider call");
-        }),
-      editProvider:
-        options.editProvider ??
-        (async () => {
-          throw new Error("Unexpected editProvider call");
-        }),
+      addProvider: async (
+        provider: ZenXProviderProfile,
+        apiKey?: string,
+        baseRevision?: number,
+        logoUpload?: Uint8Array,
+        diagnosticAttemptId?: string,
+      ) =>
+        providerReply(
+          await (
+            options.addProvider ??
+            (async () => {
+              throw new Error("Unexpected addProvider call");
+            })
+          )(provider, apiKey, baseRevision, logoUpload, diagnosticAttemptId),
+          diagnosticAttemptId,
+        ),
+      editProvider: async (
+        providerProfileId: string,
+        provider: ZenXProviderProfile,
+        optionsValue?: ZenXProviderEditOptions,
+        diagnosticAttemptId?: string,
+      ) =>
+        providerReply(
+          await (
+            options.editProvider ??
+            (async () => {
+              throw new Error("Unexpected editProvider call");
+            })
+          )(providerProfileId, provider, optionsValue, diagnosticAttemptId),
+          diagnosticAttemptId,
+        ),
       recordDiagnostic: options.recordDiagnostic ?? (async () => undefined),
       deleteProvider:
         options.deleteProvider ??
@@ -2560,6 +2610,49 @@ test("duplicate manual reasoning efforts stay in the editor and emit a field dia
       },
     );
     assert.equal(JSON.stringify(events).includes("shared-model"), false);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("oversized model ID is rejected at its field before Host validation", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  const events: Parameters<
+    Window["zenx"]["settings"]["recordDiagnostic"]
+  >[0][] = [];
+  let saves = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    recordDiagnostic: async (event) => {
+      events.push(event);
+    },
+    editProvider: async () => {
+      saves += 1;
+      return initial;
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await changeControl(requiredInput("Model 1"), "x".repeat(513));
+    await click(exactButtonRequired("Save provider"));
+    assert.equal(saves, 0);
+    assert.equal(requiredInput("Model 1").getAttribute("aria-invalid"), "true");
+    assert.match(
+      document.querySelector(".provider-editor-error-summary")?.textContent ??
+        "",
+      /model ID must be 512 characters or fewer/u,
+    );
+    assert.equal(
+      events.some(
+        (event) =>
+          "reason" in event &&
+          event.reason === "model_id_too_long" &&
+          event.modelIndex === 0,
+      ),
+      true,
+    );
+    assert.equal(JSON.stringify(events).includes("x".repeat(513)), false);
   } finally {
     await unmount(harness);
   }
