@@ -317,6 +317,39 @@ test("detaching an Agent session makes its in-flight inspection unknown without 
   }
 });
 
+test("detaching an Agent session cannot deliver an in-flight live frame", async () => {
+  const fixture = await sharedFixture();
+  try {
+    const humanTabs = fixture.browser.command(
+      fixture.sender as never,
+      "thread-a",
+      "new",
+      undefined,
+      "https://example.test/start",
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    const tabId = humanTabs[0]!.id;
+    const web = fixture.views[0]!.webContents;
+    fixture.browser.bindThreadSession("agent-session", "thread-a");
+    const pendingCapture = deferred<FakeImage>();
+    web.nextCapture = pendingCapture;
+    let frames = 0;
+    const stop = fixture.browser.observeTab("agent-session", tabId, (event) => {
+      if (event.type === "frame") frames += 1;
+    });
+    try {
+      fixture.browser.closeSession("agent-session");
+      pendingCapture.resolve(new FakeImage());
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(frames, 0);
+    } finally {
+      stop();
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
 async function sharedFixture() {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-shared-browser-race-"),
@@ -418,6 +451,7 @@ class FakeWebContents extends EventEmitter {
   #destroyed = false;
   readonly loadCalls: string[] = [];
   nextLoad?: ReturnType<typeof deferred<void>>;
+  nextCapture?: ReturnType<typeof deferred<FakeImage>>;
   constructor(readonly id = 1) {
     super();
   }
@@ -444,6 +478,9 @@ class FakeWebContents extends EventEmitter {
     return this.#destroyed;
   }
   capturePage() {
+    const next = this.nextCapture;
+    this.nextCapture = undefined;
+    if (next !== undefined) return next.promise;
     return Promise.resolve(new FakeImage());
   }
   setWindowOpenHandler() {

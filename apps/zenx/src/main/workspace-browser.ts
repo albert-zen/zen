@@ -425,7 +425,9 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
             return await tab.view.webContents.capturePage();
           }),
         current: () =>
-          this.#tabs.get(tab.id) === tab && !tab.view.webContents.isDestroyed()
+          this.#sessionThreads.get(sessionId) === tab.threadId &&
+          this.#tabs.get(tab.id) === tab &&
+          !tab.view.webContents.isDestroyed()
             ? tab.documentVersion
             : undefined,
       },
