@@ -155,6 +155,69 @@ test("Thread warns for disconnected Connected Chrome and clears on focus refresh
   dom.window.close();
 });
 
+test("Thread notices a Chrome disconnect while ZenX stays focused", async () => {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+    pretendToBeVisual: true,
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  let connected = true;
+  let poll: (() => void) | undefined;
+  dom.window.setInterval = ((callback: () => void) => {
+    poll = callback;
+    return 1;
+  }) as typeof dom.window.setInterval;
+  dom.window.clearInterval = (() => undefined) as typeof dom.window.clearInterval;
+  Object.defineProperty(dom.window, "zenx", {
+    value: {
+      chromeBridge: {
+        get: async () => ({
+          effectiveMode: "user-session",
+          connector: "chrome-extension",
+          nativeHostRegistered: true,
+          connection: {
+            state: connected ? "connected" : "waiting",
+            tabCount: connected ? 1 : 0,
+          },
+        }),
+      },
+    },
+  });
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () =>
+    root.render(
+      React.createElement(AgentReadinessNotice, {
+        pluginSnapshot: snapshot(false, true),
+        onOpenPlugins: () => {},
+        onOpenGeneral: () => {},
+      }),
+    ),
+  );
+  await act(async () => {
+    await Promise.resolve();
+  });
+  assert.equal(
+    dom.window.document.querySelector('[aria-label="Agent tool readiness"]'),
+    null,
+  );
+  assert.ok(poll);
+  connected = false;
+  await act(async () => {
+    poll?.();
+    await Promise.resolve();
+  });
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /Connected Chrome.*waiting/su,
+  );
+  await act(async () => root.unmount());
+  dom.window.close();
+});
+
 test("isolated Browser and disabled plugins never report Chrome setup", async () => {
   const dom = new JSDOM('<div id="root"></div>', {
     url: "https://zenx.local/",

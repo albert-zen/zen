@@ -33,15 +33,32 @@ export function AgentReadinessNotice({
   const [revision, setRevision] = useState(0);
 
   useEffect(() => {
+    if (!computerEnabled) setComputer({ kind: "loading" });
+  }, [computerEnabled]);
+
+  useEffect(() => {
+    if (!browserEnabled) setBrowser({ kind: "loading" });
+  }, [browserEnabled]);
+
+  useEffect(() => {
+    if (!computerEnabled && !browserEnabled) return;
     const refresh = () => setRevision((value) => value + 1);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
     window.addEventListener("focus", refresh);
-    return () => window.removeEventListener("focus", refresh);
-  }, []);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    const timer = window.setInterval(refreshWhenVisible, 3000);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.clearInterval(timer);
+    };
+  }, [computerEnabled, browserEnabled]);
 
   useEffect(() => {
     let current = true;
     if (computerEnabled) {
-      setComputer({ kind: "loading" });
       void window.zenx.computerReadiness.get().then(
         (value) => {
           if (current) setComputer({ kind: "ready", value });
@@ -52,7 +69,6 @@ export function AgentReadinessNotice({
       );
     }
     if (browserEnabled) {
-      setBrowser({ kind: "loading" });
       void window.zenx.chromeBridge.get().then(
         (value) => {
           if (current) setBrowser({ kind: "ready", value });
