@@ -38,6 +38,7 @@ test("Computer enablement first explains requested access and keeps OS setup exp
   });
   const enabled: Array<[string, boolean]> = [];
   const opened: string[] = [];
+  let accessProbes = 0;
   const installed: ZenXPluginSnapshot = {
     ...emptyPluginSnapshot,
     plugins: [
@@ -71,12 +72,19 @@ test("Computer enablement first explains requested access and keeps OS setup exp
         }),
       },
       computerReadiness: {
-        get: async () => ({
-          platform: "darwin",
-          accessibility: "needs-setup",
-          screenRecording: "denied",
-          foregroundControlEnabled: false,
-        }),
+        probe: async () => {
+          accessProbes += 1;
+          return {
+            platform: "darwin",
+            accessibility: "granted",
+            screenRecording: "granted",
+            foregroundControlEnabled: false,
+            verification: {
+              accessibility: { state: "needs-setup" },
+              screenCapture: { state: "ready" },
+            },
+          };
+        },
         openSettings: async (kind: string) => {
           opened.push(kind);
         },
@@ -123,6 +131,11 @@ test("Computer enablement first explains requested access and keeps OS setup exp
     /Capture a targeted window/u,
   );
   assert.match(dom.window.document.body.textContent ?? "", /Needs setup/u);
+  assert.equal(accessProbes, 1);
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /native helper can inspect open windows/u,
+  );
   await act(async () => {
     button("Open Accessibility settings").click();
     await Promise.resolve();

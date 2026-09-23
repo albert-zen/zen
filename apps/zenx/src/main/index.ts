@@ -4,6 +4,7 @@ import { readZenXConnectionDescriptor } from "../protocol-client/connection-desc
 import {
   app,
   BrowserWindow,
+  desktopCapturer,
   dialog,
   ipcMain,
   Menu,
@@ -12,6 +13,7 @@ import {
   shell,
   systemPreferences,
 } from "electron";
+import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { windowBackdropOptions } from "./window-appearance.js";
 import { FileAttachmentStore } from "../../../../src/attachment.js";
@@ -33,7 +35,13 @@ import type {
   ZenXSidebarOrder,
 } from "./host-profile.js";
 import { ZenXSettingsService } from "./settings-service.js";
-import { computerReadinessSnapshot } from "./computer-readiness.js";
+import {
+  computerReadinessSnapshot,
+  probeComputerAccess,
+  type ZenXComputerAccessVerification,
+  type ZenXComputerReadinessSnapshot,
+} from "./computer-readiness.js";
+import { ElectronMacComputerBackend } from "./capabilities/computer-provider.js";
 import {
   withZenXProviderTransports,
   zenXProviderDiscoveryTransport,
@@ -1288,7 +1296,10 @@ function installSettingsIpc(
     ipcChannels.settingsGet,
     async () => await settings.publicSettings(),
   );
-  ipcMain.handle(ipcChannels.computerReadinessGet, () => {
+  let computerVerification: ZenXComputerAccessVerification | undefined;
+  let verificationStatus: string | undefined;
+  let pendingComputerProbe: Promise<ZenXComputerReadinessSnapshot> | undefined;
+  const readComputerReadiness = (): ZenXComputerReadinessSnapshot => {
     let accessibilityTrusted: boolean | undefined;
     let screenRecording: string | undefined;
     if (process.platform === "darwin") {
@@ -1304,12 +1315,53 @@ function installSettingsIpc(
         // A failed status check is not evidence of denied capture.
       }
     }
-    return computerReadinessSnapshot({
+    const snapshot = computerReadinessSnapshot({
       platform: process.platform,
       accessibilityTrusted,
       screenRecording,
       foregroundControlEnabled: settings.computerForegroundControlEnabled(),
     });
+    const status = `${snapshot.accessibility}:${snapshot.screenRecording}`;
+    if (verificationStatus !== status) computerVerification = undefined;
+    return computerVerification === undefined
+      ? snapshot
+      : { ...snapshot, verification: computerVerification };
+  };
+  ipcMain.handle(ipcChannels.computerReadinessGet, readComputerReadiness);
+  ipcMain.handle(ipcChannels.computerReadinessProbe, () => {
+    if (pendingComputerProbe !== undefined) return pendingComputerProbe;
+    pendingComputerProbe = (async () => {
+      const verification = await probeComputerAccess(readComputerReadiness(), {
+        accessibility: async () => {
+          const backend = new ElectronMacComputerBackend(
+            join(app.getPath("temp"), `zenx-readiness-${randomUUID()}`),
+          );
+          try {
+            await backend.listWindows();
+          } finally {
+            await backend.close().catch(() => undefined);
+          }
+        },
+        screenCapture: async () => {
+          const sources = await desktopCapturer.getSources({
+            types: ["window"],
+            thumbnailSize: { width: 32, height: 32 },
+            fetchWindowIcons: false,
+          });
+          if (!sources.some((source) => !source.thumbnail.isEmpty()))
+            throw new Error("No window preview was available for capture");
+        },
+        screenRecordingStatus: () =>
+          systemPreferences.getMediaAccessStatus("screen"),
+      });
+      const updated = readComputerReadiness();
+      computerVerification = verification;
+      verificationStatus = `${updated.accessibility}:${updated.screenRecording}`;
+      return { ...updated, verification };
+    })().finally(() => {
+      pendingComputerProbe = undefined;
+    });
+    return pendingComputerProbe;
   });
   ipcMain.handle(
     ipcChannels.computerReadinessOpenSettings,

@@ -35,7 +35,8 @@ export function PluginAccessReview({
     setError(null);
     const operation =
       pluginId === "computer"
-        ? window.zenx.computerReadiness?.get()
+        ? (window.zenx.computerReadiness?.probe?.() ??
+          window.zenx.computerReadiness?.get())
         : window.zenx.chromeBridge?.get();
     if (operation === undefined) {
       setError("This app version cannot read current setup status.");
@@ -129,18 +130,25 @@ export function PluginAccessReview({
                 ? loading
                   ? "Checking…"
                   : "Unknown"
-                : computer.accessibility === "granted"
-                  ? "ZenX app allowed"
-                  : computer.accessibility === "needs-setup"
-                    ? "Needs setup"
-                    : computer.accessibility === "not-applicable"
-                      ? "Not applicable"
-                      : "Unknown"
+                : computer.verification !== undefined
+                  ? accessCheckLabel(computer.verification.accessibility.state)
+                  : computer.accessibility === "granted"
+                    ? "Allowed by macOS"
+                    : computer.accessibility === "needs-setup"
+                      ? "Needs setup"
+                      : computer.accessibility === "not-applicable"
+                        ? "Not applicable"
+                        : "Unknown"
             }
-            detail="Needed to inspect and act on targeted controls. The native helper checks its own access again when used."
+            detail={
+              computer?.verification?.accessibility.detail ??
+              "ZenX checks whether its native helper can inspect open windows. No window details are saved by this check."
+            }
             action={
               computer?.platform === "darwin" &&
-              computer.accessibility !== "granted" ? (
+              (computer.verification?.accessibility.state === "needs-setup" ||
+                (computer.verification === undefined &&
+                  computer.accessibility !== "granted")) ? (
                 <button
                   type="button"
                   className="secondary-button"
@@ -157,12 +165,19 @@ export function PluginAccessReview({
             value={
               computer === null && !loading
                 ? "Unknown"
-                : screenRecordingLabel(computer?.screenRecording)
+                : computer?.verification !== undefined
+                  ? accessCheckLabel(computer.verification.screenCapture.state)
+                  : screenRecordingLabel(computer?.screenRecording)
             }
-            detail="Needed for targeted window images. A capture failure can also have another cause."
+            detail={
+              computer?.verification?.screenCapture.detail ??
+              "ZenX checks a small window preview and discards it immediately. Screen access is needed for targeted images."
+            }
             action={
               computer?.platform === "darwin" &&
-              computer.screenRecording !== "granted" ? (
+              (computer.verification?.screenCapture.state === "needs-setup" ||
+                (computer.verification === undefined &&
+                  computer.screenRecording !== "granted")) ? (
                 <button
                   type="button"
                   className="secondary-button"
@@ -199,27 +214,26 @@ export function PluginAccessReview({
             }
           />
           {computer?.platform === "darwin" &&
-          (computer.accessibility !== "granted" ||
-            computer.screenRecording !== "granted") ? (
+          (needsAccessibilitySetup(computer) || needsScreenSetup(computer)) ? (
             <div className="plugin-access-steps">
               <strong>Complete macOS setup</strong>
               <ol>
-                {computer.accessibility === "granted" ? null : (
+                {!needsAccessibilitySetup(computer) ? null : (
                   <li>
                     In System Settings → Privacy & Security → Accessibility,
                     turn on the current ZenX app. If it is absent, click Add (+)
                     and choose the ZenX.app you launched.
                   </li>
                 )}
-                {computer.screenRecording === "granted" ? null : (
+                {!needsScreenSetup(computer) ? null : (
                   <li>
                     In Screen & System Audio Recording, turn on ZenX for screen
                     access. If absent, click Add (+) and choose the same app.
                   </li>
                 )}
                 <li>
-                  Relaunch ZenX if macOS asks, then return and refresh status.
-                  The native helper checks its own access when used.
+                  Relaunch ZenX if macOS asks, then return here. ZenX checks
+                  both access paths again when this page opens.
                 </li>
               </ol>
             </div>
@@ -309,6 +323,41 @@ function screenRecordingLabel(
   }
 }
 
+function accessCheckLabel(
+  state: NonNullable<
+    ZenXComputerReadinessSnapshot["verification"]
+  >["accessibility"]["state"],
+): string {
+  switch (state) {
+    case "ready":
+      return "Verified";
+    case "needs-setup":
+      return "Needs setup";
+    case "failed":
+      return "Check failed";
+    case "not-applicable":
+      return "Not applicable";
+    case "unknown":
+      return "Could not verify";
+  }
+}
+
+function needsAccessibilitySetup(
+  computer: ZenXComputerReadinessSnapshot,
+): boolean {
+  return computer.verification === undefined
+    ? computer.accessibility === "needs-setup"
+    : computer.verification.accessibility.state === "needs-setup";
+}
+
+function needsScreenSetup(computer: ZenXComputerReadinessSnapshot): boolean {
+  return computer.verification === undefined
+    ? computer.screenRecording === "denied" ||
+        computer.screenRecording === "restricted" ||
+        computer.screenRecording === "not-determined"
+    : computer.verification.screenCapture.state === "needs-setup";
+}
+
 function browserStatusLabel(
   value: ChromeBridgeSettingsSnapshot | null,
 ): string {
@@ -317,7 +366,7 @@ function browserStatusLabel(
   if (value.connection.state === "connected") return "Connected";
   if (value.connector === "external-cdp") return "External endpoint configured";
   if (value.connector === "inactive") return "Connector unavailable";
-  return value.nativeHostRegistered ? "Waiting for Chrome" : "Needs setup";
+  return value.nativeHostRegistered ? "Chrome not connected" : "Needs setup";
 }
 
 function browserStatusDetail(

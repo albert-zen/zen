@@ -263,6 +263,7 @@ declare global {
       };
       computerReadiness: {
         get(): Promise<ZenXComputerReadinessSnapshot>;
+        probe(): Promise<ZenXComputerReadinessSnapshot>;
         openSettings(kind: "accessibility" | "screen-recording"): Promise<void>;
       };
       browserObservation: {

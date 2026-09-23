@@ -433,6 +433,8 @@ contextBridge.exposeInMainWorld("zenx", {
   computerReadiness: {
     get: async (): Promise<ZenXComputerReadinessSnapshot> =>
       await ipcRenderer.invoke(ipcChannels.computerReadinessGet),
+    probe: async (): Promise<ZenXComputerReadinessSnapshot> =>
+      await ipcRenderer.invoke(ipcChannels.computerReadinessProbe),
     openSettings: async (
       kind: "accessibility" | "screen-recording",
     ): Promise<void> =>
