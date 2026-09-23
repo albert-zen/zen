@@ -507,7 +507,7 @@ export function AuxiliaryPanel({
           aria-pressed={expanded}
           onClick={() => setExpanded((value) => !value)}
         >
-          <Icon name={expanded ? "window-restore" : "expand"} />
+          <Icon name={expanded ? "minimize" : "maximize"} />
         </button>
         <button
           type="button"

@@ -16,6 +16,8 @@ export type IconName =
   | "computer"
   | "compress"
   | "expand"
+  | "maximize"
+  | "minimize"
   | "chip"
   | "check"
   | "chevron-down"
@@ -107,6 +109,18 @@ const paths: Record<IconName, ReactNode> = {
   plus: <path d="M8 3v10M3 8h10" />,
   "arrow-down": <path d="M8 2.2v11.2m-4-4 4 4 4-4" />,
   expand: <path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" />,
+  maximize: (
+    <>
+      <path d="M6.25 6.25 2.5 2.5M2.5 5.75V2.5h3.25" />
+      <path d="m9.75 9.75 3.75 3.75M10.25 13.5h3.25v-3.25" />
+    </>
+  ),
+  minimize: (
+    <>
+      <path d="m2.5 2.5 3.75 3.75M3 6.25h3.25V3" />
+      <path d="m13.5 13.5-3.75-3.75M13 9.75H9.75V13" />
+    </>
+  ),
   compress: <path d="M2 1v4h4M14 1v4h-4M2 15v-4h4M14 15v-4h-4M5 8h6" />,
   chip: (
     <>
