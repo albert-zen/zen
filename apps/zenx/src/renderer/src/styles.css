@@ -480,8 +480,7 @@ a:focus-visible {
 }
 .sidebar-header {
   flex: 0 0 auto;
-  padding: 8px 12px 5px;
-  border-bottom: 1px solid var(--color-border-subtle);
+  padding: 4px 8px 0;
 }
 .brand,
 .sidebar-view-head,
@@ -635,7 +634,7 @@ a:focus-visible {
   grid-template-columns: 20px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  margin: 0 0 3px;
+  margin: 0;
   padding: 0 10px;
   border: 0;
   border-radius: 9px;
@@ -731,7 +730,7 @@ a:focus-visible {
   overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: var(--border-control) transparent;
-  padding: 10px 8px 18px;
+  padding: 0 8px 18px;
 }
 .sidebar-empty {
   padding: 24px 12px;
