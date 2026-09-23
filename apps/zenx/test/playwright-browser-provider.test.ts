@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 
@@ -10,6 +11,27 @@ import {
   PlaywrightCliBrowserBackend,
   playwrightSelectActionCode,
 } from "../src/main/capabilities/playwright-browser-provider.js";
+
+const ONE_PIXEL_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+test("Playwright screenshot decodes the JSON-stringified CLI result", async () => {
+  const backend = new PlaywrightCliBrowserBackend({
+    executable: "/opt/playwright-cli",
+    runner: new FakePlaywrightRunner(),
+    cwd: "/tmp/zenx-playwright",
+  });
+  try {
+    const tab = await backend.open("screenshot", "https://example.com/");
+    const inspection = await backend.inspect("screenshot", tab.tabId);
+    assert.deepEqual(
+      await readFile(inspection.screenshot.artifactPath),
+      Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"),
+    );
+  } finally {
+    await backend.close();
+  }
+});
 
 test("Playwright page scroll rejects stale observations and dispatches one bounded page mutation", async () => {
   const runner = new FakePlaywrightRunner();
@@ -467,8 +489,7 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
       this.#finishDelayedClose?.();
     } else if (command === "run-code" && args[3]?.includes("screenshot")) {
       response = {
-        result:
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        result: JSON.stringify(ONE_PIXEL_PNG_BASE64),
       };
     } else if (command === "run-code") {
       response = args[3]?.includes("aria-ref=")
