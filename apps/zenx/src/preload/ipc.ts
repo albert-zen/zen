@@ -62,6 +62,7 @@ export const ipcChannels = {
   marketplaceGet: "zenx:marketplace:get",
   pluginsGet: "zenx:plugins:get",
   computerReadinessGet: "zenx:computer-readiness:get",
+  computerReadinessProbe: "zenx:computer-readiness:probe",
   computerReadinessOpenSettings: "zenx:computer-readiness:open-settings",
   pluginsSetEnabled: "zenx:plugins:set-enabled",
   pluginsSelectTarball: "zenx:plugins:select-tarball",

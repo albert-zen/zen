@@ -16,6 +16,7 @@ import {
   type ContextCompactionConfig,
 } from "../../../../src/context-compaction.js";
 import type { ZenXHostConfig } from "./host-messages.js";
+import { validProviderLogoResource } from "./provider-logo-resource.js";
 import { resolveProjectPath } from "./project-projection.js";
 import type { ToolPresentation } from "../../../../src/tool-presentation.js";
 import {
@@ -37,6 +38,7 @@ export type ZenXProviderConnection =
 export type ZenXProviderProfile = ZenXProviderConnection & {
   providerProfileId: string;
   models: ZenXModelCatalogEntry[];
+  logoResource?: string;
 };
 
 export type ZenXModelCatalogEntry = Omit<ModelCatalogEntry, "isDefault"> & {
@@ -115,6 +117,7 @@ export interface ZenXProviderEditOptions {
   defaultModel?: ZenXModelReference;
   titleModel?: ZenXModelReference;
   apiKey?: string;
+  logoUpload?: Uint8Array | null;
 }
 
 export type ZenXProviderDeleteReplacements = Omit<
@@ -133,6 +136,7 @@ export interface PublicHostSettings {
   configuration?: ConfigurationSaveResult;
   rtk?: { available: boolean; reason?: string };
   profile: ZenXHostProfile;
+  providerLogoDataUrls?: Record<string, string>;
   /** Credential presence for the profile referenced by defaultModel. */
   hasApiKey: boolean;
   apiKeyProviderProfileIds: string[];
@@ -666,7 +670,16 @@ function validateProviderProfile(value: unknown): ZenXProviderProfile {
     ...validateProviderConnection(value),
     providerProfileId: providerProfileIdentifier(value.providerProfileId),
     models: validateStructuredModelCatalog(value.models),
+    ...(value.logoResource === undefined
+      ? {}
+      : { logoResource: providerLogoResource(value.logoResource) }),
   };
+}
+
+function providerLogoResource(value: unknown): string {
+  if (!validProviderLogoResource(value))
+    throw new Error("ZenX Provider Logo resource is invalid");
+  return value;
 }
 
 function validateLegacyProviderProfileV2(

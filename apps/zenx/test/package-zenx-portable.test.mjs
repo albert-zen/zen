@@ -69,6 +69,10 @@ test("uses a stable macOS bundle ID and fail-closed ad-hoc signing by default", 
   assert.deepEqual(macOsPackagerOptions("linux", "app"), {});
   const adHoc = macOsPackagerOptions("darwin", "app");
   assert.equal(adHoc.appBundleId, "com.electron.zenx");
+  assert.equal(
+    adHoc.extendInfo.NSScreenCaptureUsageDescription,
+    "ZenX captures the target window for Computer screenshot tools.",
+  );
   assert.deepEqual(adHoc.osxSign, {
     identity: "-",
     identityValidation: false,

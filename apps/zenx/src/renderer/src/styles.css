@@ -479,8 +479,8 @@ a:focus-visible {
   transform: translateX(-12px);
 }
 .sidebar-header {
-  padding: 8px 12px 12px;
-  border-bottom: 1px solid var(--color-border-subtle);
+  flex: 0 0 auto;
+  padding: 4px 8px 0;
 }
 .brand,
 .sidebar-view-head,
@@ -604,7 +604,7 @@ a:focus-visible {
   border: 0;
   border-radius: 9px;
   background: transparent;
-  color: var(--text-3);
+  color: var(--color-text-primary);
   font-size: 12px;
   text-align: left;
 }
@@ -634,7 +634,7 @@ a:focus-visible {
   grid-template-columns: 20px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  margin: 0 0 3px;
+  margin: 0;
   padding: 0 10px;
   border: 0;
   border-radius: 9px;
@@ -730,7 +730,7 @@ a:focus-visible {
   overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: var(--border-control) transparent;
-  padding: 10px 8px 18px;
+  padding: 0 8px 18px;
 }
 .sidebar-empty {
   padding: 24px 12px;
@@ -1112,11 +1112,25 @@ a:focus-visible {
 }
 .thread-title > span:first-child,
 .model-line > span:last-child,
-.thread-model > span:not(.provider-logo) {
+.thread-model-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.thread-model-name {
+  flex: 0 1 auto;
+}
+.thread-state-inline {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+}
+.sidebar[data-thread-density="detailed"] .thread-title-status {
+  display: none;
 }
 .thread-model .provider-logo {
   width: 14px;
@@ -1823,7 +1837,7 @@ a:focus-visible {
   display: grid;
   max-height: min(440px, 60vh);
   overflow: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior-y: auto;
   gap: 1px;
   margin: 2px 0;
   padding: 2px 4px 2px 0;
@@ -1995,7 +2009,7 @@ a:focus-visible {
 .trace-output {
   max-height: 260px;
   overflow: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior-y: auto;
   padding: 10px 12px;
   border-top: 1px solid var(--border-soft);
 }
@@ -4533,6 +4547,23 @@ a:focus-visible {
   display: grid;
   gap: 7px;
 }
+.plugin-access-steps {
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  color: var(--text-2);
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
+}
+.plugin-access-steps strong {
+  color: var(--text-1);
+}
+.plugin-access-steps ol {
+  display: grid;
+  gap: 5px;
+  margin: 6px 0 0;
+  padding-left: 19px;
+}
 .plugin-access-status [role="status"] {
   display: inline-block;
   margin-top: 2px;
@@ -6618,16 +6649,19 @@ a:focus-visible {
   overflow: hidden;
 }
 .workspace:has(> .auxiliary-panel) > .agent-surface {
-  flex: 1;
+  flex: none;
   min-width: 0;
-  width: 0;
+  width: calc(100% - var(--workspace-panel-width, 0px));
 }
 .auxiliary-panel {
-  position: relative;
-  flex: 0 1 var(--auxiliary-width, 520px);
-  width: var(--auxiliary-width, 520px);
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  flex: none;
+  width: min(var(--auxiliary-width, 520px), 55%);
   min-width: 360px;
-  max-width: 55%;
+  max-width: none;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -6711,9 +6745,8 @@ a:focus-visible {
   padding-top: 10px;
 }
 .auxiliary-panel[data-expanded="true"] {
-  position: absolute;
-  inset: 0;
   width: 100%;
+  min-width: 0;
   max-width: none;
   z-index: 3;
 }
@@ -7886,8 +7919,6 @@ a:focus-visible {
   display: grid;
   gap: 3px;
   padding: 0;
-  max-height: min(32vh, 300px);
-  overflow: auto;
 }
 .plugin-space-link,
 .new-thread-action,
@@ -7909,10 +7940,8 @@ a:focus-visible {
 .thread-title {
   font-size: var(--font-size-label);
 }
-.thread-state-label {
+.thread-state-inline {
   font-size: var(--font-size-caption);
-  color: var(--color-text-secondary);
-  margin-top: 4px;
 }
 .thread-menu-trigger {
   min-width: 28px;
@@ -8488,6 +8517,9 @@ a:focus-visible {
   z-index: 80;
   top: 4px;
   right: 8px;
+}
+.app-shell:has(.auxiliary-panel[data-open="true"]) #thread-browser-toggle {
+  display: none;
 }
 :root[data-platform="win32"] .thread-panel-toggle {
   right: calc(var(--windows-control-region) + 4px);

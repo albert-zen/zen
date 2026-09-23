@@ -2,6 +2,8 @@
 
 ## 核心概念
 
+- **ZenX Provider Logo 资源** — Host 将用户选择的有界位图复制为受管的内容寻址资源，Provider profile 只保存资源引用并向 Renderer 投影可显示图片；缺失或损坏时展示默认标识，不进入 Thread ItemList。
+
 - **ZenX 输入选择器** — Renderer 从 Host 有界 cwd 文件搜索与完整 Native Thread summaries 派生候选，将选择保存在易失草稿引用标签并在既有发送入口展开为明确定位文本；引用不自动读取内容、注入历史或改变线程执行配置。
 
 - **ZenX Thread Target** — Host 从 App Server 当前列表与 workspace 身份投影解析完整 ID、唯一前缀或精确标题，歧义只返回易读候选；共享解析不保存索引或拥有会话语义。
@@ -296,6 +298,7 @@
   Playwright、Peekaboo、WinApp 或适用平台的 bundled fallback；版本、权限与可用性只属于 host 配置和瞬时诊断，不进入 Zen Core。
 - **ZenXBrowserScreenshotArtifactStore** — ZenX provider 为一次最新 Browser observation 写入有界、短时、可清理的 PNG
   artifact，并把 observation identity 与 artifact metadata 一起投影；文件是外部瞬时观测，不进入 Zen Core 或 durable journal。
+- **ZenXWorkspaceBrowserUnmountedRenderer** — 共享 Browser 的页面未挂到用户窗口时，Host 在 Agent 观察或操作期间把同一 WebContentsView 临时挂到不可见的本地渲染窗口，提供有界视口并在完成、失败或用户挂载时释放；它不复制页面、不持有 Thread 状态，也不改变页面归属。
 - **ZenXBrowserLiveObservation** — ZenX user-browser provider 把当前线程面板选择的同一 CDP target 作为
   observer-scoped、只读、host-local 的有界 latest-frame/status 投影交给当前 renderer；它逐帧 ack、在无观察者、页面隐藏、
   target/document/provider 生命周期变化时停止；只发布由当前观察世代的请求直接采集、并沿同一 document/attachment

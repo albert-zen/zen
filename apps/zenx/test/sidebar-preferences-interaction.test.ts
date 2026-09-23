@@ -235,18 +235,17 @@ test("project pins reorder the list, retain collapse through reload, and unpin r
   });
 });
 
-test("plugin navigation stays visible while Projects retains disclosure choices across remount", async () => {
+test("only New thread stays above one scroll area while Projects retains disclosure choices", async () => {
   await harness(async ({ remount }) => {
-    const primaryItems = [
-      ...document.querySelectorAll(
-        ".sidebar-header .new-thread-action, .sidebar-header .plugin-space-link",
-      ),
-    ];
+    assert.ok(document.querySelector(".sidebar-header .new-thread-action"));
     assert.equal(
-      primaryItems[0]?.classList.contains("new-thread-action"),
-      true,
+      document.querySelector(".sidebar-header .plugin-space-link"),
+      null,
     );
-    assert.ok(document.querySelector(".plugin-space-link"));
+    assert.ok(document.querySelector(".sidebar-scroll .plugin-space-link"));
+    assert.ok(
+      document.querySelector(".sidebar-scroll .projects-section-toggle"),
+    );
     await click(".projects-section-toggle");
     await remount();
     assert.equal(document.querySelector(".plugin-spaces-toggle"), null);
@@ -265,7 +264,7 @@ test("Thread rows default to detailed model metadata and persist compact density
     assert.equal(sidebar.getAttribute("data-thread-density"), "detailed");
     assert.match(
       document.querySelector(".thread-model")?.textContent ?? "",
-      /Local demo.*fake/,
+      /^Local demo$/,
     );
     await click(".sidebar-density-toggle");
     assert.equal(sidebar.getAttribute("data-thread-density"), "compact");

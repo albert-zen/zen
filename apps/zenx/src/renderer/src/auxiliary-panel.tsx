@@ -80,6 +80,18 @@ export function AuxiliaryPanel({
     };
   }, [open, onWidthChange]);
   const [expanded, setExpanded] = useState(false);
+  const restoreToggleFocus = useRef(false);
+  useLayoutEffect(() => {
+    if (open) {
+      if (document.activeElement?.id === "thread-browser-toggle")
+        panel.current
+          ?.querySelector<HTMLButtonElement>(".auxiliary-close-button")
+          ?.focus();
+    } else if (restoreToggleFocus.current) {
+      restoreToggleFocus.current = false;
+      document.getElementById("thread-browser-toggle")?.focus();
+    }
+  }, [open]);
   const [choosing, setChoosing] = useState(false);
   const [pickingFile, setPickingFile] = useState(false);
   const [browserTabs, setBrowserTabs] = useState<WorkspaceBrowserTab[]>([]);
@@ -338,8 +350,8 @@ export function AuxiliaryPanel({
   };
   const close = () => {
     setExpanded(false);
+    restoreToggleFocus.current = true;
     onOpenChange(false);
-    document.getElementById("thread-browser-toggle")?.focus();
   };
   return (
     <aside
@@ -491,15 +503,17 @@ export function AuxiliaryPanel({
           type="button"
           className="icon-button"
           aria-label={expanded ? "Restore side panel" : "Expand side panel"}
+          title={expanded ? "Restore side panel" : "Expand side panel"}
           aria-pressed={expanded}
           onClick={() => setExpanded((value) => !value)}
         >
-          <Icon name={expanded ? "compress" : "expand"} />
+          <Icon name={expanded ? "minimize" : "maximize"} />
         </button>
         <button
           type="button"
           className="icon-button auxiliary-close-button"
           aria-label="Close side panel"
+          title="Close side panel"
           onClick={close}
         >
           <Icon name="panel-right" />

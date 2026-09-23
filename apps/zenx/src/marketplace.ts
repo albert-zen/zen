@@ -1,4 +1,5 @@
 import type {
+  ZenXCapabilityPermission,
   ZenXPluginPackageSource,
   ZenXPluginSnapshot,
   ZenXPluginSummary,
@@ -36,6 +37,7 @@ export interface MarketplaceBuiltInEntry {
   readonly icon: string;
   readonly available: boolean;
   readonly unavailableReason?: string;
+  readonly permissions?: readonly ZenXCapabilityPermission[];
 }
 
 export type MarketplaceInventoryLifecycle =
@@ -53,6 +55,7 @@ export interface MarketplaceInventoryViewEntry {
   readonly available: boolean;
   readonly unavailableReason?: string;
   readonly plugin?: ZenXPluginSummary;
+  readonly permissions?: readonly ZenXCapabilityPermission[];
   readonly recommendedVersion?: string;
   readonly curated: boolean;
   readonly versions: readonly MarketplaceCatalogVersion[];
@@ -156,6 +159,9 @@ export function marketplaceInventoryView(
         ? {}
         : { unavailableReason: entry.unavailableReason }),
       ...(plugin === undefined ? {} : { plugin }),
+      ...(entry.permissions === undefined
+        ? {}
+        : { permissions: entry.permissions }),
       curated: true,
       versions: [],
       updateAvailable: false,

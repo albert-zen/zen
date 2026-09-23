@@ -120,6 +120,29 @@ const multiProviderSettings: PublicHostSettings = {
   apiKeyProviderProfileIds: ["profile-alpha", "profile-beta"],
 };
 
+test("Browser setup focus waits for settings to finish loading", async () => {
+  let finishLoading: ((value: PublicHostSettings) => void) | undefined;
+  const pendingSettings = new Promise<PublicHostSettings>((resolve) => {
+    finishLoading = resolve;
+  });
+  const harness = await mountSettings("general", {
+    get: async () => await pendingSettings,
+    browserSettingsFocusRequest: 1,
+  });
+  try {
+    assert.equal(document.getElementById("browser-settings"), null);
+    await act(async () => {
+      finishLoading?.(settings);
+      await pendingSettings;
+    });
+    const browser = document.getElementById("browser-settings");
+    assert.ok(browser);
+    assert.equal(document.activeElement, browser);
+  } finally {
+    await unmount(harness);
+  }
+});
+
 test("Settings saves global model routing by Provider profile identity", async () => {
   const saved: ZenXSettingsUpdate[] = [];
   const harness = await mountSettings("models", {
@@ -507,11 +530,16 @@ test("a saved Unknown model offers a user-triggered image probe and shows its pe
 
 test("Add custom provider submits an opaque identity, credential, and repeatable model rows", async () => {
   let added:
-    { provider: ZenXProviderProfile; apiKey: string | undefined } | undefined;
+    | {
+        provider: ZenXProviderProfile;
+        apiKey: string | undefined;
+        logoUpload: Uint8Array | undefined;
+      }
+    | undefined;
   const harness = await mountSettings("models", {
     initialSettings: settings,
-    addProvider: async (provider, apiKey) => {
-      added = { provider, apiKey };
+    addProvider: async (provider, apiKey, _baseRevision, logoUpload) => {
+      added = { provider, apiKey, logoUpload };
       return {
         ...settings,
         profile: {
@@ -532,6 +560,21 @@ test("Add custom provider submits an opaque identity, credential, and repeatable
       "https://models.acme.example/v1",
     );
     await changeControl(requiredInput("API key"), "secret-replacement");
+    const logoInput = document.querySelector<HTMLInputElement>(
+      'input[type="file"][accept="image/png,image/jpeg,image/webp"]',
+    );
+    assert.ok(logoInput);
+    const logoBytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    Object.defineProperty(logoInput, "files", {
+      value: [new window.File([logoBytes], "acme.png", { type: "image/png" })],
+    });
+    await act(async () => {
+      logoInput.dispatchEvent(new window.Event("change", { bubbles: true }));
+      await Promise.resolve();
+    });
     await changeControl(requiredInput("Model 1"), "shared-model");
     await changeControl(
       requiredInput("Model 1 context window (Required)"),
@@ -547,6 +590,7 @@ test("Add custom provider submits an opaque identity, credential, and repeatable
     await waitFor(() => added);
 
     assert.equal(added?.apiKey, "secret-replacement");
+    assert.deepEqual(Buffer.from(added?.logoUpload ?? []), logoBytes);
     assert.equal(added?.provider.type, "openai-compatible");
     assert.equal(added?.provider.displayName, "Acme AI");
     assert.deepEqual(
@@ -567,6 +611,205 @@ test("Add custom provider submits an opaque identity, credential, and repeatable
     assert.notEqual(added?.provider.providerProfileId, "acme");
     assert.match(added?.provider.providerProfileId ?? "", /^[0-9a-f-]{20,}$/u);
     assert.doesNotMatch(document.body.textContent ?? "", /secret-replacement/u);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("invalid Logo selection blocks submit instead of reusing an earlier upload", async () => {
+  let calls = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: settings,
+    addProvider: async (provider) => {
+      calls += 1;
+      return {
+        ...settings,
+        profile: {
+          ...settings.profile,
+          providerProfiles: [...settings.profile.providerProfiles, provider],
+        },
+      };
+    },
+  });
+  try {
+    await waitFor(() => exactButton("Add custom provider"));
+    await click(exactButtonRequired("Add custom provider"));
+    await changeControl(requiredInput("Display name"), "Logo selection");
+    await changeControl(requiredInput("Provider name"), "logo-selection");
+    await changeControl(requiredInput("Base URL"), "https://logo.example/v1");
+    await changeControl(requiredInput("API key"), "key");
+    await changeControl(requiredInput("Model 1"), "logo-model");
+    await changeControl(
+      requiredInput("Model 1 context window (Required)"),
+      "32768",
+    );
+    const input = document.querySelector<HTMLInputElement>(
+      'input[type="file"][accept="image/png,image/jpeg,image/webp"]',
+    );
+    assert.ok(input);
+    const choose = async (file: File) => {
+      Object.defineProperty(input, "files", {
+        configurable: true,
+        value: [file],
+      });
+      await act(async () => {
+        input.dispatchEvent(new window.Event("change", { bubbles: true }));
+        await Promise.resolve();
+      });
+    };
+    const valid = new window.File([Buffer.from("valid")], "first.png", {
+      type: "image/png",
+    });
+    await choose(valid);
+    await choose(
+      new window.File([Buffer.alloc(512 * 1024 + 1)], "too-large.png", {
+        type: "image/png",
+      }),
+    );
+    await click(exactButtonRequired("Add provider"));
+    assert.equal(calls, 0);
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /at most 512 KiB/u,
+    );
+    await choose(valid);
+    await click(exactButtonRequired("Add provider"));
+    await waitFor(() => calls === 1);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("uploaded Logo reconciles a saved Provider after Host startup fails", async () => {
+  let authoritative = settings;
+  let calls = 0;
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  const harness = await mountSettings("models", {
+    initialSettings: settings,
+    get: async () => authoritative,
+    addProvider: async (provider) => {
+      calls += 1;
+      authoritative = {
+        ...settings,
+        profile: {
+          ...settings.profile,
+          revision: 1,
+          providerProfiles: [
+            ...settings.profile.providerProfiles,
+            { ...provider, logoResource: `${"a".repeat(64)}.png` },
+          ],
+        },
+        providerLogoDataUrls: {
+          [provider.providerProfileId]: `data:image/png;base64,${png.toString("base64")}`,
+        },
+        configuration: {
+          status: "unconfirmed",
+          revision: 1,
+          pendingRestart: [],
+        },
+      };
+      throw new Error("Host startup failed");
+    },
+  });
+  try {
+    await waitFor(() => exactButton("Add custom provider"));
+    await click(exactButtonRequired("Add custom provider"));
+    await changeControl(requiredInput("Display name"), "Saved with Logo");
+    await changeControl(requiredInput("Provider name"), "saved-logo");
+    await changeControl(requiredInput("Base URL"), "https://logo.example/v1");
+    await changeControl(requiredInput("API key"), "key");
+    await changeControl(requiredInput("Model 1"), "logo-model");
+    await changeControl(
+      requiredInput("Model 1 context window (Required)"),
+      "32768",
+    );
+    const input = document.querySelector<HTMLInputElement>(
+      'input[type="file"][accept="image/png,image/jpeg,image/webp"]',
+    );
+    assert.ok(input);
+    Object.defineProperty(input, "files", {
+      value: [new window.File([png], "logo.png", { type: "image/png" })],
+    });
+    await act(async () => {
+      input.dispatchEvent(new window.Event("change", { bubbles: true }));
+      await Promise.resolve();
+    });
+    await click(exactButtonRequired("Add provider"));
+    await waitFor(
+      () =>
+        calls === 1 &&
+        document.querySelector('[aria-label="Add Provider profile"]') === null,
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /Settings were saved, but finalization failed/u,
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("removed Logo reconciles a saved Provider after Host startup fails", async () => {
+  const original: PublicHostSettings = {
+    ...multiProviderSettings,
+    profile: {
+      ...multiProviderSettings.profile,
+      providerProfiles: multiProviderSettings.profile.providerProfiles.map(
+        (provider) =>
+          provider.providerProfileId === "profile-alpha"
+            ? { ...provider, logoResource: `${"a".repeat(64)}.png` }
+            : provider,
+      ),
+    },
+    providerLogoDataUrls: { "profile-alpha": "data:image/png;base64,AA==" },
+  };
+  let authoritative = original;
+  let calls = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: original,
+    get: async () => authoritative,
+    editProvider: async (id, provider, options) => {
+      calls += 1;
+      assert.equal(options?.logoUpload, null);
+      authoritative = {
+        ...original,
+        profile: {
+          ...original.profile,
+          revision: 1,
+          providerProfiles: original.profile.providerProfiles.map(
+            (candidate) =>
+              candidate.providerProfileId === id
+                ? { ...provider, logoResource: undefined }
+                : candidate,
+          ),
+        },
+        providerLogoDataUrls: {},
+        configuration: {
+          status: "unconfirmed",
+          revision: 1,
+          pendingRestart: [],
+        },
+      };
+      throw new Error("Host startup failed");
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Remove Logo"));
+    await click(exactButtonRequired("Save provider"));
+    await waitFor(
+      () =>
+        calls === 1 &&
+        document.querySelector('[aria-label="Edit Alpha"]') === null,
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /Settings were saved, but finalization failed/u,
+    );
   } finally {
     await unmount(harness);
   }
@@ -1564,6 +1807,8 @@ async function mountSettings(
     addProvider?(
       provider: ZenXProviderProfile,
       apiKey?: string,
+      baseRevision?: number,
+      logoUpload?: Uint8Array,
     ): Promise<PublicHostSettings>;
     editProvider?(
       providerProfileId: string,
@@ -1582,6 +1827,7 @@ async function mountSettings(
       modelId: string,
     ): Promise<ZenXImageCapabilityProbeResult>;
     chromeBridge?: Window["zenx"]["chromeBridge"];
+    browserSettingsFocusRequest?: number;
     archivedThreads?: NativeThreadSummary[];
     onUnarchive?(thread: NativeThreadSummary): Promise<void>;
   } = {},
@@ -1664,6 +1910,7 @@ async function mountSettings(
     root.render(
       createElement(SettingsHarness, {
         archivedThreads: options.archivedThreads ?? [],
+        browserSettingsFocusRequest: options.browserSettingsFocusRequest ?? 0,
         initialTab,
         onUnarchive: options.onUnarchive ?? (async () => undefined),
       }),
@@ -1674,10 +1921,12 @@ async function mountSettings(
 
 function SettingsHarness({
   archivedThreads,
+  browserSettingsFocusRequest,
   initialTab,
   onUnarchive,
 }: {
   archivedThreads: NativeThreadSummary[];
+  browserSettingsFocusRequest: number;
   initialTab: SettingsTab;
   onUnarchive(thread: NativeThreadSummary): Promise<void>;
 }) {
@@ -1696,6 +1945,7 @@ function SettingsHarness({
       archivedError: null,
       archivedLoading: false,
       archivedThreads,
+      browserSettingsFocusRequest,
       onRetryArchived: () => undefined,
       onTabChange: setTab,
       onUnarchive,

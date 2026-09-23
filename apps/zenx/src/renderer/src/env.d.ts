@@ -201,6 +201,7 @@ declare global {
           provider: ZenXProviderProfile,
           apiKey?: string,
           baseRevision?: number,
+          logoUpload?: Uint8Array,
         ): Promise<PublicHostSettings>;
         editProvider(
           providerProfileId: string,
@@ -262,6 +263,7 @@ declare global {
       };
       computerReadiness: {
         get(): Promise<ZenXComputerReadinessSnapshot>;
+        probe(): Promise<ZenXComputerReadinessSnapshot>;
         openSettings(kind: "accessibility" | "screen-recording"): Promise<void>;
       };
       browserObservation: {

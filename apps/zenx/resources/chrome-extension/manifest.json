@@ -3,12 +3,23 @@
   "name": "ZenX Browser Bridge",
   "version": "2.0.0",
   "description": "Connect Chrome to ZenX once to work together across existing and new web tabs.",
+  "icons": {
+    "16": "icons/zenx-16.png",
+    "32": "icons/zenx-32.png",
+    "48": "icons/zenx-48.png",
+    "128": "icons/zenx-128.png"
+  },
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzLlvUihGMkgVLWbHIcjdKHRuWeR+UQgiRuFWF5ixOgAVSnmIOS+wcXnks8N7QczDJDlSjCm3KmLpuR2wX7tXlurG/jZUicCkSExPlWbDFjYNoHFlUjyYpH3ITCF//PkCyCmbf+lEtleYpry/uUaXOLd6GScm/57tCg23Ua+gN+cqrykB1vsLDDDgpKUg1deuALPAi7t014hppabM2WKgRWP2xRFKbUzMYkU03zwogKTK5AYxCotIvrA+c8ibmuJAtG8DnPvlsoT4EJR64+KfSUTqZIDhMji2Hiq6D+NzbKAaxMSF9I770JzMpQ64RWjAuEiomhvtKsEOOfl3E/b/rQIDAQAB",
   "permissions": ["tabs", "debugger", "nativeMessaging"],
   "background": {
     "service_worker": "service-worker.js"
   },
   "action": {
+    "default_icon": {
+      "16": "icons/zenx-16.png",
+      "24": "icons/zenx-24.png",
+      "32": "icons/zenx-32.png"
+    },
     "default_title": "Connect Chrome to ZenX"
   }
 }

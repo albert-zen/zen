@@ -12,9 +12,12 @@ export type IconName =
   | "arrow-down"
   | "archive"
   | "browser"
+  | "book"
   | "computer"
   | "compress"
   | "expand"
+  | "maximize"
+  | "minimize"
   | "chip"
   | "check"
   | "chevron-down"
@@ -29,6 +32,7 @@ export type IconName =
   | "folder-plus"
   | "grip"
   | "layers"
+  | "list-detail"
   | "lock"
   | "moon"
   | "more"
@@ -49,7 +53,8 @@ export type IconName =
   | "terminal"
   | "users"
   | "x"
-  | "warning";
+  | "warning"
+  | "window-restore";
 
 type IconProps = SVGProps<SVGSVGElement> & {
   name: IconName;
@@ -57,6 +62,24 @@ type IconProps = SVGProps<SVGSVGElement> & {
 };
 
 const paths: Record<IconName, ReactNode> = {
+  book: (
+    <>
+      <path d="M8 4.2C6.2 2.9 4.2 2.5 2 3v9.5c2.2-.5 4.2-.1 6 1.2 1.8-1.3 3.8-1.7 6-1.2V3c-2.2-.5-4.2-.1-6 1.2Z" />
+      <path d="M8 4.2v9.5" />
+    </>
+  ),
+  "list-detail": (
+    <>
+      <path d="M5.6 4h8M5.6 8h8M5.6 12h8" />
+      <path d="M2.5 4h.1M2.5 8h.1M2.5 12h.1" strokeWidth="2.5" />
+    </>
+  ),
+  "window-restore": (
+    <>
+      <path d="M5.2 2h7.3c.8 0 1.5.7 1.5 1.5v7.3" />
+      <rect x="2" y="5.2" width="8.8" height="8.8" rx="1.2" />
+    </>
+  ),
   image: (
     <>
       <rect x="1.5" y="1.5" width="13" height="13" rx="2" />
@@ -86,6 +109,18 @@ const paths: Record<IconName, ReactNode> = {
   plus: <path d="M8 3v10M3 8h10" />,
   "arrow-down": <path d="M8 2.2v11.2m-4-4 4 4 4-4" />,
   expand: <path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" />,
+  maximize: (
+    <>
+      <path d="M6.25 6.25 2.5 2.5M2.5 5.75V2.5h3.25" />
+      <path d="m9.75 9.75 3.75 3.75M10.25 13.5h3.25v-3.25" />
+    </>
+  ),
+  minimize: (
+    <>
+      <path d="m2.5 2.5 3.75 3.75M3 6.25h3.25V3" />
+      <path d="m13.5 13.5-3.75-3.75M13 9.75H9.75V13" />
+    </>
+  ),
   compress: <path d="M2 1v4h4M14 1v4h-4M2 15v-4h4M14 15v-4h-4M5 8h6" />,
   chip: (
     <>

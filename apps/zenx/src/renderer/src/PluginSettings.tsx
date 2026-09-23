@@ -1,5 +1,5 @@
 import { Select, ActionMenu } from "./ui/controls.js";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   ZenXPluginMutationResult,
@@ -26,7 +26,7 @@ export function PluginSettings({
   onOpenGeneral,
 }: {
   onFeedback?(message: string | null): void;
-  onOpenGeneral?(): void;
+  onOpenGeneral?(pluginId: "computer" | "browser"): void;
 }) {
   const [plugins, setPlugins] = useState<ZenXPluginSnapshot | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -119,7 +119,7 @@ function MarketplaceSettings({
   run,
 }: {
   plugins: ZenXPluginSnapshot;
-  onOpenGeneral?(): void;
+  onOpenGeneral?(pluginId: "computer" | "browser"): void;
   busy: string | null;
   confirmation: Confirmation | null;
   setConfirmation(value: Confirmation | null): void;
@@ -381,7 +381,7 @@ function MarketplaceInventoryCard({
   run,
 }: {
   entry: MarketplaceInventoryViewEntry;
-  onOpenGeneral?(): void;
+  onOpenGeneral?(pluginId: "computer" | "browser"): void;
   busy: string | null;
   confirmation: Confirmation | null;
   setConfirmation(value: Confirmation | null): void;
@@ -409,6 +409,20 @@ function MarketplaceInventoryCard({
   const [reviewingAccess, setReviewingAccess] = useState(
     firstPartyAccess !== null && active,
   );
+  const activationButtonRef = useRef<HTMLButtonElement>(null);
+  const accessPanelRef = useRef<HTMLDivElement>(null);
+  const focusAccessAfterOpen = useRef(false);
+  const accessPanelId = `plugin-access-${pluginId}`;
+  const openAccessReview = () => {
+    focusAccessAfterOpen.current = true;
+    setReviewingAccess(true);
+  };
+  useEffect(() => {
+    if (!reviewingAccess || !focusAccessAfterOpen.current) return;
+    focusAccessAfterOpen.current = false;
+    accessPanelRef.current?.focus();
+    accessPanelRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [reviewingAccess]);
   const source =
     entry.source === "built-in"
       ? "Built in"
@@ -536,12 +550,19 @@ function MarketplaceInventoryCard({
         {entry.lifecycle === "unavailable" ? null : entry.lifecycle ===
           "available" ? (
           <button
+            ref={firstPartyAccess === null ? undefined : activationButtonRef}
             className="primary-button"
             type="button"
             disabled={busy !== null}
+            aria-expanded={
+              firstPartyAccess === null ? undefined : reviewingAccess
+            }
+            aria-controls={
+              firstPartyAccess === null ? undefined : accessPanelId
+            }
             onClick={() =>
               void (firstPartyAccess !== null
-                ? setReviewingAccess(true)
+                ? openAccessReview()
                 : entry.source === "built-in" && pluginId !== undefined
                   ? run(
                       `install-built-in:${pluginId}`,
@@ -560,12 +581,19 @@ function MarketplaceInventoryCard({
           </button>
         ) : entry.lifecycle === "uninstalled" && pluginId !== undefined ? (
           <button
+            ref={firstPartyAccess === null ? undefined : activationButtonRef}
             className="primary-button"
             type="button"
             disabled={busy !== null || !entry.available}
+            aria-expanded={
+              firstPartyAccess === null ? undefined : reviewingAccess
+            }
+            aria-controls={
+              firstPartyAccess === null ? undefined : accessPanelId
+            }
             onClick={() =>
               void (firstPartyAccess !== null
-                ? setReviewingAccess(true)
+                ? openAccessReview()
                 : run(
                     `reinstall:${pluginId}`,
                     () => window.zenx.plugins.reinstall(pluginId),
@@ -578,9 +606,22 @@ function MarketplaceInventoryCard({
         ) : pluginId === undefined ? null : (
           <>
             <button
+              ref={
+                firstPartyAccess === null || active
+                  ? undefined
+                  : activationButtonRef
+              }
               className="secondary-button"
               type="button"
               disabled={busy !== null || (!entry.available && !active)}
+              aria-expanded={
+                firstPartyAccess === null || active
+                  ? undefined
+                  : reviewingAccess
+              }
+              aria-controls={
+                firstPartyAccess === null || active ? undefined : accessPanelId
+              }
               title={
                 !entry.available && !active
                   ? entry.unavailableReason
@@ -588,7 +629,7 @@ function MarketplaceInventoryCard({
               }
               onClick={() =>
                 void (!active && firstPartyAccess !== null
-                  ? setReviewingAccess(true)
+                  ? openAccessReview()
                   : run(
                       `enable:${pluginId}`,
                       () => window.zenx.plugins.setEnabled(pluginId, !active),
@@ -602,6 +643,18 @@ function MarketplaceInventoryCard({
                   ? "Disable"
                   : "Enable"}
             </button>
+            {firstPartyAccess === null || !active ? null : (
+              <button
+                ref={activationButtonRef}
+                className="secondary-button"
+                type="button"
+                aria-expanded={reviewingAccess}
+                aria-controls={accessPanelId}
+                onClick={openAccessReview}
+              >
+                Review access
+              </button>
+            )}
             {entry.source === "catalog" &&
             plugin?.version !== selectedVersion ? (
               <button
@@ -665,18 +718,31 @@ function MarketplaceInventoryCard({
           />
         ) : null}
       </div>
+      {firstPartyAccess !== null && !reviewingAccess ? (
+        <div id={accessPanelId} hidden />
+      ) : null}
       {firstPartyAccess !== null && reviewingAccess ? (
-        <div className="plugin-access-wrap">
+        <div
+          id={accessPanelId}
+          ref={accessPanelRef}
+          className="plugin-access-wrap"
+          role="group"
+          aria-label={`${entry.name} access details`}
+          tabIndex={-1}
+        >
           <PluginAccessReview
             pluginId={firstPartyAccess}
-            permissions={plugin?.permissions ?? []}
+            permissions={plugin?.permissions ?? entry.permissions ?? []}
             onOpenGeneral={onOpenGeneral}
           />
           <div className="plugin-access-actions">
             <button
               type="button"
               className="secondary-button"
-              onClick={() => setReviewingAccess(false)}
+              onClick={() => {
+                setReviewingAccess(false);
+                activationButtonRef.current?.focus();
+              }}
             >
               Close details
             </button>
@@ -684,7 +750,11 @@ function MarketplaceInventoryCard({
               <button
                 type="button"
                 className="primary-button"
-                disabled={busy !== null || !entry.available}
+                disabled={
+                  busy !== null ||
+                  !entry.available ||
+                  (plugin?.permissions ?? entry.permissions ?? []).length === 0
+                }
                 onClick={() => void activateFirstParty()}
               >
                 {busy === null

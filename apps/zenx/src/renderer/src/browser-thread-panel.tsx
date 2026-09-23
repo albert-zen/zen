@@ -197,10 +197,11 @@ export function BrowserThreadPanel({
             aria-label={
               expanded ? "Restore browser panel" : "Expand browser view"
             }
+            title={expanded ? "Restore browser panel" : "Expand browser view"}
             aria-pressed={expanded}
             onClick={() => setExpanded((value) => !value)}
           >
-            <Icon name="layers" />
+            <Icon name={expanded ? "minimize" : "maximize"} />
           </button>
           <button
             type="button"

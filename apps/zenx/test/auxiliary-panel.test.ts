@@ -8,6 +8,68 @@ import { EditorView } from "@codemirror/view";
 import { AuxiliaryPanel } from "../src/renderer/src/auxiliary-panel.js";
 import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 
+test("opening the panel transfers keyboard focus to its close control and restores it on close", async () => {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+    pretendToBeVisual: true,
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    Window: dom.window.Window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    MutationObserver: dom.window.MutationObserver,
+    Node: dom.window.Node,
+    getComputedStyle: dom.window.getComputedStyle,
+    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+    cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  (dom.window as any).zenx = {};
+  function Harness() {
+    const [open, setOpen] = useState(false);
+    const [selectedTab, setSelectedTab] = useState("");
+    return React.createElement(
+      React.Fragment,
+      null,
+      React.createElement(
+        "button",
+        {
+          id: "thread-browser-toggle",
+          onClick: () => setOpen(true),
+        },
+        "Open panel",
+      ),
+      React.createElement(AuxiliaryPanel, {
+        threadId: "thread-a",
+        title: "Task A",
+        open,
+        onOpenChange: setOpen,
+        snapshot: null,
+        selectedTab,
+        onSelectTab: setSelectedTab,
+      }),
+    );
+  }
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () => root.render(React.createElement(Harness)));
+    const toggle = document.getElementById("thread-browser-toggle")!;
+    toggle.focus();
+    await act(async () => toggle.click());
+    const close = document.querySelector<HTMLButtonElement>(
+      ".auxiliary-close-button",
+    )!;
+    assert.equal(document.activeElement, close);
+    await act(async () => close.click());
+    assert.equal(document.activeElement, toggle);
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
+
 test("side tabs suspend Browser frames, render Markdown and escaped source, and isolate plugin surfaces", async () => {
   const dom = new JSDOM(
     '<button id="thread-browser-toggle">Panel</button><div id="root"></div>',

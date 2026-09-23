@@ -11,7 +11,7 @@ export function PluginAccessReview({
 }: {
   pluginId: "computer" | "browser";
   permissions: readonly ZenXCapabilityPermission[];
-  onOpenGeneral?(): void;
+  onOpenGeneral?(pluginId: "computer" | "browser"): void;
 }) {
   const [computer, setComputer] =
     useState<ZenXComputerReadinessSnapshot | null>(null);
@@ -19,17 +19,28 @@ export function PluginAccessReview({
     null,
   );
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
 
   useEffect(() => {
+    const refreshOnReturn = () => setRevision((value) => value + 1);
+    window.addEventListener("focus", refreshOnReturn);
+    return () => window.removeEventListener("focus", refreshOnReturn);
+  }, []);
+
+  useEffect(() => {
     let active = true;
+    setLoading(true);
+    setError(null);
     const operation =
       pluginId === "computer"
-        ? window.zenx.computerReadiness?.get()
+        ? (window.zenx.computerReadiness?.probe?.() ??
+          window.zenx.computerReadiness?.get())
         : window.zenx.chromeBridge?.get();
     if (operation === undefined) {
       setError("This app version cannot read current setup status.");
+      setLoading(false);
       return () => {
         active = false;
       };
@@ -43,9 +54,14 @@ export function PluginAccessReview({
           setBrowser(value as ChromeBridgeSettingsSnapshot);
         }
         setError(null);
+        setLoading(false);
       },
       (reason: unknown) => {
-        if (active) setError(describeError(reason));
+        if (!active) return;
+        setComputer(null);
+        setBrowser(null);
+        setError(describeError(reason));
+        setLoading(false);
       },
     );
     return () => {
@@ -64,11 +80,10 @@ export function PluginAccessReview({
       setError(describeError(reason));
     } finally {
       setBusy(false);
+      setRevision((value) => value + 1);
     }
   };
 
-  const requestedPermissions =
-    permissions.length > 0 ? permissions : fallbackPermissions(pluginId);
   return (
     <div
       className="plugin-access-review"
@@ -91,33 +106,49 @@ export function PluginAccessReview({
           Refresh status
         </button>
       </div>
-      <ul className="plugin-access-scopes" aria-label="Requested access">
-        {requestedPermissions.map((permission) => (
-          <li key={permission.id}>
-            <strong>{permission.title}</strong>
-            <span>{permission.description}</span>
-          </li>
-        ))}
-      </ul>
+      {permissions.length > 0 ? (
+        <ul className="plugin-access-scopes" aria-label="Requested access">
+          {permissions.map((permission) => (
+            <li key={permission.id}>
+              <strong>{permission.title}</strong>
+              <span>{permission.description}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="plugin-access-error" role="status">
+          This app version cannot show the selected provider’s complete access
+          list. Update ZenX before enabling it.
+        </p>
+      )}
       {pluginId === "computer" ? (
         <div className="plugin-access-statuses">
           <AccessStatus
             title="Accessibility"
             value={
               computer === null
-                ? "Checking…"
-                : computer.accessibility === "granted"
-                  ? "ZenX app allowed"
-                  : computer.accessibility === "needs-setup"
-                    ? "Needs setup"
-                    : computer.accessibility === "not-applicable"
-                      ? "Not applicable"
-                      : "Unknown"
+                ? loading
+                  ? "Checking…"
+                  : "Unknown"
+                : computer.verification !== undefined
+                  ? accessCheckLabel(computer.verification.accessibility.state)
+                  : computer.accessibility === "granted"
+                    ? "Allowed by macOS"
+                    : computer.accessibility === "needs-setup"
+                      ? "Needs setup"
+                      : computer.accessibility === "not-applicable"
+                        ? "Not applicable"
+                        : "Unknown"
             }
-            detail="Needed to inspect and act on targeted controls. The native helper checks its own access again when used."
+            detail={
+              computer?.verification?.accessibility.detail ??
+              "ZenX checks whether its native helper can inspect open windows. No window details are saved by this check."
+            }
             action={
               computer?.platform === "darwin" &&
-              computer.accessibility !== "granted" ? (
+              (computer.verification?.accessibility.state === "needs-setup" ||
+                (computer.verification === undefined &&
+                  computer.accessibility !== "granted")) ? (
                 <button
                   type="button"
                   className="secondary-button"
@@ -131,11 +162,22 @@ export function PluginAccessReview({
           />
           <AccessStatus
             title="Screen Recording"
-            value={screenRecordingLabel(computer?.screenRecording)}
-            detail="Needed for targeted window images. A capture failure can also have another cause."
+            value={
+              computer === null && !loading
+                ? "Unknown"
+                : computer?.verification !== undefined
+                  ? accessCheckLabel(computer.verification.screenCapture.state)
+                  : screenRecordingLabel(computer?.screenRecording)
+            }
+            detail={
+              computer?.verification?.screenCapture.detail ??
+              "ZenX checks a small window preview and discards it. If Screen Recording is already on, reopen ZenX; if still blocked, remove its old entry and add this ZenX.app again."
+            }
             action={
               computer?.platform === "darwin" &&
-              computer.screenRecording !== "granted" ? (
+              (computer.verification?.screenCapture.state === "needs-setup" ||
+                (computer.verification === undefined &&
+                  computer.screenRecording !== "granted")) ? (
                 <button
                   type="button"
                   className="secondary-button"
@@ -151,7 +193,9 @@ export function PluginAccessReview({
             title="Foreground control"
             value={
               computer === null
-                ? "Checking…"
+                ? loading
+                  ? "Checking…"
+                  : "Unknown"
                 : computer.foregroundControlEnabled
                   ? "Opted in"
                   : "Off (optional)"
@@ -162,13 +206,38 @@ export function PluginAccessReview({
                 <button
                   type="button"
                   className="secondary-button"
-                  onClick={onOpenGeneral}
+                  onClick={() => onOpenGeneral("computer")}
                 >
                   Open General settings
                 </button>
               )
             }
           />
+          {computer?.platform === "darwin" &&
+          (needsAccessibilitySetup(computer) || needsScreenSetup(computer)) ? (
+            <div className="plugin-access-steps">
+              <strong>Complete macOS setup</strong>
+              <ol>
+                {!needsAccessibilitySetup(computer) ? null : (
+                  <li>
+                    In System Settings → Privacy & Security → Accessibility,
+                    turn on the current ZenX app. If it is absent, click Add (+)
+                    and choose the ZenX.app you launched.
+                  </li>
+                )}
+                {!needsScreenSetup(computer) ? null : (
+                  <li>
+                    In Screen & System Audio Recording, turn on ZenX for screen
+                    access. If absent, click Add (+) and choose the same app.
+                  </li>
+                )}
+                <li>
+                  Relaunch ZenX if macOS asks, then return here. ZenX checks
+                  both access paths again when this page opens.
+                </li>
+              </ol>
+            </div>
+          ) : null}
         </div>
       ) : (
         <div className="plugin-access-statuses">
@@ -178,14 +247,22 @@ export function PluginAccessReview({
                 ? "Connected Chrome"
                 : "ZenX browser"
             }
-            value={browserStatusLabel(browser)}
-            detail={browserStatusDetail(browser)}
+            value={
+              browser === null && !loading
+                ? "Status unavailable"
+                : browserStatusLabel(browser)
+            }
+            detail={
+              browser === null && !loading
+                ? "Could not read Chrome connection state. Refresh status to try again."
+                : browserStatusDetail(browser)
+            }
             action={
               onOpenGeneral === undefined ? null : (
                 <button
                   type="button"
                   className="secondary-button"
-                  onClick={onOpenGeneral}
+                  onClick={() => onOpenGeneral("browser")}
                 >
                   Open Browser settings
                 </button>
@@ -246,6 +323,41 @@ function screenRecordingLabel(
   }
 }
 
+function accessCheckLabel(
+  state: NonNullable<
+    ZenXComputerReadinessSnapshot["verification"]
+  >["accessibility"]["state"],
+): string {
+  switch (state) {
+    case "ready":
+      return "Verified";
+    case "needs-setup":
+      return "Needs setup";
+    case "failed":
+      return "Check failed";
+    case "not-applicable":
+      return "Not applicable";
+    case "unknown":
+      return "Could not verify";
+  }
+}
+
+function needsAccessibilitySetup(
+  computer: ZenXComputerReadinessSnapshot,
+): boolean {
+  return computer.verification === undefined
+    ? computer.accessibility === "needs-setup"
+    : computer.verification.accessibility.state === "needs-setup";
+}
+
+function needsScreenSetup(computer: ZenXComputerReadinessSnapshot): boolean {
+  return computer.verification === undefined
+    ? computer.screenRecording === "denied" ||
+        computer.screenRecording === "restricted" ||
+        computer.screenRecording === "not-determined"
+    : computer.verification.screenCapture.state === "needs-setup";
+}
+
 function browserStatusLabel(
   value: ChromeBridgeSettingsSnapshot | null,
 ): string {
@@ -254,7 +366,7 @@ function browserStatusLabel(
   if (value.connection.state === "connected") return "Connected";
   if (value.connector === "external-cdp") return "External endpoint configured";
   if (value.connector === "inactive") return "Connector unavailable";
-  return value.nativeHostRegistered ? "Waiting for Chrome" : "Needs setup";
+  return value.nativeHostRegistered ? "Chrome not connected" : "Needs setup";
 }
 
 function browserStatusDetail(
@@ -274,30 +386,6 @@ function browserStatusDetail(
     return "The Connected Chrome connector is not running. Apply the browser mode and restart ZenX, then check Browser settings.";
   }
   return "Register the local connector, load the extension, then click it in Chrome. General settings shows each step.";
-}
-
-function fallbackPermissions(
-  pluginId: "computer" | "browser",
-): ZenXCapabilityPermission[] {
-  return pluginId === "computer"
-    ? [
-        {
-          id: "computer-access",
-          title: "Targeted desktop access",
-          description:
-            "Inspect and act on selected controls, capture selected windows, and optionally control the foreground desktop.",
-          scope: "local-device",
-        },
-      ]
-    : [
-        {
-          id: "browser-access",
-          title: "Browser session access",
-          description:
-            "Inspect selected tabs, navigate pages, and interact with visible page elements.",
-          scope: "browser-session",
-        },
-      ];
 }
 
 function describeError(error: unknown): string {

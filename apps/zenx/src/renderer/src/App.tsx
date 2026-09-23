@@ -436,6 +436,8 @@ export function App() {
     });
   }, []);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
+  const [browserSettingsFocusRequest, setBrowserSettingsFocusRequest] =
+    useState(0);
   const fileDrafts = useWorkspaceFileDrafts();
   const [panelTabs, setPanelTabs] = useState<Record<string, string>>({});
   const [workspaceTabOrder, setWorkspaceTabOrder] = useState<
@@ -2214,6 +2216,7 @@ export function App() {
           onOpenSidebar={() => setSidebarOpen(true)}
           tab={settingsTab}
           pluginSnapshot={pluginSnapshot}
+          browserSettingsFocusRequest={browserSettingsFocusRequest}
           showHeader={false}
         />
         {page === "settings" ? null : genericPluginTarget !== undefined &&
@@ -2228,12 +2231,9 @@ export function App() {
             composerSendMode={composerSendMode}
             approvals={approvals}
             pluginSnapshot={pluginSnapshot}
-            onOpenPluginSettings={() => {
-              setSettingsTab("plugins");
-              openPage("settings");
-            }}
-            onOpenGeneralSettings={() => {
+            onOpenBrowserSettings={() => {
               setSettingsTab("general");
+              setBrowserSettingsFocusRequest((value) => value + 1);
               openPage("settings");
             }}
             composerStates={composerStates}
@@ -2596,7 +2596,7 @@ function ConversationTitleBar({
             className="icon-button thread-panel-toggle"
             type="button"
             aria-label={browserOpen ? "Close side panel" : "Open side panel"}
-            title="Workspace"
+            title={browserOpen ? "Close side panel" : "Open side panel"}
             aria-controls="thread-workspace-panel"
             aria-expanded={browserOpen}
             disabled={threadDetail === null}
@@ -2643,8 +2643,7 @@ function AgentSurface({
   composerSendMode,
   approvals,
   pluginSnapshot,
-  onOpenPluginSettings,
-  onOpenGeneralSettings,
+  onOpenBrowserSettings,
   composerStates,
   configuredProjects,
   newThreadDraft,
@@ -2692,8 +2691,7 @@ function AgentSurface({
   composerSendMode: "queue" | "soft" | "hard";
   approvals: ApprovalCardState[];
   pluginSnapshot: ZenXPluginSnapshot | null;
-  onOpenPluginSettings(): void;
-  onOpenGeneralSettings(): void;
+  onOpenBrowserSettings(): void;
   composerStates: Record<string, ComposerState>;
   configuredProjects: ZenXProjectProjectionEntry[];
   newThreadDraft: NewThreadDraft | null;
@@ -2769,8 +2767,7 @@ function AgentSurface({
     >
       <AgentReadinessNotice
         pluginSnapshot={pluginSnapshot}
-        onOpenPlugins={onOpenPluginSettings}
-        onOpenGeneral={onOpenGeneralSettings}
+        onOpenBrowserSettings={onOpenBrowserSettings}
       />
       {newThreadDraft !== null || selectedSummary === null ? (
         <button

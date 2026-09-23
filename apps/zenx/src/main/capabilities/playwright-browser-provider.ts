@@ -573,11 +573,31 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     );
     if (typeof response.result !== "string") {
       throw new Error(
+        "Unsupported playwright-cli JSON schema: screenshot result must be a JSON string",
+      );
+    }
+    // playwright-cli serializes every run-code return value as JSON inside
+    // response.result. A string return is therefore quoted a second time.
+    let base64: unknown;
+    try {
+      base64 = JSON.parse(response.result);
+    } catch {
+      throw new Error(
+        "Unsupported playwright-cli JSON schema: screenshot result is not JSON",
+      );
+    }
+    if (
+      typeof base64 !== "string" ||
+      base64.length === 0 ||
+      base64.length % 4 !== 0 ||
+      !/^[A-Za-z0-9+/]+={0,2}$/u.test(base64)
+    ) {
+      throw new Error(
         "Unsupported playwright-cli JSON schema: screenshot result must be base64",
       );
     }
     signal?.throwIfAborted();
-    const png = Buffer.from(response.result, "base64");
+    const png = Buffer.from(base64, "base64");
     const artifact = await this.#artifacts.write(
       `${session.sessionId}/${tab.tabId}`,
       observationId,

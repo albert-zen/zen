@@ -210,6 +210,14 @@ export function macOsPackagerOptions(
       target === "app"
         ? "com.electron.zenx"
         : "com.electron.zenx-provider-smoke",
+    ...(target === "app"
+      ? {
+          extendInfo: {
+            NSScreenCaptureUsageDescription:
+              "ZenX captures the target window for Computer screenshot tools.",
+          },
+        }
+      : {}),
     osxSign: {
       identity,
       ...(mode === "ad-hoc" || mode === "local"
