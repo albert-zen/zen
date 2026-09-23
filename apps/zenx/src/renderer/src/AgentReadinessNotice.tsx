@@ -263,7 +263,7 @@ function computerIssues(
       "screen-recording",
       "Screen Recording",
       screenCapture,
-      "Enable ZenX in macOS Screen & System Audio Recording. If it is already on, quit and reopen ZenX to apply the change, then check again.",
+      "Enable ZenX in macOS Screen Recording. Already on? Reopen ZenX; if still blocked, remove its old entry and add this ZenX.app again.",
       "ZenX could not complete the window preview check. Select Check again; the error details may help diagnose it.",
       "Open Screen Recording settings",
     ),
