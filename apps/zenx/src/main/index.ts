@@ -10,6 +10,7 @@ import {
   safeStorage,
   session,
   shell,
+  systemPreferences,
 } from "electron";
 import { join, resolve } from "node:path";
 import { windowBackdropOptions } from "./window-appearance.js";
@@ -32,6 +33,7 @@ import type {
   ZenXSidebarOrder,
 } from "./host-profile.js";
 import { ZenXSettingsService } from "./settings-service.js";
+import { computerReadinessSnapshot } from "./computer-readiness.js";
 import {
   withZenXProviderTransports,
   zenXProviderDiscoveryTransport,
@@ -1287,6 +1289,45 @@ function installSettingsIpc(
   ipcMain.handle(
     ipcChannels.settingsGet,
     async () => await settings.publicSettings(),
+  );
+  ipcMain.handle(ipcChannels.computerReadinessGet, () => {
+    let accessibilityTrusted: boolean | undefined;
+    let screenRecording: string | undefined;
+    if (process.platform === "darwin") {
+      try {
+        accessibilityTrusted =
+          systemPreferences.isTrustedAccessibilityClient(false);
+      } catch {
+        // Keep the status unknown if the current process cannot read TCC.
+      }
+      try {
+        screenRecording = systemPreferences.getMediaAccessStatus("screen");
+      } catch {
+        // A failed status check is not evidence of denied capture.
+      }
+    }
+    return computerReadinessSnapshot({
+      platform: process.platform,
+      accessibilityTrusted,
+      screenRecording,
+      foregroundControlEnabled: settings.computerForegroundControlEnabled(),
+    });
+  });
+  ipcMain.handle(
+    ipcChannels.computerReadinessOpenSettings,
+    async (_event, kind: unknown) => {
+      if (
+        process.platform !== "darwin" ||
+        (kind !== "accessibility" && kind !== "screen-recording")
+      ) {
+        throw new Error("Invalid macOS privacy settings request");
+      }
+      await shell.openExternal(
+        kind === "accessibility"
+          ? "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+          : "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+      );
+    },
   );
   ipcMain.handle(
     ipcChannels.workspaceEdit,

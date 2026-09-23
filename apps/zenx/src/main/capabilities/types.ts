@@ -245,6 +245,8 @@ export interface ZenXPluginSummary {
   enabled: boolean;
   available: boolean;
   contributionCount: number;
+  /** Requested scopes from the installed manifest; these are not OS grants. */
+  permissions?: ZenXCapabilityPermission[];
 }
 
 export type ZenXPluginProfileSourceMode =

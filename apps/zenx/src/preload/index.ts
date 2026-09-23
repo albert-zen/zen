@@ -65,6 +65,7 @@ import type {
 } from "../main/capabilities/computer-thread-observation.js";
 import type { ComputerObservationEnvelope } from "../main/computer-live-observation-ipc.js";
 import type { ChromeBridgeSettingsSnapshot } from "../main/chrome-extension-bridge.js";
+import type { ZenXComputerReadinessSnapshot } from "../main/computer-readiness.js";
 
 contextBridge.exposeInMainWorld("zenx", {
   platform: process.platform,
@@ -426,6 +427,14 @@ contextBridge.exposeInMainWorld("zenx", {
       await ipcRenderer.invoke(ipcChannels.chromeBridgeRemove),
     openExtension: async (): Promise<void> =>
       await ipcRenderer.invoke(ipcChannels.chromeBridgeOpenExtension),
+  },
+  computerReadiness: {
+    get: async (): Promise<ZenXComputerReadinessSnapshot> =>
+      await ipcRenderer.invoke(ipcChannels.computerReadinessGet),
+    openSettings: async (
+      kind: "accessibility" | "screen-recording",
+    ): Promise<void> =>
+      await ipcRenderer.invoke(ipcChannels.computerReadinessOpenSettings, kind),
   },
   browserObservation: {
     subscribe: (

@@ -4474,6 +4474,81 @@ a:focus-visible {
   font-size: var(--font-size-caption);
   line-height: 1.5;
 }
+.plugin-access-wrap {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-soft);
+}
+.plugin-access-review {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.plugin-access-heading,
+.plugin-access-status,
+.plugin-access-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.plugin-access-heading > div,
+.plugin-access-status > div {
+  min-width: 0;
+}
+.plugin-access-heading strong,
+.plugin-access-status strong,
+.plugin-access-scopes strong {
+  display: block;
+  color: var(--text-1);
+  font-size: var(--font-size-caption);
+}
+.plugin-access-heading p,
+.plugin-access-status p,
+.plugin-access-scopes span,
+.plugin-access-error {
+  margin: 3px 0 0;
+  color: var(--text-2);
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
+}
+.plugin-access-scopes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.plugin-access-scopes li,
+.plugin-access-status {
+  padding: 9px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  background: var(--surface-inset);
+}
+.plugin-access-statuses {
+  display: grid;
+  gap: 7px;
+}
+.plugin-access-status [role="status"] {
+  display: inline-block;
+  margin-top: 2px;
+  color: var(--text-accent);
+  font-size: var(--font-size-caption);
+}
+.plugin-access-status button,
+.plugin-access-heading button {
+  flex: 0 0 auto;
+}
+.plugin-access-actions {
+  justify-content: flex-end;
+}
+.plugin-access-error {
+  color: var(--warn);
+}
 .settings-success {
   padding: 10px 12px;
   border: 1px solid var(--border-accent);
@@ -5297,6 +5372,10 @@ a:focus-visible {
   .marketplace-card .plugin-actions,
   .marketplace-card .plugin-confirm {
     grid-column: 1 / -1;
+  }
+  .plugin-access-heading,
+  .plugin-access-status {
+    flex-direction: column;
   }
   .plugin-source-actions {
     flex-wrap: wrap;

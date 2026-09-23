@@ -14,6 +14,7 @@ import {
   type MarketplaceInventoryViewEntry,
 } from "../../marketplace.js";
 import { Icon } from "./icons.js";
+import { PluginAccessReview } from "./PluginAccessReview.js";
 
 type Confirmation = { pluginId: string; action: "uninstall" | "delete-data" };
 type InventoryFilter = "all" | "installed" | "built-in";
@@ -22,8 +23,10 @@ type PluginOperationResult =
 
 export function PluginSettings({
   onFeedback,
+  onOpenGeneral,
 }: {
   onFeedback?(message: string | null): void;
+  onOpenGeneral?(): void;
 }) {
   const [plugins, setPlugins] = useState<ZenXPluginSnapshot | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -91,6 +94,7 @@ export function PluginSettings({
     <>
       <MarketplaceSettings
         plugins={plugins}
+        onOpenGeneral={onOpenGeneral}
         busy={busy}
         confirmation={confirmation}
         setConfirmation={setConfirmation}
@@ -108,12 +112,14 @@ export function PluginSettings({
 
 function MarketplaceSettings({
   plugins,
+  onOpenGeneral,
   busy,
   confirmation,
   setConfirmation,
   run,
 }: {
   plugins: ZenXPluginSnapshot;
+  onOpenGeneral?(): void;
   busy: string | null;
   confirmation: Confirmation | null;
   setConfirmation(value: Confirmation | null): void;
@@ -353,6 +359,7 @@ function MarketplaceSettings({
             <MarketplaceInventoryCard
               key={entry.key}
               entry={entry}
+              onOpenGeneral={onOpenGeneral}
               busy={busy}
               confirmation={confirmation}
               setConfirmation={setConfirmation}
@@ -367,12 +374,14 @@ function MarketplaceSettings({
 
 function MarketplaceInventoryCard({
   entry,
+  onOpenGeneral,
   busy,
   confirmation,
   setConfirmation,
   run,
 }: {
   entry: MarketplaceInventoryViewEntry;
+  onOpenGeneral?(): void;
   busy: string | null;
   confirmation: Confirmation | null;
   setConfirmation(value: Confirmation | null): void;
@@ -392,6 +401,14 @@ function MarketplaceInventoryCard({
       ? confirmation.action
       : null;
   const active = plugin?.lifecycle === "enabled";
+  const firstPartyAccess =
+    entry.source === "built-in" &&
+    (pluginId === "computer" || pluginId === "browser")
+      ? pluginId
+      : null;
+  const [reviewingAccess, setReviewingAccess] = useState(
+    firstPartyAccess !== null && active,
+  );
   const source =
     entry.source === "built-in"
       ? "Built in"
@@ -426,6 +443,29 @@ function MarketplaceInventoryCard({
         ? `${entry.name} v${selectedVersion} installed and enabled.`
         : `${entry.name} updated to v${selectedVersion}.`,
     );
+  };
+
+  const activateFirstParty = async () => {
+    if (firstPartyAccess === null || pluginId === undefined) return;
+    if (entry.lifecycle === "available") {
+      await run(
+        `install-built-in:${pluginId}`,
+        () => window.zenx.plugins.installBuiltIn(pluginId),
+        `${entry.name} installed and enabled.`,
+      );
+    } else if (entry.lifecycle === "uninstalled") {
+      await run(
+        `reinstall:${pluginId}`,
+        () => window.zenx.plugins.reinstall(pluginId),
+        `${entry.name} reinstalled.`,
+      );
+    } else {
+      await run(
+        `enable:${pluginId}`,
+        () => window.zenx.plugins.setEnabled(pluginId, true),
+        `${entry.name} enabled.`,
+      );
+    }
   };
 
   return (
@@ -500,13 +540,15 @@ function MarketplaceInventoryCard({
             type="button"
             disabled={busy !== null}
             onClick={() =>
-              void (entry.source === "built-in" && pluginId !== undefined
-                ? run(
-                    `install-built-in:${pluginId}`,
-                    () => window.zenx.plugins.installBuiltIn(pluginId),
-                    `${entry.name} installed and enabled.`,
-                  )
-                : installCatalogVersion())
+              void (firstPartyAccess !== null
+                ? setReviewingAccess(true)
+                : entry.source === "built-in" && pluginId !== undefined
+                  ? run(
+                      `install-built-in:${pluginId}`,
+                      () => window.zenx.plugins.installBuiltIn(pluginId),
+                      `${entry.name} installed and enabled.`,
+                    )
+                  : installCatalogVersion())
             }
           >
             {busy === `marketplace:${entry.packageSpec}` ||
@@ -522,11 +564,13 @@ function MarketplaceInventoryCard({
             type="button"
             disabled={busy !== null || !entry.available}
             onClick={() =>
-              void run(
-                `reinstall:${pluginId}`,
-                () => window.zenx.plugins.reinstall(pluginId),
-                `${entry.name} reinstalled.`,
-              )
+              void (firstPartyAccess !== null
+                ? setReviewingAccess(true)
+                : run(
+                    `reinstall:${pluginId}`,
+                    () => window.zenx.plugins.reinstall(pluginId),
+                    `${entry.name} reinstalled.`,
+                  ))
             }
           >
             {busy === `reinstall:${pluginId}` ? "Reinstalling…" : "Reinstall"}
@@ -543,11 +587,13 @@ function MarketplaceInventoryCard({
                   : undefined
               }
               onClick={() =>
-                void run(
-                  `enable:${pluginId}`,
-                  () => window.zenx.plugins.setEnabled(pluginId, !active),
-                  `${entry.name} ${active ? "disabled" : "enabled"}.`,
-                )
+                void (!active && firstPartyAccess !== null
+                  ? setReviewingAccess(true)
+                  : run(
+                      `enable:${pluginId}`,
+                      () => window.zenx.plugins.setEnabled(pluginId, !active),
+                      `${entry.name} ${active ? "disabled" : "enabled"}.`,
+                    ))
               }
             >
               {busy === `enable:${pluginId}`
@@ -619,6 +665,36 @@ function MarketplaceInventoryCard({
           />
         ) : null}
       </div>
+      {firstPartyAccess !== null && reviewingAccess ? (
+        <div className="plugin-access-wrap">
+          <PluginAccessReview
+            pluginId={firstPartyAccess}
+            permissions={plugin?.permissions ?? []}
+            onOpenGeneral={onOpenGeneral}
+          />
+          <div className="plugin-access-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setReviewingAccess(false)}
+            >
+              Close details
+            </button>
+            {active ? null : (
+              <button
+                type="button"
+                className="primary-button"
+                disabled={busy !== null || !entry.available}
+                onClick={() => void activateFirstParty()}
+              >
+                {busy === null
+                  ? `Continue enabling ${entry.name}`
+                  : "Applying…"}
+              </button>
+            )}
+          </div>
+        </div>
+      ) : null}
       {confirming ? (
         <div
           className="plugin-confirm"

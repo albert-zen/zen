@@ -52,6 +52,7 @@ import type {
 import type { AttachmentRef } from "../../../../../src/attachment.js";
 import type { MarketplaceCatalogLoadSnapshot } from "../../marketplace.js";
 import type { ChromeBridgeSettingsSnapshot } from "../../main/chrome-extension-bridge.js";
+import type { ZenXComputerReadinessSnapshot } from "../../main/computer-readiness.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
 import type {
   BrowserThreadRequest,
@@ -258,6 +259,10 @@ declare global {
         prepare(): Promise<ChromeBridgeSettingsSnapshot>;
         remove(): Promise<ChromeBridgeSettingsSnapshot>;
         openExtension(): Promise<void>;
+      };
+      computerReadiness: {
+        get(): Promise<ZenXComputerReadinessSnapshot>;
+        openSettings(kind: "accessibility" | "screen-recording"): Promise<void>;
       };
       browserObservation: {
         subscribe(

@@ -10,6 +10,7 @@
 - **Host Skills** — Host 保存标准目录的完整导入副本与独立可见性覆盖；ZAS 的统一发送入口按预算将自动目录和显式引用解析为带来源的 canonical 文本输入，重试从已有 Item 复用快照，恢复与压缩不重新读取目录。默认手动模式不自动披露任何元数据，禁用模式拒绝加载。
 - **ZenX 界面控件** — Renderer 的共享 Select、Popover、Dialog 使用无样式可访问性 primitives 与既有主题 tokens 统一键盘、焦点、浮层避让及可取消动效，只管理易失展示状态。
 - **Plugin UI 主题快照** — Host renderer 向 trusted/isolated surface 提供版本化、只读的颜色、密度与 reduced-motion 变量，主题变化仅更新展示，不重载插件或放宽隔离。
+- **ZenX 插件就绪预览** — Host 通过只读 IPC 投影当前平台许可和用户配置，Renderer 在启用 Browser/Computer 前显示 manifest 请求范围及分别可操作的准备步骤；此预览不代替原生 helper 与具体工具执行时的能力检查，也不保存授权事实。
   设置插件隐藏时保留文档及其消息桥的共同生命周期，使用 hidden/inert 禁止界面交互；普通编辑面板可用 Activity 暂停 effects，Host 设置刷新订阅按页面可见性启停。
 
 - **ZenX 共享浏览器** — Host 拥有的 WebContentsView 标签按 Thread 分组，以独立持久 profile 承载用户与 Agent 对同一页面 target 的操作；可信 Tool invocation 把 provider session 绑定到 Thread，窗口只挂载该 target 的实时视图，页面和绑定都不成为会话权威。
