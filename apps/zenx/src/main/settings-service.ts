@@ -6,6 +6,7 @@ import {
 import { inspectRtkResource, rtkExecutable } from "./rtk-resource.js";
 import { RTK_EXPERIMENT_SHA256 } from "../../../../src/shell-output-filter.js";
 import { createHash, randomUUID } from "node:crypto";
+import { ProviderLogoResources } from "./provider-logo-resource.js";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
@@ -139,6 +140,7 @@ export interface SettingsConfigurationControl {
   current(): Promise<SettingsConfigurationCurrent>;
 }
 export class ZenXSettingsService {
+  readonly #providerLogos: ProviderLogoResources;
   #configurationControl: SettingsConfigurationControl | undefined;
   #configurationResult: ConfigurationSaveResult | undefined;
   #pendingConfiguration: SettingsConfigurationCandidate | undefined;
@@ -293,6 +295,7 @@ export class ZenXSettingsService {
       transport: ProviderTransport | undefined,
     ) => ProviderFetch;
   }) {
+    this.#providerLogos = new ProviderLogoResources(options.userDataDirectory);
     this.#rtkResourcesDirectory = options.rtkResourcesDirectory;
     this.#dataDirectory = options.zenDataDirectory;
     this.#profilePath = path.join(
@@ -383,12 +386,28 @@ export class ZenXSettingsService {
     );
     const subscriptionProviderProfileId =
       this.#configuredSubscriptionProfileId(profile);
+    const logos = await Promise.all(
+      profile.providerProfiles.map(
+        async (provider) =>
+          [
+            provider.providerProfileId,
+            provider.logoResource === undefined
+              ? undefined
+              : await this.#providerLogos.dataUrl(provider.logoResource),
+          ] as const,
+      ),
+    );
     return {
       ...(this.#configurationResult
         ? { configuration: this.#configurationResult }
         : {}),
       rtk: await inspectRtkResource(this.#rtkResourcesDirectory),
       profile: structuredClone(profile),
+      providerLogoDataUrls: Object.fromEntries(
+        logos.filter(
+          (entry): entry is readonly [string, string] => entry[1] !== undefined,
+        ),
+      ),
       hasApiKey: await this.#vault.hasApiKey(
         this.#credentialReference(
           profile.defaultModel.providerProfileId,
@@ -1011,35 +1030,52 @@ export class ZenXSettingsService {
     provider: ZenXProviderProfile,
     apiKey?: string,
     baseRevision?: number,
+    logoUpload?: Uint8Array,
   ): Promise<void> {
     await this.#queueProfileOperation(async () => {
       this.#assertBaseRevision(baseRevision);
       const current = this.#requireProfile();
-      const next = validateHostProfile({
-        ...current,
-        providerProfiles: [...current.providerProfiles, provider],
-      });
-      validateConfiguredModelContexts(next, [
-        next.providerProfiles.find(
-          (candidate) =>
-            candidate.providerProfileId === provider.providerProfileId,
-        )!,
-      ]);
-      if (
-        provider.type === "openai-compatible" &&
-        (apiKey === undefined || apiKey.length === 0)
-      ) {
-        throw new Error(
-          `Provider profile ${provider.providerProfileId} has no API key`,
-        );
-      }
-      await this.#persistProfile(
-        next,
-        apiKey === undefined
+      if (provider.logoResource !== undefined)
+        throw new Error("Provider Logo resource is Host-owned");
+      const imported =
+        logoUpload === undefined
           ? undefined
-          : { providerProfileId: provider.providerProfileId, apiKey },
-      );
-      this.#profile = next;
+          : await this.#providerLogos.import(logoUpload);
+      const withLogo =
+        imported === undefined
+          ? provider
+          : { ...provider, logoResource: imported.resource };
+      try {
+        const next = validateHostProfile({
+          ...current,
+          providerProfiles: [...current.providerProfiles, withLogo],
+        });
+        validateConfiguredModelContexts(next, [
+          next.providerProfiles.find(
+            (candidate) =>
+              candidate.providerProfileId === provider.providerProfileId,
+          )!,
+        ]);
+        if (
+          provider.type === "openai-compatible" &&
+          (apiKey === undefined || apiKey.length === 0)
+        ) {
+          throw new Error(
+            `Provider profile ${provider.providerProfileId} has no API key`,
+          );
+        }
+        await this.#persistProfile(
+          next,
+          apiKey === undefined
+            ? undefined
+            : { providerProfileId: provider.providerProfileId, apiKey },
+        );
+        this.#profile = next;
+      } catch (error) {
+        if (imported?.created)
+          await this.#providerLogos.remove(imported.resource);
+        throw error;
+      }
     });
   }
 
@@ -1061,31 +1097,59 @@ export class ZenXSettingsService {
       if (provider.providerProfileId !== providerProfileId) {
         throw new Error("Provider profile id cannot be changed by edit");
       }
-      const providerProfiles = [...current.providerProfiles];
-      providerProfiles[index] = provider;
-      const next = validateHostProfile({
-        ...current,
-        providerProfiles,
-        defaultModel: options.defaultModel ?? current.defaultModel,
-        titleModel: options.titleModel ?? current.titleModel,
-      });
-      validateConfiguredModelContexts(next, [next.providerProfiles[index]!]);
+      const oldLogo = current.providerProfiles[index]!.logoResource;
       if (
-        provider.type === "openai-compatible" &&
-        (options.apiKey === undefined || options.apiKey.length === 0) &&
-        !(await this.#vault.hasApiKey(
-          this.#credentialReference(providerProfileId),
-        ))
-      ) {
-        throw new Error(`Provider profile ${providerProfileId} has no API key`);
+        provider.logoResource !== undefined &&
+        provider.logoResource !== oldLogo
+      )
+        throw new Error("Provider Logo resource is Host-owned");
+      const imported =
+        options.logoUpload instanceof Uint8Array
+          ? await this.#providerLogos.import(options.logoUpload)
+          : undefined;
+      const withLogo = {
+        ...provider,
+        ...(options.logoUpload === null
+          ? { logoResource: undefined }
+          : imported === undefined
+            ? { logoResource: oldLogo }
+            : { logoResource: imported.resource }),
+      };
+      try {
+        const providerProfiles = [...current.providerProfiles];
+        providerProfiles[index] = withLogo;
+        const next = validateHostProfile({
+          ...current,
+          providerProfiles,
+          defaultModel: options.defaultModel ?? current.defaultModel,
+          titleModel: options.titleModel ?? current.titleModel,
+        });
+        validateConfiguredModelContexts(next, [next.providerProfiles[index]!]);
+        if (
+          provider.type === "openai-compatible" &&
+          (options.apiKey === undefined || options.apiKey.length === 0) &&
+          !(await this.#vault.hasApiKey(
+            this.#credentialReference(providerProfileId),
+          ))
+        ) {
+          throw new Error(
+            `Provider profile ${providerProfileId} has no API key`,
+          );
+        }
+        await this.#persistProfile(
+          next,
+          options.apiKey === undefined || options.apiKey.length === 0
+            ? undefined
+            : { providerProfileId, apiKey: options.apiKey },
+        );
+        this.#profile = next;
+      } catch (error) {
+        if (imported?.created)
+          await this.#providerLogos.remove(imported.resource);
+        throw error;
       }
-      await this.#persistProfile(
-        next,
-        options.apiKey === undefined || options.apiKey.length === 0
-          ? undefined
-          : { providerProfileId, apiKey: options.apiKey },
-      );
-      this.#profile = next;
+      if (oldLogo !== undefined && oldLogo !== withLogo.logoResource)
+        await this.#removeUnusedProviderLogo(oldLogo);
     });
   }
 
@@ -1096,6 +1160,9 @@ export class ZenXSettingsService {
     await this.#queueProfileOperation(async () => {
       this.#assertBaseRevision(replacements.baseRevision);
       const current = this.#requireProfile();
+      const oldLogo = current.providerProfiles.find(
+        (candidate) => candidate.providerProfileId === providerProfileId,
+      )?.logoResource;
       if (
         !current.providerProfiles.some(
           (candidate) => candidate.providerProfileId === providerProfileId,
@@ -1129,9 +1196,27 @@ export class ZenXSettingsService {
       });
       await this.#persistProfile(next, undefined, [providerProfileId]);
       this.#profile = next;
+      if (oldLogo !== undefined) await this.#removeUnusedProviderLogo(oldLogo);
       // Removing a catalog entry must not revoke an in-flight OAuth identity.
       // Explicit sign-out remains the separate credential revocation action.
     });
+  }
+
+  async #removeUnusedProviderLogo(resource: string): Promise<void> {
+    if (
+      this.#requireProfile().providerProfiles.some(
+        (provider) => provider.logoResource === resource,
+      )
+    )
+      return;
+    await this.#providerLogos
+      .remove(resource)
+      .catch((error) =>
+        console.warn(
+          `Could not remove retired Provider Logo ${resource}`,
+          error,
+        ),
+      );
   }
 
   async addWorkspace(workspace: string): Promise<boolean> {

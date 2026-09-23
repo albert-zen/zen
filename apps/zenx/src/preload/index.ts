@@ -295,12 +295,14 @@ contextBridge.exposeInMainWorld("zenx", {
       provider: ZenXProviderProfile,
       apiKey?: string,
       baseRevision?: number,
+      logoUpload?: Uint8Array,
     ): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(
         ipcChannels.providerAdd,
         provider,
         apiKey,
         baseRevision,
+        logoUpload,
       ),
     editProvider: async (
       providerProfileId: string,

@@ -459,6 +459,8 @@ export function SettingsView({
                 onRetry={onRetryArchived}
                 onUnarchive={onUnarchive}
                 threads={archivedThreads}
+                providerLogoDataUrls={settings.providerLogoDataUrls}
+                providerProfiles={settings.profile.providerProfiles}
               />
             </Activity>
             {settings.configuration?.status === "unconfirmed" ? (
@@ -641,12 +643,16 @@ export function ArchivedThreadsPanel({
   onRetry,
   onUnarchive,
   threads,
+  providerLogoDataUrls,
+  providerProfiles,
 }: {
   error: string | null;
   loading: boolean;
   onRetry(): void;
   onUnarchive(thread: NativeThreadSummary): Promise<void>;
   threads: readonly NativeThreadSummary[];
+  providerLogoDataUrls?: Readonly<Record<string, string>>;
+  providerProfiles?: readonly ZenXProviderProfile[];
 }) {
   const [busyThreadId, setBusyThreadId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -689,6 +695,13 @@ export function ArchivedThreadsPanel({
         <div className="archived-thread-list">
           {threads.map((thread) => {
             const identity = threadModelIdentity(thread);
+            const providerProfileId =
+              thread.status === "systemError"
+                ? undefined
+                : thread.currentMetadata.providerProfileId;
+            const providerProfile = providerProfiles?.find(
+              (candidate) => candidate.providerProfileId === providerProfileId,
+            );
             const busy = busyThreadId === thread.threadId;
             const workspace =
               thread.status === "systemError"
@@ -701,7 +714,20 @@ export function ArchivedThreadsPanel({
                   <span title={workspace}>{workspace}</span>
                   {identity === null ? null : (
                     <small>
-                      <ProviderLogo kind={identity.providerKind} />
+                      <ProviderLogo
+                        kind={
+                          providerProfileId !== undefined &&
+                          (providerProfile === undefined ||
+                            providerProfile.logoResource !== undefined)
+                            ? "generic"
+                            : identity.providerKind
+                        }
+                        customSrc={
+                          providerProfileId === undefined
+                            ? undefined
+                            : providerLogoDataUrls?.[providerProfileId]
+                        }
+                      />
                       {identity.label}
                     </small>
                   )}
@@ -1169,9 +1195,12 @@ function ModelsPanel({
             )}
             mode={editor.mode}
             provider={editor.provider}
+            logoDataUrl={
+              settings.providerLogoDataUrls?.[editor.provider.providerProfileId]
+            }
             titleModel={settings.profile.titleModel}
             onCancel={() => setEditor(null)}
-            onSubmit={async (provider, apiKey, replacements) => {
+            onSubmit={async (provider, apiKey, replacements, logoUpload) => {
               const success = await runMutation(
                 editor.mode === "add" ? "provider-add" : "provider-edit",
                 editor.mode === "add" ? "Provider added" : "Provider saved",
@@ -1181,6 +1210,7 @@ function ModelsPanel({
                         provider,
                         apiKey,
                         editor.baseRevision,
+                        logoUpload ?? undefined,
                       )
                     : await window.zenx.settings.editProvider(
                         editor.provider.providerProfileId,
@@ -1189,6 +1219,7 @@ function ModelsPanel({
                           ...replacements,
                           baseRevision: editor.baseRevision,
                           ...(apiKey === undefined ? {} : { apiKey }),
+                          ...(logoUpload === undefined ? {} : { logoUpload }),
                         },
                       ),
                 (authoritative) => {
@@ -1306,7 +1337,16 @@ function ProviderProfileCard({
   return (
     <article className="page-card provider-profile-card">
       <div className="provider-profile-main">
-        <ProviderLogo kind={providerLogoKind(provider)} />
+        <ProviderLogo
+          kind={
+            provider.logoResource === undefined
+              ? providerLogoKind(provider)
+              : "generic"
+          }
+          customSrc={
+            settings.providerLogoDataUrls?.[provider.providerProfileId]
+          }
+        />
         <div>
           <div className="provider-profile-name">
             <strong>{provider.displayName}</strong>
@@ -1361,6 +1401,7 @@ function ProviderEditor({
   onCancel,
   onSubmit,
   provider: initialProvider,
+  logoDataUrl,
   titleModel,
 }: {
   allProfiles: readonly ZenXProviderProfile[];
@@ -1373,8 +1414,10 @@ function ProviderEditor({
     provider: ZenXProviderProfile,
     apiKey: string | undefined,
     replacements: ZenXProviderEditOptions,
+    logoUpload: Uint8Array | null | undefined,
   ): Promise<"success" | "committed-error" | "failed">;
   provider: ZenXProviderProfile;
+  logoDataUrl?: string;
   titleModel: ZenXModelReference;
 }) {
   const [provider, setProvider] = useState(initialProvider);
@@ -1392,6 +1435,9 @@ function ProviderEditor({
   const [probingModel, setProbingModel] = useState<string | null>(null);
   const [catalogStatus, setCatalogStatus] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
+  const [logoUpload, setLogoUpload] = useState<Uint8Array | null | undefined>();
+  const [logoFilename, setLogoFilename] = useState<string | null>(null);
+  const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [defaultReplacement, setDefaultReplacement] = useState("");
   const [titleReplacement, setTitleReplacement] = useState("");
@@ -1492,6 +1538,7 @@ function ProviderEditor({
             normalizedProvider,
             apiKey.trim().length === 0 ? undefined : apiKey,
             replacements,
+            logoUpload,
           );
         }}
       >
@@ -1542,6 +1589,76 @@ function ProviderEditor({
             </>
           ) : null}
         </div>
+        {provider.type === "openai-compatible" ? (
+          <div className="settings-note" aria-label="Provider Logo">
+            <ProviderLogo
+              kind={
+                provider.logoResource === undefined
+                  ? providerLogoKind(provider)
+                  : "generic"
+              }
+              customSrc={
+                logoUpload === null ? undefined : (logoPreview ?? logoDataUrl)
+              }
+            />
+            <label className="field">
+              <span>
+                Provider Logo (PNG, JPEG, or WebP; up to 512 KiB and 1024 ×
+                1024)
+              </span>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0];
+                  if (file === undefined) return;
+                  if (
+                    !["image/png", "image/jpeg", "image/webp"].includes(
+                      file.type,
+                    )
+                  ) {
+                    setValidationError(
+                      "Choose a PNG, JPEG, or WebP Provider Logo",
+                    );
+                    return;
+                  }
+                  if (file.size > 512 * 1024) {
+                    setValidationError("Provider Logo must be at most 512 KiB");
+                    return;
+                  }
+                  void file
+                    .arrayBuffer()
+                    .then((bytes) => {
+                      setLogoUpload(new Uint8Array(bytes));
+                      setLogoFilename(file.name);
+                      setLogoPreview(
+                        `data:${file.type};base64,${base64FromBytes(new Uint8Array(bytes))}`,
+                      );
+                      setValidationError(null);
+                    })
+                    .catch((reason) =>
+                      setValidationError(describeError(reason)),
+                    );
+                }}
+              />
+            </label>
+            {logoFilename === null ? null : <span>{logoFilename}</span>}
+            {logoUpload !== null &&
+            (logoUpload !== undefined || logoDataUrl !== undefined) ? (
+              <button
+                className="quiet-button"
+                type="button"
+                onClick={() => {
+                  setLogoUpload(null);
+                  setLogoFilename(null);
+                  setLogoPreview(null);
+                }}
+              >
+                Remove Logo
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {provider.type === "openai-compatible" ? (
           <p className="settings-note credential-note">
             Stored keys are never shown. Enter a value only to add or replace
@@ -2335,6 +2452,12 @@ function providerTypeLabel(provider: ZenXProviderProfile): string {
   if (provider.type === "fake") return "Local demo";
   if (provider.type === "openai-subscription") return "OpenAI subscription";
   return "OpenAI-compatible API";
+}
+
+function base64FromBytes(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
 function providerLogoKind(provider: ZenXProviderProfile) {

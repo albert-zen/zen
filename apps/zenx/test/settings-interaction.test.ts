@@ -507,11 +507,16 @@ test("a saved Unknown model offers a user-triggered image probe and shows its pe
 
 test("Add custom provider submits an opaque identity, credential, and repeatable model rows", async () => {
   let added:
-    { provider: ZenXProviderProfile; apiKey: string | undefined } | undefined;
+    | {
+        provider: ZenXProviderProfile;
+        apiKey: string | undefined;
+        logoUpload: Uint8Array | undefined;
+      }
+    | undefined;
   const harness = await mountSettings("models", {
     initialSettings: settings,
-    addProvider: async (provider, apiKey) => {
-      added = { provider, apiKey };
+    addProvider: async (provider, apiKey, _baseRevision, logoUpload) => {
+      added = { provider, apiKey, logoUpload };
       return {
         ...settings,
         profile: {
@@ -532,6 +537,21 @@ test("Add custom provider submits an opaque identity, credential, and repeatable
       "https://models.acme.example/v1",
     );
     await changeControl(requiredInput("API key"), "secret-replacement");
+    const logoInput = document.querySelector<HTMLInputElement>(
+      'input[type="file"][accept="image/png,image/jpeg,image/webp"]',
+    );
+    assert.ok(logoInput);
+    const logoBytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    Object.defineProperty(logoInput, "files", {
+      value: [new window.File([logoBytes], "acme.png", { type: "image/png" })],
+    });
+    await act(async () => {
+      logoInput.dispatchEvent(new window.Event("change", { bubbles: true }));
+      await Promise.resolve();
+    });
     await changeControl(requiredInput("Model 1"), "shared-model");
     await changeControl(
       requiredInput("Model 1 context window (Required)"),
@@ -547,6 +567,7 @@ test("Add custom provider submits an opaque identity, credential, and repeatable
     await waitFor(() => added);
 
     assert.equal(added?.apiKey, "secret-replacement");
+    assert.deepEqual(Buffer.from(added?.logoUpload ?? []), logoBytes);
     assert.equal(added?.provider.type, "openai-compatible");
     assert.equal(added?.provider.displayName, "Acme AI");
     assert.deepEqual(
@@ -1564,6 +1585,8 @@ async function mountSettings(
     addProvider?(
       provider: ZenXProviderProfile,
       apiKey?: string,
+      baseRevision?: number,
+      logoUpload?: Uint8Array,
     ): Promise<PublicHostSettings>;
     editProvider?(
       providerProfileId: string,

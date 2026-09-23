@@ -2,6 +2,8 @@
 
 ## 核心概念
 
+- **ZenX Provider Logo 资源** — Host 将用户选择的有界位图复制为受管的内容寻址资源，Provider profile 只保存资源引用并向 Renderer 投影可显示图片；缺失或损坏时展示默认标识，不进入 Thread ItemList。
+
 - **ZenX 输入选择器** — Renderer 从 Host 有界 cwd 文件搜索与完整 Native Thread summaries 派生候选，将选择保存在易失草稿引用标签并在既有发送入口展开为明确定位文本；引用不自动读取内容、注入历史或改变线程执行配置。
 
 - **ZenX Thread Target** — Host 从 App Server 当前列表与 workspace 身份投影解析完整 ID、唯一前缀或精确标题，歧义只返回易读候选；共享解析不保存索引或拥有会话语义。

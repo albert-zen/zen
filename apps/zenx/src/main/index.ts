@@ -1454,12 +1454,20 @@ function installSettingsIpc(
       provider: ZenXProviderProfile,
       apiKey?: unknown,
       baseRevision?: number,
+      logoUpload?: unknown,
     ) => {
       if (apiKey !== undefined && typeof apiKey !== "string") {
         throw new Error("Invalid API key");
       }
       requireConfigurationRevision(baseRevision);
-      await settings.addProviderProfile(provider, apiKey, baseRevision);
+      if (logoUpload !== undefined && !(logoUpload instanceof Uint8Array))
+        throw new Error("Invalid Provider Logo upload");
+      await settings.addProviderProfile(
+        provider,
+        apiKey,
+        baseRevision,
+        logoUpload,
+      );
       await startHostIfNeeded();
       return await settings.publicSettings();
     },
@@ -1478,6 +1486,12 @@ function installSettingsIpc(
       if (options?.apiKey !== undefined && typeof options.apiKey !== "string") {
         throw new Error("Invalid API key");
       }
+      if (
+        options?.logoUpload !== undefined &&
+        options.logoUpload !== null &&
+        !(options.logoUpload instanceof Uint8Array)
+      )
+        throw new Error("Invalid Provider Logo upload");
       requireConfigurationRevision(options?.baseRevision);
       await settings.editProviderProfile(providerProfileId, provider, options);
       await startHostIfNeeded();

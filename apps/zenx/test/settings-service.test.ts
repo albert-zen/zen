@@ -1312,6 +1312,90 @@ test("adds, edits, and deletes Provider profiles with atomic replacements and is
   }
 });
 
+test("custom Provider Logo survives restart, rejects invalid uploads, and falls back when its resource is missing", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-provider-logo-"),
+  );
+  try {
+    const first = settingsFor(directory, inactiveSubscription());
+    await first.initialize({ ZENX_PROVIDER: "fake" });
+    const provider = compatibleProfile("custom-logo").providerProfiles[0]!;
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    const before = (await first.publicSettings()).profile;
+    await assert.rejects(
+      first.addProviderProfile(
+        provider,
+        "key",
+        before.revision,
+        new Uint8Array([1, 2, 3]),
+      ),
+      /valid PNG, JPEG, or WebP/u,
+    );
+    const oversizedDimensions = Buffer.from(png);
+    oversizedDimensions.writeUInt32BE(1025, 16);
+    await assert.rejects(
+      first.addProviderProfile(
+        provider,
+        "key",
+        before.revision,
+        oversizedDimensions,
+      ),
+      /dimensions must be between 1 and 1024/u,
+    );
+    assert.equal(
+      (await first.publicSettings()).profile.providerProfiles.some(
+        (entry) => entry.providerProfileId === provider.providerProfileId,
+      ),
+      false,
+    );
+    await first.addProviderProfile(provider, "key", before.revision, png);
+    const saved = await first.publicSettings();
+    const resource = saved.profile.providerProfiles.find(
+      (entry) => entry.providerProfileId === provider.providerProfileId,
+    )?.logoResource;
+    assert.match(resource ?? "", /^[a-f0-9]{64}\.png$/u);
+    assert.match(
+      saved.providerLogoDataUrls?.[provider.providerProfileId] ?? "",
+      /^data:image\/png;base64,/u,
+    );
+    const reloaded = settingsFor(directory, inactiveSubscription());
+    await reloaded.initialize({});
+    assert.equal(
+      (await reloaded.publicSettings()).profile.providerProfiles.find(
+        (entry) => entry.providerProfileId === provider.providerProfileId,
+      )?.logoResource,
+      resource,
+    );
+    assert.match(
+      (await reloaded.publicSettings()).providerLogoDataUrls?.[
+        provider.providerProfileId
+      ] ?? "",
+      /^data:image\/png;base64,/u,
+    );
+    await unlink(path.join(directory, "provider-logos", resource!));
+    assert.equal(
+      (await reloaded.publicSettings()).providerLogoDataUrls?.[
+        provider.providerProfileId
+      ],
+      undefined,
+    );
+    await reloaded.editProviderProfile(provider.providerProfileId, provider, {
+      logoUpload: null,
+    });
+    assert.equal(
+      (await reloaded.publicSettings()).profile.providerProfiles.find(
+        (entry) => entry.providerProfileId === provider.providerProfileId,
+      )?.logoResource,
+      undefined,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("provider add, edit, and settings save reject incomplete context metadata without persisting", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-required-context-"),

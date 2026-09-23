@@ -201,6 +201,7 @@ declare global {
           provider: ZenXProviderProfile,
           apiKey?: string,
           baseRevision?: number,
+          logoUpload?: Uint8Array,
         ): Promise<PublicHostSettings>;
         editProvider(
           providerProfileId: string,
