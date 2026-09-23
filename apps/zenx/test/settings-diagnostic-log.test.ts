@@ -412,6 +412,63 @@ test("host outcome distinguishes rejected, committed error, and unconfirmed save
   }
 });
 
+test("returned configuration status wins without a second settings read", async () => {
+  const outcomes: unknown[] = [];
+  let reads = 0;
+  const reply = await runDiagnosedProviderMutation({
+    log: {
+      record: async (event) => {
+        outcomes.push(event);
+        return true;
+      },
+    },
+    operation: "edit",
+    attemptId,
+    configurationStatusFromResult: (settings) => settings.configuration.status,
+    configurationStatus: async () => {
+      reads += 1;
+      throw new Error("a later settings projection failed");
+    },
+    mutate: async () => ({ configuration: { status: "unconfirmed" } }),
+  });
+  assert.equal(reads, 0);
+  assert.deepEqual(reply, {
+    ok: true,
+    settings: { configuration: { status: "unconfirmed" } },
+    outcome: "unconfirmed",
+    attemptId,
+  });
+  assert.equal((outcomes[0] as { outcome: string }).outcome, "unconfirmed");
+});
+
+test("a failed fallback status read cannot turn an uncertain save into success", async () => {
+  const outcomes: unknown[] = [];
+  const reply = await runDiagnosedProviderMutation({
+    log: {
+      record: async (event) => {
+        outcomes.push(event);
+        return true;
+      },
+    },
+    operation: "add",
+    attemptId,
+    configurationStatus: async () => {
+      throw new Error("settings projection failed after save");
+    },
+    mutate: async ({ markCommitted }) => {
+      markCommitted();
+      return "saved";
+    },
+  });
+  assert.deepEqual(reply, {
+    ok: true,
+    settings: "saved",
+    outcome: "unconfirmed",
+    attemptId,
+  });
+  assert.equal((outcomes[0] as { outcome: string }).outcome, "unconfirmed");
+});
+
 test("diagnostic write failure never changes a save result", async () => {
   const root = await mkdtemp(
     path.join(os.tmpdir(), "zenx-settings-diagnostic-"),

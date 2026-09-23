@@ -157,7 +157,8 @@ export async function runDiagnosedProviderMutation<T>(options: {
   attemptId?: string;
   preflight?(): void;
   knownRejectionCode?(error: unknown): ProviderKnownRejectionCode | undefined;
-  configurationStatus(): Promise<string | undefined>;
+  configurationStatus?(): Promise<string | undefined>;
+  configurationStatusFromResult?(result: T): string | undefined;
   mutate(context: { markCommitted(): void }): Promise<T>;
 }): Promise<ProviderMutationReply<T>> {
   const attemptId =
@@ -174,10 +175,21 @@ export async function runDiagnosedProviderMutation<T>(options: {
         committed = true;
       },
     });
+    let status: string | undefined;
+    try {
+      status = options.configurationStatusFromResult
+        ? options.configurationStatusFromResult(result)
+        : await options.configurationStatus?.();
+    } catch {
+      // The mutation completed, but application status could not be read.
+      status = undefined;
+    }
     const outcome =
-      (await readAsyncSafely(options.configurationStatus)) === "unconfirmed"
-        ? "unconfirmed"
-        : "success";
+      status === "applied" ||
+      status === "unchanged" ||
+      status === "pending-restart"
+        ? "success"
+        : "unconfirmed";
     await recordSafely(options.log, {
       event: "provider-save-outcome",
       attemptId,
@@ -217,16 +229,6 @@ export async function runDiagnosedProviderMutation<T>(options: {
             : "save-unconfirmed",
       attemptId,
     };
-  }
-}
-
-async function readAsyncSafely<T>(
-  read: () => Promise<T>,
-): Promise<T | undefined> {
-  try {
-    return await read();
-  } catch {
-    return undefined;
   }
 }
 

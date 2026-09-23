@@ -29,6 +29,7 @@ import { AppServerManager } from "./app-server-manager.js";
 import type { ApprovalDecision } from "./app-server-manager.js";
 import { ZenXCredentialVault } from "./credential-vault.js";
 import type {
+  PublicHostSettings,
   ZenXProviderDeleteReplacements,
   ZenXProviderEditOptions,
   ZenXProviderProfile,
@@ -1589,15 +1590,14 @@ function installSettingsIpc(
       logoUpload?: unknown,
       diagnosticAttemptId?: unknown,
     ) => {
-      return await runDiagnosedProviderMutation({
+      return await runDiagnosedProviderMutation<PublicHostSettings>({
         log: diagnostics,
         operation: "add",
         attemptId:
           typeof diagnosticAttemptId === "string"
             ? diagnosticAttemptId
             : undefined,
-        configurationStatus: async () =>
-          (await settings.publicSettings()).configuration?.status,
+        configurationStatusFromResult: (result) => result.configuration?.status,
         knownRejectionCode: providerKnownRejectionCode,
         preflight: () => {
           if (apiKey !== undefined && typeof apiKey !== "string") {
@@ -1630,15 +1630,14 @@ function installSettingsIpc(
       options?: ZenXProviderEditOptions,
       diagnosticAttemptId?: unknown,
     ) => {
-      return await runDiagnosedProviderMutation({
+      return await runDiagnosedProviderMutation<PublicHostSettings>({
         log: diagnostics,
         operation: "edit",
         attemptId:
           typeof diagnosticAttemptId === "string"
             ? diagnosticAttemptId
             : undefined,
-        configurationStatus: async () =>
-          (await settings.publicSettings()).configuration?.status,
+        configurationStatusFromResult: (result) => result.configuration?.status,
         knownRejectionCode: providerKnownRejectionCode,
         preflight: () => {
           if (typeof providerProfileId !== "string") {
