@@ -17,6 +17,7 @@ type ComputerProbeCode =
 type PluginCapabilityCode = "browser" | "computer" | "other";
 type PluginFailureCode =
   | "discovery-error"
+  | "plugin-startup-failed"
   | "provider-unavailable"
   | "provider-fallback"
   | "provider-integrity-failed";
@@ -75,6 +76,7 @@ const pluginCapabilities = new Set<PluginCapabilityCode>([
 ]);
 const pluginFailures = new Set<PluginFailureCode>([
   "discovery-error",
+  "plugin-startup-failed",
   "provider-unavailable",
   "provider-fallback",
   "provider-integrity-failed",
@@ -160,6 +162,7 @@ export class OperationalDiagnosticLog {
   #lastComputer?: string;
   #discoveryErrorCount = 0;
   #providerFailures = new Map<string, PluginFailureCode | "healthy">();
+  #pendingObservation: Promise<void> = Promise.resolve();
 
   constructor(userDataDirectory: string, options: { maxBytes?: number } = {}) {
     this.#sink = new BoundedLocalDiagnosticLog({
@@ -170,77 +173,95 @@ export class OperationalDiagnosticLog {
     });
   }
 
-  async observeAppServer(status: AppServerHostStatus): Promise<void> {
-    const code = appServerCode(status);
-    if (code === this.#lastAppServer) return;
-    this.#lastAppServer = code;
-    await this.#append({ event: "app-server", status: code });
-  }
-
-  async observeComputer(
-    snapshot: ZenXComputerReadinessSnapshot,
-  ): Promise<void> {
-    const event = computerEvent(snapshot);
-    const signature = [
-      event.status,
-      event.accessibility,
-      event.accessibilityProbe,
-      event.screenCaptureProbe,
-    ].join(":");
-    if (signature === this.#lastComputer) return;
-    this.#lastComputer = signature;
-    await this.#append(event);
-  }
-
-  async observePlugins(diagnostics: ZenXPluginDiagnostics): Promise<void> {
-    const events: Array<Extract<OperationalEvent, { event: "plugin" }>> = [];
-    if (diagnostics.discoveryErrors.length < this.#discoveryErrorCount)
-      this.#discoveryErrorCount = 0;
-    if (diagnostics.discoveryErrors.length > this.#discoveryErrorCount) {
-      this.#discoveryErrorCount = diagnostics.discoveryErrors.length;
-      events.push({
-        event: "plugin",
-        reason: "discovery-error",
-        capability: "other",
-      });
-    }
-    const current = new Map<string, PluginFailureCode | "healthy">();
-    for (const diagnostic of diagnostics.providerDiagnostics) {
-      const key = `${diagnostic.capabilityId}\0${diagnostic.providerId}`;
-      const reason: PluginFailureCode | "healthy" =
-        diagnostic.integrity === "failed"
-          ? "provider-integrity-failed"
-          : diagnostic.status === "unavailable"
-            ? "provider-unavailable"
-            : diagnostic.status === "fallback"
-              ? "provider-fallback"
-              : "healthy";
-      current.set(key, reason);
-      if (reason === "healthy" || this.#providerFailures.get(key) === reason)
-        continue;
-      events.push({
-        event: "plugin",
-        reason,
-        capability: pluginCapabilityCode(diagnostic.capabilityId),
-      });
-    }
-    this.#providerFailures = current;
-    for (const event of events) await this.#append(event);
-  }
-
-  async recordPluginStartupFailure(): Promise<void> {
-    await this.#append({
-      event: "plugin",
-      reason: "discovery-error",
-      capability: "other",
+  observeAppServer(status: AppServerHostStatus): Promise<void> {
+    return this.#enqueue(async () => {
+      const code = appServerCode(status);
+      if (code === this.#lastAppServer) return;
+      if (await this.#append({ event: "app-server", status: code }))
+        this.#lastAppServer = code;
     });
   }
 
-  async #append(event: OperationalEvent): Promise<void> {
+  observeComputer(snapshot: ZenXComputerReadinessSnapshot): Promise<void> {
+    return this.#enqueue(async () => {
+      const event = computerEvent(snapshot);
+      const signature = [
+        event.status,
+        event.accessibility,
+        event.accessibilityProbe,
+        event.screenCaptureProbe,
+      ].join(":");
+      if (signature === this.#lastComputer) return;
+      if (await this.#append(event)) this.#lastComputer = signature;
+    });
+  }
+
+  observePlugins(diagnostics: ZenXPluginDiagnostics): Promise<void> {
+    return this.#enqueue(async () => {
+      const errorCount = diagnostics.discoveryErrors.length;
+      if (errorCount < this.#discoveryErrorCount) this.#discoveryErrorCount = 0;
+      if (
+        errorCount > this.#discoveryErrorCount &&
+        (await this.#append({
+          event: "plugin",
+          reason: "discovery-error",
+          capability: "other",
+        }))
+      )
+        this.#discoveryErrorCount = errorCount;
+
+      const current = new Map<string, PluginFailureCode | "healthy">();
+      for (const diagnostic of diagnostics.providerDiagnostics) {
+        const key = `${diagnostic.capabilityId}\0${diagnostic.providerId}`;
+        const reason: PluginFailureCode | "healthy" =
+          diagnostic.integrity === "failed"
+            ? "provider-integrity-failed"
+            : diagnostic.status === "unavailable"
+              ? "provider-unavailable"
+              : diagnostic.status === "fallback"
+                ? "provider-fallback"
+                : "healthy";
+        const previous = this.#providerFailures.get(key);
+        if (reason === "healthy" || previous === reason) {
+          current.set(key, reason);
+          continue;
+        }
+        if (
+          await this.#append({
+            event: "plugin",
+            reason,
+            capability: pluginCapabilityCode(diagnostic.capabilityId),
+          })
+        )
+          current.set(key, reason);
+        else if (previous !== undefined) current.set(key, previous);
+      }
+      this.#providerFailures = current;
+    });
+  }
+
+  recordPluginStartupFailure(): Promise<void> {
+    return this.#enqueue(async () => {
+      await this.#append({
+        event: "plugin",
+        reason: "plugin-startup-failed",
+        capability: "other",
+      });
+    });
+  }
+
+  #enqueue(observe: () => Promise<void>): Promise<void> {
+    const operation = this.#pendingObservation.then(observe);
+    this.#pendingObservation = operation.catch(() => undefined);
+    return this.#pendingObservation;
+  }
+
+  async #append(event: OperationalEvent): Promise<boolean> {
     try {
-      await this.#sink.record(event);
+      return await this.#sink.record(event);
     } catch {
       // Support logging must never change a product operation's outcome.
+      return false;
     }
   }
 }

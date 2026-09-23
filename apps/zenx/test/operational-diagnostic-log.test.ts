@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -178,6 +185,85 @@ test("operational log has a fixed rotation budget and ignores filesystem failure
     const unusable = new OperationalDiagnosticLog(blocked);
     await assert.doesNotReject(
       unusable.observeAppServer({ type: "error", message: "private" }),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a failed write can be retried with the same observed state after storage recovers", async () => {
+  const root = await temporaryDirectory();
+  try {
+    const userData = path.join(root, "blocked");
+    await writeFile(userData, "not a directory");
+    const log = new OperationalDiagnosticLog(userData);
+    const appServer = { type: "error" as const, message: "private" };
+    const computer = {
+      platform: "darwin" as const,
+      accessibility: "needs-setup" as const,
+      screenRecording: "denied" as const,
+      foregroundControlEnabled: false,
+    };
+    const plugins = {
+      discoveryErrors: ["private error"],
+      providerDiagnostics: [
+        {
+          capabilityId: "browser",
+          providerId: "private-provider",
+          status: "unavailable" as const,
+          interactionModes: [] as [],
+          capabilities: [] as [],
+        },
+      ],
+    };
+    await log.observeAppServer(appServer);
+    await log.observeComputer(computer);
+    await log.observePlugins(plugins);
+    await rm(userData);
+    await mkdir(userData);
+    await log.observeAppServer(appServer);
+    await log.observeComputer(computer);
+    await log.observePlugins(plugins);
+    assert.deepEqual(
+      (await records(userData)).map((entry) => [
+        entry.event,
+        entry.status ?? entry.reason,
+      ]),
+      [
+        ["app-server", "error"],
+        ["computer-readiness", "denied"],
+        ["plugin", "discovery-error"],
+        ["plugin", "provider-unavailable"],
+      ],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("concurrent reports of one state write a single diagnostic record", async () => {
+  const root = await temporaryDirectory();
+  try {
+    const log = new OperationalDiagnosticLog(root);
+    await Promise.all(
+      Array.from({ length: 6 }, () =>
+        log.observeAppServer({ type: "error", message: "private" }),
+      ),
+    );
+    assert.equal((await records(root)).length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("plugin startup failure uses a lifecycle code instead of claiming discovery failed", async () => {
+  const root = await temporaryDirectory();
+  try {
+    const log = new OperationalDiagnosticLog(root);
+    await log.recordPluginStartupFailure();
+    assert.deepEqual(
+      (await records(root)).map((entry) => [entry.event, entry.reason]),
+      [["plugin", "plugin-startup-failed"]],
     );
   } finally {
     await rm(root, { recursive: true, force: true });
