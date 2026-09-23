@@ -664,6 +664,29 @@ function computerTargetKey(target: ComputerTarget): string {
   });
 }
 
+export async function retryDesktopSourceEnumeration<T>(
+  getSources: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await getSources();
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      error.message !== "Failed to get sources"
+    ) {
+      throw new Error("Window source enumeration failed", { cause: error });
+    }
+  }
+  await new Promise<void>((resolve) => setTimeout(resolve, 150));
+  try {
+    return await getSources();
+  } catch (error) {
+    throw new Error("Window source enumeration failed after retry", {
+      cause: error,
+    });
+  }
+}
+
 export class ElectronMacComputerBackend implements ZenXComputerBackend {
   readonly #artifactDirectory: string;
   readonly #expiryTimers = new Set<NodeJS.Timeout>();
@@ -864,11 +887,13 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
 
   async #captureWindowId(windowId: number) {
     const { desktopCapturer } = await import("electron");
-    const sources = await desktopCapturer.getSources({
-      types: ["window"],
-      thumbnailSize: { width: 1600, height: 1000 },
-      fetchWindowIcons: false,
-    });
+    const sources = await retryDesktopSourceEnumeration(() =>
+      desktopCapturer.getSources({
+        types: ["window"],
+        thumbnailSize: { width: 1600, height: 1000 },
+        fetchWindowIcons: false,
+      }),
+    );
     const source = sources.find((candidate) =>
       candidate.id.startsWith(`window:${String(windowId)}:`),
     );

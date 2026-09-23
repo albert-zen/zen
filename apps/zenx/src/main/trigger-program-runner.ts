@@ -38,7 +38,7 @@ export interface TriggerProgramRunInput {
 }
 
 export function processTableTimeoutMs(platform: NodeJS.Platform): number {
-  return platform === "win32" ? 8_000 : 750;
+  return platform === "win32" ? 20_000 : 750;
 }
 
 export interface TriggerProgramRunResult {

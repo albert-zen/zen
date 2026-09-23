@@ -7,6 +7,7 @@ import {
   ComputerZenXCapabilityPackage,
   MacForegroundInputDriver,
   resolveMacNativeHelperExecutable,
+  retryDesktopSourceEnumeration,
   runProcess,
   selectComputerInspectionControls,
   type ComputerControlSelector,
@@ -24,6 +25,29 @@ const buttonControl: ComputerControlSelector = {
   observationId: "observation-1",
   targetId: "button",
 };
+
+test("window source enumeration retries one transient Electron failure", async () => {
+  let attempts = 0;
+  const result = await retryDesktopSourceEnumeration(async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("Failed to get sources");
+    return ["window:42:0"];
+  });
+  assert.deepEqual(result, ["window:42:0"]);
+  assert.equal(attempts, 2);
+});
+
+test("window source enumeration preserves persistent failure after one retry", async () => {
+  let attempts = 0;
+  await assert.rejects(
+    retryDesktopSourceEnumeration(async () => {
+      attempts += 1;
+      throw new Error("Failed to get sources");
+    }),
+    /Window source enumeration failed after retry/u,
+  );
+  assert.equal(attempts, 2);
+});
 
 test("computer vertical slice uses only targeted AX operations and does not echo set values", async () => {
   const calls: string[] = [];
