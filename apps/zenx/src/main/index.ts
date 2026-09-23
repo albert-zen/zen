@@ -630,12 +630,14 @@ async function bootstrapZenX(): Promise<void> {
     }
   } catch (error) {
     bootstrapFence.rethrowIfCancelled(error);
-    console.error("Could not start Zen App Server", error);
+    console.error(
+      appServerManager === undefined
+        ? "Could not start ZenX"
+        : "Could not start Zen App Server",
+      error,
+    );
     if (appServerManager === undefined) {
-      void operationalDiagnostics.observeAppServer({
-        type: "error",
-        message: "",
-      });
+      void operationalDiagnostics.recordBootstrapFailure();
       installFailedProtocolIpc(
         error instanceof Error ? error.message : String(error),
       );

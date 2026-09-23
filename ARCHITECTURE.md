@@ -249,8 +249,8 @@
   Renderer 原文、Provider/模型身份、URL、凭证和错误文本都不进入该日志，写入失败不改变保存结果。
   诊断记录只用于排查本机产品操作，不是 Thread、Turn 或工具执行事实，不替代 canonical ItemList，
   也不成为配置、凭证或会话状态的第二份权威。后续其他 Host 操作可复用有界存储，事件仍需各自的严格白名单。
-- **ZenX 运行诊断投影** — 主进程把 App Server 状态转移、Computer 权限与只读探测状态变化、
-  插件发现、初始化失败及 Browser/Computer Provider 选择失败映射成固定状态码，写入独立的有界本机日志；
+- **ZenX 运行诊断投影** — 主进程把桌面启动准备失败、App Server 状态转移、Computer 权限与只读探测状态变化、
+  插件发现、安装与初始化失败及 Browser/Computer Provider 选择失败映射成固定状态码，写入独立的有界本机日志；
   原始 stderr、路径、窗口标题、Provider 标识与任意错误文本都不进入该投影。它是可丢弃的支持数据，
   写入失败不阻断运行，也不代表会话或配置事实；用户可从 General 设置主动打开目录，不自动分享。
 - **ConfigurationPreCommitError** — 设置服务用这个有类型的错误表示配置变更在写入前被版本冲突或待确认状态拒绝，让诊断日志能准确区分确定失败与结果未确认。

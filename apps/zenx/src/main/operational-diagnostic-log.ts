@@ -23,6 +23,7 @@ type PluginFailureCode =
   | "provider-integrity-failed";
 
 type OperationalEvent =
+  | { event: "desktop-bootstrap"; status: "failed" }
   | { event: "app-server"; status: AppServerCode }
   | {
       event: "computer-readiness";
@@ -90,6 +91,10 @@ export function normalizeOperationalDiagnostic(
   if (input === null || typeof input !== "object") return null;
   const value = input as Record<string, unknown>;
   const timestamp = now.toISOString();
+  if (value.event === "desktop-bootstrap") {
+    if (value.status !== "failed") return null;
+    return { timestamp, event: "desktop-bootstrap", status: "failed" };
+  }
   if (value.event === "app-server") {
     if (!appServerCodes.has(value.status as AppServerCode)) return null;
     return {
@@ -161,6 +166,7 @@ export class OperationalDiagnosticLog {
   #lastAppServer?: AppServerCode;
   #lastComputer?: string;
   #discoveryErrorCount = 0;
+  #bundledStartupFailureCount = 0;
   #providerFailures = new Map<string, PluginFailureCode | "healthy">();
   #pendingObservation: Promise<void> = Promise.resolve();
 
@@ -182,6 +188,12 @@ export class OperationalDiagnosticLog {
     });
   }
 
+  recordBootstrapFailure(): Promise<void> {
+    return this.#enqueue(async () => {
+      await this.#append({ event: "desktop-bootstrap", status: "failed" });
+    });
+  }
+
   observeComputer(snapshot: ZenXComputerReadinessSnapshot): Promise<void> {
     return this.#enqueue(async () => {
       const event = computerEvent(snapshot);
@@ -198,7 +210,11 @@ export class OperationalDiagnosticLog {
 
   observePlugins(diagnostics: ZenXPluginDiagnostics): Promise<void> {
     return this.#enqueue(async () => {
-      const errorCount = diagnostics.discoveryErrors.length;
+      const startupCount = diagnostics.bundledStartupFailureCount;
+      const errorCount = Math.max(
+        0,
+        diagnostics.discoveryErrors.length - startupCount,
+      );
       if (errorCount < this.#discoveryErrorCount) this.#discoveryErrorCount = 0;
       if (
         errorCount > this.#discoveryErrorCount &&
@@ -209,6 +225,18 @@ export class OperationalDiagnosticLog {
         }))
       )
         this.#discoveryErrorCount = errorCount;
+
+      if (startupCount < this.#bundledStartupFailureCount)
+        this.#bundledStartupFailureCount = 0;
+      if (
+        startupCount > this.#bundledStartupFailureCount &&
+        (await this.#append({
+          event: "plugin",
+          reason: "plugin-startup-failed",
+          capability: "other",
+        }))
+      )
+        this.#bundledStartupFailureCount = startupCount;
 
       const current = new Map<string, PluginFailureCode | "healthy">();
       for (const diagnostic of diagnostics.providerDiagnostics) {

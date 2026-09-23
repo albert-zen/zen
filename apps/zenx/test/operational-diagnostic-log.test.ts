@@ -15,6 +15,8 @@ import {
   OperationalDiagnosticLog,
   normalizeOperationalDiagnostic,
 } from "../src/main/operational-diagnostic-log.js";
+import { JsonZenXPluginCatalogStore } from "../src/main/capabilities/plugin-catalog-store.js";
+import { ZenXPluginCatalog } from "../src/main/capabilities/plugin-catalog.js";
 
 async function temporaryDirectory(): Promise<string> {
   return await mkdtemp(path.join(os.tmpdir(), "zenx-operations-diagnostic-"));
@@ -51,6 +53,7 @@ test("operational diagnostics retain fixed codes and discard arbitrary messages"
     });
     await log.observePlugins({
       discoveryErrors: ["plugin secret failed at /Users/private/file"],
+      bundledStartupFailureCount: 0,
       providerDiagnostics: [
         {
           capabilityId: "browser",
@@ -134,18 +137,22 @@ test("operational diagnostics report state transitions once and retain later fai
     };
     await log.observePlugins({
       discoveryErrors: ["first secret"],
+      bundledStartupFailureCount: 0,
       providerDiagnostics: [failed],
     });
     await log.observePlugins({
       discoveryErrors: ["first secret"],
+      bundledStartupFailureCount: 0,
       providerDiagnostics: [failed],
     });
     await log.observePlugins({
       discoveryErrors: ["first secret"],
+      bundledStartupFailureCount: 0,
       providerDiagnostics: [{ ...failed, status: "selected" }],
     });
     await log.observePlugins({
       discoveryErrors: ["first secret", "second secret"],
+      bundledStartupFailureCount: 0,
       providerDiagnostics: [failed],
     });
     const result = await records(root);
@@ -205,7 +212,8 @@ test("a failed write can be retried with the same observed state after storage r
       foregroundControlEnabled: false,
     };
     const plugins = {
-      discoveryErrors: ["private error"],
+      discoveryErrors: ["private error", "private install error"],
+      bundledStartupFailureCount: 1,
       providerDiagnostics: [
         {
           capabilityId: "browser",
@@ -233,6 +241,7 @@ test("a failed write can be retried with the same observed state after storage r
         ["app-server", "error"],
         ["computer-readiness", "denied"],
         ["plugin", "discovery-error"],
+        ["plugin", "plugin-startup-failed"],
         ["plugin", "provider-unavailable"],
       ],
     );
@@ -264,6 +273,67 @@ test("plugin startup failure uses a lifecycle code instead of claiming discovery
     assert.deepEqual(
       (await records(root)).map((entry) => [entry.event, entry.reason]),
       [["plugin", "plugin-startup-failed"]],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("bootstrap failures before App Server creation keep their own fixed code", async () => {
+  const root = await temporaryDirectory();
+  try {
+    const log = new OperationalDiagnosticLog(root);
+    await log.recordBootstrapFailure();
+    assert.deepEqual(
+      (await records(root)).map((entry) => [entry.event, entry.status]),
+      [["desktop-bootstrap", "failed"]],
+    );
+    const projected = normalizeOperationalDiagnostic({
+      event: "desktop-bootstrap",
+      status: "failed",
+      message: "private profile path /Users/private/config.json",
+    });
+    assert.deepEqual(Object.keys(projected ?? {}).sort(), [
+      "event",
+      "status",
+      "timestamp",
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("bundled installation failures retain UI detail but log a startup code", async () => {
+  const root = await temporaryDirectory();
+  try {
+    const catalog = new ZenXPluginCatalog(
+      new JsonZenXPluginCatalogStore(path.join(root, "catalog.json")),
+    );
+    await catalog.initialize();
+    catalog.recordDiscoveryError("private discovery path");
+    catalog.recordBundledStartupError("private install error");
+    const diagnostics = catalog.diagnostics();
+    assert.deepEqual(diagnostics.discoveryErrors, [
+      "private discovery path",
+      "private install error",
+    ]);
+    assert.equal(diagnostics.bundledStartupFailureCount, 1);
+    const log = new OperationalDiagnosticLog(root);
+    await log.observePlugins(diagnostics);
+    await log.observePlugins(diagnostics);
+    assert.deepEqual(
+      (await records(root)).map((entry) => entry.reason),
+      ["discovery-error", "plugin-startup-failed"],
+    );
+    catalog.recordBundledStartupError("second private install error");
+    await log.observePlugins(catalog.diagnostics());
+    assert.deepEqual(
+      (await records(root)).map((entry) => entry.reason),
+      ["discovery-error", "plugin-startup-failed", "plugin-startup-failed"],
+    );
+    assert.equal(
+      JSON.stringify(await records(root)).includes("private"),
+      false,
     );
   } finally {
     await rm(root, { recursive: true, force: true });

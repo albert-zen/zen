@@ -282,6 +282,8 @@ export interface ZenXPluginSnapshot {
 export interface ZenXPluginDiagnostics {
   providerDiagnostics: ZenXCapabilityProviderDiagnostic[];
   discoveryErrors: string[];
+  /** Subset of discoveryErrors retained for existing diagnostics UI. */
+  bundledStartupFailureCount: number;
 }
 
 export type ZenXPostCommitCapabilityRefresh =

@@ -638,7 +638,9 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   }
 
   recordBundledPluginStartupError(pluginId: string, error: unknown): void {
-    this.#registry.recordDiscoveryError(`${pluginId}: ${describeError(error)}`);
+    this.#registry.recordBundledStartupError(
+      `${pluginId}: ${describeError(error)}`,
+    );
   }
 
   recordDiscoveryError(message: string): void {
