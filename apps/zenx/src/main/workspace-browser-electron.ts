@@ -67,6 +67,7 @@ class UnmountedWorkspaceRenderer {
         skipTaskbar: true,
         opacity: 0,
       });
+      window.setIgnoreMouseEvents(true);
       const lease = { window, released: false };
       this.#active.set(view, lease);
       try {

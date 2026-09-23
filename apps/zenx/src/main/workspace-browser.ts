@@ -387,6 +387,14 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       if (owner.active?.lease === value.lease) this.#hide(owner);
       return;
     }
+    const previousBounds = tab.view.getBounds();
+    const changedMount =
+      owner.active?.tab !== tab ||
+      owner.active.lease !== value.lease ||
+      previousBounds.x !== bounds.x ||
+      previousBounds.y !== bounds.y ||
+      previousBounds.width !== bounds.width ||
+      previousBounds.height !== bounds.height;
     if (tab.owner !== undefined && tab.owner !== owner) this.#hide(tab.owner);
     tab.owner = owner;
     if (owner.active?.tab !== tab) {
@@ -394,8 +402,10 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       this.#dependencies.releaseUnmountedView?.(tab.view);
       owner.window.contentView.addChildView(tab.view);
     }
-    tab.renderRevision += 1;
-    tab.observation = undefined;
+    if (changedMount) {
+      tab.renderRevision += 1;
+      tab.observation = undefined;
+    }
     owner.active = { tab, lease: value.lease };
     tab.view.setBounds(bounds);
     tab.view.setVisible(true);
@@ -618,6 +628,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       this.#requireAgentTab(sessionId, tabId);
       const navigationGeneration = tab.navigationGeneration;
       const documentVersion = tab.documentVersion;
+      const renderRevision = tab.renderRevision;
       assertBrowserObservation(
         tab.observation,
         tab.documentVersion,
@@ -631,6 +642,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         navigationGeneration,
         documentVersion,
         "scroll",
+        renderRevision,
       );
       if (signal?.aborted)
         throw new Error(
@@ -673,6 +685,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     return await this.#rendered(tab, async () => {
       this.#requireAgentTab(sessionId, tabId);
       const navigationGeneration = tab.navigationGeneration;
+      const renderRevision = tab.renderRevision;
       const target = resolveBrowserObservedTarget(
         tab.observation,
         tab.documentVersion,
@@ -695,6 +708,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         navigationGeneration,
         undefined,
         action,
+        renderRevision,
       );
       await settleWebContents(tab.view.webContents);
       this.#assertAgentOperationCurrent(
@@ -703,6 +717,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         navigationGeneration,
         undefined,
         action,
+        renderRevision,
       );
       return this.#agentSummary(sessionId, tab);
     });

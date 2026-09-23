@@ -119,6 +119,66 @@ test("an aborted current Agent navigation fails instead of reporting success", a
   }
 });
 
+test("mounting during an Agent action fences its outcome while an unchanged mount preserves observation", async () => {
+  const fixture = await sharedFixture();
+  try {
+    const humanTabs = fixture.browser.command(
+      fixture.sender as never,
+      "thread-a",
+      "new",
+      undefined,
+      "https://example.test/start",
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    const tabId = humanTabs[0]!.id;
+    const web = fixture.views[0]!.webContents;
+    fixture.browser.bindThreadSession("agent-session", "thread-a");
+    web.debuggerApi.defaultValue = {
+      visibleText: "fixture",
+      targets: [
+        {
+          selector: "button",
+          role: "button",
+          name: "Act",
+          actions: ["click"],
+          state: {},
+        },
+      ],
+    };
+    let inspection = await fixture.browser.inspect("agent-session", tabId);
+    const actionEvaluation = deferred<unknown>();
+    web.debuggerApi.nextEvaluation = actionEvaluation;
+    const acting = fixture.browser.click(
+      "agent-session",
+      tabId,
+      inspection.observationId,
+      inspection.targets[0]!.targetId,
+    );
+    const mount = () =>
+      fixture.browser.mount(fixture.sender as never, {
+        threadId: "thread-a",
+        tabId,
+        lease: "lease-a",
+        bounds: { x: 0, y: 0, width: 640, height: 480 },
+      });
+    mount();
+    actionEvaluation.resolve({ ok: true });
+    await assert.rejects(acting, /outcome is unknown/u);
+
+    inspection = await fixture.browser.inspect("agent-session", tabId);
+    mount();
+    web.debuggerApi.defaultValue = { ok: true };
+    await fixture.browser.click(
+      "agent-session",
+      tabId,
+      inspection.observationId,
+      inspection.targets[0]!.targetId,
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("human navigation fences an in-flight Agent inspection and action without waiting", async () => {
   const fixture = await sharedFixture();
   try {
@@ -406,11 +466,15 @@ class FakeWebContents extends EventEmitter {
 
 class FakeView {
   readonly webContents = new FakeWebContents();
+  #bounds = { x: 0, y: 0, width: 0, height: 0 };
   setVisible() {
     return undefined;
   }
-  setBounds() {
-    return undefined;
+  setBounds(bounds: { x: number; y: number; width: number; height: number }) {
+    this.#bounds = bounds;
+  }
+  getBounds() {
+    return this.#bounds;
   }
 }
 
