@@ -968,7 +968,25 @@ function ModelsPanel({
     message: string,
     mutation: () => Promise<PublicHostSettings>,
     committed: (value: PublicHostSettings) => boolean,
+    diagnosticAttemptId?: string,
   ): Promise<"success" | "committed-error" | "failed"> => {
+    const recordReconciled = (
+      outcome: "failed" | "committed-error" | "unconfirmed",
+    ) => {
+      if (
+        diagnosticAttemptId === undefined ||
+        (operation !== "provider-add" && operation !== "provider-edit")
+      )
+        return;
+      void window.zenx.settings
+        .recordDiagnostic({
+          event: "provider-save-reconciled",
+          attemptId: diagnosticAttemptId,
+          operation: operation === "provider-add" ? "add" : "edit",
+          outcome,
+        })
+        .catch(() => undefined);
+    };
     setBusy(operation);
     setError(null);
     setStatus(null);
@@ -991,13 +1009,16 @@ function ModelsPanel({
           setError(
             `Settings were saved, but finalization failed: ${originalError}`,
           );
+          recordReconciled("committed-error");
           return "committed-error";
         }
         setError(originalError);
+        recordReconciled("unconfirmed");
       } catch (reconciliationReason) {
         setError(
           `Settings mutation failed: ${originalError}. Authoritative state could not be reconciled: ${describeError(reconciliationReason)}. Outcome is unknown.`,
         );
+        recordReconciled("unconfirmed");
       }
       return "failed";
     } finally {
@@ -1227,7 +1248,13 @@ function ModelsPanel({
             }
             titleModel={settings.profile.titleModel}
             onCancel={() => setEditor(null)}
-            onSubmit={async (provider, apiKey, replacements, logoUpload) => {
+            onSubmit={async (
+              provider,
+              apiKey,
+              replacements,
+              logoUpload,
+              diagnosticAttemptId,
+            ) => {
               const success = await runMutation(
                 editor.mode === "add" ? "provider-add" : "provider-edit",
                 editor.mode === "add" ? "Provider added" : "Provider saved",
@@ -1238,6 +1265,7 @@ function ModelsPanel({
                         apiKey,
                         editor.baseRevision,
                         logoUpload ?? undefined,
+                        diagnosticAttemptId,
                       )
                     : await window.zenx.settings.editProvider(
                         editor.provider.providerProfileId,
@@ -1248,6 +1276,7 @@ function ModelsPanel({
                           ...(apiKey === undefined ? {} : { apiKey }),
                           ...(logoUpload === undefined ? {} : { logoUpload }),
                         },
+                        diagnosticAttemptId,
                       ),
                 (authoritative) => {
                   const current = authoritative.profile.providerProfiles.find(
@@ -1271,6 +1300,7 @@ function ModelsPanel({
                           ]?.split(",", 2)[1] === base64FromBytes(logoUpload))
                   );
                 },
+                diagnosticAttemptId,
               );
               if (success !== "failed") setEditor(null);
               return success;
@@ -1453,6 +1483,7 @@ function ProviderEditor({
     apiKey: string | undefined,
     replacements: ZenXProviderEditOptions,
     logoUpload: Uint8Array | null | undefined,
+    diagnosticAttemptId?: string,
   ): Promise<"success" | "committed-error" | "failed">;
   provider: ZenXProviderProfile;
   logoDataUrl?: string;

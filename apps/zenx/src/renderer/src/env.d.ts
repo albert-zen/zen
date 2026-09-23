@@ -197,16 +197,21 @@ declare global {
           settings: ZenXSettingsUpdate,
           apiKey?: string,
         ): Promise<PublicHostSettings>;
+        recordDiagnostic(
+          event: import("../../main/settings-diagnostic-log.js").SettingsDiagnosticEvent,
+        ): Promise<void>;
         addProvider(
           provider: ZenXProviderProfile,
           apiKey?: string,
           baseRevision?: number,
           logoUpload?: Uint8Array,
+          diagnosticAttemptId?: string,
         ): Promise<PublicHostSettings>;
         editProvider(
           providerProfileId: string,
           provider: ZenXProviderProfile,
           options?: ZenXProviderEditOptions,
+          diagnosticAttemptId?: string,
         ): Promise<PublicHostSettings>;
         deleteProvider(
           providerProfileId: string,

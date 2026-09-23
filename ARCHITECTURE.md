@@ -244,6 +244,11 @@
   renderer settings、进程环境与 App Server 协议配置字段都不主动序列化解密值。Provider、
   模型或工具返回的内容属于 trace，即使字节与 credential 相同也不扫描或改写，并可按正常
   Runtime 规则进入 canonical ItemList。
+- **ZenX 本机诊断日志** — 主进程将设置页校验拒绝与 Provider 保存结果规范化为固定事件、
+  原因码、行序号、尝试 ID 和结果，再写入 userData 下权限收窄、定额轮转的 JSONL 支持数据；
+  Renderer 原文、Provider/模型身份、URL、凭证和错误文本都不进入该日志，写入失败不改变保存结果。
+  诊断记录只用于排查本机产品操作，不是 Thread、Turn 或工具执行事实，不替代 canonical ItemList，
+  也不成为配置、凭证或会话状态的第二份权威。后续其他 Host 操作可复用有界存储，事件仍需各自的严格白名单。
 - **ZenXSystemProxyProjection** — ZenX 主进程把操作系统为当前 Provider endpoint
   解析出的代理投影为 host 子进程的 Provider transport；它是可丢弃的外部连接配置，不进入
   Zen Core、Thread、journal 或 credential store。

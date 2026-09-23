@@ -36,6 +36,11 @@ import type {
 } from "./host-profile.js";
 import { ZenXSettingsService } from "./settings-service.js";
 import {
+  isRendererSettingsDiagnostic,
+  SettingsDiagnosticLog,
+  runDiagnosedProviderMutation,
+} from "./settings-diagnostic-log.js";
+import {
   computerReadinessSnapshot,
   probeComputerAccess,
   type ZenXComputerAccessVerification,
@@ -357,6 +362,7 @@ async function bootstrapZenX(): Promise<void> {
       safeStorage,
     ),
   });
+  const settingsDiagnostics = new SettingsDiagnosticLog(userDataDirectory);
   try {
     await settingsService.initialize(process.env);
     bootstrapFence.throwIfCancelled();
@@ -657,6 +663,7 @@ async function bootstrapZenX(): Promise<void> {
   installSettingsIpc(
     settingsService,
     directoryBrowser,
+    settingsDiagnostics,
     async () => {
       if (appServerManager?.status.type === "ready") return;
       const hostConfig = await withZenXProviderTransports(
@@ -1284,6 +1291,7 @@ function readProjectThreadStartOptions(
 function installSettingsIpc(
   settings: ZenXSettingsService,
   directoryBrowser: ZenXDirectoryBrowser,
+  diagnostics: SettingsDiagnosticLog,
   startHostIfNeeded: () => Promise<void>,
   refreshProjects: () => Promise<void>,
 ): void {
@@ -1298,6 +1306,17 @@ function installSettingsIpc(
   ipcMain.handle(
     ipcChannels.settingsGet,
     async () => await settings.publicSettings(),
+  );
+  ipcMain.handle(
+    ipcChannels.settingsDiagnosticRecord,
+    async (_event, input: unknown) => {
+      try {
+        if (!isRendererSettingsDiagnostic(input)) return;
+        await diagnostics.record(input);
+      } catch {
+        // A support log failure must never interrupt Settings.
+      }
+    },
   );
   let computerVerification: ZenXComputerAccessVerification | undefined;
   let verificationStatus: string | undefined;
@@ -1512,21 +1531,37 @@ function installSettingsIpc(
       apiKey?: unknown,
       baseRevision?: number,
       logoUpload?: unknown,
+      diagnosticAttemptId?: unknown,
     ) => {
-      if (apiKey !== undefined && typeof apiKey !== "string") {
-        throw new Error("Invalid API key");
-      }
-      requireConfigurationRevision(baseRevision);
-      if (logoUpload !== undefined && !(logoUpload instanceof Uint8Array))
-        throw new Error("Invalid Provider Logo upload");
-      await settings.addProviderProfile(
-        provider,
-        apiKey,
-        baseRevision,
-        logoUpload,
-      );
-      await startHostIfNeeded();
-      return await settings.publicSettings();
+      return await runDiagnosedProviderMutation({
+        log: diagnostics,
+        operation: "add",
+        attemptId:
+          typeof diagnosticAttemptId === "string"
+            ? diagnosticAttemptId
+            : undefined,
+        configurationStatus: async () =>
+          (await settings.publicSettings()).configuration?.status,
+        preflight: () => {
+          if (apiKey !== undefined && typeof apiKey !== "string") {
+            throw new Error("Invalid API key");
+          }
+          requireConfigurationRevision(baseRevision);
+          if (logoUpload !== undefined && !(logoUpload instanceof Uint8Array))
+            throw new Error("Invalid Provider Logo upload");
+        },
+        mutate: async ({ markCommitted }) => {
+          await settings.addProviderProfile(
+            provider,
+            apiKey as string | undefined,
+            baseRevision,
+            logoUpload as Uint8Array | undefined,
+          );
+          markCommitted();
+          await startHostIfNeeded();
+          return await settings.publicSettings();
+        },
+      });
     },
   );
   ipcMain.handle(
@@ -1536,23 +1571,46 @@ function installSettingsIpc(
       providerProfileId: unknown,
       provider: ZenXProviderProfile,
       options?: ZenXProviderEditOptions,
+      diagnosticAttemptId?: unknown,
     ) => {
-      if (typeof providerProfileId !== "string") {
-        throw new Error("Invalid Provider profile id");
-      }
-      if (options?.apiKey !== undefined && typeof options.apiKey !== "string") {
-        throw new Error("Invalid API key");
-      }
-      if (
-        options?.logoUpload !== undefined &&
-        options.logoUpload !== null &&
-        !(options.logoUpload instanceof Uint8Array)
-      )
-        throw new Error("Invalid Provider Logo upload");
-      requireConfigurationRevision(options?.baseRevision);
-      await settings.editProviderProfile(providerProfileId, provider, options);
-      await startHostIfNeeded();
-      return await settings.publicSettings();
+      return await runDiagnosedProviderMutation({
+        log: diagnostics,
+        operation: "edit",
+        attemptId:
+          typeof diagnosticAttemptId === "string"
+            ? diagnosticAttemptId
+            : undefined,
+        configurationStatus: async () =>
+          (await settings.publicSettings()).configuration?.status,
+        preflight: () => {
+          if (typeof providerProfileId !== "string") {
+            throw new Error("Invalid Provider profile id");
+          }
+          if (
+            options?.apiKey !== undefined &&
+            typeof options.apiKey !== "string"
+          ) {
+            throw new Error("Invalid API key");
+          }
+          if (
+            options?.logoUpload !== undefined &&
+            options.logoUpload !== null &&
+            !(options.logoUpload instanceof Uint8Array)
+          )
+            throw new Error("Invalid Provider Logo upload");
+          requireConfigurationRevision(options?.baseRevision);
+        },
+        mutate: async ({ markCommitted }) => {
+          await settings.editProviderProfile(
+            providerProfileId as string,
+            provider,
+            options,
+          );
+          markCommitted();
+          await startHostIfNeeded();
+          return await settings.publicSettings();
+        },
+      });
     },
   );
   ipcMain.handle(

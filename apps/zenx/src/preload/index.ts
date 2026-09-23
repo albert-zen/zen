@@ -291,11 +291,17 @@ contextBridge.exposeInMainWorld("zenx", {
       apiKey?: string,
     ): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.settingsSave, settings, apiKey),
+    recordDiagnostic: async (
+      event: import("../main/settings-diagnostic-log.js").SettingsDiagnosticEvent,
+    ): Promise<void> => {
+      await ipcRenderer.invoke(ipcChannels.settingsDiagnosticRecord, event);
+    },
     addProvider: async (
       provider: ZenXProviderProfile,
       apiKey?: string,
       baseRevision?: number,
       logoUpload?: Uint8Array,
+      diagnosticAttemptId?: string,
     ): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(
         ipcChannels.providerAdd,
@@ -303,17 +309,20 @@ contextBridge.exposeInMainWorld("zenx", {
         apiKey,
         baseRevision,
         logoUpload,
+        diagnosticAttemptId,
       ),
     editProvider: async (
       providerProfileId: string,
       provider: ZenXProviderProfile,
       options?: ZenXProviderEditOptions,
+      diagnosticAttemptId?: string,
     ): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(
         ipcChannels.providerEdit,
         providerProfileId,
         provider,
         options,
+        diagnosticAttemptId,
       ),
     deleteProvider: async (
       providerProfileId: string,
