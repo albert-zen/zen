@@ -19,6 +19,7 @@ export const providerValidationReasons = [
   "logo_loading",
   "replacement_default_missing",
   "replacement_title_missing",
+  "validation_issues_truncated",
 ] as const;
 
 export type ProviderValidationReason =

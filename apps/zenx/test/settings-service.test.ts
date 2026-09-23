@@ -1693,12 +1693,20 @@ test("provider add, edit, and settings save reject incomplete context metadata w
 
     await assert.rejects(
       service.addProviderProfile(incomplete, "required-key"),
-      /Provider profile required.*model required-model.*positive context window/u,
+      (error: unknown) =>
+        error instanceof ConfigurationPreCommitError &&
+        /Provider profile required.*model required-model.*positive context window/u.test(
+          error.message,
+        ),
     );
     await service.addProviderProfile(configured, "required-key");
     await assert.rejects(
       service.editProviderProfile("required", incomplete),
-      /Provider profile required.*model required-model.*positive context window/u,
+      (error: unknown) =>
+        error instanceof ConfigurationPreCommitError &&
+        /Provider profile required.*model required-model.*positive context window/u.test(
+          error.message,
+        ),
     );
     const before = await service.publicSettings();
     await assert.rejects(

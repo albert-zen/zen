@@ -2565,6 +2565,172 @@ test("duplicate manual reasoning efforts stay in the editor and emit a field dia
   }
 });
 
+test("many invalid model rows keep diagnostics bounded while all errors remain visible", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.providerProfiles[0]!.models = Array.from(
+    { length: 40 },
+    (_, index) => ({ ...model(`row-${index}`), contextWindow: null }),
+  );
+  const events: Parameters<
+    Window["zenx"]["settings"]["recordDiagnostic"]
+  >[0][] = [];
+  let saves = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    recordDiagnostic: async (event) => {
+      events.push(event);
+    },
+    editProvider: async () => {
+      saves += 1;
+      return initial;
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Save provider"));
+    assert.equal(saves, 0);
+    assert.equal(
+      document.querySelectorAll(".provider-editor-error-summary a").length,
+      40,
+    );
+    assert.equal(events.length, 17);
+    assert.deepEqual(
+      events.map((event) => ("reason" in event ? event.reason : "other")),
+      [
+        ...Array.from({ length: 16 }, () => "context_window_invalid"),
+        "validation_issues_truncated",
+      ],
+    );
+    assert.equal(new Set(events.map((event) => event.attemptId)).size, 1);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("one Base URL field exposes one matching summary and inline error", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  const provider = initial.profile.providerProfiles[0]!;
+  if (provider.type !== "openai-compatible")
+    throw new Error("Expected compatible provider");
+  provider.baseUrl = "http://user:pass@remote.example/v1?secret=1";
+  const events: Parameters<
+    Window["zenx"]["settings"]["recordDiagnostic"]
+  >[0][] = [];
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    recordDiagnostic: async (event) => {
+      events.push(event);
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Save provider"));
+    const links = [
+      ...document.querySelectorAll<HTMLAnchorElement>(
+        ".provider-editor-error-summary a",
+      ),
+    ];
+    assert.equal(links.length, 1);
+    const input = requiredInput("Base URL");
+    assert.equal(
+      links[0]!.textContent,
+      document.getElementById(input.getAttribute("aria-describedby")!)
+        ?.textContent,
+    );
+    assert.equal(events.length, 1);
+    assert.equal(JSON.stringify(events).includes("remote.example"), false);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Host-rejected stale API key edit keeps the draft despite another window's revision", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.revision = 2;
+  let authoritative = initial;
+  let calls = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    get: async () => authoritative,
+    editProvider: async (_id, _provider, _options, attemptId) => {
+      calls += 1;
+      authoritative = {
+        ...initial,
+        profile: { ...initial.profile, revision: 3 },
+        configuration: {
+          status: "applied",
+          revision: 3,
+          pendingRestart: [],
+        },
+      };
+      return {
+        ok: false,
+        outcome: "failed",
+        code: "revision-conflict",
+        attemptId: attemptId!,
+      } as unknown as PublicHostSettings;
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await changeControl(requiredInput("API key"), "new-secret-key");
+    await click(exactButtonRequired("Save provider"));
+    await waitFor(() => calls === 1);
+    assert.ok(document.querySelector('[aria-label="Edit Alpha"]'));
+    assert.equal(requiredInput("API key").value, "new-secret-key");
+    assert.match(
+      document.body.textContent ?? "",
+      /changed.*reload|reload.*changed/iu,
+    );
+    assert.equal(
+      (document.body.textContent ?? "").includes("new-secret-key"),
+      false,
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Provider IPC failure stays unconfirmed even if another window now has matching fields", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.revision = 2;
+  let authoritative = initial;
+  let calls = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    get: async () => authoritative,
+    editProvider: async () => {
+      calls += 1;
+      authoritative = {
+        ...initial,
+        profile: { ...initial.profile, revision: 3 },
+        configuration: {
+          status: "applied",
+          revision: 3,
+          pendingRestart: [],
+        },
+      };
+      throw new Error("IPC reply lost");
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Save provider"));
+    await waitFor(() => calls === 1);
+    assert.ok(document.querySelector('[aria-label="Edit Alpha"]'));
+    assert.match(
+      document.body.textContent ?? "",
+      /could not confirm|unknown/iu,
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
 test("provider validation survives unrelated edits and clears each issue only when repaired", async () => {
   const initial = structuredClone(multiProviderSettings);
   initial.profile.providerProfiles[0]!.models = [

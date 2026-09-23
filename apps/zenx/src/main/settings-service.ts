@@ -74,7 +74,15 @@ import type { WorkflowCommand } from "./workflow-configuration.js";
 const MAX_WORKSPACE_IDENTITY_ATTEMPTS = 2;
 
 /** Rejected before the settings mutation can write a new configuration. */
-export class ConfigurationPreCommitError extends Error {}
+export class ConfigurationPreCommitError extends Error {
+  constructor(
+    message: string,
+    readonly reason:
+      "conflict" | "application-unconfirmed" | "validation" = "validation",
+  ) {
+    super(message);
+  }
+}
 
 type SubscriptionAuth = Pick<
   OpenAiSubscriptionAuthProfile,
@@ -247,6 +255,7 @@ export class ZenXSettingsService {
     if (this.#pendingConfiguration)
       throw new ConfigurationPreCommitError(
         "Configuration application is unconfirmed; check or retry its application before saving again",
+        "application-unconfirmed",
       );
     if (
       baseRevision !== undefined &&
@@ -254,6 +263,7 @@ export class ZenXSettingsService {
     )
       throw new ConfigurationPreCommitError(
         "Configuration conflict: another window saved changes. Your draft was preserved; reload before applying it",
+        "conflict",
       );
   }
   #credentialReference(id: string, profile = this.#requireProfile()): string {
@@ -1059,52 +1069,65 @@ export class ZenXSettingsService {
     baseRevision?: number,
     logoUpload?: Uint8Array,
   ): Promise<void> {
-    await this.#queueProfileOperation(async () => {
-      this.#assertBaseRevision(baseRevision);
-      const current = this.#requireProfile();
-      if (provider.logoResource !== undefined)
-        throw new Error("Provider Logo resource is Host-owned");
-      const imported =
-        logoUpload === undefined
-          ? undefined
-          : await this.#providerLogos.import(logoUpload);
-      const withLogo =
-        imported === undefined
-          ? provider
-          : { ...provider, logoResource: imported.resource };
-      try {
-        const next = validateHostProfile({
-          ...current,
-          providerProfiles: [...current.providerProfiles, withLogo],
-        });
-        validateConfiguredModelContexts(next, [
-          next.providerProfiles.find(
-            (candidate) =>
-              candidate.providerProfileId === provider.providerProfileId,
-          )!,
-        ]);
-        await this.#assertProviderLogoBudget(next.providerProfiles);
-        if (
-          provider.type === "openai-compatible" &&
-          (apiKey === undefined || apiKey.length === 0)
-        ) {
-          throw new Error(
-            `Provider profile ${provider.providerProfileId} has no API key`,
-          );
-        }
-        await this.#persistProfile(
-          next,
-          apiKey === undefined
+    let persistenceStarted = false;
+    try {
+      await this.#queueProfileOperation(async () => {
+        this.#assertBaseRevision(baseRevision);
+        const current = this.#requireProfile();
+        if (provider.logoResource !== undefined)
+          throw new Error("Provider Logo resource is Host-owned");
+        const imported =
+          logoUpload === undefined
             ? undefined
-            : { providerProfileId: provider.providerProfileId, apiKey },
+            : await this.#providerLogos.import(logoUpload);
+        const withLogo =
+          imported === undefined
+            ? provider
+            : { ...provider, logoResource: imported.resource };
+        try {
+          const next = validateHostProfile({
+            ...current,
+            providerProfiles: [...current.providerProfiles, withLogo],
+          });
+          validateConfiguredModelContexts(next, [
+            next.providerProfiles.find(
+              (candidate) =>
+                candidate.providerProfileId === provider.providerProfileId,
+            )!,
+          ]);
+          await this.#assertProviderLogoBudget(next.providerProfiles);
+          if (
+            provider.type === "openai-compatible" &&
+            (apiKey === undefined || apiKey.length === 0)
+          ) {
+            throw new Error(
+              `Provider profile ${provider.providerProfileId} has no API key`,
+            );
+          }
+          persistenceStarted = true;
+          await this.#persistProfile(
+            next,
+            apiKey === undefined
+              ? undefined
+              : { providerProfileId: provider.providerProfileId, apiKey },
+          );
+          this.#profile = next;
+        } catch (error) {
+          if (imported?.created)
+            await this.#providerLogos.remove(imported.resource);
+          throw error;
+        }
+      });
+    } catch (error) {
+      if (
+        !persistenceStarted &&
+        !(error instanceof ConfigurationPreCommitError)
+      )
+        throw new ConfigurationPreCommitError(
+          error instanceof Error ? error.message : String(error),
         );
-        this.#profile = next;
-      } catch (error) {
-        if (imported?.created)
-          await this.#providerLogos.remove(imported.resource);
-        throw error;
-      }
-    });
+      throw error;
+    }
   }
 
   async editProviderProfile(
@@ -1112,74 +1135,89 @@ export class ZenXSettingsService {
     provider: ZenXProviderProfile,
     options: ZenXProviderEditOptions = {},
   ): Promise<void> {
-    await this.#queueProfileOperation(async () => {
-      this.#assertBaseRevision(options.baseRevision);
-      const current = this.#requireProfile();
-      const index = current.providerProfiles.findIndex(
-        (candidate) => candidate.providerProfileId === providerProfileId,
-      );
-      if (index < 0)
-        throw new Error(
-          `Provider profile ${providerProfileId} is not configured`,
+    let persistenceStarted = false;
+    try {
+      await this.#queueProfileOperation(async () => {
+        this.#assertBaseRevision(options.baseRevision);
+        const current = this.#requireProfile();
+        const index = current.providerProfiles.findIndex(
+          (candidate) => candidate.providerProfileId === providerProfileId,
         );
-      if (provider.providerProfileId !== providerProfileId) {
-        throw new Error("Provider profile id cannot be changed by edit");
-      }
-      const oldLogo = current.providerProfiles[index]!.logoResource;
-      if (
-        provider.logoResource !== undefined &&
-        provider.logoResource !== oldLogo
-      )
-        throw new Error("Provider Logo resource is Host-owned");
-      const imported =
-        options.logoUpload instanceof Uint8Array
-          ? await this.#providerLogos.import(options.logoUpload)
-          : undefined;
-      const withLogo = {
-        ...provider,
-        ...(options.logoUpload === null
-          ? { logoResource: undefined }
-          : imported === undefined
-            ? { logoResource: oldLogo }
-            : { logoResource: imported.resource }),
-      };
-      try {
-        const providerProfiles = [...current.providerProfiles];
-        providerProfiles[index] = withLogo;
-        const next = validateHostProfile({
-          ...current,
-          providerProfiles,
-          defaultModel: options.defaultModel ?? current.defaultModel,
-          titleModel: options.titleModel ?? current.titleModel,
-        });
-        validateConfiguredModelContexts(next, [next.providerProfiles[index]!]);
-        await this.#assertProviderLogoBudget(next.providerProfiles);
-        if (
-          provider.type === "openai-compatible" &&
-          (options.apiKey === undefined || options.apiKey.length === 0) &&
-          !(await this.#vault.hasApiKey(
-            this.#credentialReference(providerProfileId),
-          ))
-        ) {
+        if (index < 0)
           throw new Error(
-            `Provider profile ${providerProfileId} has no API key`,
+            `Provider profile ${providerProfileId} is not configured`,
           );
+        if (provider.providerProfileId !== providerProfileId) {
+          throw new Error("Provider profile id cannot be changed by edit");
         }
-        await this.#persistProfile(
-          next,
-          options.apiKey === undefined || options.apiKey.length === 0
-            ? undefined
-            : { providerProfileId, apiKey: options.apiKey },
+        const oldLogo = current.providerProfiles[index]!.logoResource;
+        if (
+          provider.logoResource !== undefined &&
+          provider.logoResource !== oldLogo
+        )
+          throw new Error("Provider Logo resource is Host-owned");
+        const imported =
+          options.logoUpload instanceof Uint8Array
+            ? await this.#providerLogos.import(options.logoUpload)
+            : undefined;
+        const withLogo = {
+          ...provider,
+          ...(options.logoUpload === null
+            ? { logoResource: undefined }
+            : imported === undefined
+              ? { logoResource: oldLogo }
+              : { logoResource: imported.resource }),
+        };
+        try {
+          const providerProfiles = [...current.providerProfiles];
+          providerProfiles[index] = withLogo;
+          const next = validateHostProfile({
+            ...current,
+            providerProfiles,
+            defaultModel: options.defaultModel ?? current.defaultModel,
+            titleModel: options.titleModel ?? current.titleModel,
+          });
+          validateConfiguredModelContexts(next, [
+            next.providerProfiles[index]!,
+          ]);
+          await this.#assertProviderLogoBudget(next.providerProfiles);
+          if (
+            provider.type === "openai-compatible" &&
+            (options.apiKey === undefined || options.apiKey.length === 0) &&
+            !(await this.#vault.hasApiKey(
+              this.#credentialReference(providerProfileId),
+            ))
+          ) {
+            throw new Error(
+              `Provider profile ${providerProfileId} has no API key`,
+            );
+          }
+          persistenceStarted = true;
+          await this.#persistProfile(
+            next,
+            options.apiKey === undefined || options.apiKey.length === 0
+              ? undefined
+              : { providerProfileId, apiKey: options.apiKey },
+          );
+          this.#profile = next;
+        } catch (error) {
+          if (imported?.created)
+            await this.#providerLogos.remove(imported.resource);
+          throw error;
+        }
+        if (oldLogo !== undefined && oldLogo !== withLogo.logoResource)
+          await this.#removeUnusedProviderLogo(oldLogo);
+      });
+    } catch (error) {
+      if (
+        !persistenceStarted &&
+        !(error instanceof ConfigurationPreCommitError)
+      )
+        throw new ConfigurationPreCommitError(
+          error instanceof Error ? error.message : String(error),
         );
-        this.#profile = next;
-      } catch (error) {
-        if (imported?.created)
-          await this.#providerLogos.remove(imported.resource);
-        throw error;
-      }
-      if (oldLogo !== undefined && oldLogo !== withLogo.logoResource)
-        await this.#removeUnusedProviderLogo(oldLogo);
-    });
+      throw error;
+    }
   }
 
   async deleteProviderProfile(

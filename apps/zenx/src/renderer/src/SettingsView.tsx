@@ -1531,12 +1531,16 @@ function ProviderEditor({
     validationAttempt === 0
       ? []
       : validateProviderEditor(normalizedProvider, apiKey, mode, hasApiKey);
+  const validationIssueByField = new Map(
+    validationIssues.map((issue) => [
+      `${issue.modelIndex ?? -1}:${issue.field}`,
+      issue.message,
+    ]),
+  );
   const fieldId = (field: ProviderEditorIssue["field"], modelIndex?: number) =>
     `${editorId}-${modelIndex === undefined ? "provider" : `model-${modelIndex}`}-${field}`;
   const issueFor = (field: ProviderEditorIssue["field"], modelIndex?: number) =>
-    validationIssues.find(
-      (issue) => issue.field === field && issue.modelIndex === modelIndex,
-    )?.message;
+    validationIssueByField.get(`${modelIndex ?? -1}:${field}`);
   const recordValidationRejection = (
     attemptId: string,
     reason:
@@ -1544,7 +1548,8 @@ function ProviderEditor({
       | "logo_invalid"
       | "logo_loading"
       | "replacement_default_missing"
-      | "replacement_title_missing",
+      | "replacement_title_missing"
+      | "validation_issues_truncated",
     modelIndex?: number,
   ) => {
     try {
@@ -1640,11 +1645,16 @@ function ProviderEditor({
             hasApiKey,
           );
           if (issues.length > 0) {
-            for (const issue of issues)
+            for (const issue of issues.slice(0, 16))
               recordValidationRejection(
                 diagnosticAttemptId,
                 issue.code,
                 issue.modelIndex,
+              );
+            if (issues.length > 16)
+              recordValidationRejection(
+                diagnosticAttemptId,
+                "validation_issues_truncated",
               );
             setValidationError(null);
             setValidationAttempt((current) => current + 1);
@@ -2790,15 +2800,13 @@ function validateProviderEditor(
       field: "baseUrl",
       message: "Base URL must use HTTPS (loopback HTTP is allowed)",
     });
-  }
-  if (url.username.length > 0 || url.password.length > 0) {
+  } else if (url.username.length > 0 || url.password.length > 0) {
     issues.push({
       code: "base_url_credentials",
       field: "baseUrl",
       message: "Remove credentials from the Base URL",
     });
-  }
-  if (url.search.length > 0 || url.hash.length > 0) {
+  } else if (url.search.length > 0 || url.hash.length > 0) {
     issues.push({
       code: "base_url_query_fragment",
       field: "baseUrl",
