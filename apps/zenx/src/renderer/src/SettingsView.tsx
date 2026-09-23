@@ -978,14 +978,18 @@ function ModelsPanel({
         (operation !== "provider-add" && operation !== "provider-edit")
       )
         return;
-      void window.zenx.settings
-        .recordDiagnostic({
-          event: "provider-save-reconciled",
-          attemptId: diagnosticAttemptId,
-          operation: operation === "provider-add" ? "add" : "edit",
-          outcome,
-        })
-        .catch(() => undefined);
+      try {
+        void window.zenx.settings
+          .recordDiagnostic({
+            event: "provider-save-reconciled",
+            attemptId: diagnosticAttemptId,
+            operation: operation === "provider-add" ? "add" : "edit",
+            outcome,
+          })
+          .catch(() => undefined);
+      } catch {
+        // Diagnostics must not change the save result.
+      }
     };
     setBusy(operation);
     setError(null);
