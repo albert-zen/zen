@@ -661,6 +661,21 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       );
       return {
         ...entry,
+        ...(entry.pluginId === "browser" &&
+        this.#browserProfilePackage !== undefined
+          ? {
+              permissions: structuredClone(
+                this.#browserProfilePackage.manifest.permissions,
+              ),
+            }
+          : entry.pluginId === "computer" &&
+              this.#computerProfilePackage !== undefined
+            ? {
+                permissions: structuredClone(
+                  this.#computerProfilePackage.manifest.permissions,
+                ),
+              }
+            : {}),
         available,
         ...(available || diagnostic?.reason === undefined
           ? {}

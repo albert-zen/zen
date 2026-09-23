@@ -4534,6 +4534,23 @@ a:focus-visible {
   display: grid;
   gap: 7px;
 }
+.plugin-access-steps {
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  color: var(--text-2);
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
+}
+.plugin-access-steps strong {
+  color: var(--text-1);
+}
+.plugin-access-steps ol {
+  display: grid;
+  gap: 5px;
+  margin: 6px 0 0;
+  padding-left: 19px;
+}
 .plugin-access-status [role="status"] {
   display: inline-block;
   margin-top: 2px;

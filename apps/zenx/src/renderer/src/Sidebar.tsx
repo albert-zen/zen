@@ -1,6 +1,8 @@
 import {
   type CSSProperties,
   type ReactNode,
+  createContext,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -15,7 +17,10 @@ import { createPortal } from "react-dom";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { Thread } from "../../protocol-client/index.js";
 import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
-import type { ZenXSidebarOrder } from "../../main/host-profile.js";
+import type {
+  PublicHostSettings,
+  ZenXSidebarOrder,
+} from "../../main/host-profile.js";
 import type { AppServerHostStatus } from "../../main/app-server-manager.js";
 import { Icon } from "./icons.js";
 import type { LoadedPluginContribution } from "./plugin-contributions.js";
@@ -38,6 +43,7 @@ import { useSidebarExpansion } from "./sidebar-expansion.js";
 
 const THREAD_DENSITY_STORAGE_KEY = "zenx.sidebar.thread-density";
 type ThreadDensity = "compact" | "detailed";
+const SidebarSettingsContext = createContext<PublicHostSettings | null>(null);
 
 interface SidebarProps {
   collapsed?: boolean;
@@ -138,6 +144,27 @@ export function Sidebar({
       return "detailed";
     }
   });
+  const [settings, setSettings] = useState<PublicHostSettings | null>(null);
+  useEffect(() => {
+    const api = window.zenx?.settings;
+    if (api?.get === undefined) return;
+    let active = true;
+    let changed = false;
+    const dispose = api.onChanged?.((value) => {
+      changed = true;
+      if (active) setSettings(value);
+    });
+    void api.get().then(
+      (value) => {
+        if (active && !changed) setSettings(value);
+      },
+      () => undefined,
+    );
+    return () => {
+      active = false;
+      dispose?.();
+    };
+  }, []);
   const lastUsedProject =
     projects.lastUsedWorkspace === null
       ? undefined
@@ -310,7 +337,7 @@ export function Sidebar({
   }, []);
   const watchingThreadIds = new Set<string>();
   return (
-    <>
+    <SidebarSettingsContext.Provider value={settings}>
       <aside
         id="primary-sidebar"
         className={`sidebar${open ? " open" : ""}`}
@@ -549,7 +576,7 @@ export function Sidebar({
         aria-label="Close sidebar"
         onClick={onClose}
       />
-    </>
+    </SidebarSettingsContext.Provider>
   );
 }
 
@@ -1551,6 +1578,25 @@ function ThreadRow({
     menuTriggerRef.current?.focus();
   }, [menuOpen]);
   const identity = threadModelIdentity(thread);
+  const settings = useContext(SidebarSettingsContext);
+  const providerProfileId =
+    thread.status === "systemError"
+      ? undefined
+      : thread.currentMetadata.providerProfileId;
+  const providerProfile = settings?.profile.providerProfiles.find(
+    (candidate) => candidate.providerProfileId === providerProfileId,
+  );
+  const customLogo =
+    providerProfileId === undefined
+      ? undefined
+      : settings?.providerLogoDataUrls?.[providerProfileId];
+  const logoKind =
+    settings !== null &&
+    providerProfileId !== undefined &&
+    (providerProfile === undefined ||
+      (providerProfile.logoResource !== undefined && customLogo === undefined))
+      ? "generic"
+      : identity?.providerKind;
   const modelProvider =
     thread.status === "systemError" ? null : thread.currentMetadata.provider;
   const contents = (
@@ -1572,7 +1618,7 @@ function ThreadRow({
       </span>
       {identity === null || modelProvider === null ? null : (
         <span className="thread-model" title={identity.label}>
-          <ProviderLogo kind={identity.providerKind} />
+          <ProviderLogo kind={logoKind ?? "generic"} customSrc={customLogo} />
           <span>{identity.label}</span>
         </span>
       )}
