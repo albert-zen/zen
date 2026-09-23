@@ -989,6 +989,14 @@ export class ZenXSettingsService {
         )
       ).profile;
       validateConfiguredModelContexts(validated);
+      for (const provider of validated.providerProfiles) {
+        const previous = current.providerProfiles.find(
+          (candidate) =>
+            candidate.providerProfileId === provider.providerProfileId,
+        );
+        if (provider.logoResource !== previous?.logoResource)
+          throw new Error("Provider Logo resource is Host-owned");
+      }
       const credentialProfileId = validated.defaultModel.providerProfileId;
       for (const provider of validated.providerProfiles) {
         if (provider.type !== "openai-compatible") continue;
@@ -1023,6 +1031,12 @@ export class ZenXSettingsService {
           .map((provider) => provider.providerProfileId),
       );
       this.#profile = validated;
+      for (const resource of new Set(
+        current.providerProfiles.flatMap((provider) =>
+          provider.logoResource === undefined ? [] : [provider.logoResource],
+        ),
+      ))
+        await this.#removeUnusedProviderLogo(resource);
     });
   }
 

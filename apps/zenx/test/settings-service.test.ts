@@ -1321,7 +1321,7 @@ test("custom Provider Logo survives restart, rejects invalid uploads, and falls 
     await first.initialize({ ZENX_PROVIDER: "fake" });
     const provider = compatibleProfile("custom-logo").providerProfiles[0]!;
     const png = Buffer.from(
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==",
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
       "base64",
     );
     const before = (await first.publicSettings()).profile;
@@ -1343,7 +1343,16 @@ test("custom Provider Logo survives restart, rejects invalid uploads, and falls 
         before.revision,
         oversizedDimensions,
       ),
-      /dimensions must be between 1 and 1024/u,
+      /valid PNG, JPEG, or WebP/u,
+    );
+    await assert.rejects(
+      first.addProviderProfile(
+        provider,
+        "key",
+        before.revision,
+        png.subarray(0, 24),
+      ),
+      /valid PNG, JPEG, or WebP/u,
     );
     assert.equal(
       (await first.publicSettings()).profile.providerProfiles.some(
@@ -1390,6 +1399,58 @@ test("custom Provider Logo survives restart, rejects invalid uploads, and falls 
         (entry) => entry.providerProfileId === provider.providerProfileId,
       )?.logoResource,
       undefined,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("general Settings save cannot replace Host-owned Logo references and cleans removed Provider assets", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-provider-logo-save-"),
+  );
+  try {
+    const service = settingsFor(directory, inactiveSubscription());
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    const provider = compatibleProfile("save-logo").providerProfiles[0]!;
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    await service.addProviderProfile(provider, "key", undefined, png);
+    const saved = (await service.publicSettings()).profile;
+    const resource = saved.providerProfiles.find(
+      (candidate) => candidate.providerProfileId === provider.providerProfileId,
+    )?.logoResource;
+    assert.ok(resource);
+    await assert.rejects(
+      service.save({
+        ...saved,
+        providerProfiles: saved.providerProfiles.map((candidate) =>
+          candidate.providerProfileId === provider.providerProfileId
+            ? { ...candidate, logoResource: `${"a".repeat(64)}.png` }
+            : candidate,
+        ),
+      }),
+      /Logo resource is Host-owned/u,
+    );
+    assert.equal(
+      (await service.publicSettings()).profile.providerProfiles.find(
+        (candidate) =>
+          candidate.providerProfileId === provider.providerProfileId,
+      )?.logoResource,
+      resource,
+    );
+    await service.save({
+      ...saved,
+      providerProfiles: saved.providerProfiles.filter(
+        (candidate) =>
+          candidate.providerProfileId !== provider.providerProfileId,
+      ),
+    });
+    await assert.rejects(
+      readFile(path.join(directory, "provider-logos", resource)),
+      /ENOENT/u,
     );
   } finally {
     await rm(directory, { recursive: true, force: true });

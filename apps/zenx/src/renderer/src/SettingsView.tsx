@@ -1230,7 +1230,18 @@ function ModelsPanel({
                   );
                   return (
                     current !== undefined &&
-                    providerProfilesEquivalent(current, provider)
+                    providerProfilesEquivalent(current, {
+                      ...provider,
+                      logoResource: current.logoResource,
+                    }) &&
+                    (logoUpload === null
+                      ? current.logoResource === undefined
+                      : logoUpload === undefined
+                        ? current.logoResource === editor.provider.logoResource
+                        : current.logoResource !== undefined &&
+                          authoritative.providerLogoDataUrls?.[
+                            current.providerProfileId
+                          ]?.split(",", 2)[1] === base64FromBytes(logoUpload))
                   );
                 },
               );
@@ -1438,6 +1449,12 @@ function ProviderEditor({
   const [logoUpload, setLogoUpload] = useState<Uint8Array | null | undefined>();
   const [logoFilename, setLogoFilename] = useState<string | null>(null);
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
+  const [logoSelectionError, setLogoSelectionError] = useState<string | null>(
+    null,
+  );
+  const [logoReading, setLogoReading] = useState(false);
+  const logoReadVersion = useRef(0);
+  const logoFileInput = useRef<HTMLInputElement>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [defaultReplacement, setDefaultReplacement] = useState("");
   const [titleReplacement, setTitleReplacement] = useState("");
@@ -1501,6 +1518,13 @@ function ProviderEditor({
       <form
         onSubmit={(event) => {
           event.preventDefault();
+          if (logoSelectionError !== null || logoReading) {
+            setValidationError(
+              logoSelectionError ??
+                "Wait for the Provider Logo to finish loading",
+            );
+            return;
+          }
           const error = validateProviderEditor(
             normalizedProvider,
             apiKey,
@@ -1607,28 +1631,39 @@ function ProviderEditor({
                 1024)
               </span>
               <input
+                ref={logoFileInput}
                 type="file"
                 accept="image/png,image/jpeg,image/webp"
                 onChange={(event) => {
                   const file = event.currentTarget.files?.[0];
                   if (file === undefined) return;
+                  const version = ++logoReadVersion.current;
+                  setLogoUpload(undefined);
+                  setLogoFilename(null);
+                  setLogoPreview(null);
+                  setLogoSelectionError(null);
+                  setLogoReading(false);
                   if (
                     !["image/png", "image/jpeg", "image/webp"].includes(
                       file.type,
                     )
                   ) {
-                    setValidationError(
-                      "Choose a PNG, JPEG, or WebP Provider Logo",
-                    );
+                    const message = "Choose a PNG, JPEG, or WebP Provider Logo";
+                    setLogoSelectionError(message);
+                    setValidationError(message);
                     return;
                   }
                   if (file.size > 512 * 1024) {
-                    setValidationError("Provider Logo must be at most 512 KiB");
+                    const message = "Provider Logo must be at most 512 KiB";
+                    setLogoSelectionError(message);
+                    setValidationError(message);
                     return;
                   }
+                  setLogoReading(true);
                   void file
                     .arrayBuffer()
                     .then((bytes) => {
+                      if (version !== logoReadVersion.current) return;
                       setLogoUpload(new Uint8Array(bytes));
                       setLogoFilename(file.name);
                       setLogoPreview(
@@ -1636,22 +1671,37 @@ function ProviderEditor({
                       );
                       setValidationError(null);
                     })
-                    .catch((reason) =>
-                      setValidationError(describeError(reason)),
-                    );
+                    .catch((reason) => {
+                      if (version !== logoReadVersion.current) return;
+                      const message = describeError(reason);
+                      setLogoSelectionError(message);
+                      setValidationError(message);
+                    })
+                    .finally(() => {
+                      if (version === logoReadVersion.current)
+                        setLogoReading(false);
+                    });
                 }}
               />
             </label>
             {logoFilename === null ? null : <span>{logoFilename}</span>}
             {logoUpload !== null &&
-            (logoUpload !== undefined || logoDataUrl !== undefined) ? (
+            (logoUpload !== undefined ||
+              logoDataUrl !== undefined ||
+              initialProvider.logoResource !== undefined) ? (
               <button
                 className="quiet-button"
                 type="button"
                 onClick={() => {
+                  logoReadVersion.current += 1;
+                  if (logoFileInput.current !== null)
+                    logoFileInput.current.value = "";
                   setLogoUpload(null);
                   setLogoFilename(null);
                   setLogoPreview(null);
+                  setLogoSelectionError(null);
+                  setLogoReading(false);
+                  setValidationError(null);
                 }}
               >
                 Remove Logo
@@ -1963,7 +2013,11 @@ function ProviderEditor({
           <button className="quiet-button" type="button" onClick={onCancel}>
             Cancel
           </button>
-          <button className="primary-button" type="submit" disabled={busy}>
+          <button
+            className="primary-button"
+            type="submit"
+            disabled={busy || logoReading}
+          >
             {busy
               ? mode === "add"
                 ? "Adding…"

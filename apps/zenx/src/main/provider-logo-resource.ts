@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, open, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { inflateSync } from "node:zlib";
 
 export const MAX_PROVIDER_LOGO_BYTES = 512 * 1024;
 export const MAX_PROVIDER_LOGO_SIDE = 1024;
@@ -68,6 +69,8 @@ export class ProviderLogoResources {
       if (read.bytesRead !== size) return undefined;
       const format = imageFormatAndSize(bytes);
       if (
+        format.width < 1 ||
+        format.height < 1 ||
         format.width > MAX_PROVIDER_LOGO_SIDE ||
         format.height > MAX_PROVIDER_LOGO_SIDE
       )
@@ -103,26 +106,32 @@ function imageFormatAndSize(bytes: Uint8Array): {
 } {
   const data = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (
-    data.length >= 24 &&
-    data
-      .subarray(0, 8)
-      .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) &&
-    data.toString("ascii", 12, 16) === "IHDR" &&
-    data.readUInt32BE(8) === 13
+    data.length >= 8 &&
+    data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
   )
-    return {
-      extension: "png",
-      mime: "image/png",
-      width: data.readUInt32BE(16),
-      height: data.readUInt32BE(20),
-    };
-  if (data.length >= 4 && data[0] === 0xff && data[1] === 0xd8) {
+    return pngFormatAndSize(data);
+  if (
+    data.length >= 8 &&
+    data[0] === 0xff &&
+    data[1] === 0xd8 &&
+    data[data.length - 2] === 0xff &&
+    data[data.length - 1] === 0xd9
+  ) {
     let offset = 2;
+    let size: { width: number; height: number } | undefined;
+    let sawScan = false;
     while (offset + 4 < data.length) {
       if (data[offset] !== 0xff) break;
       const marker = data[offset + 1]!;
       offset += 2;
-      if (marker === 0xd9 || marker === 0xda) break;
+      if (marker === 0xd9) break;
+      if (marker === 0xda) {
+        if (offset + 2 > data.length) break;
+        const length = data.readUInt16BE(offset);
+        if (length < 2 || offset + length > data.length - 2) break;
+        sawScan = true;
+        break;
+      }
       if (marker === 0x00 || marker === 0xff) continue;
       if (offset + 2 > data.length) break;
       const length = data.readUInt16BE(offset);
@@ -134,55 +143,137 @@ function imageFormatAndSize(bytes: Uint8Array): {
         ].includes(marker) &&
         length >= 7
       )
-        return {
-          extension: "jpg",
-          mime: "image/jpeg",
+        size = {
           width: data.readUInt16BE(offset + 5),
           height: data.readUInt16BE(offset + 3),
         };
       offset += length;
     }
+    if (size !== undefined && sawScan)
+      return { extension: "jpg", mime: "image/jpeg", ...size };
   }
   if (
-    data.length >= 30 &&
+    data.length >= 20 &&
     data.toString("ascii", 0, 4) === "RIFF" &&
     data.toString("ascii", 8, 12) === "WEBP" &&
     data.readUInt32LE(4) + 8 === data.length
   ) {
-    const kind = data.toString("ascii", 12, 16);
-    if (kind === "VP8X" && data.length >= 30)
+    const chunks: { kind: string; offset: number; size: number }[] = [];
+    let offset = 12;
+    while (offset + 8 <= data.length) {
+      const size = data.readUInt32LE(offset + 4);
+      const end = offset + 8 + size + (size & 1);
+      if (end > data.length) break;
+      chunks.push({
+        kind: data.toString("ascii", offset, offset + 4),
+        offset: offset + 8,
+        size,
+      });
+      offset = end;
+    }
+    if (offset !== data.length || chunks.length === 0)
+      throw new Error("Provider Logo must be a valid PNG, JPEG, or WebP image");
+    const first = chunks[0]!;
+    const image = chunks.find(
+      (chunk) => chunk.kind === "VP8 " || chunk.kind === "VP8L",
+    );
+    if (first.kind === "VP8X" && first.size === 10 && image !== undefined)
       return {
         extension: "webp",
         mime: "image/webp",
-        width: 1 + data.readUIntLE(24, 3),
-        height: 1 + data.readUIntLE(27, 3),
+        width: 1 + data.readUIntLE(first.offset + 4, 3),
+        height: 1 + data.readUIntLE(first.offset + 7, 3),
       };
-    if (kind === "VP8L" && data.length >= 25 && data[20] === 0x2f)
+    if (first.kind === "VP8L" && first.size >= 5 && data[first.offset] === 0x2f)
       return {
         extension: "webp",
         mime: "image/webp",
-        width: 1 + (((data[22]! & 0x3f) << 8) | data[21]!),
+        width:
+          1 +
+          (((data[first.offset + 2]! & 0x3f) << 8) | data[first.offset + 1]!),
         height:
           1 +
-          (((data[24]! & 0x0f) << 10) |
-            (data[23]! << 2) |
-            ((data[22]! & 0xc0) >> 6)),
+          (((data[first.offset + 4]! & 0x0f) << 10) |
+            (data[first.offset + 3]! << 2) |
+            ((data[first.offset + 2]! & 0xc0) >> 6)),
       };
     if (
-      kind === "VP8 " &&
-      data.length >= 30 &&
-      data[23] === 0x9d &&
-      data[24] === 0x01 &&
-      data[25] === 0x2a
+      first.kind === "VP8 " &&
+      first.size >= 10 &&
+      data[first.offset + 3] === 0x9d &&
+      data[first.offset + 4] === 0x01 &&
+      data[first.offset + 5] === 0x2a
     )
       return {
         extension: "webp",
         mime: "image/webp",
-        width: data.readUInt16LE(26) & 0x3fff,
-        height: data.readUInt16LE(28) & 0x3fff,
+        width: data.readUInt16LE(first.offset + 6) & 0x3fff,
+        height: data.readUInt16LE(first.offset + 8) & 0x3fff,
       };
   }
   throw new Error("Provider Logo must be a valid PNG, JPEG, or WebP image");
+}
+
+function pngFormatAndSize(data: Buffer): {
+  extension: "png";
+  mime: "image/png";
+  width: number;
+  height: number;
+} {
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  let sawHeader = false;
+  let sawEnd = false;
+  const imageData: Buffer[] = [];
+  while (offset + 12 <= data.length) {
+    const length = data.readUInt32BE(offset);
+    const type = data.toString("ascii", offset + 4, offset + 8);
+    const end = offset + 12 + length;
+    if (end > data.length) break;
+    if (
+      pngCrc32(data.subarray(offset + 4, offset + 8 + length)) !==
+      data.readUInt32BE(offset + 8 + length)
+    )
+      break;
+    if (offset === 8 && type !== "IHDR") break;
+    if (type === "IHDR") {
+      if (sawHeader || length !== 13) break;
+      width = data.readUInt32BE(offset + 8);
+      height = data.readUInt32BE(offset + 12);
+      sawHeader = true;
+    } else if (type === "IDAT") {
+      imageData.push(data.subarray(offset + 8, offset + 8 + length));
+    } else if (type === "IEND") {
+      if (length !== 0 || end !== data.length) break;
+      sawEnd = true;
+      break;
+    }
+    offset = end;
+  }
+  if (!sawHeader || !sawEnd || imageData.length === 0)
+    throw new Error("Provider Logo must be a valid PNG, JPEG, or WebP image");
+  try {
+    if (
+      inflateSync(Buffer.concat(imageData), {
+        maxOutputLength: 16 * 1024 * 1024,
+      }).length === 0
+    )
+      throw new Error("Empty PNG image data");
+  } catch {
+    throw new Error("Provider Logo must be a valid PNG, JPEG, or WebP image");
+  }
+  return { extension: "png", mime: "image/png", width, height };
+}
+
+function pngCrc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++)
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
 }
 
 function isNodeError(value: unknown): value is NodeJS.ErrnoException {

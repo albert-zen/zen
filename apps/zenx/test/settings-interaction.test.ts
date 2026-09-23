@@ -593,6 +593,205 @@ test("Add custom provider submits an opaque identity, credential, and repeatable
   }
 });
 
+test("invalid Logo selection blocks submit instead of reusing an earlier upload", async () => {
+  let calls = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: settings,
+    addProvider: async (provider) => {
+      calls += 1;
+      return {
+        ...settings,
+        profile: {
+          ...settings.profile,
+          providerProfiles: [...settings.profile.providerProfiles, provider],
+        },
+      };
+    },
+  });
+  try {
+    await waitFor(() => exactButton("Add custom provider"));
+    await click(exactButtonRequired("Add custom provider"));
+    await changeControl(requiredInput("Display name"), "Logo selection");
+    await changeControl(requiredInput("Provider name"), "logo-selection");
+    await changeControl(requiredInput("Base URL"), "https://logo.example/v1");
+    await changeControl(requiredInput("API key"), "key");
+    await changeControl(requiredInput("Model 1"), "logo-model");
+    await changeControl(
+      requiredInput("Model 1 context window (Required)"),
+      "32768",
+    );
+    const input = document.querySelector<HTMLInputElement>(
+      'input[type="file"][accept="image/png,image/jpeg,image/webp"]',
+    );
+    assert.ok(input);
+    const choose = async (file: File) => {
+      Object.defineProperty(input, "files", {
+        configurable: true,
+        value: [file],
+      });
+      await act(async () => {
+        input.dispatchEvent(new window.Event("change", { bubbles: true }));
+        await Promise.resolve();
+      });
+    };
+    const valid = new window.File([Buffer.from("valid")], "first.png", {
+      type: "image/png",
+    });
+    await choose(valid);
+    await choose(
+      new window.File([Buffer.alloc(512 * 1024 + 1)], "too-large.png", {
+        type: "image/png",
+      }),
+    );
+    await click(exactButtonRequired("Add provider"));
+    assert.equal(calls, 0);
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /at most 512 KiB/u,
+    );
+    await choose(valid);
+    await click(exactButtonRequired("Add provider"));
+    await waitFor(() => calls === 1);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("uploaded Logo reconciles a saved Provider after Host startup fails", async () => {
+  let authoritative = settings;
+  let calls = 0;
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  const harness = await mountSettings("models", {
+    initialSettings: settings,
+    get: async () => authoritative,
+    addProvider: async (provider) => {
+      calls += 1;
+      authoritative = {
+        ...settings,
+        profile: {
+          ...settings.profile,
+          revision: 1,
+          providerProfiles: [
+            ...settings.profile.providerProfiles,
+            { ...provider, logoResource: `${"a".repeat(64)}.png` },
+          ],
+        },
+        providerLogoDataUrls: {
+          [provider.providerProfileId]: `data:image/png;base64,${png.toString("base64")}`,
+        },
+        configuration: {
+          status: "unconfirmed",
+          revision: 1,
+          pendingRestart: [],
+        },
+      };
+      throw new Error("Host startup failed");
+    },
+  });
+  try {
+    await waitFor(() => exactButton("Add custom provider"));
+    await click(exactButtonRequired("Add custom provider"));
+    await changeControl(requiredInput("Display name"), "Saved with Logo");
+    await changeControl(requiredInput("Provider name"), "saved-logo");
+    await changeControl(requiredInput("Base URL"), "https://logo.example/v1");
+    await changeControl(requiredInput("API key"), "key");
+    await changeControl(requiredInput("Model 1"), "logo-model");
+    await changeControl(
+      requiredInput("Model 1 context window (Required)"),
+      "32768",
+    );
+    const input = document.querySelector<HTMLInputElement>(
+      'input[type="file"][accept="image/png,image/jpeg,image/webp"]',
+    );
+    assert.ok(input);
+    Object.defineProperty(input, "files", {
+      value: [new window.File([png], "logo.png", { type: "image/png" })],
+    });
+    await act(async () => {
+      input.dispatchEvent(new window.Event("change", { bubbles: true }));
+      await Promise.resolve();
+    });
+    await click(exactButtonRequired("Add provider"));
+    await waitFor(
+      () =>
+        calls === 1 &&
+        document.querySelector('[aria-label="Add Provider profile"]') === null,
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /Settings were saved, but finalization failed/u,
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("removed Logo reconciles a saved Provider after Host startup fails", async () => {
+  const original: PublicHostSettings = {
+    ...multiProviderSettings,
+    profile: {
+      ...multiProviderSettings.profile,
+      providerProfiles: multiProviderSettings.profile.providerProfiles.map(
+        (provider) =>
+          provider.providerProfileId === "profile-alpha"
+            ? { ...provider, logoResource: `${"a".repeat(64)}.png` }
+            : provider,
+      ),
+    },
+    providerLogoDataUrls: { "profile-alpha": "data:image/png;base64,AA==" },
+  };
+  let authoritative = original;
+  let calls = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: original,
+    get: async () => authoritative,
+    editProvider: async (id, provider, options) => {
+      calls += 1;
+      assert.equal(options?.logoUpload, null);
+      authoritative = {
+        ...original,
+        profile: {
+          ...original.profile,
+          revision: 1,
+          providerProfiles: original.profile.providerProfiles.map(
+            (candidate) =>
+              candidate.providerProfileId === id
+                ? { ...provider, logoResource: undefined }
+                : candidate,
+          ),
+        },
+        providerLogoDataUrls: {},
+        configuration: {
+          status: "unconfirmed",
+          revision: 1,
+          pendingRestart: [],
+        },
+      };
+      throw new Error("Host startup failed");
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Remove Logo"));
+    await click(exactButtonRequired("Save provider"));
+    await waitFor(
+      () =>
+        calls === 1 &&
+        document.querySelector('[aria-label="Edit Alpha"]') === null,
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /Settings were saved, but finalization failed/u,
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
 test("Add displays the server unconfirmed result without inferring failure", async () => {
   let authoritative = settings;
   let calls = 0;
