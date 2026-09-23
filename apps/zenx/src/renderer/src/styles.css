@@ -6649,13 +6649,16 @@ a:focus-visible {
   overflow: hidden;
 }
 .workspace:has(> .auxiliary-panel) > .agent-surface {
-  flex: 1;
+  flex: none;
   min-width: 0;
-  width: 0;
+  width: calc(100% - var(--workspace-panel-width, 0px));
 }
 .auxiliary-panel {
-  position: relative;
-  flex: 0 1 var(--auxiliary-width, 520px);
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  flex: none;
   width: var(--auxiliary-width, 520px);
   min-width: 360px;
   max-width: 55%;
@@ -6742,11 +6745,6 @@ a:focus-visible {
   padding-top: 10px;
 }
 .auxiliary-panel[data-expanded="true"] {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: auto;
   width: 100%;
   min-width: 0;
   max-width: none;
