@@ -485,6 +485,83 @@ test("Provider discovery starts text-only and manual overrides persist", async (
   }
 });
 
+test("model discovery and manual addition stop at the Host limit of 1024 rows", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.providerProfiles[0]!.models.push(
+    ...Array.from({ length: 1021 }, (_, index) => model(`extra-${index}`)),
+  );
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    discoverProvider: async () => ({
+      providerProfileId: "profile-alpha",
+      models: [model("new-one"), model("new-two")],
+    }),
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Get available models"));
+    const first = await waitFor(() =>
+      document.querySelector<HTMLInputElement>(
+        'input[aria-label="Select new-one"]',
+      ),
+    );
+    await click(first);
+    const second = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Select new-two"]',
+    );
+    assert.ok(second);
+    assert.equal(second.disabled, true);
+    await click(exactButtonRequired("Add selected models (1)"));
+    assert.equal(document.querySelectorAll(".provider-model-row").length, 1024);
+    const addModel = exactButtonRequired("Add model");
+    assert.equal(addModel.disabled, true);
+    assert.match(
+      document.body.textContent ?? "",
+      /Model limit reached.*1,024/u,
+    );
+    await click(addModel);
+    assert.equal(document.querySelectorAll(".provider-model-row").length, 1024);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("removing a model keeps local reasoning editor state with its original row", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.providerProfiles[0]!.models = [
+    {
+      ...model("first"),
+      supportedReasoningEfforts: [],
+      defaultReasoningEffort: null,
+    },
+    {
+      ...model("second"),
+      supportedReasoningEfforts: [],
+      defaultReasoningEffort: null,
+    },
+  ];
+  const harness = await mountSettings("models", { initialSettings: initial });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await changeControl(
+      (await labeledSelect("Model 1 reasoning metadata"))!,
+      "configured",
+    );
+    assert.ok(requiredInput("Model 1 reasoning efforts"));
+    await click(labeledButtonRequired("Remove model 1"));
+    assert.equal(requiredInput("Model 1").value, "second");
+    assert.equal(
+      (await labeledSelect("Model 1 reasoning metadata"))!.value,
+      "text-only",
+    );
+    assert.equal(labelControl("Model 1 reasoning efforts", "input"), undefined);
+  } finally {
+    await unmount(harness);
+  }
+});
+
 test("a saved Unknown model offers a user-triggered image probe and shows its persisted outcome", async () => {
   const unknownModel = {
     ...multiProviderSettings.profile.providerProfiles[0]!.models[0]!,

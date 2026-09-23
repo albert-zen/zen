@@ -58,6 +58,9 @@ export type SettingsTab =
   | "workflows"
   | "archived";
 
+// Match the Host profile limit before allowing either model-add path.
+const MAX_MODELS_PER_PROVIDER = 1_024;
+
 export function SettingsView({
   archivedError,
   archivedLoading,
@@ -1502,8 +1505,17 @@ function ProviderEditor({
   titleModel: ZenXModelReference;
 }) {
   const [provider, setProvider] = useState(initialProvider);
-  const [models, setModels] = useState(
-    initialProvider.models.map((model) => ({ ...model })),
+  const [modelRows, setModelRows] = useState(() =>
+    initialProvider.models.map((model) => ({
+      key: globalThis.crypto.randomUUID(),
+      model: { ...model },
+    })),
+  );
+  const models = modelRows.map((row) => row.model);
+  const modelIds = new Set(models.map((model) => model.id));
+  const remainingModelSlots = Math.max(
+    0,
+    MAX_MODELS_PER_PROVIDER - models.length,
   );
   const [discovering, setDiscovering] = useState(false);
   const [availableModels, setAvailableModels] = useState<
@@ -1512,6 +1524,12 @@ function ProviderEditor({
   const [selectedAvailableModels, setSelectedAvailableModels] = useState<
     string[]
   >([]);
+  const selectedAvailableModelIds = new Set(selectedAvailableModels);
+  const selectedNewModels =
+    availableModels?.filter(
+      (model) =>
+        selectedAvailableModelIds.has(model.id) && !modelIds.has(model.id),
+    ) ?? [];
   const [modelSearch, setModelSearch] = useState("");
   const [probingModel, setProbingModel] = useState<string | null>(null);
   const [catalogStatus, setCatalogStatus] = useState<string | null>(null);
@@ -1600,9 +1618,9 @@ function ProviderEditor({
     index: number,
     update: (model: ZenXModelCatalogEntry) => ZenXModelCatalogEntry,
   ) => {
-    setModels((current) =>
-      current.map((model, candidate) =>
-        candidate === index ? update(model) : model,
+    setModelRows((current) =>
+      current.map((row, candidate) =>
+        candidate === index ? { ...row, model: update(row.model) } : row,
       ),
     );
     setValidationError(null);
@@ -1635,6 +1653,12 @@ function ProviderEditor({
         onSubmit={(event) => {
           event.preventDefault();
           const diagnosticAttemptId = globalThis.crypto.randomUUID();
+          if (models.length > MAX_MODELS_PER_PROVIDER) {
+            setValidationError(
+              "A Provider can have at most 1,024 models. Remove models before saving.",
+            );
+            return;
+          }
           if (logoSelectionError !== null || logoReading) {
             recordValidationRejection(
               diagnosticAttemptId,
@@ -1943,15 +1967,16 @@ function ProviderEditor({
                     .then((snapshot) => {
                       setAvailableModels(snapshot.models);
                       if (provider.type === "openai-subscription") {
-                        setModels((current) =>
-                          current.map((model) => {
-                            if (model.source === "manual") return model;
+                        setModelRows((current) =>
+                          current.map((row) => {
+                            const model = row.model;
+                            if (model.source === "manual") return row;
                             const discovered = snapshot.models.find(
                               (entry) => entry.id === model.id,
                             );
                             return discovered === undefined
-                              ? model
-                              : { ...discovered };
+                              ? row
+                              : { ...row, model: { ...discovered } };
                           }),
                         );
                       }
@@ -1992,6 +2017,13 @@ function ProviderEditor({
                   ? "Choose additional models. Official metadata is updated in the draft; manual settings are preserved. Save provider to apply."
                   : "Select the models you want. Existing models and their settings stay unchanged."}
               </p>
+              {remainingModelSlots <= 10 ? (
+                <p className="settings-note" role="status">
+                  {remainingModelSlots === 0
+                    ? "Model limit reached (1,024). Remove a model to add another."
+                    : `You can add ${remainingModelSlots} more models (1,024 max).`}
+                </p>
+              ) : null}
               <label className="field">
                 <span>Search available models</span>
                 <input
@@ -2008,18 +2040,19 @@ function ProviderEditor({
                       .includes(modelSearch.trim().toLowerCase()),
                   )
                   .map((model) => {
-                    const exists = models.some(
-                      (entry) => entry.id === model.id,
-                    );
+                    const exists = modelIds.has(model.id);
+                    const selected = selectedAvailableModelIds.has(model.id);
                     return (
                       <label className="available-model-option" key={model.id}>
                         <input
                           type="checkbox"
                           aria-label={`Select ${model.id}`}
-                          disabled={exists}
-                          checked={
-                            exists || selectedAvailableModels.includes(model.id)
+                          disabled={
+                            exists ||
+                            (!selected &&
+                              selectedNewModels.length >= remainingModelSlots)
                           }
+                          checked={exists || selected}
                           onChange={(event) =>
                             setSelectedAvailableModels((current) =>
                               event.target.checked
@@ -2056,16 +2089,23 @@ function ProviderEditor({
                 <button
                   type="button"
                   className="primary-button"
-                  disabled={selectedAvailableModels.length === 0}
+                  disabled={
+                    selectedNewModels.length === 0 ||
+                    selectedNewModels.length > remainingModelSlots
+                  }
                   onClick={() => {
-                    const additions = availableModels.filter(
-                      (entry) =>
-                        selectedAvailableModels.includes(entry.id) &&
-                        !models.some((model) => model.id === entry.id),
+                    const additions = selectedNewModels.slice(
+                      0,
+                      remainingModelSlots,
                     );
-                    setModels((current) => [
+                    setModelRows((current) => [
                       ...current,
-                      ...additions.map((model) => ({ ...model })),
+                      ...additions
+                        .slice(0, MAX_MODELS_PER_PROVIDER - current.length)
+                        .map((model) => ({
+                          key: globalThis.crypto.randomUUID(),
+                          model: { ...model },
+                        })),
                     ]);
                     setAvailableModels(null);
                     setSelectedAvailableModels([]);
@@ -2079,8 +2119,8 @@ function ProviderEditor({
               </div>
             </section>
           )}
-          {models.map((model, index) => (
-            <div className="provider-model-row" key={index}>
+          {modelRows.map(({ key, model }, index) => (
+            <div className="provider-model-row" key={key}>
               <label className="field">
                 <span>{`Model ${index + 1}`}</span>
                 <input
@@ -2120,7 +2160,7 @@ function ProviderEditor({
                 aria-label={`Remove model ${index + 1}`}
                 disabled={models.length === 1}
                 onClick={() => {
-                  setModels((current) =>
+                  setModelRows((current) =>
                     current.filter((_, candidate) => candidate !== index),
                   );
                   setValidationError(null);
@@ -2182,12 +2222,28 @@ function ProviderEditor({
             className="quiet-button add-model-button"
             type="button"
             id={fieldId("addModel")}
+            disabled={remainingModelSlots === 0}
             onClick={() =>
-              setModels((current) => [...current, manualModelCatalogEntry("")])
+              setModelRows((current) =>
+                current.length >= MAX_MODELS_PER_PROVIDER
+                  ? current
+                  : [
+                      ...current,
+                      {
+                        key: globalThis.crypto.randomUUID(),
+                        model: manualModelCatalogEntry(""),
+                      },
+                    ],
+              )
             }
           >
             Add model
           </button>
+          {remainingModelSlots === 0 ? (
+            <p className="settings-note" role="status">
+              Model limit reached (1,024). Remove a model to add another.
+            </p>
+          ) : null}
         </fieldset>
         {replacesDefault ? (
           <ModelReferenceSelect
