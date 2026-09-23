@@ -72,15 +72,72 @@ void app.whenReady().then(async () => {
     const tabId = humanTabs[0]?.id;
     assert.ok(tabId, "Human navigation must create a shared tab");
     browser.bindThreadSession("shared-session", "shared-thread");
-    await eventually(async () =>
-      assert.equal((await browser.listTabs("shared-session"))[0]?.url, url),
+    await eventually(async () => {
+      const current = (await browser.listTabs("shared-session"))[0];
+      assert.equal(current?.url, url);
+      assert.equal(current?.loading, false);
+    });
+    assert.ok(createdView);
+    const unmountedInspection = await browser.inspect("shared-session", tabId);
+    assert.match(unmountedInspection.visibleText, /Human value/u);
+    assert.ok(
+      unmountedInspection.screenshot.bytes > 0,
+      "Agent inspection must capture an unmounted Browser tab",
     );
+    const hiddenInput = requiredTarget(
+      unmountedInspection,
+      "Human value",
+      "type",
+    );
+    await browser.type(
+      "shared-session",
+      tabId,
+      unmountedInspection.observationId,
+      hiddenInput.targetId,
+      "Agent hidden",
+      false,
+    );
+    const afterHiddenAction = await browser.inspect("shared-session", tabId);
+    assert.equal(
+      requiredTarget(afterHiddenAction, "Human value", "type").value,
+      "Agent hidden",
+      "the Agent must use the same unmounted page for actions",
+    );
+    assert.equal(
+      BrowserWindow.getAllWindows().length,
+      1,
+      "the temporary renderer must close after each Agent operation",
+    );
+    await assert.rejects(
+      browser.scroll("shared-session", tabId, "stale", "down", 100),
+      /stale or unknown/u,
+    );
+    assert.equal(
+      BrowserWindow.getAllWindows().length,
+      1,
+      "the temporary renderer must close when an operation fails",
+    );
+    const handoffInspection = browser.inspect("shared-session", tabId);
+    await eventually(async () => {
+      assert.equal(
+        BrowserWindow.getAllWindows().length,
+        2,
+        "the Agent inspection must start on the temporary renderer",
+      );
+    });
     browser.mount(owner.webContents, {
       threadId: "shared-thread",
       tabId,
       lease: "shared-smoke",
       bounds: { x: 20, y: 20, width: 700, height: 500 },
     });
+    owner.showInactive();
+    await handoffInspection;
+    assert.equal(
+      BrowserWindow.getAllWindows().length,
+      1,
+      "mounting for the user must close the temporary renderer",
+    );
     assert.ok(createdView, "Electron factory must create a WebContentsView");
     assert.equal(owner.contentView.children[0], createdView);
     assert.equal(
@@ -88,14 +145,13 @@ void app.whenReady().then(async () => {
       createdView.webContents.id,
       "The mounted human view must be the Agent target WebContents",
     );
-    owner.showInactive();
     await new Promise((resolve) => setTimeout(resolve, 100));
     let inspection = await browser.inspect("shared-session", tabId);
     assert.equal(inspection.url, url);
     assert.match(inspection.visibleText, /Human value/u);
 
     await createdView.webContents.executeJavaScript(
-      "document.querySelector('input').focus()",
+      "document.querySelector('input').focus();document.querySelector('input').select()",
     );
     createdView.webContents.insertText("typed by human");
     inspection = await browser.inspect("shared-session", tabId);
@@ -193,7 +249,16 @@ void app.whenReady().then(async () => {
         tabId,
         webContentsId: createdView.webContents.id,
         url,
+        unmountedScreenshot: {
+          width: unmountedInspection.screenshot.width,
+          height: unmountedInspection.screenshot.height,
+          bytes: unmountedInspection.screenshot.bytes,
+        },
         checks: [
+          "unmounted Agent inspect captures a screenshot and visible targets",
+          "unmounted Agent action changes the same page",
+          "temporary rendering closes on success and failure",
+          "a user mount takes the same WebContents from a pending Agent render",
           "human navigation is visible to Browser inspect",
           "human Chromium input is visible to Browser inspect",
           "Browser click mutates the mounted human page",

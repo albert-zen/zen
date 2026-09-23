@@ -298,6 +298,7 @@
   Playwright、Peekaboo、WinApp 或适用平台的 bundled fallback；版本、权限与可用性只属于 host 配置和瞬时诊断，不进入 Zen Core。
 - **ZenXBrowserScreenshotArtifactStore** — ZenX provider 为一次最新 Browser observation 写入有界、短时、可清理的 PNG
   artifact，并把 observation identity 与 artifact metadata 一起投影；文件是外部瞬时观测，不进入 Zen Core 或 durable journal。
+- **ZenXWorkspaceBrowserUnmountedRenderer** — 共享 Browser 的页面未挂到用户窗口时，Host 在 Agent 观察或操作期间把同一 WebContentsView 临时挂到不可见的本地渲染窗口，提供有界视口并在完成、失败或用户挂载时释放；它不复制页面、不持有 Thread 状态，也不改变页面归属。
 - **ZenXBrowserLiveObservation** — ZenX user-browser provider 把当前线程面板选择的同一 CDP target 作为
   observer-scoped、只读、host-local 的有界 latest-frame/status 投影交给当前 renderer；它逐帧 ack、在无观察者、页面隐藏、
   target/document/provider 生命周期变化时停止；只发布由当前观察世代的请求直接采集、并沿同一 document/attachment

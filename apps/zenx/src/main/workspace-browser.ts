@@ -42,6 +42,7 @@ interface Tab {
   owner?: Owner;
   documentVersion: number;
   navigationGeneration: number;
+  renderRevision: number;
   observation?: BrowserObservation;
   error?: string;
 }
@@ -52,6 +53,13 @@ interface Owner {
 interface WorkspaceBrowserDependencies {
   createView(): WebContentsView;
   windowFor(sender: WebContents): BrowserWindow | null;
+  renderWhileUnmounted?<T>(
+    view: WebContentsView,
+    isMounted: () => boolean,
+    operation: () => Promise<T>,
+  ): Promise<T>;
+  releaseUnmountedView?(view: WebContentsView): void;
+  closeUnmountedRenderer?(): void;
 }
 
 export function workspaceBrowserUrl(input: unknown): string {
@@ -94,6 +102,17 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     this.#dependencies = {
       createView: options.dependencies.createView,
       windowFor: options.dependencies.windowFor,
+      ...(options.dependencies.renderWhileUnmounted === undefined
+        ? {}
+        : { renderWhileUnmounted: options.dependencies.renderWhileUnmounted }),
+      ...(options.dependencies.releaseUnmountedView === undefined
+        ? {}
+        : { releaseUnmountedView: options.dependencies.releaseUnmountedView }),
+      ...(options.dependencies.closeUnmountedRenderer === undefined
+        ? {}
+        : {
+            closeUnmountedRenderer: options.dependencies.closeUnmountedRenderer,
+          }),
     };
   }
 
@@ -129,6 +148,8 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
 
   #hide(owner: Owner): void {
     if (!owner.active) return;
+    owner.active.tab.renderRevision += 1;
+    owner.active.tab.observation = undefined;
     owner.active.tab.view.setVisible(false);
     if (!owner.window.isDestroyed())
       owner.window.contentView.removeChildView(owner.active.tab.view);
@@ -204,6 +225,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       owner,
       documentVersion: 0,
       navigationGeneration: 0,
+      renderRevision: 0,
     };
     this.#tabs.set(tab.id, tab);
     view.setVisible(false);
@@ -369,8 +391,11 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     tab.owner = owner;
     if (owner.active?.tab !== tab) {
       this.#hide(owner);
+      this.#dependencies.releaseUnmountedView?.(tab.view);
       owner.window.contentView.addChildView(tab.view);
     }
+    tab.renderRevision += 1;
+    tab.observation = undefined;
     owner.active = { tab, lease: value.lease };
     tab.view.setBounds(bounds);
     tab.view.setVisible(true);
@@ -384,7 +409,11 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     const tab = this.#requireAgentTab(sessionId, tabId);
     return observeElectronPage(
       {
-        capture: async () => await tab.view.webContents.capturePage(),
+        capture: async () =>
+          await this.#rendered(tab, async () => {
+            this.#requireAgentTab(sessionId, tabId);
+            return await tab.view.webContents.capturePage();
+          }),
         current: () =>
           this.#tabs.get(tab.id) === tab && !tab.view.webContents.isDestroyed()
             ? tab.documentVersion
@@ -436,84 +465,97 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
 
   async inspect(sessionId: string, tabId: string): Promise<BrowserInspection> {
     const tab = this.#requireAgentTab(sessionId, tabId);
-    const documentVersion = tab.documentVersion;
-    const navigationGeneration = tab.navigationGeneration;
-    const inspected = await this.#evaluate<{
-      visibleText: string;
-      targets: BrowserTargetFingerprint[];
-    }>(tab, browserInspectScript);
-    this.#assertAgentOperationCurrent(
-      sessionId,
-      tab,
-      navigationGeneration,
-      documentVersion,
-      "inspection",
-    );
-    const observationId = randomUUID();
-    const image = await tab.view.webContents.capturePage();
-    let png = image.toPNG();
-    if (png.byteLength > 4 * 1024 * 1024) {
-      const size = image.getSize();
-      const scale = Math.sqrt((4 * 1024 * 1024) / png.byteLength);
-      png = image
-        .resize({
-          width: Math.max(1, Math.floor(size.width * scale)),
-          height: Math.max(1, Math.floor(size.height * scale)),
-        })
-        .toPNG();
-    }
-    this.#assertAgentOperationCurrent(
-      sessionId,
-      tab,
-      navigationGeneration,
-      documentVersion,
-      "inspection",
-    );
-    const screenshot = await this.#artifacts.write(tab.id, observationId, png);
-    try {
+    return await this.#rendered(tab, async () => {
+      this.#requireAgentTab(sessionId, tabId);
+      const documentVersion = tab.documentVersion;
+      const navigationGeneration = tab.navigationGeneration;
+      const renderRevision = tab.renderRevision;
+      const inspected = await this.#evaluate<{
+        visibleText: string;
+        targets: BrowserTargetFingerprint[];
+      }>(tab, browserInspectScript);
       this.#assertAgentOperationCurrent(
         sessionId,
         tab,
         navigationGeneration,
         documentVersion,
         "inspection",
+        renderRevision,
       );
-    } catch (error) {
-      await this.#artifacts.removeArtifact(
-        screenshot.artifactPath,
-        screenshot.observationId,
+      const observationId = randomUUID();
+      const image = await tab.view.webContents.capturePage();
+      let png = image.toPNG();
+      if (png.byteLength > 4 * 1024 * 1024) {
+        const size = image.getSize();
+        const scale = Math.sqrt((4 * 1024 * 1024) / png.byteLength);
+        png = image
+          .resize({
+            width: Math.max(1, Math.floor(size.width * scale)),
+            height: Math.max(1, Math.floor(size.height * scale)),
+          })
+          .toPNG();
+      }
+      this.#assertAgentOperationCurrent(
+        sessionId,
+        tab,
+        navigationGeneration,
+        documentVersion,
+        "inspection",
+        renderRevision,
       );
-      throw error;
-    }
-    const targets = new Map<string, BrowserTargetFingerprint>();
-    const projected = inspected.targets.slice(0, 80).map((target) => {
-      const targetId = randomUUID();
-      targets.set(targetId, target);
+      const screenshot = await this.#artifacts.write(
+        tab.id,
+        observationId,
+        png,
+      );
+      try {
+        this.#assertAgentOperationCurrent(
+          sessionId,
+          tab,
+          navigationGeneration,
+          documentVersion,
+          "inspection",
+          renderRevision,
+        );
+      } catch (error) {
+        await this.#artifacts.removeArtifact(
+          screenshot.artifactPath,
+          screenshot.observationId,
+        );
+        throw error;
+      }
+      const targets = new Map<string, BrowserTargetFingerprint>();
+      const projected = inspected.targets.slice(0, 80).map((target) => {
+        const targetId = randomUUID();
+        targets.set(targetId, target);
+        return {
+          targetId,
+          role: target.role,
+          name: target.name,
+          actions: [...target.actions],
+          ...(target.value === undefined ? {} : { value: target.value }),
+          ...(target.checked === undefined ? {} : { checked: target.checked }),
+          ...(target.selected === undefined
+            ? {}
+            : { selected: target.selected }),
+          ...(target.options === undefined
+            ? {}
+            : { options: target.options.map((option) => ({ ...option })) }),
+          ...(target.optionsTruncated === undefined
+            ? {}
+            : { optionsTruncated: target.optionsTruncated }),
+        };
+      });
+      tab.observation = { id: observationId, documentVersion, targets };
       return {
-        targetId,
-        role: target.role,
-        name: target.name,
-        actions: [...target.actions],
-        ...(target.value === undefined ? {} : { value: target.value }),
-        ...(target.checked === undefined ? {} : { checked: target.checked }),
-        ...(target.selected === undefined ? {} : { selected: target.selected }),
-        ...(target.options === undefined
-          ? {}
-          : { options: target.options.map((option) => ({ ...option })) }),
-        ...(target.optionsTruncated === undefined
-          ? {}
-          : { optionsTruncated: target.optionsTruncated }),
+        ...this.#agentSummary(sessionId, tab),
+        observationId,
+        documentVersion,
+        visibleText: inspected.visibleText.slice(0, 8_000),
+        screenshot,
+        targets: projected,
       };
     });
-    tab.observation = { id: observationId, documentVersion, targets };
-    return {
-      ...this.#agentSummary(sessionId, tab),
-      observationId,
-      documentVersion,
-      visibleText: inspected.visibleText.slice(0, 8_000),
-      screenshot,
-      targets: projected,
-    };
   }
 
   async click(
@@ -571,27 +613,31 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
   ): Promise<BrowserTabSummary> {
     signal?.throwIfAborted();
     const tab = this.#requireAgentTab(sessionId, tabId);
-    const navigationGeneration = tab.navigationGeneration;
-    const documentVersion = tab.documentVersion;
-    assertBrowserObservation(
-      tab.observation,
-      tab.documentVersion,
-      observationId,
-    );
-    tab.observation = undefined;
-    await this.#evaluate(tab, browserScrollScript(direction, pixels));
-    this.#assertAgentOperationCurrent(
-      sessionId,
-      tab,
-      navigationGeneration,
-      documentVersion,
-      "scroll",
-    );
-    if (signal?.aborted)
-      throw new Error(
-        "Browser scroll outcome unknown after cancellation; inspect again before interacting",
+    return await this.#rendered(tab, async () => {
+      signal?.throwIfAborted();
+      this.#requireAgentTab(sessionId, tabId);
+      const navigationGeneration = tab.navigationGeneration;
+      const documentVersion = tab.documentVersion;
+      assertBrowserObservation(
+        tab.observation,
+        tab.documentVersion,
+        observationId,
       );
-    return this.#agentSummary(sessionId, tab);
+      tab.observation = undefined;
+      await this.#evaluate(tab, browserScrollScript(direction, pixels));
+      this.#assertAgentOperationCurrent(
+        sessionId,
+        tab,
+        navigationGeneration,
+        documentVersion,
+        "scroll",
+      );
+      if (signal?.aborted)
+        throw new Error(
+          "Browser scroll outcome unknown after cancellation; inspect again before interacting",
+        );
+      return this.#agentSummary(sessionId, tab);
+    });
   }
 
   async closeTab(sessionId: string, tabId: string): Promise<void> {
@@ -610,6 +656,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
 
   async shutdown(): Promise<void> {
     for (const tab of [...this.#tabs.values()]) this.#closeTab(tab);
+    this.#dependencies.closeUnmountedRenderer?.();
     await this.#artifacts.close();
   }
 
@@ -623,39 +670,53 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     submit = false,
   ): Promise<BrowserTabSummary> {
     const tab = this.#requireAgentTab(sessionId, tabId);
-    const navigationGeneration = tab.navigationGeneration;
-    const target = resolveBrowserObservedTarget(
-      tab.observation,
-      tab.documentVersion,
-      observationId,
-      targetId,
-      action,
-    );
-    tab.observation = undefined;
-    const result = await this.#evaluate<{ ok: boolean; reason?: string }>(
-      tab,
-      browserActionScript(target, action, value, submit),
-    );
-    if (!result.ok)
-      throw new Error(
-        `Browser ${action} target is stale or unsafe: ${result.reason}`,
+    return await this.#rendered(tab, async () => {
+      this.#requireAgentTab(sessionId, tabId);
+      const navigationGeneration = tab.navigationGeneration;
+      const target = resolveBrowserObservedTarget(
+        tab.observation,
+        tab.documentVersion,
+        observationId,
+        targetId,
+        action,
       );
-    this.#assertAgentOperationCurrent(
-      sessionId,
-      tab,
-      navigationGeneration,
-      undefined,
-      action,
+      tab.observation = undefined;
+      const result = await this.#evaluate<{ ok: boolean; reason?: string }>(
+        tab,
+        browserActionScript(target, action, value, submit),
+      );
+      if (!result.ok)
+        throw new Error(
+          `Browser ${action} target is stale or unsafe: ${result.reason}`,
+        );
+      this.#assertAgentOperationCurrent(
+        sessionId,
+        tab,
+        navigationGeneration,
+        undefined,
+        action,
+      );
+      await settleWebContents(tab.view.webContents);
+      this.#assertAgentOperationCurrent(
+        sessionId,
+        tab,
+        navigationGeneration,
+        undefined,
+        action,
+      );
+      return this.#agentSummary(sessionId, tab);
+    });
+  }
+
+  async #rendered<T>(tab: Tab, operation: () => Promise<T>): Promise<T> {
+    if (this.#dependencies.renderWhileUnmounted === undefined) {
+      return await operation();
+    }
+    return await this.#dependencies.renderWhileUnmounted(
+      tab.view,
+      () => tab.owner?.active?.tab === tab,
+      operation,
     );
-    await settleWebContents(tab.view.webContents);
-    this.#assertAgentOperationCurrent(
-      sessionId,
-      tab,
-      navigationGeneration,
-      undefined,
-      action,
-    );
-    return this.#agentSummary(sessionId, tab);
   }
 
   #beginNavigation(tab: Tab): number {
@@ -681,11 +742,14 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     navigationGeneration: number,
     documentVersion: number | undefined,
     operation: string,
+    renderRevision?: number,
   ): void {
     this.#requireAgentTab(sessionId, tab.id);
     if (
       tab.navigationGeneration !== navigationGeneration ||
-      (documentVersion !== undefined && tab.documentVersion !== documentVersion)
+      (documentVersion !== undefined &&
+        tab.documentVersion !== documentVersion) ||
+      (renderRevision !== undefined && tab.renderRevision !== renderRevision)
     )
       throw new Error(
         `Browser ${operation} became stale and its outcome is unknown after the page changed; inspect again`,
@@ -724,6 +788,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
   }
 
   #closeTab(tab: Tab): void {
+    this.#dependencies.releaseUnmountedView?.(tab.view);
     if (tab.owner?.active?.tab === tab) this.#hide(tab.owner);
     this.#tabs.delete(tab.id);
     tab.observation = undefined;
