@@ -16,6 +16,7 @@ import {
   SettingsDiagnosticLog,
   runDiagnosedProviderMutation,
 } from "../src/main/settings-diagnostic-log.js";
+import { BoundedLocalDiagnosticLog } from "../src/main/bounded-diagnostic-log.js";
 
 const attemptId = "10e870b0-3264-46b4-8a9b-e079f08ad985";
 
@@ -28,6 +29,26 @@ test("renderer cannot submit a forged Host save outcome", () => {
     isRendererSettingsDiagnostic({ event: "provider-validation-rejected" }),
     true,
   );
+});
+
+test("shared diagnostic storage refuses one record larger than its file limit", async () => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-settings-diagnostic-"),
+  );
+  try {
+    const log = new BoundedLocalDiagnosticLog({
+      userDataDirectory: root,
+      fileName: "other.jsonl",
+      maxBytes: 512,
+      normalize: () => ({ value: "x".repeat(800) }),
+    });
+    assert.equal(await log.record({}), false);
+    await assert.rejects(lstat(path.join(root, "diagnostics", "other.jsonl")), {
+      code: "ENOENT",
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("local validation failure is recorded with only allowlisted fields", async () => {

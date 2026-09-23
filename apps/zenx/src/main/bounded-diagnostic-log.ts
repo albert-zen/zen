@@ -37,6 +37,8 @@ export class BoundedLocalDiagnosticLog<TRecord extends object> {
     const value = this.#normalize(input);
     if (value === null) return Promise.resolve(false);
     const line = `${JSON.stringify(value)}\n`;
+    const lineBytes = Buffer.byteLength(line);
+    if (lineBytes > this.#maxBytes) return Promise.resolve(false);
     const operation = this.#pending.then(async () => {
       await mkdir(this.#directory, { recursive: true, mode: 0o700 });
       const directory = await lstat(this.#directory);
@@ -47,7 +49,7 @@ export class BoundedLocalDiagnosticLog<TRecord extends object> {
       if (size > this.#maxBytes) {
         await rm(this.#file);
         await rm(`${this.#file}.1`, { force: true });
-      } else if (size > 0 && size + Buffer.byteLength(line) > this.#maxBytes) {
+      } else if (size > 0 && size + lineBytes > this.#maxBytes) {
         await rm(`${this.#file}.1`, { force: true });
         await rename(this.#file, `${this.#file}.1`);
         await chmod(`${this.#file}.1`, 0o600);
