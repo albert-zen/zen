@@ -151,8 +151,8 @@ test("message links render local and web anchors inside a Thread", () => {
     ),
   );
   assert.match(html, /href="agent-data\/codex-instance-repair\/RESULT.md"/u);
-  assert.match(html, /href="\.\/中文 file.md"/u);
-  assert.match(html, /href="\/tmp\/a b.md"/u);
+  assert.match(html, /href="\.\/%E4%B8%AD%E6%96%87%20file.md"/u);
+  assert.match(html, /href="file:\/\/\/tmp\/a%20b.md"/u);
   assert.match(html, /href="https:\/\/example.com\/"/u);
   assert.doesNotMatch(html, /target="_blank"|javascript:/u);
 });
@@ -187,4 +187,28 @@ test("message link policy rejects dangerous schemes and delegates workspace boun
     /outside/u,
   );
   assert.throws(() => messageFilePath("/etc/passwd", "/tmp/work"), /outside/u);
+});
+
+test("production Markdown keeps one decode for percent filenames and file URLs", () => {
+  const markup = renderToStaticMarkup(
+    createElement(
+      MessageLinkContext.Provider,
+      { value: () => {} },
+      createElement(Markdown, {
+        text: [
+          "[literal percent](report%25done.md)",
+          "[literal percent20](report%2520done.md)",
+          "[file percent](file:///tmp/report%25done.md)",
+          "[space](report%20done.md)",
+          "[中文](%E4%B8%AD%E6%96%87%20file.md)",
+        ].join(" "),
+      }),
+    ),
+  );
+  assert.match(markup, /href="report%25done.md"/u);
+  assert.match(markup, /href="report%2520done.md"/u);
+  assert.match(markup, /href="file:\/\/\/tmp\/report%25done.md"/u);
+  assert.match(markup, /href="report%20done.md"/u);
+  assert.match(markup, /href="%E4%B8%AD%E6%96%87%20file.md"/u);
+  assert.equal((markup.match(/<a /gu) ?? []).length, 5);
 });

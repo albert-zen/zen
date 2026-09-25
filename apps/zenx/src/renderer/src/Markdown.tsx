@@ -302,9 +302,11 @@ function safeUrlTransform(url: string, key: string): string {
   const target = classifyMessageLink(url);
   return target.kind === "rejected"
     ? ""
-    : target.kind === "file" || target.kind === "browser"
-      ? target.value
-      : target.href;
+    : target.kind === "file"
+      ? url // Keep the encoded spelling: messageAnchor classifies/decodes it once on click.
+      : target.kind === "browser"
+        ? target.value
+        : target.href;
 }
 
 function prepareMarkdown(source: string): string {
