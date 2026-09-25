@@ -14,6 +14,10 @@ const panel = readFileSync(
   new URL("../src/renderer/src/auxiliary-panel.tsx", import.meta.url),
   "utf8",
 );
+const thread = readFileSync(
+  new URL("../src/renderer/src/ThreadView.tsx", import.meta.url),
+  "utf8",
+);
 
 function rule(selector, last = false) {
   const start = last
@@ -49,7 +53,7 @@ test("side panel open and close affordances use the same glyph and footprint", (
 
 test("composer scrollbar stays inset from the rounded shell, including when focused", () => {
   assert.match(rule(".composer"), /border-radius: 22px;/u);
-  assert.match(rule(".composer > textarea"), /margin: 8px 8px 0;/u);
+  assert.match(rule(".composer > textarea"), /margin: 22px 8px 0;/u);
   assert.match(rule(".composer > textarea"), /width: calc\(100% - 16px\);/u);
   assert.match(rule(".composer > textarea"), /outline: 0;/u);
   assert.match(css, /\.composer:focus-within\s*\{[^}]*box-shadow:/u);
@@ -62,7 +66,22 @@ test("composer icon controls retain a matching hit area in narrow layouts", () =
     /flex-basis: 36px;/u,
   );
   assert.match(
-    rule(".context-usage-indicator:focus-visible", true),
+    rule(".context-usage-trigger:focus-visible"),
     /color-focus-ring/u,
   );
+  assert.match(rule(".context-usage-trigger"), /width: 36px;/u);
+  assert.match(thread, /<button\s+className="context-usage-trigger"/u);
+});
+
+test("overflow track begins on straight edge while the total editor height remains bounded", () => {
+  assert.match(rule(".composer > textarea"), /min-height: 54px;/u);
+  assert.match(
+    rule(".composer > textarea"),
+    /max-height: max\(54px, min\(136px, calc\(35vh - 14px\)\)\);/u,
+  );
+  assert.match(thread, /const style = window\.getComputedStyle\(textarea\);/u);
+  assert.match(thread, /Number\.parseFloat\(style\.minHeight\)/u);
+  assert.match(rule(".composer-rail"), /min-height: 50px;/u);
+  assert.match(rule(".composer", false), /border-radius: 22px;/u);
+  assert.match(css, /  \.composer \{\s*border-radius: 20px;/u);
 });

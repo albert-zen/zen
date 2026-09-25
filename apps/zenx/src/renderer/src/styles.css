@@ -2341,15 +2341,18 @@ a:focus-visible {
 
 .composer > textarea {
   width: calc(100% - 16px);
-  margin: 8px 8px 0;
-  min-height: 68px;
-  max-height: max(68px, min(150px, 35vh));
+  /* Native scrollbar tracks span the scroll element, not its text padding.
+     Begin the scrollport on the shell's straight vertical edge; reclaim the
+     extra 14px from its height to preserve the overall composer budget. */
+  margin: 22px 8px 0;
+  min-height: 54px;
+  max-height: max(54px, min(136px, calc(35vh - 14px)));
   display: block;
   resize: none;
   overflow-y: hidden;
   scrollbar-width: thin;
   scrollbar-color: var(--border-control) transparent;
-  padding: 7px 8px 6px;
+  padding: 0 8px 6px;
   border: 0;
   outline: 0;
   background: transparent;
@@ -2510,10 +2513,6 @@ a:focus-visible {
 .context-usage-indicator:focus-visible {
   color: var(--color-text-primary);
   background: var(--color-surface-elevated);
-}
-.context-usage-indicator:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--color-focus-ring);
 }
 .context-usage-indicator::after {
   content: attr(data-tooltip);
@@ -5272,7 +5271,6 @@ a:focus-visible {
     border-radius: 20px;
   }
   .composer > textarea {
-    height: 60px;
     padding-inline: 8px;
     font-size: 16px;
   }
@@ -7110,7 +7108,7 @@ a:focus-visible {
   content: none;
 }
 .context-usage-trigger {
-  width: 30px;
+  width: 36px;
   height: 36px;
   display: inline-grid;
   place-items: center;
@@ -7122,7 +7120,7 @@ a:focus-visible {
   cursor: pointer;
 }
 .context-usage-trigger:focus-visible {
-  box-shadow: inset 0 0 0 2px var(--border-focus);
+  box-shadow: inset 0 0 0 2px var(--color-focus-ring);
 }
 .context-usage-indicator:hover .context-usage-trigger,
 .context-usage-trigger[aria-expanded="true"] {

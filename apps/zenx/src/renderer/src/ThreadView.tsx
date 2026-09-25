@@ -274,13 +274,16 @@ export function ThreadView({
     const resize = () => {
       textarea.style.height = "auto";
       const contentHeight = textarea.scrollHeight;
-      const declaredMaxHeight = Number.parseFloat(
-        window.getComputedStyle(textarea).maxHeight,
-      );
+      const style = window.getComputedStyle(textarea);
+      const declaredMinHeight = Number.parseFloat(style.minHeight);
+      const minHeight = Number.isFinite(declaredMinHeight)
+        ? declaredMinHeight
+        : 54;
+      const declaredMaxHeight = Number.parseFloat(style.maxHeight);
       const maxHeight = Number.isFinite(declaredMaxHeight)
         ? declaredMaxHeight
-        : 150;
-      const height = Math.min(Math.max(contentHeight, 68), maxHeight);
+        : 136;
+      const height = Math.min(Math.max(contentHeight, minHeight), maxHeight);
       textarea.style.height = `${height}px`;
       textarea.style.overflowY = contentHeight > height ? "auto" : "hidden";
     };
