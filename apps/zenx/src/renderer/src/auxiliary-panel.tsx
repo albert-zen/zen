@@ -20,6 +20,7 @@ import {
 import { WorkspaceFilesPanel } from "./workspace-files-panel.js";
 import { WorkspaceFilePicker } from "./workspace-file-picker.js";
 import { Icon, type IconName } from "./icons.js";
+import { messageFilePath } from "./message-file-path.js";
 
 interface ContentTab {
   id: string;
@@ -41,7 +42,13 @@ export function AuxiliaryPanel({
   openedTabs,
   onTabsChange,
   onWidthChange,
+  messageLinkRequest,
 }: {
+  messageLinkRequest?: {
+    id: number;
+    kind: "file" | "browser";
+    value: string;
+  } | null;
   onWidthChange?(width: number): void;
   fileDrafts?: WorkspaceFileDrafts;
   workspacePath?: string;
@@ -297,6 +304,44 @@ export function AuxiliaryPanel({
       drafts.set(key, { base: value, text: value.text });
     select(`file:${value.path}`);
   };
+  const handledLink = useRef<number | null>(null);
+  useEffect(() => {
+    if (!messageLinkRequest || handledLink.current === messageLinkRequest.id)
+      return;
+    handledLink.current = messageLinkRequest.id;
+    selectionEpoch.current += 1;
+    let active = true;
+    setError("");
+    void (async () => {
+      try {
+        if (messageLinkRequest.kind === "file") {
+          await openFile(
+            messageFilePath(messageLinkRequest.value, workspacePath),
+          );
+        } else {
+          const tabs = await window.zenx.workspaceBrowser.command(
+            threadId,
+            "new",
+            undefined,
+            messageLinkRequest.value,
+          );
+          if (active) {
+            setBrowserTabs(tabs);
+            const newest = tabs.at(-1);
+            if (newest) select(`browser:${newest.id}`);
+          }
+        }
+      } catch (reason) {
+        if (active)
+          setError(reason instanceof Error ? reason.message : String(reason));
+      }
+    })();
+    return () => {
+      active = false;
+    };
+    // A request id represents a single click; render changes must not replay it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messageLinkRequest?.id, threadId]);
   const remove = (id: string, expectedEpoch?: number) => {
     const currentIds = idsRef.current;
     const currentOrder = orderRef.current;

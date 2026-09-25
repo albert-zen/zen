@@ -45,7 +45,7 @@ import { Icon } from "./icons.js";
 import { PermissionSelect } from "./PermissionSelect.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
 import type { ModelMessage } from "../../../../../src/model.js";
-import { Markdown } from "./Markdown.js";
+import { Markdown, MessageLinkContext } from "./Markdown.js";
 import {
   AttachmentImage,
   ImagePreview,
@@ -101,6 +101,7 @@ interface ThreadViewProps {
   pluginSnapshot?: ZenXPluginSnapshot | null;
   pluginUiRegistry?: PluginUiRegistry | null;
   onDraftChange(draft: string): void;
+  onOpenMessageLink?(target: { kind: "file" | "browser"; value: string }): void;
   onImportImages?(files: readonly File[]): Promise<void>;
   onPickImages?(): Promise<void>;
   onRemoveImage?(imageId: string): void;
@@ -162,6 +163,7 @@ export function ThreadView({
   onReasoningChange,
   onRespondToApproval,
   onSubmit,
+  onOpenMessageLink,
 }: ThreadViewProps) {
   const [interrupting, setInterrupting] = useState(false);
   const [interruptError, setInterruptError] = useState<string | null>(null);
@@ -382,55 +384,57 @@ export function ThreadView({
           setAtLive(live);
         }}
       >
-        <ThreadImagesContext.Provider
-          value={{
-            cwd: thread?.cwd,
-            attachments: threadAttachments,
-            read: onReadAttachment,
-            open: (attachment, name, trigger) =>
-              setPreview({ attachment, name, trigger }),
-          }}
-        >
-          <div className="messages-inner">
-            {transcriptRows.length === 0
-              ? (emptyContent ?? (
-                  <div className="thread-empty">
-                    <h2>Start a new thread</h2>
-                    <p>
-                      Describe the outcome you want. ZenX will use this Thread’s
-                      workspace, model, and permission policy.
-                    </p>
-                  </div>
-                ))
-              : transcriptRows.map((row) =>
-                  row.type === "turn" ? (
-                    <TurnBlock
-                      index={row.index}
-                      key={row.turn.id}
-                      turn={row.turn}
-                      usage={threadUsage?.turns[row.turn.id]}
-                      wakeups={wakeups}
-                      attachments={threadAttachments}
-                      onOpenImage={(attachment, name, trigger) =>
-                        setPreview({ attachment, name, trigger })
-                      }
-                      onReadAttachment={onReadAttachment}
-                      pluginSnapshot={pluginSnapshot}
-                      pluginUiRegistry={pluginUiRegistry}
-                    />
-                  ) : (
-                    <ContextCompactionEvent
-                      key={row.compaction.item.id}
-                      projection={row.compaction}
-                    />
-                  ),
-                )}
-            {composer.compaction?.status === "pending" ||
-            composer.compaction?.status === "failed" ? (
-              <ContextCompactionProgress state={composer.compaction} />
-            ) : null}
-          </div>
-        </ThreadImagesContext.Provider>
+        <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
+          <ThreadImagesContext.Provider
+            value={{
+              cwd: thread?.cwd,
+              attachments: threadAttachments,
+              read: onReadAttachment,
+              open: (attachment, name, trigger) =>
+                setPreview({ attachment, name, trigger }),
+            }}
+          >
+            <div className="messages-inner">
+              {transcriptRows.length === 0
+                ? (emptyContent ?? (
+                    <div className="thread-empty">
+                      <h2>Start a new thread</h2>
+                      <p>
+                        Describe the outcome you want. ZenX will use this
+                        Thread’s workspace, model, and permission policy.
+                      </p>
+                    </div>
+                  ))
+                : transcriptRows.map((row) =>
+                    row.type === "turn" ? (
+                      <TurnBlock
+                        index={row.index}
+                        key={row.turn.id}
+                        turn={row.turn}
+                        usage={threadUsage?.turns[row.turn.id]}
+                        wakeups={wakeups}
+                        attachments={threadAttachments}
+                        onOpenImage={(attachment, name, trigger) =>
+                          setPreview({ attachment, name, trigger })
+                        }
+                        onReadAttachment={onReadAttachment}
+                        pluginSnapshot={pluginSnapshot}
+                        pluginUiRegistry={pluginUiRegistry}
+                      />
+                    ) : (
+                      <ContextCompactionEvent
+                        key={row.compaction.item.id}
+                        projection={row.compaction}
+                      />
+                    ),
+                  )}
+              {composer.compaction?.status === "pending" ||
+              composer.compaction?.status === "failed" ? (
+                <ContextCompactionProgress state={composer.compaction} />
+              ) : null}
+            </div>
+          </ThreadImagesContext.Provider>
+        </MessageLinkContext.Provider>
       </div>
 
       {atLive ? null : (
