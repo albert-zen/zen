@@ -1152,7 +1152,7 @@ test("public reasoning without a summary keeps a neutral expandable label", asyn
     );
     assert.equal(
       requiredWithin(toggle, ":scope > span").textContent,
-      "Reasoning details",
+      "Reasoning",
     );
 
     await act(async () => toggle.click());
@@ -1750,7 +1750,7 @@ test("shell headings and pending calls do not claim that a started call is runni
 
 test("public reasoning content without a summary has an honest heading", () => {
   const html = renderTurns([
-    turnWithItems("completed", [
+    turnWithItems("inProgress", [
       reasoningItem("public-reason", [], ["Visible thought"]),
     ]),
   ]);
@@ -1820,7 +1820,7 @@ test("generic tool task observations distinguish waiting and unconfirmed cancell
     const cases = [
       ["browser_click", "queued", "Queued"],
       ["wait", "queued", "Queued"],
-      ["image_generate", "running", "Started"],
+      ["image_generate", "running", "Running"],
       ["wait", "running", "Waiting"],
       ["wait", "cancel_requested", "Cancelling"],
       ["wait", "cancellation_unconfirmed", "Cancellation unconfirmed"],
