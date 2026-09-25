@@ -1728,20 +1728,32 @@ test("shell headings and pending calls do not claim that a started call is runni
     const base = commandItem("shell-start", "sleep 10");
     assert.equal(base.type, "commandExecution");
     if (base.type !== "commandExecution") return;
-    await renderInteractive(root, turnWithItems("inProgress", [{
-      ...base, toolName: "shell", status: "inProgress",
-      toolArguments: { command: "sleep 10" },
-    }]));
-    assert.match(requiredElement(".trace-item-toggle").textContent ?? "", /Shell/);
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        {
+          ...base,
+          toolName: "shell",
+          status: "inProgress",
+          toolArguments: { command: "sleep 10" },
+        },
+      ]),
+    );
+    assert.match(
+      requiredElement(".trace-item-toggle").textContent ?? "",
+      /Shell/,
+    );
     assert.equal(requiredElement(".tool-status").textContent, "Started");
     assert.equal(document.querySelector(".mini-spinner"), null);
   });
 });
 
 test("public reasoning content without a summary has an honest heading", () => {
-  const html = renderTurns([turnWithItems("completed", [
-    reasoningItem("public-reason", [], ["Visible thought"]),
-  ])]);
+  const html = renderTurns([
+    turnWithItems("completed", [
+      reasoningItem("public-reason", [], ["Visible thought"]),
+    ]),
+  ]);
   assert.match(html, /Think[\s\S]*Reasoning/u);
   assert.doesNotMatch(html, /Reasoning details/u);
 });

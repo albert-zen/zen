@@ -213,7 +213,8 @@ export function traceSummary(
         if (data.status === "cancellation_unconfirmed")
           return "Cancellation unconfirmed";
         if (data.status === "cancelled") return "Cancelled";
-        if (data.status === "failed" || data.status === "timed_out") return "Failed";
+        if (data.status === "failed" || data.status === "timed_out")
+          return "Failed";
       }
     }
     if (item.status === "inProgress") return "Started";
@@ -225,14 +226,15 @@ export function traceSummary(
     const groups = [...new Set(stages)];
     return [
       ...(reasoning > 0 ? ["Reasoning"] : []),
-      ...groups.map((value) =>
-        `${value} ${[
-          ...new Set(
-            commands
-              .filter((_, index) => stages[index] === value)
-              .map((item) => commandLabel(item.toolName ?? item.command)),
-          ),
-        ].join(", ")}`,
+      ...groups.map(
+        (value) =>
+          `${value} ${[
+            ...new Set(
+              commands
+                .filter((_, index) => stages[index] === value)
+                .map((item) => commandLabel(item.toolName ?? item.command)),
+            ),
+          ].join(", ")}`,
       ),
     ].join(" · ");
   }
