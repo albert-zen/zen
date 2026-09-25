@@ -1744,7 +1744,7 @@ test("shell headings and pending calls do not claim that a started call is runni
       /Shell/,
     );
     assert.equal(requiredElement(".tool-status").textContent, "Started");
-    assert.equal(document.querySelector(".mini-spinner"), null);
+    assert.equal(document.querySelector(".trace-item .mini-spinner"), null);
   });
 });
 
