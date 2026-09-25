@@ -3,7 +3,13 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import test from "node:test";
 
-import { Markdown, parseMarkdown } from "../src/renderer/src/Markdown.js";
+import {
+  Markdown,
+  MessageLinkContext,
+  parseMarkdown,
+} from "../src/renderer/src/Markdown.js";
+import { classifyMessageLink } from "../src/external-link-policy.js";
+import { messageFilePath } from "../src/renderer/src/message-file-path.js";
 import {
   classifyZenXLink,
   isAllowedZenXExternalUrl,
@@ -132,4 +138,51 @@ test("allows only web/mail external links and keeps anchors inside the renderer"
   assert.match(html, /href="#result"/u);
   assert.doesNotMatch(html, /\.\.\/escape|file:\/\//u);
   assert.match(html, /target="_blank"/u);
+});
+
+test("message links render local and web anchors inside a Thread", () => {
+  const html = renderToStaticMarkup(
+    createElement(
+      MessageLinkContext.Provider,
+      { value: () => {} },
+      createElement(Markdown, {
+        text: "[修复记录与备份说明](agent-data/codex-instance-repair/RESULT.md) [中文](./中文%20file.md) [file](file:///tmp/a%20b.md) [web](https://example.com/) [unsafe](javascript:alert(1))",
+      }),
+    ),
+  );
+  assert.match(html, /href="agent-data\/codex-instance-repair\/RESULT.md"/u);
+  assert.match(html, /href="\.\/中文 file.md"/u);
+  assert.match(html, /href="\/tmp\/a b.md"/u);
+  assert.match(html, /href="https:\/\/example.com\/"/u);
+  assert.doesNotMatch(html, /target="_blank"|javascript:/u);
+});
+
+test("message link policy rejects dangerous schemes and delegates workspace boundaries", () => {
+  for (const value of [
+    "javascript:alert(1)",
+    "data:text/html,hi",
+    "//host/path",
+    "file://remote/etc/passwd",
+    "file:///tmp/x?query",
+    "\\\\server\\share",
+  ]) {
+    assert.deepEqual(classifyMessageLink(value), { kind: "rejected" });
+  }
+  assert.deepEqual(
+    classifyMessageLink("file:///tmp/%E4%B8%AD%E6%96%87%20file.md"),
+    { kind: "file", value: "/tmp/中文 file.md" },
+  );
+  assert.equal(
+    messageFilePath("agent-data/codex-instance-repair/RESULT.md", "/tmp/work"),
+    "agent-data/codex-instance-repair/RESULT.md",
+  );
+  assert.equal(
+    messageFilePath("/tmp/work/中文 file.md", "/tmp/work"),
+    "中文 file.md",
+  );
+  assert.throws(
+    () => messageFilePath("../elsewhere.md", "/tmp/work"),
+    /outside/u,
+  );
+  assert.throws(() => messageFilePath("/etc/passwd", "/tmp/work"), /outside/u);
 });
