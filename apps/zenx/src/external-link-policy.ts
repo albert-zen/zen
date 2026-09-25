@@ -58,13 +58,19 @@ export function classifyMessageLink(
         url.hash
       )
         return { kind: "rejected" };
-      return { kind: "file", value: decodeURIComponent(url.pathname) };
+      const value = decodeURIComponent(url.pathname);
+      return /[\u0000-\u001f\u007f]/u.test(value)
+        ? { kind: "rejected" }
+        : { kind: "file", value };
     } catch {
       return { kind: "rejected" };
     }
   }
   try {
-    return { kind: "file", value: decodeURIComponent(raw) };
+    const value = decodeURIComponent(raw);
+    return /[\u0000-\u001f\u007f]/u.test(value)
+      ? { kind: "rejected" }
+      : { kind: "file", value };
   } catch {
     return { kind: "rejected" };
   }

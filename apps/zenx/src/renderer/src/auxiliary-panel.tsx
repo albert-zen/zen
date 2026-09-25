@@ -309,6 +309,7 @@ export function AuxiliaryPanel({
     if (!messageLinkRequest || handledLink.current === messageLinkRequest.id)
       return;
     handledLink.current = messageLinkRequest.id;
+    selectionEpoch.current += 1;
     let active = true;
     setError("");
     void (async () => {

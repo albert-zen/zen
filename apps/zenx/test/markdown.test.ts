@@ -164,6 +164,8 @@ test("message link policy rejects dangerous schemes and delegates workspace boun
     "//host/path",
     "file://remote/etc/passwd",
     "file:///tmp/x?query",
+    "file:///tmp/%0Asecret",
+    "./%00secret",
     "\\\\server\\share",
   ]) {
     assert.deepEqual(classifyMessageLink(value), { kind: "rejected" });
