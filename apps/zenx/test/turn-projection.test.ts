@@ -5,7 +5,22 @@ import type { ThreadItem, Turn } from "../src/protocol-client/index.js";
 import {
   projectTurn,
   traceDisplayRows,
+  traceSummary,
 } from "../src/renderer/src/turn-projection.js";
+
+test("group summary does not claim unfinished tools have been used", () => {
+  const pending = { ...command("a", "shell"), status: "inProgress" as const, toolName: "shell" };
+  const done = { ...command("b", "browser_inspect"), toolName: "browser_inspect" };
+  assert.equal(traceSummary([reasoning("r", ""), pending]), "Reasoning · Started shell");
+  assert.equal(traceSummary([pending, done]), "Started shell · Used browser inspect");
+  assert.equal(traceSummary([done]), "Used browser inspect");
+  const yielded = {
+    ...done,
+    contentType: "application/vnd.zen.tool-task+json",
+    structuredContent: { status: "running" },
+  };
+  assert.equal(traceSummary([pending, yielded]), "Started shell · Running browser inspect");
+});
 
 test("groups only consecutive reasoning and tool Items", () => {
   const projection = projectTurn(

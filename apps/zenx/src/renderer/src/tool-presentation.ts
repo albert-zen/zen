@@ -31,6 +31,10 @@ export function toolPresentation(name: string): {
   if (/^view_image(?:\s|$)/u.test(key)) {
     return { category: "Image", icon: "image", action: "View images" };
   }
+  if (key === "shell")
+    return { category: "Shell", icon: "terminal", action: "Run command" };
+  if (key === "wait")
+    return { category: "Wait", icon: "terminal", action: "Wait for task" };
   const action = actions[key];
   if (action)
     return {
