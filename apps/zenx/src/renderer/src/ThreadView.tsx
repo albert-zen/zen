@@ -1515,9 +1515,7 @@ function StatusMark({ item }: { item: ThreadItem }) {
     return null;
   }
   if (item.type !== "commandExecution") return null;
-  return item.status === "inProgress" ? (
-    <span className="mini-spinner" aria-label="Running" />
-  ) : (
+  return (
     <small className={`tool-status ${item.status}`}>
       {commandStatus(item)}
     </small>
@@ -1883,7 +1881,11 @@ function ApprovalBar({
 function traceItemLabel(item: ThreadItem): string {
   if (item.type === "reasoning") {
     const summary = item.summary.join("\n").trim();
-    return summary.length > 0 ? summary : "Reasoning details";
+    return summary.length > 0
+      ? summary
+      : reasoningContentText(item).trim().length > 0
+        ? "Reasoning"
+        : "Reasoning details";
   }
   return item.type === "commandExecution"
     ? item.toolName === "run_code" &&
@@ -1955,7 +1957,7 @@ function commandStatus(
   ) {
     if (data.status === "queued") return "Queued";
     if (data.status === "running")
-      return item.toolName === "wait" ? "Waiting" : "Started";
+      return item.toolName === "wait" ? "Waiting" : "Running";
     if (data.status === "cancel_requested") return "Cancelling";
     if (data.status === "cancellation_unconfirmed")
       return "Cancellation unconfirmed";
@@ -1965,7 +1967,7 @@ function commandStatus(
     if (data.status === "cancelled") return "Cancelled";
   }
   return {
-    inProgress: "Running",
+    inProgress: "Started",
     completed: "Done",
     failed: "Failed",
     declined: "Declined",

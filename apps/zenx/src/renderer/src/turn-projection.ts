@@ -198,6 +198,46 @@ export function traceSummary(
   );
   const reasoning = items.length - commands.length;
   if (commands.length === 0) return "Reasoned through the next step";
+  const stage = (item: (typeof commands)[number]): string => {
+    if (item.contentType === "application/vnd.zen.tool-task+json") {
+      const data = item.structuredContent;
+      if (
+        data !== null &&
+        typeof data === "object" &&
+        !Array.isArray(data) &&
+        "status" in data
+      ) {
+        if (data.status === "queued") return "Queued";
+        if (data.status === "running") return "Running";
+        if (data.status === "cancel_requested") return "Cancelling";
+        if (data.status === "cancellation_unconfirmed")
+          return "Cancellation unconfirmed";
+        if (data.status === "cancelled") return "Cancelled";
+        if (data.status === "failed" || data.status === "timed_out")
+          return "Failed";
+      }
+    }
+    if (item.status === "inProgress") return "Started";
+    if (item.status === "failed" || item.status === "declined") return "Failed";
+    return "Used";
+  };
+  const stages = commands.map(stage);
+  if (stages.some((value) => value !== "Used")) {
+    const groups = [...new Set(stages)];
+    return [
+      ...(reasoning > 0 ? ["Reasoning"] : []),
+      ...groups.map(
+        (value) =>
+          `${value} ${[
+            ...new Set(
+              commands
+                .filter((_, index) => stages[index] === value)
+                .map((item) => commandLabel(item.toolName ?? item.command)),
+            ),
+          ].join(", ")}`,
+      ),
+    ].join(" · ");
+  }
   const names = commands.map((item) => commandLabel(item.command));
   const unique = [...new Set(names)];
   const action = unique.length === 1 ? unique[0] : `${unique.length} tools`;
