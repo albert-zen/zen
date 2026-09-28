@@ -3,7 +3,7 @@
 ## 核心概念
 
 - **Android RemoteHostTransport** — Android 客户端用共享 ZAS 原生 wire、Host ID 与安全存储 grant 建立 TLS 连接，把公开快照/事件映射到可撤销的临时视图；epoch/watermark 恢复不改变 Host 的 canonical authority。
-- **ZenX Android 控制端** — Android 只保存本地连接偏好并显示选定 Host 的 ZAS 读模型；设备、workspace 或 Thread 切换按发起身份隔离易失输入与命令回执，断线/失权不保留公开页面投影但未知送达围栏仍归属原 Thread；请求准入与 Host canonical Turn 终态分别呈现，不保存 Agent、Turn、Provider key 或第二份 ItemList。
+- **ZenX Android 控制端** — Android 只保存本地连接偏好并显示选定 Host 的 ZAS 读模型；设备、workspace 或 Thread 切换按发起身份隔离易失输入与命令回执，草稿编辑/视图选择世代避免相同文字的新稿被旧回执清除，而同归属命令结算与旧恢复视图各自核验身份；断线/失权不保留公开页面投影但未知送达围栏仍归属原 Thread，请求准入与 Host canonical Turn 终态分别呈现，不保存 Agent、Turn、Provider key 或第二份 ItemList。
 
 - **ZenX Provider Logo 资源** — Host 将用户选择的有界位图复制为受管的内容寻址资源，Provider profile 只保存资源引用并向 Renderer 投影可显示图片；缺失或损坏时展示默认标识，不进入 Thread ItemList。
 

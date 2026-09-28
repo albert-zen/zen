@@ -60,10 +60,10 @@ export function createSession(transport, publish) {
     });
     return generation;
   }
-  async function refresh(epoch, h, w) {
+  async function refresh(epoch, h, w, stillOwned = () => true) {
     try {
       const result = await transport.snapshot(h, w);
-      if (!current(epoch, h, w)) return;
+      if (!current(epoch, h, w) || !stillOwned()) return;
       emit({
         workspaces: result.workspaces,
         threads: result.threads,
@@ -101,7 +101,7 @@ export function createSession(transport, publish) {
           });
       });
     } catch (e) {
-      if (current(epoch, h, w)) {
+      if (current(epoch, h, w) && stillOwned()) {
         ++generation;
         ++readIdentity;
         emit({
@@ -198,16 +198,18 @@ export function createSession(transport, publish) {
       const record = { op, status: "pending", generation: epoch };
       operations.set(k, record);
       emit({ command: "pending", lastRequest: null, error: null });
-      const visible = () =>
+      // A settled command still belongs to A after A→B→A; its read/refresh
+      // projection belongs only to the view that initiated that command.
+      const visibleCommand = () =>
         current(epoch, h, w) &&
-        readIdentity === identity &&
         state.thread === displayedThread &&
         operations.get(k)?.op === op;
+      const sameView = () => visibleCommand() && readIdentity === identity;
       try {
         const result = await transport.command(h, w, kind, payload);
         if (operations.get(k)?.op !== op) return result;
         record.status = result.accepted ? "accepted" : null;
-        if (visible())
+        if (visibleCommand())
           emit({
             command: record.status,
             lastRequest:
@@ -220,12 +222,14 @@ export function createSession(transport, publish) {
               ? null
               : (result.error ?? "Host rejected command."),
           });
-        if (result.accepted && visible()) await refresh(epoch, h, w);
+        // Admission is independent of optional workspace-summary refresh;
+        // a slow snapshot must not hold the unchanged submitted draft hostage.
+        if (result.accepted && sameView()) void refresh(epoch, h, w, sameView);
         return result;
       } catch (e) {
         if (operations.get(k)?.op !== op) return;
         record.status = e?.confirmedRejection === true ? null : "uncertain";
-        if (visible())
+        if (visibleCommand())
           emit(
             e?.confirmedRejection === true
               ? { command: null, error: String(e) }

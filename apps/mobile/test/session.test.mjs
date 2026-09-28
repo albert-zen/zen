@@ -306,7 +306,8 @@ test("same Thread old read and old ack never overwrite a new read or canonical f
   await tick();
   assert.deepEqual(s.get().items, [{ id: "new", text: "new" }]);
   assert.deepEqual(s.get().turns, [{ id: "turn-x", status: "failed" }]);
-  assert.equal(s.get().lastRequest, null);
+  assert.deepEqual(s.get().lastRequest, { kind: "send", turnId: "turn-x" });
+  assert.equal(s.get().command, "accepted"); // admission, not a failed→success rewrite
 });
 test("canonical live and recovered Turn outcomes override request admission without guessing from thread idle", async () => {
   let observer;
@@ -467,4 +468,44 @@ test("failed post-admission refresh clears public Turn projection and request ID
   assert.deepEqual(s.get().items, []);
   assert.deepEqual(s.get().turns, []);
   assert.equal(s.get().lastRequest, null);
+});
+test("superseded same-Thread refresh cannot re-subscribe or rewrite a newer operation/view", async () => {
+  const oldSnapshot = deferred();
+  let snapshots = 0,
+    subscribed = 0,
+    commands = 0;
+  const tr = {
+    snapshot: () =>
+      ++snapshots === 3
+        ? oldSnapshot.promise
+        : Promise.resolve({ workspaces: [], threads: [] }),
+    subscribe: () => {
+      subscribed++;
+      return () => {};
+    },
+    read: async () => [],
+    command: async () => ({ accepted: true, turnId: `turn-${++commands}` }),
+  };
+  const s = createSession(tr, () => {});
+  s.selectHost("h");
+  await tick();
+  s.selectWorkspace("w");
+  await tick();
+  s.openThread("a");
+  await tick();
+  const old = s.command("send", { threadId: "a", text: "old" });
+  await tick();
+  assert.equal(snapshots, 3);
+  const newer = s.command("send", { threadId: "a", text: "new" });
+  await newer;
+  const before = [snapshots, subscribed];
+  assert.equal(s.get().lastRequest.turnId, "turn-2");
+  oldSnapshot.resolve({
+    workspaces: [],
+    threads: [{ id: "stale", status: "idle" }],
+  });
+  await old;
+  assert.deepEqual([snapshots, subscribed], before);
+  assert.equal(s.get().lastRequest.turnId, "turn-2");
+  assert.ok(!s.get().threads.some((t) => t.id === "stale"));
 });

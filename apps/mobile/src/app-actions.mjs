@@ -2,20 +2,32 @@
 // pretending a Node socket test is an Android device run.
 export function createAppActions(session, pairTransport, fields) {
   let pairIdentity = 0;
+  let viewIdentity = 0;
+  let draftRevision = 0;
+  // All App edits and programmatic clears pass through this one handler.
+  // Equal text after X→Y→X is a different draft from the submitted X.
+  const editDraft = (value) => {
+    ++draftRevision;
+    fields.setDraft(value);
+  };
   return {
+    editDraft,
     selectHost(id) {
       ++pairIdentity;
+      ++viewIdentity;
       fields.setPairState(null);
       fields.setPairCode("");
-      fields.setDraft("");
+      editDraft("");
       session.selectHost(id);
     },
     selectWorkspace(id) {
-      fields.setDraft("");
+      ++viewIdentity;
+      editDraft("");
       session.selectWorkspace(id);
     },
     openThread(id) {
-      fields.setDraft(""); // no cross-Thread draft projection
+      ++viewIdentity;
+      editDraft(""); // no cross-Thread draft projection
       session.openThread(id);
     },
     async pair() {
@@ -28,6 +40,8 @@ export function createAppActions(session, pairTransport, fields) {
         if (identity !== pairIdentity || session.get().host !== selected)
           return;
         if (fields.getPairCode() === code) fields.setPairCode("");
+        ++viewIdentity;
+        editDraft("");
         fields.setPairState("Paired. Select Host again to connect.");
         session.selectHost(selected);
       } catch (e) {
@@ -39,15 +53,19 @@ export function createAppActions(session, pairTransport, fields) {
       const { host, workspace, thread } = session.get();
       if (!host || !workspace || !thread) return;
       const text = fields.getDraft();
+      const submittedRevision = draftRevision;
+      const submittedView = viewIdentity;
       const result = await session.command("send", { threadId: thread, text });
       if (
         result?.accepted &&
+        draftRevision === submittedRevision &&
+        viewIdentity === submittedView &&
         session.get().host === host &&
         session.get().workspace === workspace &&
         session.get().thread === thread &&
         fields.getDraft() === text
       )
-        fields.setDraft("");
+        editDraft("");
     },
     stop() {
       const thread = session.get().thread;

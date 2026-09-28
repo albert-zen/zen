@@ -94,7 +94,7 @@ export default function App() {
           selected &&
           list.some((h) => h.id === selected)
         )
-          session.selectHost(selected);
+          actions.selectHost(selected);
       })
       .catch((e) => {
         if (active)
@@ -103,7 +103,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [session]);
+  }, [session, actions]);
   const s = screen ?? session.get();
   function selectHost(id: string) {
     userSelected.current = true;
@@ -227,7 +227,6 @@ export default function App() {
             {button(
               s.workspace === w.id ? "Selected workspace" : "Switch workspace",
               () => {
-                setDraft("");
                 actions.selectWorkspace(w.id);
               },
             )}
@@ -282,7 +281,7 @@ export default function App() {
               placeholder="Message"
               placeholderTextColor={colors.muted}
               value={draft}
-              onChangeText={updateDraft}
+              onChangeText={actions.editDraft}
             />
             {button(
               "Send message",
