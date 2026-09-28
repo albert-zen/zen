@@ -399,6 +399,19 @@ export class ZenXProjectProjection {
         break;
       }
     }
+    // Cool down paths not reached before this read's deadline as well. Without
+    // this, callers already waiting on the same probe can launch another batch
+    // immediately after its gate releases (8 children per caller rather than
+    // one shared bounded attempt). A later ordinary read retries after TTL.
+    for (const candidate of candidates) {
+      const entry = this.#gitIdentities.get(candidate);
+      if (entry !== undefined && entry.until > Date.now()) continue;
+      if (this.#gitIdentities.size >= 256) this.#gitIdentities.clear();
+      this.#gitIdentities.set(candidate, {
+        until: Date.now() + 10_000,
+        result: null,
+      });
+    }
   }
 
   async #gitCommonDirectory(

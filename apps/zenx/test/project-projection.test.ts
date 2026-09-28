@@ -683,9 +683,18 @@ test(
       process.env.ZEN_PROJECT_PROBE_LOG = log;
       const projection = new ZenXProjectProjection();
       const started = performance.now();
-      const snapshots = await Promise.all(
-        Array.from({ length: 3 }, () => projection.project(threads)),
-      );
+      const readAfter = async (delay: number) => {
+        if (delay > 0)
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        return await projection.project(threads);
+      };
+      // The second and third callers enter while the first Git batch is
+      // active but have later deadlines: neither may trigger a second wave.
+      const snapshots = await Promise.all([
+        readAfter(0),
+        readAfter(200),
+        readAfter(350),
+      ]);
       const elapsed = performance.now() - started;
       for (const snapshot of snapshots) {
         assert.equal(snapshot.projects.length, 32);
