@@ -461,6 +461,12 @@ export function App() {
   const [browserPanels, setBrowserPanels] = useState<Record<string, boolean>>(
     {},
   );
+  const [messageLinkRequest, setMessageLinkRequest] = useState<{
+    id: number;
+    threadId: string;
+    kind: "file" | "browser";
+    value: string;
+  } | null>(null);
   const editingProjectFocusWorkspace = useRef<string | null>(null);
   const [editingProject, setEditingProject] = useState<{
     workspace: string;
@@ -2228,6 +2234,14 @@ export function App() {
           />
         ) : (
           <AgentSurface
+            onOpenMessageLink={(threadId, target) => {
+              setMessageLinkRequest((previous) => ({
+                ...target,
+                id: (previous?.id ?? 0) + 1,
+                threadId,
+              }));
+              setBrowserPanels((current) => ({ ...current, [threadId]: true }));
+            }}
             composerSendMode={composerSendMode}
             approvals={approvals}
             pluginSnapshot={pluginSnapshot}
@@ -2375,6 +2389,11 @@ export function App() {
         threadDetail !== null &&
         selectedThreadId === threadDetail.id ? (
           <AuxiliaryPanel
+            messageLinkRequest={
+              messageLinkRequest?.threadId === threadDetail.id
+                ? messageLinkRequest
+                : null
+            }
             onWidthChange={setWorkspacePanelWidth}
             fileDrafts={fileDrafts}
             workspacePath={threadDetail.cwd}
@@ -2640,6 +2659,7 @@ function PageTitleBar({
 }
 
 function AgentSurface({
+  onOpenMessageLink,
   composerSendMode,
   approvals,
   pluginSnapshot,
@@ -2688,6 +2708,10 @@ function AgentSurface({
   threadError,
   threadLoading,
 }: {
+  onOpenMessageLink(
+    threadId: string,
+    target: { kind: "file" | "browser"; value: string },
+  ): void;
   composerSendMode: "queue" | "soft" | "hard";
   approvals: ApprovalCardState[];
   pluginSnapshot: ZenXPluginSnapshot | null;
@@ -2883,6 +2907,9 @@ function AgentSurface({
         <>
           <ThreadView
             composerSendMode={composerSendMode}
+            onOpenMessageLink={(target) => {
+              onOpenMessageLink(threadDetail.id, target);
+            }}
             onResumeQueue={async () => {
               await window.zenx.protocol.request("turn/queue/resume", {
                 threadId: threadDetail.id,
