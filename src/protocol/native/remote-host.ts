@@ -6,6 +6,8 @@ import type { CanonicalItem } from "../../item.js";
 import { REMOTE_HOST_VERSION } from "./remote-wire.js";
 import type {
   RemoteWorkspaceView,
+  RemotePairRequest,
+  RemotePairResult,
   RemoteSend,
   RemoteItemView,
   RemoteThreadView,
@@ -17,6 +19,8 @@ import type {
 export { REMOTE_HOST_VERSION } from "./remote-wire.js";
 export type {
   RemoteWorkspaceView,
+  RemotePairRequest,
+  RemotePairResult,
   RemoteSend,
   RemoteItemView,
   RemoteThreadView,
@@ -141,11 +145,7 @@ export class RemoteHostAccess {
     };
     return code;
   }
-  async pair(input: {
-    hostId: string;
-    deviceId: string;
-    code: string;
-  }): Promise<{ hostId: string; deviceId: string; token: string }> {
+  async pair(input: RemotePairRequest): Promise<RemotePairResult> {
     if (input.hostId !== this.#hostId) throw new RemoteHostError("wrong_host");
     if (!validId(input.deviceId) || !validToken(input.code))
       throw new RemoteHostError("invalid_request");
