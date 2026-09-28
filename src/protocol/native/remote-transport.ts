@@ -273,7 +273,7 @@ function attach(
   let dispose = () => {};
   let subscriptionGeneration = 0;
   let recovery: RecoverySession | undefined;
-  let pageBusy = false;
+  let pageBusyGeneration: number | null = null;
   let activeRequests = 0;
   const invalidateRecovery = (state: RecoverySession) => {
     // An older in-flight page may finish after another resume has installed a
@@ -395,6 +395,8 @@ function attach(
               dispose();
               dispose = () => {};
               recovery = undefined;
+              pending.length = 0;
+              pendingBytes = 0;
               send({
                 method: "zen/remote/thread/reset",
                 params: { threadId, reason: "resync_required" },
@@ -419,12 +421,7 @@ function attach(
               (event) => {
                 if (generation !== subscriptionGeneration) return;
                 if (event === null) {
-                  if (ready) reset();
-                  else {
-                    overflow = true;
-                    pending.length = 0;
-                    pendingBytes = 0;
-                  }
+                  reset(); // auth/read gap, including while pages are buffered
                   return;
                 }
                 if (ready) {
@@ -496,11 +493,11 @@ function attach(
               cursor === state.previousCursor &&
               state.previousPage !== undefined;
             if (
-              pageBusy ||
+              pageBusyGeneration === state.generation ||
               (!retry && (cursor !== state.cursor || state.position === null))
             )
               throw new RemoteHostError("stale_cursor");
-            pageBusy = true;
+            pageBusyGeneration = state.generation;
             try {
               const thread = await access.recoveryThread(
                 deviceId,
@@ -546,7 +543,8 @@ function attach(
                 invalidateRecovery(state);
               throw error;
             } finally {
-              pageBusy = false;
+              if (pageBusyGeneration === state.generation)
+                pageBusyGeneration = null;
             }
             return;
           }

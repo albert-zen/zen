@@ -406,3 +406,308 @@ test("an authorization read completing after another resume never replays the ol
     await f.close();
   }
 });
+
+type Notification = {
+  method?: string;
+  params?: { threadId?: string; event?: { item?: { text?: string } } };
+};
+async function notificationCount(
+  events: Notification[],
+  method: string,
+  count = 1,
+) {
+  const until = Date.now() + 5000;
+  while (events.filter((event) => event.method === method).length < count) {
+    if (Date.now() > until) throw new Error(`missing ${method} notification`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+test("live subscription emits reset on lost scope and cannot silently resume after regrant", async (t) => {
+  const f = await fixture(t);
+  if (!f) return;
+  try {
+    const thread = await f.host.startThread({
+      cwd: f.dir,
+      sandbox: "read-only",
+      approvalPolicy: "always",
+    });
+    const ws = await f.connect();
+    const events: Notification[] = [];
+    ws.on("message", (raw) => {
+      const event = JSON.parse(String(raw)) as Notification;
+      if (event.method) events.push(event);
+    });
+    const first = await rpc(ws, 2, "zen/remote/resume", {
+      workspaceId: "demo",
+      threadId: thread.id,
+    });
+    assert.equal(first.result?.nextCursor, null);
+    f.allow(false);
+    await (
+      await f.host.startTurn(thread.id, "hidden-after-scope-loss")
+    ).done;
+    await notificationCount(events, "zen/remote/thread/reset");
+    assert(
+      !events.some((x) =>
+        x.params?.event?.item?.text?.includes("hidden-after-scope-loss"),
+      ),
+    );
+    f.allow(true);
+    await (
+      await f.host.startTurn(thread.id, "visible-after-regrant")
+    ).done;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert(
+      !events.some((x) =>
+        x.params?.event?.item?.text?.includes("visible-after-regrant"),
+      ),
+      "old subscription cannot revive",
+    );
+    const renewed = await rpc(ws, 3, "zen/remote/resume", {
+      workspaceId: "demo",
+      threadId: thread.id,
+    });
+    assert(
+      renewed.result?.entries.some(
+        (x) => x.kind === "item" && x.item.text === "hidden-after-scope-loss",
+      ),
+    );
+    assert(
+      renewed.result?.entries.some(
+        (x) => x.kind === "item" && x.item.text === "visible-after-regrant",
+      ),
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("live event read straddling scope removal never emits body, and a failed read forces reset", async (t) => {
+  const f = await fixture(t);
+  if (!f) return;
+  let release = () => {};
+  try {
+    const thread = await f.host.startThread({
+      cwd: f.dir,
+      sandbox: "read-only",
+      approvalPolicy: "always",
+    });
+    const ws = await f.connect();
+    const events: Notification[] = [];
+    ws.on("message", (raw) => {
+      const event = JSON.parse(String(raw)) as Notification;
+      if (event.method) events.push(event);
+    });
+    assert(
+      (
+        await rpc(ws, 2, "zen/remote/resume", {
+          workspaceId: "demo",
+          threadId: thread.id,
+        })
+      ).result,
+    );
+    const read = f.host.readThread.bind(f.host);
+    let enter = () => {};
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let delayed = false;
+    f.host.readThread = async (id) => {
+      if (id === thread.id && !delayed) {
+        delayed = true;
+        enter();
+        await held;
+      }
+      return await read(id);
+    };
+    const turn = await f.host.startTurn(thread.id, "late-authorized-read");
+    await entered;
+    f.allow(false);
+    release();
+    await turn.done;
+    await notificationCount(events, "zen/remote/thread/reset");
+    assert(
+      !events.some((x) =>
+        x.params?.event?.item?.text?.includes("late-authorized-read"),
+      ),
+      "no post-revocation body",
+    );
+    f.allow(true);
+    f.host.readThread = read;
+    assert(
+      (
+        await rpc(ws, 3, "zen/remote/resume", {
+          workspaceId: "demo",
+          threadId: thread.id,
+        })
+      ).result,
+    );
+    const recovery = f.access.recoveryThread.bind(f.access);
+    let failed = false;
+    f.access.recoveryThread = async (...args) => {
+      if (!failed) {
+        failed = true;
+        throw new Error("simulated authorization read failure");
+      }
+      return await recovery(...args);
+    };
+    await (
+      await f.host.startTurn(thread.id, "after-read-error")
+    ).done;
+    await notificationCount(events, "zen/remote/thread/reset", 2);
+    assert(failed);
+    f.access.recoveryThread = recovery;
+    assert(
+      !events.some((x) => x.params?.event?.item?.text === "after-read-error"),
+    );
+    f.host.readThread = read;
+    assert(
+      (
+        await rpc(ws, 4, "zen/remote/resume", {
+          workspaceId: "demo",
+          threadId: thread.id,
+        })
+      ).result,
+    );
+  } finally {
+    release();
+    await f.close();
+  }
+});
+
+test("scope loss during a paged event barrier resets immediately and invalidates the cursor", async (t) => {
+  const f = await fixture(t);
+  if (!f) return;
+  try {
+    const thread = await createHistory(f);
+    const ws = await f.connect();
+    const events: Notification[] = [];
+    ws.on("message", (raw) => {
+      const event = JSON.parse(String(raw)) as Notification;
+      if (event.method) events.push(event);
+    });
+    const first = await rpc(ws, 2, "zen/remote/resume", {
+      workspaceId: "demo",
+      threadId: thread.id,
+    });
+    assert(first.result?.nextCursor);
+    f.allow(false);
+    await (
+      await f.host.startTurn(thread.id, "missing-during-barrier")
+    ).done;
+    await notificationCount(events, "zen/remote/thread/reset");
+    f.allow(true);
+    await (
+      await f.host.startTurn(thread.id, "later-during-barrier")
+    ).done;
+    assert.equal(
+      (
+        await rpc(ws, 3, "zen/remote/resume/page", {
+          cursor: first.result.nextCursor,
+        })
+      ).error?.data?.code,
+      "stale_cursor",
+    );
+    assert(
+      !events.some((x) =>
+        x.params?.event?.item?.text?.includes("later-during-barrier"),
+      ),
+    );
+    const fresh = await rpc(ws, 4, "zen/remote/resume", {
+      workspaceId: "demo",
+      threadId: thread.id,
+    });
+    assert(fresh.result?.nextCursor);
+  } finally {
+    await f.close();
+  }
+});
+
+test("new resume can page while old read is pending; old finally cannot unlock a new busy page", async (t) => {
+  const f = await fixture(t);
+  if (!f) return;
+  let releaseOld = () => {},
+    releaseNew = () => {};
+  try {
+    const old = await createHistory(f);
+    const newer = await createHistory(f);
+    const ws = await f.connect();
+    const first = await rpc(ws, 2, "zen/remote/resume", {
+      workspaceId: "demo",
+      threadId: old.id,
+    });
+    assert(first.result?.nextCursor);
+    const read = f.host.readThread.bind(f.host);
+    let enterOld = () => {},
+      enterNew = () => {};
+    const oldEntered = new Promise<void>((resolve) => {
+      enterOld = resolve;
+    });
+    const oldHeld = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    const newEntered = new Promise<void>((resolve) => {
+      enterNew = resolve;
+    });
+    const newHeld = new Promise<void>((resolve) => {
+      releaseNew = resolve;
+    });
+    let heldOld = false,
+      heldNew = false,
+      armNew = false;
+    f.host.readThread = async (id) => {
+      if (id === old.id && !heldOld) {
+        heldOld = true;
+        enterOld();
+        await oldHeld;
+      }
+      if (id === newer.id && armNew && !heldNew) {
+        heldNew = true;
+        enterNew();
+        await newHeld;
+      }
+      return await read(id);
+    };
+    const stale = rpc(ws, 3, "zen/remote/resume/page", {
+      cursor: first.result.nextCursor,
+    });
+    await oldEntered;
+
+    const recent = await rpc(ws, 4, "zen/remote/resume", {
+      workspaceId: "demo",
+      threadId: newer.id,
+    });
+
+    assert(recent.result?.nextCursor);
+    armNew = true;
+    const cursor = recent.result.nextCursor;
+    const pending = rpc(ws, 5, "zen/remote/resume/page", { cursor });
+    await newEntered;
+
+    releaseOld();
+
+    assert.equal((await stale).error?.data?.code, "stale_cursor");
+    // Old finally ran, but the new generation still owns its in-flight page.
+    assert.equal(
+      (await rpc(ws, 6, "zen/remote/resume/page", { cursor })).error?.data
+        ?.code,
+      "stale_cursor",
+    );
+
+    releaseNew();
+    const valid = await pending;
+    assert(valid.result && valid.result.threadId === newer.id);
+    assert.deepEqual(
+      (await rpc(ws, 7, "zen/remote/resume/page", { cursor })).result,
+      valid.result,
+    );
+  } finally {
+    releaseOld();
+    releaseNew();
+    await f.close();
+  }
+});

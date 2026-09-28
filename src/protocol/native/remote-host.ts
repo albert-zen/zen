@@ -561,10 +561,22 @@ export class RemoteHostAccess {
       chain = chain.then(async () => {
         try {
           if (disposed) return;
-          await this.#thread(deviceId, token, workspaceId, threadId);
+          // Validation after the asynchronous read is just as important for
+          // live events as it is for paged replies. A failed read or a scope
+          // gap poisons this subscription; regrant requires a new resume.
+          await this.recoveryThread(deviceId, token, workspaceId, {
+            processEpoch: event.processEpoch,
+            threadId,
+            watermark: event.watermark,
+            itemCount: 0,
+          });
           if (!disposed) listener(publicEvent(event));
         } catch {
-          /* authorization changed; never publish */
+          if (!disposed) {
+            disposed = true;
+            unsubscribe();
+            listener(null);
+          }
         } finally {
           inFlight -= 1;
         }
