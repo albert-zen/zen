@@ -2067,6 +2067,9 @@ a:focus-visible {
   left: 0;
   z-index: 4;
   min-width: 0;
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0
     max(
       var(--conversation-gutter),

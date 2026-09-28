@@ -240,6 +240,15 @@ export function ThreadView({
     }
   }, [approvals, composer.compaction, thread?.canonicalItems, thread?.turns]);
 
+  // Keep a newly failed request visible when approvals, queued messages and a
+  // long draft overflow the bottom zone. User scrolling afterwards is left
+  // alone; focus can still scroll the queue and approval controls into view.
+  useLayoutEffect(() => {
+    if (composer.compaction?.status !== "failed") return;
+    const zone = bottomZoneRef.current;
+    if (zone !== null) zone.scrollTop = zone.scrollHeight;
+  }, [composer.compaction, thread?.id]);
+
   // The Composer overlays the bottom of the full-height transcript scroll
   // area. Publish its live height so the list reserves matching virtual
   // space and Back to live can float just above it; growth keeps a live
