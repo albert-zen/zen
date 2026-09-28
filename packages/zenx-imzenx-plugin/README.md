@@ -3,7 +3,9 @@
 IMZenX is a first-party ZenX plugin that runs the existing IMZen composition
 inside the desktop Host lifecycle. QQ, Telegram, Feishu and Weixin are supplied
 by the same pinned IM Agent SDK used by IMZen:
-`57f255fb1f40a095aeabb5a6967380ba057494a3`.
+`7d5f1179365679d0f95abd5cb2ce76547238d05f` on the SDK's independent
+`codex/im-input-failure-fix-sdk-compat` ref. This Git revision is not a PyPI
+release or a merge to the SDK v1 main.
 
 IM and the desktop use **the same authenticated local ZAS and Thread**.
 IM input becomes canonical user messages and Agent replies visible in ZenX;

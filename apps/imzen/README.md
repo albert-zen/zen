@@ -1,8 +1,11 @@
 # IMZen
 
 IMZen is a thin Python client of the Zen App Server. It composes the IM Agent
-SDK at the complete ADR 0015 rollout commit merged to SDK `main`,
-`57f255fb1f40a095aeabb5a6967380ba057494a3`; it does not implement a second
+SDK at `7d5f1179365679d0f95abd5cb2ce76547238d05f`, a compatibility
+revision directly after the complete ADR 0015 rollout commit `57f255f`.
+The revision is reachable on the SDK's independent
+`codex/im-input-failure-fix-sdk-compat` ref, not a PyPI release or a merge to
+the SDK v1 main. IMZen does not implement a second
 Gateway, Channel runtime, Agent backend, transcript, scheduler, or recovery
 state machine.
 
