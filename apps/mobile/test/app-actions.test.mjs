@@ -137,3 +137,13 @@ test("pair completion preserves newly edited code on same Host", async () => {
   assert.equal(a.get().code, "next-new-code");
   assert.match(a.get().pairState, /Paired/);
 });
+test("App reconnect to the same Host supersedes an older pair operation", async () => {
+  const a = view();
+  const pair = a.actions.pair();
+  a.actions.selectHost("a");
+  a.setCode("fresh-code");
+  a.getPair().resolve();
+  await pair;
+  assert.equal(a.get().code, "fresh-code");
+  assert.equal(a.get().pairState, null);
+});
