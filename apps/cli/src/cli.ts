@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import { open, readFile, unlink } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import os from "node:os";
 import path from "node:path";
@@ -26,6 +27,9 @@ import {
   type CodexWebSocketServer,
 } from "../../../src/protocol/codex/websocket.js";
 import { isRecord } from "../../../src/protocol/codex/wire.js";
+import { RemoteHostAccess } from "../../../src/protocol/native/remote-host.js";
+import { serveRemoteHost } from "../../../src/protocol/native/remote-transport.js";
+import { loadRemoteHostConfig } from "./remote-host-config.js";
 
 interface ParsedArguments {
   options: Map<string, string | true>;
@@ -68,6 +72,25 @@ async function appServerCommand(args: ParsedArguments): Promise<void> {
   if (remote !== undefined) {
     assertRemoteBridgeOptions(args);
   }
+  const remoteHostConfigFile = option(args, "remote-host-config");
+  if (remoteHostConfigFile !== undefined && remote !== undefined) {
+    throw new Error("--remote-host-config requires a local Host, not --remote");
+  }
+  if (
+    remoteHostConfigFile !== undefined &&
+    (option(args, "data-dir") === undefined ||
+      dataDirectory(args) === path.join(os.homedir(), ".zen"))
+  ) {
+    throw new Error("Remote Host requires an explicit, non-default --data-dir");
+  }
+  if (
+    remoteHostConfigFile !== undefined &&
+    (option(args, "provider") ?? "fake") !== "fake"
+  ) {
+    throw new Error(
+      "Experimental remote CLI Host only supports the deterministic fake provider",
+    );
+  }
   const bearerToken = await loadBearerToken(args);
   if (remote !== undefined) {
     await bridgeCodexStdioToWebSocket({
@@ -83,6 +106,9 @@ async function appServerCommand(args: ParsedArguments): Promise<void> {
   const host = createHostedAppServer(hostConfig);
   try {
     if (listen === "stdio://" || listen === "stdio") {
+      if (remoteHostConfigFile !== undefined) {
+        throw new Error("--remote-host-config requires a local WebSocket Host");
+      }
       if (bearerToken !== undefined) {
         throw new Error(
           "--auth-token-file only applies to WebSocket listeners or --remote",
@@ -103,8 +129,75 @@ async function appServerCommand(args: ParsedArguments): Promise<void> {
       listen,
       ...(bearerToken === undefined ? {} : { bearerToken }),
     });
-    process.stderr.write(`Zen App Server listening on ${server.url}\n`);
-    await waitForShutdown(server);
+    let access: RemoteHostAccess | undefined;
+    let remoteServer: Awaited<ReturnType<typeof serveRemoteHost>> | undefined;
+    let admin: ReturnType<typeof createInterface> | undefined;
+    let pairingFile: string | undefined;
+    let loopbackClosed = false;
+    try {
+      if (remoteHostConfigFile !== undefined) {
+        const config = await loadRemoteHostConfig(remoteHostConfigFile);
+        access = new RemoteHostAccess({
+          appServer: host,
+          hostId: config.hostId,
+          workspaces: () => config.workspaces,
+        });
+        remoteServer = await serveRemoteHost({
+          enabled: true,
+          listen: config.listen,
+          port: config.port,
+          tls: {
+            cert: await readFile(config.tlsCertFile),
+            key: await readFile(config.tlsKeyFile),
+          },
+          access,
+        });
+        // The only pairing authority is the local CLI operator. Never print a
+        // pairing secret into process logs or export the local bearer file.
+        const codeFile = await open(config.pairCodeFile, "wx", 0o600);
+        pairingFile = config.pairCodeFile;
+        try {
+          await codeFile.writeFile(`${access.createPairingCode()}\n`, "utf8");
+        } finally {
+          await codeFile.close();
+        }
+        process.stderr.write(
+          `Remote Host enabled at ${remoteServer.url}; pairing code in protected local file ${pairingFile}\n`,
+        );
+        if (process.stdin.isTTY) {
+          admin = createInterface({
+            input: process.stdin,
+            output: process.stderr,
+          });
+          admin.on("line", (line: string) => {
+            const match = /^revoke ([^\s]+)$/u.exec(line.trim());
+            if (match?.[1] !== undefined) {
+              access?.revoke(match[1]);
+              process.stderr.write("Device revoked for this Host process.\n");
+            }
+          });
+          process.stderr.write(
+            "Local admin: type revoke <deviceId> to revoke immediately.\n",
+          );
+        }
+      }
+      process.stderr.write(`Zen App Server listening on ${server.url}\n`);
+      await waitForShutdown(server);
+      loopbackClosed = true;
+    } finally {
+      admin?.close();
+      const cleanup = await Promise.allSettled([
+        remoteServer?.close(),
+        pairingFile === undefined ? undefined : unlink(pairingFile),
+        loopbackClosed ? undefined : server.close(),
+      ]);
+      access?.close();
+      const errors = cleanup.flatMap((result) =>
+        result.status === "rejected" ? [result.reason as unknown] : [],
+      );
+      if (errors.length > 0)
+        throw new AggregateError(errors, "Remote Host shutdown failed");
+    }
   } finally {
     await host.closeHostResources();
   }
@@ -591,6 +684,7 @@ function parseArguments(args: string[]): ParsedArguments {
     "provider",
     "provider-name",
     "remote",
+    "remote-host-config",
     "thread",
     "tool-presentation",
   ]);
@@ -834,6 +928,7 @@ function printHelp(): void {
 
 Usage:
   zen app-server [--listen ws://127.0.0.1:4500] [--auth-token-file <path>]
+  zen app-server --remote-host-config <private-config.json>  # isolated opt-in TLS gateway
   zen app-server --remote ws://127.0.0.1:4500 [--auth-token-file <path>]
   zen run [options] <prompt>
   zen chat [options]
