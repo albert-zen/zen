@@ -107,6 +107,7 @@ interface ThreadViewProps {
   onReadAttachment?(attachment: AttachmentRef): Promise<Uint8Array>;
   onInterrupt(turnId: string): Promise<void>;
   onCompact?(): Promise<void>;
+  onDismissCompaction?(): void;
   onModelChange?(model: string): void;
   onReasoningChange?(effort: string): void;
   onRespondToApproval(
@@ -158,6 +159,7 @@ export function ThreadView({
   },
   onInterrupt,
   onCompact,
+  onDismissCompaction,
   onModelChange,
   onReasoningChange,
   onRespondToApproval,
@@ -425,8 +427,7 @@ export function ThreadView({
                     />
                   ),
                 )}
-            {composer.compaction?.status === "pending" ||
-            composer.compaction?.status === "failed" ? (
+            {composer.compaction?.status === "pending" ? (
               <ContextCompactionProgress state={composer.compaction} />
             ) : null}
           </div>
@@ -486,6 +487,12 @@ export function ThreadView({
               </button>
             ) : null}
           </div>
+        ) : null}
+        {composer.compaction?.status === "failed" ? (
+          <ContextCompactionProgress
+            state={composer.compaction}
+            onDismiss={onDismissCompaction}
+          />
         ) : null}
         <form
           className="composer"
@@ -841,8 +848,10 @@ function buildTranscriptRows(
 
 function ContextCompactionProgress({
   state,
+  onDismiss,
 }: {
   state: NonNullable<ComposerState["compaction"]>;
+  onDismiss?(): void;
 }) {
   const failed = state.status === "failed";
   return (
@@ -855,7 +864,28 @@ function ContextCompactionProgress({
       ) : (
         <span className="mini-spinner" aria-hidden="true" />
       )}
-      <span>{state.message}</span>
+      <div className="context-compaction-progress-content">
+        <span>{state.message}</span>
+        {failed ? (
+          <div className="context-compaction-error-actions">
+            {state.detail ? (
+              <details className="context-compaction-error-detail">
+                <summary tabIndex={0}>Technical details</summary>
+                <p>{state.detail}</p>
+              </details>
+            ) : null}
+            {onDismiss ? (
+              <button
+                type="button"
+                onClick={onDismiss}
+                aria-label="Dismiss compaction error"
+              >
+                Dismiss
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

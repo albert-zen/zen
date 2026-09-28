@@ -68,6 +68,7 @@ import {
   beginComposerSubmission,
   editComposer,
   emptyComposerState,
+  dismissCompactionFeedback,
   failComposerSubmission,
   removeComposerImage,
   type ComposerIntent,
@@ -2356,6 +2357,9 @@ export function App() {
             onOpenSidebar={() => setSidebarOpen(true)}
             onRespondToApproval={respondToApproval}
             onCompact={compactFromContext}
+            onDismissCompaction={(threadId) =>
+              updateComposer(threadId, dismissCompactionFeedback)
+            }
             onSubmit={submitComposer}
             onSubmitNewThread={submitNewThreadDraft}
             selectedSettings={selectedSettings}
@@ -2677,6 +2681,7 @@ function AgentSurface({
   onOpenSidebar,
   onRespondToApproval,
   onCompact,
+  onDismissCompaction,
   onSubmit,
   onSubmitNewThread,
   selectedSettings,
@@ -2730,6 +2735,7 @@ function AgentSurface({
     decision: ApprovalDecision,
   ): Promise<void>;
   onCompact(): Promise<void>;
+  onDismissCompaction(threadId: string): void;
   onSubmit(
     intent: ComposerIntent,
     expectedTurnId: string | null,
@@ -2950,6 +2956,7 @@ function AgentSurface({
             onReasoningChange={onReasoningChange}
             onRespondToApproval={onRespondToApproval}
             onCompact={onCompact}
+            onDismissCompaction={() => onDismissCompaction(threadDetail.id)}
             onSubmit={onSubmit}
           />
         </>
