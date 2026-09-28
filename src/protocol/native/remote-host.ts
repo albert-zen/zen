@@ -461,6 +461,20 @@ export class RemoteHostAccess {
       workspaceId,
       boundary.threadId,
     );
+    // The allowlist callback is deliberately dynamic. A slow journal read may
+    // overlap removal/remapping of a workspace after #thread's first lookup;
+    // re-evaluate the current mapping before either a fresh or cached reply.
+    const currentCwd = await this.#workspace(deviceId, token, workspaceId);
+    try {
+      if ((await realpath(thread.cwd)) !== currentCwd)
+        throw new RemoteHostError("wrong_workspace");
+    } catch (error) {
+      if (error instanceof RemoteHostError) throw error;
+      throw new RemoteHostError("wrong_workspace");
+    }
+    this.authenticate(deviceId, token);
+    if (boundary.processEpoch !== this.#projection.processEpoch)
+      throw new RemoteHostError("resync_required");
     if (thread.items.length < boundary.itemCount)
       throw new RemoteHostError("resync_required");
     return thread;
