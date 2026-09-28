@@ -40,7 +40,34 @@ const referenceSearchExcludedDirectories = new Set([
   ".svn",
   ".venv",
   "__pycache__",
+  ".spotlight-v100",
+  ".trashes",
 ]);
+
+const referenceSearchExcludedFiles = new Set([
+  ".ds_store",
+  "thumbs.db",
+  "desktop.ini",
+]);
+
+function referenceRank(relative: string, needle: string, explicit: boolean) {
+  const basename = path.posix.basename(relative).toLowerCase();
+  const hidden = relative.split("/").some((part) => part.startsWith("."));
+  const match = !needle
+    ? 0
+    : basename === needle ||
+        (basename.lastIndexOf(".") > 0 &&
+          basename.slice(0, basename.lastIndexOf(".")) === needle)
+      ? 0
+      : basename.startsWith(needle)
+        ? 1
+        : basename.includes(needle)
+          ? 2
+          : 3;
+  // Broad queries favor ordinary files; explicit dotted/path queries favor
+  // match quality, so useful hidden configuration remains discoverable.
+  return explicit ? [match, Number(hidden)] : [Number(hidden), match];
+}
 
 // Ephemeral discovery only: no index, file content, or session state is retained.
 export async function searchWorkspaceFiles(
@@ -62,6 +89,19 @@ export async function searchWorkspaceFiles(
     .replaceAll("\\", "/")
     .replace(/^\.\//, "");
   const needle = normalizedQuery.toLocaleLowerCase();
+  const explicit =
+    normalizedQuery.includes("/") || normalizedQuery.startsWith(".");
+  const compare = (a: { path: string }, b: { path: string }) => {
+    const left = referenceRank(a.path, needle, explicit);
+    const right = referenceRank(b.path, needle, explicit);
+    return (
+      left[0]! - right[0]! ||
+      left[1]! - right[1]! ||
+      (!needle ? a.path.split("/").length - b.path.split("/").length : 0) ||
+      a.path.toLowerCase().localeCompare(b.path.toLowerCase(), "en") ||
+      a.path.localeCompare(b.path, "en")
+    );
+  };
   const result: WorkspaceFileSearch = {
     cwd,
     entries: [],
@@ -126,12 +166,12 @@ export async function searchWorkspaceFiles(
           break;
         }
         result.scanned++;
+        const lowerName = entry.name.toLowerCase();
         const relative = current.relative
           ? `${current.relative}/${entry.name}`
           : entry.name;
         if (entry.isDirectory()) {
-          if (referenceSearchExcludedDirectories.has(entry.name.toLowerCase()))
-            continue;
+          if (referenceSearchExcludedDirectories.has(lowerName)) continue;
           if (current.depth >= 32) result.truncated = true;
           else {
             const next = {
@@ -144,14 +184,16 @@ export async function searchWorkspaceFiles(
           }
         } else if (
           entry.isFile() &&
+          !referenceSearchExcludedFiles.has(lowerName) &&
+          !lowerName.startsWith("._") &&
           relative.toLocaleLowerCase().includes(needle)
         ) {
-          if (result.entries.length === 80) {
-            result.truncated = true;
-            result.entries.sort((a, b) => a.path.localeCompare(b.path));
-            return result;
-          }
           result.entries.push({ name: entry.name, path: relative });
+          result.entries.sort(compare);
+          if (result.entries.length > 80) {
+            result.truncated = true;
+            result.entries.pop();
+          }
         }
       }
     } catch (error) {
@@ -163,7 +205,6 @@ export async function searchWorkspaceFiles(
       break;
     }
   }
-  result.entries.sort((a, b) => a.path.localeCompare(b.path));
   return result;
 }
 
