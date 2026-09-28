@@ -19,11 +19,12 @@ type Credential = {
   token: string;
 };
 type Notification =
-  | { type: "offline" }
+  | { type: "offline"; revoked?: boolean }
   | { type: "resync" }
   | {
       type: "snapshot";
       threads: { id: string; title: string; status: string }[];
+      turns: Record<string, { id: string; status: string }[]>;
       items: Record<
         string,
         { id: string; role: string; text: string; status: string }[]
@@ -35,7 +36,7 @@ const mapItem = (item: RemoteItemView) => ({
   id: item.id,
   role: item.type,
   text: item.text ?? "",
-  status: item.type.startsWith("turn_") ? item.type.slice(5) : "completed",
+  status: item.type.startsWith("turn_") ? "recorded" : "completed",
 });
 const mapThreads = (threads: RemoteThreadSummary[]) =>
   threads.map((t) => ({
@@ -84,6 +85,7 @@ export class RemoteHostTransport {
   private recovered = false;
   private eventBuffer: RemoteEventView[] = [];
   private restartRecovery = false;
+  private revokedHost: string | null = null;
   private staleCursorRetries = 0;
   constructor(
     private readonly hosts: () => Host[],
@@ -98,6 +100,10 @@ export class RemoteHostTransport {
   }
   private async credential(id: string): Promise<Credential> {
     const host = this.host(id);
+    if (this.revokedHost === id)
+      throw Error(
+        "Host revoked this device grant. Pair again with a new code.",
+      );
     const saved = await this.deps.getSecret(secureKey(id));
     if (!saved) throw Error("Unpaired Host. Pair using a fresh Host code.");
     const credential = JSON.parse(saved) as Credential;
@@ -152,10 +158,12 @@ export class RemoteHostTransport {
         token: result.token,
       } satisfies Credential),
     );
+    if (generation === this.generation) this.revokedHost = null;
   }
   async forget(id: string) {
     this.disconnect();
     await this.deps.deleteSecret(secureKey(id));
+    if (this.revokedHost === id) this.revokedHost = null;
   }
   disconnect() {
     this.generation++;
@@ -205,16 +213,35 @@ export class RemoteHostTransport {
             "TLS/Host connection failed. Check trusted certificate, listener and grant.",
           ),
         );
-        if (this.socket === socket) this.disconnect();
-      };
-      socket.onclose = () => {
         if (this.socket === socket) {
-          for (const [, p] of this.pending)
-            p.reject(Error("Host disconnected; delivery unconfirmed."));
-          this.pending.clear();
-          this.socket = null;
-          this.observer?.({ type: "offline" });
+          const observer = this.observer;
+          this.disconnect();
+          observer?.({ type: "offline", revoked: false });
         }
+      };
+      socket.onclose = (event) => {
+        if (this.socket !== socket) return;
+        const revoked = event.code === 4003;
+        if (revoked) this.revokedHost = id;
+        this.generation++;
+        this.recoveryGeneration++;
+        this.recovering = false;
+        this.recovered = false;
+        this.restartRecovery = false;
+        this.eventBuffer = [];
+        this.items.clear();
+        this.turns.clear();
+        this.summaries = [];
+        this.epoch = null;
+        this.watermark = -1;
+        this.activeThread = null;
+        this.activeWorkspace = null;
+        this.bound = null;
+        this.socket = null;
+        for (const [, p] of this.pending)
+          p.reject(Error("Host disconnected; delivery unconfirmed."));
+        this.pending.clear();
+        this.observer?.({ type: "offline", revoked });
       };
       socket.onmessage = (message) =>
         this.message(socket, String(message.data));
@@ -318,6 +345,12 @@ export class RemoteHostTransport {
       type: "snapshot",
       threads: mapThreads(this.summaries),
       items: { [this.activeThread]: [...this.items.values()] },
+      turns: {
+        [this.activeThread]: [...this.turns].map(([id, status]) => ({
+          id,
+          status,
+        })),
+      },
     });
   }
   private invalidateRecovery() {
@@ -529,7 +562,7 @@ export class RemoteHostTransport {
           clientId: this.deps.uuid(),
         },
       );
-      return { accepted: !!result.turnId };
+      return { accepted: !!result.turnId, turnId: result.turnId };
     }
     if (kind === "stop") {
       const current = [...this.turns]
@@ -545,7 +578,7 @@ export class RemoteHostTransport {
         threadId: payload.threadId,
         expectedTurnId: current,
       });
-      return { accepted: true };
+      return { accepted: true, turnId: current };
     }
     return { accepted: false, error: "Unsupported command" };
   }

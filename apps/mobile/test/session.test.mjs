@@ -176,3 +176,218 @@ test("Host reset clears visible Thread and never turns unknown send into a confi
   await session.command("send", { threadId: "t", text: "hello" });
   assert.equal(calls, 1);
 });
+test("revoke and ordinary disconnect clear projection without losing unknown send fence", async () => {
+  let observer,
+    calls = 0;
+  const transport = {
+    snapshot: async () => ({ workspaces: [], threads: [] }),
+    subscribe: (_h, _w, cb) => {
+      observer = cb;
+      return () => {};
+    },
+    read: async () => [{ id: "secret", text: "body" }],
+    command: async () => {
+      calls++;
+      throw Error("lost ack");
+    },
+    disconnect() {},
+  };
+  const s = createSession(transport, () => {});
+  s.selectHost("h");
+  await tick();
+  s.selectWorkspace("w");
+  await tick();
+  s.openThread("a");
+  await tick();
+  await s.command("send", { threadId: "a", text: "x" });
+  assert.equal(s.get().command, "uncertain");
+  observer({ type: "offline", revoked: true });
+  assert.deepEqual(s.get().items, []);
+  assert.deepEqual(s.get().turns, []);
+  assert.match(s.get().error, /revoked/);
+  s.openThread("a");
+  await tick();
+  await s.command("send", { threadId: "a", text: "x" });
+  assert.equal(calls, 1, "same connection must not clear unknown fence");
+  s.selectHost("h");
+  await tick();
+  s.selectWorkspace("w");
+  await tick();
+  s.openThread("a");
+  await tick();
+  assert.equal(
+    s.get().command,
+    null,
+    "explicit reconnect + full canonical read releases fence",
+  );
+  await s.command("send", { threadId: "a", text: "new" });
+  assert.equal(calls, 2);
+  observer({ type: "offline" });
+  assert.deepEqual(s.get().items, []);
+  assert.match(s.get().error, /Disconnected/);
+});
+test("same-workspace A late ack/reject and read errors cannot change B; A unknown stays fenced", async () => {
+  const readA = deferred(),
+    cmdA = deferred();
+  let calls = [];
+  const transport = {
+    snapshot: async () => ({ workspaces: [], threads: [] }),
+    subscribe: () => () => {},
+    read: (_h, _w, id) =>
+      id === "a" ? readA.promise : Promise.resolve([{ id: "b", text: "B" }]),
+    command: (_h, _w, _k, p) => {
+      calls.push(p.threadId);
+      return p.threadId === "a"
+        ? cmdA.promise
+        : Promise.resolve({ accepted: true, turnId: "b-turn" });
+    },
+  };
+  const s = createSession(transport, () => {});
+  s.selectHost("h");
+  await tick();
+  s.selectWorkspace("w");
+  await tick();
+  s.openThread("a");
+  const old = s.command("send", { threadId: "a", text: "A" });
+  s.openThread("b");
+  await tick();
+  assert.deepEqual(s.get().items, [{ id: "b", text: "B" }]);
+  assert.equal(s.get().command, null);
+  await s.command("send", { threadId: "b", text: "B" });
+  assert.equal(s.get().lastRequest.turnId, "b-turn");
+  readA.reject(Error("old page failed"));
+  cmdA.reject(Error("unknown delivery"));
+  await old;
+  await tick();
+  assert.equal(s.get().thread, "b");
+  assert.equal(s.get().lastRequest.turnId, "b-turn");
+  assert.deepEqual(s.get().items, [{ id: "b", text: "B" }]);
+  s.openThread("a");
+  await tick();
+  assert.equal(s.get().command, "uncertain");
+  await s.command("send", { threadId: "a", text: "A again" });
+  assert.deepEqual(calls, ["a", "b"]);
+});
+test("same Thread old read and old ack never overwrite a new read or canonical failed status", async () => {
+  const slow = deferred(),
+    ack = deferred();
+  let reads = 0,
+    observer;
+  const transport = {
+    snapshot: async () => ({ workspaces: [], threads: [] }),
+    subscribe: (_h, _w, cb) => {
+      observer = cb;
+      return () => {};
+    },
+    read: () =>
+      ++reads === 1
+        ? slow.promise
+        : Promise.resolve([{ id: "new", text: "new" }]),
+    command: () => ack.promise,
+  };
+  const s = createSession(transport, () => {});
+  s.selectHost("h");
+  await tick();
+  s.selectWorkspace("w");
+  await tick();
+  s.openThread("a");
+  const send = s.command("send", { threadId: "a", text: "x" });
+  s.openThread("a");
+  await tick();
+  observer({
+    type: "snapshot",
+    threads: [],
+    items: { a: [{ id: "new", text: "new" }] },
+    turns: { a: [{ id: "turn-x", status: "failed" }] },
+  });
+  slow.resolve([{ id: "old", text: "old" }]);
+  ack.resolve({ accepted: true, turnId: "turn-x" });
+  await send;
+  await tick();
+  assert.deepEqual(s.get().items, [{ id: "new", text: "new" }]);
+  assert.deepEqual(s.get().turns, [{ id: "turn-x", status: "failed" }]);
+  assert.equal(s.get().lastRequest, null);
+});
+test("canonical live and recovered Turn outcomes override request admission without guessing from thread idle", async () => {
+  let observer;
+  const ack = deferred();
+  const transport = {
+    snapshot: async () => ({
+      workspaces: [],
+      threads: [{ id: "a", status: "idle" }],
+    }),
+    subscribe: (_h, _w, cb) => {
+      observer = cb;
+      return () => {};
+    },
+    read: async () => [{ id: "user", text: "ask" }],
+    command: () => ack.promise,
+  };
+  const s = createSession(transport, () => {});
+  s.selectHost("h");
+  await tick();
+  s.selectWorkspace("w");
+  await tick();
+  s.openThread("a");
+  await tick();
+  const send = s.command("send", { threadId: "a", text: "ask" });
+  observer({
+    type: "snapshot",
+    threads: [{ id: "a", status: "idle" }],
+    items: { a: [{ id: "user", text: "ask" }] },
+    turns: { a: [{ id: "turn-f", status: "failed" }] },
+  });
+  ack.resolve({ accepted: true, turnId: "turn-f" });
+  await send;
+  assert.equal(s.get().command, "accepted");
+  assert.deepEqual(s.get().lastRequest, { kind: "send", turnId: "turn-f" });
+  assert.equal(s.get().turns[0].status, "failed");
+  observer({
+    type: "snapshot",
+    threads: [{ id: "a", status: "idle" }],
+    items: { a: [{ id: "done", text: "done" }] },
+    turns: {
+      a: [
+        { id: "turn-f", status: "failed" },
+        { id: "turn-c", status: "completed" },
+        { id: "turn-i", status: "interrupted" },
+      ],
+    },
+  });
+  assert.deepEqual(
+    s.get().turns.map((t) => t.status),
+    ["failed", "completed", "interrupted"],
+  );
+});
+test("late workspace refresh after disconnect cannot re-expose stale public view", async () => {
+  let observer;
+  const late = deferred();
+  let calls = 0;
+  const transport = {
+    snapshot: () =>
+      ++calls === 3
+        ? late.promise
+        : Promise.resolve({ workspaces: [], threads: [] }),
+    subscribe: (_h, _w, cb) => {
+      observer = cb;
+      return () => {};
+    },
+    read: async () => [{ id: "secret", text: "old" }],
+    command: async () => ({ accepted: true, turnId: "t" }),
+  };
+  const s = createSession(transport, () => {});
+  s.selectHost("h");
+  await tick();
+  s.selectWorkspace("w");
+  await tick();
+  s.openThread("a");
+  await tick();
+  const send = s.command("send", { threadId: "a", text: "x" });
+  await tick();
+  observer({ type: "offline", revoked: true });
+  late.resolve({ workspaces: [], threads: [{ id: "a", status: "idle" }] });
+  await send;
+  assert.equal(s.get().status, "offline");
+  assert.deepEqual(s.get().items, []);
+  assert.deepEqual(s.get().turns, []);
+});

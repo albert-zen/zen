@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { createSession } from "./session.mjs";
+import { createAppActions } from "./app-actions.mjs";
 import { fixtureHosts } from "./fixture.mjs";
 import { combinedTransport, setHostList, transport } from "./transport";
 
@@ -33,9 +34,30 @@ export default function App() {
   const [hosts, setHosts] = useState(fixtureHosts);
   const [storageError, setStorageError] = useState<string | null>(null);
   const userSelected = useRef(false);
+  const draftRef = useRef("");
+  const pairCodeRef = useRef("");
+  const updateDraft = (value: string) => {
+    draftRef.current = value;
+    setDraft(value);
+  };
+  const updatePairCode = (value: string) => {
+    pairCodeRef.current = value;
+    setPairCode(value);
+  };
   const session = useMemo(
     () => createSession(combinedTransport, setScreen),
     [],
+  );
+  const actions = useMemo(
+    () =>
+      createAppActions(session, transport, {
+        getDraft: () => draftRef.current,
+        setDraft: updateDraft,
+        getPairCode: () => pairCodeRef.current,
+        setPairCode: updatePairCode,
+        setPairState,
+      }),
+    [session],
   );
   useEffect(() => {
     setHostList(hosts);
@@ -84,10 +106,8 @@ export default function App() {
   }, [session]);
   const s = screen ?? session.get();
   function selectHost(id: string) {
-    setDraft("");
-    setPairCode("");
     userSelected.current = true;
-    session.selectHost(id);
+    actions.selectHost(id);
     void SecureStore.setItemAsync("zenx-mobile-host-preference-v1", id).catch(
       (e) => setStorageError(`Could not save device preference: ${String(e)}`),
     );
@@ -183,22 +203,13 @@ export default function App() {
               placeholder="Fresh pairing code"
               placeholderTextColor={colors.muted}
               value={pairCode}
-              onChangeText={setPairCode}
+              onChangeText={updatePairCode}
               autoCapitalize="none"
               secureTextEntry
               accessibilityLabel="Pairing code"
             />
             {button("Pair selected Host", () => {
-              const selected = s.host!;
-              void transport
-                .pair(selected, pairCode)
-                .then(() => {
-                  setPairCode("");
-                  setPairState("Paired. Select Host again to connect.");
-                  if (session.get().host === selected)
-                    session.selectHost(selected);
-                })
-                .catch((e) => setPairState(String(e)));
+              void actions.pair();
             })}
             {pairState && <Text style={styles.meta}>{pairState}</Text>}
           </>
@@ -219,7 +230,7 @@ export default function App() {
               s.workspace === w.id ? "Selected workspace" : "Switch workspace",
               () => {
                 setDraft("");
-                session.selectWorkspace(w.id);
+                actions.selectWorkspace(w.id);
               },
             )}
           </View>
@@ -242,7 +253,7 @@ export default function App() {
             <View key={t.id} style={styles.card}>
               <Text style={styles.name}>{t.title}</Text>
               <Text style={styles.meta}>{t.status}</Text>
-              {button("Open thread", () => session.openThread(t.id))}
+              {button("Open thread", () => actions.openThread(t.id))}
             </View>
           ))}
         {s.thread && (
@@ -256,21 +267,29 @@ export default function App() {
                 <Text style={styles.name}>{item.text}</Text>
               </View>
             ))}
+            {s.turns.map((turn) => (
+              <Text key={turn.id} style={styles.meta}>
+                Turn {turn.id}: {turn.status}
+              </Text>
+            ))}
+            {s.lastRequest && (
+              <Text style={styles.meta}>
+                {s.lastRequest.kind === "send" ? "Send" : "Stop"} accepted for
+                Turn {s.lastRequest.turnId}. Admission is not the Turn outcome.
+              </Text>
+            )}
             <TextInput
               style={styles.input}
               multiline
               placeholder="Message"
               placeholderTextColor={colors.muted}
               value={draft}
-              onChangeText={setDraft}
+              onChangeText={updateDraft}
             />
             {button(
               "Send message",
               () => {
-                void session.command("send", {
-                  threadId: s.thread,
-                  text: draft,
-                });
+                void actions.send();
               },
               !draft.trim() ||
                 s.command === "pending" ||
@@ -279,7 +298,7 @@ export default function App() {
             {button(
               "Stop current turn",
               () => {
-                void session.command("stop", { threadId: s.thread });
+                void actions.stop();
               },
               s.command === "pending" || s.command === "uncertain",
             )}
@@ -299,7 +318,14 @@ export default function App() {
             Host history first.
           </Text>
         )}
-        {s.command && <Text style={styles.meta}>Command: {s.command}</Text>}
+        {s.command && (
+          <Text style={styles.meta}>
+            Request:{" "}
+            {s.command === "accepted"
+              ? "accepted (not Turn outcome)"
+              : s.command}
+          </Text>
+        )}
       </ScrollView>
     </SafeAreaView>
   );

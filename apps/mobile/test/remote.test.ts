@@ -6,7 +6,7 @@ class Socket {
   static OPEN = 1;
   readyState = 1;
   onopen: (() => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((event: { code: number }) => void) | null = null;
   onerror: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
   requests: any[] = [];
@@ -29,9 +29,9 @@ class Socket {
       data: JSON.stringify({ method: REMOTE_METHODS.event, params: event }),
     });
   }
-  close() {
+  close(code = 1000) {
     this.readyState = 3;
-    this.onclose?.();
+    this.onclose?.({ code });
   }
 }
 const host = {
@@ -135,11 +135,11 @@ test("pair requires Host match, stores credential only in secure store, hello ve
       threadId: "t",
       text: "hello",
     }),
-    { accepted: true },
+    { accepted: true, turnId: "turn2" },
   );
   assert.deepEqual(
     await s.transport.command(host.id, "w", "stop", { threadId: "t" }),
-    { accepted: true },
+    { accepted: true, turnId: "turn1" },
   );
   const requests = s.socket().requests;
   assert.deepEqual(
@@ -289,7 +289,7 @@ test("v1 recovery concatenates >2 MiB text across pages, no partial success or d
       threadId: "t",
       text: "next",
     }),
-    { accepted: true },
+    { accepted: true, turnId: "turn2" },
   );
 });
 test("v1 reset during pagination discards partial pages and starts a fresh resume", async () => {
@@ -664,4 +664,163 @@ test("repeated stale cursor retry is bounded, never marked synchronized", async 
       error: "Open a Thread and verify its current Turn first.",
     },
   );
+});
+
+test("close 4003 clears live projection and grant use; ordinary close clears projection but allows reconnect", async () => {
+  const s = setup(response);
+  await s.transport.pair(host.id, "code");
+  await s.transport.snapshot(host.id, "w");
+  const events: any[] = [];
+  s.transport.subscribe(host.id, "w", (event) => events.push(event));
+  await s.transport.read(host.id, "w", "t");
+  assert.ok(events.at(-1)?.items.t.length);
+  s.socket().close();
+  assert.deepEqual(events.at(-1), { type: "offline", revoked: false });
+  await s.transport.snapshot(host.id, "w");
+  s.transport.subscribe(host.id, "w", (event) => events.push(event));
+  await s.transport.read(host.id, "w", "t");
+  s.socket().close(4003);
+  assert.deepEqual(events.at(-1), { type: "offline", revoked: true });
+  await assert.rejects(
+    s.transport.snapshot(host.id, "w"),
+    /revoked.*Pair again/,
+  );
+  await s.transport.pair(host.id, "new code");
+  await s.transport.snapshot(host.id, "w");
+  assert.equal((await s.transport.read(host.id, "w", "t"))[1]?.text, "hello");
+});
+test("Turn failed/completed/interrupted canonical status survives resume and live events; ack is only admission", async () => {
+  const s = setup((request) =>
+    request.method === REMOTE_METHODS.resume
+      ? {
+          processEpoch: "e1",
+          threadId: "t",
+          watermark: 1,
+          thread: { id: "t", archived: false },
+          nextCursor: null,
+          entries: [
+            {
+              kind: "item",
+              item: {
+                id: "u",
+                type: "user_message",
+                threadId: "t",
+                createdAt: "now",
+                text: "prompt",
+              },
+              turn: { id: "turn-f", status: "failed" },
+            },
+            {
+              kind: "item",
+              item: {
+                id: "ended",
+                type: "turn_completed",
+                threadId: "t",
+                createdAt: "now",
+                turnId: "turn-f",
+              },
+              turn: { id: "turn-f", status: "failed" },
+            },
+            {
+              kind: "item",
+              item: {
+                id: "done",
+                type: "agent_message",
+                threadId: "t",
+                createdAt: "now",
+                text: "done",
+              },
+              turn: { id: "turn-c", status: "completed" },
+            },
+            {
+              kind: "item",
+              item: {
+                id: "halted",
+                type: "turn_aborted",
+                threadId: "t",
+                createdAt: "now",
+                turnId: "turn-i",
+              },
+              turn: { id: "turn-i", status: "interrupted" },
+            },
+            {
+              kind: "item",
+              item: {
+                id: "active",
+                type: "user_message",
+                threadId: "t",
+                createdAt: "now",
+                text: "active",
+              },
+              turn: { id: "turn1", status: "inProgress" },
+            },
+          ],
+        }
+      : response(request),
+  );
+  await s.transport.pair(host.id, "code");
+  await s.transport.snapshot(host.id, "w");
+  const seen: any[] = [];
+  s.transport.subscribe(host.id, "w", (e) => seen.push(e));
+  await s.transport.read(host.id, "w", "t");
+  assert.deepEqual(seen.at(-1).turns.t, [
+    { id: "turn-f", status: "failed" },
+    { id: "turn-c", status: "completed" },
+    { id: "turn-i", status: "interrupted" },
+    { id: "turn1", status: "inProgress" },
+  ]);
+  assert.equal(
+    seen.at(-1).items.t.find((i: any) => i.id === "ended").status,
+    "recorded",
+  );
+  assert.deepEqual(
+    await s.transport.command(host.id, "w", "stop", { threadId: "t" }),
+    { accepted: true, turnId: "turn1" },
+  );
+  assert.equal(
+    seen.at(-1).turns.t.at(-1).status,
+    "inProgress",
+    "stop ack is not terminal",
+  );
+  s.socket().notify({
+    threadId: "t",
+    processEpoch: "e1",
+    watermark: 2,
+    event: { type: "turn_completed", turnId: "turn1", status: "interrupted" },
+  });
+  assert.equal(seen.at(-1).turns.t.at(-1).status, "interrupted");
+  s.socket().notify({
+    threadId: "t",
+    processEpoch: "e1",
+    watermark: 3,
+    event: { type: "turn_started", turnId: "turn2" },
+  });
+  s.socket().notify({
+    threadId: "t",
+    processEpoch: "e1",
+    watermark: 4,
+    event: { type: "turn_completed", turnId: "turn2", status: "failed" },
+  });
+  assert.equal(seen.at(-1).turns.t.at(-1).status, "failed");
+});
+test("socket error without close event invalidates projected body and reports offline", async () => {
+  const s = setup(response);
+  await s.transport.pair(host.id, "code");
+  await s.transport.snapshot(host.id, "w");
+  const events: any[] = [];
+  s.transport.subscribe(host.id, "w", (e) => events.push(e));
+  await s.transport.read(host.id, "w", "t");
+  s.socket().onerror?.();
+  assert.deepEqual(events.at(-1), { type: "offline", revoked: false });
+  assert.deepEqual(
+    await s.transport.command(host.id, "w", "send", {
+      threadId: "t",
+      text: "x",
+    }),
+    {
+      accepted: false,
+      error: "Open a Thread and verify its current Turn first.",
+    },
+  );
+  await s.transport.snapshot(host.id, "w"); // ordinary error does not revoke device grant
 });

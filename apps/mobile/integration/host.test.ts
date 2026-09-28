@@ -133,7 +133,8 @@ test("Android client transport pairs over trusted TLS, shares Host authority wit
         threadId: id,
         text: "test from Android client",
       });
-      assert.deepEqual(sent, { accepted: true });
+      assert.equal(sent.accepted, true);
+      assert.ok(sent.turnId);
       const second = new NodeSocket(server.url, {
         ca: cert,
         headers: {
@@ -244,9 +245,22 @@ test("Android client transport pairs over trusted TLS, shares Host authority wit
         ),
       );
       access.revoke(JSON.parse([...secrets.values()][0]!).deviceId);
-      await assert.rejects(
-        mobile.snapshot("isolated-test", "w"),
-        /disconnected|offline|unauthorized|connection|Host/i,
+      const revokeDeadline = Date.now() + 3000;
+      while (
+        !projected.some((event) => event.type === "offline" && event.revoked)
+      ) {
+        if (Date.now() > revokeDeadline)
+          throw Error("Host close 4003 not observed");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.deepEqual(projected.at(-1), { type: "offline", revoked: true });
+      await assert.rejects(mobile.snapshot("isolated-test", "w"), /revoked/);
+      await mobile.pair("isolated-test", access.createPairingCode());
+      await mobile.snapshot("isolated-test", "w");
+      assert.ok(
+        (await mobile.read("isolated-test", "w", id)).some(
+          (item) => item.text === "private-during-scope-loss",
+        ),
       );
       mobile.disconnect();
     } finally {
