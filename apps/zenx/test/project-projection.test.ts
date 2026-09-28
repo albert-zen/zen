@@ -877,6 +877,49 @@ test(
         started.includes(await realpath(linked)),
         "the healthy linked path was actually probed",
       );
+      // A success hint is scheduling only. Replacing the linked worktree with
+      // an independent repository must not reuse its old common-dir identity.
+      execFileSync(
+        "/usr/bin/git",
+        ["-C", main, "worktree", "remove", "--force", linked],
+        { stdio: "pipe" },
+      );
+      await mkdir(linked);
+      execFileSync("/usr/bin/git", ["-C", linked, "init", "-q"], {
+        stdio: "pipe",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10_050));
+      const replaced = await projection.project(threads);
+      assert.equal(replaced.projects.length, 10);
+      assert.deepEqual(
+        replaced.projects.find((project) => project.workspace === main)
+          ?.threadIds,
+        ["main"],
+      );
+      assert.deepEqual(
+        replaced.projects.find((project) => project.workspace === linked)
+          ?.threadIds,
+        ["linked"],
+      );
+      assert.ok(
+        (await readFile(log, "utf8"))
+          .trim()
+          .split("\n")
+          .slice(started.length)
+          .includes(await realpath(linked)),
+        "replacement was not re-probed",
+      );
+      // Losing Git entirely is a verified failure, not permission to preserve
+      // the last successful identity as a display authority.
+      await rm(path.join(linked, ".git"), { recursive: true, force: true });
+      await new Promise((resolve) => setTimeout(resolve, 10_050));
+      const noRepository = await projection.project(threads);
+      assert.equal(noRepository.projects.length, 10);
+      assert.deepEqual(
+        noRepository.projects.find((project) => project.workspace === linked)
+          ?.threadIds,
+        ["linked"],
+      );
       assert.equal(await projection.configuredWorkspace(linked), null);
       await projection.updateConfiguration([main, linked], main);
       const explicit = await projection.project(threads);

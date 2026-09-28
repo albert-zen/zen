@@ -92,8 +92,10 @@ export class ZenXProjectProjection {
   readonly #realpath: ProjectRealpath;
   readonly #gitIdentities = new Map<
     string,
-    { until: number; result: string | null }
+    { until: number; result: string | null; verified: boolean }
   >();
+  // Ordering hint only: a past common-dir is never a current identity.
+  readonly #gitSuccessHints = new Map<string, number>();
   #gitProbe: Promise<void> | null = null;
   #activeGitProbes = 0;
   #gitProbeOffset = 0;
@@ -342,25 +344,34 @@ export class ZenXProjectProjection {
       missing.length > 0 &&
       deadline > performance.now()
     ) {
-      // Keep the primary configured workspace in reach on every attempt: a
-      // linked worktree cannot join it if their successful TTLs never overlap.
-      // Rotate the other missing candidates by *attempted* slots, not by all
-      // 32 cooled-down paths, so a fixed set of slow leaders cannot starve a
-      // healthy worktree on every later TTL. Modulo handles changed candidates.
+      // Revalidate the configured root and recent successes first. Hints only
+      // order fresh probes; expired identities never group. Rotate all other
+      // paths by attempted slots so unknown/failed paths keep fair chances.
       const primary =
         preferred !== null && missing.includes(preferred) ? preferred : null;
-      const rotating = missing.filter((candidate) => candidate !== primary);
+      const priority = [
+        ...(primary === null ? [] : [primary]),
+        ...missing.filter(
+          (candidate) =>
+            candidate !== primary &&
+            (this.#gitSuccessHints.get(candidate) ?? 0) > Date.now(),
+        ),
+      ];
+      const prioritySet = new Set(priority);
+      const rotating = missing.filter(
+        (candidate) => !prioritySet.has(candidate),
+      );
       const offset =
         rotating.length === 0 ? 0 : this.#gitProbeOffset % rotating.length;
       const order = [
-        ...(primary === null ? [] : [primary]),
+        ...priority,
         ...rotating.slice(offset),
         ...rotating.slice(0, offset),
       ];
       const probe = this.#probeGit(order, deadline).then((attempted) => {
         if (rotating.length > 0) {
           this.#gitProbeOffset =
-            (offset + Math.max(0, attempted - (primary === null ? 0 : 1))) %
+            (offset + Math.max(0, attempted - priority.length)) %
             rotating.length;
         }
       });
@@ -416,7 +427,15 @@ export class ZenXProjectProjection {
             this.#gitIdentities.set(candidate, {
               until: Date.now() + 10_000,
               result,
+              verified: true,
             });
+            if (result === null) {
+              this.#gitSuccessHints.delete(candidate);
+            } else {
+              if (this.#gitSuccessHints.size >= 256)
+                this.#gitSuccessHints.clear();
+              this.#gitSuccessHints.set(candidate, Date.now() + 30_000);
+            }
           } finally {
             this.#activeGitProbes--;
           }
@@ -438,6 +457,7 @@ export class ZenXProjectProjection {
       this.#gitIdentities.set(candidate, {
         until: Date.now() + 10_000,
         result: null,
+        verified: false,
       });
     }
     return attempted;
