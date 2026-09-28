@@ -76,7 +76,7 @@ function setup(reply: (request: any, socket: Socket) => any) {
 const response = (request: any) => {
   switch (request.method) {
     case REMOTE_METHODS.hello:
-      return { hostId: host.id, version: 0, processEpoch: "e1" };
+      return { hostId: host.id, version: 1, processEpoch: "e1" };
     case REMOTE_METHODS.workspaces:
       return { workspaces: [{ id: "w", label: "Workspace" }] };
     case REMOTE_METHODS.threads:
@@ -86,21 +86,30 @@ const response = (request: any) => {
         processEpoch: "e1",
         watermark: 2,
         threadId: "t",
-        events: [],
-        thread: {
-          id: "t",
-          archived: false,
-          items: [
-            {
+        thread: { id: "t", archived: false },
+        nextCursor: null,
+        entries: [
+          {
+            kind: "item",
+            item: {
+              id: "start",
+              threadId: "t",
+              createdAt: "now",
+              type: "turn_started",
+            },
+            turn: { id: "turn1", status: "inProgress" },
+          },
+          {
+            kind: "item",
+            item: {
               id: "i1",
               threadId: "t",
               createdAt: "now",
               type: "agent_message",
               text: "hello",
             },
-          ],
-          turns: [{ id: "turn1", status: "inProgress" }],
-        },
+          },
+        ],
       };
     case REMOTE_METHODS.send:
       return { turnId: "turn2" };
@@ -120,7 +129,7 @@ test("pair requires Host match, stores credential only in secure store, hello ve
   );
   assert.equal(s.headers[0]?.Authorization, "Bearer secret-token");
   await s.transport.snapshot(host.id, "w");
-  assert.equal((await s.transport.read(host.id, "w", "t"))[0]?.text, "hello");
+  assert.equal((await s.transport.read(host.id, "w", "t"))[1]?.text, "hello");
   assert.deepEqual(
     await s.transport.command(host.id, "w", "send", {
       threadId: "t",
@@ -148,7 +157,7 @@ test("pair requires Host match, stores credential only in secure store, hello ve
 test("wrong Host hello and stale identity cannot show threads", async () => {
   const s = setup((request) =>
     request.method === REMOTE_METHODS.hello
-      ? { hostId: "imposter", version: 0, processEpoch: "e1" }
+      ? { hostId: "imposter", version: 1, processEpoch: "e1" }
       : response(request),
   );
   await s.transport.pair(host.id, "code");
@@ -194,7 +203,7 @@ test("event watermark gap and epoch change re-resume without copying tool conten
       .length,
     3,
   );
-  assert.equal(notifications.at(-1)?.items.t[0]?.text, "hello");
+  assert.equal(notifications.at(-1)?.items.t[1]?.text, "hello");
 });
 
 test("pairing interrupted by a device switch never persists an obsolete grant", async () => {
@@ -230,4 +239,161 @@ test("pairing interrupted by a device switch never persists an obsolete grant", 
   });
   await assert.rejects(pending, /Selection changed/);
   assert.equal(secrets.size, 0);
+});
+
+test("v1 recovery concatenates >2 MiB text across pages, no partial success or duplicate Item", async () => {
+  const text = "ab🙂".repeat(550000); // 2.2M UTF-16 code units, larger than old frame cap.
+  const parts = Array.from({ length: Math.ceil(text.length / 80000) }, (_, i) =>
+    text.slice(i * 80000, (i + 1) * 80000),
+  );
+  let position = 0;
+  const s = setup((request) => {
+    if (
+      request.method === REMOTE_METHODS.resume ||
+      request.method === REMOTE_METHODS.resumePage
+    ) {
+      const n = position++;
+      const item = {
+        id: "huge",
+        threadId: "t",
+        createdAt: "now",
+        type: "agent_message",
+      };
+      return {
+        processEpoch: "e1",
+        threadId: "t",
+        watermark: 0,
+        thread: { id: "t", archived: false },
+        entries: [
+          {
+            kind: "text_fragment",
+            item,
+            offset: n * 80000,
+            text: parts[n],
+            complete: n === parts.length - 1,
+          },
+        ],
+        nextCursor: n === parts.length - 1 ? null : `cursor-${n}`,
+      };
+    }
+    return response(request);
+  });
+  await s.transport.pair(host.id, "code");
+  await s.transport.snapshot(host.id, "w");
+  const items = await s.transport.read(host.id, "w", "t");
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.text, text);
+  assert.equal(position, parts.length);
+  assert.deepEqual(
+    await s.transport.command(host.id, "w", "send", {
+      threadId: "t",
+      text: "next",
+    }),
+    { accepted: true },
+  );
+});
+test("v1 reset during pagination discards partial pages and starts a fresh resume", async () => {
+  let attempt = 0;
+  const s = setup((request, socket) => {
+    if (request.method === REMOTE_METHODS.resume) {
+      attempt++;
+      return {
+        processEpoch: attempt === 1 ? "e1" : "e2",
+        threadId: "t",
+        watermark: 0,
+        thread: { id: "t", archived: false },
+        entries: [],
+        nextCursor: attempt === 1 ? "first" : null,
+      };
+    }
+    if (request.method === REMOTE_METHODS.resumePage) {
+      socket.onmessage?.({
+        data: JSON.stringify({
+          method: REMOTE_METHODS.reset,
+          params: { threadId: "t", reason: "resync_required" },
+        }),
+      });
+      return {
+        processEpoch: "e1",
+        threadId: "t",
+        watermark: 0,
+        thread: { id: "t", archived: false },
+        entries: [],
+        nextCursor: null,
+      };
+    }
+    return response(request);
+  });
+  await s.transport.pair(host.id, "code");
+  await s.transport.snapshot(host.id, "w");
+  await assert.rejects(s.transport.read(host.id, "w", "t"), /incomplete/);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(attempt, 2);
+});
+
+test("live event arriving between recovery pages is replayed once after terminal cursor", async () => {
+  let pageCount = 0;
+  const s = setup((request, socket) => {
+    if (request.method === REMOTE_METHODS.resume)
+      return {
+        processEpoch: "e1",
+        threadId: "t",
+        watermark: 0,
+        thread: { id: "t", archived: false },
+        entries: [
+          {
+            kind: "item",
+            item: {
+              id: "old",
+              threadId: "t",
+              createdAt: "now",
+              type: "agent_message",
+              text: "before",
+            },
+          },
+        ],
+        nextCursor: "page2",
+      };
+    if (request.method === REMOTE_METHODS.resumePage) {
+      pageCount++;
+      socket.notify({
+        processEpoch: "e1",
+        watermark: 1,
+        threadId: "t",
+        event: {
+          type: "item_completed",
+          item: {
+            id: "new",
+            threadId: "t",
+            createdAt: "later",
+            type: "agent_message",
+            text: "after",
+          },
+        },
+      });
+      return {
+        processEpoch: "e1",
+        threadId: "t",
+        watermark: 0,
+        thread: { id: "t", archived: false },
+        entries: [],
+        nextCursor: null,
+      };
+    }
+    return response(request);
+  });
+  await s.transport.pair(host.id, "code");
+  await s.transport.snapshot(host.id, "w");
+  const events: any[] = [];
+  s.transport.subscribe(host.id, "w", (e) => events.push(e));
+  const result = await s.transport.read(host.id, "w", "t");
+  assert.equal(pageCount, 1);
+  assert.deepEqual(
+    result.map((item) => item.text),
+    ["before", "after"],
+  );
+  assert.deepEqual(
+    events.at(-1)?.items.t.map((item: any) => item.id),
+    ["old", "new"],
+  );
 });

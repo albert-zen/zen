@@ -4,7 +4,8 @@ import {
   type RemoteEventView,
   type RemoteItemView,
   type RemotePairResult,
-  type RemoteRecoverySnapshot,
+  type RemoteRecoveryEntry,
+  type RemoteRecoveryPage,
   type RemoteThreadSummary,
   type RemoteThreadView,
   type RemoteWorkspaceView,
@@ -69,6 +70,10 @@ export class RemoteHostTransport {
   private bound: string | null = null;
   private generation = 0;
   private recovering = false;
+  private recoveryGeneration = 0;
+  private recovered = false;
+  private eventBuffer: RemoteEventView[] = [];
+  private restartRecovery = false;
   constructor(
     private readonly hosts: () => Host[],
     private readonly deps: RemoteDependencies,
@@ -144,6 +149,10 @@ export class RemoteHostTransport {
   disconnect() {
     this.generation++;
     this.recovering = false;
+    this.recovered = false;
+    this.recoveryGeneration++;
+    this.eventBuffer = [];
+    this.restartRecovery = false;
     this.observer = null;
     this.activeThread = null;
     this.activeWorkspace = null;
@@ -225,6 +234,11 @@ export class RemoteHostTransport {
       this.disconnect();
       return;
     }
+    if (data.method === REMOTE_METHODS.reset) {
+      if (data.params?.threadId === this.activeThread)
+        this.invalidateRecovery();
+      return;
+    }
     if (data.method === REMOTE_METHODS.event) {
       this.event(data.params as RemoteEventView);
       return;
@@ -293,11 +307,30 @@ export class RemoteHostTransport {
       items: { [this.activeThread]: [...this.items.values()] },
     });
   }
+  private invalidateRecovery() {
+    this.recovered = false;
+    this.recoveryGeneration++;
+    this.eventBuffer = [];
+    if (this.recovering) this.restartRecovery = true;
+    else void this.recover().catch(() => {});
+  }
   private event(e: RemoteEventView) {
     if (!this.activeThread || e.threadId !== this.activeThread) return;
-    if (this.recovering) return;
-    if (e.processEpoch !== this.epoch || e.watermark !== this.watermark + 1) {
-      void this.recover().catch(() => {});
+    if (this.recovering) {
+      // The Host has its own bounded barrier. Never treat a partial page set as synced.
+      if (this.eventBuffer.length >= 2048) {
+        this.invalidateRecovery();
+        return;
+      }
+      this.eventBuffer.push(e);
+      return;
+    }
+    if (
+      !this.recovered ||
+      e.processEpoch !== this.epoch ||
+      e.watermark !== this.watermark + 1
+    ) {
+      this.invalidateRecovery();
       return;
     }
     this.watermark = e.watermark;
@@ -305,52 +338,128 @@ export class RemoteHostTransport {
       this.items.set(e.event.item.id, mapItem(e.event.item));
     if (e.event.type === "turn_started")
       this.turns.set(e.event.turnId, "inProgress");
+    if (e.event.type === "turn_completed")
+      this.turns.set(e.event.turnId, e.event.status);
+    const current = this.summaries.find((t) => t.threadId === e.threadId);
+    if (current && e.event.type === "turn_started") current.status = "active";
+    if (current && e.event.type === "turn_completed") current.status = "idle";
     this.notify();
   }
   private async recover() {
     if (!this.activeWorkspace || !this.activeThread || this.recovering) return;
     this.recovering = true;
+    this.recovered = false;
+    this.restartRecovery = false;
+    const generation = ++this.recoveryGeneration;
     const workspaceId = this.activeWorkspace,
       threadId = this.activeThread;
-    try {
-      const result = await this.request<RemoteRecoverySnapshot>(
-        REMOTE_METHODS.resume,
-        { workspaceId, threadId },
-      );
-      if (
-        this.activeWorkspace !== workspaceId ||
-        this.activeThread !== threadId
-      )
+    this.eventBuffer = [];
+    const items = new Map<string, ReturnType<typeof mapItem>>();
+    const turns = new Map<string, string>();
+    let fragment: { id: string; text: string } | null = null;
+    const append = (entry: RemoteRecoveryEntry) => {
+      if (entry.kind === "item") {
+        if (fragment) throw Error("Incomplete Host text fragment");
+        items.set(entry.item.id, mapItem(entry.item));
+        if (entry.turn) turns.set(entry.turn.id, entry.turn.status);
         return;
-      this.epoch = result.processEpoch;
-      this.watermark = result.watermark;
-      this.items = new Map(
-        result.thread.items.map((item) => [item.id, mapItem(item)]),
-      );
-      this.turns = new Map(
-        result.thread.turns.map((turn) => [turn.id, turn.status]),
-      );
-      for (const event of result.events)
+      }
+      if (fragment && fragment.id !== entry.item.id)
+        throw Error("Fragment changed item");
+      if (entry.offset !== (fragment?.text.length ?? 0))
+        throw Error("Non-contiguous Host text fragment");
+      fragment = {
+        id: entry.item.id,
+        text: (fragment?.text ?? "") + entry.text,
+      };
+      if (entry.complete) {
+        items.set(
+          entry.item.id,
+          mapItem({ ...entry.item, text: fragment.text }),
+        );
+        fragment = null;
+      }
+    };
+    try {
+      let page = await this.request<RemoteRecoveryPage>(REMOTE_METHODS.resume, {
+        workspaceId,
+        threadId,
+      });
+      const epoch = page.processEpoch,
+        watermark = page.watermark;
+      let previousCursor: string | null = null;
+      for (let count = 0; ; count++) {
         if (
-          event.processEpoch === this.epoch &&
-          event.watermark > this.watermark
+          generation !== this.recoveryGeneration ||
+          this.activeWorkspace !== workspaceId ||
+          this.activeThread !== threadId
         )
-          this.event(event);
+          return;
+        if (
+          page.threadId !== threadId ||
+          page.thread.id !== threadId ||
+          page.processEpoch !== epoch ||
+          page.watermark !== watermark ||
+          !Array.isArray(page.entries)
+        )
+          throw Error("Host recovery boundary changed");
+        for (const entry of page.entries) append(entry);
+        if (page.nextCursor === null) break;
+        if (
+          typeof page.nextCursor !== "string" ||
+          !page.nextCursor ||
+          page.nextCursor === previousCursor ||
+          count > 10000
+        )
+          throw Error("Invalid Host recovery cursor");
+        previousCursor = page.nextCursor;
+        page = await this.request<RemoteRecoveryPage>(
+          REMOTE_METHODS.resumePage,
+          { cursor: page.nextCursor },
+        );
+      }
+      if (fragment)
+        throw Error("Incomplete Host text fragment at terminal page");
+      if (generation !== this.recoveryGeneration) return;
+      this.epoch = epoch;
+      this.watermark = watermark;
+      this.items = items;
+      this.turns = turns;
+      this.recovered = true;
       this.notify();
     } catch (error) {
+      this.recovered = false;
       this.observer?.({ type: "offline" });
       throw error;
     } finally {
       this.recovering = false;
+      if (this.restartRecovery && this.activeThread === threadId)
+        void this.recover().catch(() => {});
+      else if (this.recovered) {
+        const pending = this.eventBuffer;
+        this.eventBuffer = [];
+        for (const event of pending) {
+          if (
+            event.watermark <= this.watermark &&
+            event.processEpoch === this.epoch
+          )
+            continue;
+          this.event(event);
+        }
+      }
     }
   }
   async read(_host: string, workspace: string, id: string) {
+    this.recoveryGeneration++;
     this.activeWorkspace = workspace;
     this.activeThread = id;
     this.items.clear();
     this.turns.clear();
     this.watermark = -1;
+    this.recovered = false;
     await this.recover();
+    if (!this.recovered)
+      throw Error("Thread recovery incomplete; do not send commands");
     return [...this.items.values()];
   }
   async command(
@@ -366,7 +475,11 @@ export class RemoteHostTransport {
       );
       return { accepted: !!thread.id };
     }
-    if (!payload.threadId || this.activeThread !== payload.threadId)
+    if (
+      !this.recovered ||
+      !payload.threadId ||
+      this.activeThread !== payload.threadId
+    )
       return {
         accepted: false,
         error: "Open a Thread and verify its current Turn first.",

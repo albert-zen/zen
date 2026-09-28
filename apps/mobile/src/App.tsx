@@ -201,6 +201,11 @@ export default function App() {
             {pairState && <Text style={styles.meta}>{pairState}</Text>}
           </>
         )}
+        {s.status === "offline" &&
+          s.host &&
+          button("Reconnect (read Host state)", () =>
+            session.selectHost(s.host!),
+          )}
         {s.error && <Text style={styles.error}>{s.error}</Text>}
         {storageError && <Text style={styles.error}>{storageError}</Text>}
         <Text style={styles.heading}>Workspace</Text>

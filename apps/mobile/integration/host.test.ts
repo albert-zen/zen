@@ -160,14 +160,15 @@ test("Android client transport pairs over trusted TLS, shares Host authority wit
             });
           });
         };
-        await rpc("zen/remote/hello", { version: 0, hostId: "isolated-test" });
+        await rpc("zen/remote/hello", { version: 1, hostId: "isolated-test" });
         const resumed = await rpc("zen/remote/resume", {
           workspaceId: "w",
           threadId: id,
         });
         assert.equal(
-          resumed.result.thread.items.filter(
-            (item: any) => item.type === "user_message",
+          resumed.result.entries.filter(
+            (entry: any) =>
+              entry.kind === "item" && entry.item.type === "user_message",
           ).length,
           1,
         );
