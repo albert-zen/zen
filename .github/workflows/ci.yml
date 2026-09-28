@@ -215,7 +215,7 @@ jobs:
         run: npm --workspace apps/zenx run smoke:providers
 
   android-mobile:
-    name: Android fixture tests and debug APK
+    name: Android TLS Host integration and debug APK
     runs-on: ubuntu-latest
     timeout-minutes: 35
     defaults:
@@ -249,6 +249,6 @@ jobs:
           path: apps/mobile/evidence/android-fixture-emulator.png
       - uses: actions/upload-artifact@v4
         with:
-          name: zenx-mobile-fixture-debug-apk
+          name: zenx-mobile-integration-debug-apk
           path: apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
