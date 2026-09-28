@@ -1,5 +1,9 @@
+import { execFile } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 export interface ProjectProjectionThread {
   id: string;
@@ -82,6 +86,10 @@ const lexicalProjectRealpath: ProjectRealpath = async (candidate) => candidate;
 export class ZenXProjectProjection {
   readonly #platform: NodeJS.Platform;
   readonly #realpath: ProjectRealpath;
+  readonly #gitIdentities = new Map<
+    string,
+    { until: number; result: Promise<string | null> }
+  >();
   #configuration: ProjectConfigurationSnapshot = Object.freeze({
     names: Object.freeze({}),
     revision: 0,
@@ -187,7 +195,26 @@ export class ZenXProjectProjection {
       defaultIndex === undefined
         ? null
         : (identities[defaultIndex]?.key ?? null);
+    // A bounded, per-instance TTL avoids spawning Git on every renderer refresh.
+    // Only the list projection uses repository identity: configuration and start
+    // authorization still compare exact canonical workspace paths.
+    // Prefer configured roots if the list is exceptionally large; remaining
+    // entries retain ordinary path grouping rather than blocking the UI.
+    const gitPaths = [
+      ...new Set(identities.map((identity) => identity.key)),
+    ].slice(0, 32);
+    const gitGroups = new Map<string, string | null>();
+    for (let index = 0; index < gitPaths.length; index += 8) {
+      const batch = gitPaths.slice(index, index + 8);
+      const resolved = await Promise.all(
+        batch.map((candidate) => this.#gitCommonDirectory(candidate)),
+      );
+      batch.forEach((candidate, offset) =>
+        gitGroups.set(candidate, resolved[offset] ?? null),
+      );
+    }
     const projects = new Map<string, ZenXProjectProjectionEntry>();
+    const primaryByGit = new Map<string, string>();
     for (const workspace of configuredWorkspaces) {
       if (projects.has(workspace.key)) continue;
       projects.set(workspace.key, {
@@ -200,6 +227,10 @@ export class ZenXProjectProjection {
         isDefault: workspace.key === defaultKey,
         threadIds: [],
       });
+      const git = gitGroups.get(workspace.key);
+      if (git !== undefined && git !== null && !primaryByGit.has(git)) {
+        primaryByGit.set(git, workspace.key);
+      }
     }
     const unavailableThreadIds: string[] = [];
     let availableThreadIndex = 0;
@@ -216,15 +247,24 @@ export class ZenXProjectProjection {
         unavailableThreadIds.push(thread.id);
         continue;
       }
-      const project = projects.get(identity.key) ?? {
-        key: identity.key,
+      const git = gitGroups.get(identity.key);
+      const ownerKey = projects.has(identity.key)
+        ? identity.key
+        : ((git === null || git === undefined
+            ? undefined
+            : primaryByGit.get(git)) ?? identity.key);
+      const project = projects.get(ownerKey) ?? {
+        key: ownerKey,
         workspace: identity.displayPath,
         configured: true,
-        isDefault: identity.key === defaultKey,
+        isDefault: ownerKey === defaultKey,
         threadIds: [],
       };
       project.threadIds.push(thread.id);
-      projects.set(identity.key, project);
+      projects.set(ownerKey, project);
+      if (git !== null && git !== undefined && !primaryByGit.has(git)) {
+        primaryByGit.set(git, ownerKey);
+      }
     }
     const lastUsedKey =
       lastUsedIndex === undefined
@@ -281,6 +321,52 @@ export class ZenXProjectProjection {
     values: readonly string[],
   ): Promise<ProjectPathSnapshot> {
     return await projectPathSnapshot(values, this.#platform, this.#realpath);
+  }
+
+  async #gitCommonDirectory(candidate: string): Promise<string | null> {
+    if (this.#platform !== process.platform) return null;
+    const now = Date.now();
+    const cached = this.#gitIdentities.get(candidate);
+    if (cached !== undefined && cached.until > now) return await cached.result;
+    if (this.#gitIdentities.size >= 256) this.#gitIdentities.clear();
+    const result = (async () => {
+      try {
+        // Git environment overrides can redirect -C to a different repository.
+        const env = Object.fromEntries(
+          Object.entries(process.env).filter(
+            ([key]) => !key.startsWith("GIT_"),
+          ),
+        );
+        const { stdout } = await execFileAsync(
+          "git",
+          [
+            "-C",
+            candidate,
+            "rev-parse",
+            "--is-inside-work-tree",
+            "--path-format=absolute",
+            "--git-common-dir",
+          ],
+          { env, timeout: 1200, maxBuffer: 4096, encoding: "utf8" },
+        );
+        const [inside, common, ...extra] = stdout.trim().split(/\r?\n/u);
+        if (
+          inside !== "true" ||
+          extra.length > 0 ||
+          !common ||
+          !path.isAbsolute(common)
+        )
+          return null;
+        const physical = await realpath(common);
+        return this.#platform === "win32"
+          ? physical.toLocaleLowerCase("en-US")
+          : physical;
+      } catch {
+        return null;
+      }
+    })();
+    this.#gitIdentities.set(candidate, { until: now + 10_000, result });
+    return await result;
   }
 }
 

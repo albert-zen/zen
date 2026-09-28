@@ -1448,6 +1448,7 @@ function ProjectRows({
                 pinned={pinnedThreadIds.has(thread.threadId)}
                 selected={thread.threadId === selectedThreadId}
                 thread={thread}
+                projectWorkspace={group.workspace}
                 watching={watchingThreadIds.has(thread.threadId)}
                 reorder={
                   threadReorder === undefined
@@ -1501,6 +1502,7 @@ interface ThreadRowReorderHandlers {
 
 function ThreadRow({
   thread,
+  projectWorkspace,
   selected,
   hasActiveTurn,
   onChangeThreadLifecycle,
@@ -1515,6 +1517,7 @@ function ThreadRow({
   reorder,
 }: {
   thread: NativeThreadSummary;
+  projectWorkspace?: string | null;
   selected: boolean;
   hasActiveTurn: boolean;
   onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
@@ -1601,9 +1604,23 @@ function ThreadRow({
     thread.status === "systemError" ? null : thread.currentMetadata.provider;
   const contents = (
     <>
-      {inbox ? (
-        <span className="thread-project">
-          <Icon name="folder" size={12} /> {threadProject(thread)}
+      {inbox ||
+      (projectWorkspace !== undefined &&
+        thread.status !== "systemError" &&
+        thread.currentMetadata.cwd &&
+        thread.currentMetadata.cwd !== projectWorkspace) ? (
+        <span
+          className="thread-project"
+          title={
+            thread.status === "systemError"
+              ? undefined
+              : (thread.currentMetadata.cwd ?? undefined)
+          }
+        >
+          <Icon name="folder" size={12} />
+          {inbox
+            ? threadProject(thread)
+            : `Directory · ${threadProject(thread)}`}
         </span>
       ) : null}
       <span className="thread-title">
@@ -1721,7 +1738,7 @@ function ThreadRow({
         </div>
       ) : (
         <button
-          title={`${threadTitle(thread)}${identity ? ` · ${identity.label}` : ""}`}
+          title={`${threadTitle(thread)}${identity ? ` · ${identity.label}` : ""}${thread.currentMetadata.cwd ? ` · Working directory: ${thread.currentMetadata.cwd}` : ""}`}
           className={`thread-row${selected ? " selected" : ""}${inbox ? " inbox" : ""}`}
           type="button"
           id={reorder?.controlId}

@@ -561,3 +561,89 @@ test("ZenX file presets supply both file scope and approval policy to Thread sta
     });
   }
 });
+
+test("real Git linked worktrees group under configured main without changing thread identity or cwd", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-project-git-"));
+  const main = path.join(root, "main");
+  const linked = path.join(root, "linked");
+  const clone = path.join(root, "clone");
+  const nested = path.join(linked, "nested");
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { stdio: "pipe" });
+  try {
+    await mkdir(main);
+    git("-C", main, "init", "-q");
+    git(
+      "-C",
+      main,
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "fixture",
+    );
+    git("-C", main, "worktree", "add", "-q", "-b", "linked", linked);
+    git("clone", "-q", main, clone);
+    await mkdir(nested);
+    git("-C", nested, "init", "-q");
+    const alias = path.join(root, "alias");
+    await symlink(linked, alias, "dir");
+    const projection = new ZenXProjectProjection();
+    await projection.updateConfiguration([main], main, main, { [main]: "Zen" });
+    const threads = [
+      { id: "main-id", cwd: main },
+      { id: "linked-id", cwd: linked },
+      { id: "alias-id", cwd: alias },
+      { id: "clone-id", cwd: clone },
+      { id: "nested-id", cwd: nested },
+      { id: "plain-id", cwd: root },
+    ];
+    const before = structuredClone(threads);
+    const snapshot = await projection.project(threads);
+    assert.deepEqual(
+      snapshot.projects.find((entry) => entry.workspace === main),
+      {
+        key: await projection.canonicalKey(main),
+        workspace: main,
+        name: "Zen",
+        configured: true,
+        isDefault: true,
+        threadIds: ["main-id", "linked-id", "alias-id"],
+      },
+    );
+    assert.equal(snapshot.projects.length, 4);
+    assert.deepEqual(threads, before);
+    assert.equal(snapshot.lastUsedWorkspace, main);
+    assert.equal(await projection.configuredWorkspace(linked), null);
+    const unconfigured = new ZenXProjectProjection();
+    await unconfigured.updateConfiguration([], null);
+    const discovered = await unconfigured.project(threads);
+    assert.deepEqual(
+      discovered.projects.find((entry) => entry.workspace === main)?.threadIds,
+      ["main-id", "linked-id", "alias-id"],
+    );
+    assert.equal(discovered.projects.length, 4);
+    await projection.updateConfiguration([main, linked], main);
+    const explicit = await projection.project(threads);
+    assert.deepEqual(
+      explicit.projects.find((entry) => entry.workspace === linked)?.threadIds,
+      ["linked-id", "alias-id"],
+    );
+    assert.deepEqual(
+      explicit.projects.find((entry) => entry.workspace === main)?.threadIds,
+      ["main-id"],
+    );
+    await rm(linked, { recursive: true, force: true });
+    const missing = await new ZenXProjectProjection().project([
+      { id: "deleted", cwd: linked },
+    ]);
+    assert.equal(missing.projects[0]?.workspace, linked);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
