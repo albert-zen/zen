@@ -46,3 +46,32 @@ and pin a new failure to its bottom once, without repeatedly resetting the
 user's scroll. Focus movement in the capture is programmatic in a hidden
 window and the rects demonstrate actual pixel reachability, **not** an
 active-window physical Tab-navigation or packaged Windows acceptance test.
+
+## Transcript-access delivery follow-up (after R2 and six-source Phase C)
+
+A six-source integration fixture exposed a delivery boundary that the single-PR
+R2 did not claim to solve: a bottom zone taking all 516px of ThreadView could
+cover the canonical transcript entirely, even while the scrollable controls
+were individually reachable. This was also reproducible with the isolated PR214
+production component at its prior head; it is **not** a claim that this PR
+introduced the original overlay behavior. The new CSS reserves a reading lane
+above only an overflowing bottom zone, and the message scroller's bottom
+padding ends before the zone starts. The existing internal zone scrolling,
+error identity, explicit Dismiss, queue, approval, and composer draft remain.
+
+These are hidden Electron 43.2 production-component + synthetic fixture images,
+not a user invoke repro, active-window Tab acceptance, or packaged/Windows
+capture. The prior RED images and failed early GREEN sampling attempts remain
+in the author's `compaction-error-ui/` work artifacts with exact geometries.
+
+- [360×560 dark, three short paragraphs](transcript-green-min-dark-short-crowded.png): all paragraphs fully readable above the expanded error card.
+- [360×560 dark, long message ending](transcript-green-min-dark-long-crowded.png): final paragraphs 30–32 are readable at a distinct scroll position.
+- [600×560 light, short paragraphs](transcript-green-mid-light-short-crowded.png): narrow-height theme contrast.
+- [1280×820 dark, short paragraphs](transcript-green-wide-dark-short-crowded.png): normal-width case.
+
+Probe `transcript-access-probe.cjs` in the work artifacts samples three distinct
+text paragraphs and uses their real rect, ThreadView clip, bottom-zone top,
+and `document.elementFromPoint` against the `.agent-copy` under each sampled
+text point. For long messages it separately scrolls the first two and last
+three paragraphs to readable positions. It does not assume a successful
+`focus()` alone proves visibility or expect the entire long message at once.
