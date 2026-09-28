@@ -346,7 +346,11 @@ export class RemoteHostTransport {
     this.notify();
   }
   private async recover() {
-    if (!this.activeWorkspace || !this.activeThread || this.recovering) return;
+    if (!this.activeWorkspace || !this.activeThread) return;
+    if (this.recovering) {
+      this.restartRecovery = true;
+      return;
+    }
     this.recovering = true;
     this.recovered = false;
     this.restartRecovery = false;

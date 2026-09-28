@@ -65,6 +65,8 @@ export function createSession(transport, publish) {
         if (event.type === "snapshot")
           emit({
             threads: event.threads,
+            status: "connected",
+            error: state.command === "uncertain" ? state.error : null,
             items: state.thread ? (event.items[state.thread] ?? []) : [],
           });
       });
@@ -101,6 +103,7 @@ export function createSession(transport, publish) {
         });
     },
     async command(kind, payload) {
+      if (state.command === "pending") return;
       if (!host || !workspace || state.status !== "connected") {
         emit({ error: "Not connected to a selected Host workspace." });
         return;
