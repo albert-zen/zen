@@ -239,6 +239,14 @@ jobs:
       - run: npm run prebuild -- --no-install
       - run: ./gradlew assembleDebug
         working-directory: apps/mobile/android
+      - name: Try preinstalled headless Android emulator screenshot (fixture only)
+        run: timeout 240 ./scripts/capture-installed-emulator.sh
+        continue-on-error: true
+      - uses: actions/upload-artifact@v4
+        if: hashFiles('apps/mobile/evidence/android-fixture-emulator.png') != ''
+        with:
+          name: zenx-mobile-android-fixture-screenshot
+          path: apps/mobile/evidence/android-fixture-emulator.png
       - uses: actions/upload-artifact@v4
         with:
           name: zenx-mobile-fixture-debug-apk

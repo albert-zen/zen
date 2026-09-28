@@ -23,3 +23,5 @@ apps/zenx/resources/.rtk-build-*/
 apps/mobile/node_modules/
 apps/mobile/android/
 apps/mobile/.expo/
+
+apps/mobile/evidence/
