@@ -233,6 +233,9 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run typecheck
+      - run: npm ci
+        working-directory: .
+      - run: npm run test:host
       - run: npm run prebuild -- --no-install
       - run: ./gradlew assembleDebug
         working-directory: apps/mobile/android

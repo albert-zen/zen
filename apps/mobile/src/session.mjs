@@ -26,6 +26,7 @@ export function createSession(transport, publish) {
     ++generation;
     unsubscribe();
     unsubscribe = () => {};
+    transport.disconnect?.();
     host = nextHost;
     workspace = nextWorkspace;
     emit({
