@@ -14,6 +14,18 @@ export interface RemoteWorkspaceView {
   id: string;
   label: string;
 }
+export interface RemotePairRequest {
+  hostId: string;
+  deviceId: string;
+  code: string;
+}
+export interface RemotePairResult {
+  hostId: string;
+  deviceId: string;
+  token: string;
+}
+export type RemoteTurnStatus =
+  "inProgress" | "completed" | "failed" | "interrupted";
 export interface RemoteSend {
   workspaceId: string;
   threadId: string;
@@ -38,7 +50,7 @@ export interface RemoteThreadView {
   name?: string;
   archived: boolean;
   items: RemoteItemView[];
-  turns: { id: string; status: string }[];
+  turns: { id: string; status: RemoteTurnStatus }[];
 }
 export interface RemoteThreadSummary {
   threadId: string;
