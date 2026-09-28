@@ -13,3 +13,14 @@ test("known browser and computer operations have readable labels without inventi
   assert.equal(toolPresentation("browser_unknown").category, "Tool");
   assert.equal(toolPresentation("run_code").category, "Code");
 });
+
+test("shell and other built-in tools do not fall back to a generic Tool label", () => {
+  assert.deepEqual(toolPresentation("shell"), {
+    category: "Shell",
+    icon: "terminal",
+    action: "Run command",
+  });
+  assert.equal(toolPresentation("zenx_shell").category, "Shell");
+  assert.equal(toolPresentation("wait").category, "Wait");
+  assert.equal(toolPresentation("view_image").category, "Image");
+});

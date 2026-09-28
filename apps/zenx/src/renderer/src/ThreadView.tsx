@@ -1,6 +1,6 @@
 import type { SkillEntry } from "../../../../cli/src/skills.js";
 import { parseSkillDraft, withSkillDraft } from "./skill-draft.js";
-import { toolPresentation } from "./tool-presentation.js";
+import { commandStatus, toolPresentation } from "./tool-presentation.js";
 import { isCompactCommand } from "./compact-command.js";
 import { createPortal } from "react-dom";
 import {
@@ -1515,9 +1515,7 @@ function StatusMark({ item }: { item: ThreadItem }) {
     return null;
   }
   if (item.type !== "commandExecution") return null;
-  return item.status === "inProgress" ? (
-    <span className="mini-spinner" aria-label="Running" />
-  ) : (
+  return (
     <small className={`tool-status ${item.status}`}>
       {commandStatus(item)}
     </small>
@@ -1883,7 +1881,11 @@ function ApprovalBar({
 function traceItemLabel(item: ThreadItem): string {
   if (item.type === "reasoning") {
     const summary = item.summary.join("\n").trim();
-    return summary.length > 0 ? summary : "Reasoning details";
+    return summary.length > 0
+      ? summary
+      : reasoningContentText(item).trim().length > 0
+        ? "Reasoning"
+        : "Reasoning details";
   }
   return item.type === "commandExecution"
     ? item.toolName === "run_code" &&
@@ -1940,36 +1942,6 @@ function formatDuration(milliseconds: number): string {
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${seconds % 60}s`;
-}
-
-function commandStatus(
-  item: Extract<ThreadItem, { type: "commandExecution" }>,
-): string {
-  const data = item.structuredContent;
-  if (
-    item.contentType === "application/vnd.zen.tool-task+json" &&
-    typeof data === "object" &&
-    data !== null &&
-    !Array.isArray(data) &&
-    "status" in data
-  ) {
-    if (data.status === "queued") return "Queued";
-    if (data.status === "running")
-      return item.toolName === "wait" ? "Waiting" : "Started";
-    if (data.status === "cancel_requested") return "Cancelling";
-    if (data.status === "cancellation_unconfirmed")
-      return "Cancellation unconfirmed";
-    if (data.status === "failed") return "Failed";
-    if (data.status === "completed") return "Done";
-    if (data.status === "timed_out") return "Timed out";
-    if (data.status === "cancelled") return "Cancelled";
-  }
-  return {
-    inProgress: "Running",
-    completed: "Done",
-    failed: "Failed",
-    declined: "Declined",
-  }[item.status];
 }
 
 function describeError(error: unknown): string {

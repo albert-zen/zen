@@ -1,4 +1,5 @@
 import type { ThreadItem, Turn } from "../../protocol-client/index.js";
+import { commandStatus } from "./tool-presentation.js";
 
 export type TurnDisplayNode =
   | {
@@ -198,6 +199,26 @@ export function traceSummary(
   );
   const reasoning = items.length - commands.length;
   if (commands.length === 0) return "Reasoned through the next step";
+  const stages = commands.map((item) => {
+    const status = commandStatus(item);
+    return status === "Done" ? "Used" : status;
+  });
+  if (stages.some((value) => value !== "Used")) {
+    const groups = [...new Set(stages)];
+    return [
+      ...(reasoning > 0 ? ["Reasoning"] : []),
+      ...groups.map(
+        (value) =>
+          `${value} ${[
+            ...new Set(
+              commands
+                .filter((_, index) => stages[index] === value)
+                .map((item) => commandLabel(item.toolName ?? item.command)),
+            ),
+          ].join(", ")}`,
+      ),
+    ].join(" · ");
+  }
   const names = commands.map((item) => commandLabel(item.command));
   const unique = [...new Set(names)];
   const action = unique.length === 1 ? unique[0] : `${unique.length} tools`;

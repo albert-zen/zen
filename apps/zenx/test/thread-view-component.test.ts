@@ -1152,7 +1152,7 @@ test("public reasoning without a summary keeps a neutral expandable label", asyn
     );
     assert.equal(
       requiredWithin(toggle, ":scope > span").textContent,
-      "Reasoning details",
+      "Reasoning",
     );
 
     await act(async () => toggle.click());
@@ -1723,7 +1723,42 @@ test("keyboard modifiers and send button honor all running send modes", async ()
   });
 });
 
-test("yielded shell work is labelled Started or Waiting rather than Done", async () => {
+test("shell headings and pending calls do not claim that a started call is running", async () => {
+  await withDom(async (root) => {
+    const base = commandItem("shell-start", "sleep 10");
+    assert.equal(base.type, "commandExecution");
+    if (base.type !== "commandExecution") return;
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        {
+          ...base,
+          toolName: "shell",
+          status: "inProgress",
+          toolArguments: { command: "sleep 10" },
+        },
+      ]),
+    );
+    assert.match(
+      requiredElement(".trace-item-toggle").textContent ?? "",
+      /Shell/,
+    );
+    assert.equal(requiredElement(".tool-status").textContent, "Started");
+    assert.equal(document.querySelector(".trace-item .mini-spinner"), null);
+  });
+});
+
+test("public reasoning content without a summary has an honest heading", () => {
+  const html = renderTurns([
+    turnWithItems("inProgress", [
+      reasoningItem("public-reason", [], ["Visible thought"]),
+    ]),
+  ]);
+  assert.match(html, /Think[\s\S]*Reasoning/u);
+  assert.doesNotMatch(html, /Reasoning details/u);
+});
+
+test("yielded shell work reports the actual task receipt phase", async () => {
   await withDom(async (root) => {
     const base = commandItem("shell-start", "npm run dev");
     assert.equal(base.type, "commandExecution");
@@ -1745,7 +1780,7 @@ test("yielded shell work is labelled Started or Waiting rather than Done", async
     );
     assert.equal(
       document.querySelector(".tool-status")?.textContent,
-      "Started",
+      "Running",
     );
     await renderInteractive(
       root,
@@ -1778,6 +1813,48 @@ test("yielded shell work is labelled Started or Waiting rather than Done", async
   });
 });
 
+test("folded task group and expanded wait row use the same receipt phase", async () => {
+  await withDom(async (root) => {
+    const base = commandItem("wait-item", "wait");
+    if (base.type !== "commandExecution") throw new Error("missing command");
+    const wait = {
+      ...base,
+      toolName: "wait",
+      contentType: "application/vnd.zen.tool-task+json",
+      structuredContent: { status: "running" },
+    };
+    const reasoning = reasoningItem("reason-wait", [], ["Waiting for task"]);
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [reasoning, wait]),
+    );
+    const group = requiredButton(".trace-toggle");
+    assert.equal(group.getAttribute("aria-expanded"), "false");
+    assert.match(group.textContent ?? "", /Reasoning · Waiting wait/u);
+    await act(async () => group.click());
+    assert.equal(group.getAttribute("aria-expanded"), "true");
+    assert.equal(
+      requiredElement(".trace-items .tool-status").textContent,
+      "Waiting",
+    );
+
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        reasoning,
+        { ...wait, structuredContent: { status: "timed_out" } },
+      ]),
+    );
+    assert.match(group.textContent ?? "", /Reasoning · Timed out wait/u);
+    assert.equal(
+      requiredElement(".trace-items .tool-status").textContent,
+      "Timed out",
+    );
+    await act(async () => group.click());
+    assert.equal(group.getAttribute("aria-expanded"), "false");
+  });
+});
+
 test("generic tool task observations distinguish waiting and unconfirmed cancellation", async () => {
   await withDom(async (root) => {
     const base = commandItem("image-task", "generate image");
@@ -1785,7 +1862,7 @@ test("generic tool task observations distinguish waiting and unconfirmed cancell
     const cases = [
       ["browser_click", "queued", "Queued"],
       ["wait", "queued", "Queued"],
-      ["image_generate", "running", "Started"],
+      ["image_generate", "running", "Running"],
       ["wait", "running", "Waiting"],
       ["wait", "cancel_requested", "Cancelling"],
       ["wait", "cancellation_unconfirmed", "Cancellation unconfirmed"],
