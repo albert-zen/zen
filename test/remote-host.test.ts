@@ -332,3 +332,40 @@ test("resume over a deliberately secret-bearing trusted snapshot returns only pu
     await f.close();
   }
 });
+
+test("a local permission change racing remote send is rejected inside Host turn admission", async () => {
+  const f = await fixture();
+  try {
+    const token = (
+      await f.remote.pair({
+        hostId: "desktop-a",
+        deviceId: "phone",
+        code: f.remote.createPairingCode(),
+      })
+    ).token;
+    const created = await f.remote.create("phone", token, "a");
+    const original = f.host.startTurn.bind(f.host);
+    f.host.startTurn = async (id, input, options) => {
+      await f.host.setThreadPermissions(id, "danger-full-access");
+      return await original(id, input, options);
+    };
+    await errorCode(
+      () =>
+        f.remote.send("phone", token, {
+          workspaceId: "a",
+          threadId: created.id,
+          clientId: "racing",
+          text: "do not execute",
+        }),
+      "operation_forbidden",
+    );
+    assert.equal(
+      (await f.host.readThread(created.id)).items.filter(
+        (item) => item.type === "user_message",
+      ).length,
+      0,
+    );
+  } finally {
+    await f.close();
+  }
+});
