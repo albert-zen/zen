@@ -176,6 +176,8 @@ test("context ring opens an accessible popover before its compact action runs", 
 
     const ring = requiredButton(".context-usage-trigger");
     assert.equal(ring.getAttribute("aria-expanded"), "false");
+    ring.focus();
+    assert.equal(document.activeElement, ring);
     await act(async () => ring.click());
     assert.equal(compactCalls, 0);
     assert.equal(ring.getAttribute("aria-expanded"), "true");
@@ -360,12 +362,12 @@ test("composer textarea grows to its cap, scrolls, and shrinks after deletion", 
 
     await act(async () => root.render(props("long draft")));
     const textarea = requiredElement<HTMLTextAreaElement>("#thread-composer");
-    assert.equal(textarea.style.height, "150px");
+    assert.equal(textarea.style.height, "136px");
     assert.equal(textarea.style.overflowY, "auto");
 
     contentHeight = 42;
     await act(async () => root.render(props("")));
-    assert.equal(textarea.style.height, "68px");
+    assert.equal(textarea.style.height, "54px");
     assert.equal(textarea.style.overflowY, "hidden");
   });
 });
@@ -384,7 +386,8 @@ test("composer respects the viewport cap and remeasures on resize", async () => 
     const computedStyle = window.getComputedStyle;
     window.getComputedStyle = (() =>
       ({
-        maxHeight: `${Math.max(68, Math.min(150, window.innerHeight * 0.35))}px`,
+        minHeight: "54px",
+        maxHeight: `${Math.max(54, Math.min(136, window.innerHeight * 0.35 - 14))}px`,
       }) as unknown as CSSStyleDeclaration) as typeof window.getComputedStyle;
     try {
       const props = createElement(ThreadView, {
@@ -398,7 +401,7 @@ test("composer respects the viewport cap and remeasures on resize", async () => 
       });
       await act(async () => root.render(props));
       const textarea = requiredElement<HTMLTextAreaElement>("#thread-composer");
-      assert.equal(textarea.style.height, "70px");
+      assert.equal(textarea.style.height, "56px");
       assert.equal(textarea.style.overflowY, "auto");
 
       Object.defineProperty(window, "innerHeight", {
@@ -406,7 +409,7 @@ test("composer respects the viewport cap and remeasures on resize", async () => 
         value: 168,
       });
       await act(async () => window.dispatchEvent(new window.Event("resize")));
-      assert.equal(textarea.style.height, "68px");
+      assert.equal(textarea.style.height, "54px");
       assert.equal(textarea.style.overflowY, "auto");
 
       Object.defineProperty(window, "innerHeight", {
@@ -414,7 +417,7 @@ test("composer respects the viewport cap and remeasures on resize", async () => 
         value: 600,
       });
       await act(async () => window.dispatchEvent(new window.Event("resize")));
-      assert.equal(textarea.style.height, "150px");
+      assert.equal(textarea.style.height, "136px");
       assert.equal(textarea.style.overflowY, "auto");
     } finally {
       window.getComputedStyle = computedStyle;
