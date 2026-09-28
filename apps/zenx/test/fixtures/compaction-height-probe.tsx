@@ -19,6 +19,17 @@ document.documentElement.dataset.appearance = theme;
 document.documentElement.dataset.platform = "darwin";
 const crowded = params.get("crowded") === "1";
 const queueOnly = params.get("queueOnly") === "1";
+const reading = params.get("reading") ?? "original";
+const syntheticAnswer =
+  reading === "short"
+    ? "Short first paragraph.\n\nShort second paragraph.\n\nShort final paragraph."
+    : reading === "long"
+      ? Array.from(
+          { length: 32 },
+          (_, i) =>
+            `Long paragraph ${i + 1}: synthetic text for transcript access.`,
+        ).join("\n\n")
+      : "This is fixture content, not a user conversation.";
 const thread: Thread = {
   id: "synthetic-thread",
   sessionId: "synthetic-thread",
@@ -71,7 +82,7 @@ const thread: Thread = {
         {
           type: "agentMessage",
           id: "synthetic-answer",
-          text: "This is fixture content, not a user conversation.",
+          text: syntheticAnswer,
           phase: "final_answer",
           memoryCitation: null,
         },
@@ -91,7 +102,7 @@ const thread: Thread = {
             itemsView: "full" as const,
             status: "inProgress" as const,
             error: null,
-            startedAt: 2,
+            startedAt: Math.floor(Date.now() / 1000) - 10,
             completedAt: null,
             durationMs: null,
           },

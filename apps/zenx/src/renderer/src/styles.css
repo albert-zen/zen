@@ -1492,7 +1492,7 @@ a:focus-visible {
       var(--conversation-gutter),
       calc((100% - var(--conversation-width)) / 2)
     )
-    calc(38px + var(--bottom-zone-height, 0px));
+    max(38px, calc(var(--bottom-zone-height, 0px) - 6px));
 }
 .messages-inner {
   width: 100%;
@@ -2067,7 +2067,10 @@ a:focus-visible {
   left: 0;
   z-index: 4;
   min-width: 0;
-  max-height: 100%;
+  /* Leave a real reading lane above the overlay even when approvals, queued
+     input and a long Composer draft all coexist. Normal uncluttered layouts
+     remain content-sized; only an overflowing zone is capped. */
+  max-height: calc(100% - clamp(168px, 28%, 240px));
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 0
@@ -5229,7 +5232,7 @@ a:focus-visible {
   }
   .messages {
     padding: 20px var(--conversation-gutter)
-      calc(28px + var(--bottom-zone-height, 0px));
+      max(28px, calc(var(--bottom-zone-height, 0px) - 6px));
   }
   .messages-inner {
     gap: 20px;
