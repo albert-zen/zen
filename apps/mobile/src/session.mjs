@@ -101,14 +101,19 @@ export function createSession(transport, publish) {
           });
       });
     } catch (e) {
-      if (current(epoch, h, w))
+      if (current(epoch, h, w)) {
+        ++generation;
+        ++readIdentity;
         emit({
           status: "offline",
           items: [],
           turns: [],
           threads: [],
+          lastRequest: null,
+          command: state.command === "uncertain" ? "uncertain" : null,
           error: String(e),
         });
+      }
     }
   }
   return {
@@ -205,9 +210,12 @@ export function createSession(transport, publish) {
         if (visible())
           emit({
             command: record.status,
-            lastRequest: result.accepted
-              ? { kind, turnId: result.turnId ?? null }
-              : null,
+            lastRequest:
+              result.accepted &&
+              result.turnId &&
+              (kind === "send" || kind === "stop")
+                ? { kind, turnId: result.turnId ?? null }
+                : null,
             error: result.accepted
               ? null
               : (result.error ?? "Host rejected command."),

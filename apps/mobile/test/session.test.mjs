@@ -425,3 +425,46 @@ test("A late admission cannot refresh or re-subscribe B workspace view", async (
   assert.equal(s.get().thread, "b");
   assert.equal(s.get().lastRequest, null);
 });
+test("create admission has no Turn ID or invented terminal outcome", async () => {
+  const tr = {
+    snapshot: async () => ({ workspaces: [], threads: [] }),
+    subscribe: () => () => {},
+    read: async () => [],
+    command: async () => ({ accepted: true }),
+  };
+  const s = createSession(tr, () => {});
+  s.selectHost("h");
+  await tick();
+  s.selectWorkspace("w");
+  await tick();
+  s.openThread("a");
+  await tick();
+  await s.command("create", {});
+  assert.equal(s.get().command, "accepted");
+  assert.equal(s.get().lastRequest, null);
+  assert.deepEqual(s.get().turns, []);
+});
+test("failed post-admission refresh clears public Turn projection and request ID", async () => {
+  let snapshots = 0;
+  const tr = {
+    snapshot: async () => {
+      if (++snapshots === 3) throw Error("scope lost");
+      return { workspaces: [], threads: [] };
+    },
+    subscribe: () => () => {},
+    read: async () => [{ id: "old", text: "body" }],
+    command: async () => ({ accepted: true, turnId: "turn-old" }),
+  };
+  const s = createSession(tr, () => {});
+  s.selectHost("h");
+  await tick();
+  s.selectWorkspace("w");
+  await tick();
+  s.openThread("a");
+  await tick();
+  await s.command("send", { threadId: "a", text: "body" });
+  assert.equal(s.get().status, "offline");
+  assert.deepEqual(s.get().items, []);
+  assert.deepEqual(s.get().turns, []);
+  assert.equal(s.get().lastRequest, null);
+});
