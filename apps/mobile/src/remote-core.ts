@@ -20,6 +20,7 @@ type Credential = {
 };
 type Notification =
   | { type: "offline" }
+  | { type: "resync" }
   | {
       type: "snapshot";
       threads: { id: string; title: string; status: string }[];
@@ -83,6 +84,7 @@ export class RemoteHostTransport {
   private recovered = false;
   private eventBuffer: RemoteEventView[] = [];
   private restartRecovery = false;
+  private staleCursorRetries = 0;
   constructor(
     private readonly hosts: () => Host[],
     private readonly deps: RemoteDependencies,
@@ -162,6 +164,7 @@ export class RemoteHostTransport {
     this.recoveryGeneration++;
     this.eventBuffer = [];
     this.restartRecovery = false;
+    this.staleCursorRetries = 0;
     this.observer = null;
     this.activeThread = null;
     this.activeWorkspace = null;
@@ -321,6 +324,10 @@ export class RemoteHostTransport {
     this.recovered = false;
     this.recoveryGeneration++;
     this.eventBuffer = [];
+    this.items.clear();
+    this.turns.clear();
+    this.watermark = -1;
+    this.observer?.({ type: "resync" });
     if (this.recovering) this.restartRecovery = true;
     else void this.recover().catch(() => {});
   }
@@ -440,14 +447,25 @@ export class RemoteHostTransport {
       this.items = items;
       this.turns = turns;
       this.recovered = true;
+      this.staleCursorRetries = 0;
       this.notify();
     } catch (error) {
-      this.recovered = false;
-      this.observer?.({ type: "offline" });
+      if (
+        error instanceof RemoteRejectedError &&
+        (error.code === "stale_cursor" || error.code === "resync_required") &&
+        generation === this.recoveryGeneration &&
+        this.staleCursorRetries < 1
+      ) {
+        this.staleCursorRetries++;
+        this.invalidateRecovery();
+      } else {
+        this.recovered = false;
+        this.observer?.({ type: "offline" });
+      }
       throw error;
     } finally {
       this.recovering = false;
-      if (this.restartRecovery && this.activeThread === threadId)
+      if (this.restartRecovery && this.activeThread && this.activeWorkspace)
         void this.recover().catch(() => {});
       else if (this.recovered) {
         const pending = this.eventBuffer;
@@ -465,6 +483,7 @@ export class RemoteHostTransport {
   }
   async read(_host: string, workspace: string, id: string) {
     this.recoveryGeneration++;
+    this.staleCursorRetries = 0;
     this.activeWorkspace = workspace;
     this.activeThread = id;
     this.items.clear();

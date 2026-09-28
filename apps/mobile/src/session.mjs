@@ -62,6 +62,14 @@ export function createSession(transport, publish) {
             error:
               "Disconnected. Unconfirmed commands may have been received; check Host before retrying.",
           });
+        if (event.type === "resync")
+          emit({
+            status: "offline",
+            items: [],
+            command: state.command === "uncertain" ? "uncertain" : null,
+            error:
+              "Host invalidated this Thread view. Wait for a fresh resume or reconnect and read Host state; do not resend uncertain commands.",
+          });
         if (event.type === "snapshot")
           emit({
             threads: event.threads,

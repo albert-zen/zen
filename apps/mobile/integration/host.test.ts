@@ -52,10 +52,12 @@ test("Android client transport pairs over trusted TLS, shares Host authority wit
       journal: new InMemoryThreadJournal(),
       approvalPolicy: "never",
     });
+    let workspaceAllowed = true;
     const access = new RemoteHostAccess({
       appServer: host,
       hostId: "isolated-test",
-      workspaces: () => [{ id: "w", cwd: dir, label: "Isolated" }],
+      workspaces: () =>
+        workspaceAllowed ? [{ id: "w", cwd: dir, label: "Isolated" }] : [],
     });
     const server = await serveRemoteHost({
       enabled: true,
@@ -193,6 +195,53 @@ test("Android client transport pairs over trusted TLS, shares Host authority wit
           (item) => item.type === "user_message",
         ).length,
         0,
+      );
+      // Real TLS Host v1: losing a dynamic workspace invalidates the live view,
+      // no public user body is delivered; a fresh resume is required after regrant.
+      const projected: any[] = [];
+      mobile.subscribe("isolated-test", "w", (event) => projected.push(event));
+      await mobile.read("isolated-test", "w", id);
+      workspaceAllowed = false;
+      await (
+        await host.startTurn(id, "private-during-scope-loss")
+      ).done;
+      const deadline = Date.now() + 3000;
+      while (!projected.some((event) => event.type === "resync")) {
+        if (Date.now() > deadline)
+          throw Error("Host did not invalidate lost-scope live subscription");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.ok(
+        !projected.some(
+          (event) =>
+            event.type === "snapshot" &&
+            Object.values(event.items)
+              .flat()
+              .some((item: any) =>
+                item.text?.includes("private-during-scope-loss"),
+              ),
+        ),
+      );
+      assert.deepEqual(
+        await mobile.command("isolated-test", "w", "send", {
+          threadId: id,
+          text: "must not send while invalidated",
+        }),
+        {
+          accepted: false,
+          error: "Open a Thread and verify its current Turn first.",
+        },
+      );
+      while (!projected.some((event) => event.type === "offline")) {
+        if (Date.now() > deadline)
+          throw Error("Lost-scope fresh resume did not report denial");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      workspaceAllowed = true;
+      assert.ok(
+        (await mobile.read("isolated-test", "w", id)).some(
+          (item) => item.text === "private-during-scope-loss",
+        ),
       );
       access.revoke(JSON.parse([...secrets.values()][0]!).deviceId);
       await assert.rejects(

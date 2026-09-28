@@ -397,3 +397,271 @@ test("live event arriving between recovery pages is replayed once after terminal
     ["old", "new"],
   );
 });
+
+test("stale page cursor discards partial text and issues one fresh v1 resume", async () => {
+  let attempts = 0;
+  const s = setup((request, socket) => {
+    if (request.method === REMOTE_METHODS.resume) {
+      attempts++;
+      return {
+        processEpoch: "e1",
+        threadId: "t",
+        watermark: attempts,
+        thread: { id: "t", archived: false },
+        entries: [
+          {
+            kind: "item",
+            item: {
+              id: attempts === 1 ? "partial" : "fresh",
+              threadId: "t",
+              createdAt: "now",
+              type: "agent_message",
+              text: attempts === 1 ? "discard" : "authoritative",
+            },
+          },
+        ],
+        nextCursor: attempts === 1 ? "lost" : null,
+      };
+    }
+    if (request.method === REMOTE_METHODS.resumePage) {
+      socket.onmessage?.({
+        data: JSON.stringify({
+          id: request.id,
+          error: { message: "stale cursor", data: { code: "stale_cursor" } },
+        }),
+      });
+      return undefined;
+    }
+    return response(request);
+  });
+  await s.transport.pair(host.id, "code");
+  await s.transport.snapshot(host.id, "w");
+  const events: any[] = [];
+  s.transport.subscribe(host.id, "w", (event) => events.push(event));
+  await assert.rejects(s.transport.read(host.id, "w", "t"), /stale_cursor/);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(attempts, 2);
+  assert.deepEqual(
+    events.at(-1)?.items.t.map((item: any) => item.text),
+    ["authoritative"],
+  );
+  assert.equal(
+    s
+      .socket()
+      .requests.filter((request) => request.method === REMOTE_METHODS.resume)
+      .length,
+    2,
+  );
+});
+
+test("scope reset while paging never exposes partial page; regrant requires new resume", async () => {
+  let granted = true,
+    resumes = 0;
+  const s = setup((request, socket) => {
+    if (request.method === REMOTE_METHODS.resume) {
+      resumes++;
+      if (!granted) {
+        socket.onmessage?.({
+          data: JSON.stringify({
+            id: request.id,
+            error: {
+              message: "workspace revoked",
+              data: { code: "wrong_workspace" },
+            },
+          }),
+        });
+        return undefined;
+      }
+      return {
+        processEpoch: "e1",
+        threadId: "t",
+        watermark: 0,
+        thread: { id: "t", archived: false },
+        entries: [
+          {
+            kind: "item",
+            item: {
+              id: "visible",
+              threadId: "t",
+              createdAt: "now",
+              type: "agent_message",
+              text: "permitted",
+            },
+          },
+        ],
+        nextCursor: resumes === 1 ? "pending" : null,
+      };
+    }
+    if (request.method === REMOTE_METHODS.resumePage) {
+      granted = false;
+      socket.onmessage?.({
+        data: JSON.stringify({
+          method: REMOTE_METHODS.reset,
+          params: { threadId: "t", reason: "resync_required" },
+        }),
+      });
+      socket.onmessage?.({
+        data: JSON.stringify({
+          id: request.id,
+          error: {
+            message: "cursor invalidated",
+            data: { code: "stale_cursor" },
+          },
+        }),
+      });
+      return undefined;
+    }
+    return response(request);
+  });
+  await s.transport.pair(host.id, "code");
+  await s.transport.snapshot(host.id, "w");
+  const events: any[] = [];
+  s.transport.subscribe(host.id, "w", (event) => events.push(event));
+  await assert.rejects(s.transport.read(host.id, "w", "t"), /stale_cursor/);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(events.some((e) => e.type === "resync"));
+  assert.ok(
+    !events.some(
+      (e) =>
+        e.type === "snapshot" &&
+        e.items.t?.some((item: any) => item.text === "permitted"),
+    ),
+  );
+  assert.deepEqual(
+    await s.transport.command(host.id, "w", "send", {
+      threadId: "t",
+      text: "forbidden",
+    }),
+    {
+      accepted: false,
+      error: "Open a Thread and verify its current Turn first.",
+    },
+  );
+  granted = true;
+  assert.equal(
+    (await s.transport.read(host.id, "w", "t"))[0]?.text,
+    "permitted",
+  );
+  assert.equal(resumes, 3);
+});
+
+test("old in-flight page and old subscription callback cannot overwrite newer Thread resume", async () => {
+  let oldPageId: number | null = null;
+  const s = setup((request) => {
+    if (request.method === REMOTE_METHODS.resume) {
+      const threadId = request.params.threadId;
+      return {
+        processEpoch: "e1",
+        threadId,
+        watermark: 0,
+        thread: { id: threadId, archived: false },
+        entries: [
+          {
+            kind: "item",
+            item: {
+              id: threadId + "-item",
+              threadId,
+              createdAt: "now",
+              type: "agent_message",
+              text: threadId,
+            },
+          },
+        ],
+        nextCursor: threadId === "t" ? "old" : null,
+      };
+    }
+    if (request.method === REMOTE_METHODS.resumePage) {
+      oldPageId = request.id;
+      return undefined;
+    }
+    return response(request);
+  });
+  await s.transport.pair(host.id, "code");
+  await s.transport.snapshot(host.id, "w");
+  const events: any[] = [];
+  s.transport.subscribe(host.id, "w", (event) => events.push(event));
+  const oldRead = s.transport.read(host.id, "w", "t");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(oldPageId !== null);
+  await assert.rejects(s.transport.read(host.id, "w", "t2"), /incomplete/);
+  s.socket().onmessage?.({
+    data: JSON.stringify({
+      id: oldPageId,
+      error: { message: "old cursor", data: { code: "stale_cursor" } },
+    }),
+  });
+  await oldRead.catch(() => {});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(events.at(-1)?.items.t2[0]?.text, "t2");
+  s.socket().onmessage?.({
+    data: JSON.stringify({
+      method: REMOTE_METHODS.reset,
+      params: { threadId: "t", reason: "resync_required" },
+    }),
+  });
+  s.socket().notify({
+    processEpoch: "e1",
+    watermark: 1,
+    threadId: "t",
+    event: {
+      type: "item_completed",
+      item: {
+        id: "old",
+        threadId: "t",
+        createdAt: "now",
+        type: "agent_message",
+        text: "old",
+      },
+    },
+  });
+  assert.equal(events.at(-1)?.items.t2[0]?.text, "t2");
+  assert.equal(
+    s
+      .socket()
+      .requests.filter((request) => request.method === REMOTE_METHODS.resume)
+      .length,
+    2,
+  );
+});
+
+test("repeated stale cursor retry is bounded, never marked synchronized", async () => {
+  let resumes = 0;
+  const s = setup((request, socket) => {
+    if (request.method === REMOTE_METHODS.resume) {
+      resumes++;
+      return {
+        processEpoch: "e1",
+        threadId: "t",
+        watermark: 0,
+        thread: { id: "t", archived: false },
+        entries: [],
+        nextCursor: `lost-${resumes}`,
+      };
+    }
+    if (request.method === REMOTE_METHODS.resumePage) {
+      socket.onmessage?.({
+        data: JSON.stringify({
+          id: request.id,
+          error: { message: "stale", data: { code: "stale_cursor" } },
+        }),
+      });
+      return undefined;
+    }
+    return response(request);
+  });
+  await s.transport.pair(host.id, "code");
+  await s.transport.snapshot(host.id, "w");
+  await assert.rejects(s.transport.read(host.id, "w", "t"), /stale_cursor/);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(resumes, 2);
+  assert.deepEqual(
+    await s.transport.command(host.id, "w", "send", {
+      threadId: "t",
+      text: "must not send",
+    }),
+    {
+      accepted: false,
+      error: "Open a Thread and verify its current Turn first.",
+    },
+  );
+});

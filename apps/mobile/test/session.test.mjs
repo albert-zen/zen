@@ -65,6 +65,12 @@ test("uncertain delivery never becomes accepted or auto-retried", async () => {
   assert.equal(session.get().command, "uncertain");
   assert.match(session.get().error, /Do not retry/);
   assert.equal(calls, 1);
+  await session.command("send", { text: "hello" });
+  assert.equal(
+    calls,
+    1,
+    "uncertain delivery cannot get a second clientId by a second tap",
+  );
 });
 test("late command acknowledgement cannot cross host boundary", async () => {
   const pending = deferred();
@@ -136,4 +142,37 @@ test("explicit Host rejection is distinct from unknown network delivery", async 
   await session.command("send", { text: "x" });
   assert.equal(session.get().command, null);
   assert.match(session.get().error, /operation_forbidden/);
+});
+test("Host reset clears visible Thread and never turns unknown send into a confirmed retry", async () => {
+  let observer;
+  let calls = 0;
+  const transport = {
+    snapshot: async () => ({
+      workspaces: [{ id: "w" }],
+      threads: [{ id: "t" }],
+    }),
+    subscribe: (_h, _w, cb) => {
+      observer = cb;
+      return () => {};
+    },
+    read: async () => [{ id: "old", text: "old" }],
+    command: async () => {
+      calls++;
+      throw Error("socket died");
+    },
+  };
+  const session = createSession(transport, () => {});
+  session.selectHost("a");
+  await tick();
+  session.selectWorkspace("w");
+  await tick();
+  session.openThread("t");
+  await tick();
+  assert.equal(session.get().items[0].text, "old");
+  await session.command("send", { threadId: "t", text: "hello" });
+  observer({ type: "resync" });
+  assert.deepEqual(session.get().items, []);
+  assert.equal(session.get().command, "uncertain");
+  await session.command("send", { threadId: "t", text: "hello" });
+  assert.equal(calls, 1);
 });
