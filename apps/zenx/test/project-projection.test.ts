@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, unlink } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -647,3 +656,122 @@ test("real Git linked worktrees group under configured main without changing thr
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test(
+  "32 slow Git paths return a path projection within one budget and concurrent lists share a bounded probe",
+  { skip: process.platform === "win32" },
+  async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "zen-project-slow-git-"));
+    const bin = path.join(root, "bin");
+    const log = path.join(root, "starts");
+    const oldPath = process.env.PATH;
+    try {
+      await mkdir(bin);
+      await writeFile(
+        path.join(bin, "git"),
+        '#!/bin/sh\necho $$ >> "$ZEN_PROJECT_PROBE_LOG"\nexec sleep 9\n',
+      );
+      await chmod(path.join(bin, "git"), 0o755);
+      const threads = await Promise.all(
+        Array.from({ length: 32 }, async (_, index) => {
+          const cwd = path.join(root, String(index));
+          await mkdir(cwd);
+          return { id: `id${index}`, cwd };
+        }),
+      );
+      process.env.PATH = `${bin}${path.delimiter}${oldPath ?? ""}`;
+      process.env.ZEN_PROJECT_PROBE_LOG = log;
+      const projection = new ZenXProjectProjection();
+      const started = performance.now();
+      const snapshots = await Promise.all(
+        Array.from({ length: 3 }, () => projection.project(threads)),
+      );
+      const elapsed = performance.now() - started;
+      for (const snapshot of snapshots) {
+        assert.equal(snapshot.projects.length, 32);
+        assert.deepEqual(
+          snapshot.projects.flatMap((project) => project.threadIds).sort(),
+          threads.map((thread) => thread.id).sort(),
+        );
+      }
+      assert.ok(
+        elapsed < 1800,
+        `Project list took ${elapsed.toFixed(0)}ms with a 600ms Git-phase budget`,
+      );
+      const recorded = await readFile(log, "utf8").catch(
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return "";
+          throw error;
+        },
+      );
+      const starts =
+        recorded.trim() === "" ? 0 : recorded.trim().split("\n").length;
+      assert.ok(
+        starts <= 8,
+        `${starts} children started for three concurrent lists`,
+      );
+      // Deadline cancellation must reach the subprocess, not only the waiter.
+      const pids = recorded.trim().split("\n").filter(Boolean).map(Number);
+      for (let attempt = 0; attempt < 20; attempt++) {
+        if (pids.every((pid) => !processExists(pid))) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.ok(
+        pids.every((pid) => !processExists(pid)),
+        "cancelled Git children are still running",
+      );
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      delete process.env.ZEN_PROJECT_PROBE_LOG;
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "32 failing Git paths keep every Thread in a path-based Project",
+  { skip: process.platform === "win32" },
+  async () => {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "zen-project-failed-git-"),
+    );
+    const bin = path.join(root, "bin");
+    const oldPath = process.env.PATH;
+    try {
+      await mkdir(bin);
+      await writeFile(path.join(bin, "git"), "#!/bin/sh\nexit 1\n");
+      await chmod(path.join(bin, "git"), 0o755);
+      const threads = await Promise.all(
+        Array.from({ length: 32 }, async (_, index) => {
+          const cwd = path.join(root, String(index));
+          await mkdir(cwd);
+          return { id: `id${index}`, cwd };
+        }),
+      );
+      process.env.PATH = `${bin}${path.delimiter}${oldPath ?? ""}`;
+      const started = performance.now();
+      const snapshot = await new ZenXProjectProjection().project(threads);
+      assert.ok(performance.now() - started < 1800);
+      assert.equal(snapshot.projects.length, 32);
+      assert.deepEqual(
+        snapshot.projects.flatMap((project) => project.threadIds).sort(),
+        threads.map((thread) => thread.id).sort(),
+      );
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}

@@ -4,6 +4,10 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+// Git is only a display enrichment. A visible sidebar must not wait through
+// four consecutive child timeouts when a filesystem or Git binary is slow.
+const GIT_PROJECTION_BUDGET_MS = 600;
+const GIT_PROJECTION_CONCURRENCY = 8;
 
 export interface ProjectProjectionThread {
   id: string;
@@ -88,8 +92,10 @@ export class ZenXProjectProjection {
   readonly #realpath: ProjectRealpath;
   readonly #gitIdentities = new Map<
     string,
-    { until: number; result: Promise<string | null> }
+    { until: number; result: string | null }
   >();
+  #gitProbe: Promise<void> | null = null;
+  #activeGitProbes = 0;
   #configuration: ProjectConfigurationSnapshot = Object.freeze({
     names: Object.freeze({}),
     revision: 0,
@@ -200,19 +206,7 @@ export class ZenXProjectProjection {
     // authorization still compare exact canonical workspace paths.
     // Prefer configured roots if the list is exceptionally large; remaining
     // entries retain ordinary path grouping rather than blocking the UI.
-    const gitPaths = [
-      ...new Set(identities.map((identity) => identity.key)),
-    ].slice(0, 32);
-    const gitGroups = new Map<string, string | null>();
-    for (let index = 0; index < gitPaths.length; index += 8) {
-      const batch = gitPaths.slice(index, index + 8);
-      const resolved = await Promise.all(
-        batch.map((candidate) => this.#gitCommonDirectory(candidate)),
-      );
-      batch.forEach((candidate, offset) =>
-        gitGroups.set(candidate, resolved[offset] ?? null),
-      );
-    }
+    const gitGroups = await this.#gitGroups(identities);
     const projects = new Map<string, ZenXProjectProjectionEntry>();
     const primaryByGit = new Map<string, string>();
     for (const workspace of configuredWorkspaces) {
@@ -323,50 +317,145 @@ export class ZenXProjectProjection {
     return await projectPathSnapshot(values, this.#platform, this.#realpath);
   }
 
-  async #gitCommonDirectory(candidate: string): Promise<string | null> {
-    if (this.#platform !== process.platform) return null;
-    const now = Date.now();
-    const cached = this.#gitIdentities.get(candidate);
-    if (cached !== undefined && cached.until > now) return await cached.result;
-    if (this.#gitIdentities.size >= 256) this.#gitIdentities.clear();
-    const result = (async () => {
+  async #gitGroups(
+    identities: ProjectPathSnapshot,
+  ): Promise<Map<string, string | null>> {
+    const candidates = [
+      ...new Set(identities.map((identity) => identity.key)),
+    ].slice(0, 32);
+    const deadline = performance.now() + GIT_PROJECTION_BUDGET_MS;
+    // One owner probes at a time per projection instance. Other list reads
+    // reuse its bounded work and cached results; they never multiply children.
+    if (this.#gitProbe !== null)
+      await withinGitBudget(this.#gitProbe, deadline);
+    const missing = candidates.filter((candidate) => {
+      const entry = this.#gitIdentities.get(candidate);
+      return entry === undefined || entry.until <= Date.now();
+    });
+    if (
+      this.#gitProbe === null &&
+      missing.length > 0 &&
+      deadline > performance.now()
+    ) {
+      const probe = this.#probeGit(missing, deadline);
+      this.#gitProbe = probe;
       try {
-        // Git environment overrides can redirect -C to a different repository.
-        const env = Object.fromEntries(
-          Object.entries(process.env).filter(
-            ([key]) => !key.startsWith("GIT_"),
-          ),
-        );
-        const { stdout } = await execFileAsync(
-          "git",
-          [
-            "-C",
-            candidate,
-            "rev-parse",
-            "--is-inside-work-tree",
-            "--path-format=absolute",
-            "--git-common-dir",
-          ],
-          { env, timeout: 1200, maxBuffer: 4096, encoding: "utf8" },
-        );
-        const [inside, common, ...extra] = stdout.trim().split(/\r?\n/u);
-        if (
-          inside !== "true" ||
-          extra.length > 0 ||
-          !common ||
-          !path.isAbsolute(common)
-        )
-          return null;
-        const physical = await realpath(common);
-        return this.#platform === "win32"
-          ? physical.toLocaleLowerCase("en-US")
-          : physical;
-      } catch {
-        return null;
+        await probe;
+      } finally {
+        if (this.#gitProbe === probe) this.#gitProbe = null;
       }
-    })();
-    this.#gitIdentities.set(candidate, { until: now + 10_000, result });
-    return await result;
+    }
+    return new Map(
+      candidates.map((candidate) => {
+        const entry = this.#gitIdentities.get(candidate);
+        return [
+          candidate,
+          entry !== undefined && entry.until > Date.now() ? entry.result : null,
+        ];
+      }),
+    );
+  }
+
+  async #probeGit(
+    candidates: readonly string[],
+    deadline: number,
+  ): Promise<void> {
+    if (this.#platform !== process.platform) return;
+    for (
+      let index = 0;
+      index < candidates.length && performance.now() < deadline;
+    ) {
+      const available = GIT_PROJECTION_CONCURRENCY - this.#activeGitProbes;
+      if (available <= 0) break; // A timed-out realpath or child has not settled yet.
+      const batch = candidates.slice(index, index + available);
+      index += batch.length;
+      const controllers = batch.map(() => new AbortController());
+      const work = Promise.all(
+        batch.map(async (candidate, offset) => {
+          this.#activeGitProbes++;
+          try {
+            const result = await this.#gitCommonDirectory(
+              candidate,
+              controllers[offset]!.signal,
+            );
+            // A late filesystem completion cannot publish or cache stale identity.
+            if (
+              performance.now() >= deadline ||
+              controllers[offset]!.signal.aborted
+            )
+              return;
+            if (this.#gitIdentities.size >= 256) this.#gitIdentities.clear();
+            this.#gitIdentities.set(candidate, {
+              until: Date.now() + 10_000,
+              result,
+            });
+          } finally {
+            this.#activeGitProbes--;
+          }
+        }),
+      );
+      if (!(await withinGitBudget(work, deadline))) {
+        controllers.forEach((controller) => controller.abort());
+        break;
+      }
+    }
+  }
+
+  async #gitCommonDirectory(
+    candidate: string,
+    signal: AbortSignal,
+  ): Promise<string | null> {
+    try {
+      // Git environment overrides can redirect -C to a different repository.
+      const env = Object.fromEntries(
+        Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
+      );
+      const { stdout } = await execFileAsync(
+        "git",
+        [
+          "-C",
+          candidate,
+          "rev-parse",
+          "--is-inside-work-tree",
+          "--path-format=absolute",
+          "--git-common-dir",
+        ],
+        { env, signal, timeout: 1200, maxBuffer: 4096, encoding: "utf8" },
+      );
+      const [inside, common, ...extra] = stdout.trim().split(/\r?\n/u);
+      if (
+        inside !== "true" ||
+        extra.length > 0 ||
+        !common ||
+        !path.isAbsolute(common)
+      )
+        return null;
+      const physical = await realpath(common);
+      return this.#platform === "win32"
+        ? physical.toLocaleLowerCase("en-US")
+        : physical;
+    } catch {
+      return null;
+    }
+  }
+}
+
+async function withinGitBudget(
+  work: Promise<unknown>,
+  deadline: number,
+): Promise<boolean> {
+  const remaining = Math.max(0, deadline - performance.now());
+  if (remaining === 0) return false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work.then(() => true),
+      new Promise<false>((resolve) => {
+        timer = setTimeout(() => resolve(false), remaining);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
