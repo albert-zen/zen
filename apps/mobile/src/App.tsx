@@ -84,6 +84,8 @@ export default function App() {
   }, [session]);
   const s = screen ?? session.get();
   function selectHost(id: string) {
+    setDraft("");
+    setPairCode("");
     userSelected.current = true;
     session.selectHost(id);
     void SecureStore.setItemAsync("zenx-mobile-host-preference-v1", id).catch(
@@ -215,7 +217,10 @@ export default function App() {
             <Text style={styles.name}>{w.name}</Text>
             {button(
               s.workspace === w.id ? "Selected workspace" : "Switch workspace",
-              () => session.selectWorkspace(w.id),
+              () => {
+                setDraft("");
+                session.selectWorkspace(w.id);
+              },
             )}
           </View>
         ))}
@@ -267,14 +272,16 @@ export default function App() {
                   text: draft,
                 });
               },
-              !draft.trim() || s.command === "pending",
+              !draft.trim() ||
+                s.command === "pending" ||
+                s.command === "uncertain",
             )}
             {button(
               "Stop current turn",
               () => {
                 void session.command("stop", { threadId: s.thread });
               },
-              s.command === "pending",
+              s.command === "pending" || s.command === "uncertain",
             )}
           </>
         )}
@@ -284,8 +291,14 @@ export default function App() {
             () => {
               void session.command("create", {});
             },
-            s.command === "pending",
+            s.command === "pending" || s.command === "uncertain",
           )}
+        {s.command === "uncertain" && (
+          <Text style={styles.error}>
+            Delivery unknown. Do not resend; reconnect and inspect canonical
+            Host history first.
+          </Text>
+        )}
         {s.command && <Text style={styles.meta}>Command: {s.command}</Text>}
       </ScrollView>
     </SafeAreaView>

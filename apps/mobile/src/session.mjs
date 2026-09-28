@@ -103,7 +103,7 @@ export function createSession(transport, publish) {
         });
     },
     async command(kind, payload) {
-      if (state.command === "pending") return;
+      if (state.command === "pending" || state.command === "uncertain") return;
       if (!host || !workspace || state.status !== "connected") {
         emit({ error: "Not connected to a selected Host workspace." });
         return;
