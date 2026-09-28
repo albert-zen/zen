@@ -21,6 +21,8 @@ import {
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 const { ThreadView } = await import("../src/renderer/src/ThreadView.js");
+const { requestContextCompaction } =
+  await import("../src/renderer/src/compact-command.js");
 
 const noop = async () => undefined;
 
@@ -258,6 +260,123 @@ test("compaction progress is a transcript item and completed items reveal exact 
       /Compacting context/u,
     );
     assert.equal(document.querySelector(".composer-command-status"), null);
+  });
+});
+
+test("compaction error is a keyboard-reachable context notice with plain details and explicit dismiss", async () => {
+  await withDom(async (root) => {
+    let composer: ComposerState = {
+      ...emptyComposerState(),
+      compaction: {
+        status: "failed",
+        message: "Could not confirm this compaction request.",
+        detail: "Error invoking <script> & token hidden",
+      },
+    };
+    let selected = thread([]);
+    const renderView = () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer,
+          thread: selected,
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+          onDismissCompaction: () => {
+            composer = { ...composer, compaction: undefined };
+            renderView();
+          },
+        }),
+      );
+    await act(async () => renderView());
+    const alert = requiredElement('[role="alert"].context-compaction-progress');
+    assert.equal(alert.closest(".messages-inner"), null);
+    assert.equal(alert.closest(".composer-error"), null);
+    const details = requiredElement<HTMLDetailsElement>(
+      ".context-compaction-error-detail",
+    );
+    assert.equal(details.open, false);
+    const summary = requiredElement<HTMLElement>(
+      ".context-compaction-error-detail summary",
+    );
+    assert.equal(summary.tabIndex, 0);
+    assert.equal(document.querySelector("script"), null);
+    assert.match(details.textContent ?? "", /<script>/u);
+    await act(async () =>
+      requiredButton('[aria-label="Dismiss compaction error"]').click(),
+    );
+    assert.equal(
+      document.querySelector(".context-compaction-progress.is-error"),
+      null,
+    );
+    selected = { ...selected, id: "other-thread" };
+    await act(async () => renderView());
+    assert.equal(
+      document.querySelector(".context-compaction-progress.is-error"),
+      null,
+    );
+  });
+});
+
+test("real compaction request rejection stays with its Thread, ignores stale completion and coexists with a canonical success", async () => {
+  await withDom(async (root) => {
+    const states: Record<string, ComposerState> = {
+      a: emptyComposerState(),
+      b: emptyComposerState(),
+    };
+    const a = { ...thread([]), id: "a", canonicalItems: compactionHistory() };
+    const b = { ...thread([]), id: "b" };
+    let selected: Thread = a;
+    const renderView = () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: states[selected.id]!,
+          thread: selected,
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      );
+    let reject!: (reason: unknown) => void;
+    const pending = requestContextCompaction({
+      threadId: "a",
+      active: false,
+      clearCommandDraft: false,
+      read: () => states.a!,
+      update: (change) => {
+        states.a = change(states.a!);
+        renderView();
+      },
+      compact: () =>
+        new Promise((_, rejectRequest) => {
+          reject = rejectRequest;
+        }),
+    });
+    await act(async () => renderView());
+    selected = b;
+    await act(async () => renderView());
+    reject(new Error("Error invoking remote method: private=secret"));
+    await act(async () => pending);
+    assert.equal(
+      document.querySelector(".context-compaction-progress.is-error"),
+      null,
+    );
+    selected = a;
+    await act(async () => renderView());
+    assert.match(
+      requiredElement(".context-compaction-event").textContent ?? "",
+      /Context compacted/u,
+    );
+    assert.match(
+      requiredElement(".context-compaction-progress.is-error").textContent ??
+        "",
+      /Could not confirm/u,
+    );
+    assert.doesNotMatch(document.body.textContent ?? "", /private=secret/u);
   });
 });
 

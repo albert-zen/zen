@@ -2067,6 +2067,9 @@ a:focus-visible {
   left: 0;
   z-index: 4;
   min-width: 0;
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0
     max(
       var(--conversation-gutter),
@@ -7316,6 +7319,46 @@ a:focus-visible {
 .context-compaction-progress.is-error {
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border-soft));
   color: var(--danger);
+}
+.context-compaction-progress-content {
+  min-width: 0;
+  flex: 1;
+}
+.context-compaction-progress.is-error {
+  margin-bottom: 9px;
+  align-items: flex-start;
+  background: var(--surface-2);
+}
+.context-compaction-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 16px;
+  margin-top: 6px;
+  color: var(--text-2);
+}
+.context-compaction-error-detail summary,
+.context-compaction-error-actions button {
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.context-compaction-error-actions button {
+  border: 0;
+  background: transparent;
+  text-decoration: underline;
+}
+.context-compaction-error-detail p {
+  margin: 6px 0 0;
+  max-width: 70ch;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.context-compaction-error-detail summary:focus-visible,
+.context-compaction-error-actions button:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+  border-radius: 3px;
 }
 @media (prefers-reduced-motion: reduce) {
   .context-compaction-progress .mini-spinner {
