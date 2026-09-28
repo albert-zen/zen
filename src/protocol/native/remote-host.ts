@@ -346,7 +346,13 @@ export class RemoteHostAccess {
       const handle = await this.#appServer.startTurn(
         input.threadId,
         input.text,
-        { clientId: input.clientId },
+        {
+          clientId: input.clientId,
+          requirePermissions: {
+            sandbox: "read-only",
+            approvalPolicy: "always",
+          },
+        },
       );
       void handle.done.catch(() => undefined);
       return { turnId: handle.id };
@@ -431,5 +437,7 @@ function fromAppServer(error: unknown): RemoteHostError {
     return new RemoteHostError(error.code);
   if (error instanceof AppServerError && error.code === "turn_not_running")
     return new RemoteHostError("stale_turn");
+  if (error instanceof AppServerError && error.code === "operation_forbidden")
+    return new RemoteHostError("operation_forbidden");
   return new RemoteHostError("invalid_request");
 }
