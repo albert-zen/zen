@@ -11,7 +11,10 @@ import { WebSocket } from "ws";
 import { createHostedAppServer } from "../apps/cli/src/host.js";
 import { InMemoryThreadJournal } from "../src/journal.js";
 import { RemoteHostAccess } from "../src/protocol/native/remote-host.js";
-import { serveRemoteHost } from "../src/protocol/native/remote-transport.js";
+import {
+  REMOTE_UNAUTHENTICATED_MS,
+  serveRemoteHost,
+} from "../src/protocol/native/remote-transport.js";
 
 // Generated for this test invocation only; never reused as a production identity.
 test("TLS pairing + two authenticated clients, rejected origin, revoke closes active socket", async (t) => {
@@ -100,14 +103,22 @@ test("TLS pairing + two authenticated clients, rejected origin, revoke closes ac
       try {
         const hello = await rpc(socket, 1, "zen/remote/hello", {
           hostId: "desktop",
-          version: 0,
+          version: 1,
         });
         assert.equal((hello.result as { hostId: string }).hostId, "desktop");
+        await new Promise((resolve) =>
+          setTimeout(resolve, REMOTE_UNAUTHENTICATED_MS + 100),
+        );
+        assert.equal(
+          socket.readyState,
+          WebSocket.OPEN,
+          "upgraded authenticated sockets do not inherit the unauthenticated deadline",
+        );
         assert.equal(
           (
             await rpc(socket, 2, "zen/remote/hello", {
               hostId: "wrong",
-              version: 0,
+              version: 1,
             })
           ).error?.data?.code,
           "wrong_host",
@@ -118,7 +129,7 @@ test("TLS pairing + two authenticated clients, rejected origin, revoke closes ac
         const threadId = (created.result as { id: string }).id;
         await rpc(second, 1, "zen/remote/hello", {
           hostId: "desktop",
-          version: 0,
+          version: 1,
         });
         const sent = await rpc(socket, 4, "zen/remote/send", {
           workspaceId: "workspace",
@@ -139,8 +150,13 @@ test("TLS pairing + two authenticated clients, rejected origin, revoke closes ac
         });
         assert.equal(
           (
-            snapshot.result as { thread: { items: { type: string }[] } }
-          ).thread.items.filter((item) => item.type === "user_message").length,
+            snapshot.result as {
+              entries: { kind: string; item: { type: string } }[];
+            }
+          ).entries.filter(
+            (entry) =>
+              entry.kind === "item" && entry.item.type === "user_message",
+          ).length,
           1,
         );
         const other = await rpc(socket, 5, "zen/remote/create", {
@@ -179,7 +195,7 @@ test("TLS pairing + two authenticated clients, rejected origin, revoke closes ac
           threadId,
         );
         releaseRead();
-        assert.equal((await stale).error?.data?.code, "invalid_request");
+        assert.equal((await stale).error?.data?.code, "stale_cursor");
         const closed = once(socket, "close");
         access.revoke("phone");
         await closed;
