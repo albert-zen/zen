@@ -391,3 +391,37 @@ test("late workspace refresh after disconnect cannot re-expose stale public view
   assert.deepEqual(s.get().items, []);
   assert.deepEqual(s.get().turns, []);
 });
+test("A late admission cannot refresh or re-subscribe B workspace view", async () => {
+  const a = deferred();
+  let snapshots = 0,
+    subscriptions = 0;
+  const tr = {
+    snapshot: async () => {
+      snapshots++;
+      return { workspaces: [], threads: [] };
+    },
+    subscribe: () => {
+      subscriptions++;
+      return () => {};
+    },
+    read: async () => [],
+    command: (_h, _w, _k, p) =>
+      p.threadId === "a" ? a.promise : Promise.resolve({ accepted: false }),
+  };
+  const s = createSession(tr, () => {});
+  s.selectHost("h");
+  await tick();
+  s.selectWorkspace("w");
+  await tick();
+  s.openThread("a");
+  await tick();
+  const late = s.command("send", { threadId: "a", text: "a" });
+  s.openThread("b");
+  await tick();
+  const before = [snapshots, subscriptions];
+  a.resolve({ accepted: true, turnId: "a-turn" });
+  await late;
+  assert.deepEqual([snapshots, subscriptions], before);
+  assert.equal(s.get().thread, "b");
+  assert.equal(s.get().lastRequest, null);
+});

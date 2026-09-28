@@ -212,7 +212,7 @@ export function createSession(transport, publish) {
               ? null
               : (result.error ?? "Host rejected command."),
           });
-        if (result.accepted && current(epoch, h, w)) await refresh(epoch, h, w);
+        if (result.accepted && visible()) await refresh(epoch, h, w);
         return result;
       } catch (e) {
         if (operations.get(k)?.op !== op) return;
