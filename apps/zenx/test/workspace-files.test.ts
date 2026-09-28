@@ -270,12 +270,16 @@ test("reference search reports scan cap with excluded OS debris", async (t) => {
         return originalOpen(directory);
       return {
         async *[Symbol.asyncIterator]() {
-          for (let i = 0; i < 10_001; i++)
-            yield {
-              name: `._junk-${i}`,
-              isDirectory: () => false,
-              isFile: () => true,
-            };
+          try {
+            for (let i = 0; i < 10_001; i++)
+              yield {
+                name: `._junk-${i}`,
+                isDirectory: () => false,
+                isFile: () => true,
+              };
+          } finally {
+            throw Object.assign(new Error("close failed"), { code: "EIO" });
+          }
         },
       } as Awaited<ReturnType<typeof fs.opendir>>;
     });
@@ -284,6 +288,61 @@ test("reference search reports scan cap with excluded OS debris", async (t) => {
     assert.deepEqual(result.entries, []);
     assert.equal(result.truncated, true);
     assert.ok(result.scanned <= 10_000);
+    assert.match(result.warnings!.join(" "), /EIO/);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("reference search gives ordinary siblings scan time before hidden debris and a large ordinary directory", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-mention-fair-"));
+  const cwd = await realpath(root);
+  const originalOpen = fs.opendir;
+  let rootOpens = 0;
+  try {
+    for (const directory of [".github", "bulk", "src"])
+      await mkdir(path.join(root, directory));
+    await writeFile(path.join(root, "src", "sample.ts"), "");
+    t.mock.method(fs, "opendir", async (directory: string) => {
+      if (directory === cwd && ++rootOpens > 1)
+        return {
+          close: async () => {},
+          async *[Symbol.asyncIterator]() {
+            for (const name of [".github", "bulk", "src"])
+              yield { name, isDirectory: () => true, isFile: () => false };
+          },
+        } as Awaited<ReturnType<typeof fs.opendir>>;
+      if (
+        [".github", "bulk"].some((name) => directory === path.join(cwd, name))
+      )
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield {
+              name: "sample.yml",
+              isDirectory: () => false,
+              isFile: () => true,
+            };
+            for (let i = 0; i < 10_001; i++)
+              yield {
+                name: `._sample-${i}`,
+                isDirectory: () => false,
+                isFile: () => true,
+              };
+          },
+        } as Awaited<ReturnType<typeof fs.opendir>>;
+      return originalOpen(directory);
+    });
+    syncBuiltinESMExports();
+    const broad = await searchWorkspaceFiles(root, "sample");
+    assert.ok(broad.entries.some((entry) => entry.path === "src/sample.ts"));
+    assert.equal(broad.truncated, true);
+    assert.ok(broad.scanned <= 10_000);
+    const precise = await searchWorkspaceFiles(root, ".github/sample.yml");
+    assert.ok(
+      precise.entries.some((entry) => entry.path === ".github/sample.yml"),
+    );
   } finally {
     t.mock.restoreAll();
     syncBuiltinESMExports();
