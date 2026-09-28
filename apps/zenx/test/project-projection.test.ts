@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   unlink,
@@ -688,12 +689,13 @@ test(
           await new Promise((resolve) => setTimeout(resolve, delay));
         return await projection.project(threads);
       };
-      // The second and third callers enter while the first Git batch is
-      // active but have later deadlines: neither may trigger a second wave.
+      // Later callers have different deadlines; even a read after the first
+      // timeout must reuse the cooldown rather than trigger a second wave.
       const snapshots = await Promise.all([
         readAfter(0),
         readAfter(200),
         readAfter(350),
+        readAfter(800),
       ]);
       const elapsed = performance.now() - started;
       for (const snapshot of snapshots) {
@@ -717,7 +719,7 @@ test(
         recorded.trim() === "" ? 0 : recorded.trim().split("\n").length;
       assert.ok(
         starts <= 8,
-        `${starts} children started for three concurrent lists`,
+        `${starts} children started for four concurrent lists`,
       );
       // Deadline cancellation must reach the subprocess, not only the waiter.
       const pids = recorded.trim().split("\n").filter(Boolean).map(Number);
@@ -784,3 +786,138 @@ function processExists(pid: number): boolean {
     throw error;
   }
 }
+
+test(
+  "a healthy linked worktree behind slow cwd candidates groups on a later read of the same instance",
+  { skip: process.platform === "win32" },
+  async () => {
+    const { execFileSync } = await import("node:child_process");
+    const root = await mkdtemp(path.join(os.tmpdir(), "zen-project-fair-git-"));
+    const main = path.join(root, "main");
+    const linked = path.join(root, "linked");
+    const bin = path.join(root, "bin");
+    const log = path.join(root, "starts");
+    const oldPath = process.env.PATH;
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { stdio: "pipe" });
+    try {
+      await mkdir(main);
+      git("-C", main, "init", "-q");
+      git(
+        "-C",
+        main,
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "fixture",
+      );
+      git("-C", main, "worktree", "add", "-q", "-b", "linked", linked);
+      await mkdir(bin);
+      await writeFile(
+        path.join(bin, "git"),
+        '#!/bin/sh\necho "$2" >> "$ZEN_PROJECT_PROBE_LOG"\ncase "$2" in *slow-*) exec sleep 9;; esac\nexec /usr/bin/git "$@"\n',
+      );
+      await chmod(path.join(bin, "git"), 0o755);
+      const slow = await Promise.all(
+        Array.from({ length: 8 }, async (_, index) => {
+          const cwd = path.join(root, `slow-${index}`);
+          await mkdir(cwd);
+          return { id: `slow-${index}`, cwd };
+        }),
+      );
+      const threads = [
+        ...slow,
+        { id: "main", cwd: main },
+        { id: "linked", cwd: linked },
+      ];
+      const original = structuredClone(threads);
+      process.env.PATH = `${bin}${path.delimiter}${oldPath ?? ""}`;
+      process.env.ZEN_PROJECT_PROBE_LOG = log;
+      const projection = new ZenXProjectProjection();
+      await projection.updateConfiguration([main], main);
+      let startedAt = performance.now();
+      const first = await projection.project(threads);
+      assert.ok(performance.now() - startedAt < 1800);
+      assert.equal(first.projects.length, 10);
+      assert.equal(
+        first.projects
+          .find((project) => project.workspace === main)
+          ?.threadIds.includes("linked"),
+        false,
+      );
+      let later = first;
+      let reads = 1;
+      // With a busy OS an execFile may be aborted before the wrapper starts;
+      // subsequent ordinary TTL reads still rotate by attempted slots.
+      while (reads < 3 && later.projects.length !== 9) {
+        await new Promise((resolve) => setTimeout(resolve, 10_050));
+        startedAt = performance.now();
+        later = await projection.project(threads);
+        assert.ok(performance.now() - startedAt < 1800);
+        reads++;
+      }
+      assert.deepEqual(
+        later.projects.find((project) => project.workspace === main)?.threadIds,
+        ["main", "linked"],
+        `Git starts after ${reads} reads: ${await readFile(log, "utf8").catch(() => "none")}`,
+      );
+      assert.equal(later.projects.length, 9);
+      assert.deepEqual(threads, original);
+      const started = (await readFile(log, "utf8")).trim().split("\n");
+      assert.ok(
+        started.length <= reads * 8,
+        `${started.length} Git children over ${reads} bounded reads`,
+      );
+      assert.ok(
+        started.includes(await realpath(linked)),
+        "the healthy linked path was actually probed",
+      );
+      assert.equal(await projection.configuredWorkspace(linked), null);
+      await projection.updateConfiguration([main, linked], main);
+      const explicit = await projection.project(threads);
+      assert.deepEqual(
+        explicit.projects.find((project) => project.workspace === main)
+          ?.threadIds,
+        ["main"],
+      );
+      assert.deepEqual(
+        explicit.projects.find((project) => project.workspace === linked)
+          ?.threadIds,
+        ["linked"],
+      );
+      assert.equal(
+        await startConfiguredProjectThread(
+          projection,
+          linked,
+          async ({ cwd }) => cwd,
+        ),
+        linked,
+      );
+      const extra = path.join(root, "new-candidate");
+      await mkdir(extra);
+      const changed = await projection.project([
+        ...threads.slice(1),
+        { id: "new", cwd: extra },
+      ]);
+      assert.deepEqual(
+        changed.projects.flatMap((project) => project.threadIds).sort(),
+        [...threads.slice(1).map((thread) => thread.id), "new"].sort(),
+      );
+      assert.deepEqual(
+        changed.projects.find((project) => project.workspace === linked)
+          ?.threadIds,
+        ["linked"],
+      );
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      delete process.env.ZEN_PROJECT_PROBE_LOG;
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

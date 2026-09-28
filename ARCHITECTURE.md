@@ -136,7 +136,7 @@
 - **ZenXSidebarMenuPopover** — 项目与会话菜单共用锚点定位的临时浮层，在侧栏右侧显示并按视口边界回退，不参与列表布局或持久化状态。
 - **ZenXProjectNamePreference** — host-profile 按已配置 workspace 保存可编辑显示名称；名称不改变目录身份、Thread cwd 或 journal，修改只刷新 Project 投影，不重启 Host。
 - **ZenXGitWorktreeGrouping** — Host 仅在 Project 列表投影中用本机 Git 的 canonical common-directory 身份将同一仓库的工作树归组；显式配置的路径各自保留独立 Project，Thread cwd、配置 workspace 和新建执行路径不变，Git 不可用时退回路径身份。
-  精确 canonical cwd 优先归入其显式配置；其余同仓库 cwd 归入配置顺序最先的 workspace（默认 workspace 优先），没有配置时归入本次列表中首个遇到的 cwd；主项目名称、默认标记、排序键、新建 Thread 路径均取所属 workspace，侧栏 Thread tooltip 保留真实 cwd。Git 探测每次列表最多处理 32 个唯一路径，实例级并发上限 8、每个子进程 1.2 秒超时，同一实例的并发列表复用探测；另设 **600 毫秒 Git 探测总等待预算**，超过即向仍运行的子进程发出取消信号并以路径身份返回，不启动剩余批次、不后台补写身份；尚未完成的文件系统调用可能继续运行但结果不可回填缓存。该数值让常见本机 Git 探测有机会完成，同时把故障注入的约 4.9 秒等待降至可交互的亚秒级；它不包含前置 cwd realpath、结果组装或操作系统调度，不能宣传为整个 IPC 的硬时限。已完成结果（包括 Git 失败）和预算内未探测/取消的路径降级最多缓存 10 秒，令同一批并发列表不重复触发新批子进程，TTL 后的普通读取再探测；超过上限、缺失/不可读 cwd 或 Git 不可用时维持路径投影，不强改旧 Thread 或假装目录存在。
+  精确 canonical cwd 优先归入其显式配置；其余同仓库 cwd 归入配置顺序最先的 workspace（默认 workspace 优先），没有配置时归入本次列表中首个遇到的 cwd；主项目名称、默认标记、排序键、新建 Thread 路径均取所属 workspace，侧栏 Thread tooltip 保留真实 cwd。Git 探测每次列表最多处理 32 个唯一路径，实例级并发上限 8、每个子进程 1.2 秒超时，同一实例的并发列表复用探测；另设 **600 毫秒 Git 探测总等待预算**，超过即向仍运行的子进程发出取消信号并以路径身份返回，不启动剩余批次、不后台补写身份；尚未完成的文件系统调用可能继续运行但结果不可回填缓存。该数值让常见本机 Git 探测有机会完成，同时把故障注入的约 4.9 秒等待降至可交互的亚秒级；它不包含前置 cwd realpath、结果组装或操作系统调度，不能宣传为整个 IPC 的硬时限。已完成结果（包括 Git 失败）和预算内未探测/取消的路径降级最多缓存 10 秒，令同一批并发列表不重复触发新批子进程，TTL 后的普通读取再探测；实例内按已尝试位置轮换尚需探测的路径，保留首个配置 workspace 的优先探测位，使持续慢路径不会每轮占满配额，候选变动时按当次长度归一索引，且不改变配置授权。超过上限、缺失/不可读 cwd 或 Git 不可用时维持路径投影，不强改旧 Thread 或假装目录存在。
 - **ZenXProjectProjection** — ZenX main 的同一个实例把 host-profile workspace 与 ZAS
   原生 Thread cwd 按最近存在祖先的异步 realpath 归一为 UI 和 Agent self-control 共用的
   Project 读模型；Windows 路径折叠大小写，POSIX 路径保留大小写，配置保留用户选择的展示路径，

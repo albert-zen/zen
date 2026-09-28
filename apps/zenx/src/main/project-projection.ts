@@ -96,6 +96,7 @@ export class ZenXProjectProjection {
   >();
   #gitProbe: Promise<void> | null = null;
   #activeGitProbes = 0;
+  #gitProbeOffset = 0;
   #configuration: ProjectConfigurationSnapshot = Object.freeze({
     names: Object.freeze({}),
     revision: 0,
@@ -206,7 +207,10 @@ export class ZenXProjectProjection {
     // authorization still compare exact canonical workspace paths.
     // Prefer configured roots if the list is exceptionally large; remaining
     // entries retain ordinary path grouping rather than blocking the UI.
-    const gitGroups = await this.#gitGroups(identities);
+    const gitGroups = await this.#gitGroups(
+      identities,
+      configuredWorkspaces[0]?.key ?? null,
+    );
     const projects = new Map<string, ZenXProjectProjectionEntry>();
     const primaryByGit = new Map<string, string>();
     for (const workspace of configuredWorkspaces) {
@@ -319,6 +323,7 @@ export class ZenXProjectProjection {
 
   async #gitGroups(
     identities: ProjectPathSnapshot,
+    preferred: string | null,
   ): Promise<Map<string, string | null>> {
     const candidates = [
       ...new Set(identities.map((identity) => identity.key)),
@@ -337,7 +342,28 @@ export class ZenXProjectProjection {
       missing.length > 0 &&
       deadline > performance.now()
     ) {
-      const probe = this.#probeGit(missing, deadline);
+      // Keep the primary configured workspace in reach on every attempt: a
+      // linked worktree cannot join it if their successful TTLs never overlap.
+      // Rotate the other missing candidates by *attempted* slots, not by all
+      // 32 cooled-down paths, so a fixed set of slow leaders cannot starve a
+      // healthy worktree on every later TTL. Modulo handles changed candidates.
+      const primary =
+        preferred !== null && missing.includes(preferred) ? preferred : null;
+      const rotating = missing.filter((candidate) => candidate !== primary);
+      const offset =
+        rotating.length === 0 ? 0 : this.#gitProbeOffset % rotating.length;
+      const order = [
+        ...(primary === null ? [] : [primary]),
+        ...rotating.slice(offset),
+        ...rotating.slice(0, offset),
+      ];
+      const probe = this.#probeGit(order, deadline).then((attempted) => {
+        if (rotating.length > 0) {
+          this.#gitProbeOffset =
+            (offset + Math.max(0, attempted - (primary === null ? 0 : 1))) %
+            rotating.length;
+        }
+      });
       this.#gitProbe = probe;
       try {
         await probe;
@@ -359,8 +385,9 @@ export class ZenXProjectProjection {
   async #probeGit(
     candidates: readonly string[],
     deadline: number,
-  ): Promise<void> {
-    if (this.#platform !== process.platform) return;
+  ): Promise<number> {
+    if (this.#platform !== process.platform) return 0;
+    let attempted = 0;
     for (
       let index = 0;
       index < candidates.length && performance.now() < deadline;
@@ -369,6 +396,7 @@ export class ZenXProjectProjection {
       if (available <= 0) break; // A timed-out realpath or child has not settled yet.
       const batch = candidates.slice(index, index + available);
       index += batch.length;
+      attempted += batch.length;
       const controllers = batch.map(() => new AbortController());
       const work = Promise.all(
         batch.map(async (candidate, offset) => {
@@ -412,6 +440,7 @@ export class ZenXProjectProjection {
         result: null,
       });
     }
+    return attempted;
   }
 
   async #gitCommonDirectory(
