@@ -275,6 +275,16 @@ function attach(
   let recovery: RecoverySession | undefined;
   let pageBusy = false;
   let activeRequests = 0;
+  const invalidateRecovery = (state: RecoverySession) => {
+    // An older in-flight page may finish after another resume has installed a
+    // new subscription. It must neither clear nor reply with that newer state.
+    if (recovery !== state || subscriptionGeneration !== state.generation)
+      return;
+    subscriptionGeneration += 1;
+    dispose();
+    dispose = () => {};
+    recovery = undefined; // drops the cached page and the bounded event barrier
+  };
   const send = (data: unknown) => {
     if (socket.readyState !== WebSocket.OPEN) return;
     if (socket.bufferedAmount > REMOTE_MAX_OUTBOUND_BUFFER) {
@@ -329,7 +339,12 @@ function attach(
         const p = request.params;
         if (request.method !== "zen/remote/hello" && !initialized)
           throw new RemoteHostError("unauthorized");
-        access.authenticate(deviceId, token);
+        try {
+          access.authenticate(deviceId, token);
+        } catch (error) {
+          if (recovery !== undefined) invalidateRecovery(recovery);
+          throw error;
+        }
         const str = (key: string) => {
           const value = p[key];
           if (typeof value !== "string" || value.length > 32768)
@@ -477,14 +492,13 @@ function attach(
               state.generation !== subscriptionGeneration
             )
               throw new RemoteHostError("stale_cursor");
-            if (
+            const retry =
               cursor === state.previousCursor &&
-              state.previousPage !== undefined
-            ) {
-              send({ id, result: state.previousPage });
-              return;
-            }
-            if (pageBusy || cursor !== state.cursor || state.position === null)
+              state.previousPage !== undefined;
+            if (
+              pageBusy ||
+              (!retry && (cursor !== state.cursor || state.position === null))
+            )
               throw new RemoteHostError("stale_cursor");
             pageBusy = true;
             try {
@@ -499,10 +513,16 @@ function attach(
                 state.generation !== subscriptionGeneration
               )
                 throw new RemoteHostError("stale_cursor");
+              if (retry) {
+                // Replaying bytes is idempotent, but never replays an old
+                // authorization decision (including a terminal page).
+                send({ id, result: state.previousPage });
+                return;
+              }
               const projected = projectRemoteRecoveryPage(
                 thread,
                 state.boundary,
-                state.position,
+                state.position!,
               );
               const nextCursor =
                 projected.next === null
@@ -518,6 +538,13 @@ function attach(
               state.cursor = nextCursor;
               send({ id, result: page });
               if (nextCursor === null) state.finish();
+            } catch (error) {
+              if (!(
+                error instanceof RemoteHostError &&
+                error.code === "stale_cursor"
+              ))
+                invalidateRecovery(state);
+              throw error;
             } finally {
               pageBusy = false;
             }
