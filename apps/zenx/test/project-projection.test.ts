@@ -1,5 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, unlink } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -561,3 +571,396 @@ test("ZenX file presets supply both file scope and approval policy to Thread sta
     });
   }
 });
+
+test("real Git linked worktrees group under configured main without changing thread identity or cwd", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-project-git-"));
+  const main = path.join(root, "main");
+  const linked = path.join(root, "linked");
+  const clone = path.join(root, "clone");
+  const nested = path.join(linked, "nested");
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { stdio: "pipe" });
+  try {
+    await mkdir(main);
+    git("-C", main, "init", "-q");
+    git(
+      "-C",
+      main,
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "fixture",
+    );
+    git("-C", main, "worktree", "add", "-q", "-b", "linked", linked);
+    git("clone", "-q", main, clone);
+    await mkdir(nested);
+    git("-C", nested, "init", "-q");
+    const alias = path.join(root, "alias");
+    await symlink(linked, alias, "dir");
+    const projection = new ZenXProjectProjection();
+    await projection.updateConfiguration([main], main, main, { [main]: "Zen" });
+    const threads = [
+      { id: "main-id", cwd: main },
+      { id: "linked-id", cwd: linked },
+      { id: "alias-id", cwd: alias },
+      { id: "clone-id", cwd: clone },
+      { id: "nested-id", cwd: nested },
+      { id: "plain-id", cwd: root },
+    ];
+    const before = structuredClone(threads);
+    const snapshot = await projection.project(threads);
+    assert.deepEqual(
+      snapshot.projects.find((entry) => entry.workspace === main),
+      {
+        key: await projection.canonicalKey(main),
+        workspace: main,
+        name: "Zen",
+        configured: true,
+        isDefault: true,
+        threadIds: ["main-id", "linked-id", "alias-id"],
+      },
+    );
+    assert.equal(snapshot.projects.length, 4);
+    assert.deepEqual(threads, before);
+    assert.equal(snapshot.lastUsedWorkspace, main);
+    assert.equal(await projection.configuredWorkspace(linked), null);
+    const unconfigured = new ZenXProjectProjection();
+    await unconfigured.updateConfiguration([], null);
+    const discovered = await unconfigured.project(threads);
+    assert.deepEqual(
+      discovered.projects.find((entry) => entry.workspace === main)?.threadIds,
+      ["main-id", "linked-id", "alias-id"],
+    );
+    assert.equal(discovered.projects.length, 4);
+    await projection.updateConfiguration([main, linked], main);
+    const explicit = await projection.project(threads);
+    assert.deepEqual(
+      explicit.projects.find((entry) => entry.workspace === linked)?.threadIds,
+      ["linked-id", "alias-id"],
+    );
+    assert.deepEqual(
+      explicit.projects.find((entry) => entry.workspace === main)?.threadIds,
+      ["main-id"],
+    );
+    await rm(linked, { recursive: true, force: true });
+    const missing = await new ZenXProjectProjection().project([
+      { id: "deleted", cwd: linked },
+    ]);
+    assert.equal(missing.projects[0]?.workspace, linked);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test(
+  "32 slow Git paths return a path projection within one budget and concurrent lists share a bounded probe",
+  { skip: process.platform === "win32" },
+  async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "zen-project-slow-git-"));
+    const bin = path.join(root, "bin");
+    const log = path.join(root, "starts");
+    const oldPath = process.env.PATH;
+    try {
+      await mkdir(bin);
+      await writeFile(
+        path.join(bin, "git"),
+        '#!/bin/sh\necho $$ >> "$ZEN_PROJECT_PROBE_LOG"\nexec sleep 9\n',
+      );
+      await chmod(path.join(bin, "git"), 0o755);
+      const threads = await Promise.all(
+        Array.from({ length: 32 }, async (_, index) => {
+          const cwd = path.join(root, String(index));
+          await mkdir(cwd);
+          return { id: `id${index}`, cwd };
+        }),
+      );
+      process.env.PATH = `${bin}${path.delimiter}${oldPath ?? ""}`;
+      process.env.ZEN_PROJECT_PROBE_LOG = log;
+      const projection = new ZenXProjectProjection();
+      const started = performance.now();
+      const readAfter = async (delay: number) => {
+        if (delay > 0)
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        return await projection.project(threads);
+      };
+      // Later callers have different deadlines; even a read after the first
+      // timeout must reuse the cooldown rather than trigger a second wave.
+      const snapshots = await Promise.all([
+        readAfter(0),
+        readAfter(200),
+        readAfter(350),
+        readAfter(800),
+      ]);
+      const elapsed = performance.now() - started;
+      for (const snapshot of snapshots) {
+        assert.equal(snapshot.projects.length, 32);
+        assert.deepEqual(
+          snapshot.projects.flatMap((project) => project.threadIds).sort(),
+          threads.map((thread) => thread.id).sort(),
+        );
+      }
+      assert.ok(
+        elapsed < 1800,
+        `Project list took ${elapsed.toFixed(0)}ms with a 600ms Git-phase budget`,
+      );
+      const recorded = await readFile(log, "utf8").catch(
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return "";
+          throw error;
+        },
+      );
+      const starts =
+        recorded.trim() === "" ? 0 : recorded.trim().split("\n").length;
+      assert.ok(
+        starts <= 8,
+        `${starts} children started for four concurrent lists`,
+      );
+      // Deadline cancellation must reach the subprocess, not only the waiter.
+      const pids = recorded.trim().split("\n").filter(Boolean).map(Number);
+      for (let attempt = 0; attempt < 20; attempt++) {
+        if (pids.every((pid) => !processExists(pid))) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.ok(
+        pids.every((pid) => !processExists(pid)),
+        "cancelled Git children are still running",
+      );
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      delete process.env.ZEN_PROJECT_PROBE_LOG;
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "32 failing Git paths keep every Thread in a path-based Project",
+  { skip: process.platform === "win32" },
+  async () => {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "zen-project-failed-git-"),
+    );
+    const bin = path.join(root, "bin");
+    const oldPath = process.env.PATH;
+    try {
+      await mkdir(bin);
+      await writeFile(path.join(bin, "git"), "#!/bin/sh\nexit 1\n");
+      await chmod(path.join(bin, "git"), 0o755);
+      const threads = await Promise.all(
+        Array.from({ length: 32 }, async (_, index) => {
+          const cwd = path.join(root, String(index));
+          await mkdir(cwd);
+          return { id: `id${index}`, cwd };
+        }),
+      );
+      process.env.PATH = `${bin}${path.delimiter}${oldPath ?? ""}`;
+      const started = performance.now();
+      const snapshot = await new ZenXProjectProjection().project(threads);
+      assert.ok(performance.now() - started < 1800);
+      assert.equal(snapshot.projects.length, 32);
+      assert.deepEqual(
+        snapshot.projects.flatMap((project) => project.threadIds).sort(),
+        threads.map((thread) => thread.id).sort(),
+      );
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+test(
+  "a healthy linked worktree behind slow cwd candidates groups on a later read of the same instance",
+  { skip: process.platform === "win32" },
+  async () => {
+    const { execFileSync } = await import("node:child_process");
+    const root = await mkdtemp(path.join(os.tmpdir(), "zen-project-fair-git-"));
+    const main = path.join(root, "main");
+    const linked = path.join(root, "linked");
+    const bin = path.join(root, "bin");
+    const log = path.join(root, "starts");
+    const oldPath = process.env.PATH;
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { stdio: "pipe" });
+    try {
+      await mkdir(main);
+      git("-C", main, "init", "-q");
+      git(
+        "-C",
+        main,
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "fixture",
+      );
+      git("-C", main, "worktree", "add", "-q", "-b", "linked", linked);
+      await mkdir(bin);
+      await writeFile(
+        path.join(bin, "git"),
+        '#!/bin/sh\necho "$2" >> "$ZEN_PROJECT_PROBE_LOG"\ncase "$2" in *slow-*) exec sleep 9;; esac\nexec /usr/bin/git "$@"\n',
+      );
+      await chmod(path.join(bin, "git"), 0o755);
+      const slow = await Promise.all(
+        Array.from({ length: 8 }, async (_, index) => {
+          const cwd = path.join(root, `slow-${index}`);
+          await mkdir(cwd);
+          return { id: `slow-${index}`, cwd };
+        }),
+      );
+      const threads = [
+        ...slow,
+        { id: "main", cwd: main },
+        { id: "linked", cwd: linked },
+      ];
+      const original = structuredClone(threads);
+      process.env.PATH = `${bin}${path.delimiter}${oldPath ?? ""}`;
+      process.env.ZEN_PROJECT_PROBE_LOG = log;
+      const projection = new ZenXProjectProjection();
+      await projection.updateConfiguration([main], main);
+      let startedAt = performance.now();
+      const first = await projection.project(threads);
+      assert.ok(performance.now() - startedAt < 1800);
+      assert.equal(first.projects.length, 10);
+      assert.equal(
+        first.projects
+          .find((project) => project.workspace === main)
+          ?.threadIds.includes("linked"),
+        false,
+      );
+      let later = first;
+      let reads = 1;
+      // With a busy OS an execFile may be aborted before the wrapper starts;
+      // subsequent ordinary TTL reads still rotate by attempted slots.
+      while (reads < 3 && later.projects.length !== 9) {
+        await new Promise((resolve) => setTimeout(resolve, 10_050));
+        startedAt = performance.now();
+        later = await projection.project(threads);
+        assert.ok(performance.now() - startedAt < 1800);
+        reads++;
+      }
+      assert.deepEqual(
+        later.projects.find((project) => project.workspace === main)?.threadIds,
+        ["main", "linked"],
+        `Git starts after ${reads} reads: ${await readFile(log, "utf8").catch(() => "none")}`,
+      );
+      assert.equal(later.projects.length, 9);
+      assert.deepEqual(threads, original);
+      const started = (await readFile(log, "utf8")).trim().split("\n");
+      assert.ok(
+        started.length <= reads * 8,
+        `${started.length} Git children over ${reads} bounded reads`,
+      );
+      assert.ok(
+        started.includes(await realpath(linked)),
+        "the healthy linked path was actually probed",
+      );
+      // A success hint is scheduling only. Replacing the linked worktree with
+      // an independent repository must not reuse its old common-dir identity.
+      execFileSync(
+        "/usr/bin/git",
+        ["-C", main, "worktree", "remove", "--force", linked],
+        { stdio: "pipe" },
+      );
+      await mkdir(linked);
+      execFileSync("/usr/bin/git", ["-C", linked, "init", "-q"], {
+        stdio: "pipe",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10_050));
+      const replaced = await projection.project(threads);
+      assert.equal(replaced.projects.length, 10);
+      assert.deepEqual(
+        replaced.projects.find((project) => project.workspace === main)
+          ?.threadIds,
+        ["main"],
+      );
+      assert.deepEqual(
+        replaced.projects.find((project) => project.workspace === linked)
+          ?.threadIds,
+        ["linked"],
+      );
+      assert.ok(
+        (await readFile(log, "utf8"))
+          .trim()
+          .split("\n")
+          .slice(started.length)
+          .includes(await realpath(linked)),
+        "replacement was not re-probed",
+      );
+      // Losing Git entirely is a verified failure, not permission to preserve
+      // the last successful identity as a display authority.
+      await rm(path.join(linked, ".git"), { recursive: true, force: true });
+      await new Promise((resolve) => setTimeout(resolve, 10_050));
+      const noRepository = await projection.project(threads);
+      assert.equal(noRepository.projects.length, 10);
+      assert.deepEqual(
+        noRepository.projects.find((project) => project.workspace === linked)
+          ?.threadIds,
+        ["linked"],
+      );
+      assert.equal(await projection.configuredWorkspace(linked), null);
+      await projection.updateConfiguration([main, linked], main);
+      const explicit = await projection.project(threads);
+      assert.deepEqual(
+        explicit.projects.find((project) => project.workspace === main)
+          ?.threadIds,
+        ["main"],
+      );
+      assert.deepEqual(
+        explicit.projects.find((project) => project.workspace === linked)
+          ?.threadIds,
+        ["linked"],
+      );
+      assert.equal(
+        await startConfiguredProjectThread(
+          projection,
+          linked,
+          async ({ cwd }) => cwd,
+        ),
+        linked,
+      );
+      const extra = path.join(root, "new-candidate");
+      await mkdir(extra);
+      const changed = await projection.project([
+        ...threads.slice(1),
+        { id: "new", cwd: extra },
+      ]);
+      assert.deepEqual(
+        changed.projects.flatMap((project) => project.threadIds).sort(),
+        [...threads.slice(1).map((thread) => thread.id), "new"].sort(),
+      );
+      assert.deepEqual(
+        changed.projects.find((project) => project.workspace === linked)
+          ?.threadIds,
+        ["linked"],
+      );
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      delete process.env.ZEN_PROJECT_PROBE_LOG;
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

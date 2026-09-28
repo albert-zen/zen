@@ -1,5 +1,13 @@
+import { execFile } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+// Git is only a display enrichment. A visible sidebar must not wait through
+// four consecutive child timeouts when a filesystem or Git binary is slow.
+const GIT_PROJECTION_BUDGET_MS = 600;
+const GIT_PROJECTION_CONCURRENCY = 8;
 
 export interface ProjectProjectionThread {
   id: string;
@@ -82,6 +90,15 @@ const lexicalProjectRealpath: ProjectRealpath = async (candidate) => candidate;
 export class ZenXProjectProjection {
   readonly #platform: NodeJS.Platform;
   readonly #realpath: ProjectRealpath;
+  readonly #gitIdentities = new Map<
+    string,
+    { until: number; result: string | null; verified: boolean }
+  >();
+  // Ordering hint only: a past common-dir is never a current identity.
+  readonly #gitSuccessHints = new Map<string, number>();
+  #gitProbe: Promise<void> | null = null;
+  #activeGitProbes = 0;
+  #gitProbeOffset = 0;
   #configuration: ProjectConfigurationSnapshot = Object.freeze({
     names: Object.freeze({}),
     revision: 0,
@@ -187,7 +204,17 @@ export class ZenXProjectProjection {
       defaultIndex === undefined
         ? null
         : (identities[defaultIndex]?.key ?? null);
+    // A bounded, per-instance TTL avoids spawning Git on every renderer refresh.
+    // Only the list projection uses repository identity: configuration and start
+    // authorization still compare exact canonical workspace paths.
+    // Prefer configured roots if the list is exceptionally large; remaining
+    // entries retain ordinary path grouping rather than blocking the UI.
+    const gitGroups = await this.#gitGroups(
+      identities,
+      configuredWorkspaces[0]?.key ?? null,
+    );
     const projects = new Map<string, ZenXProjectProjectionEntry>();
+    const primaryByGit = new Map<string, string>();
     for (const workspace of configuredWorkspaces) {
       if (projects.has(workspace.key)) continue;
       projects.set(workspace.key, {
@@ -200,6 +227,10 @@ export class ZenXProjectProjection {
         isDefault: workspace.key === defaultKey,
         threadIds: [],
       });
+      const git = gitGroups.get(workspace.key);
+      if (git !== undefined && git !== null && !primaryByGit.has(git)) {
+        primaryByGit.set(git, workspace.key);
+      }
     }
     const unavailableThreadIds: string[] = [];
     let availableThreadIndex = 0;
@@ -216,15 +247,24 @@ export class ZenXProjectProjection {
         unavailableThreadIds.push(thread.id);
         continue;
       }
-      const project = projects.get(identity.key) ?? {
-        key: identity.key,
+      const git = gitGroups.get(identity.key);
+      const ownerKey = projects.has(identity.key)
+        ? identity.key
+        : ((git === null || git === undefined
+            ? undefined
+            : primaryByGit.get(git)) ?? identity.key);
+      const project = projects.get(ownerKey) ?? {
+        key: ownerKey,
         workspace: identity.displayPath,
         configured: true,
-        isDefault: identity.key === defaultKey,
+        isDefault: ownerKey === defaultKey,
         threadIds: [],
       };
       project.threadIds.push(thread.id);
-      projects.set(identity.key, project);
+      projects.set(ownerKey, project);
+      if (git !== null && git !== undefined && !primaryByGit.has(git)) {
+        primaryByGit.set(git, ownerKey);
+      }
     }
     const lastUsedKey =
       lastUsedIndex === undefined
@@ -281,6 +321,203 @@ export class ZenXProjectProjection {
     values: readonly string[],
   ): Promise<ProjectPathSnapshot> {
     return await projectPathSnapshot(values, this.#platform, this.#realpath);
+  }
+
+  async #gitGroups(
+    identities: ProjectPathSnapshot,
+    preferred: string | null,
+  ): Promise<Map<string, string | null>> {
+    const candidates = [
+      ...new Set(identities.map((identity) => identity.key)),
+    ].slice(0, 32);
+    const deadline = performance.now() + GIT_PROJECTION_BUDGET_MS;
+    // One owner probes at a time per projection instance. Other list reads
+    // reuse its bounded work and cached results; they never multiply children.
+    if (this.#gitProbe !== null)
+      await withinGitBudget(this.#gitProbe, deadline);
+    const missing = candidates.filter((candidate) => {
+      const entry = this.#gitIdentities.get(candidate);
+      return entry === undefined || entry.until <= Date.now();
+    });
+    if (
+      this.#gitProbe === null &&
+      missing.length > 0 &&
+      deadline > performance.now()
+    ) {
+      // Revalidate the configured root and recent successes first. Hints only
+      // order fresh probes; expired identities never group. Rotate all other
+      // paths by attempted slots so unknown/failed paths keep fair chances.
+      const primary =
+        preferred !== null && missing.includes(preferred) ? preferred : null;
+      const priority = [
+        ...(primary === null ? [] : [primary]),
+        ...missing.filter(
+          (candidate) =>
+            candidate !== primary &&
+            (this.#gitSuccessHints.get(candidate) ?? 0) > Date.now(),
+        ),
+      ];
+      const prioritySet = new Set(priority);
+      const rotating = missing.filter(
+        (candidate) => !prioritySet.has(candidate),
+      );
+      const offset =
+        rotating.length === 0 ? 0 : this.#gitProbeOffset % rotating.length;
+      const order = [
+        ...priority,
+        ...rotating.slice(offset),
+        ...rotating.slice(0, offset),
+      ];
+      const probe = this.#probeGit(order, deadline).then((attempted) => {
+        if (rotating.length > 0) {
+          this.#gitProbeOffset =
+            (offset + Math.max(0, attempted - priority.length)) %
+            rotating.length;
+        }
+      });
+      this.#gitProbe = probe;
+      try {
+        await probe;
+      } finally {
+        if (this.#gitProbe === probe) this.#gitProbe = null;
+      }
+    }
+    return new Map(
+      candidates.map((candidate) => {
+        const entry = this.#gitIdentities.get(candidate);
+        return [
+          candidate,
+          entry !== undefined && entry.until > Date.now() ? entry.result : null,
+        ];
+      }),
+    );
+  }
+
+  async #probeGit(
+    candidates: readonly string[],
+    deadline: number,
+  ): Promise<number> {
+    if (this.#platform !== process.platform) return 0;
+    let attempted = 0;
+    for (
+      let index = 0;
+      index < candidates.length && performance.now() < deadline;
+    ) {
+      const available = GIT_PROJECTION_CONCURRENCY - this.#activeGitProbes;
+      if (available <= 0) break; // A timed-out realpath or child has not settled yet.
+      const batch = candidates.slice(index, index + available);
+      index += batch.length;
+      attempted += batch.length;
+      const controllers = batch.map(() => new AbortController());
+      const work = Promise.all(
+        batch.map(async (candidate, offset) => {
+          this.#activeGitProbes++;
+          try {
+            const result = await this.#gitCommonDirectory(
+              candidate,
+              controllers[offset]!.signal,
+            );
+            // A late filesystem completion cannot publish or cache stale identity.
+            if (
+              performance.now() >= deadline ||
+              controllers[offset]!.signal.aborted
+            )
+              return;
+            if (this.#gitIdentities.size >= 256) this.#gitIdentities.clear();
+            this.#gitIdentities.set(candidate, {
+              until: Date.now() + 10_000,
+              result,
+              verified: true,
+            });
+            if (result === null) {
+              this.#gitSuccessHints.delete(candidate);
+            } else {
+              if (this.#gitSuccessHints.size >= 256)
+                this.#gitSuccessHints.clear();
+              this.#gitSuccessHints.set(candidate, Date.now() + 30_000);
+            }
+          } finally {
+            this.#activeGitProbes--;
+          }
+        }),
+      );
+      if (!(await withinGitBudget(work, deadline))) {
+        controllers.forEach((controller) => controller.abort());
+        break;
+      }
+    }
+    // Cool down paths not reached before this read's deadline as well. Without
+    // this, callers already waiting on the same probe can launch another batch
+    // immediately after its gate releases (8 children per caller rather than
+    // one shared bounded attempt). A later ordinary read retries after TTL.
+    for (const candidate of candidates) {
+      const entry = this.#gitIdentities.get(candidate);
+      if (entry !== undefined && entry.until > Date.now()) continue;
+      if (this.#gitIdentities.size >= 256) this.#gitIdentities.clear();
+      this.#gitIdentities.set(candidate, {
+        until: Date.now() + 10_000,
+        result: null,
+        verified: false,
+      });
+    }
+    return attempted;
+  }
+
+  async #gitCommonDirectory(
+    candidate: string,
+    signal: AbortSignal,
+  ): Promise<string | null> {
+    try {
+      // Git environment overrides can redirect -C to a different repository.
+      const env = Object.fromEntries(
+        Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
+      );
+      const { stdout } = await execFileAsync(
+        "git",
+        [
+          "-C",
+          candidate,
+          "rev-parse",
+          "--is-inside-work-tree",
+          "--path-format=absolute",
+          "--git-common-dir",
+        ],
+        { env, signal, timeout: 1200, maxBuffer: 4096, encoding: "utf8" },
+      );
+      const [inside, common, ...extra] = stdout.trim().split(/\r?\n/u);
+      if (
+        inside !== "true" ||
+        extra.length > 0 ||
+        !common ||
+        !path.isAbsolute(common)
+      )
+        return null;
+      const physical = await realpath(common);
+      return this.#platform === "win32"
+        ? physical.toLocaleLowerCase("en-US")
+        : physical;
+    } catch {
+      return null;
+    }
+  }
+}
+
+async function withinGitBudget(
+  work: Promise<unknown>,
+  deadline: number,
+): Promise<boolean> {
+  const remaining = Math.max(0, deadline - performance.now());
+  if (remaining === 0) return false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work.then(() => true),
+      new Promise<false>((resolve) => {
+        timer = setTimeout(() => resolve(false), remaining);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
