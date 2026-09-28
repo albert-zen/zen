@@ -13,7 +13,8 @@ import type {
   RemoteThreadView,
   RemoteThreadSummary,
   RemoteEventView,
-  RemoteRecoverySnapshot,
+  RemoteRecoveryPage,
+  RemoteRecoveryEntry,
   RemoteErrorCode,
 } from "./remote-wire.js";
 export { REMOTE_HOST_VERSION } from "./remote-wire.js";
@@ -26,7 +27,8 @@ export type {
   RemoteThreadView,
   RemoteThreadSummary,
   RemoteEventView,
-  RemoteRecoverySnapshot,
+  RemoteRecoveryPage,
+  RemoteRecoveryEntry,
   RemoteErrorCode,
 } from "./remote-wire.js";
 /** Host-only allowlist entry; cwd never appears in the mobile wire. */
@@ -86,6 +88,12 @@ function publicEvent(projected: NativeProjectedThreadEvent): RemoteEventView {
     if (item !== null) safe = { type: "item_completed", item };
   } else if (event.type === "turn_started")
     safe = { type: "turn_started", turnId: event.turnId };
+  else if (event.type === "turn_completed")
+    safe = {
+      type: "turn_completed",
+      turnId: event.turnId,
+      status: event.status,
+    };
   return {
     processEpoch: projected.processEpoch,
     threadId: projected.threadId,
@@ -99,6 +107,121 @@ export class RemoteHostError extends Error {
     super(code);
     this.name = "RemoteHostError";
   }
+}
+
+export interface RemoteRecoveryPosition {
+  itemIndex: number;
+  textOffset: number;
+}
+export interface RemoteRecoveryBoundary {
+  processEpoch: string;
+  threadId: string;
+  watermark: number;
+  itemCount: number;
+}
+/** Response body is below the transport's 2 MiB cap even with a 64 KiB request id. */
+export const REMOTE_RECOVERY_PAGE_BYTES = 256 * 1024;
+/** Only a position and recent page, never a second complete ItemList, survive between requests. */
+export function projectRemoteRecoveryPage(
+  thread: ThreadSnapshot,
+  boundary: RemoteRecoveryBoundary,
+  position: RemoteRecoveryPosition,
+): { page: RemoteRecoveryPage; next: RemoteRecoveryPosition | null } {
+  if (
+    thread.id !== boundary.threadId ||
+    thread.items.length < boundary.itemCount ||
+    !Number.isSafeInteger(position.itemIndex) ||
+    position.itemIndex < 0 ||
+    position.itemIndex > boundary.itemCount ||
+    !Number.isSafeInteger(position.textOffset) ||
+    position.textOffset < 0
+  )
+    throw new RemoteHostError("resync_required");
+  const page: RemoteRecoveryPage = {
+    processEpoch: boundary.processEpoch,
+    threadId: boundary.threadId,
+    watermark: boundary.watermark,
+    thread: {
+      id: thread.id,
+      ...(thread.name === undefined ? {} : { name: thread.name }),
+      archived: thread.archived,
+    },
+    entries: [],
+    nextCursor: null,
+  };
+  const fits = (entry?: RemoteRecoveryEntry) =>
+    Buffer.byteLength(
+      JSON.stringify({
+        ...page,
+        entries: entry === undefined ? page.entries : [...page.entries, entry],
+        nextCursor: "x".repeat(64),
+      }),
+    ) <= REMOTE_RECOVERY_PAGE_BYTES;
+  if (!fits()) throw new RemoteHostError("entry_too_large");
+  let { itemIndex, textOffset } = position;
+  while (itemIndex < boundary.itemCount) {
+    const publicItem = projectRemoteItem(thread.items[itemIndex]!);
+    if (publicItem === null) {
+      if (textOffset !== 0) throw new RemoteHostError("resync_required");
+      itemIndex += 1;
+      continue;
+    }
+    const turn =
+      publicItem.type === "turn_started"
+        ? thread.turns.find(({ id }) => id === publicItem.turnId)
+        : undefined;
+    const attachedTurn =
+      turn === undefined ? {} : { turn: { id: turn.id, status: turn.status } };
+    if (textOffset === 0) {
+      const full: RemoteRecoveryEntry = {
+        kind: "item",
+        item: publicItem,
+        ...attachedTurn,
+      };
+      if (fits(full)) {
+        page.entries.push(full);
+        itemIndex += 1;
+        continue;
+      }
+    }
+    const text = publicItem.text;
+    if (text === undefined || textOffset >= text.length) {
+      if (page.entries.length > 0 && textOffset === 0) break;
+      throw new RemoteHostError("entry_too_large");
+    }
+    const { text: _text, ...metadata } = publicItem;
+    let low = 1,
+      high = text.length - textOffset,
+      best = 0;
+    const fragment = (count: number): RemoteRecoveryEntry => ({
+      kind: "text_fragment",
+      item: metadata,
+      offset: textOffset,
+      text: text.slice(textOffset, textOffset + count),
+      complete: textOffset + count === text.length,
+    });
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      if (fits(fragment(mid))) {
+        best = mid;
+        low = mid + 1;
+      } else high = mid - 1;
+    }
+    if (best === 0) {
+      if (page.entries.length > 0) break;
+      throw new RemoteHostError("entry_too_large");
+    }
+    page.entries.push(fragment(best));
+    textOffset += best;
+    if (textOffset === text.length) {
+      textOffset = 0;
+      itemIndex += 1;
+    }
+  }
+  return {
+    page,
+    next: itemIndex >= boundary.itemCount ? null : { itemIndex, textOffset },
+  };
 }
 
 interface Device {
@@ -203,6 +326,7 @@ export class RemoteHostAccess {
         "threads",
         "create",
         "resume",
+        "resumePage",
         "send",
         "interrupt",
       ],
@@ -304,22 +428,42 @@ export class RemoteHostAccess {
       }),
     );
   }
-  async resume(
+  async beginRecovery(
     deviceId: string,
     token: string,
     workspaceId: string,
     threadId: string,
-  ): Promise<RemoteRecoverySnapshot> {
+  ): Promise<{ boundary: RemoteRecoveryBoundary; thread: ThreadSnapshot }> {
     await this.#thread(deviceId, token, workspaceId, threadId);
     const snapshot = await this.#projection.resume(threadId);
     await this.#thread(deviceId, token, workspaceId, threadId);
     return {
-      processEpoch: snapshot.processEpoch,
-      threadId: snapshot.threadId,
-      watermark: snapshot.watermark,
-      thread: publicThread(snapshot.thread),
-      events: snapshot.events.map(publicEvent),
+      boundary: {
+        processEpoch: snapshot.processEpoch,
+        threadId: snapshot.threadId,
+        watermark: snapshot.watermark,
+        itemCount: snapshot.thread.items.length,
+      },
+      thread: snapshot.thread,
     };
+  }
+  async recoveryThread(
+    deviceId: string,
+    token: string,
+    workspaceId: string,
+    boundary: RemoteRecoveryBoundary,
+  ): Promise<ThreadSnapshot> {
+    if (boundary.processEpoch !== this.#projection.processEpoch)
+      throw new RemoteHostError("resync_required");
+    const thread = await this.#thread(
+      deviceId,
+      token,
+      workspaceId,
+      boundary.threadId,
+    );
+    if (thread.items.length < boundary.itemCount)
+      throw new RemoteHostError("resync_required");
+    return thread;
   }
   async send(
     deviceId: string,
@@ -381,9 +525,10 @@ export class RemoteHostAccess {
     token: string,
     workspaceId: string,
     threadId: string,
-    listener: (event: RemoteEventView) => void,
+    listener: (event: RemoteEventView | null) => void,
   ): () => void {
     let disposed = false;
+    let inFlight = 0;
     let chain = Promise.resolve();
     const unsubscribe = this.#projection.subscribe((projected) => {
       if (
@@ -391,14 +536,23 @@ export class RemoteHostAccess {
         projected.event.threadId !== threadId
       )
         return;
+      if (inFlight >= 256) {
+        disposed = true;
+        unsubscribe();
+        listener(null); // canonical restart, not a silent event gap
+        return;
+      }
+      inFlight += 1;
       const event = projected.event;
       chain = chain.then(async () => {
-        if (disposed) return;
         try {
+          if (disposed) return;
           await this.#thread(deviceId, token, workspaceId, threadId);
           if (!disposed) listener(publicEvent(event));
         } catch {
           /* authorization changed; never publish */
+        } finally {
+          inFlight -= 1;
         }
       });
     });

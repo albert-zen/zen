@@ -1,14 +1,16 @@
 /** Pure native ZAS mobile wire types: safe to import as types in React Native. */
-export const REMOTE_HOST_VERSION = 0;
+export const REMOTE_HOST_VERSION = 1;
 export const REMOTE_METHODS = {
   hello: "zen/remote/hello",
   workspaces: "zen/remote/workspaces",
   threads: "zen/remote/threads",
   create: "zen/remote/create",
   resume: "zen/remote/resume",
+  resumePage: "zen/remote/resume/page",
   send: "zen/remote/send",
   interrupt: "zen/remote/interrupt",
   event: "zen/remote/thread/event",
+  reset: "zen/remote/thread/reset",
 } as const;
 export interface RemoteWorkspaceView {
   id: string;
@@ -64,14 +66,34 @@ export interface RemoteEventView {
   event:
     | { type: "item_completed"; item: RemoteItemView }
     | { type: "turn_started"; turnId: string }
+    | { type: "turn_completed"; turnId: string; status: RemoteTurnStatus }
     | { type: "redacted" };
 }
-export interface RemoteRecoverySnapshot {
+export type RemoteRecoveryEntry =
+  | {
+      kind: "item";
+      item: RemoteItemView;
+      turn?: { id: string; status: RemoteTurnStatus };
+    }
+  | {
+      kind: "text_fragment";
+      item: Omit<RemoteItemView, "text">;
+      offset: number;
+      text: string;
+      complete: boolean;
+    };
+/** A page is incomplete until nextCursor is null; fragments are not Items. */
+export interface RemoteRecoveryPage {
   processEpoch: string;
   threadId: string;
   watermark: number;
-  thread: RemoteThreadView;
-  events: RemoteEventView[];
+  thread: Pick<RemoteThreadView, "id" | "name" | "archived">;
+  entries: RemoteRecoveryEntry[];
+  nextCursor: string | null;
+}
+export interface RemoteResetParams {
+  threadId: string;
+  reason: "resync_required";
 }
 export type RemoteErrorCode =
   | "unauthorized"
@@ -84,7 +106,10 @@ export type RemoteErrorCode =
   | "idempotency_conflict"
   | "operation_forbidden"
   | "unsupported_version"
-  | "invalid_request";
+  | "invalid_request"
+  | "stale_cursor"
+  | "resync_required"
+  | "entry_too_large";
 
 export interface RemoteRequestParams {
   [REMOTE_METHODS.hello]: { version: number; hostId: string };
@@ -92,6 +117,7 @@ export interface RemoteRequestParams {
   [REMOTE_METHODS.threads]: { workspaceId: string };
   [REMOTE_METHODS.create]: { workspaceId: string };
   [REMOTE_METHODS.resume]: { workspaceId: string; threadId: string };
+  [REMOTE_METHODS.resumePage]: { cursor: string };
   [REMOTE_METHODS.send]: RemoteSend;
   [REMOTE_METHODS.interrupt]: {
     workspaceId: string;
@@ -109,7 +135,8 @@ export interface RemoteResponseResults {
   [REMOTE_METHODS.workspaces]: { workspaces: RemoteWorkspaceView[] };
   [REMOTE_METHODS.threads]: { threads: RemoteThreadSummary[] };
   [REMOTE_METHODS.create]: RemoteThreadView;
-  [REMOTE_METHODS.resume]: RemoteRecoverySnapshot;
+  [REMOTE_METHODS.resume]: RemoteRecoveryPage;
+  [REMOTE_METHODS.resumePage]: RemoteRecoveryPage;
   [REMOTE_METHODS.send]: { turnId: string };
   [REMOTE_METHODS.interrupt]: Record<string, never>;
 }
