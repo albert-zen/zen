@@ -124,10 +124,14 @@ export function createSession(transport, publish) {
         if (result.accepted) await refresh(epoch, h, w);
       } catch (e) {
         if (current(epoch, h, w))
-          emit({
-            command: "uncertain",
-            error: `Delivery unconfirmed: ${String(e)}. Do not retry without checking Host.`,
-          });
+          emit(
+            e?.confirmedRejection === true
+              ? { command: null, error: String(e) }
+              : {
+                  command: "uncertain",
+                  error: `Delivery unconfirmed: ${String(e)}. Do not retry without checking Host.`,
+                },
+          );
       }
     },
     dispose() {

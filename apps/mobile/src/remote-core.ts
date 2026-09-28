@@ -43,6 +43,15 @@ const mapThreads = (threads: RemoteThreadSummary[]) =>
     status: t.status,
   }));
 
+export class RemoteRejectedError extends Error {
+  readonly confirmedRejection = true;
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(`Host ${code}: ${message}`);
+  }
+}
 // Android uses OS TLS verification. No skipTLSverify and no plaintext fallback.
 export type RemoteDependencies = {
   getSecret(key: string): Promise<string | null>;
@@ -248,8 +257,9 @@ export class RemoteHostTransport {
     this.pending.delete(data.id);
     if (data.error)
       pending.reject(
-        Error(
-          `Host ${String(data.error?.data?.code ?? "error")}: ${String(data.error?.message ?? "rejected")}`,
+        new RemoteRejectedError(
+          String(data.error?.data?.code ?? "error"),
+          String(data.error?.message ?? "rejected"),
         ),
       );
     else pending.resolve(data.result);

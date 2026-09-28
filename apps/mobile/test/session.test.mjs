@@ -117,3 +117,23 @@ test("stale read and repeat refresh never resurrect old items or duplicate subsc
   assert.deepEqual(session.get().items, []);
   assert.equal(active, 1);
 });
+test("explicit Host rejection is distinct from unknown network delivery", async () => {
+  const transport = {
+    snapshot: async () => ({ workspaces: [], threads: [] }),
+    subscribe: () => () => {},
+    read: async () => [],
+    command: async () => {
+      throw Object.assign(Error("Host operation_forbidden"), {
+        confirmedRejection: true,
+      });
+    },
+  };
+  const session = createSession(transport, () => {});
+  session.selectHost("a");
+  await tick();
+  session.selectWorkspace("w");
+  await tick();
+  await session.command("send", { text: "x" });
+  assert.equal(session.get().command, null);
+  assert.match(session.get().error, /operation_forbidden/);
+});

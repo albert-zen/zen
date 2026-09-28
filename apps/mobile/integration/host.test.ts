@@ -175,6 +175,25 @@ test("Android client transport pairs over trusted TLS, shares Host authority wit
       } finally {
         second.terminate();
       }
+      const full = await host.startThread({
+        cwd: dir,
+        sandbox: "danger-full-access",
+        approvalPolicy: "never",
+      });
+      await mobile.read("isolated-test", "w", full.id);
+      await assert.rejects(
+        mobile.command("isolated-test", "w", "send", {
+          threadId: full.id,
+          text: "do not run",
+        }),
+        /operation_forbidden/,
+      );
+      assert.equal(
+        (await host.readThread(full.id)).items.filter(
+          (item) => item.type === "user_message",
+        ).length,
+        0,
+      );
       access.revoke(JSON.parse([...secrets.values()][0]!).deviceId);
       await assert.rejects(
         mobile.snapshot("isolated-test", "w"),
