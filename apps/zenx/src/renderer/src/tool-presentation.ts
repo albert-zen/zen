@@ -1,4 +1,36 @@
 import type { IconName } from "./icons.js";
+import type { ThreadItem } from "../../protocol-client/index.js";
+
+/** One display phase for both a tool row and its enclosing trace summary. */
+export function commandStatus(
+  item: Extract<ThreadItem, { type: "commandExecution" }>,
+): string {
+  const data = item.structuredContent;
+  if (
+    item.contentType === "application/vnd.zen.tool-task+json" &&
+    typeof data === "object" &&
+    data !== null &&
+    !Array.isArray(data) &&
+    "status" in data
+  ) {
+    if (data.status === "queued") return "Queued";
+    if (data.status === "running")
+      return item.toolName === "wait" ? "Waiting" : "Running";
+    if (data.status === "cancel_requested") return "Cancelling";
+    if (data.status === "cancellation_unconfirmed")
+      return "Cancellation unconfirmed";
+    if (data.status === "failed") return "Failed";
+    if (data.status === "completed") return "Done";
+    if (data.status === "timed_out") return "Timed out";
+    if (data.status === "cancelled") return "Cancelled";
+  }
+  return {
+    inProgress: "Started",
+    completed: "Done",
+    failed: "Failed",
+    declined: "Declined",
+  }[item.status];
+}
 
 // These are presentation labels for known capabilities, never execution routing.
 const actions: Record<string, string> = {

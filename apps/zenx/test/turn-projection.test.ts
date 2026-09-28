@@ -38,6 +38,39 @@ test("group summary does not claim unfinished tools have been used", () => {
   );
 });
 
+test("grouped task receipts preserve the same wait and terminal phases as their rows", () => {
+  const wait = {
+    ...command("wait-item", "wait"),
+    toolName: "wait",
+    contentType: "application/vnd.zen.tool-task+json",
+    structuredContent: { status: "running" },
+  };
+  const cases = [
+    [wait, "Reasoning · Waiting wait"],
+    [
+      { ...wait, structuredContent: { status: "timed_out" } },
+      "Reasoning · Timed out wait",
+    ],
+    [
+      {
+        ...wait,
+        status: "declined" as const,
+        contentType: undefined,
+        structuredContent: undefined,
+      },
+      "Reasoning · Declined wait",
+    ],
+  ] as const;
+  for (const [item, label] of cases) {
+    const grouped = projectTurn(turn("completed", [reasoning("r", ""), item]))
+      .history[0];
+    assert.equal(grouped?.kind, "traceGroup");
+    if (grouped?.kind !== "traceGroup") continue;
+    assert.equal(grouped.summary, label);
+    assert.equal(traceSummary(grouped.items), label);
+  }
+});
+
 test("groups only consecutive reasoning and tool Items", () => {
   const projection = projectTurn(
     turn("inProgress", [

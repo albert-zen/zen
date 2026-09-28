@@ -1813,6 +1813,48 @@ test("yielded shell work reports the actual task receipt phase", async () => {
   });
 });
 
+test("folded task group and expanded wait row use the same receipt phase", async () => {
+  await withDom(async (root) => {
+    const base = commandItem("wait-item", "wait");
+    if (base.type !== "commandExecution") throw new Error("missing command");
+    const wait = {
+      ...base,
+      toolName: "wait",
+      contentType: "application/vnd.zen.tool-task+json",
+      structuredContent: { status: "running" },
+    };
+    const reasoning = reasoningItem("reason-wait", [], ["Waiting for task"]);
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [reasoning, wait]),
+    );
+    const group = requiredButton(".trace-toggle");
+    assert.equal(group.getAttribute("aria-expanded"), "false");
+    assert.match(group.textContent ?? "", /Reasoning · Waiting wait/u);
+    await act(async () => group.click());
+    assert.equal(group.getAttribute("aria-expanded"), "true");
+    assert.equal(
+      requiredElement(".trace-items .tool-status").textContent,
+      "Waiting",
+    );
+
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        reasoning,
+        { ...wait, structuredContent: { status: "timed_out" } },
+      ]),
+    );
+    assert.match(group.textContent ?? "", /Reasoning · Timed out wait/u);
+    assert.equal(
+      requiredElement(".trace-items .tool-status").textContent,
+      "Timed out",
+    );
+    await act(async () => group.click());
+    assert.equal(group.getAttribute("aria-expanded"), "false");
+  });
+});
+
 test("generic tool task observations distinguish waiting and unconfirmed cancellation", async () => {
   await withDom(async (root) => {
     const base = commandItem("image-task", "generate image");
