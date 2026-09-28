@@ -31,6 +31,9 @@
 - **Host 配置候选** — prepare 产生绑定 processEpoch 与 revision 的瞬时候选，publish/discard 幂等且进程退出即丢弃；候选不成为持久配置权威。
 - **Host Provider 资源** — Host 按连接身份复用 adapter/transport，由配置快照与执行持有共同决定寿命，最后引用结束后异步关闭。
 - **原生恢复投影** — ZAS 为每个 Thread 保留当前 processEpoch 的单调水位与活动显示尾部，在恢复快照中与 canonical 历史一起交付，不重放执行或保存第二份会话权威。
+- **远程设备接入边界** — 可选的 Host-owned 原生 ZAS 网关以独立设备凭证、Host 身份和当前授权 workspace 约束读取/创建/发送/停止，只转交唯一 AppServer 的 canonical 权威，不暴露本机 descriptor、不复制 Thread 或改变默认 loopback listener。
+- **远程配对会话** — 本机管理员签发的一次性短期配对 code 只换取有界设备凭证，撤销和权限属于 Host 外部配置而非 Thread Item，未收到确认的发送只能用原 clientId 查询或幂等重试。
+- **CLI 远程试验配置** — 显式、仅该进程的受保护配置文件为隔离 CLI Host 提供 TLS 身份、稳定 hostId 与工作空间 allowlist，而非修改 ZenX 日用 profile 或将配置当会话权威。
 
 五个概念，各一句话。新抽象必须先在这里获得自己的一句话。
 
