@@ -161,12 +161,20 @@ test("packaged Rooms installs offline through profile discovery and preserves it
 
     // Installed profile loader (not a source-runtime stand-in) must preserve
     // the Host-minted distinction when an Agent supplies a forged nested input.
-    const forgedList = await capabilities.execute(
-      invocation("agent-list", "zenx_rooms_list", { input: { cursor: 0 } }),
+    await assert.rejects(
+      capabilities.execute(
+        invocation("agent-forged-list", "zenx_rooms_list", {
+          input: { cursor: 0 },
+        }),
+      ),
+      /Trusted Room UI required/u,
+    );
+    const ordinaryAgentList = await capabilities.execute(
+      invocation("agent-list", "zenx_rooms_list", { cursor: 0 }),
     );
     assert.equal(
       (
-        JSON.parse(forgedList.output) as {
+        JSON.parse(ordinaryAgentList.output) as {
           rooms: Array<{ operationEpoch?: string }>;
         }
       ).rooms[0]?.operationEpoch,
