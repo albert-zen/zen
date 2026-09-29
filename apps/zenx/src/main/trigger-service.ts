@@ -404,6 +404,7 @@ export class ZenXTriggerService {
         existing.active,
         this.#now(),
       );
+      replacement.definitionRevision = (existing.definitionRevision ?? 0) + 1;
       snapshot.triggers[index] = replacement;
       return replacement;
     });
@@ -419,6 +420,37 @@ export class ZenXTriggerService {
       );
       if (trigger === undefined) throw new Error("Trigger was not found");
       trigger.active = false;
+      trigger.definitionRevision = (trigger.definitionRevision ?? 0) + 1;
+    });
+    this.#rescheduleTimers(generation);
+  }
+
+  async resume(
+    triggerId: string,
+    expectedDefinition?: ZenXTrigger | number,
+  ): Promise<void> {
+    const generation = this.#runningGeneration();
+    await this.#mutate(generation, async (snapshot) => {
+      const trigger = snapshot.triggers.find(
+        (item) => item.id === required(triggerId, "trigger"),
+      );
+      if (trigger === undefined) throw new Error("Trigger was not found");
+      if (
+        expectedDefinition !== undefined &&
+        (typeof expectedDefinition === "number"
+          ? (trigger.definitionRevision ?? 0) !== expectedDefinition
+          : JSON.stringify(trigger) !== JSON.stringify(expectedDefinition))
+      )
+        throw new Error(
+          "Trigger definition changed during validation; refresh before enabling",
+        );
+      if (trigger.active) return;
+      if (trigger.timer !== undefined && trigger.timer.nextRunAt <= this.#now())
+        throw new Error(
+          "Timer is in the past; edit the next run time before resuming",
+        );
+      trigger.active = true;
+      trigger.definitionRevision = (trigger.definitionRevision ?? 0) + 1;
     });
     this.#rescheduleTimers(generation);
   }

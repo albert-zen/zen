@@ -51,6 +51,8 @@ export interface TriggerProgramInput {
 
 export interface ZenXTrigger {
   id: string;
+  /** Monotonic definition mutation fence; legacy definitions start at zero. */
+  definitionRevision?: number;
   threadId: string;
   kind: TriggerKind;
   label: string;

@@ -486,6 +486,11 @@ export class ZenAppServer {
     }));
   }
 
+  /** Trusted Host runtime defaults used by thread/start, not renderer settings. */
+  threadStartDefaults(): AppServerDefaults {
+    return { ...this.#runtimeConfiguration.defaults };
+  }
+
   completeProviderSelection(
     current: ProviderSelection,
     input: ProviderSelectionInput,

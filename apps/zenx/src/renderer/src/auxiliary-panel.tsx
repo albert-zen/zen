@@ -30,6 +30,7 @@ interface ContentTab {
   browser?: WorkspaceBrowserTab;
 }
 export function AuxiliaryPanel({
+  navigate,
   threadId,
   title,
   open,
@@ -50,6 +51,7 @@ export function AuxiliaryPanel({
     value: string;
   } | null;
   onWidthChange?(width: number): void;
+  navigate?(route: string): void;
   fileDrafts?: WorkspaceFileDrafts;
   workspacePath?: string;
   threadId: string;
@@ -694,6 +696,7 @@ export function AuxiliaryPanel({
                 theme={theme}
                 executeCommand={window.zenx.plugins.executeCommand}
                 readHandle={window.zenx.plugins.readHandle}
+                navigate={navigate}
               />
             ) : null}
           </div>

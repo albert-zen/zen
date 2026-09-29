@@ -51,6 +51,7 @@ export interface HostConfigurationCurrent {
   processEpoch: string;
   revision: number;
   pendingRestart: string[];
+  threadStartDefaults?: import("../../../../src/app-server.js").AppServerDefaults;
 }
 
 export type ZenXSingleProviderHostConfig = ZenXHostConfig &
@@ -468,7 +469,16 @@ function isHostConfigurationCurrent(
     Array.isArray((value as { pendingRestart?: unknown }).pendingRestart) &&
     (value as { pendingRestart: unknown[] }).pendingRestart.every(
       (domain) => typeof domain === "string",
-    )
+    ) &&
+    ((value as HostConfigurationCurrent).threadStartDefaults === undefined ||
+      (typeof (value as HostConfigurationCurrent).threadStartDefaults
+        ?.providerProfileId === "string" &&
+        typeof (value as HostConfigurationCurrent).threadStartDefaults
+          ?.modelId === "string" &&
+        typeof (value as HostConfigurationCurrent).threadStartDefaults
+          ?.sandbox === "string" &&
+        typeof (value as HostConfigurationCurrent).threadStartDefaults
+          ?.approvalPolicy === "string"))
   );
 }
 
