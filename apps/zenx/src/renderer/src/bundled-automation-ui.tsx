@@ -3,6 +3,7 @@ import type { ThreadCandidate } from "../../main/thread-target.js";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import { threadTitle } from "./thread-list.js";
 import { Select, Combobox } from "./ui/controls.js";
+import { Markdown } from "./Markdown.js";
 
 import type {
   TriggerKind,
@@ -502,200 +503,487 @@ export function TriggersPanel({ sdk }: PluginUiSurfaceProps) {
 export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const [data, setData] = useState<RoomListResult>({ rooms: [] });
   const [selected, setSelected] = useState<string | null>(null);
+  const [panel, setPanel] = useState<"create" | "manage" | null>(null);
   const [name, setName] = useState("");
   const [memberName, setMemberName] = useState("");
   const [threadId, setThreadId] = useState("");
-  const [draft, setDraft] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [threads, setThreads] = useState<NativeThreadSummary[]>([]);
   const [busy, setBusy] = useState(false);
+  const sending = useRef(false);
+  const [pending, setPending] = useState<{
+    roomId: string;
+    ids: string[];
+    text: string;
+  } | null>(null);
+  const pendingRef = useRef<{
+    roomId: string;
+    ids: string[];
+    text: string;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const feed = useRef<HTMLDivElement>(null);
+  const lastMessage = useRef<string | null>(null);
+  const lastRoom = useRef<string | null>(null);
+  const stickToBottom = useRef(true);
   const refresh = async () => {
     const next = (await sdk.commands.execute("list")) as RoomListResult;
     setData(next);
     setSelected((current) =>
-      current !== null && next.rooms.some((room) => room.id === current)
+      current !== null && next.rooms.some((entry) => entry.id === current)
         ? current
         : (next.rooms[0]?.id ?? null),
     );
+    const uncertain = pendingRef.current;
+    if (uncertain !== null) {
+      const room = next.rooms.find((entry) => entry.id === uncertain.roomId);
+      if (
+        room?.messages.some(
+          (entry) =>
+            !uncertain.ids.includes(entry.id) &&
+            entry.kind === "human" &&
+            entry.text === uncertain.text,
+        )
+      ) {
+        pendingRef.current = null;
+        setPending(null);
+        setDrafts((drafts) => ({
+          ...drafts,
+          [uncertain.roomId]:
+            drafts[uncertain.roomId] === uncertain.text
+              ? ""
+              : (drafts[uncertain.roomId] ?? ""),
+        }));
+        setError(
+          "Message saved. Mention delivery may still have failed; check Trigger history.",
+        );
+      }
+    }
+    setLoading(false);
   };
   useEffect(() => {
     void window.zenx.threads
       .list()
       .then(setThreads)
       .catch((reason: unknown) => setError(describeError(reason)));
-    void refresh().catch((reason: unknown) => setError(describeError(reason)));
+    void refresh().catch((reason: unknown) => {
+      setLoading(false);
+      setError(describeError(reason));
+    });
+    const timer = setInterval(
+      () =>
+        void refresh().catch((reason: unknown) =>
+          setError(describeError(reason)),
+        ),
+      3000,
+    );
+    return () => clearInterval(timer);
   }, [sdk]);
-  const room = data.rooms.find((candidate) => candidate.id === selected);
+  const room = data.rooms.find((entry) => entry.id === selected);
+  const draft = room === undefined ? "" : (drafts[room.id] ?? "");
+  const tail = room?.messages.at(-1)?.id ?? null;
+  useEffect(() => {
+    if (
+      selected !== lastRoom.current ||
+      (tail !== lastMessage.current && stickToBottom.current)
+    ) {
+      if (feed.current) feed.current.scrollTop = feed.current.scrollHeight;
+    }
+    lastRoom.current = selected;
+    lastMessage.current = tail;
+  }, [selected, tail]);
   const run = async (command: string, input: unknown) => {
-    if (busy) return false;
+    if (sending.current || busy) return false;
     setBusy(true);
     setError(null);
     try {
-      await sdk.commands.execute(command, input);
+      const result = await sdk.commands.execute(command, input);
       await refresh();
+      if (
+        command === "create" &&
+        result &&
+        typeof result === "object" &&
+        "id" in result &&
+        typeof result.id === "string"
+      )
+        setSelected(result.id);
       return true;
     } catch (reason) {
-      setError(describeError(reason));
+      setError(
+        `Result unknown; refresh before repeating. ${describeError(reason)}`,
+      );
+      void refresh().catch(() => {});
       return false;
     } finally {
       setBusy(false);
     }
   };
+  const send = async () => {
+    if (!room || !draft.trim() || sending.current || busy || pending !== null)
+      return;
+    const text = draft;
+    const roomId = room.id;
+    const ids = room.messages.map((entry) => entry.id);
+    sending.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      await sdk.commands.execute("post-message", { roomId, text });
+      setDrafts((current) => ({
+        ...current,
+        [roomId]: current[roomId] === text ? "" : (current[roomId] ?? ""),
+      }));
+      setError(
+        text.includes("@")
+          ? "Message saved. Mention delivery is separate; check Trigger history for wake status."
+          : null,
+      );
+      await refresh();
+    } catch (reason) {
+      pendingRef.current = { roomId, ids, text };
+      setPending(pendingRef.current);
+      setError(
+        `Send result unknown; do not resend. Refresh to check if the message was saved. ${describeError(reason)}`,
+      );
+      void refresh().catch(() => {});
+    } finally {
+      sending.current = false;
+      setBusy(false);
+    }
+  };
   return (
-    <div className="page-scroll rooms-overview">
-      <div className="page-intro">
-        <div>
-          <h2>Rooms</h2>
-          <p>
-            Bring conversations together. Mention a registered member to wake
-            its agent; other messages stay in the room.
-          </p>
-        </div>
-      </div>
-      <div className="page-card room-create-card">
-        <h2>New Room</h2>
-        <Field label="Room name" value={name} onChange={setName} />
-        <Field
-          label="First member"
-          value={memberName}
-          onChange={setMemberName}
-        />
-        <label className="field">
-          <span>Member conversation</span>
-          <Combobox
-            label="Member conversation"
-            value={threadId}
-            onValueChange={setThreadId}
+    <div className="rooms-chat">
+      <nav className="rooms-chat-list" aria-label="Rooms">
+        <div className="rooms-chat-list-head">
+          <strong>Rooms</strong>
+          <button
+            type="button"
+            onClick={() => {
+              setName("");
+              setMemberName("");
+              setThreadId("");
+              setPanel("create");
+            }}
           >
-            {threads.map((thread) => (
-              <option key={thread.threadId} value={thread.threadId}>
-                {threadTitle(thread)} · {thread.threadId} ·{" "}
-                {"currentMetadata" in thread
-                  ? thread.currentMetadata.cwd
-                  : "Unavailable workspace"}
-              </option>
-            ))}
-          </Combobox>
-        </label>
-        <button
-          className="primary-button"
-          disabled={busy || !name.trim() || !memberName.trim() || !threadId}
-          type="button"
-          onClick={() =>
-            void run("create", {
-              name,
-              members: [{ name: memberName, threadId }],
-            }).then((saved) => {
-              if (saved) setName("");
-            })
-          }
-        >
-          Create Room
-        </button>
-      </div>
-      {error === null ? null : <p role="alert">{error}</p>}
-      <div className="rooms-layout">
-        <nav className="room-list" aria-label="Rooms">
-          {data.rooms.map((candidate) => (
-            <button
-              key={candidate.id}
-              aria-current={candidate.id === selected ? "true" : undefined}
-              type="button"
-              onClick={() => setSelected(candidate.id)}
-            >
-              #{candidate.name}
-            </button>
-          ))}
-        </nav>
-        {room === undefined ? (
-          <p>Create a room above to start a shared conversation.</p>
+            + New
+          </button>
+        </div>
+        {data.rooms.map((entry) => (
+          <button
+            type="button"
+            key={entry.id}
+            aria-current={entry.id === selected ? "page" : undefined}
+            onClick={() => {
+              setSelected(entry.id);
+              setPanel(null);
+              setError(null);
+            }}
+          >
+            <strong>#{entry.name}</strong>
+            <small>{entry.messages.at(-1)?.text ?? "No messages yet"}</small>
+          </button>
+        ))}
+      </nav>
+      <main className="rooms-chat-main">
+        {loading ? (
+          <p className="rooms-chat-empty" role="status">
+            Loading rooms…
+          </p>
+        ) : room === undefined ? (
+          <div className="rooms-chat-empty">
+            No room selected. Create a room to start a conversation.
+          </div>
         ) : (
-          <section className="page-card" aria-label={`Room ${room.name}`}>
-            <h2>#{room.name}</h2>
-            <button
-              type="button"
-              onClick={() => void run("delete", { roomId: room.id })}
+          <>
+            <header className="rooms-chat-header">
+              <div>
+                <h2>#{room.name}</h2>
+                <span>
+                  {room.members.length
+                    ? room.members
+                        .map((member) => `@${member.name}`)
+                        .join(" · ")
+                    : "No agents yet"}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setName(room.name);
+                  setPanel("manage");
+                }}
+              >
+                Members & settings
+              </button>
+            </header>
+            <div
+              className="rooms-chat-feed"
+              ref={feed}
+              role="log"
+              aria-label={`${room.name} messages`}
+              onScroll={(event) => {
+                const target = event.currentTarget;
+                stickToBottom.current =
+                  target.scrollHeight - target.scrollTop - target.clientHeight <
+                  80;
+              }}
             >
-              Delete Room
-            </button>
-            <div className="form-grid">
-              <Field
-                label="Member name"
-                value={memberName}
-                onChange={setMemberName}
-              />
-              <label className="field">
-                <span>Member conversation</span>
-                <Combobox
-                  label="Member conversation"
-                  value={threadId}
-                  onValueChange={setThreadId}
-                >
-                  {threads.map((thread) => (
-                    <option key={thread.threadId} value={thread.threadId}>
-                      {threadTitle(thread)} · {thread.threadId} ·{" "}
-                      {"currentMetadata" in thread
-                        ? thread.currentMetadata.cwd
-                        : "Unavailable workspace"}
-                    </option>
-                  ))}
-                </Combobox>
-              </label>
+              {room.messages.length === 0 ? (
+                <div className="rooms-chat-empty">
+                  Start the conversation. @mention a registered member to
+                  request an agent response.
+                </div>
+              ) : null}
+              {room.messages.map((message) => (
+                <article className="room-message" key={message.id}>
+                  <header>
+                    <strong>{message.author}</strong>
+                    <span className="room-kind">{message.kind}</span>
+                    <time dateTime={new Date(message.createdAt).toISOString()}>
+                      {new Date(message.createdAt).toLocaleString()}
+                    </time>
+                  </header>
+                  <Markdown text={message.text} />
+                </article>
+              ))}
             </div>
-            <button
-              type="button"
-              onClick={() =>
-                void run("add-member", {
-                  roomId: room.id,
-                  name: memberName,
-                  threadId,
-                })
-              }
-            >
-              Add member
-            </button>
-            <ul>
-              {room.members.map((member) => (
-                <li key={member.threadId}>
-                  @{member.name} · {member.threadId}{" "}
+            <div className="rooms-chat-compose">
+              {error ? (
+                <p role="alert" className="form-error">
+                  {error}
+                </p>
+              ) : null}
+              {pending?.roomId === room.id ? (
+                <div role="status">
+                  Send result unknown. Refresh and inspect the timeline before
+                  composing a new message.{" "}
                   <button
                     type="button"
                     onClick={() =>
-                      void run("remove-member", {
-                        roomId: room.id,
-                        threadId: member.threadId,
-                      })
+                      void refresh().catch((reason: unknown) =>
+                        setError(describeError(reason)),
+                      )
                     }
                   >
-                    Remove
+                    Refresh
                   </button>
-                </li>
-              ))}
-            </ul>
-            <div className="room-messages">
-              {room.messages.map((message) => (
-                <p key={message.id}>
-                  <strong>{message.author}</strong>: {message.text}
-                </p>
-              ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      pendingRef.current = null;
+                      setPending(null);
+                      setDrafts((current) => ({ ...current, [room.id]: "" }));
+                      setError(null);
+                    }}
+                  >
+                    Discard draft & compose new
+                  </button>
+                </div>
+              ) : null}
+              <div className="rooms-chat-mentions">
+                {room.members.map((member) => (
+                  <button
+                    key={member.threadId}
+                    type="button"
+                    onClick={() =>
+                      setDrafts((current) => ({
+                        ...current,
+                        [room.id]: `${current[room.id] ?? ""}@${member.name} `,
+                      }))
+                    }
+                  >
+                    @{member.name}
+                  </button>
+                ))}
+              </div>
+              <label htmlFor="room-chat-input" className="sr-only">
+                Message
+              </label>
+              <textarea
+                id="room-chat-input"
+                placeholder={`Message #${room.name} · Enter to send, Shift+Enter for newline`}
+                value={draft}
+                disabled={pending?.roomId === room.id}
+                onChange={(event) =>
+                  setDrafts((current) => ({
+                    ...current,
+                    [room.id]: event.target.value,
+                  }))
+                }
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "Enter" &&
+                    !event.shiftKey &&
+                    !event.nativeEvent.isComposing
+                  ) {
+                    event.preventDefault();
+                    void send();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="primary-button"
+                disabled={busy || pending?.roomId === room.id || !draft.trim()}
+                onClick={() => void send()}
+              >
+                {busy ? "Sending…" : "Send"}
+              </button>
+              <small>
+                Only explicit @mentions with an active Room mention Trigger wake
+                agents.
+              </small>
             </div>
-            <Field label="Message" value={draft} onChange={setDraft} />
-            <button
-              type="button"
-              disabled={busy || !draft.trim()}
-              onClick={() =>
-                void run("post-message", { roomId: room.id, text: draft }).then(
-                  (saved) => {
-                    if (saved) setDraft("");
-                  },
-                )
-              }
-            >
-              Post message
-            </button>
-          </section>
+          </>
         )}
-      </div>
+      </main>
+      {panel !== null ? (
+        <div
+          className="rooms-chat-overlay"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setPanel(null);
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label={panel === "create" ? "Create Room" : "Room settings"}
+            className="rooms-chat-dialog"
+          >
+            <header>
+              <h2>
+                {panel === "create" ? "New Room" : `#${room?.name} settings`}
+              </h2>
+              <button type="button" onClick={() => setPanel(null)}>
+                Close
+              </button>
+            </header>
+            <Field label="Room name" value={name} onChange={setName} />
+            {panel === "manage" ? (
+              <button
+                type="button"
+                disabled={busy || !name.trim() || name === room?.name}
+                onClick={() =>
+                  void run("rename", { roomId: room?.id, name }).then((ok) => {
+                    if (ok) setPanel(null);
+                  })
+                }
+              >
+                Rename
+              </button>
+            ) : null}
+            <Field
+              label="Member name"
+              value={memberName}
+              onChange={setMemberName}
+            />
+            <label className="field">
+              <span>Member conversation</span>
+              <Combobox
+                label="Member conversation"
+                value={threadId}
+                onValueChange={setThreadId}
+              >
+                {threads.map((thread) => (
+                  <option key={thread.threadId} value={thread.threadId}>
+                    {threadTitle(thread)} · {thread.threadId} ·{" "}
+                    {"currentMetadata" in thread
+                      ? thread.currentMetadata.cwd
+                      : "Unavailable workspace"}
+                  </option>
+                ))}
+              </Combobox>
+            </label>
+            {panel === "create" ? (
+              <button
+                type="button"
+                className="primary-button"
+                disabled={
+                  busy || !name.trim() || !memberName.trim() || !threadId
+                }
+                onClick={() =>
+                  void run("create", {
+                    name,
+                    members: [{ name: memberName, threadId }],
+                  }).then((ok) => {
+                    if (ok) setPanel(null);
+                  })
+                }
+              >
+                Create Room
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  disabled={busy || !memberName.trim() || !threadId}
+                  onClick={() =>
+                    void run("add-member", {
+                      roomId: room?.id,
+                      name: memberName,
+                      threadId,
+                    }).then((ok) => {
+                      if (ok) {
+                        setMemberName("");
+                        setThreadId("");
+                      }
+                    })
+                  }
+                >
+                  Add member
+                </button>
+                <h3>Members</h3>
+                {room?.members.map((member) => (
+                  <div className="rooms-chat-member" key={member.threadId}>
+                    <strong>@{member.name}</strong>
+                    <details>
+                      <summary>Details</summary>
+                      <code>{member.threadId}</code>
+                    </details>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            `Remove @${member.name} from #${room.name}?`,
+                          )
+                        )
+                          void run("remove-member", {
+                            roomId: room.id,
+                            threadId: member.threadId,
+                          });
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="rooms-chat-danger"
+                  disabled={busy}
+                  onClick={() => {
+                    if (
+                      room &&
+                      window.confirm(
+                        `Permanently delete #${room.name} and its message history?`,
+                      )
+                    )
+                      void run("delete", { roomId: room.id }).then((ok) => {
+                        if (ok) setPanel(null);
+                      });
+                  }}
+                >
+                  Delete Room…
+                </button>
+              </>
+            )}
+            {error ? <p role="alert">{error}</p> : null}
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
