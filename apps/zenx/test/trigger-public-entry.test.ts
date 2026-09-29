@@ -10,8 +10,8 @@ import { ZenXPluginCatalog } from "../src/main/capabilities/plugin-catalog.js";
 import { MemoryZenXPluginCatalogStore } from "../src/main/capabilities/plugin-catalog-store.js";
 import type { TriggerHistoryEntry } from "../src/main/trigger-types.js";
 
-// Execute through the same public capability tools as the trusted UI, with an
-// isolated Host store and real fake-provider App Server; no renderer clock.
+// Exercise ordinary Agent tool invocation with top-level arguments, not a
+// forged trusted-plugin-UI context. UI commands use the Host SDK separately.
 test(
   "public timer and one-shot watch wake canonical Threads while UI is absent",
   { timeout: 20_000 },
@@ -94,7 +94,7 @@ test(
           threadId: thread.id,
           cwd: process.cwd(),
           signal: new AbortController().signal,
-          arguments: { input },
+          arguments: input,
         });
       const preview = await invoke("zenx_triggers_preview_target", {
         workspace: process.cwd(),
