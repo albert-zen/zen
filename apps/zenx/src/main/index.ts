@@ -552,6 +552,8 @@ async function bootstrapZenX(): Promise<void> {
     installTitleIpc(titleCoordinator);
     const automationManager = appServerManager;
     automationService = await createBundledAutomationPluginService({
+      startThread: async (cwd) =>
+        await automationManager.request("thread/start", { cwd }),
       threadTargets: {
         projectProjection,
         request: (method, params) => automationManager.request(method, params),

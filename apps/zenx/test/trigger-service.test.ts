@@ -26,6 +26,49 @@ import type {
 } from "../src/protocol-client/index.js";
 import type { TriggerSnapshot } from "../src/main/trigger-types.js";
 
+test("paused future timers can resume; elapsed one-shots require editing", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-trigger-resume-"),
+  );
+  const manager = managerFor(directory);
+  try {
+    await manager.start();
+    const thread = (await manager.request("thread/start", {})).thread;
+    const triggers = new ZenXTriggerService(
+      manager,
+      new ZenXTriggerStore(path.join(directory, "triggers.json")),
+    );
+    await triggers.start();
+    const timer = await triggers.create({
+      kind: "timer",
+      threadId: thread.id,
+      label: "Resume",
+      prompt: "Run",
+      runAt: Date.now() + 500,
+    });
+    await triggers.cancel(timer.id);
+    assert.equal(triggers.snapshot().triggers[0]?.active, false);
+    await triggers.resume(timer.id);
+    assert.equal(triggers.snapshot().triggers[0]?.active, true);
+    await triggers.cancel(timer.id);
+    await assert.rejects(
+      triggers.resume(timer.id, { threadId: "different-target" }),
+      /target changed/,
+    );
+    assert.equal(triggers.snapshot().triggers[0]?.active, false);
+    await new Promise((resolve) => setTimeout(resolve, 550));
+    await assert.rejects(triggers.resume(timer.id), /in the past/);
+    assert.equal(triggers.snapshot().triggers[0]?.active, false);
+    assert.equal(triggers.snapshot().history.length, 0);
+    await triggers.delete(timer.id);
+    await assert.rejects(triggers.resume(timer.id), /not found/);
+    await triggers.stop();
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("timer expiry creates one explicit App Server turn and auditable history", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-trigger-"));
   const manager = managerFor(directory);

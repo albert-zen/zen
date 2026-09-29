@@ -53,6 +53,7 @@ export const ZENX_AUTOMATION_WRITE_PERMISSION = "zenx-automation-control.write";
 
 export interface ZenXAutomationControlPort {
   threads?(): Promise<ThreadCandidate[]>;
+  createTarget?(workspace: string): Promise<{ threadId: string }>;
   result?(historyId: string): Promise<{
     threadId: string;
     turnId: string;
@@ -63,6 +64,7 @@ export interface ZenXAutomationControlPort {
   create(input: CreateTriggerInput): Promise<ZenXTrigger>;
   update(input: UpdateTriggerInput): Promise<ZenXTrigger>;
   cancel(triggerId: string): Promise<void>;
+  resume(triggerId: string): Promise<void>;
   delete(triggerId: string): Promise<void>;
   signal(name: string, detail: string): Promise<void>;
   createRoom(input: CreateRoomInput): Promise<ZenXRoom>;
@@ -192,6 +194,12 @@ const manifest: ZenXPluginManifestV2 = {
       false,
     ),
     tool(
+      "zenx_triggers_create_target",
+      "Create an idle dedicated automation Thread in an already discovered workspace.",
+      { workspace: { type: "string", maxLength: 4096 } },
+      ["workspace"],
+    ),
+    tool(
       "zenx_triggers_result",
       "Read the exact source Turn preview of a retained notification; full original content is available through Thread reading.",
       { historyId: { type: "string" } },
@@ -221,6 +229,12 @@ const manifest: ZenXPluginManifestV2 = {
       "zenx_triggers_cancel",
       "Deactivate a Trigger without deleting its definition or history.",
       { triggerId: { type: "string" } },
+      ["triggerId"],
+    ),
+    tool(
+      "zenx_triggers_resume",
+      "Resume a stopped Trigger; elapsed one-shot timers must first be edited to a future time.",
+      { triggerId: { type: "string", maxLength: MAX_ID_BYTES } },
       ["triggerId"],
     ),
     tool(
@@ -319,6 +333,10 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
         if (this.#port.threads === undefined)
           throw new Error("Thread discovery is unavailable");
         return { threads: await this.#port.threads() };
+      case "zenx_triggers_create_target":
+        if (this.#port.createTarget === undefined)
+          throw new Error("Creating a target Thread is unavailable");
+        return await this.#port.createTarget(string(args, "workspace", 4096));
       case "zenx_triggers_result":
         if (this.#port.result === undefined)
           throw new Error("Reading source results is unavailable");
@@ -349,6 +367,9 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
       case "zenx_triggers_cancel":
         await this.#port.cancel(string(args, "triggerId", MAX_ID_BYTES));
         return { cancelled: true };
+      case "zenx_triggers_resume":
+        await this.#port.resume(string(args, "triggerId", MAX_ID_BYTES));
+        return { resumed: true };
       case "zenx_triggers_delete":
         await this.#port.delete(string(args, "triggerId", MAX_ID_BYTES));
         return { deleted: true };
@@ -430,13 +451,13 @@ export class ZenXTriggersCapabilityPackage implements ZenXCapabilityPackage {
       writePermission: ZENX_TRIGGERS_WRITE_PERMISSION,
       page: {
         id: "triggers",
-        title: "Triggers",
+        title: "Automations",
         route: "/plugins/zenx-triggers/triggers",
         surfaceId: "triggers-page",
       },
       sidebar: {
         id: "triggers",
-        label: "Triggers",
+        label: "Automations",
         icon: "clock",
         pageId: "triggers",
         order: 10,

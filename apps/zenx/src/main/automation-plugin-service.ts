@@ -37,6 +37,7 @@ export async function createBundledAutomationPluginService(options: {
   appServer: ZenXTriggerAppServerPort;
   titles?: ZenXTriggerTitlePort;
   threadTargets?: ThreadTargetPort;
+  startThread?: (cwd: string) => Promise<{ thread: { id: string } }>;
 }): Promise<ZenXBundledAutomationPluginService> {
   let legacy: TriggerSnapshot;
   try {
@@ -80,6 +81,7 @@ export async function createBundledAutomationPluginService(options: {
     active,
     options.titles,
     options.threadTargets,
+    options.startThread,
   );
 }
 
@@ -183,6 +185,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   readonly #active: Set<string>;
   readonly #targets: ThreadTargetPort | undefined;
   readonly #appServer: ZenXTriggerAppServerPort;
+  readonly #startThread?: (cwd: string) => Promise<{ thread: { id: string } }>;
   #lifecycle: Promise<void> = Promise.resolve();
 
   constructor(
@@ -191,10 +194,12 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     active: Set<string>,
     titles?: ZenXTriggerTitlePort,
     targets?: ThreadTargetPort,
+    startThread?: (cwd: string) => Promise<{ thread: { id: string } }>,
   ) {
     this.#active = active;
     this.#appServer = appServer;
     this.#targets = targets;
+    this.#startThread = startThread;
     this.#service = new ZenXTriggerService(appServer, store, { titles });
   }
 
@@ -265,6 +270,20 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       throw new Error("Thread discovery is unavailable");
     return await listThreadCandidates(this.#targets);
   }
+  async createTarget(workspace: string): Promise<{ threadId: string }> {
+    if (this.#targets === undefined || this.#startThread === undefined)
+      throw new Error("Creating a target Thread is unavailable");
+    const candidates = await listThreadCandidates(this.#targets);
+    if (
+      !candidates.some(
+        (candidate) => candidate.cwd === workspace && !candidate.archived,
+      )
+    )
+      throw new Error("Choose a workspace from a current Thread");
+    const result = await this.#startThread(workspace);
+    return { threadId: result.thread.id };
+  }
+
   async result(historyId: string) {
     const entry = this.#service
       .snapshot()
@@ -295,6 +314,10 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
         throw new Error(
           `Thread target ${JSON.stringify(target)} is ${result.status}: ${JSON.stringify(result.candidates)}`,
         );
+      if (result.candidate.archived)
+        throw new Error(
+          `Thread target ${JSON.stringify(target)} is archived; unarchive it first`,
+        );
       return result.threadId;
     };
     const threadId = await resolve(input.threadId);
@@ -308,6 +331,23 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   }
   async cancel(triggerId: string): Promise<void> {
     await this.#service.cancel(triggerId);
+  }
+  async resume(triggerId: string): Promise<void> {
+    const trigger = this.#service
+      .snapshot()
+      .triggers.find((item) => item.id === triggerId);
+    if (trigger === undefined) throw new Error("Trigger was not found");
+    await this.#resolveInput({
+      threadId: trigger.threadId,
+      kind: "thread",
+      label: trigger.label,
+      prompt: trigger.prompt,
+      watchedThreadId: trigger.watch?.threadId ?? trigger.threadId,
+    });
+    await this.#service.resume(triggerId, {
+      threadId: trigger.threadId,
+      ...(trigger.watch ? { watchedThreadId: trigger.watch.threadId } : {}),
+    });
   }
   async delete(triggerId: string): Promise<void> {
     await this.#service.delete(triggerId);

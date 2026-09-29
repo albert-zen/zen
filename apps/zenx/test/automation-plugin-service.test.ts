@@ -110,6 +110,7 @@ test("completion setup resolves readable targets without ambiguous writes and re
       status: { type: "idle" as const },
     },
   ];
+  const archivedRows: typeof rows = [];
   const service = new ZenXBundledAutomationPluginService(
     port,
     {
@@ -123,11 +124,22 @@ test("completion setup resolves readable targets without ambiguous writes and re
     {
       projectProjection: { canonicalKeys: async (values) => values },
       request: async (_method, params) => ({
-        data: params.archived ? [] : rows,
+        data: params.archived ? archivedRows : rows,
         nextCursor: null,
       }),
     },
+    async (cwd) => {
+      assert.equal(cwd, "/work");
+      return { thread: { id: "dedicated-111" } };
+    },
   );
+  await assert.rejects(
+    service.createTarget("/not-a-discovered-workspace"),
+    /Choose a workspace/,
+  );
+  assert.deepEqual(await service.createTarget("/work"), {
+    threadId: "dedicated-111",
+  });
   await service.startPlugin("zenx-triggers", {} as never);
   try {
     await assert.rejects(
@@ -166,6 +178,18 @@ test("completion setup resolves readable targets without ambiguous writes and re
     assert.match(result.preview, /Exact child result/u);
     assert.doesNotMatch(result.preview, /newer-turn/u);
     assert.equal((await service.threads())[1]?.name, "Renamed child");
+    archivedRows.push(rows.splice(0, 1)[0]!);
+    await assert.rejects(service.resume(watch.id), /archived/);
+    await assert.rejects(
+      service.create({
+        kind: "timer",
+        threadId: "parent-111",
+        label: "Invalid target",
+        prompt: "Do not run",
+        runAt: Date.now() + 60_000,
+      }),
+      /archived/,
+    );
   } finally {
     await service.stopPlugin("zenx-triggers");
   }

@@ -423,6 +423,34 @@ export class ZenXTriggerService {
     this.#rescheduleTimers(generation);
   }
 
+  async resume(
+    triggerId: string,
+    expectedTarget?: { threadId: string; watchedThreadId?: string },
+  ): Promise<void> {
+    const generation = this.#runningGeneration();
+    await this.#mutate(generation, async (snapshot) => {
+      const trigger = snapshot.triggers.find(
+        (item) => item.id === required(triggerId, "trigger"),
+      );
+      if (trigger === undefined) throw new Error("Trigger was not found");
+      if (
+        expectedTarget &&
+        (trigger.threadId !== expectedTarget.threadId ||
+          trigger.watch?.threadId !== expectedTarget.watchedThreadId)
+      )
+        throw new Error(
+          "Trigger target changed during validation; inspect it before enabling",
+        );
+      if (trigger.active) return;
+      if (trigger.timer !== undefined && trigger.timer.nextRunAt <= this.#now())
+        throw new Error(
+          "Timer is in the past; edit the next run time before resuming",
+        );
+      trigger.active = true;
+    });
+    this.#rescheduleTimers(generation);
+  }
+
   async delete(triggerId: string): Promise<void> {
     const generation = this.#runningGeneration();
     await this.#mutate(generation, async (snapshot) => {

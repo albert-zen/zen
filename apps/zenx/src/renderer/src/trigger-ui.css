@@ -1,27 +1,27 @@
-.trigger-page .trigger-grid {
+.trigger-manager .trigger-grid {
   display: grid;
   gap: 12px;
   margin-top: 16px;
 }
 
-.trigger-page .trigger-card,
-.trigger-page .trigger-history {
+.trigger-manager .trigger-card,
+.trigger-manager .trigger-history {
   padding: 16px;
   overflow-wrap: anywhere;
 }
 
-.trigger-page .trigger-card h2 {
+.trigger-manager .trigger-card h2 {
   margin-top: 0;
 }
 
-.trigger-page .trigger-history {
+.trigger-manager .trigger-history {
   margin-bottom: 12px;
   border: 1px solid var(--border-soft);
   border-radius: 13px;
   background: var(--surface-inset);
 }
 
-.trigger-page .trigger-history pre {
+.trigger-manager .trigger-history pre {
   padding: 12px;
   border-radius: 8px;
   background: var(--color-surface-code);
@@ -29,23 +29,118 @@
   font-family: ui-monospace, monospace;
 }
 
-.trigger-page .trigger-create-card > button {
+.trigger-manager .trigger-editor > button {
   margin-top: 12px;
 }
 
-.trigger-page .trigger-checkbox {
+.trigger-manager .trigger-checkbox {
   display: flex;
   align-items: start;
   gap: 6px;
 }
 
-.trigger-page .quiet-button {
+.trigger-manager .quiet-button {
   margin: 4px 8px 4px 0;
   min-height: 36px;
 }
 
 @media (max-width: 600px) {
-  .trigger-page .form-grid {
+  .trigger-manager .form-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+.trigger-manager {
+  min-width: 0;
+  padding: 24px;
+}
+.trigger-manager-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.trigger-manager-header h2 {
+  margin: 0 0 6px;
+}
+.trigger-manager-header p {
+  color: var(--color-text-muted);
+  max-width: 68ch;
+  line-height: 1.5;
+}
+.trigger-manager .trigger-editor {
+  margin-top: 16px;
+  padding: 18px;
+}
+.trigger-manager .trigger-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr));
+}
+.trigger-manager .trigger-card {
+  min-width: 0;
+}
+.trigger-card-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: start;
+}
+.trigger-card-heading h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.trigger-card-heading span {
+  white-space: nowrap;
+  color: var(--color-text-muted);
+}
+.trigger-manager .trigger-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+.trigger-manager .trigger-instructions {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.trigger-manager .trigger-history-list {
+  margin-top: 24px;
+}
+.trigger-manager .trigger-history pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.trigger-manager-rail {
+  padding: 12px;
+}
+.trigger-manager-rail .trigger-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+.trigger-manager-rail .form-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+.trigger-manager-rail .trigger-editor {
+  padding: 12px;
+}
+.trigger-manager-rail .trigger-card-heading {
+  flex-wrap: wrap;
+}
+@media (max-width: 600px) {
+  .trigger-manager {
+    padding: 12px;
+  }
+}
+
+.trigger-target-picker {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+.trigger-dedicated {
+  display: grid;
+  gap: 4px;
+}
+.trigger-dedicated .quiet-button {
+  justify-self: start;
 }
