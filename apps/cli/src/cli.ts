@@ -146,6 +146,9 @@ async function appServerCommand(args: ParsedArguments): Promise<void> {
           enabled: true,
           listen: config.listen,
           port: config.port,
+          ...(config.originEndpoint === undefined
+            ? {}
+            : { originEndpoint: config.originEndpoint }),
           tls: {
             cert: await readFile(config.tlsCertFile),
             key: await readFile(config.tlsKeyFile),

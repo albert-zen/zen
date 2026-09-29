@@ -1,7 +1,7 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, X509Certificate } from "node:crypto";
 import { createServer, type Server as HttpsServer } from "node:https";
 import type { IncomingMessage } from "node:http";
-import type { AddressInfo } from "node:net";
+import { isIP, type AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 import {
@@ -21,6 +21,8 @@ export interface RemoteTransportOptions {
   port: number;
   tls: { cert: Buffer | string; key: Buffer | string };
   access: RemoteHostAccess;
+  /** One explicitly trusted direct HTTPS authority; never inferred from request Host. */
+  originEndpoint?: string;
 }
 export interface RemoteHostTransport {
   url: string;
@@ -38,6 +40,42 @@ export const REMOTE_PAIR_BODY_MS = 5_000;
 const REMOTE_PENDING_EVENTS_BYTES = 512 * 1024;
 const REMOTE_MAX_OUTBOUND_BUFFER = 2 * 1024 * 1024;
 
+function originAuthority(value: string): { host: string; port: number } {
+  // Require the full single direct endpoint with an explicit canonical port.
+  // No IPv6, IDNA, URL path, userinfo, proxy authority or ambiguous IP aliases.
+  const match = /^https:\/\/([a-zA-Z0-9.-]+):([1-9][0-9]{0,4})$/u.exec(value);
+  if (!match) throw new Error("Invalid direct remote Origin endpoint");
+  const host = match[1]!.toLowerCase();
+  const port = Number(match[2]);
+  if (
+    port > 65535 ||
+    String(port) !== match[2] ||
+    (host.split(".").every((part) => /^[0-9]+$/u.test(part))
+      ? isIP(host) !== 4 || match[1] !== host
+      : host.length > 253 ||
+        host
+          .split(".")
+          .some(
+            (part) =>
+              part.startsWith("xn--") ||
+              !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(part),
+          ))
+  )
+    throw new Error("Invalid direct remote Origin authority");
+  return { host, port };
+}
+
+function singleHeader(
+  request: IncomingMessage,
+  name: string,
+): string | undefined {
+  let count = 0;
+  for (let index = 0; index < request.rawHeaders.length; index += 2)
+    if (request.rawHeaders[index]?.toLowerCase() === name) count += 1;
+  const value = request.headers[name];
+  return count === 1 && typeof value === "string" ? value : undefined;
+}
+
 export async function serveRemoteHost(
   options: RemoteTransportOptions,
 ): Promise<RemoteHostTransport> {
@@ -53,6 +91,21 @@ export async function serveRemoteHost(
     throw new Error(
       "Remote Host requires explicit enabled flag, TLS identity and listen address",
     );
+  const origin =
+    options.originEndpoint === undefined
+      ? undefined
+      : originAuthority(options.originEndpoint);
+  if (origin !== undefined) {
+    if (options.port === 0 || origin.port !== options.port)
+      throw new Error("Remote Origin endpoint port must equal the bound port");
+    const cert = new X509Certificate(options.tls.cert);
+    const match =
+      isIP(origin.host) === 4
+        ? cert.checkIP(origin.host)
+        : cert.checkHost(origin.host, { subject: "never", wildcards: false });
+    if (!match)
+      throw new Error("Remote Origin endpoint must match TLS certificate SAN");
+  }
   let closing = false;
   let pendingPairBodies = 0;
   const rawSockets = new Set<Duplex>();
@@ -180,9 +233,28 @@ export async function serveRemoteHost(
       reject(503);
       return;
     }
-    if (request.url !== "/remote" || request.headers.origin !== undefined) {
+    if (request.url !== "/remote") {
       reject(403);
       return;
+    }
+    if (
+      request.rawHeaders.some(
+        (header, index) => index % 2 === 0 && header.toLowerCase() === "origin",
+      )
+    ) {
+      const value = singleHeader(request, "origin");
+      const host = singleHeader(request, "host");
+      const expected = origin && `https://${origin.host}:${origin.port}`;
+      if (
+        !expected ||
+        value === undefined ||
+        host === undefined ||
+        value.toLowerCase() !== expected ||
+        host.toLowerCase() !== `${origin.host}:${origin.port}`
+      ) {
+        reject(403);
+        return;
+      }
     }
     const deviceId = request.headers["x-zen-device-id"];
     const auth = request.headers.authorization;
