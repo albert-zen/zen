@@ -977,7 +977,7 @@ CAS mapped surface 的机会型验收，不反向塑造 ZAS 或 Zen Core。
 
 Host 为兼容模型流解析失败保存独立、限量轮转的结构化诊断（请求关联、分片序号、字段类型），失败时附带最近8个接收分片（各至多8KiB，明确标记截断），保留实际响应及工具参数以支持诊断；不记录请求头或请求正文，遮盖配置的API密钥，不作为会话语义来源；诊断写入失败不得替换原始模型错误。
 
-消息队列由 canonical `user_message_queued` 记录及同clientId的已交付user_message推导，Core按FIFO在正常完成后启动新Turn，失败/中断暂停且可显式继续；接入端仅投影队列。显式 batch-next 是队列Item上的投递选择，Host在下一Turn接纳固定有界FIFO批次并为每条输入分别写入带原clientId的canonical user_message；未指定选择的自动化/兼容客户端继续逐条Turn。运行中发送模式是桌面偏好，新手动Composer默认有活动Turn时 steer、无活动Turn时 start，可选下一轮合批或逐条队列；偏好不改变已入队的Item。偏好的 explicit 标记仅用于区分新手动Composer隐式 steer 与旧用户显式 steer 对自控插件的影响，不携带Thread运行时语义。Host 以临时 attemptId + queuedItemId 标识队列接纳尝试，预检或异步启动失败发出不携原始凭证/输入的 native queue_failed 通知；显式 resume 仍拒收且不自动重试，队列状态仅由 ItemList 决定。旧归一化Queue无法区分隐式默认与旧手选时，用户偏好层一次迁移至手动steer并记录版本、原Queue值和可见恢复/确认状态；该设置不改变已有队列Item或自动化投递。
+消息队列由 canonical `user_message_queued` 记录及同clientId的已交付user_message推导，Core按FIFO在正常完成后启动新Turn，失败/中断暂停且可显式继续；接入端仅投影队列。显式 batch-next 是队列Item上的投递选择，Host在下一Turn接纳固定有界FIFO批次并为每条输入分别写入带原clientId的canonical user_message；未指定选择的自动化/兼容客户端继续逐条Turn。运行中发送模式是桌面偏好，新手动Composer默认有活动Turn时 steer、无活动Turn时 start，可选下一轮合批或逐条队列；偏好不改变已入队的Item。偏好的 explicit 标记仅用于区分新手动Composer隐式 steer 与旧用户显式 steer 对自控插件的影响，不携带Thread运行时语义。Host 以临时 attemptId + queuedItemId 标识队列接纳尝试，预检或异步启动失败发出不携原始凭证/输入的 native queue_failed 通知；显式 resume 共享同一Thread首批临时 admission Promise，直到初始输入落盘或启动拒收才应答，不等待完整Turn、不自动重试，也不把该Promise存为会话权威；队列状态仅由 ItemList 决定。旧归一化Queue无法区分隐式默认与旧手选时，用户偏好层一次迁移至手动steer并记录版本、原Queue值和可见恢复/确认状态；该设置不改变已有队列Item或自动化投递。
 
 ZenX 在 app ready 后先打开无需IPC的静态启动页，同一窗口在Host/IPC准备就绪后切入应用；启动错误显示在该窗口，启动中再次激活只聚焦或恢复启动窗口。
 

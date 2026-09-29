@@ -14,7 +14,11 @@ import {
 import type { Thread as ZenXThread } from "../apps/zenx/src/protocol-client/index.js";
 import { png1x1, shellPrintCommand } from "./fixtures.js";
 
-import { type AppServerEvent, ZenAppServer } from "../src/app-server.js";
+import {
+  AppServerError,
+  type AppServerEvent,
+  ZenAppServer,
+} from "../src/app-server.js";
 import type {
   CanonicalItem,
   ThreadMetadataItem,
@@ -3665,4 +3669,258 @@ test("lost queued attachment produces a safe native failure and keeps the canoni
     [],
   );
   assert.equal(calls, 2);
+});
+
+test("concurrent explicit batch resumes share late second-item launch rejection and return after ready", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const enteredSecond = testDeferred<void>();
+  const releaseSecond = testDeferred<void>();
+  const autoFailed = testDeferred<void>();
+  const finished = testDeferred<void>();
+  let calls = 0;
+  let reads = 0;
+  let failAt = Number.POSITIVE_INFINITY;
+  const attachments = new InMemoryAttachmentStore();
+  const read = attachments.read.bind(attachments);
+  attachments.read = async (attachment) => {
+    if (++reads === failAt)
+      throw new AttachmentStoreError(
+        "attachment_missing",
+        "secret launch payload",
+      );
+    return await read(attachment);
+  };
+  const model: ModelAdapter = {
+    provider: "resume-admission-boundary",
+    async *stream(): AsyncIterable<ModelEvent> {
+      if (++calls === 1) {
+        entered.resolve();
+        await release.promise;
+      } else if (calls === 2) {
+        enteredSecond.resolve();
+        await releaseSecond.promise;
+      }
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const server = createServer({
+    model,
+    attachments,
+    modelCatalog: new StaticModelCatalog([
+      {
+        id: "images",
+        isDefault: true,
+        contextWindow: 32_768,
+        inputModalities: ["text", "image"],
+      },
+      { id: "text-only", contextWindow: 32_768, inputModalities: ["text"] },
+    ]),
+  });
+  const failures: Extract<AppServerEvent, { type: "queue_failed" }>[] = [];
+  const attempts: Extract<
+    AppServerEvent,
+    { type: "queue_admission_started" }
+  >[] = [];
+  let completions = 0;
+  server.subscribe((event) => {
+    if (event.type === "queue_failed") {
+      failures.push(event);
+      autoFailed.resolve();
+    }
+    if (event.type === "queue_admission_started") attempts.push(event);
+    if (
+      event.type === "turn_completed" &&
+      event.status === "completed" &&
+      ++completions === 2
+    )
+      finished.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  const image = await server.importImageBytes(png1x1());
+  await server.queueMessage(thread.id, "first batched", "batch-text", {
+    deliveryMode: "batch-next",
+  });
+  await server.queueMessage(
+    thread.id,
+    [{ type: "image", attachment: image }],
+    "batch-image",
+    { deliveryMode: "batch-next" },
+  );
+  const pending = pendingQueuedMessages(
+    (await server.readThread(thread.id)).items,
+  );
+  await server.updateThreadSettings(thread.id, { model: "text-only" });
+  release.resolve();
+  await first.done;
+  await autoFailed.promise;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(failures[0]?.clientId, "batch-image");
+  assert.equal(calls, 1);
+  await server.updateThreadSettings(thread.id, { model: "images" });
+  reads = 0;
+  failAt = 2; // first preflight read succeeds; second read inside #launchTurn fails.
+  const rejected = await Promise.allSettled([
+    server.resumeQueue(thread.id),
+    server.resumeQueue(thread.id),
+  ]);
+  assert.deepEqual(
+    rejected.map((entry) => entry.status),
+    ["rejected", "rejected"],
+  );
+  assert.deepEqual(
+    rejected.map((entry) =>
+      entry.status === "rejected" && entry.reason instanceof AppServerError
+        ? entry.reason.code
+        : null,
+    ),
+    ["attachment_missing", "attachment_missing"],
+  );
+  assert.equal(reads, 2);
+  assert.equal(calls, 1);
+  assert.equal(failures.length, 2); // one automatic + one explicit attempt, not per caller
+  assert.equal(failures[1]?.queuedItemId, pending[1]?.id);
+  assert.equal(failures[1]?.clientId, "batch-image");
+  assert.equal(
+    JSON.stringify(failures).includes("secret launch payload"),
+    false,
+  );
+  assert.equal(
+    attempts.filter((entry) => entry.attemptId === failures[1]?.attemptId)
+      .length,
+    2,
+  );
+  assert.deepEqual(
+    pendingQueuedMessages((await server.readThread(thread.id)).items).map(
+      (entry) => entry.clientId,
+    ),
+    ["batch-text", "batch-image"],
+  );
+
+  failAt = Number.POSITIVE_INFINITY;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let admitted = false;
+  try {
+    admitted = await Promise.race([
+      Promise.all([
+        server.resumeQueue(thread.id),
+        server.resumeQueue(thread.id),
+      ]).then(() => true),
+      new Promise<false>((resolve) => {
+        timeout = setTimeout(() => resolve(false), 1_500);
+      }),
+    ]);
+    assert.equal(
+      admitted,
+      true,
+      "first batch admission must not wait for the blocked Provider or all queue turns",
+    );
+    await enteredSecond.promise;
+    const during = await server.readThread(thread.id);
+    assert.equal(during.turns.at(-1)?.status, "inProgress");
+    assert.deepEqual(
+      during.turns
+        .at(-1)
+        ?.items.filter((item) => item.type === "user_message")
+        .map((item) => item.clientId),
+      ["batch-text", "batch-image"],
+    );
+  } finally {
+    clearTimeout(timeout);
+    releaseSecond.resolve();
+  }
+  await finished.promise;
+  assert.equal(calls, 2);
+  assert.equal(failures.length, 2);
+  assert.deepEqual(
+    pendingQueuedMessages((await server.readThread(thread.id)).items),
+    [],
+  );
+});
+
+test("a successfully admitted queued Turn that later fails is not another admission failure", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const enteredSecond = testDeferred<void>();
+  const releaseSecond = testDeferred<void>();
+  const autoFailed = testDeferred<void>();
+  const turnFailed = testDeferred<void>();
+  let calls = 0;
+  const model: ModelAdapter = {
+    provider: "post-admission-failure",
+    async *stream(): AsyncIterable<ModelEvent> {
+      if (++calls === 1) {
+        entered.resolve();
+        await release.promise;
+        yield { type: "text_delta", delta: "first completed" };
+      } else {
+        enteredSecond.resolve();
+        await releaseSecond.promise;
+        throw new Error(
+          "Model failed after canonical user message was accepted",
+        );
+      }
+    },
+  };
+  const server = createServer({
+    model,
+    modelCatalog: new StaticModelCatalog([
+      {
+        id: "images",
+        isDefault: true,
+        contextWindow: 32_768,
+        inputModalities: ["text", "image"],
+      },
+      { id: "text-only", contextWindow: 32_768, inputModalities: ["text"] },
+    ]),
+  });
+  let admissionFailures = 0;
+  server.subscribe((event) => {
+    if (event.type === "queue_failed") {
+      admissionFailures++;
+      autoFailed.resolve();
+    }
+    if (event.type === "turn_completed" && event.status === "failed")
+      turnFailed.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  const image = await server.importImageBytes(png1x1());
+  await server.queueMessage(
+    thread.id,
+    [{ type: "image", attachment: image }],
+    "admitted-then-failed",
+  );
+  await server.updateThreadSettings(thread.id, { model: "text-only" });
+  release.resolve();
+  await first.done;
+  await autoFailed.promise;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await server.updateThreadSettings(thread.id, { model: "images" });
+  try {
+    await server.resumeQueue(thread.id); // first message committed, Provider may still run
+    await enteredSecond.promise;
+    const running = await server.readThread(thread.id);
+    assert.equal(running.turns.at(-1)?.status, "inProgress");
+    assert.deepEqual(pendingQueuedMessages(running.items), []);
+    assert.equal(calls, 2);
+  } finally {
+    releaseSecond.resolve();
+  }
+  await turnFailed.promise;
+  assert.equal(admissionFailures, 1); // earlier auto-preflight only
+  const after = await server.readThread(thread.id);
+  assert.equal(after.turns.at(-1)?.status, "failed");
+  assert.deepEqual(
+    after.items.filter(
+      (item) =>
+        item.type === "user_message" &&
+        item.clientId === "admitted-then-failed",
+    ).length,
+    1,
+  );
+  assert.deepEqual(pendingQueuedMessages(after.items), []);
 });

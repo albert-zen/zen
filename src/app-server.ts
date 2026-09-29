@@ -882,38 +882,80 @@ export class ZenAppServer {
     options: { requestApproval?: ApprovalHandler } = {},
   ): Promise<void> {
     const thread = await this.#requireThread(threadId);
+    const admissionInProgress = this.#queueAdmissions.get(threadId);
+    if (admissionInProgress !== undefined) {
+      await admissionInProgress;
+      return;
+    }
     if (this.#activeTurns.has(threadId) || this.#drainingQueues.has(threadId))
       return;
     const first = pendingQueuedMessages(thread.items)[0];
     if (first === undefined) return;
+    // Claim the admission before the first asynchronous validation. A second
+    // explicit resume observes the same result, not a duplicate launch.
+    this.#drainingQueues.add(threadId);
+    const admission = deferred<void>();
+    const gate = admission.promise;
+    this.#queueAdmissions.set(threadId, gate);
+    void gate
+      .finally(() => {
+        if (this.#queueAdmissions.get(threadId) === gate)
+          this.#queueAdmissions.delete(threadId);
+      })
+      .catch(() => undefined);
+    let firstSettled = false;
+    const settleFirst = (
+      outcome: { type: "admitted" } | { type: "rejected"; reason: unknown },
+    ) => {
+      if (firstSettled) return;
+      firstSettled = true;
+      if (outcome.type === "admitted") {
+        admission.resolve();
+      } else {
+        const cause =
+          outcome.reason instanceof QueueAdmissionRejection
+            ? outcome.reason.reason
+            : outcome.reason;
+        const safe = safeQueueFailure(cause);
+        admission.reject(new AppServerError(safe.code, safe.message));
+      }
+    };
     const attemptId = randomUUID();
     this.#announceQueueAttempt(first, attemptId);
     let batch: QueuedUserMessageItem[];
     try {
       batch = await this.#preflightQueue(thread, first, attemptId);
     } catch (error) {
+      this.#drainingQueues.delete(threadId);
       this.#reportQueueFailure(threadId, error);
-      // Explicit resume rejects with a safe, specific code/reason. One
-      // native event also informs other subscribed windows about this attempt.
-      const safe = safeQueueFailure(
-        error instanceof QueueAdmissionRejection ? error.reason : error,
-      );
-      throw new AppServerError(safe.code, safe.message);
+      settleFirst({ type: "rejected", reason: error });
+      await gate;
+      return;
     }
-    void this.#drainQueue(threadId, options, { batch, attemptId }).catch(
-      (error: unknown) => {
-        this.#reportQueueFailure(threadId, error);
-        console.error(
-          "Queued message could not start; the durable queue remains available for retry",
-          safeQueueFailure(
-            error instanceof QueueAdmissionRejection ? error.reason : error,
-          ).code,
-        );
-      },
-    );
+    void this.#drainQueue(
+      threadId,
+      options,
+      { batch, attemptId },
+      settleFirst,
+    ).catch((error: unknown) => {
+      const failure =
+        !firstSettled && !(error instanceof QueueAdmissionRejection)
+          ? new QueueAdmissionRejection(first, attemptId, error)
+          : error;
+      this.#reportQueueFailure(threadId, failure);
+      settleFirst({ type: "rejected", reason: failure });
+      console.error(
+        "Queued message could not start; the durable queue remains available for retry",
+        safeQueueFailure(
+          failure instanceof QueueAdmissionRejection ? failure.reason : failure,
+        ).code,
+      );
+    });
+    await gate;
   }
 
   readonly #drainingQueues = new Set<string>();
+  readonly #queueAdmissions = new Map<string, Promise<void>>();
 
   #announceQueueAttempt(item: QueuedUserMessageItem, attemptId: string): void {
     this.#emit({
@@ -986,17 +1028,44 @@ export class ZenAppServer {
     threadId: string,
     options: { requestApproval?: ApprovalHandler },
     firstAttempt?: { batch: QueuedUserMessageItem[]; attemptId: string },
+    onFirstAdmission?: (
+      outcome: { type: "admitted" } | { type: "rejected"; reason: unknown },
+    ) => void,
   ): Promise<void> {
-    if (this.#drainingQueues.has(threadId) || this.#activeTurns.has(threadId))
-      return;
-    this.#drainingQueues.add(threadId);
     let nextAttempt = firstAttempt;
+    let admittedFirst = false;
     try {
-      while (!this.#activeTurns.has(threadId)) {
+      while (true) {
+        if (this.#activeTurns.has(threadId)) {
+          if (!admittedFirst && firstAttempt?.batch[0] !== undefined)
+            throw new QueueAdmissionRejection(
+              firstAttempt.batch[0],
+              firstAttempt.attemptId,
+              new AppServerError(
+                "thread_busy",
+                "Another Turn started before queued input could be admitted",
+              ),
+            );
+          return;
+        }
         const thread = await this.#requireThread(threadId);
-        if (this.#pendingReplacement(thread) !== undefined) return;
+        if (this.#pendingReplacement(thread) !== undefined) {
+          if (!admittedFirst && firstAttempt?.batch[0] !== undefined)
+            throw new QueueAdmissionRejection(
+              firstAttempt.batch[0],
+              firstAttempt.attemptId,
+              new AppServerError(
+                "replacement_pending",
+                "A replacement was requested before queued input could be admitted",
+              ),
+            );
+          return;
+        }
         const queued = pendingQueuedMessages(thread.items)[0];
-        if (queued === undefined) return;
+        if (queued === undefined) {
+          if (!admittedFirst) onFirstAdmission?.({ type: "admitted" });
+          return;
+        }
         const attemptId = nextAttempt?.attemptId ?? randomUUID();
         if (nextAttempt === undefined)
           this.#announceQueueAttempt(queued, attemptId);
@@ -1036,6 +1105,10 @@ export class ZenAppServer {
           throw error instanceof QueueAdmissionRejection
             ? error
             : new QueueAdmissionRejection(queued, attemptId, error);
+        }
+        if (!admittedFirst) {
+          admittedFirst = true;
+          onFirstAdmission?.({ type: "admitted" });
         }
         // A started Turn has its own canonical failure lifecycle; this is
         // not another queue-admission failure or permission to retry it.
