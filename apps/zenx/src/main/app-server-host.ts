@@ -152,7 +152,10 @@ async function handleCommand(command: HostCommand): Promise<void> {
         : {
             type: "configuration/current",
             requestId: command.requestId,
-            current: appServer.currentConfiguration(),
+            current: {
+              ...appServer.currentConfiguration(),
+              threadStartDefaults: appServer.threadStartDefaults(),
+            },
           },
     );
     return;

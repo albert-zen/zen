@@ -2398,6 +2398,7 @@ export function App() {
                 ? messageLinkRequest
                 : null
             }
+            navigate={openPage}
             onWidthChange={setWorkspacePanelWidth}
             fileDrafts={fileDrafts}
             workspacePath={threadDetail.cwd}

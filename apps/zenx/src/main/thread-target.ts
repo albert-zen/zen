@@ -2,7 +2,13 @@ import type { Thread } from "../protocol-client/index.js";
 import type { ZenXProjectProjection } from "./project-projection.js";
 
 export interface ThreadTargetPort {
-  readonly projectProjection: Pick<ZenXProjectProjection, "canonicalKeys">;
+  readonly projectProjection: Pick<ZenXProjectProjection, "canonicalKeys"> &
+    Partial<
+      Pick<
+        ZenXProjectProjection,
+        "configuredWorkspace" | "configuredWorkspaces"
+      >
+    >;
   request(
     method: "thread/list",
     params: { archived: boolean; cursor?: string; limit?: number },

@@ -1413,6 +1413,7 @@ function automationPort(): ZenXAutomationControlPort {
     create: unsupported,
     update: unsupported,
     cancel: unsupported,
+    resume: unsupported,
     delete: unsupported,
     signal: unsupported,
     createRoom: unsupported,

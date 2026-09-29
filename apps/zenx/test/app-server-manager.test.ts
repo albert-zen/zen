@@ -246,11 +246,18 @@ test("publishes runtime configuration in place and reports restart-only domains 
     await manager.start();
     const processId = manager.processId;
     const processEpoch = manager.processEpoch;
-    assert.deepEqual(await manager.currentConfiguration(), {
-      processEpoch,
-      revision: 7,
-      pendingRestart: [],
-    });
+    const initial = await manager.currentConfiguration();
+    assert.deepEqual(
+      { ...initial, threadStartDefaults: undefined },
+      {
+        processEpoch,
+        revision: 7,
+        pendingRestart: [],
+        threadStartDefaults: undefined,
+      },
+    );
+    assert.equal(initial.threadStartDefaults?.modelId, "fake");
+    assert.equal(initial.threadStartDefaults?.sandbox, "danger-full-access");
 
     const nextConfig = {
       ...initialConfig,
@@ -287,11 +294,17 @@ test("publishes runtime configuration in place and reports restart-only domains 
     assert.deepEqual(replacement, { status: "restarted" });
     assert.notEqual(manager.processId, processId);
     assert.notEqual(manager.processEpoch, processEpoch);
-    assert.deepEqual(await manager.currentConfiguration(), {
-      processEpoch: manager.processEpoch,
-      revision: 8,
-      pendingRestart: [],
-    });
+    const restarted = await manager.currentConfiguration();
+    assert.deepEqual(
+      { ...restarted, threadStartDefaults: undefined },
+      {
+        processEpoch: manager.processEpoch,
+        revision: 8,
+        pendingRestart: [],
+        threadStartDefaults: undefined,
+      },
+    );
+    assert.equal(restarted.threadStartDefaults?.modelId, "fake-next");
     await assert.rejects(
       manager.publishConfiguration(candidate),
       /another process epoch/u,
