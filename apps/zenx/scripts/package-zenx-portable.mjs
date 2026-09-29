@@ -6,6 +6,7 @@ import {
   cp,
   mkdir,
   mkdtemp,
+  stat,
   open,
   readFile,
   rename,
@@ -154,10 +155,16 @@ async function packageZenX(arguments_) {
       if (target === "smoke") {
         await runExecutable(executablePath(packaged[0], target));
       }
-      const publishedArtifact = await publishPackagedArtifact(
-        packaged[0],
-        path.join(artifactRoot, targetDirectory),
-      );
+      const finalArtifact = path.join(artifactRoot, targetDirectory);
+      let publishedArtifact;
+      try {
+        publishedArtifact = await publishPackagedArtifact(packaged[0], finalArtifact);
+      } catch (error) {
+        if (process.platform === "win32" && process.env.ZENX_PACKAGE_DIAG === "1") {
+          await diagnoseWindowsPublishFailure(packaged[0], finalArtifact);
+        }
+        throw error;
+      }
       const executable = executablePath(publishedArtifact, target);
       console.log(
         JSON.stringify(
@@ -547,6 +554,47 @@ export async function withPackagingTargetLock(
   } finally {
     await lock.close();
     await rm(lockPath, { force: true });
+  }
+}
+
+// QA-only, opt-in: inspect the owned staging artifact after a failed publish.
+// Do not retry or change the artifact during observation; never print command lines or env.
+async function diagnoseWindowsPublishFailure(stagedArtifact, finalArtifact) {
+  const status = async (file) => {
+    try {
+      const entry = await stat(file);
+      return { exists: true, directory: entry.isDirectory() };
+    } catch (error) {
+      return { exists: false, code: error?.code };
+    }
+  };
+  const script = `
+$prefix = $env:ZENX_DIAG_STAGE
+Get-CimInstance Win32_Process | Where-Object {
+  $_.ExecutablePath -and $_.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)
+} | ForEach-Object {
+  [PSCustomObject]@{ pid = $_.ProcessId; parent = $_.ParentProcessId; name = $_.Name }
+} | ConvertTo-Json -Compress
+`;
+  for (const delay of [0, 750, 2000]) {
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    let processes;
+    try {
+      processes = (await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+        timeout: 10000,
+        env: { ...process.env, ZENX_DIAG_STAGE: `${stagedArtifact}${path.sep}` },
+      })).stdout.trim();
+    } catch (error) {
+      processes = `query failed: ${error?.code ?? error?.message}`;
+    }
+    console.error("Windows packaged publish diagnostic", JSON.stringify({
+      delayMs: delay,
+      node: process.version,
+      staged: await status(stagedArtifact),
+      final: await status(finalArtifact),
+      stagedExe: await status(path.join(stagedArtifact, "ZenXProviderSmoke.exe")),
+      ownedProcesses: processes || "[]",
+    }));
   }
 }
 

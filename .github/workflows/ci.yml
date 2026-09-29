@@ -106,7 +106,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm --workspace apps/zenx run smoke:packaged
+      - name: Package and diagnose Windows smoke publication
+        env:
+          ZENX_PACKAGE_DIAG: "1"
+        run: npm --workspace apps/zenx run smoke:packaged
       - name: Confirm packaged smoke left no shared build output
         shell: pwsh
         run: |
