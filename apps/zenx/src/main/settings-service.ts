@@ -1012,7 +1012,11 @@ export class ZenXSettingsService {
               current.experimentalRtkEnabled ??
               false,
             composerSendMode:
-              settings.composerSendMode ?? current.composerSendMode ?? "queue",
+              settings.composerSendMode ?? current.composerSendMode ?? "soft",
+            composerSendModeExplicit:
+              settings.composerSendModeExplicit ??
+              current.composerSendModeExplicit ??
+              false,
             maxToolRounds: settings.maxToolRounds,
             contextCompaction: settings.contextCompaction,
             workflowCommands:

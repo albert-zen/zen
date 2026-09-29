@@ -1845,8 +1845,9 @@ test("Composer keyboard and form routes do not duplicate one submit event", asyn
 
 test("running queue, soft steer and hard steer each own one pending admission", async () => {
   for (const [mode, method, label] of [
-    ["queue", "turn/queue", "Queue message"],
-    ["soft", "turn/steer", "Soft steer"],
+    ["batch", "zen/turn/send", "Next turn"],
+    ["queue", "turn/queue", "Each turn"],
+    ["soft", "turn/steer", "Steer now"],
     ["hard", "turn/replace", "Interrupt and send"],
   ] as const) {
     const response = deferred<unknown>();
@@ -2721,7 +2722,7 @@ async function mountApp(
     addWorkspace?(workspace: string): Promise<void>;
     getStatus?(): Promise<AppServerHostStatus>;
     initialPinnedThreadIds?: string[];
-    composerSendMode?: "queue" | "soft" | "hard";
+    composerSendMode?: "batch" | "queue" | "soft" | "hard";
     onNotification?: Window["zenx"]["protocol"]["onNotification"];
     onStatus?(listener: (status: AppServerHostStatus) => void): () => void;
     onPinnedThreadIds?(threadIds: readonly string[]): void;
@@ -2924,7 +2925,7 @@ function publicSettings(pinnedThreadIds: string[]) {
   return {
     profile: {
       version: 3 as const,
-      composerSendMode: "queue" as "queue" | "soft" | "hard",
+      composerSendMode: "queue" as "batch" | "queue" | "soft" | "hard",
       onboardingComplete: true,
       providerProfiles: [
         {

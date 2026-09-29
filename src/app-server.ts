@@ -202,6 +202,7 @@ export interface ModelCatalogUpdatedEvent {
 
 export type AppServerEvent =
   | RuntimeEvent
+  | { type: "queue_failed"; threadId: string; message: string }
   | ThreadSettingsUpdatedEvent
   | ThreadNameUpdatedEvent
   | ThreadArchivedUpdatedEvent
@@ -798,7 +799,10 @@ export class ZenAppServer {
     threadId: string,
     requestedInput: RequestedUserInput,
     clientId: string,
-    options: { requestApproval?: ApprovalHandler } = {},
+    options: {
+      requestApproval?: ApprovalHandler;
+      deliveryMode?: "batch-next";
+    } = {},
   ): Promise<void> {
     if (clientId.trim().length === 0)
       throw new AppServerError("invalid_input", "Queue client id is required");
@@ -828,6 +832,15 @@ export class ZenAppServer {
             "idempotency_conflict",
             "Queue client id was already used for different input",
           );
+        if (
+          duplicate.type === "user_message_queued" &&
+          duplicate.deliveryMode !== options.deliveryMode
+        ) {
+          throw new AppServerError(
+            "idempotency_conflict",
+            "Queue client id was already used for a different delivery mode",
+          );
+        }
         return;
       }
       const resolved = this.#requireSelection(thread.effectiveConfiguration());
@@ -839,6 +852,9 @@ export class ZenAppServer {
         createdAt: this.#now(),
         clientId,
         input,
+        ...(options.deliveryMode === undefined
+          ? {}
+          : { deliveryMode: options.deliveryMode }),
       };
       await this.#commit(thread, queued);
       this.#emit({ type: "item_completed", item: queued });
@@ -857,9 +873,12 @@ export class ZenAppServer {
       const selection = this.#requireSelection(thread.effectiveConfiguration());
       await this.#validateInput(first.input, selection.model.inputModalities);
     }
-    void this.#drainQueue(threadId, options).catch(() => {
+    void this.#drainQueue(threadId, options).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      this.#emit({ type: "queue_failed", threadId, message });
       console.error(
         "Queued message could not start; the durable queue remains available for retry",
+        error,
       );
     });
   }
@@ -877,8 +896,26 @@ export class ZenAppServer {
       while (!this.#activeTurns.has(threadId)) {
         const thread = await this.#requireThread(threadId);
         if (this.#pendingReplacement(thread) !== undefined) return;
-        const queued = pendingQueuedMessages(thread.items)[0];
+        const pending = pendingQueuedMessages(thread.items);
+        const queued = pending[0];
         if (queued === undefined) return;
+        const batch = [queued];
+        if (queued.deliveryMode === "batch-next") {
+          // A bounded snapshot: never reach across legacy inputs or into
+          // appends made after this admission boundary.
+          const contextWindow = this.#requireSelection(
+            thread.effectiveConfiguration(),
+          ).model.contextWindow;
+          const byteBudget = Math.min(64 * 1024, (contextWindow ?? 32_768) * 2);
+          let bytes = Buffer.byteLength(JSON.stringify(queued.input));
+          for (const next of pending.slice(1, 8)) {
+            if (next.deliveryMode !== "batch-next") break;
+            const nextBytes = Buffer.byteLength(JSON.stringify(next.input));
+            if (bytes + nextBytes > byteBudget) break;
+            batch.push(next);
+            bytes += nextBytes;
+          }
+        }
         const turn = await this.#launchTurn(
           threadId,
           queued.input,
@@ -886,7 +923,17 @@ export class ZenAppServer {
             ...options,
             clientId: queued.clientId,
           },
-          { preparedInput: true },
+          {
+            preparedInput: true,
+            ...(batch.length === 1
+              ? {}
+              : {
+                  initialMessages: batch.map(({ input, clientId }) => ({
+                    input,
+                    clientId,
+                  })),
+                }),
+          },
         );
         await turn.done;
         if (
@@ -1018,6 +1065,7 @@ export class ZenAppServer {
       preparedInput?: boolean;
       turnId?: string;
       replacementClientId?: string;
+      initialMessages?: readonly { input: UserInput; clientId: string }[];
     } = {},
   ): Promise<TurnHandle> {
     const launch = await this.#withThreadMutation(threadId, async () => {
@@ -1113,6 +1161,12 @@ export class ZenAppServer {
       );
       const prospective = this.#requireSelection(prospectiveSelection);
       await this.#validateInput(input, prospective.model.inputModalities);
+      for (const message of internal.initialMessages ?? []) {
+        await this.#validateInput(
+          message.input,
+          prospective.model.inputModalities,
+        );
+      }
       if (options.selection !== undefined || options.model !== undefined) {
         await this.#updateThreadSettingsUnlocked(thread, {
           ...(options.selection === undefined
@@ -1155,6 +1209,9 @@ export class ZenAppServer {
           thread,
           turnId,
           input,
+          ...(internal.initialMessages === undefined
+            ? {}
+            : { initialMessages: internal.initialMessages }),
           resolved,
           contextCompaction: admitted.configuration.contextCompaction,
           signal: controller.signal,
@@ -1179,6 +1236,9 @@ export class ZenAppServer {
                 thread,
                 turnId,
                 input,
+                ...(internal.initialMessages === undefined
+                  ? {}
+                  : { initialMessages: internal.initialMessages }),
                 ...(options.clientId === undefined
                   ? {}
                   : { clientId: options.clientId }),
@@ -1775,6 +1835,7 @@ export class ZenAppServer {
     thread: Thread;
     turnId: string;
     input: UserInput;
+    initialMessages?: readonly { input: UserInput; clientId: string }[];
     resolved: ResolvedProviderSelection;
     contextCompaction: ResolvedContextCompactionConfig;
     signal: AbortSignal;
@@ -1794,14 +1855,16 @@ export class ZenAppServer {
         type: "turn_started",
         selection: options.resolved.selection,
       },
-      {
-        id: `${options.turnId}:context-preview-input`,
-        threadId: options.thread.id,
-        turnId: options.turnId,
-        createdAt: this.#now(),
-        type: "user_message",
-        content: options.input,
-      },
+      ...(options.initialMessages ?? [{ input: options.input }]).map(
+        (message, index) => ({
+          id: `${options.turnId}:context-preview-input:${index}`,
+          threadId: options.thread.id,
+          turnId: options.turnId,
+          createdAt: this.#now(),
+          type: "user_message" as const,
+          content: message.input,
+        }),
+      ),
     ];
     if (
       estimateModelMessageInputTokens(

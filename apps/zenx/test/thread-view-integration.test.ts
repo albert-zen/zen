@@ -333,3 +333,72 @@ test("queued messages retain approval routing and drain through the hosted proto
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("native batch choice crosses hosted protocol without changing legacy queue", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-native-batch-"));
+  const manager = new AppServerManager({
+    entryPath: path.resolve("src/main/app-server-host.ts"),
+    tokenFile: path.join(directory, "runtime", "app-server.token"),
+    hostConfig: {
+      cwd: process.cwd(),
+      dataDirectory: path.join(directory, "data"),
+      model: "fake",
+      models: ["fake"],
+      approvalPolicy: "always",
+      provider: { type: "fake" },
+    },
+    execArgv: ["--import", "tsx"],
+    startupTimeoutMs: 10_000,
+  });
+  try {
+    await manager.start();
+    const { thread } = await manager.request("thread/start", {});
+    const waiting = deferred<string>();
+    const finished = deferred<void>();
+    let completed = 0;
+    manager.onApprovalRequest((request) => waiting.resolve(request.requestId));
+    manager.onNotification((method) => {
+      if (method === "turn/completed" && ++completed === 2) finished.resolve();
+    });
+    await manager.request("turn/start", {
+      threadId: thread.id,
+      input: [
+        { type: "text", text: '!tool run_code {"code":"console.log(1)"}' },
+      ],
+    });
+    const approvalId = await within(waiting.promise);
+    for (const [index, text] of ["same", "same", "third"].entries()) {
+      await manager.request("zen/turn/send", {
+        threadId: thread.id,
+        mode: "batch-next",
+        input: [{ type: "text", text }],
+        clientUserMessageId: `manual-${index}`,
+      });
+    }
+    const waitingQueue = await manager.request("zen/thread/read", {
+      threadId: thread.id,
+    });
+    assert.deepEqual(
+      waitingQueue.thread.items
+        .filter((item) => item.type === "user_message_queued")
+        .map((item) => item.deliveryMode),
+      ["batch-next", "batch-next", "batch-next"],
+    );
+    manager.respondToApproval(approvalId, "accept");
+    await within(finished.promise);
+    const final = await manager.request("zen/thread/read", {
+      threadId: thread.id,
+    });
+    assert.equal(final.thread.turns.length, 2);
+    assert.deepEqual(
+      final.thread.turns
+        .at(-1)
+        ?.items.filter((item) => item.type === "user_message")
+        .map((item) => item.clientId),
+      ["manual-0", "manual-1", "manual-2"],
+    );
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

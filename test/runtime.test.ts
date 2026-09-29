@@ -5,7 +5,9 @@ import path from "node:path";
 import test from "node:test";
 
 import { pendingQueuedMessages } from "../src/input-queue.js";
-import { shellPrintCommand } from "./fixtures.js";
+import { applyNativeThreadEvent } from "../apps/zenx/src/renderer/src/thread-view-state.js";
+import type { Thread as ZenXThread } from "../apps/zenx/src/protocol-client/index.js";
+import { png1x1, shellPrintCommand } from "./fixtures.js";
 
 import { type AppServerEvent, ZenAppServer } from "../src/app-server.js";
 import type {
@@ -3080,6 +3082,216 @@ test("failed sample trace survives journal reload without executing a queued too
   }
 });
 
+test("opted-in queued messages share one next Turn without losing canonical identity", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const finished = testDeferred<void>();
+  const sampled: string[][] = [];
+  const model: ModelAdapter = {
+    provider: "queue-batch-test",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      sampled.push(
+        request.messages.flatMap((message) =>
+          message.role !== "user"
+            ? []
+            : [
+                "text" in message
+                  ? message.text
+                  : message.content
+                      .filter((part) => part.type === "text")
+                      .map((part) => part.text)
+                      .join("\n"),
+              ],
+        ),
+      );
+      if (sampled.length === 1) {
+        entered.resolve();
+        await release.promise;
+      }
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const server = createServer({
+    model,
+    modelCatalog: new StaticModelCatalog([
+      {
+        id: "fake",
+        isDefault: true,
+        contextWindow: 32_768,
+        inputModalities: ["text", "image"],
+      },
+    ]),
+  });
+  let completions = 0;
+  server.subscribe((event) => {
+    if (event.type === "turn_completed" && ++completions === 2)
+      finished.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  for (const [index, text] of ["same", "same"].entries()) {
+    await server.queueMessage(thread.id, text, `batch-${index}`, {
+      deliveryMode: "batch-next",
+    });
+  }
+  await assert.rejects(server.queueMessage(thread.id, "same", "batch-0"), {
+    code: "idempotency_conflict",
+  });
+  const attachment = await server.importImageBytes(png1x1());
+  await server.queueMessage(
+    thread.id,
+    [
+      { type: "text", text: "third" },
+      { type: "image", attachment },
+    ],
+    "batch-2",
+    { deliveryMode: "batch-next" },
+  );
+  release.resolve();
+  await first.done;
+  await finished.promise;
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(snapshot.turns.length, 2);
+  assert.deepEqual(
+    snapshot.items
+      .filter((item) => item.type === "user_message")
+      .map((item) => item.clientId),
+    [undefined, "batch-0", "batch-1", "batch-2"],
+  );
+  assert.deepEqual(sampled[1]?.slice(-3), ["same", "same", "third"]);
+  assert.deepEqual(
+    snapshot.items.filter((item) => item.type === "user_message").at(-1)
+      ?.content,
+    [
+      { type: "text", text: "third" },
+      { type: "image", attachment },
+    ],
+  );
+  assert.equal(pendingQueuedMessages(snapshot.items).length, 0);
+});
+
+test("live same-thread projection clears each identical queue entry only on canonical acceptance", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const finished = testDeferred<void>();
+  let calls = 0;
+  const server = createServer({
+    model: {
+      provider: "blocked-live-queue",
+      async *stream(): AsyncIterable<ModelEvent> {
+        if (++calls === 1) {
+          entered.resolve();
+          await release.promise;
+        }
+        yield { type: "text_delta", delta: "done" };
+      },
+    },
+  });
+  let completions = 0;
+  server.subscribe((event) => {
+    if (event.type === "turn_completed" && ++completions === 3)
+      finished.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  const initial = await server.readThread(thread.id);
+  let visible: ZenXThread = {
+    ...projectThread(initial, { includeTurns: true }),
+    canonicalItems: initial.items,
+  };
+  const evidence: string[][] = [];
+  server.subscribe((event) => {
+    visible = applyNativeThreadEvent(visible, event);
+    if (
+      event.type === "item_completed" &&
+      (event.item.type === "user_message_queued" ||
+        event.item.type === "user_message")
+    ) {
+      evidence.push(visible.queuedMessages?.map((item) => item.clientId) ?? []);
+    }
+  });
+  await server.queueMessage(thread.id, "same", "same-1");
+  await server.queueMessage(thread.id, "same", "same-2");
+  assert.equal(calls, 1); // The fake Provider remains active; no !shell shortcut.
+  assert.deepEqual(
+    visible.queuedMessages?.map((item) => item.clientId),
+    ["same-1", "same-2"],
+  );
+  release.resolve();
+  await first.done;
+  await finished.promise;
+  assert.deepEqual(evidence, [
+    ["same-1"],
+    ["same-1", "same-2"],
+    ["same-2"],
+    [],
+  ]);
+  assert.deepEqual(visible.queuedMessages, []);
+});
+
+test("batch admission stops at legacy items and appends after the boundary wait", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const batchStarted = testDeferred<void>();
+  const releaseBatch = testDeferred<void>();
+  const finished = testDeferred<void>();
+  let calls = 0;
+  const server = createServer({
+    model: {
+      provider: "batch-boundary",
+      async *stream(): AsyncIterable<ModelEvent> {
+        calls++;
+        if (calls === 1) {
+          entered.resolve();
+          await release.promise;
+        }
+        if (calls === 2) {
+          batchStarted.resolve();
+          await releaseBatch.promise;
+        }
+        yield { type: "text_delta", delta: "done" };
+      },
+    },
+  });
+  let completions = 0;
+  server.subscribe((event) => {
+    if (event.type === "turn_completed" && ++completions === 4)
+      finished.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  await server.queueMessage(thread.id, "batch-a", "a", {
+    deliveryMode: "batch-next",
+  });
+  await server.queueMessage(thread.id, "batch-b", "b", {
+    deliveryMode: "batch-next",
+  });
+  await server.queueMessage(thread.id, "legacy", "legacy");
+  await server.queueMessage(thread.id, "batch-c", "c", {
+    deliveryMode: "batch-next",
+  });
+  release.resolve();
+  await first.done;
+  await batchStarted.promise;
+  await server.queueMessage(thread.id, "late", "late", {
+    deliveryMode: "batch-next",
+  });
+  releaseBatch.resolve();
+  await finished.promise;
+  const snapshot = await server.readThread(thread.id);
+  assert.deepEqual(
+    snapshot.turns.map((turn) =>
+      turn.items
+        .filter((item) => item.type === "user_message")
+        .map((item) => item.clientId),
+    ),
+    [[undefined], ["a", "b"], ["legacy"], ["c", "late"]],
+  );
+});
+
 test("queued input waits for the active turn and drains in FIFO order", async () => {
   const release = testDeferred<void>();
   const entered = testDeferred<void>();
@@ -3178,6 +3390,71 @@ test("queued input survives restart and pauses after interruption until explicit
       ).length,
       1,
     );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("batch intent survives interrupted restart and explicitly resumes once", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-batch-reload-"));
+  try {
+    const entered = testDeferred<void>();
+    const server = createServer({
+      journal: new JsonlThreadJournal(directory),
+      model: {
+        provider: "batch-restart",
+        async *stream(request): AsyncIterable<ModelEvent> {
+          entered.resolve();
+          await new Promise<void>((_resolve, reject) =>
+            request.signal.addEventListener(
+              "abort",
+              () => reject(request.signal.reason),
+              { once: true },
+            ),
+          );
+        },
+      },
+    });
+    const thread = await server.startThread();
+    const first = await server.startTurn(thread.id, "first");
+    await entered.promise;
+    for (const id of ["one", "two", "three"])
+      await server.queueMessage(thread.id, id, id, {
+        deliveryMode: "batch-next",
+      });
+    await server.interruptTurn(thread.id, first.id);
+    await first.done;
+    const restored = createServer({
+      journal: new JsonlThreadJournal(directory),
+      model: {
+        provider: "batch-restart",
+        async *stream() {
+          yield { type: "text_delta" as const, delta: "done" };
+        },
+      },
+    });
+    const pending = pendingQueuedMessages(
+      (await restored.readThread(thread.id)).items,
+    );
+    assert.deepEqual(
+      pending.map((item) => item.deliveryMode),
+      ["batch-next", "batch-next", "batch-next"],
+    );
+    const finished = testDeferred<void>();
+    restored.subscribe((event) => {
+      if (event.type === "turn_completed") finished.resolve();
+    });
+    await restored.resumeQueue(thread.id);
+    await finished.promise;
+    const snapshot = await restored.readThread(thread.id);
+    assert.deepEqual(
+      snapshot.turns
+        .at(-1)
+        ?.items.filter((item) => item.type === "user_message")
+        .map((item) => item.clientId),
+      ["one", "two", "three"],
+    );
+    assert.deepEqual(pendingQueuedMessages(snapshot.items), []);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

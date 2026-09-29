@@ -396,8 +396,8 @@ export function App() {
   const sidebarOrderRef = useRef<ZenXSidebarOrder>(EMPTY_SIDEBAR_ORDER);
   const profilePreferenceQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [composerSendMode, setComposerSendMode] = useState<
-    "queue" | "soft" | "hard"
-  >("queue");
+    "batch" | "queue" | "soft" | "hard"
+  >("soft");
   const [workflowCommands, setWorkflowCommands] = useState<WorkflowCommand[]>(
     [],
   );
@@ -418,7 +418,7 @@ export function App() {
       .get()
       .then((value) => {
         if (active) {
-          setComposerSendMode(value.profile.composerSendMode ?? "queue");
+          setComposerSendMode(value.profile.composerSendMode ?? "soft");
           setWorkflowCommands(value.profile.workflowCommands ?? []);
         }
       })
@@ -431,7 +431,7 @@ export function App() {
     const onChanged = window.zenx.settings.onChanged;
     if (onChanged === undefined) return undefined;
     return onChanged((value) => {
-      setComposerSendMode(value.profile.composerSendMode ?? "queue");
+      setComposerSendMode(value.profile.composerSendMode ?? "soft");
       setWorkflowCommands(value.profile.workflowCommands ?? []);
     });
   }, []);
@@ -986,6 +986,14 @@ export function App() {
           const projected =
             params as ServerNotificationParams["zen/thread/event"];
           if (
+            projected.event.type === "queue_failed" &&
+            selectedThreadIdRef.current === projected.threadId
+          ) {
+            setRequestError(
+              `Queued message could not start. It remains queued; use Continue queue after resolving the cause. ${projected.event.message}`,
+            );
+          }
+          if (
             projected.event.type === "item_completed" ||
             projected.event.type === "turn_completed"
           ) {
@@ -1349,6 +1357,23 @@ export function App() {
       await window.zenx.protocol.request("turn/start", {
         threadId,
         input,
+        clientUserMessageId: submission.clientUserMessageId,
+      });
+    } else if (submission.intent === "batch-next") {
+      if (archivingThreadIdsRef.current.has(threadId))
+        throw new Error("This Thread is being archived.");
+      await window.zenx.protocol.request("zen/turn/send", {
+        threadId,
+        mode: "batch-next",
+        input: input.map((part) =>
+          part.type === "attachment"
+            ? { type: "image" as const, attachment: part.attachment }
+            : part.type === "text"
+              ? part
+              : (() => {
+                  throw new Error("Unsupported batch input part");
+                })(),
+        ),
         clientUserMessageId: submission.clientUserMessageId,
       });
     } else if (submission.intent === "queue") {
@@ -2688,7 +2713,7 @@ function AgentSurface({
   threadError,
   threadLoading,
 }: {
-  composerSendMode: "queue" | "soft" | "hard";
+  composerSendMode: "batch" | "queue" | "soft" | "hard";
   approvals: ApprovalCardState[];
   pluginSnapshot: ZenXPluginSnapshot | null;
   onOpenBrowserSettings(): void;

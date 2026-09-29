@@ -58,6 +58,10 @@ test("native consumption removes only the accepted queue id on the current page"
     threadId: "thread-1",
     queuedMessages: stale ?? [],
   });
+  current = applyNativeThreadEvent(current, {
+    type: "item_completed",
+    item: first,
+  });
   assert.deepEqual(
     current.queuedMessages?.map((entry) => entry.id),
     ["queue-2"],

@@ -77,7 +77,9 @@ export interface ZenXHostProfile {
   toolPresentation?: ToolPresentation;
   /** Process-level opt-in; old profiles keep RTK disabled. */
   experimentalRtkEnabled?: boolean;
-  composerSendMode?: "queue" | "soft" | "hard";
+  composerSendMode?: "batch" | "queue" | "soft" | "hard";
+  /** Records explicit manual choice; older soft/hard could only be explicit. */
+  composerSendModeExplicit?: boolean;
   /** Omitted means tool rounds are unlimited. */
   maxToolRounds?: number;
   /** Omitted means Core uses its default compaction prompt. */
@@ -102,6 +104,7 @@ export type ZenXSettingsUpdate = Pick<
   | "toolPresentation"
   | "experimentalRtkEnabled"
   | "composerSendMode"
+  | "composerSendModeExplicit"
   | "maxToolRounds"
   | "contextCompaction"
 > & {
@@ -328,8 +331,17 @@ export function validateHostProfile(
   ) {
     throw new Error("Invalid browser session mode");
   }
-  const composerSendMode = value.composerSendMode ?? "queue";
+  const composerSendMode = value.composerSendMode ?? "soft";
   if (
+    value.composerSendModeExplicit !== undefined &&
+    typeof value.composerSendModeExplicit !== "boolean"
+  )
+    throw new Error("Invalid composer send preference provenance");
+  const composerSendModeExplicit =
+    value.composerSendModeExplicit ??
+    (value.composerSendMode === "soft" || value.composerSendMode === "hard");
+  if (
+    composerSendMode !== "batch" &&
     composerSendMode !== "queue" &&
     composerSendMode !== "soft" &&
     composerSendMode !== "hard"
@@ -394,6 +406,7 @@ export function validateHostProfile(
     toolPresentation,
     experimentalRtkEnabled: value.experimentalRtkEnabled === true,
     composerSendMode,
+    composerSendModeExplicit,
     ...(maxToolRounds === undefined ? {} : { maxToolRounds }),
     ...(contextCompaction === undefined ? {} : { contextCompaction }),
     ...(workflowCommands.length === 0 ? {} : { workflowCommands }),

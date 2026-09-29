@@ -118,6 +118,7 @@ test("round-trips credential-free v3 profiles and builds all host registry entri
     const read = await store.read(profile);
     assert.deepEqual(read, {
       ...profile,
+      composerSendModeExplicit: false,
       workspace: path.resolve(profile.workspace!),
       workspaces: [path.resolve(profile.workspace!)],
     });
@@ -652,12 +653,45 @@ test("concurrent profile stores use independent atomic staging files", async () 
 });
 
 test("composer send modes persist and reject unknown modes", async () => {
+  assert.equal(
+    validateHostProfile({ ...profile, composerSendMode: undefined })
+      .composerSendMode,
+    "soft",
+  );
+  assert.equal(
+    validateHostProfile({ ...profile, composerSendMode: undefined })
+      .composerSendModeExplicit,
+    false,
+  );
+  assert.equal(
+    validateHostProfile({ ...profile, composerSendMode: "soft" })
+      .composerSendModeExplicit,
+    true,
+  );
+  assert.equal(
+    validateHostProfile({ ...profile, composerSendMode: "queue" })
+      .composerSendModeExplicit,
+    false,
+  );
+  assert.equal(
+    validateHostProfile({
+      ...profile,
+      composerSendMode: "soft",
+      composerSendModeExplicit: false,
+    }).composerSendModeExplicit,
+    false,
+  );
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-send-mode-"));
   try {
     const store = new ZenXHostProfileStore(
       path.join(directory, "profile.json"),
     );
-    for (const composerSendMode of ["queue", "soft", "hard"] as const) {
+    for (const composerSendMode of [
+      "batch",
+      "queue",
+      "soft",
+      "hard",
+    ] as const) {
       await store.write({ ...profile, composerSendMode });
       assert.equal(
         (await store.read(profile)).composerSendMode,

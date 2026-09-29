@@ -2633,10 +2633,12 @@ a:focus-visible {
 }
 .composer-actions {
   gap: 5px;
+  min-width: 0;
 }
 .steer-button {
+  min-width: 0;
   min-height: 34px;
-  padding: 0 10px;
+  padding: 0 6px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -2646,6 +2648,14 @@ a:focus-visible {
 .steer-button:hover {
   color: var(--color-text-primary);
   background: var(--color-surface-elevated);
+}
+@media (max-width: 480px) {
+  .composer-rail {
+    flex-wrap: wrap;
+  }
+  .composer-actions {
+    margin-left: auto;
+  }
 }
 .action-orb {
   position: relative;

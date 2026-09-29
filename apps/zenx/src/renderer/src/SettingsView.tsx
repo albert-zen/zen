@@ -202,7 +202,7 @@ export function SettingsView({
         approvalPolicy: draft.approvalPolicy,
         toolPresentation: draft.toolPresentation ?? "both",
         experimentalRtkEnabled: draft.experimentalRtkEnabled === true,
-        composerSendMode: draft.composerSendMode ?? "queue",
+        composerSendMode: draft.composerSendMode ?? "soft",
         maxToolRounds: draft.maxToolRounds,
         contextCompaction: draft.contextCompaction,
         workflowCommands: draft.workflowCommands ?? [],
@@ -3131,23 +3131,28 @@ function GeneralPanel({
           <span id="composer-send-label">Send during a running turn</span>
           <Select
             aria-labelledby="composer-send-label"
-            value={draft.composerSendMode ?? "queue"}
+            value={draft.composerSendMode ?? "soft"}
             onValueChange={(value) =>
               setDraft({
                 ...draft,
-                composerSendMode: value as "queue" | "soft" | "hard",
+                composerSendMode: value as "batch" | "queue" | "soft" | "hard",
+                composerSendModeExplicit: true,
               })
             }
             aria-describedby="composer-send-help"
           >
-            <option value="queue">Queue</option>
-            <option value="soft">Soft steer</option>
+            <option value="batch">Next turn together</option>
+            <option value="queue">Run each queued message separately</option>
+            <option value="soft">Steer current turn now (default)</option>
             <option value="hard">Hard steer (interrupt and send)</option>
           </Select>
           <small id="composer-send-help" className="settings-note">
             Enter and the send button use this choice. Cmd/Ctrl+Enter uses soft
-            steer when Queue is selected, and Queue when either steer mode is
-            selected. Shift+Enter adds a new line.
+            steer when a queue mode is selected, and Next turn together when a
+            steer mode is selected. Existing queued messages keep their original
+            delivery choice. Older saved Queue preferences remain Queue, even
+            when the old version did not record whether that choice was
+            explicit. Shift+Enter adds a new line.
           </small>
         </label>
       </section>

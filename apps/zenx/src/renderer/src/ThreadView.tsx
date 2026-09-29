@@ -120,7 +120,7 @@ interface ThreadViewProps {
 }
 
 export function ThreadView({
-  composerSendMode = "queue",
+  composerSendMode = "soft",
   onResumeQueue,
   approvals,
   composer,
@@ -323,13 +323,15 @@ export function ThreadView({
   const primaryMode =
     runningTurn === null ? "send" : !hasDraft ? "stop" : sendIntent;
   const intentLabel = (intent: ComposerIntent) =>
-    intent === "queue"
-      ? "Queue message"
-      : intent === "steer"
-        ? "Soft steer"
-        : intent === "replace"
-          ? "Interrupt and send"
-          : "Send";
+    intent === "batch-next"
+      ? "Next turn"
+      : intent === "queue"
+        ? "Each turn"
+        : intent === "steer"
+          ? "Steer now"
+          : intent === "replace"
+            ? "Interrupt and send"
+            : "Send";
   const primaryLabel = compactRequested
     ? "Compact context"
     : primaryMode === "stop"
@@ -662,8 +664,8 @@ export function ThreadView({
                 ? watching
                   ? "Send a message to wake this thread…"
                   : "Ask ZenX anything…"
-                : composerSendMode === "queue"
-                  ? "Queue a message…"
+                : composerSendMode === "queue" || composerSendMode === "batch"
+                  ? "Message for the next turn…"
                   : "Steer the current run…"
             }
             ref={composerTextareaRef}
@@ -724,6 +726,28 @@ export function ThreadView({
               )}
             </div>
             <div className="composer-actions">
+              {runningTurn !== null && hasDraft
+                ? (["steer", "batch-next", "queue"] as const)
+                    .filter(
+                      (intent) =>
+                        intent !== sendIntent && intent !== alternateIntent,
+                    )
+                    .map((intent) => (
+                      <button
+                        key={intent}
+                        className="steer-button"
+                        type="button"
+                        disabled={
+                          composerDisabled ||
+                          submitting ||
+                          blockedByImageCapability
+                        }
+                        onClick={() => submit(intent)}
+                      >
+                        {intentLabel(intent)}
+                      </button>
+                    ))
+                : null}
               {runningTurn !== null && hasDraft ? (
                 <button
                   className="steer-button"
