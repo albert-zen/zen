@@ -110,6 +110,7 @@
   使用 Core 默认，配置本身不写入 Thread canonical ItemList。
 - **ModelUsageItem** — Provider 对一次稳定 model response 报告的 canonical 执行事实，
   保存包含 cached 部分的 total input、可选 cached input、output 与可选 reasoning output tokens。
+- **TurnSortAt** — 原生 Thread summary 从本地 `turn_started` 的最新时间（fork 后的 Turn；没有则本线程创建时间）推导默认列表排序键，独立于 updatedAt，可随 journal 重建。
 - **NativeThreadSummaryProjection** — ZAS 把 canonical journal 与
   ThreadMetadataStore 归约为可持久化、可删除重建的原生 `ThreadSummary` /
   `CurrentMetadata` 列表读取模型；它只加速产品读取，不成为新的权威状态。
@@ -235,6 +236,7 @@
   renderer 只把仍存在的 active Thread 投影到独立 Pinned section；Pin 不同步、不进入
   canonical ItemList，也不改变 Runtime、调度或 Inbox 优先级。
 - **ZenXImagePresentation** — Renderer 将 Markdown 图片源与既有 tool modelContent 附件投影为缩略图和共享全窗口预览；本地 Markdown 图片经只读、格式/大小受限的 IPC 读取，工具原文、路径和 journal 不变，不导入新的持久化附件。
+- **TraceReveal** — ZenX ThreadView 中的纯呈现折叠容器以临时展开状态驱动 180ms 高度过渡和隐藏内容的 inert，不保存 Thread/Turn 语义。
 - **ZenXSidebarExpansionPreference** — Renderer 在本机 app origin 按区域与 canonical Project key 保存折叠选择；父区关闭、页面切换与重启不重置子区选择，不进入 Core 或 Host restart。数字线程快捷键只按当前展开的可选择线程行顺序投影。
 - **ZenXSidebarDensityPreference** — Renderer 在本机 app origin 保存 compact / detailed 线程行密度，默认 detailed 并从当前 Thread summary 投影模型与 Provider；它不进入 Core、Thread 或 ItemList。
 - **ZenXSidebarDrag** — Renderer 的单次原生拖动拥有临时预览、来源反馈与边缘滚动；结束、取消或卸载时统一释放，不持久化临时折叠，不改变 Thread 或排序权威。

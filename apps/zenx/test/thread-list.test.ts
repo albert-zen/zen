@@ -54,6 +54,45 @@ test("derives inbox groups from native summary status", () => {
   );
 });
 
+test("default inbox and project order ignore mid-Turn items and use stable ties", () => {
+  const a = {
+    ...summary("a", "idle", 90),
+    turnSortAt: new Date(20_000).toISOString(),
+  };
+  const b = {
+    ...summary("b", "idle", 40),
+    turnSortAt: new Date(30_000).toISOString(),
+  };
+  const ids = (entries: NativeThreadSummary[]) =>
+    deriveInboxSections(entries)
+      .find((section) => section.key === "settled")!
+      .threads.map((thread) => thread.threadId);
+  assert.deepEqual(ids([a, b]), ["b", "a"]);
+  assert.deepEqual(
+    ids([{ ...a, updatedAt: new Date(200_000).toISOString() }, b]),
+    ["b", "a"],
+  );
+  assert.deepEqual(ids([{ ...a, turnSortAt: b.turnSortAt }, b]), ["a", "b"]);
+  const projection = {
+    projects: [project("/work/zen", ["a", "b"])],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: null,
+  };
+  assert.deepEqual(
+    deriveProjectGroups([a, b], projection)[0]?.threads.map(
+      (thread) => thread.threadId,
+    ),
+    ["b", "a"],
+  );
+  assert.deepEqual(
+    deriveProjectGroups([a, b], projection, {
+      projectKeys: [],
+      threadIdsByProject: { "/work/zen": ["a", "b"] },
+    })[0]?.threads.map((thread) => thread.threadId),
+    ["a", "b"],
+  );
+});
+
 test("projects local Pins in persisted order while filtering archived and missing Threads", () => {
   const first = summary("first", "idle", 20);
   const second = summary("second", "idle", 30);
