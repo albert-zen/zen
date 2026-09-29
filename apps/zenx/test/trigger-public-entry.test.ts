@@ -110,6 +110,102 @@ test(
           ?.active,
         false,
       );
+      // Pause a future Host timer, then explicitly resume through the public command.
+      const resumed = (await invoke("zenx_triggers_create", {
+        kind: "timer",
+        threadId: bound.threadId,
+        label: "Paused timer",
+        prompt: "Run after resume",
+        runAt: Date.now() + 750,
+      })) as { id: string };
+      await invoke("zenx_triggers_cancel", { triggerId: resumed.id });
+      assert.equal(
+        (
+          (await invoke("zenx_triggers_list", {})) as {
+            triggers: Array<{ id: string; active: boolean }>;
+          }
+        ).triggers.find((item) => item.id === resumed.id)?.active,
+        false,
+      );
+      await invoke("zenx_triggers_resume", { triggerId: resumed.id });
+      let resumedEntry: TriggerHistoryEntry | undefined;
+      const resumeDeadline = Date.now() + 10_000;
+      while (Date.now() < resumeDeadline) {
+        const listed = (await invoke("zenx_triggers_list", {})) as {
+          history: TriggerHistoryEntry[];
+        };
+        resumedEntry = listed.history.find(
+          (item) =>
+            item.triggerId === resumed.id && item.status === "completed",
+        );
+        if (resumedEntry) break;
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      }
+      assert(resumedEntry, "resumed Host timer did not fire");
+      assert.equal(
+        (
+          (await invoke("zenx_triggers_list", {})) as {
+            history: TriggerHistoryEntry[];
+          }
+        ).history.filter((item) => item.triggerId === resumed.id).length,
+        1,
+      );
+      const source = (await manager.request("thread/start", {})).thread;
+      const watch = (await invoke("zenx_triggers_create", {
+        kind: "thread",
+        threadId: bound.threadId,
+        watchedThreadId: source.id,
+        label: "Source once",
+        prompt: "Read source result",
+        once: true,
+      })) as { id: string };
+      const sourceTurn = (
+        await manager.request("turn/start", {
+          threadId: source.id,
+          input: [{ type: "text", text: "Source result" }],
+        })
+      ).turn;
+      let watched: TriggerHistoryEntry | undefined;
+      const watchDeadline = Date.now() + 10_000;
+      while (Date.now() < watchDeadline) {
+        const listed = (await invoke("zenx_triggers_list", {})) as {
+          history: TriggerHistoryEntry[];
+        };
+        watched = listed.history.find(
+          (item) => item.triggerId === watch.id && item.status === "completed",
+        );
+        if (watched) break;
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      }
+      assert(watched, "one-shot watch did not complete");
+      assert.equal(watched.sourceTurnId, sourceTurn.id);
+      const watchedRead = await manager.request("thread/read", {
+        threadId: bound.threadId,
+        includeTurns: true,
+      });
+      assert(
+        watchedRead.thread.turns
+          .flatMap((turn) => turn.items)
+          .some(
+            (item) =>
+              item.type === "userMessage" &&
+              item.clientId === watched?.clientUserMessageId,
+          ),
+      );
+      const final = (await invoke("zenx_triggers_list", {})) as {
+        triggers: Array<{ id: string; active: boolean }>;
+        history: TriggerHistoryEntry[];
+      };
+      assert.equal(
+        final.triggers.find((item) => item.id === watch.id)?.active,
+        false,
+      );
+      assert.equal(
+        final.history.filter((item) => item.triggerId === watch.id).length,
+        1,
+      );
+      await invoke("zenx_triggers_delete", { triggerId: resumed.id });
+      await invoke("zenx_triggers_delete", { triggerId: watch.id });
       await domain.stopPlugin("zenx-triggers");
     } finally {
       await manager.stop();
