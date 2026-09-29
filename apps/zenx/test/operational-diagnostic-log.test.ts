@@ -357,3 +357,31 @@ test("operational normalizer rejects arbitrary codes rather than persisting inpu
     null,
   );
 });
+
+test("main window records share existing bounded private log and storage errors are safe", async () => {
+  const root = await temporaryDirectory();
+  try {
+    const log = new OperationalDiagnosticLog(root, { maxBytes: 512 });
+    for (let i = 0; i < 32; i++)
+      await log.recordMainWindowEvent({
+        event: "main-window",
+        status: "load-failed",
+        errorCode: -105,
+        windowId: 1,
+        mainPid: 1234,
+      });
+    const file = path.join(root, "diagnostics", "operations.jsonl");
+    assert.ok((await stat(file)).size <= 512);
+    assert.equal((await records(root)).at(-1)?.errorCode, -105);
+    await rm(path.join(root, "diagnostics"), { recursive: true });
+    await writeFile(path.join(root, "diagnostics"), "not a directory");
+    await assert.doesNotReject(
+      log.recordMainWindowEvent({
+        event: "main-window",
+        status: "unresponsive",
+      }),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

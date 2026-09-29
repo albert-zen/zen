@@ -255,6 +255,8 @@
   插件发现、安装与初始化失败及 Browser/Computer Provider 选择失败映射成固定状态码，写入独立的有界本机日志；
   原始 stderr、路径、窗口标题、Provider 标识与任意错误文本都不进入该投影。它是可丢弃的支持数据，
   写入失败不阻断运行，也不代表会话或配置事实；用户可从 General 设置主动打开目录，不自动分享。
+- **ZenX 主窗口诊断监听** — 仅把主窗口 Electron 故障事件投影到既有有界本地运维日志，
+  不参与会话状态、调度或窗口恢复。
 - **ConfigurationPreCommitError** — 设置服务用这个有类型的错误表示配置变更在写入前被版本冲突或待确认状态拒绝，让诊断日志能准确区分确定失败与结果未确认。
 - **ZenXSystemProxyProjection** — ZenX 主进程把操作系统为当前 Provider endpoint
   解析出的代理投影为 host 子进程的 Provider transport；它是可丢弃的外部连接配置，不进入

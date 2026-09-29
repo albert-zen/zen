@@ -22,7 +22,31 @@ type PluginFailureCode =
   | "provider-fallback"
   | "provider-integrity-failed";
 
+export type MainWindowEvent =
+  | {
+      event: "main-window";
+      status: "renderer-gone";
+      reason: string;
+      exitCode?: number;
+      windowId?: number;
+      mainPid?: number;
+    }
+  | {
+      event: "main-window";
+      status: "load-failed";
+      errorCode: number;
+      windowId?: number;
+      mainPid?: number;
+    }
+  | {
+      event: "main-window";
+      status: "unresponsive" | "responsive";
+      windowId?: number;
+      mainPid?: number;
+    };
+
 type OperationalEvent =
+  | MainWindowEvent
   | { event: "desktop-bootstrap"; status: "failed" }
   | { event: "app-server"; status: AppServerCode }
   | {
@@ -39,6 +63,30 @@ type OperationalEvent =
     };
 
 type OperationalRecord = OperationalEvent & { timestamp: string };
+
+const rendererExitReasons = new Set([
+  "clean-exit",
+  "abnormal-exit",
+  "killed",
+  "crashed",
+  "oom",
+  "launch-failed",
+  "integrity-failure",
+  "memory-eviction",
+]);
+const mainWindowStatuses = new Set(["unresponsive", "responsive"]);
+function boundedNumber(
+  value: unknown,
+  min: number,
+  max: number,
+): number | undefined {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= min &&
+    value <= max
+    ? value
+    : undefined;
+}
 
 const appServerCodes = new Set<AppServerCode>([
   "starting",
@@ -91,6 +139,49 @@ export function normalizeOperationalDiagnostic(
   if (input === null || typeof input !== "object") return null;
   const value = input as Record<string, unknown>;
   const timestamp = now.toISOString();
+  if (value.event === "main-window") {
+    const identity = {
+      ...(boundedNumber(value.windowId, 1, 10_000_000) === undefined
+        ? {}
+        : { windowId: value.windowId as number }),
+      ...(boundedNumber(value.mainPid, 1, 10_000_000) === undefined
+        ? {}
+        : { mainPid: value.mainPid as number }),
+    };
+    if (value.status === "renderer-gone") {
+      const reason = rendererExitReasons.has(value.reason as string)
+        ? (value.reason as string)
+        : "other";
+      const exitCode = boundedNumber(value.exitCode, -65_535, 65_535);
+      return {
+        timestamp,
+        event: "main-window",
+        status: "renderer-gone",
+        reason,
+        ...identity,
+        ...(exitCode === undefined ? {} : { exitCode }),
+      };
+    }
+    if (value.status === "load-failed") {
+      const errorCode = boundedNumber(value.errorCode, -65_535, 65_535);
+      if (errorCode === undefined || errorCode === -3) return null; // ERR_ABORTED is normal navigation.
+      return {
+        timestamp,
+        event: "main-window",
+        status: "load-failed",
+        errorCode,
+        ...identity,
+      };
+    }
+    if (mainWindowStatuses.has(value.status as string))
+      return {
+        timestamp,
+        event: "main-window",
+        status: value.status as "unresponsive" | "responsive",
+        ...identity,
+      };
+    return null;
+  }
   if (value.event === "desktop-bootstrap") {
     if (value.status !== "failed") return null;
     return { timestamp, event: "desktop-bootstrap", status: "failed" };
@@ -185,6 +276,12 @@ export class OperationalDiagnosticLog {
       if (code === this.#lastAppServer) return;
       if (await this.#append({ event: "app-server", status: code }))
         this.#lastAppServer = code;
+    });
+  }
+
+  recordMainWindowEvent(event: MainWindowEvent): Promise<void> {
+    return this.#enqueue(async () => {
+      await this.#append(event);
     });
   }
 
