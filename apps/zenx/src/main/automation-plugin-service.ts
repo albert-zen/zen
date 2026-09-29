@@ -32,12 +32,32 @@ import type {
   UpdateTriggerInput,
 } from "./trigger-types.js";
 
+export interface AutomationTargetPreview {
+  workspace: string;
+  model: string;
+  providerProfileId: string;
+  modelId: string;
+  reasoningEffort: string | null;
+  sandbox: "read-only" | "workspace-write" | "danger-full-access";
+  approvalPolicy: "on-request" | "never";
+  processEpoch: string;
+  revision: number;
+}
+
 export async function createBundledAutomationPluginService(options: {
   userDataDirectory: string;
   appServer: ZenXTriggerAppServerPort;
   titles?: ZenXTriggerTitlePort;
   threadTargets?: ThreadTargetPort;
-  startThread?: (cwd: string) => Promise<{ thread: { id: string } }>;
+  targetDefaults?: () => Promise<Omit<AutomationTargetPreview, "workspace">>;
+  startThread?: (preview: AutomationTargetPreview) => Promise<{
+    thread: { id: string };
+    cwd: string;
+    model: string;
+    sandbox: { type: string };
+    approvalPolicy: string;
+    reasoningEffort: string | null;
+  }>;
 }): Promise<ZenXBundledAutomationPluginService> {
   let legacy: TriggerSnapshot;
   try {
@@ -81,6 +101,7 @@ export async function createBundledAutomationPluginService(options: {
     active,
     options.titles,
     options.threadTargets,
+    options.targetDefaults,
     options.startThread,
   );
 }
@@ -185,7 +206,12 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   readonly #active: Set<string>;
   readonly #targets: ThreadTargetPort | undefined;
   readonly #appServer: ZenXTriggerAppServerPort;
-  readonly #startThread?: (cwd: string) => Promise<{ thread: { id: string } }>;
+  readonly #targetDefaults?: () => Promise<
+    Omit<AutomationTargetPreview, "workspace">
+  >;
+  readonly #startThread?: NonNullable<
+    Parameters<typeof createBundledAutomationPluginService>[0]["startThread"]
+  >;
   #lifecycle: Promise<void> = Promise.resolve();
 
   constructor(
@@ -194,11 +220,15 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     active: Set<string>,
     titles?: ZenXTriggerTitlePort,
     targets?: ThreadTargetPort,
-    startThread?: (cwd: string) => Promise<{ thread: { id: string } }>,
+    targetDefaults?: () => Promise<Omit<AutomationTargetPreview, "workspace">>,
+    startThread?: NonNullable<
+      Parameters<typeof createBundledAutomationPluginService>[0]["startThread"]
+    >,
   ) {
     this.#active = active;
     this.#appServer = appServer;
     this.#targets = targets;
+    this.#targetDefaults = targetDefaults;
     this.#startThread = startThread;
     this.#service = new ZenXTriggerService(appServer, store, { titles });
   }
@@ -270,18 +300,64 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       throw new Error("Thread discovery is unavailable");
     return await listThreadCandidates(this.#targets);
   }
-  async createTarget(workspace: string): Promise<{ threadId: string }> {
+  async workspaces(): Promise<string[]> {
+    const projection = this.#targets?.projectProjection;
+    if (!projection?.configuredWorkspaces)
+      throw new Error("Configured workspace discovery is unavailable");
+    return await projection.configuredWorkspaces();
+  }
+  async previewTarget(workspace: string): Promise<AutomationTargetPreview> {
+    const projection = this.#targets?.projectProjection;
+    if (!projection?.configuredWorkspace || !this.#targetDefaults)
+      throw new Error("Target preview is unavailable");
+    const configured = await projection.configuredWorkspace(workspace);
+    if (configured === null)
+      throw new Error("Workspace is not configured; refresh projects");
+    const defaults = await this.#targetDefaults();
+    if ((await projection.configuredWorkspace(configured)) !== configured)
+      throw new Error(
+        "Workspace configuration changed; refresh and confirm again",
+      );
+    return { workspace: configured, ...defaults };
+  }
+  async createTarget(
+    workspace: string,
+    expected: AutomationTargetPreview,
+  ): Promise<{ threadId: string; effective: AutomationTargetPreview }> {
     if (this.#targets === undefined || this.#startThread === undefined)
       throw new Error("Creating a target Thread is unavailable");
-    const candidates = await listThreadCandidates(this.#targets);
+    const current = await this.previewTarget(workspace);
+    if (JSON.stringify(expected) !== JSON.stringify(current))
+      throw new Error(
+        "Workspace or Host defaults changed; refresh preview and confirm again",
+      );
+    // Last trusted workspace admission, independent of historical Thread cwd.
     if (
-      !candidates.some(
-        (candidate) => candidate.cwd === workspace && !candidate.archived,
-      )
+      (await this.#targets.projectProjection.configuredWorkspace?.(
+        current.workspace,
+      )) !== current.workspace
     )
-      throw new Error("Choose a workspace from a current Thread");
-    const result = await this.#startThread(workspace);
-    return { threadId: result.thread.id };
+      throw new Error(
+        "Workspace was unconfigured; refresh preview and confirm again",
+      );
+    const result = await this.#startThread(current);
+    const sandboxType =
+      current.sandbox === "danger-full-access"
+        ? "dangerFullAccess"
+        : current.sandbox === "read-only"
+          ? "readOnly"
+          : "workspaceWrite";
+    if (
+      result.cwd !== current.workspace ||
+      result.model !== current.model ||
+      result.sandbox.type !== sandboxType ||
+      result.approvalPolicy !== current.approvalPolicy ||
+      result.reasoningEffort !== current.reasoningEffort
+    )
+      throw new Error(
+        `Thread ${result.thread.id} was created with different settings; inspect it before retrying`,
+      );
+    return { threadId: result.thread.id, effective: current };
   }
 
   async result(historyId: string) {
@@ -332,11 +408,17 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   async cancel(triggerId: string): Promise<void> {
     await this.#service.cancel(triggerId);
   }
-  async resume(triggerId: string): Promise<void> {
+  async resume(triggerId: string, expectedRevision?: number): Promise<void> {
     const trigger = this.#service
       .snapshot()
       .triggers.find((item) => item.id === triggerId);
     if (trigger === undefined) throw new Error("Trigger was not found");
+    if (
+      expectedRevision !== undefined &&
+      trigger.definitionRevision !== expectedRevision &&
+      (trigger.definitionRevision !== undefined || expectedRevision !== 0)
+    )
+      throw new Error("Trigger definition changed; refresh before enabling");
     await this.#resolveInput({
       threadId: trigger.threadId,
       kind: "thread",
@@ -344,10 +426,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       prompt: trigger.prompt,
       watchedThreadId: trigger.watch?.threadId ?? trigger.threadId,
     });
-    await this.#service.resume(triggerId, {
-      threadId: trigger.threadId,
-      ...(trigger.watch ? { watchedThreadId: trigger.watch.threadId } : {}),
-    });
+    await this.#service.resume(triggerId, trigger);
   }
   async delete(triggerId: string): Promise<void> {
     await this.#service.delete(triggerId);

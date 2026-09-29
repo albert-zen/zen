@@ -38,6 +38,110 @@
       "maxOutputBytes": 65536
     },
     {
+      "name": "zenx_triggers_workspaces",
+      "description": "List configured Project workspaces eligible for a new automation Thread.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-triggers.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.triggers.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_triggers_preview_target",
+      "description": "Preview trusted Host Thread defaults and configured workspace before explicit confirmation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workspace": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "required": ["workspace"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-triggers.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.triggers.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_triggers_create_target",
+      "description": "Create an idle dedicated automation Thread only after confirming current Host defaults and workspace.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workspace": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "preview": {
+            "type": "object",
+            "properties": {
+              "workspace": {
+                "type": "string",
+                "maxLength": 4096
+              },
+              "model": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "providerProfileId": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "modelId": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "reasoningEffort": {
+                "type": ["string", "null"]
+              },
+              "sandbox": {
+                "type": "string",
+                "enum": ["read-only", "workspace-write", "danger-full-access"]
+              },
+              "approvalPolicy": {
+                "type": "string",
+                "enum": ["never", "on-request"]
+              },
+              "processEpoch": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "workspace",
+              "model",
+              "providerProfileId",
+              "modelId",
+              "reasoningEffort",
+              "sandbox",
+              "approvalPolicy",
+              "processEpoch",
+              "revision"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": ["workspace", "preview"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-triggers.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.triggers.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
       "name": "zenx_triggers_result",
       "description": "Read the exact source Turn preview of a retained notification; full original content is available through Thread reading.",
       "inputSchema": {
@@ -428,6 +532,29 @@
       "maxOutputBytes": 65536
     },
     {
+      "name": "zenx_triggers_resume",
+      "description": "Resume a stopped Trigger after validating its full definition revision; elapsed timers must first be edited.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "triggerId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["triggerId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-triggers.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.triggers.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
       "name": "zenx_triggers_delete",
       "description": "Delete a Trigger definition while preserving audit history.",
       "inputSchema": {
@@ -504,7 +631,7 @@
     "pages": [
       {
         "id": "triggers",
-        "title": "Triggers",
+        "title": "Automations",
         "route": "/plugins/zenx-triggers/triggers",
         "surfaceId": "triggers-page"
       }
@@ -512,7 +639,7 @@
     "sidebar": [
       {
         "id": "triggers",
-        "label": "Triggers",
+        "label": "Automations",
         "icon": "clock",
         "pageId": "triggers",
         "order": 10
@@ -523,6 +650,21 @@
         "id": "threads",
         "title": "Discover readable Thread targets for notification setup.",
         "tool": "zenx_triggers_threads"
+      },
+      {
+        "id": "workspaces",
+        "title": "List configured Project workspaces eligible for a new automation Thread.",
+        "tool": "zenx_triggers_workspaces"
+      },
+      {
+        "id": "preview-target",
+        "title": "Preview trusted Host Thread defaults and configured workspace before explicit confirmation.",
+        "tool": "zenx_triggers_preview_target"
+      },
+      {
+        "id": "create-target",
+        "title": "Create an idle dedicated automation Thread only after confirming current Host defaults and workspace.",
+        "tool": "zenx_triggers_create_target"
       },
       {
         "id": "result",
@@ -548,6 +690,11 @@
         "id": "cancel",
         "title": "Deactivate a Trigger without deleting its definition or history.",
         "tool": "zenx_triggers_cancel"
+      },
+      {
+        "id": "resume",
+        "title": "Resume a stopped Trigger after validating its full definition revision; elapsed timers must first be edited.",
+        "tool": "zenx_triggers_resume"
       },
       {
         "id": "delete",

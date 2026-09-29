@@ -40,6 +40,7 @@ import type {
   ZenXPluginSidebarContribution,
 } from "./types.js";
 import type { ZenXPluginHostSdkV1 } from "../plugin-host-sdk.js";
+import type { AutomationTargetPreview } from "../automation-plugin-service.js";
 
 export const ZENX_AUTOMATION_CONTROL_CAPABILITY_ID = "zenx-automation-control";
 export const ZENX_TRIGGERS_CAPABILITY_ID = "zenx-triggers";
@@ -53,7 +54,12 @@ export const ZENX_AUTOMATION_WRITE_PERMISSION = "zenx-automation-control.write";
 
 export interface ZenXAutomationControlPort {
   threads?(): Promise<ThreadCandidate[]>;
-  createTarget?(workspace: string): Promise<{ threadId: string }>;
+  workspaces?(): Promise<string[]>;
+  previewTarget?(workspace: string): Promise<AutomationTargetPreview>;
+  createTarget?(
+    workspace: string,
+    preview: AutomationTargetPreview,
+  ): Promise<{ threadId: string; effective: AutomationTargetPreview }>;
   result?(historyId: string): Promise<{
     threadId: string;
     turnId: string;
@@ -64,7 +70,7 @@ export interface ZenXAutomationControlPort {
   create(input: CreateTriggerInput): Promise<ZenXTrigger>;
   update(input: UpdateTriggerInput): Promise<ZenXTrigger>;
   cancel(triggerId: string): Promise<void>;
-  resume(triggerId: string): Promise<void>;
+  resume(triggerId: string, expectedRevision?: number): Promise<void>;
   delete(triggerId: string): Promise<void>;
   signal(name: string, detail: string): Promise<void>;
   createRoom(input: CreateRoomInput): Promise<ZenXRoom>;
@@ -152,6 +158,36 @@ const triggerProperties = {
   program: programSchema,
 };
 
+const targetPreviewSchema = {
+  type: "object",
+  properties: {
+    workspace: { type: "string", maxLength: 4096 },
+    model: { type: "string", maxLength: 1024 },
+    providerProfileId: { type: "string", maxLength: 256 },
+    modelId: { type: "string", maxLength: 256 },
+    reasoningEffort: { type: ["string", "null"] },
+    sandbox: {
+      type: "string",
+      enum: ["read-only", "workspace-write", "danger-full-access"],
+    },
+    approvalPolicy: { type: "string", enum: ["never", "on-request"] },
+    processEpoch: { type: "string", maxLength: 128 },
+    revision: { type: "integer", minimum: 0 },
+  },
+  required: [
+    "workspace",
+    "model",
+    "providerProfileId",
+    "modelId",
+    "reasoningEffort",
+    "sandbox",
+    "approvalPolicy",
+    "processEpoch",
+    "revision",
+  ],
+  additionalProperties: false,
+};
+
 const manifest: ZenXPluginManifestV2 = {
   schemaVersion: 2,
   id: ZENX_AUTOMATION_CONTROL_CAPABILITY_ID,
@@ -194,10 +230,27 @@ const manifest: ZenXPluginManifestV2 = {
       false,
     ),
     tool(
-      "zenx_triggers_create_target",
-      "Create an idle dedicated automation Thread in an already discovered workspace.",
+      "zenx_triggers_workspaces",
+      "List configured Project workspaces eligible for a new automation Thread.",
+      {},
+      [],
+      false,
+    ),
+    tool(
+      "zenx_triggers_preview_target",
+      "Preview trusted Host Thread defaults and configured workspace before explicit confirmation.",
       { workspace: { type: "string", maxLength: 4096 } },
       ["workspace"],
+      false,
+    ),
+    tool(
+      "zenx_triggers_create_target",
+      "Create an idle dedicated automation Thread only after confirming current Host defaults and workspace.",
+      {
+        workspace: { type: "string", maxLength: 4096 },
+        preview: targetPreviewSchema,
+      },
+      ["workspace", "preview"],
     ),
     tool(
       "zenx_triggers_result",
@@ -233,8 +286,11 @@ const manifest: ZenXPluginManifestV2 = {
     ),
     tool(
       "zenx_triggers_resume",
-      "Resume a stopped Trigger; elapsed one-shot timers must first be edited to a future time.",
-      { triggerId: { type: "string", maxLength: MAX_ID_BYTES } },
+      "Resume a stopped Trigger after validating its full definition revision; elapsed timers must first be edited.",
+      {
+        triggerId: { type: "string", maxLength: MAX_ID_BYTES },
+        expectedRevision: { type: "integer", minimum: 0 },
+      },
       ["triggerId"],
     ),
     tool(
@@ -333,10 +389,21 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
         if (this.#port.threads === undefined)
           throw new Error("Thread discovery is unavailable");
         return { threads: await this.#port.threads() };
+      case "zenx_triggers_workspaces":
+        if (this.#port.workspaces === undefined)
+          throw new Error("Configured workspaces are unavailable");
+        return { workspaces: await this.#port.workspaces() };
+      case "zenx_triggers_preview_target":
+        if (this.#port.previewTarget === undefined)
+          throw new Error("Target preview is unavailable");
+        return await this.#port.previewTarget(string(args, "workspace", 4096));
       case "zenx_triggers_create_target":
         if (this.#port.createTarget === undefined)
           throw new Error("Creating a target Thread is unavailable");
-        return await this.#port.createTarget(string(args, "workspace", 4096));
+        return await this.#port.createTarget(
+          string(args, "workspace", 4096),
+          args.preview as AutomationTargetPreview,
+        );
       case "zenx_triggers_result":
         if (this.#port.result === undefined)
           throw new Error("Reading source results is unavailable");
@@ -368,7 +435,17 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
         await this.#port.cancel(string(args, "triggerId", MAX_ID_BYTES));
         return { cancelled: true };
       case "zenx_triggers_resume":
-        await this.#port.resume(string(args, "triggerId", MAX_ID_BYTES));
+        if (
+          uiInput !== undefined &&
+          !Number.isSafeInteger(args.expectedRevision)
+        )
+          throw new Error("Refresh Trigger definitions before enabling");
+        await this.#port.resume(
+          string(args, "triggerId", MAX_ID_BYTES),
+          args.expectedRevision === undefined
+            ? undefined
+            : number(args, "expectedRevision"),
+        );
         return { resumed: true };
       case "zenx_triggers_delete":
         await this.#port.delete(string(args, "triggerId", MAX_ID_BYTES));
@@ -666,6 +743,7 @@ function automationPluginManifest(
 function readSafeTrigger(trigger: ZenXTrigger): unknown {
   const common = {
     id: trigger.id,
+    definitionRevision: trigger.definitionRevision ?? 0,
     threadId: trigger.threadId,
     label: trigger.label,
     prompt: trigger.prompt,

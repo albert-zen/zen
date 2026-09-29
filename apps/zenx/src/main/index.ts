@@ -552,8 +552,62 @@ async function bootstrapZenX(): Promise<void> {
     installTitleIpc(titleCoordinator);
     const automationManager = appServerManager;
     automationService = await createBundledAutomationPluginService({
-      startThread: async (cwd) =>
-        await automationManager.request("thread/start", { cwd }),
+      targetDefaults: async () => {
+        const current = await automationManager.currentConfiguration();
+        const defaults = current.threadStartDefaults;
+        if (defaults === undefined)
+          throw new Error("Host thread defaults are unavailable");
+        const models = await automationManager.request("model/list", {});
+        const model = models.data.find((entry) => entry.isDefault);
+        if (model === undefined)
+          throw new Error("Host default model is unavailable");
+        const after = await automationManager.currentConfiguration();
+        if (
+          after.processEpoch !== current.processEpoch ||
+          after.revision !== current.revision ||
+          JSON.stringify(after.threadStartDefaults) !== JSON.stringify(defaults)
+        )
+          throw new Error("Host defaults changed; refresh and confirm again");
+        return {
+          model: model.id,
+          providerProfileId: defaults.providerProfileId,
+          modelId: defaults.modelId,
+          reasoningEffort: defaults.reasoningEffort,
+          sandbox: defaults.sandbox,
+          approvalPolicy:
+            defaults.approvalPolicy === "never"
+              ? ("never" as const)
+              : ("on-request" as const),
+          processEpoch: current.processEpoch,
+          revision: current.revision,
+        };
+      },
+      startThread: async (preview) => {
+        const current = await automationManager.currentConfiguration();
+        if (
+          current.processEpoch !== preview.processEpoch ||
+          current.revision !== preview.revision
+        )
+          throw new Error("Host defaults changed; refresh and confirm again");
+        const started = await automationManager.request("thread/start", {
+          cwd: preview.workspace,
+          model: preview.model,
+          sandbox: preview.sandbox,
+          approvalPolicy: preview.approvalPolicy,
+          ...(preview.reasoningEffort === null
+            ? {}
+            : { effort: preview.reasoningEffort }),
+        });
+        const after = await automationManager.currentConfiguration();
+        if (
+          after.processEpoch !== preview.processEpoch ||
+          after.revision !== preview.revision
+        )
+          throw new Error(
+            `Thread ${started.thread.id} was created as confirmed, but Host defaults changed; inspect it before retrying`,
+          );
+        return started;
+      },
       threadTargets: {
         projectProjection,
         request: (method, params) => automationManager.request(method, params),

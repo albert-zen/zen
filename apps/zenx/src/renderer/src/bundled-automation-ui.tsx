@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, type FormEvent } from "react";
 import type { ThreadCandidate } from "../../main/thread-target.js";
+import type { AutomationTargetPreview } from "../../main/automation-plugin-service.js";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import { threadTitle } from "./thread-list.js";
 import { Select, Combobox } from "./ui/controls.js";
@@ -160,20 +161,35 @@ function conditionLabel(
   return `Signal: ${trigger.signal?.name ?? "unknown"}`;
 }
 
+function safeProgramFailure(entry: TriggerHistoryEntry): string | null {
+  if (
+    entry.status !== "failed" ||
+    entry.programOutcome === null ||
+    entry.programOutcome === undefined
+  )
+    return null;
+  const outcome = entry.programOutcome;
+  // Host-classified fields only; never raw error, stdout, command or env.
+  return `Program ${outcome.stage}: ${outcome.status}${outcome.exitCode === null ? "" : ` (exit ${outcome.exitCode})`}. Diagnostic history ${entry.id}.`;
+}
+
 function useTriggerData(sdk: PluginUiSdkV1) {
   const [data, setData] = useState<TriggerListResult>({
     triggers: [],
     history: [],
   });
   const [threads, setThreads] = useState<ThreadCandidate[]>([]);
+  const [workspaces, setWorkspaces] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const refresh = async () => {
-    const [listed, discovered] = await Promise.all([
+    const [listed, discovered, configured] = await Promise.all([
       sdk.commands.execute("list"),
       sdk.commands.execute("threads"),
+      sdk.commands.execute("workspaces"),
     ]);
     setData(listed as TriggerListResult);
     setThreads((discovered as { threads: ThreadCandidate[] }).threads);
+    setWorkspaces((configured as { workspaces: string[] }).workspaces);
   };
   useEffect(() => {
     void refresh().catch((reason: unknown) => setError(describeError(reason)));
@@ -187,7 +203,7 @@ function useTriggerData(sdk: PluginUiSdkV1) {
     );
     return () => clearInterval(timer);
   }, [sdk]);
-  return { data, threads, error, setError, refresh };
+  return { data, threads, workspaces, error, setError, refresh };
 }
 
 function TriggerManager({
@@ -197,13 +213,16 @@ function TriggerManager({
   sdk: PluginUiSdkV1;
   scopedThreadId?: string;
 }) {
-  const { data, threads, error, setError, refresh } = useTriggerData(sdk);
+  const { data, threads, workspaces, error, setError, refresh } =
+    useTriggerData(sdk);
   const [editor, setEditor] = useState<TriggerEditor>(() =>
     blankEditor(scopedThreadId),
   );
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [workspace, setWorkspace] = useState("");
+  const [targetPreview, setTargetPreview] =
+    useState<AutomationTargetPreview | null>(null);
   const [targetNotice, setTargetNotice] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [previews, setPreviews] = useState<Record<string, string>>({});
@@ -242,21 +261,43 @@ function TriggerManager({
       setBusy(false);
     }
   };
-  const createTarget = async () => {
+  const previewDedicatedTarget = async () => {
     if (!workspace) return;
+    setBusy(true);
+    setError(null);
+    setTargetPreview(null);
+    try {
+      setTargetPreview(
+        (await sdk.commands.execute("preview-target", {
+          workspace,
+        })) as AutomationTargetPreview,
+      );
+    } catch (reason) {
+      setError(describeError(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const createTarget = async () => {
+    if (!workspace || targetPreview?.workspace !== workspace) return;
     setBusy(true);
     setError(null);
     try {
       const result = (await sdk.commands.execute("create-target", {
         workspace,
-      })) as { threadId: string };
+        preview: targetPreview,
+      })) as { threadId: string; effective: AutomationTargetPreview };
+      setTargetPreview(null);
       change({ threadId: result.threadId });
       setTargetNotice(
-        `Dedicated Thread ${result.threadId} created. Save this trigger to bind it; if saving fails, this idle Thread remains available.`,
+        `Dedicated Thread ${result.threadId} created with ${result.effective.sandbox} / ${result.effective.approvalPolicy}, model ${result.effective.modelId}. Save this trigger to bind it; if saving fails, this idle Thread remains available.`,
       );
       await refresh();
     } catch (reason) {
-      setError(describeError(reason));
+      setTargetPreview(null);
+      setError(
+        `${describeError(reason)}. If the response was lost, inspect Threads before retrying.`,
+      );
     } finally {
       setBusy(false);
     }
@@ -288,8 +329,19 @@ function TriggerManager({
           <p>
             {scopedThreadId
               ? "Host schedules independently of this panel."
-              : "Host schedules while running, even when this page is closed. Sleep or Host exit pauses execution; missed timers fire at most once when Host resumes. Unknown deliveries are not retried automatically."}
+              : "Host schedules while running, even when this page is closed."}
           </p>
+          {!scopedThreadId ? (
+            <details>
+              <summary>Scheduling and recovery</summary>
+              <p>
+                Sleep or Host exit pauses execution; missed timers fire at most
+                once when Host resumes. Unknown deliveries are not retried
+                automatically. Pausing or deleting a definition does not cancel
+                an already accepted delivery.
+              </p>
+            </details>
+          ) : null}
         </div>
         {scopedThreadId ? (
           <button
@@ -357,15 +409,15 @@ function TriggerManager({
                   <div className="trigger-dedicated">
                     <label className="field">
                       <span>Or create a dedicated Thread in a workspace</span>
-                      <Select value={workspace} onValueChange={setWorkspace}>
-                        <option value="">Select an existing workspace</option>
-                        {[
-                          ...new Set(
-                            threads
-                              .filter((item) => !item.archived && item.cwd)
-                              .map((item) => item.cwd),
-                          ),
-                        ].map((cwd) => (
+                      <Select
+                        value={workspace}
+                        onValueChange={(value) => {
+                          setWorkspace(value);
+                          setTargetPreview(null);
+                        }}
+                      >
+                        <option value="">Select a configured workspace</option>
+                        {workspaces.map((cwd) => (
                           <option key={cwd} value={cwd}>
                             {cwd}
                           </option>
@@ -376,10 +428,50 @@ function TriggerManager({
                       type="button"
                       className="quiet-button"
                       disabled={busy || !workspace}
-                      onClick={() => void createTarget()}
+                      onClick={() => void previewDedicatedTarget()}
                     >
-                      Create dedicated Thread
+                      Review Thread permissions
                     </button>
+                    {targetPreview?.workspace === workspace ? (
+                      <div
+                        className="trigger-target-confirm"
+                        role="group"
+                        aria-label="Confirm dedicated Thread settings"
+                      >
+                        <p>Host defaults for this unattended Thread:</p>
+                        <p>Configured workspace: {targetPreview.workspace}</p>
+                        <p>
+                          Model: {targetPreview.modelId} (profile{" "}
+                          {targetPreview.providerProfileId}); effort{" "}
+                          {targetPreview.reasoningEffort ?? "default"}
+                        </p>
+                        <p>
+                          File access:{" "}
+                          {targetPreview.sandbox === "danger-full-access"
+                            ? "Full Access — may change files outside this workspace without sandbox approval"
+                            : targetPreview.sandbox}
+                          . Approval:{" "}
+                          {targetPreview.approvalPolicy === "never"
+                            ? "Never — actions may proceed without asking you"
+                            : "On request"}
+                          .
+                        </p>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void createTarget()}
+                        >
+                          Confirm settings and create dedicated Thread
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => setTargetPreview(null)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : null}
                     {targetNotice ? <p role="status">{targetNotice}</p> : null}
                   </div>
                 ) : null}
@@ -507,7 +599,7 @@ function TriggerManager({
               <p>
                 Last:{" "}
                 {last
-                  ? `${timeLabel(last.startedAt)} · ${deliveryLabel(last)}${last.error ? ` · ${last.error}` : ""}`
+                  ? `${timeLabel(last.startedAt)} · ${deliveryLabel(last)}${safeProgramFailure(last) ? ` · ${safeProgramFailure(last)}` : last.error ? ` · ${last.error}` : ""}`
                   : "No runs yet"}
               </p>
               <div className="trigger-actions">
@@ -538,6 +630,9 @@ function TriggerManager({
                   onClick={() =>
                     void run(trigger.active ? "cancel" : "resume", {
                       triggerId: trigger.id,
+                      ...(!trigger.active
+                        ? { expectedRevision: trigger.definitionRevision ?? 0 }
+                        : {}),
                     })
                   }
                 >
@@ -596,7 +691,11 @@ function TriggerManager({
               </strong>{" "}
               · {timeLabel(entry.startedAt)} · {deliveryLabel(entry)}
               <p>{entry.reason}</p>
-              {entry.error ? <p role="status">{entry.error}</p> : null}
+              {safeProgramFailure(entry) ? (
+                <p role="status">{safeProgramFailure(entry)}</p>
+              ) : entry.error ? (
+                <p role="status">{entry.error}</p>
+              ) : null}
               <div className="trigger-actions">
                 {entry.sourceThreadId ? (
                   <>

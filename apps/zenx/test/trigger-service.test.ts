@@ -52,8 +52,11 @@ test("paused future timers can resume; elapsed one-shots require editing", async
     assert.equal(triggers.snapshot().triggers[0]?.active, true);
     await triggers.cancel(timer.id);
     await assert.rejects(
-      triggers.resume(timer.id, { threadId: "different-target" }),
-      /target changed/,
+      triggers.resume(timer.id, {
+        ...triggers.snapshot().triggers[0]!,
+        threadId: "different-target",
+      }),
+      /definition changed/,
     );
     assert.equal(triggers.snapshot().triggers[0]?.active, false);
     await new Promise((resolve) => setTimeout(resolve, 550));

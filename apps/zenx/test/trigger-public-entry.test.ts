@@ -46,11 +46,44 @@ test(
           onNotification: (listener) => manager.onNotification(listener),
         },
         threadTargets: {
-          projectProjection: { canonicalKeys: async (values) => values },
+          projectProjection: {
+            canonicalKeys: async (values) => values,
+            configuredWorkspace: async (value) =>
+              value === process.cwd() ? value : null,
+            configuredWorkspaces: async () => [process.cwd()],
+          },
           request: (method, params) => manager.request(method, params),
         },
-        startThread: async (cwd) =>
-          await manager.request("thread/start", { cwd }),
+        targetDefaults: async () => {
+          const current = await manager.currentConfiguration();
+          const defaults = current.threadStartDefaults!;
+          const model = (await manager.request("model/list", {})).data.find(
+            (item) => item.isDefault,
+          )!;
+          return {
+            model: model.id,
+            providerProfileId: defaults.providerProfileId,
+            modelId: defaults.modelId,
+            reasoningEffort: defaults.reasoningEffort,
+            sandbox: defaults.sandbox,
+            approvalPolicy:
+              defaults.approvalPolicy === "never"
+                ? ("never" as const)
+                : ("on-request" as const),
+            processEpoch: current.processEpoch,
+            revision: current.revision,
+          };
+        },
+        startThread: async (preview) =>
+          await manager.request("thread/start", {
+            cwd: preview.workspace,
+            model: preview.model,
+            sandbox: preview.sandbox,
+            approvalPolicy: preview.approvalPolicy,
+            ...(preview.reasoningEffort === null
+              ? {}
+              : { effort: preview.reasoningEffort }),
+          }),
       });
       const api = new ZenXTriggersCapabilityPackage(domain);
       await domain.startPlugin("zenx-triggers", {} as never);
@@ -63,8 +96,12 @@ test(
           signal: new AbortController().signal,
           arguments: { input },
         });
+      const preview = await invoke("zenx_triggers_preview_target", {
+        workspace: process.cwd(),
+      });
       const bound = (await invoke("zenx_triggers_create_target", {
         workspace: process.cwd(),
+        preview,
       })) as { threadId: string };
       assert.notEqual(bound.threadId, thread.id);
       const created = (await invoke("zenx_triggers_create", {
@@ -127,7 +164,15 @@ test(
         ).triggers.find((item) => item.id === resumed.id)?.active,
         false,
       );
-      await invoke("zenx_triggers_resume", { triggerId: resumed.id });
+      const revision = (
+        (await invoke("zenx_triggers_list", {})) as {
+          triggers: Array<{ id: string; definitionRevision: number }>;
+        }
+      ).triggers.find((item) => item.id === resumed.id)!.definitionRevision;
+      await invoke("zenx_triggers_resume", {
+        triggerId: resumed.id,
+        expectedRevision: revision,
+      });
       let resumedEntry: TriggerHistoryEntry | undefined;
       const resumeDeadline = Date.now() + 10_000;
       while (Date.now() < resumeDeadline) {

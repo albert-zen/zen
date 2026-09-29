@@ -267,6 +267,18 @@ export class ZenXProjectProjection {
     );
   }
 
+  async configuredWorkspaces(): Promise<string[]> {
+    const revision = this.#configurationRevision;
+    const configuration = this.#configuration;
+    const identities = await this.#canonicalSnapshot(configuration.workspaces);
+    if (
+      revision !== this.#configurationRevision ||
+      configuration !== this.#configuration
+    )
+      throw new Error("Project configuration changed; refresh workspaces");
+    return [...new Set(identities.map((identity) => identity.displayPath))];
+  }
+
   async canonicalKey(value: string): Promise<string> {
     return (await this.canonicalKeys([value]))[0]!;
   }

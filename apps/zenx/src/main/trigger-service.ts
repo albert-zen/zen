@@ -404,6 +404,7 @@ export class ZenXTriggerService {
         existing.active,
         this.#now(),
       );
+      replacement.definitionRevision = (existing.definitionRevision ?? 0) + 1;
       snapshot.triggers[index] = replacement;
       return replacement;
     });
@@ -419,13 +420,14 @@ export class ZenXTriggerService {
       );
       if (trigger === undefined) throw new Error("Trigger was not found");
       trigger.active = false;
+      trigger.definitionRevision = (trigger.definitionRevision ?? 0) + 1;
     });
     this.#rescheduleTimers(generation);
   }
 
   async resume(
     triggerId: string,
-    expectedTarget?: { threadId: string; watchedThreadId?: string },
+    expectedDefinition?: ZenXTrigger | number,
   ): Promise<void> {
     const generation = this.#runningGeneration();
     await this.#mutate(generation, async (snapshot) => {
@@ -434,12 +436,13 @@ export class ZenXTriggerService {
       );
       if (trigger === undefined) throw new Error("Trigger was not found");
       if (
-        expectedTarget &&
-        (trigger.threadId !== expectedTarget.threadId ||
-          trigger.watch?.threadId !== expectedTarget.watchedThreadId)
+        expectedDefinition !== undefined &&
+        (typeof expectedDefinition === "number"
+          ? (trigger.definitionRevision ?? 0) !== expectedDefinition
+          : JSON.stringify(trigger) !== JSON.stringify(expectedDefinition))
       )
         throw new Error(
-          "Trigger target changed during validation; inspect it before enabling",
+          "Trigger definition changed during validation; refresh before enabling",
         );
       if (trigger.active) return;
       if (trigger.timer !== undefined && trigger.timer.nextRunAt <= this.#now())
@@ -447,6 +450,7 @@ export class ZenXTriggerService {
           "Timer is in the past; edit the next run time before resuming",
         );
       trigger.active = true;
+      trigger.definitionRevision = (trigger.definitionRevision ?? 0) + 1;
     });
     this.#rescheduleTimers(generation);
   }
