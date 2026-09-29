@@ -109,7 +109,7 @@ jobs:
       - name: Exercise Windows publish handle lifecycle and rollback
         run: |
           npm run build --workspace @zenx/plugin-sdk
-          node --import tsx --test --test-name-pattern="publish|missing source|concurrent packaging" apps/zenx/test/package-zenx-portable.test.mjs
+          node --import tsx --test --test-name-pattern="publishes a complete|publishing retries|exhausted EPERM|non-EPERM publication|missing source|publish rejects|rollback failure|publish preserves backup|Windows publishes|concurrent packaging" apps/zenx/test/package-zenx-portable.test.mjs
       - name: Package and diagnose Windows smoke publication
         env:
           ZENX_PACKAGE_DIAG: "1"

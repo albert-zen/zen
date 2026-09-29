@@ -6,6 +6,7 @@ import {
   cp,
   mkdir,
   mkdtemp,
+  lstat,
   stat,
   open,
   readFile,
@@ -167,7 +168,14 @@ async function packageZenX(arguments_) {
           process.platform === "win32" &&
           process.env.ZENX_PACKAGE_DIAG === "1"
         ) {
-          await diagnoseWindowsPublishFailure(packaged[0], finalArtifact);
+          try {
+            await diagnoseWindowsPublishFailure(packaged[0], finalArtifact);
+          } catch (diagnosticError) {
+            console.error(
+              "Windows packaged publish diagnostic failed",
+              diagnosticError?.code ?? "unknown",
+            );
+          }
         }
         throw error;
       }
@@ -618,6 +626,30 @@ Get-CimInstance Win32_Process | Where-Object {
   }
 }
 
+// A no-follow identity snapshot keeps retries bound to the original source and
+// target. Paths alone are insufficient across a backoff; this is not an OS-level
+// no-clobber operation against a writer racing *between* validation and rename.
+async function publishDirectoryIdentity(file) {
+  let entry;
+  try {
+    entry = await lstat(file, { bigint: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+  if (!entry.isDirectory())
+    throw new Error(`Packaged artifact is not a directory: ${file}`);
+  if (entry.ino === 0n && entry.birthtimeNs === 0n) {
+    throw new Error(`Packaged artifact has no usable identity: ${file}`);
+  }
+  return `${entry.dev}:${entry.ino}:${entry.birthtimeNs}`;
+}
+
+function assertPublishIdentity(actual, expected, label) {
+  if (actual !== expected)
+    throw new Error(`Packaged artifact ${label} changed during publication`);
+}
+
 // A lingering Windows handle can block directory rename even after the
 // smoke parent exits. Only retry a failed staging rename; each attempt first
 // restores any prior published artifact before waiting.
@@ -631,26 +663,62 @@ export async function publishPackagedArtifact(
   } = {},
 ) {
   await mkdir(path.dirname(finalArtifact), { recursive: true, mode: 0o700 });
+  const stagedIdentity = await publishDirectoryIdentity(stagedArtifact);
+  if (stagedIdentity === null)
+    throw new Error("Packaged artifact staging source is missing");
+  const oldIdentity = await publishDirectoryIdentity(finalArtifact);
   const retiredArtifact = path.join(
     path.dirname(finalArtifact),
     `.${path.basename(finalArtifact)}.${randomUUID()}.retired`,
   );
   const delays = platform === "win32" ? [100, 250, 500, 1000] : [];
   for (let attempt = 0; ; attempt++) {
+    // Revalidate *after* each wait, before touching either artifact. The lock
+    // serializes cooperating packagers; an unrelated writer need not honor it.
+    assertPublishIdentity(
+      await publishDirectoryIdentity(stagedArtifact),
+      stagedIdentity,
+      "source",
+    );
+    assertPublishIdentity(
+      await publishDirectoryIdentity(finalArtifact),
+      oldIdentity,
+      "target",
+    );
     let retired = false;
-    try {
+    if (oldIdentity !== null) {
       await renameArtifact(finalArtifact, retiredArtifact);
       retired = true;
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
+      assertPublishIdentity(
+        await publishDirectoryIdentity(retiredArtifact),
+        oldIdentity,
+        "backup",
+      );
     }
     try {
       await renameArtifact(stagedArtifact, finalArtifact);
     } catch (error) {
       if (retired) {
         try {
+          assertPublishIdentity(
+            await publishDirectoryIdentity(retiredArtifact),
+            oldIdentity,
+            "backup",
+          );
+          assertPublishIdentity(
+            await publishDirectoryIdentity(finalArtifact),
+            null,
+            "target before rollback",
+          );
           await renameArtifact(retiredArtifact, finalArtifact);
+          assertPublishIdentity(
+            await publishDirectoryIdentity(finalArtifact),
+            oldIdentity,
+            "restored target",
+          );
         } catch (rollbackError) {
+          // Keep the owned backup if restoration cannot be proven safe. The
+          // caller removes only the private run staging directory in finally.
           throw new AggregateError(
             [error, rollbackError],
             "Packaged artifact publication and rollback failed",
@@ -658,27 +726,32 @@ export async function publishPackagedArtifact(
         }
       }
       if (error?.code !== "EPERM" || attempt >= delays.length) throw error;
-      // A missing source or a surprise target is not a transient sharing
-      // violation. Never retry over a foreign artifact or a partial publish.
-      let source;
-      try {
-        source = await stat(stagedArtifact);
-      } catch {
-        throw error;
-      }
-      if (!source.isDirectory()) throw error;
-      const targetExists = await stat(finalArtifact).then(
-        () => true,
-        (statusError) => {
-          if (statusError?.code === "ENOENT") return false;
-          throw statusError;
-        },
+      assertPublishIdentity(
+        await publishDirectoryIdentity(stagedArtifact),
+        stagedIdentity,
+        "source",
       );
-      if (targetExists !== retired) throw error;
+      assertPublishIdentity(
+        await publishDirectoryIdentity(finalArtifact),
+        oldIdentity,
+        "target",
+      );
       await wait(delays[attempt]);
       continue;
     }
-    if (retired) await rm(retiredArtifact, { recursive: true, force: true });
+    assertPublishIdentity(
+      await publishDirectoryIdentity(finalArtifact),
+      stagedIdentity,
+      "published target",
+    );
+    if (retired) {
+      assertPublishIdentity(
+        await publishDirectoryIdentity(retiredArtifact),
+        oldIdentity,
+        "backup before removal",
+      );
+      await rm(retiredArtifact, { recursive: true, force: true });
+    }
     return finalArtifact;
   }
 }

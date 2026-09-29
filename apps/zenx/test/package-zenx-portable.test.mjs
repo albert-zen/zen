@@ -1103,7 +1103,7 @@ test("missing source or surprise target cannot be treated as a transient EPERM",
             waits++;
           },
         }),
-        (caught) => caught === error,
+        /Packaged artifact (source|target) changed during publication/u,
       );
       assert.equal(attempts, 1);
       assert.equal(waits, 0);
@@ -1117,6 +1117,218 @@ test("missing source or surprise target cannot be treated as a transient EPERM",
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  }
+});
+
+test("publish rejects a replaced target during retry wait without deleting foreign data", async () => {
+  for (const hadOld of [true, false]) {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-retry-foreign-"),
+    );
+    try {
+      const staged = path.join(directory, "run", "ZenX-fixture");
+      const published = path.join(directory, "artifact", "ZenX-fixture");
+      await mkdir(staged, { recursive: true });
+      await writeFile(path.join(staged, "version"), "new");
+      if (hadOld) {
+        await mkdir(published, { recursive: true });
+        await writeFile(path.join(published, "version"), "old");
+      }
+      const error = Object.assign(new Error("injected EPERM"), {
+        code: "EPERM",
+      });
+      let stageMoves = 0;
+      await assert.rejects(
+        publishPackagedArtifact(staged, published, {
+          platform: "win32",
+          renameArtifact: async (from, to) => {
+            if (from === staged && ++stageMoves === 1) throw error;
+            await rename(from, to);
+          },
+          wait: async () => {
+            if (hadOld) {
+              assert.equal(
+                await readFile(path.join(published, "version"), "utf8"),
+                "old",
+              );
+              await rm(published, { recursive: true });
+            }
+            await mkdir(published, { recursive: true });
+            await writeFile(
+              path.join(published, "foreign-marker"),
+              "must-survive",
+            );
+          },
+        }),
+        /changed|not a directory/u,
+      );
+      assert.equal(stageMoves, 1);
+      assert.equal(
+        await readFile(path.join(published, "foreign-marker"), "utf8"),
+        "must-survive",
+      );
+      assert.equal(await readFile(path.join(staged, "version"), "utf8"), "new");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("publish rejects replaced or missing staging during retry wait", async () => {
+  for (const scenario of [
+    "replaced",
+    "missing",
+    ...(process.platform === "win32" ? [] : ["symlink"]),
+  ]) {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-retry-source-"),
+    );
+    try {
+      const staged = path.join(directory, "run", "ZenX-fixture");
+      const published = path.join(directory, "artifact", "ZenX-fixture");
+      await mkdir(staged, { recursive: true });
+      await writeFile(path.join(staged, "version"), "new");
+      await mkdir(published, { recursive: true });
+      await writeFile(path.join(published, "version"), "old");
+      const error = Object.assign(new Error("injected EPERM"), {
+        code: "EPERM",
+      });
+      let moves = 0;
+      await assert.rejects(
+        publishPackagedArtifact(staged, published, {
+          platform: "win32",
+          renameArtifact: async (from, to) => {
+            if (from === staged && ++moves === 1) throw error;
+            await rename(from, to);
+          },
+          wait: async () => {
+            await rm(staged, { recursive: true });
+            if (scenario === "replaced") {
+              await mkdir(staged);
+              await writeFile(path.join(staged, "foreign-marker"), "untouched");
+            } else if (scenario === "symlink") {
+              const foreign = path.join(directory, "foreign");
+              await mkdir(foreign);
+              await symlink(foreign, staged, "dir");
+            }
+          },
+        }),
+        /changed|not a directory/u,
+      );
+      assert.equal(moves, 1);
+      assert.equal(
+        await readFile(path.join(published, "version"), "utf8"),
+        "old",
+      );
+      if (scenario === "replaced")
+        assert.equal(
+          await readFile(path.join(staged, "foreign-marker"), "utf8"),
+          "untouched",
+        );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("rollback failure reports both errors and retains the old backup after staging cleanup", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-publish-rollback-"),
+  );
+  try {
+    const staged = path.join(
+      directory,
+      "runs",
+      "package-test",
+      "artifact",
+      "ZenX-fixture",
+    );
+    const published = path.join(directory, "artifact", "ZenX-fixture");
+    await mkdir(staged, { recursive: true });
+    await mkdir(published, { recursive: true });
+    await writeFile(path.join(staged, "version"), "new");
+    await writeFile(path.join(published, "version"), "old");
+    const publishError = Object.assign(new Error("publish"), { code: "EPERM" });
+    const rollbackError = Object.assign(new Error("rollback"), { code: "EIO" });
+    await assert.rejects(
+      publishPackagedArtifact(staged, published, {
+        platform: "win32",
+        renameArtifact: async (from, to) => {
+          if (from === staged) throw publishError;
+          if (from.endsWith(".retired")) throw rollbackError;
+          await rename(from, to);
+        },
+      }),
+      (error) =>
+        error instanceof AggregateError &&
+        error.errors[0] === publishError &&
+        error.errors[1] === rollbackError,
+    );
+    await rm(path.join(directory, "runs"), { recursive: true, force: true });
+    const backups = await readdir(path.dirname(published));
+    assert.equal(backups.length, 1);
+    assert.match(backups[0], /^\.ZenX-fixture\..*\.retired$/u);
+    assert.equal(
+      await readFile(
+        path.join(path.dirname(published), backups[0], "version"),
+        "utf8",
+      ),
+      "old",
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("publish preserves backup and foreign target when rollback is unsafe", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-unsafe-rollback-"),
+  );
+  try {
+    const staged = path.join(directory, "run", "ZenX-fixture");
+    const published = path.join(directory, "artifact", "ZenX-fixture");
+    await mkdir(staged, { recursive: true });
+    await mkdir(published, { recursive: true });
+    await writeFile(path.join(staged, "version"), "new");
+    await writeFile(path.join(published, "version"), "old");
+    const injected = Object.assign(new Error("stage EPERM"), { code: "EPERM" });
+    await assert.rejects(
+      publishPackagedArtifact(staged, published, {
+        platform: "win32",
+        renameArtifact: async (from, to) => {
+          if (from === staged) {
+            await mkdir(published);
+            await writeFile(
+              path.join(published, "foreign-marker"),
+              "untouched",
+            );
+            throw injected;
+          }
+          await rename(from, to);
+        },
+      }),
+      (error) =>
+        error instanceof AggregateError &&
+        error.errors[0] === injected &&
+        /target before rollback changed/u.test(error.errors[1]?.message),
+    );
+    assert.equal(
+      await readFile(path.join(published, "foreign-marker"), "utf8"),
+      "untouched",
+    );
+    const backups = (await readdir(path.dirname(published))).filter((name) =>
+      name.endsWith(".retired"),
+    );
+    assert.equal(backups.length, 1);
+    assert.equal(
+      await readFile(
+        path.join(path.dirname(published), backups[0], "version"),
+        "utf8",
+      ),
+      "old",
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 });
 
