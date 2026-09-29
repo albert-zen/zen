@@ -161,7 +161,7 @@ function conditionLabel(
   return `Signal: ${trigger.signal?.name ?? "unknown"}`;
 }
 
-function safeProgramFailure(entry: TriggerHistoryEntry): string | null {
+export function safeProgramFailure(entry: TriggerHistoryEntry): string | null {
   if (
     entry.status !== "failed" ||
     entry.programOutcome === null ||

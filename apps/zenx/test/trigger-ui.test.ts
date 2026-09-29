@@ -7,8 +7,28 @@ import {
   TriggersPanel,
   editorFromTrigger,
   localDateTime,
+  safeProgramFailure,
   triggerEditorInput,
 } from "../src/renderer/src/bundled-automation-ui.js";
+import type { TriggerHistoryEntry } from "../src/main/trigger-types.js";
+
+test("program failure summary contains only Host-classified fields", () => {
+  const entry = {
+    id: "history-1",
+    status: "failed",
+    error: "private raw error",
+    programOutcome: {
+      stage: "action",
+      status: "nonzero_exit",
+      exitCode: 12,
+      error: "SECRET env and command",
+      output: "private stdout",
+    },
+  } as TriggerHistoryEntry;
+  const summary = safeProgramFailure(entry);
+  assert.match(summary!, /Program action: nonzero_exit \(exit 12\).*history-1/);
+  assert.doesNotMatch(summary!, /SECRET|private|command|stdout/);
+});
 import type { PluginUiSdkV1 } from "../src/renderer/src/plugin-ui-host.js";
 
 test("timer editor round-trips its absolute instant and interval without rewriting identity", () => {
