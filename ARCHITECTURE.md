@@ -2,6 +2,9 @@
 
 ## 核心概念
 
+- **Android RemoteHostTransport** — Android 客户端用共享 ZAS 原生 wire、Host ID 与安全存储 grant 建立 TLS 连接，把公开快照/事件映射到可撤销的临时视图；epoch/watermark 恢复不改变 Host 的 canonical authority。
+- **ZenX Android 控制端** — Android 只保存本地连接偏好并显示选定 Host 的 ZAS 读模型；设备、workspace 或 Thread 切换按发起身份隔离易失输入与命令回执，草稿编辑/视图选择世代避免相同文字的新稿被旧回执清除，而同归属命令结算与旧恢复视图各自核验身份；断线/失权不保留公开页面投影但未知送达围栏仍归属原 Thread，请求准入与 Host canonical Turn 终态分别呈现，不保存 Agent、Turn、Provider key 或第二份 ItemList。
+
 - **ZenX Provider Logo 资源** — Host 将用户选择的有界位图复制为受管的内容寻址资源，Provider profile 只保存资源引用并向 Renderer 投影可显示图片；缺失或损坏时展示默认标识，不进入 Thread ItemList。
 
 - **ZenX 输入选择器** — Renderer 从 Host 有界 cwd 文件搜索与完整 Native Thread summaries 派生候选，将选择保存在易失草稿引用标签并在既有发送入口展开为明确定位文本；引用不自动读取内容、注入历史或改变线程执行配置。
@@ -29,6 +32,12 @@
 - **Host 配置候选** — prepare 产生绑定 processEpoch 与 revision 的瞬时候选，publish/discard 幂等且进程退出即丢弃；候选不成为持久配置权威。
 - **Host Provider 资源** — Host 按连接身份复用 adapter/transport，由配置快照与执行持有共同决定寿命，最后引用结束后异步关闭。
 - **原生恢复投影** — ZAS 为每个 Thread 保留当前 processEpoch 的单调水位与活动显示尾部，在恢复快照中与 canonical 历史一起交付，不重放执行或保存第二份会话权威。
+- **远程设备接入边界** — 可选的 Host-owned 原生 ZAS 网关以独立设备凭证、Host 身份和当前授权 workspace 约束读取/创建/发送/停止，只转交唯一 AppServer 的 canonical 权威，不暴露本机 descriptor、不复制 Thread 或改变默认 loopback listener。
+- **有界远程恢复页** — ZAS 网关以同一 Host epoch/watermark 与首次读取的 canonical Item 数为边界，按字节有界地逐页重读 append-only 前缀，并在单连接内暂存有界新事件与最近页重试位置；断线或水位失配重读权威快照，不持有完整镜像或另建日志。
+- **公开文本片段** — 单条合法的大文本 Item 可在多个恢复页按 UTF-16 offset 分片，客户端只在收到完整片段后合成该公开 Item，不将部分文本当作 canonical 完成事实。
+- **Turn 权限准入栅栏** — Host 可在 AppServer 的同 Thread mutation 临界区检查当前文件权限与审批模式后才接受远程 Turn，以防本地设置变化跨越网关读快照与发送之间的窗口；该检查不另存权限或建立会话状态。
+- **远程配对会话** — 本机管理员签发的一次性短期配对 code 只换取有界设备凭证，撤销和权限属于 Host 外部配置而非 Thread Item，未收到确认的发送只能用原 clientId 查询或幂等重试。
+- **CLI 远程试验配置** — 显式、仅该进程的受保护配置文件为隔离 CLI Host 提供 TLS 身份、稳定 hostId 与工作空间 allowlist，而非修改 ZenX 日用 profile 或将配置当会话权威。
 
 五个概念，各一句话。新抽象必须先在这里获得自己的一句话。
 
@@ -856,6 +865,7 @@ claim，不得被称为 Codex extension 或因固定 CAS schema 缺失而删除�
   读取不授予发送就绪状态，发送本身不得隐式初始化连接。
 - **WebSocket 访问控制在宿主侧**：loopback listener 拒绝浏览器 `Origin`，可选
   bearer credential 仅用于 transport 握手，不进入 Zen Core、Thread 或 journal。
+- **远程 Host 单一可信对外 Origin 是显式部署配置**：仅为直连 TLS WebSocket 握手核验配置证书 SAN、HTTP Host 和严格 Origin，不是设备身份或会话权威，缺省仍拒 Origin。
 - **stdio ↔ WebSocket bridge 只是 transport adapter**：它原样转发共享 endpoint 消息，
   不创建 runtime、Thread 或任何可持久化状态。
 - **ZAS 调用面先由产品生命周期定义**：先实现 Zen 自建客户端需要的原生语义，

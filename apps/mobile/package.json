@@ -1,0 +1,27 @@
+{
+  "name": "@zen/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "android": "expo run:android",
+    "prebuild": "expo prebuild --platform android",
+    "test": "node --test test/*.test.mjs && tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "test:host": "tsx --test integration/*.test.ts"
+  },
+  "dependencies": {
+    "expo": "~54.0.0",
+    "expo-crypto": "~15.0.7",
+    "expo-secure-store": "~15.0.7",
+    "expo-status-bar": "~3.0.9",
+    "react": "19.1.0",
+    "react-native": "0.81.5"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.10",
+    "tsx": "^4.23.15",
+    "typescript": "~5.9.2"
+  }
+}

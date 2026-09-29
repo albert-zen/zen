@@ -912,6 +912,11 @@ export class ZenAppServer {
       selection?: ProviderSelectionInput;
       model?: string;
       requestApproval?: ApprovalHandler;
+      /** Host admission fence, checked under the Thread mutation lock. */
+      requirePermissions?: {
+        sandbox: SandboxMode;
+        approvalPolicy: ApprovalPolicy;
+      };
     } = {},
   ): Promise<TurnHandle> {
     return await this.#launchTurn(threadId, input, options);
@@ -1013,6 +1018,10 @@ export class ZenAppServer {
       selection?: ProviderSelectionInput;
       model?: string;
       requestApproval?: ApprovalHandler;
+      requirePermissions?: {
+        sandbox: SandboxMode;
+        approvalPolicy: ApprovalPolicy;
+      };
     },
     internal: {
       preparedInput?: boolean;
@@ -1071,6 +1080,17 @@ export class ZenAppServer {
             );
           }
         }
+      }
+      if (options.requirePermissions !== undefined) {
+        const actual = thread.effectiveConfiguration();
+        if (
+          actual.sandbox !== options.requirePermissions.sandbox ||
+          actual.approvalPolicy !== options.requirePermissions.approvalPolicy
+        )
+          throw new AppServerError(
+            "operation_forbidden",
+            "Thread permissions changed before Turn admission",
+          );
       }
       const input =
         internal.preparedInput === true
