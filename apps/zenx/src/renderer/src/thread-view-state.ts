@@ -12,6 +12,18 @@ import type {
   ToolCallItem,
   ToolResultItem,
 } from "../../../../../src/item.js";
+import { pendingQueuedMessages } from "../../../../../src/input-queue.js";
+
+function projectedQueue(
+  items: readonly CanonicalItem[],
+): NonNullable<Thread["queuedMessages"]> {
+  return pendingQueuedMessages(items).map((item) => ({
+    id: item.id,
+    clientId: item.clientId,
+    text: userInputText(item.input),
+    imageCount: item.input.filter((part) => part.type === "image").length,
+  }));
+}
 
 export function projectNativeRecovery(
   recovery: NativeThreadRecoverySnapshot,
@@ -105,6 +117,15 @@ export function applyNativeThreadEvent(
       canonicalItems: [...(thread.canonicalItems ?? []), event.item],
       updatedAt: seconds(event.item.createdAt),
     };
+    if (
+      event.item.type === "user_message_queued" ||
+      event.item.type === "user_message"
+    ) {
+      thread = {
+        ...thread,
+        queuedMessages: projectedQueue(thread.canonicalItems ?? []),
+      };
+    }
   }
   if (event.type === "turn_started") {
     return applyThreadViewNotification(
@@ -261,6 +282,9 @@ export function applyThreadViewNotification(
 ): Thread {
   if (method === "thread/queue/updated") {
     const event = params as ServerNotificationParams["thread/queue/updated"];
+    // The native canonical stream owns queue consumption. Legacy snapshots
+    // may arrive later than its item_completed event (or a new append).
+    if (thread.canonicalItems !== undefined) return thread;
     return event.threadId === thread.id
       ? { ...thread, queuedMessages: event.queuedMessages }
       : thread;
@@ -500,13 +524,6 @@ function projectNativeThread(
     .reverse()
     .find((item) => item.type === "thread_forked");
   const createdAt = seconds(fork?.createdAt ?? metadata.createdAt);
-  const deliveredClientIds = new Set(
-    snapshot.items.flatMap((item) =>
-      item.type === "user_message" && item.clientId !== undefined
-        ? [item.clientId]
-        : [],
-    ),
-  );
   return {
     id: snapshot.id,
     sessionId: snapshot.id,
@@ -532,20 +549,7 @@ function projectNativeThread(
     gitInfo: null,
     name: snapshot.name ?? null,
     canonicalItems: structuredClone(snapshot.items),
-    queuedMessages: snapshot.items.flatMap((item) =>
-      item.type === "user_message_queued" &&
-      !deliveredClientIds.has(item.clientId)
-        ? [
-            {
-              id: item.id,
-              clientId: item.clientId,
-              text: userInputText(item.input),
-              imageCount: item.input.filter((part) => part.type === "image")
-                .length,
-            },
-          ]
-        : [],
-    ),
+    queuedMessages: projectedQueue(snapshot.items),
     turns: snapshot.turns.map((turn) => {
       const started = turn.items.find((item) => item.type === "turn_started");
       const terminal = [...turn.items]

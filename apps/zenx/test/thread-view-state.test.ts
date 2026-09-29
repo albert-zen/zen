@@ -13,6 +13,57 @@ import {
 } from "../src/renderer/src/thread-view-state.js";
 import type { NativeThreadRecoverySnapshot } from "../../../src/protocol/native/recovery.js";
 
+test("native consumption removes only the accepted queue id on the current page", () => {
+  const queued = (id: string, clientId: string) => ({
+    id,
+    clientId,
+    threadId: "thread-1",
+    type: "user_message_queued" as const,
+    createdAt: new Date(10000).toISOString(),
+    input: [{ type: "text" as const, text: "same" }],
+  });
+  const first = queued("queue-1", "client-1");
+  const second = queued("queue-2", "client-2");
+  let current: Thread = { ...thread(), canonicalItems: [], queuedMessages: [] };
+  current = applyNativeThreadEvent(current, {
+    type: "item_completed",
+    item: first,
+  });
+  current = applyNativeThreadEvent(current, {
+    type: "item_completed",
+    item: second,
+  });
+  assert.deepEqual(
+    current.queuedMessages?.map((entry) => entry.id),
+    ["queue-1", "queue-2"],
+  );
+  const stale = current.queuedMessages;
+  current = applyNativeThreadEvent(current, {
+    type: "item_completed",
+    item: {
+      id: "message-1",
+      threadId: "thread-1",
+      turnId: "turn-2",
+      type: "user_message",
+      createdAt: new Date(11000).toISOString(),
+      content: first.input,
+      clientId: first.clientId,
+    },
+  });
+  assert.deepEqual(
+    current.queuedMessages?.map((entry) => entry.id),
+    ["queue-2"],
+  );
+  current = applyThreadViewNotification(current, "thread/queue/updated", {
+    threadId: "thread-1",
+    queuedMessages: stale ?? [],
+  });
+  assert.deepEqual(
+    current.queuedMessages?.map((entry) => entry.id),
+    ["queue-2"],
+  );
+});
+
 test("keeps interrupted history from thread/resume as terminal history", () => {
   const interrupted = turn("turn-old", "interrupted", [
     userItem("user-old", "stop here"),
