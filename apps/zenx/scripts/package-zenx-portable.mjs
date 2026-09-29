@@ -618,8 +618,8 @@ Get-CimInstance Win32_Process | Where-Object {
   }
 }
 
-// Windows can briefly retain a handle to a smoke-tested executable after its
-// parent exits. Only retry a failed staging rename; each failed attempt first
+// A lingering Windows handle can block directory rename even after the
+// smoke parent exits. Only retry a failed staging rename; each attempt first
 // restores any prior published artifact before waiting.
 export async function publishPackagedArtifact(
   stagedArtifact,
