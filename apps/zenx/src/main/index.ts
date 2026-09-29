@@ -1,3 +1,4 @@
+import { attachMainWindowDiagnostics } from "./main-window-diagnostics.js";
 import { SkillsService, type SkillMode } from "../../../cli/src/skills.js";
 import { createImZenXProfileLoader } from "./imzenx-profile-loader.js";
 import { readZenXConnectionDescriptor } from "../protocol-client/connection-descriptor.js";
@@ -190,6 +191,7 @@ if (nativeHostCaller !== undefined) {
   })();
 }
 
+let mainWindowDiagnostics: OperationalDiagnosticLog | undefined;
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
 let capabilityService: ZenXCapabilityService | undefined;
@@ -282,6 +284,14 @@ function createWindow(): BrowserWindow {
     },
   });
 
+  mainWindowDiagnostics ??= new OperationalDiagnosticLog(
+    app.getPath("userData"),
+  );
+  attachMainWindowDiagnostics(
+    window,
+    mainWindowDiagnostics,
+    () => hostLifecycle.quitting,
+  );
   window.on("closed", () => dirtyFileWindows.delete(window.id));
   window.webContents.on("will-prevent-unload", (event) => {
     if (hostLifecycle.quitting) {
@@ -370,9 +380,8 @@ async function bootstrapZenX(): Promise<void> {
     ),
   });
   const settingsDiagnostics = new SettingsDiagnosticLog(userDataDirectory);
-  const operationalDiagnostics = new OperationalDiagnosticLog(
-    userDataDirectory,
-  );
+  const operationalDiagnostics = (mainWindowDiagnostics ??=
+    new OperationalDiagnosticLog(userDataDirectory));
   const observeAppServer = (manager: AppServerManager) => {
     manager.onStatus((status) => {
       void operationalDiagnostics.observeAppServer(status);
