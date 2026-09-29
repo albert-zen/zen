@@ -2,6 +2,8 @@
 
 ## 核心概念
 
+- **ZenX Android 控制端** — Android 只保存本地连接偏好并显示选定 Host 的 ZAS 读模型；设备或 workspace 切换立即废弃旧订阅和异步响应，命令只有收到 Host 明确确认才显示为已接收，不保存 Agent、Turn、Provider key 或第二份 ItemList。
+
 - **ZenX Provider Logo 资源** — Host 将用户选择的有界位图复制为受管的内容寻址资源，Provider profile 只保存资源引用并向 Renderer 投影可显示图片；缺失或损坏时展示默认标识，不进入 Thread ItemList。
 
 - **ZenX 输入选择器** — Renderer 从 Host 有界 cwd 文件搜索与完整 Native Thread summaries 派生候选，将选择保存在易失草稿引用标签并在既有发送入口展开为明确定位文本；引用不自动读取内容、注入历史或改变线程执行配置。
