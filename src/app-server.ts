@@ -202,7 +202,22 @@ export interface ModelCatalogUpdatedEvent {
 
 export type AppServerEvent =
   | RuntimeEvent
-  | { type: "queue_failed"; threadId: string; message: string }
+  | {
+      type: "queue_admission_started";
+      threadId: string;
+      queuedItemId: string;
+      clientId: string;
+      attemptId: string;
+    }
+  | {
+      type: "queue_failed";
+      threadId: string;
+      queuedItemId: string;
+      clientId: string;
+      attemptId: string;
+      code: string;
+      message: string;
+    }
   | ThreadSettingsUpdatedEvent
   | ThreadNameUpdatedEvent
   | ThreadArchivedUpdatedEvent
@@ -867,75 +882,168 @@ export class ZenAppServer {
     options: { requestApproval?: ApprovalHandler } = {},
   ): Promise<void> {
     const thread = await this.#requireThread(threadId);
-    if (this.#activeTurns.has(threadId)) return;
+    if (this.#activeTurns.has(threadId) || this.#drainingQueues.has(threadId))
+      return;
     const first = pendingQueuedMessages(thread.items)[0];
-    if (first !== undefined) {
-      const selection = this.#requireSelection(thread.effectiveConfiguration());
-      await this.#validateInput(first.input, selection.model.inputModalities);
-    }
-    void this.#drainQueue(threadId, options).catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      this.#emit({ type: "queue_failed", threadId, message });
-      console.error(
-        "Queued message could not start; the durable queue remains available for retry",
-        error,
+    if (first === undefined) return;
+    const attemptId = randomUUID();
+    this.#announceQueueAttempt(first, attemptId);
+    let batch: QueuedUserMessageItem[];
+    try {
+      batch = await this.#preflightQueue(thread, first, attemptId);
+    } catch (error) {
+      this.#reportQueueFailure(threadId, error);
+      // Explicit resume rejects with a safe, specific code/reason. One
+      // native event also informs other subscribed windows about this attempt.
+      const safe = safeQueueFailure(
+        error instanceof QueueAdmissionRejection ? error.reason : error,
       );
-    });
+      throw new AppServerError(safe.code, safe.message);
+    }
+    void this.#drainQueue(threadId, options, { batch, attemptId }).catch(
+      (error: unknown) => {
+        this.#reportQueueFailure(threadId, error);
+        console.error(
+          "Queued message could not start; the durable queue remains available for retry",
+          safeQueueFailure(
+            error instanceof QueueAdmissionRejection ? error.reason : error,
+          ).code,
+        );
+      },
+    );
   }
 
   readonly #drainingQueues = new Set<string>();
 
+  #announceQueueAttempt(item: QueuedUserMessageItem, attemptId: string): void {
+    this.#emit({
+      type: "queue_admission_started",
+      threadId: item.threadId,
+      queuedItemId: item.id,
+      clientId: item.clientId,
+      attemptId,
+    });
+  }
+
+  #reportQueueFailure(threadId: string, error: unknown): void {
+    if (!(error instanceof QueueAdmissionRejection)) {
+      console.error("Queue admission failed without a known queued Item");
+      return;
+    }
+    const { code, message } = safeQueueFailure(error.reason);
+    this.#emit({
+      type: "queue_failed",
+      threadId,
+      queuedItemId: error.item.id,
+      clientId: error.item.clientId,
+      attemptId: error.attemptId,
+      code,
+      message,
+    });
+  }
+
+  async #preflightQueue(
+    thread: Thread,
+    first: QueuedUserMessageItem,
+    attemptId: string,
+  ): Promise<QueuedUserMessageItem[]> {
+    let selection: ResolvedProviderSelection;
+    try {
+      selection = this.#requireSelection(thread.effectiveConfiguration());
+    } catch (error) {
+      throw new QueueAdmissionRejection(first, attemptId, error);
+    }
+    const pending = pendingQueuedMessages(thread.items);
+    const batch = [first];
+    if (first.deliveryMode === "batch-next") {
+      // Capture a bounded FIFO admission boundary; later appends and legacy
+      // entries cannot be silently pulled into this batch.
+      const byteBudget = Math.min(
+        64 * 1024,
+        (selection.model.contextWindow ?? 32_768) * 2,
+      );
+      let bytes = Buffer.byteLength(JSON.stringify(first.input));
+      for (const next of pending.slice(1, 8)) {
+        if (next.deliveryMode !== "batch-next") break;
+        const nextBytes = Buffer.byteLength(JSON.stringify(next.input));
+        if (bytes + nextBytes > byteBudget) break;
+        batch.push(next);
+        bytes += nextBytes;
+      }
+    }
+    for (const [index, item] of batch.entries()) {
+      if (index > 0) this.#announceQueueAttempt(item, attemptId);
+      try {
+        await this.#validateInput(item.input, selection.model.inputModalities);
+      } catch (error) {
+        throw new QueueAdmissionRejection(item, attemptId, error);
+      }
+    }
+    return batch;
+  }
+
   async #drainQueue(
     threadId: string,
     options: { requestApproval?: ApprovalHandler },
+    firstAttempt?: { batch: QueuedUserMessageItem[]; attemptId: string },
   ): Promise<void> {
     if (this.#drainingQueues.has(threadId) || this.#activeTurns.has(threadId))
       return;
     this.#drainingQueues.add(threadId);
+    let nextAttempt = firstAttempt;
     try {
       while (!this.#activeTurns.has(threadId)) {
         const thread = await this.#requireThread(threadId);
         if (this.#pendingReplacement(thread) !== undefined) return;
-        const pending = pendingQueuedMessages(thread.items);
-        const queued = pending[0];
+        const queued = pendingQueuedMessages(thread.items)[0];
         if (queued === undefined) return;
-        const batch = [queued];
-        if (queued.deliveryMode === "batch-next") {
-          // A bounded snapshot: never reach across legacy inputs or into
-          // appends made after this admission boundary.
-          const contextWindow = this.#requireSelection(
-            thread.effectiveConfiguration(),
-          ).model.contextWindow;
-          const byteBudget = Math.min(64 * 1024, (contextWindow ?? 32_768) * 2);
-          let bytes = Buffer.byteLength(JSON.stringify(queued.input));
-          for (const next of pending.slice(1, 8)) {
-            if (next.deliveryMode !== "batch-next") break;
-            const nextBytes = Buffer.byteLength(JSON.stringify(next.input));
-            if (bytes + nextBytes > byteBudget) break;
-            batch.push(next);
-            bytes += nextBytes;
-          }
+        const attemptId = nextAttempt?.attemptId ?? randomUUID();
+        if (nextAttempt === undefined)
+          this.#announceQueueAttempt(queued, attemptId);
+        let batch: QueuedUserMessageItem[];
+        if (
+          nextAttempt !== undefined &&
+          nextAttempt.batch[0]?.id === queued.id
+        ) {
+          batch = nextAttempt.batch;
+        } else {
+          batch = await this.#preflightQueue(thread, queued, attemptId);
         }
-        const turn = await this.#launchTurn(
-          threadId,
-          queued.input,
-          {
-            ...options,
-            clientId: queued.clientId,
-          },
-          {
-            preparedInput: true,
-            ...(batch.length === 1
-              ? {}
-              : {
-                  initialMessages: batch.map(({ input, clientId }) => ({
-                    input,
-                    clientId,
-                  })),
-                }),
-          },
-        );
-        await turn.done;
+        nextAttempt = undefined;
+        let turn: TurnHandle;
+        try {
+          turn = await this.#launchTurn(
+            threadId,
+            queued.input,
+            {
+              ...options,
+              clientId: queued.clientId,
+            },
+            {
+              preparedInput: true,
+              ...(batch.length === 1
+                ? {}
+                : {
+                    initialMessages: batch.map(({ input, clientId }) => ({
+                      input,
+                      clientId,
+                    })),
+                    queuedAdmission: { items: batch, attemptId },
+                  }),
+            },
+          );
+        } catch (error) {
+          throw error instanceof QueueAdmissionRejection
+            ? error
+            : new QueueAdmissionRejection(queued, attemptId, error);
+        }
+        // A started Turn has its own canonical failure lifecycle; this is
+        // not another queue-admission failure or permission to retry it.
+        try {
+          await turn.done;
+        } catch {
+          return;
+        }
         if (
           !thread.items.some(
             (item) =>
@@ -1066,6 +1174,10 @@ export class ZenAppServer {
       turnId?: string;
       replacementClientId?: string;
       initialMessages?: readonly { input: UserInput; clientId: string }[];
+      queuedAdmission?: {
+        items: readonly QueuedUserMessageItem[];
+        attemptId: string;
+      };
     } = {},
   ): Promise<TurnHandle> {
     const launch = await this.#withThreadMutation(threadId, async () => {
@@ -1161,11 +1273,24 @@ export class ZenAppServer {
       );
       const prospective = this.#requireSelection(prospectiveSelection);
       await this.#validateInput(input, prospective.model.inputModalities);
-      for (const message of internal.initialMessages ?? []) {
-        await this.#validateInput(
-          message.input,
-          prospective.model.inputModalities,
-        );
+      for (const [index, message] of (
+        internal.initialMessages ?? []
+      ).entries()) {
+        try {
+          await this.#validateInput(
+            message.input,
+            prospective.model.inputModalities,
+          );
+        } catch (error) {
+          const source = internal.queuedAdmission?.items[index];
+          if (source !== undefined)
+            throw new QueueAdmissionRejection(
+              source,
+              internal.queuedAdmission!.attemptId,
+              error,
+            );
+          throw error;
+        }
       }
       if (options.selection !== undefined || options.model !== undefined) {
         await this.#updateThreadSettingsUnlocked(thread, {
@@ -2650,6 +2775,62 @@ export class AppServerError extends Error {
     super(message);
     this.name = "AppServerError";
     this.code = code;
+  }
+}
+
+/** An admission attempt is transient; only its queued Item is durable. */
+class QueueAdmissionRejection extends Error {
+  constructor(
+    readonly item: QueuedUserMessageItem,
+    readonly attemptId: string,
+    readonly reason: unknown,
+  ) {
+    super("Queued input was not admitted");
+  }
+}
+
+function safeQueueFailure(error: unknown): { code: string; message: string } {
+  const code =
+    error instanceof AppServerError ? error.code : "queue_admission_failed";
+  switch (code) {
+    case "image_input_unsupported":
+      return {
+        code,
+        message:
+          "The selected model cannot accept images. Choose an image-capable model, then Continue queue.",
+      };
+    case "attachment_missing":
+    case "attachment_corrupt":
+      return {
+        code,
+        message:
+          "A queued image attachment is unavailable. Restore that attachment before using Continue queue; the queued input was not sent.",
+      };
+    case "model_unavailable":
+    case "provider_unavailable":
+    case "context_window_unknown":
+    case "reasoning_effort_unknown":
+    case "reasoning_effort_unavailable":
+      return {
+        code,
+        message:
+          "The current provider/model settings cannot start this queued message. Choose an available model and reasoning setting, then Continue queue.",
+      };
+    case "thread_busy":
+    case "replacement_pending":
+      return {
+        code,
+        message:
+          "Another Turn is using this Thread. Wait for it to finish, then Continue queue if the message is still pending.",
+      };
+    default:
+      // Never transmit arbitrary Provider/attachment errors or their
+      // potentially sensitive payload over the native UI notification.
+      return {
+        code: "queue_admission_failed",
+        message:
+          "This queued message could not start. It remains queued; check the model, attachments and Thread settings before using Continue queue.",
+      };
   }
 }
 

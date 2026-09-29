@@ -72,6 +72,11 @@ import {
 
 interface ThreadViewProps {
   composerSendMode?: ComposerSendMode;
+  queueFailure?: {
+    queuedItemId: string;
+    code: string;
+    message: string;
+  } | null;
   onResumeQueue?(): Promise<void>;
   approvals: readonly ApprovalCardState[];
   composer: ComposerState;
@@ -121,6 +126,7 @@ interface ThreadViewProps {
 
 export function ThreadView({
   composerSendMode = "soft",
+  queueFailure = null,
   onResumeQueue,
   approvals,
   composer,
@@ -165,6 +171,11 @@ export function ThreadView({
 }: ThreadViewProps) {
   const [interrupting, setInterrupting] = useState(false);
   const [interruptError, setInterruptError] = useState<string | null>(null);
+  const [queueResumeError, setQueueResumeError] = useState<{
+    threadId: string;
+    queuedItemId: string;
+    message: string;
+  } | null>(null);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [draggingImages, setDraggingImages] = useState(false);
   const [preview, setPreview] = useState<{
@@ -341,6 +352,22 @@ export function ThreadView({
     if (primaryMode === "stop") void interrupt();
     else submit(sendIntent);
   };
+  const visibleResumeError =
+    queueResumeError !== null &&
+    thread !== null &&
+    queueResumeError.threadId === thread.id &&
+    thread.queuedMessages?.some(
+      (entry) => entry.id === queueResumeError.queuedItemId,
+    )
+      ? queueResumeError.message
+      : null;
+  const composerError =
+    interruptError ??
+    (queueFailure === null ? visibleResumeError : null) ??
+    attachmentError ??
+    (blockedByImageCapability ? imageCapabilityError : null) ??
+    composer.submission?.error ??
+    modelError;
 
   return (
     <div
@@ -472,6 +499,12 @@ export function ThreadView({
               {thread!.queuedMessages!.map((message) => (
                 <li key={message.id}>
                   {message.text || `${message.imageCount} image(s)`}
+                  {queueFailure?.queuedItemId === message.id ? (
+                    <p className="queued-failure" role="alert">
+                      Not delivered ({queueFailure.code}):{" "}
+                      {queueFailure.message}
+                    </p>
+                  ) : null}
                 </li>
               ))}
             </ol>
@@ -479,9 +512,15 @@ export function ThreadView({
               <button
                 type="button"
                 onClick={() =>
-                  void onResumeQueue().catch((error: unknown) =>
-                    setInterruptError(describeError(error)),
-                  )
+                  void onResumeQueue()
+                    .then(() => setQueueResumeError(null))
+                    .catch((error: unknown) =>
+                      setQueueResumeError({
+                        threadId: thread!.id,
+                        queuedItemId: thread!.queuedMessages![0]!.id,
+                        message: describeError(error),
+                      }),
+                    )
                 }
               >
                 Continue queue
@@ -726,6 +765,14 @@ export function ThreadView({
               )}
             </div>
             <div className="composer-actions">
+              {runningTurn === null ? null : (
+                <span
+                  className="composer-current-mode"
+                  aria-label={`Send mode: ${intentLabel(sendIntent)}`}
+                >
+                  {intentLabel(sendIntent)}
+                </span>
+              )}
               {runningTurn !== null && hasDraft
                 ? (["steer", "batch-next", "queue"] as const)
                     .filter(
@@ -781,21 +828,13 @@ export function ThreadView({
               </button>
             </div>
           </div>
-          {composer.submission?.status === "failed" ||
-          interruptError !== null ||
-          attachmentError !== null ||
-          blockedByImageCapability ||
-          modelError !== null ? (
+          {composerError !== null ? (
             <p
               className="composer-error"
               id={modelError === null ? undefined : "composer-model-error"}
               role="alert"
             >
-              {interruptError ??
-                attachmentError ??
-                (blockedByImageCapability ? imageCapabilityError : null) ??
-                composer.submission?.error ??
-                modelError}
+              {composerError}
             </p>
           ) : null}
           {composer.draft.images.length > 0 &&

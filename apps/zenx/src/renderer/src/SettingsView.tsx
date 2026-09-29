@@ -203,6 +203,8 @@ export function SettingsView({
         toolPresentation: draft.toolPresentation ?? "both",
         experimentalRtkEnabled: draft.experimentalRtkEnabled === true,
         composerSendMode: draft.composerSendMode ?? "soft",
+        composerSendModeExplicit: draft.composerSendModeExplicit,
+        composerSendModeMigration: draft.composerSendModeMigration,
         maxToolRounds: draft.maxToolRounds,
         contextCompaction: draft.contextCompaction,
         workflowCommands: draft.workflowCommands ?? [],
@@ -260,8 +262,16 @@ export function SettingsView({
   const hostDirty = JSON.stringify(draft) !== JSON.stringify(settings.profile);
   const sendModeOnly =
     hostDirty &&
-    JSON.stringify({ ...draft, composerSendMode: undefined }) ===
-      JSON.stringify({ ...settings.profile, composerSendMode: undefined });
+    JSON.stringify({
+      ...draft,
+      composerSendMode: undefined,
+      composerSendModeExplicit: undefined,
+    }) ===
+      JSON.stringify({
+        ...settings.profile,
+        composerSendMode: undefined,
+        composerSendModeExplicit: undefined,
+      });
   const tabs: Array<{
     id: SettingsTab;
     label: string;
@@ -3137,6 +3147,14 @@ function GeneralPanel({
                 ...draft,
                 composerSendMode: value as "batch" | "queue" | "soft" | "hard",
                 composerSendModeExplicit: true,
+                ...(draft.composerSendModeMigration === undefined
+                  ? {}
+                  : {
+                      composerSendModeMigration: {
+                        ...draft.composerSendModeMigration,
+                        acknowledged: true,
+                      },
+                    }),
               })
             }
             aria-describedby="composer-send-help"
@@ -3150,9 +3168,10 @@ function GeneralPanel({
             Enter and the send button use this choice. Cmd/Ctrl+Enter uses soft
             steer when a queue mode is selected, and Next turn together when a
             steer mode is selected. Existing queued messages keep their original
-            delivery choice. Older saved Queue preferences remain Queue, even
-            when the old version did not record whether that choice was
-            explicit. Shift+Enter adds a new line.
+            delivery choice. Older Queue profiles with no reliable record of a
+            manual choice now default to Steer; use the restore action in the
+            conversation to return to per-message Queue. Shift+Enter adds a new
+            line.
           </small>
         </label>
       </section>

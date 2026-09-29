@@ -1017,6 +1017,9 @@ export class ZenXSettingsService {
               settings.composerSendModeExplicit ??
               current.composerSendModeExplicit ??
               false,
+            composerSendModeMigration:
+              settings.composerSendModeMigration ??
+              current.composerSendModeMigration,
             maxToolRounds: settings.maxToolRounds,
             contextCompaction: settings.contextCompaction,
             workflowCommands:

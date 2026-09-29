@@ -80,6 +80,12 @@ export interface ZenXHostProfile {
   composerSendMode?: "batch" | "queue" | "soft" | "hard";
   /** Records explicit manual choice; older soft/hard could only be explicit. */
   composerSendModeExplicit?: boolean;
+  /** One-time, reversible manual-only migration of an ambiguous old Queue. */
+  composerSendModeMigration?: {
+    version: 1;
+    previousMode: "queue";
+    acknowledged: boolean;
+  };
   /** Omitted means tool rounds are unlimited. */
   maxToolRounds?: number;
   /** Omitted means Core uses its default compaction prompt. */
@@ -105,6 +111,7 @@ export type ZenXSettingsUpdate = Pick<
   | "experimentalRtkEnabled"
   | "composerSendMode"
   | "composerSendModeExplicit"
+  | "composerSendModeMigration"
   | "maxToolRounds"
   | "contextCompaction"
 > & {
@@ -251,7 +258,8 @@ export class ZenXHostProfileStore {
       migrated ||
       foregroundPreferenceWasMissing ||
       toolPresentationWasMissing ||
-      JSON.stringify(profile) !== JSON.stringify(decoded)
+      JSON.stringify(profile) !== JSON.stringify(decoded) ||
+      JSON.stringify(profile) !== JSON.stringify(value)
     ) {
       await this.write(profile);
     }
@@ -331,15 +339,47 @@ export function validateHostProfile(
   ) {
     throw new Error("Invalid browser session mode");
   }
-  const composerSendMode = value.composerSendMode ?? "soft";
+  const migration = value.composerSendModeMigration;
+  if (
+    migration !== undefined &&
+    (!isRecord(migration) ||
+      migration.version !== 1 ||
+      migration.previousMode !== "queue" ||
+      typeof migration.acknowledged !== "boolean")
+  )
+    throw new Error("Invalid composer send mode migration");
+  // Old Queue was normalized into saved profiles even without a manual
+  // choice. There is no reliable way to distinguish that case from an old
+  // explicit Queue; preserve the source and offer a visible undo instead.
+  const ambiguousLegacyQueue =
+    value.composerSendMode === "queue" &&
+    value.composerSendModeExplicit !== true &&
+    migration === undefined;
+  const composerSendMode = ambiguousLegacyQueue
+    ? "soft"
+    : (value.composerSendMode ?? "soft");
+  const composerSendModeMigration = ambiguousLegacyQueue
+    ? {
+        version: 1 as const,
+        previousMode: "queue" as const,
+        acknowledged: false,
+      }
+    : migration === undefined
+      ? undefined
+      : {
+          version: 1 as const,
+          previousMode: "queue" as const,
+          acknowledged: migration.acknowledged as boolean,
+        };
   if (
     value.composerSendModeExplicit !== undefined &&
     typeof value.composerSendModeExplicit !== "boolean"
   )
     throw new Error("Invalid composer send preference provenance");
-  const composerSendModeExplicit =
-    value.composerSendModeExplicit ??
-    (value.composerSendMode === "soft" || value.composerSendMode === "hard");
+  const composerSendModeExplicit = ambiguousLegacyQueue
+    ? false
+    : (value.composerSendModeExplicit ??
+      (value.composerSendMode === "soft" || value.composerSendMode === "hard"));
   if (
     composerSendMode !== "batch" &&
     composerSendMode !== "queue" &&
@@ -407,6 +447,9 @@ export function validateHostProfile(
     experimentalRtkEnabled: value.experimentalRtkEnabled === true,
     composerSendMode,
     composerSendModeExplicit,
+    ...(composerSendModeMigration === undefined
+      ? {}
+      : { composerSendModeMigration }),
     ...(maxToolRounds === undefined ? {} : { maxToolRounds }),
     ...(contextCompaction === undefined ? {} : { contextCompaction }),
     ...(workflowCommands.length === 0 ? {} : { workflowCommands }),

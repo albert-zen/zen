@@ -773,7 +773,11 @@ export class CodexConnection {
 
   async #projectEvent(event: AppServerEvent): Promise<void> {
     // Native queue admission diagnostics have no CAS equivalent.
-    if (event.type === "model_catalog_updated" || event.type === "queue_failed")
+    if (
+      event.type === "model_catalog_updated" ||
+      event.type === "queue_failed" ||
+      event.type === "queue_admission_started"
+    )
       return;
     if (event.type === "thread_started") {
       this.#send({
@@ -1222,7 +1226,8 @@ export class CodexConnection {
       event.type === "thread_settings_updated" ||
       event.type === "thread_archived_updated" ||
       event.type === "model_catalog_updated" ||
-      event.type === "queue_failed"
+      event.type === "queue_failed" ||
+      event.type === "queue_admission_started"
     ) {
       console.warn(`Could not project ${event.type} notification`, error);
       return;
@@ -1282,6 +1287,7 @@ function eventRepresentedInSnapshot(
 ): boolean {
   switch (event.type) {
     case "queue_failed":
+    case "queue_admission_started":
       return true;
     case "thread_started":
       return snapshot.id === event.threadId;

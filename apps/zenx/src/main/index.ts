@@ -1581,8 +1581,18 @@ function installSettingsIpc(
       const after = (await settings.publicSettings()).profile;
       if (
         !apiKey &&
-        JSON.stringify({ ...before, composerSendMode: undefined }) ===
-          JSON.stringify({ ...after, composerSendMode: undefined })
+        JSON.stringify({
+          ...before,
+          composerSendMode: undefined,
+          composerSendModeExplicit: undefined,
+          composerSendModeMigration: undefined,
+        }) ===
+          JSON.stringify({
+            ...after,
+            composerSendMode: undefined,
+            composerSendModeExplicit: undefined,
+            composerSendModeMigration: undefined,
+          })
       ) {
         return await settings.publicSettings();
       }

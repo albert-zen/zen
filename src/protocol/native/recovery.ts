@@ -230,6 +230,7 @@ function eventEstablishesCanonicalBoundary(event: AppServerEvent): boolean {
     case "token_usage":
     case "model_catalog_updated":
     case "queue_failed":
+    case "queue_admission_started":
       return false;
   }
 }
@@ -248,6 +249,7 @@ function eventRepresentedInSnapshot(
     case "model_catalog_updated":
       return true;
     case "queue_failed":
+    case "queue_admission_started":
       return true; // Ephemeral feedback is not journal-backed state.
     case "thread_started":
       return snapshot.id === event.threadId;

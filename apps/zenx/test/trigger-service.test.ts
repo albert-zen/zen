@@ -75,6 +75,171 @@ test("timer expiry creates one explicit App Server turn and auditable history", 
   }
 });
 
+test("isolated Room direct reply and Trigger legacy queue preserve distinct client IDs and routes", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-legacy-room-queue-"),
+  );
+  const manager = managerFor(directory);
+  try {
+    await manager.start();
+    const target = (await manager.request("thread/start", {})).thread;
+    const other = (await manager.request("thread/start", {})).thread;
+    const triggers = new ZenXTriggerService(
+      {
+        request: async (method, params) =>
+          await manager.request(method, params),
+        onNotification: (listener) => manager.onNotification(listener),
+        readThread: async (threadId) =>
+          await manager.request("thread/read", {
+            threadId,
+            includeTurns: true,
+          }),
+        enqueue: async (params) => {
+          await manager.request("turn/queue", params);
+        },
+      },
+      new ZenXTriggerStore(path.join(directory, "triggers.json")),
+    );
+    try {
+      await triggers.start();
+      const room = await triggers.createRoom({
+        name: "isolated-legacy-route",
+        members: [
+          { name: "Monitor", threadId: target.id },
+          { name: "Other", threadId: other.id },
+        ],
+      });
+      await triggers.create({
+        threadId: target.id,
+        kind: "roomMention",
+        label: "QA reply",
+        prompt: "Reply to the exact mentioned Room message.",
+        roomId: room.id,
+        mention: "Monitor",
+      });
+      await triggers.create({
+        threadId: other.id,
+        kind: "thread",
+        watchedThreadId: target.id,
+        label: "Legacy queue follower",
+        prompt: "Review the exact completed Room member turn.",
+      });
+      const delivered = deferred<string>();
+      const disposeDelivery = manager.onNotification((method, params) => {
+        if (method !== "item/completed") return;
+        const event = params as ServerNotificationParams["item/completed"];
+        if (
+          event.threadId === other.id &&
+          event.item.type === "userMessage" &&
+          event.item.clientId !== null
+        )
+          delivered.resolve(event.item.clientId);
+      });
+      await triggers.postRoomMessage(
+        room.id,
+        "You",
+        "@Monitor please confirm the queue route",
+      );
+      const snapshot = await snapshotWhen(
+        triggers,
+        (candidate) =>
+          candidate.rooms
+            .find((item) => item.id === room.id)
+            ?.messages.some(
+              (message) =>
+                message.kind === "agent" &&
+                message.originThreadId === target.id,
+            ) === true,
+      );
+      const history = snapshot.history.find(
+        (entry) => entry.kind === "roomMention" && entry.threadId === target.id,
+      );
+      assert.ok(history);
+      assert.equal(history.replyRoomId, room.id);
+      assert.equal(history.replyAuthor, "Monitor");
+      assert.equal(history.sourceRoomId, room.id);
+      assert.ok(history.sourceRoomMessageId);
+      const canonical = (
+        await manager.request("zen/thread/read", { threadId: target.id })
+      ).thread.items;
+      const accepted = canonical.find(
+        (item) =>
+          item.type === "user_message" &&
+          item.clientId === history.clientUserMessageId,
+      );
+      // Room mentions in this baseline use direct start, not an invented
+      // queue mode. Their committed reply route still matches their clientId.
+      assert.equal(
+        canonical.some((item) => item.type === "user_message_queued"),
+        false,
+      );
+      assert.ok(accepted);
+      assert.equal(
+        snapshot.rooms
+          .find((item) => item.id === room.id)
+          ?.messages.filter(
+            (message) =>
+              message.kind === "agent" && message.originThreadId === target.id,
+          ).length,
+        1,
+      );
+      const followed = await snapshotWhen(triggers, (candidate) =>
+        candidate.history.some(
+          (entry) =>
+            entry.kind === "thread" &&
+            entry.threadId === other.id &&
+            entry.delivery === "queued",
+        ),
+      );
+      const follower = followed.history.find(
+        (entry) => entry.kind === "thread" && entry.threadId === other.id,
+      );
+      assert.ok(follower);
+      assert.equal(follower.sourceThreadId, target.id);
+      assert.equal(follower.sourceTurnId, accepted.turnId);
+      const followerItems = (
+        await manager.request("zen/thread/read", { threadId: other.id })
+      ).thread.items;
+      const queued = followerItems.find(
+        (item) =>
+          item.type === "user_message_queued" &&
+          item.clientId === follower.clientUserMessageId,
+      );
+      assert.equal(queued?.type, "user_message_queued");
+      if (queued?.type !== "user_message_queued")
+        throw new Error("Queued wakeup missing");
+      assert.equal(queued.deliveryMode, undefined); // external trigger remains legacy FIFO
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const receivedClientId = await Promise.race([
+        delivered.promise,
+        new Promise<string>((_resolve, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error("Legacy queued wakeup did not deliver")),
+            10_000,
+          );
+        }),
+      ]).finally(() => {
+        clearTimeout(timeout);
+        disposeDelivery();
+      });
+      assert.equal(receivedClientId, queued.clientId);
+      assert.ok(
+        (
+          await manager.request("zen/thread/read", { threadId: other.id })
+        ).thread.items.some(
+          (item) =>
+            item.type === "user_message" && item.clientId === queued.clientId,
+        ),
+      );
+    } finally {
+      await triggers.stop();
+    }
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("thread snapshots and two-member Room context route through target Threads", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-routing-"));
   const manager = managerFor(directory);

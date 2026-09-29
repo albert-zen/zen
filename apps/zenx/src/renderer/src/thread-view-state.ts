@@ -83,7 +83,8 @@ export function applyNativeThreadEvent(
   nowSeconds = Math.floor(Date.now() / 1_000),
 ): Thread {
   if (event.type === "model_catalog_updated") return thread;
-  if (event.type === "queue_failed") return thread;
+  if (event.type === "queue_failed" || event.type === "queue_admission_started")
+    return thread;
   if (event.type === "thread_started") {
     return event.threadId === thread.id
       ? projectNativeThread(event.thread)
