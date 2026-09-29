@@ -198,7 +198,15 @@ createRoot(document.getElementById("root")!).render(
       thread={thread([
         turnWithItems(
           compactStatus ? "completed" : "inProgress",
-          toolShowcase ? showcaseValues : values,
+          params.has("singleton")
+            ? [
+                user("Inspect a single tool."),
+                agent("Running the command."),
+                commandItem("solo", "echo hello"),
+              ]
+            : toolShowcase
+              ? showcaseValues
+              : values,
         ),
       ])}
       threadAttachments={

@@ -1049,6 +1049,56 @@ test("renders canonical run_code children as nested rows with full code", async 
   });
 });
 
+test("tool and group disclosures remain mounted, inert when closed, and stable across streamed updates", async () => {
+  await withDom(async (root) => {
+    const first = commandItem("motion-one", "printf first") as Extract<
+      ThreadItem,
+      { type: "commandExecution" }
+    >;
+    const second = commandItem("motion-two", "printf second");
+    await renderInteractive(root, turnWithItems("inProgress", [first, second]));
+    const group = requiredButton(".trace-toggle");
+    const groupReveal = requiredElement(".trace-group > .trace-reveal");
+    assert.equal(groupReveal.getAttribute("aria-hidden"), "true");
+    assert.equal(groupReveal.hasAttribute("inert"), true);
+    await act(async () => group.click());
+    assert.equal(group.getAttribute("aria-expanded"), "true");
+    assert.equal(groupReveal.getAttribute("aria-hidden"), "false");
+    assert.equal(groupReveal.hasAttribute("inert"), false);
+    const item = requiredButton(".trace-items .trace-item-toggle");
+    const itemReveal = requiredElement(
+      ".trace-items .trace-item .trace-reveal",
+    );
+    await act(async () => item.click());
+    assert.equal(item.getAttribute("aria-expanded"), "true");
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        { ...first, aggregatedOutput: "streamed output" },
+        second,
+      ]),
+    );
+    assert.equal(
+      requiredElement(".trace-items .trace-item .trace-reveal"),
+      itemReveal,
+    );
+    assert.equal(itemReveal.dataset.open, "true");
+    await act(async () => {
+      item.click();
+      item.click();
+      item.click();
+    });
+    assert.equal(itemReveal.dataset.open, "false");
+    assert.equal(itemReveal.hasAttribute("inert"), true);
+    await act(async () => {
+      group.click();
+      group.click();
+    });
+    assert.equal(groupReveal.dataset.open, "true");
+    assert.equal(requiredElement(".trace-group > .trace-reveal"), groupReveal);
+  });
+});
+
 test("singleton promotion preserves its disclosure and focused button", async () => {
   await withDom(async (root) => {
     const first = reasoningItem(
@@ -1223,7 +1273,7 @@ test("public reasoning with a summary expands from summary to full content", asy
     );
 
     await act(async () => toggle.click());
-    const detail = requiredWithin(row, ":scope > .trace-detail");
+    const detail = requiredWithin(row, ":scope > .trace-reveal .trace-detail");
     assert.equal(toggle.getAttribute("aria-expanded"), "true");
     assert.equal(detail.textContent, "Full public reasoning");
     assert.doesNotMatch(detail.textContent ?? "", /Provider summary/u);
@@ -1256,7 +1306,7 @@ test("projected public reasoning keeps its summary label and expandable content"
 
     await act(async () => toggle.click());
     assert.equal(
-      requiredWithin(row, ":scope > .trace-detail").textContent,
+      requiredWithin(row, ":scope > .trace-reveal .trace-detail").textContent,
       "Projected public reasoning",
     );
   });
@@ -1279,7 +1329,7 @@ test("public reasoning without a summary keeps a neutral expandable label", asyn
 
     await act(async () => toggle.click());
     assert.equal(
-      requiredWithin(row, ":scope > .trace-detail").textContent,
+      requiredWithin(row, ":scope > .trace-reveal .trace-detail").textContent,
       "Full public reasoning",
     );
   });
@@ -2105,7 +2155,12 @@ test("tool images appear only inside expanded tool details beside unchanged call
     );
     assert.equal(JSON.stringify(value), original);
     await act(async () => requiredButton(".trace-item-toggle").click());
-    assert.equal(document.querySelector('[aria-label="Tool images"]'), null);
+    assert.equal(
+      requiredElement('.trace-reveal[data-open="false"]').getAttribute(
+        "aria-hidden",
+      ),
+      "true",
+    );
   });
 });
 

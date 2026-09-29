@@ -1393,6 +1393,26 @@ function DisplayNode({
   );
 }
 
+/** Keep content mounted for a height-independent transition; inert removes hidden controls from tab order. */
+function TraceReveal({
+  open,
+  children,
+}: {
+  open: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className="trace-reveal"
+      data-open={open}
+      aria-hidden={!open}
+      inert={!open}
+    >
+      <div className="trace-reveal-inner">{children}</div>
+    </div>
+  );
+}
+
 function TraceSequence({
   node,
   pluginSnapshot,
@@ -1403,24 +1423,35 @@ function TraceSequence({
   pluginUiRegistry: PluginUiRegistry | null;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const sectionRef = useRef<HTMLElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
   const [openItems, setOpenItems] = useState<Set<string>>(new Set());
+  const [visited, setVisited] = useState(false);
+  const [visitedItems, setVisitedItems] = useState<Set<string>>(new Set());
   const grouped = node.kind === "traceGroup";
   const singleton = node.kind === "traceItem" ? node.item : null;
   const singletonExpandable =
     singleton !== null && traceItemExpandable(singleton);
   const toggleExpanded = () => {
-    setExpanded((current) => {
-      if (current) setOpenItems(new Set());
-      else if (singleton !== null && singletonExpandable) {
-        setOpenItems(new Set([singleton.id]));
-      }
-      return !current;
-    });
+    if (expanded && sectionRef.current?.contains(document.activeElement)) {
+      toggleRef.current?.focus();
+    }
+    setVisited(true);
+    if (expanded) setOpenItems(new Set());
+    else if (singleton !== null && singletonExpandable) {
+      setVisitedItems((seen) => new Set(seen).add(singleton.id));
+      setOpenItems(new Set([singleton.id]));
+    }
+    setExpanded((current) => !current);
   };
   return (
-    <section className={grouped ? "trace-group" : "trace-item trace-singleton"}>
+    <section
+      ref={sectionRef}
+      className={grouped ? "trace-group" : "trace-item trace-singleton"}
+    >
       {grouped ? (
         <button
+          ref={toggleRef}
           className="trace-toggle"
           type="button"
           aria-expanded={expanded}
@@ -1433,6 +1464,7 @@ function TraceSequence({
         </button>
       ) : singletonExpandable ? (
         <button
+          ref={toggleRef}
           className="trace-item-toggle"
           type="button"
           aria-expanded={expanded}
@@ -1445,67 +1477,82 @@ function TraceSequence({
           <TraceItemHeader item={singleton!} expandable={false} />
         </div>
       )}
-      {!grouped && expanded && singletonExpandable ? (
-        <TraceDetail
-          item={singleton}
-          pluginSnapshot={pluginSnapshot}
-          pluginUiRegistry={pluginUiRegistry}
-        />
+      {!grouped && singletonExpandable ? (
+        <TraceReveal open={expanded}>
+          {visited ? (
+            <TraceDetail
+              item={singleton}
+              pluginSnapshot={pluginSnapshot}
+              pluginUiRegistry={pluginUiRegistry}
+            />
+          ) : null}
+        </TraceReveal>
       ) : null}
-      {grouped && expanded ? (
-        <div
-          className="trace-items"
-          role="region"
-          aria-label="Execution details"
-          tabIndex={0}
-        >
-          {traceDisplayRows(node.items).map(
-            ({ item, nested, parentToolName }) => {
-              const open = openItems.has(item.id);
-              const expandable = traceItemExpandable(item);
-              return (
-                <div
-                  className={`trace-item${nested ? " trace-item-nested" : ""}`}
-                  aria-label={
-                    nested
-                      ? `Nested tool invoked by ${parentToolName ?? "parent code"}`
-                      : undefined
-                  }
-                  key={item.id}
-                >
-                  {expandable ? (
-                    <button
-                      className="trace-item-toggle"
-                      type="button"
-                      aria-expanded={open}
-                      onClick={() =>
-                        setOpenItems((current) => {
-                          const next = new Set(current);
-                          if (next.has(item.id)) next.delete(item.id);
-                          else next.add(item.id);
-                          return next;
-                        })
+      {grouped ? (
+        <TraceReveal open={expanded}>
+          {visited ? (
+            <div
+              className="trace-items"
+              role="region"
+              aria-label="Execution details"
+              tabIndex={0}
+            >
+              {traceDisplayRows(node.items).map(
+                ({ item, nested, parentToolName }) => {
+                  const open = openItems.has(item.id);
+                  const expandable = traceItemExpandable(item);
+                  return (
+                    <div
+                      className={`trace-item${nested ? " trace-item-nested" : ""}`}
+                      aria-label={
+                        nested
+                          ? `Nested tool invoked by ${parentToolName ?? "parent code"}`
+                          : undefined
                       }
+                      key={item.id}
                     >
-                      <TraceItemHeader item={item} expandable />
-                    </button>
-                  ) : (
-                    <div className="trace-item-static">
-                      <TraceItemHeader item={item} expandable={false} />
+                      {expandable ? (
+                        <button
+                          className="trace-item-toggle"
+                          type="button"
+                          aria-expanded={open}
+                          onClick={() => {
+                            setVisitedItems((current) =>
+                              new Set(current).add(item.id),
+                            );
+                            setOpenItems((current) => {
+                              const next = new Set(current);
+                              if (next.has(item.id)) next.delete(item.id);
+                              else next.add(item.id);
+                              return next;
+                            });
+                          }}
+                        >
+                          <TraceItemHeader item={item} expandable />
+                        </button>
+                      ) : (
+                        <div className="trace-item-static">
+                          <TraceItemHeader item={item} expandable={false} />
+                        </div>
+                      )}
+                      {expandable ? (
+                        <TraceReveal open={open}>
+                          {visitedItems.has(item.id) ? (
+                            <TraceDetail
+                              item={item}
+                              pluginSnapshot={pluginSnapshot}
+                              pluginUiRegistry={pluginUiRegistry}
+                            />
+                          ) : null}
+                        </TraceReveal>
+                      ) : null}
                     </div>
-                  )}
-                  {open && expandable ? (
-                    <TraceDetail
-                      item={item}
-                      pluginSnapshot={pluginSnapshot}
-                      pluginUiRegistry={pluginUiRegistry}
-                    />
-                  ) : null}
-                </div>
-              );
-            },
-          )}
-        </div>
+                  );
+                },
+              )}
+            </div>
+          ) : null}
+        </TraceReveal>
       ) : null}
     </section>
   );
