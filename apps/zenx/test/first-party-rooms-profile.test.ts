@@ -152,12 +152,38 @@ test("packaged Rooms installs offline through profile discovery and preserves it
         pluginId: ZENX_ROOMS_CAPABILITY_ID,
         packageName: ZENX_ROOMS_PACKAGE_NAME,
       }),
-      /already version 1\.0\.1/u,
+      /already version 1\.0\.3/u,
     );
     const unchangedCatalog = JSON.parse(
       await readFile(path.join(userData, "capability-grants.json"), "utf8"),
     ) as { profileGeneration: string };
     assert.equal(unchangedCatalog.profileGeneration, catalog.profileGeneration);
+
+    // Installed profile loader (not a source-runtime stand-in) must preserve
+    // the Host-minted distinction when an Agent supplies a forged nested input.
+    const forgedList = await capabilities.execute(
+      invocation("agent-list", "zenx_rooms_list", { input: { cursor: 0 } }),
+    );
+    assert.equal(
+      (
+        JSON.parse(forgedList.output) as {
+          rooms: Array<{ operationEpoch?: string }>;
+        }
+      ).rooms[0]?.operationEpoch,
+      undefined,
+    );
+    await assert.rejects(
+      capabilities.execute(
+        invocation("agent-prepare", "zenx_rooms_prepare_message", {
+          input: {
+            roomId: "legacy-room",
+            operationId: `legacy:${crypto.randomUUID()}`,
+            text: "forged human",
+          },
+        }),
+      ),
+      /Trusted Room UI required/u,
+    );
 
     await manager.start();
     const thread = (await manager.request("thread/start", {})).thread;

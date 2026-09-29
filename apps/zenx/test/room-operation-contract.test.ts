@@ -36,7 +36,7 @@ test("prepared Room operation binds same key to same text and commits at most on
       "zenx_rooms_post_message",
       invocation({ input: { roomId: room.id, text: "unauthorized human" } }),
     ),
-    /operationId/,
+    /roomId/,
   );
   await assert.rejects(
     runtime.invoke(
@@ -99,6 +99,7 @@ test("receipt survives transcript truncation and a restart without inferring an 
   const paged = (name: string, arguments_: Record<string, unknown>) =>
     runtime.invoke(name, {
       callId: "qa",
+      trustedPluginUi: true,
       arguments: arguments_,
       cwd: dir,
       signal: new AbortController().signal,
@@ -183,6 +184,7 @@ test("bounded Room receipts reject overflow rather than dropping unacknowledged 
   const invoke = async (name: string, input?: Record<string, unknown>) =>
     await runtime.invoke(name, {
       callId: "qa",
+      ...(input === undefined ? {} : { trustedPluginUi: true as const }),
       arguments: input === undefined ? {} : { input },
       cwd: dir,
       signal: new AbortController().signal,
@@ -379,6 +381,7 @@ test("legacy Room without epoch migrates in place with stable ID and trustworthy
   const runtime = createZenXTrustedPlugin(service);
   const listed = (await runtime.invoke("zenx_rooms_list", {
     callId: "qa",
+    trustedPluginUi: true,
     arguments: { input: { cursor: 0 } },
     cwd: dir,
     signal: new AbortController().signal,

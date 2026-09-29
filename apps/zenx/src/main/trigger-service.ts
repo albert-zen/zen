@@ -555,6 +555,8 @@ export class ZenXTriggerService {
       const operations = (room.operations ??= []);
       const existing = operations.find((operation) => operation.id === id);
       if (existing) {
+        if (existing.cancelled === true)
+          throw new Error("Room operation was cancelled; no message was sent");
         if (existing.text !== normalizedText)
           throw new Error("Operation is bound to a different message");
         return structuredClone(existing);
@@ -615,6 +617,39 @@ export class ZenXTriggerService {
     return operation;
   }
 
+  async cancelPreparedRoomOperation(
+    roomId: string,
+    operationId: string,
+  ): Promise<RoomDeliveryView> {
+    const generation = this.#runningGeneration();
+    const normalizedRoomId = required(roomId, "room", MAX_ID_BYTES);
+    const id = required(operationId, "operation ID", MAX_ID_BYTES);
+    return await this.#mutate(generation, async (snapshot) => {
+      const room = snapshot.rooms.find(
+        (entry) => entry.id === normalizedRoomId,
+      );
+      if (!room) throw new Error("Room was not found");
+      const operation = room.operations?.find((entry) => entry.id === id);
+      if (!operation)
+        throw new Error("Room operation is not retained; result unknown");
+      if (operation.cancelled !== true && operation.messageId !== null)
+        throw new Error(
+          `Cannot cancel a saved Room message: ${operation.messageId}`,
+        );
+      operation.cancelled = true;
+      operation.acknowledged = true;
+      return {
+        operationId: operation.id,
+        roomId: normalizedRoomId,
+        text: operation.text,
+        messageId: null,
+        state: "cancelled" as const,
+        createdAt: operation.createdAt,
+        mentions: [],
+      };
+    });
+  }
+
   wakeupsEnabled(): boolean {
     return (
       this.#generation?.wakeupAdmission === true && this.#generation.active
@@ -635,7 +670,12 @@ export class ZenXTriggerService {
       roomId,
       text: operation.text,
       messageId: operation.messageId,
-      state: operation.messageId === null ? "prepared" : "saved",
+      state:
+        operation.cancelled === true
+          ? "cancelled"
+          : operation.messageId === null
+            ? "prepared"
+            : "saved",
       createdAt: operation.createdAt,
       mentions: operation.mentions.map((mention) => ({
         name: mention.name,
@@ -757,6 +797,8 @@ export class ZenXTriggerService {
         operationId === undefined
           ? undefined
           : room.operations?.find((entry) => entry.id === operationId);
+      if (operation?.cancelled === true)
+        throw new Error("Room operation was cancelled; no message was sent");
       if (
         operationId !== undefined &&
         (!operation ||

@@ -46,8 +46,9 @@ interface RoomListResult {
   >;
 }
 interface RoomDeliveryResult {
+  operationId?: string;
   text?: string;
-  state: "prepared" | "saved" | "unknown";
+  state: "prepared" | "saved" | "cancelled" | "unknown";
   messageId: string | null;
   mentions: Array<{
     name: string;
@@ -608,10 +609,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     }
     if (pendingRef.current[roomId]?.id === entry.id)
       setRoomPending(roomId, null);
-    setFeedback((current) => ({
-      ...current,
-      [roomId]: "Message saved. Check wake status on the message.",
-    }));
+    // Confirmed receipts live on the message, not in the persistent chat rail.
+    setFeedback((current) => ({ ...current, [roomId]: "" }));
     await sdk.commands
       .execute("ack-operation", { roomId, operationId: entry.id })
       .catch((reason: unknown) =>
@@ -676,6 +675,18 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     // The Host is the authority. Unacknowledged prepared/committed operations
     // survive renderer unmount; lack of a retained receipt NEVER means unsent.
     const merged = { ...pendingRef.current };
+    for (const room of next.rooms) {
+      const local = merged[room.id];
+      // Only an exactly observed saved message and no outstanding Host
+      // operation permit clearing a stale local success banner.
+      if (
+        local?.messageId &&
+        room.messages.some((message) => message.id === local.messageId) &&
+        !room.operations?.some((operation) => operation.id === local.id) &&
+        room.pendingCount === 0
+      )
+        delete merged[room.id];
+    }
     for (const room of next.rooms)
       for (const operation of room.operations ?? []) {
         if (!merged[room.id] || merged[room.id]?.id === operation.id) {
@@ -912,9 +923,10 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       await refresh();
     } catch (reason) {
       // Do not infer success from matching text, even when a new ID appeared.
-      setError(
-        `Send result unknown for this operation; do not resend. ${describeError(reason)}`,
-      );
+      setRoomErrors((current) => ({
+        ...current,
+        [roomId]: `Send result unknown for this operation; do not resend. ${describeError(reason)}`,
+      }));
       try {
         const status = (await sdk.commands.execute("operation", {
           roomId,
@@ -959,7 +971,11 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       }
       if (state.state === "saved" && state.messageId)
         await finishSaved(roomId, entry, state);
-      else
+      else if (state.state === "cancelled") {
+        if (pendingRef.current[roomId]?.id === entry.id)
+          setRoomPending(roomId, null);
+        setFeedback((current) => ({ ...current, [roomId]: "" }));
+      } else
         setFeedback((current) => ({
           ...current,
           [roomId]:
@@ -967,9 +983,82 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
         }));
       await refresh();
     } catch (reason) {
-      setError(
-        `Result unknown; this operation stays unresolved. ${describeError(reason)}`,
-      );
+      setRoomErrors((current) => ({
+        ...current,
+        [roomId]: `Result unknown; this operation stays unresolved. ${describeError(reason)}`,
+      }));
+    }
+  };
+  const cancelPrepared = async (roomId: string, entry: RoomPendingSend) => {
+    setRoomErrors((current) => ({ ...current, [roomId]: "" }));
+    try {
+      // UNKNOWN is never a client-side cancellation fact.
+      const exact = (await sdk.commands.execute("operation", {
+        roomId,
+        operationId: entry.id,
+      })) as RoomDeliveryResult;
+      if (exact.state === "saved" && exact.messageId) {
+        await finishSaved(roomId, entry, exact);
+        setRoomErrors((current) => ({
+          ...current,
+          [roomId]: `Already saved as message ${exact.messageId}; cancellation cannot withdraw it.`,
+        }));
+        await refresh();
+        return;
+      }
+      if (exact.state === "prepared")
+        await sdk.commands.execute("cancel-prepared", {
+          roomId,
+          operationId: entry.id,
+        });
+      const result = (await sdk.commands.execute("operation", {
+        roomId,
+        operationId: entry.id,
+      })) as RoomDeliveryResult;
+      if (result.state !== "cancelled")
+        throw new Error("Cancellation not confirmed; check exact operation");
+      if (pendingRef.current[roomId]?.id === entry.id)
+        setRoomPending(roomId, null);
+      if (
+        entry.revision !== null &&
+        revisions.current[roomId] === entry.revision
+      )
+        setDrafts((current) =>
+          current[roomId] === entry.text
+            ? { ...current, [roomId]: "" }
+            : current,
+        );
+      setFeedback((current) => ({ ...current, [roomId]: "" }));
+      await refresh();
+    } catch (reason) {
+      // A lost cancel result is never permission to drop a possibly saved send.
+      try {
+        const exact = (await sdk.commands.execute("operation", {
+          roomId,
+          operationId: entry.id,
+        })) as RoomDeliveryResult;
+        if (exact.state === "cancelled") {
+          if (pendingRef.current[roomId]?.id === entry.id)
+            setRoomPending(roomId, null);
+          await refresh();
+          return;
+        }
+        if (exact.state === "saved" && exact.messageId) {
+          await finishSaved(roomId, entry, exact);
+          setRoomErrors((current) => ({
+            ...current,
+            [roomId]: `Already saved as message ${exact.messageId}; cancellation cannot withdraw it.`,
+          }));
+          await refresh();
+          return;
+        }
+      } catch {
+        // No exact receipt: keep the original intent and the next check path.
+      }
+      setRoomErrors((current) => ({
+        ...current,
+        [roomId]: `Cancellation result unknown; check the exact operation. ${describeError(reason)}`,
+      }));
     }
   };
   return (
@@ -1051,13 +1140,16 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               <div
                 className="rooms-chat-status"
                 aria-label="Room delivery and setup"
+                tabIndex={0}
               >
                 {error || roomErrors[room.id] ? (
                   <p role="alert" className="form-error">
                     {roomErrors[room.id] || error}
                   </p>
                 ) : null}
-                {room.responders?.some((entry) => !entry.configured) ? (
+                {!pending &&
+                (room.operations ?? []).length === 0 &&
+                room.responders?.some((entry) => !entry.configured) ? (
                   <p className="room-setup-note">
                     No automatic wakeup for:{" "}
                     {room.responders
@@ -1083,8 +1175,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 {pending ? (
                   <div role="status" className="room-send-pending">
                     {pending.messageId
-                      ? `Message ${pending.messageId} saved; verify its wakeup status.`
-                      : "Operation awaiting confirmation. This Room cannot silently resend it."}{" "}
+                      ? "Message saved; check its exact delivery."
+                      : "Send unconfirmed. Check, cancel if still prepared, or explicitly send."}{" "}
                     <button
                       type="button"
                       onClick={() =>
@@ -1094,14 +1186,22 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       Check exact operation
                     </button>
                     {!pending.messageId ? (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void inspectPending(room.id, pending, true)
-                        }
-                      >
-                        Send prepared operation (explicit)
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => void cancelPrepared(room.id, pending)}
+                        >
+                          Cancel if prepared
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void inspectPending(room.id, pending, true)
+                          }
+                        >
+                          Send prepared operation (explicit)
+                        </button>
+                      </>
                     ) : null}
                   </div>
                 ) : null}
@@ -1136,23 +1236,38 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                         Check exact operation
                       </button>
                       {!operation.messageId ? (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void inspectPending(
-                              room.id,
-                              {
+                        <>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void cancelPrepared(room.id, {
                                 id: operation.id,
                                 text: operation.text,
                                 revision: null,
                                 messageId: null,
-                              },
-                              true,
-                            )
-                          }
-                        >
-                          Send prepared operation (explicit)
-                        </button>
+                              })
+                            }
+                          >
+                            Cancel if prepared
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void inspectPending(
+                                room.id,
+                                {
+                                  id: operation.id,
+                                  text: operation.text,
+                                  revision: null,
+                                  messageId: null,
+                                },
+                                true,
+                              )
+                            }
+                          >
+                            Send prepared operation (explicit)
+                          </button>
+                        </>
                       ) : null}
                     </div>
                   ))}
@@ -1210,6 +1325,17 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     <small className="room-delivery">
                       Saved message · wake result unavailable
                     </small>
+                  ) : null}
+                  {message.kind === "human" ? (
+                    <details className="room-message-details">
+                      <summary>Message details</summary>
+                      <span>Message ID: {message.id}</span>
+                      {deliveries[message.id]?.operationId ? (
+                        <span>
+                          Operation ID: {deliveries[message.id]!.operationId}
+                        </span>
+                      ) : null}
+                    </details>
                   ) : null}
                 </article>
               ))}

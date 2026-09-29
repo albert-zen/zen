@@ -60,6 +60,10 @@ export interface ZenXRoomsTrustedService {
     operationId: string,
     text: string,
   ): Promise<RoomOperation>;
+  cancelPreparedRoomOperation?(
+    roomId: string,
+    operationId: string,
+  ): Promise<unknown>;
   roomOperation?(roomId: string, operationId: string): unknown;
   roomDelivery?(roomId: string, messageId: string): unknown;
   wakeupsEnabled?(): boolean;
@@ -74,11 +78,15 @@ export interface ZenXRoomsTrustedService {
     }>;
   };
   startPlugin?(pluginId: string, sdk: ZenXPluginHostSdkV1): Promise<void>;
-  stopPlugin?(pluginId: string): Promise<void>;
+  stopPlugin?(
+    pluginId: string,
+    runtimeSdk?: ZenXPluginHostSdkV1,
+  ): Promise<void>;
 }
 
 export interface ZenXTrustedPluginInvocation {
   readonly callId: string;
+  readonly trustedPluginUi?: true;
   readonly arguments: Readonly<Record<string, unknown>>;
   readonly cwd: string;
   readonly signal: AbortSignal;
@@ -100,12 +108,22 @@ export interface ZenXTrustedPluginRuntime {
 export function createZenXTrustedPlugin(
   service: ZenXRoomsTrustedService,
 ): ZenXTrustedPluginRuntime {
+  let runtimeSdk: ZenXPluginHostSdkV1 | undefined;
   return {
     storage: { version: 1, initialValue: { rooms: [] } },
-    start: async (sdk) => await service.startPlugin?.(PLUGIN_ID, sdk),
+    start: async (sdk) => {
+      await service.startPlugin?.(PLUGIN_ID, sdk);
+      runtimeSdk = sdk;
+    },
     invoke: async (toolName, invocation) => {
       invocation.signal.throwIfAborted();
-      const uiInput = record(invocation.arguments["input"]);
+      // Only the Host's direct UI command route may mint trustedPluginUi.
+      // Agent tool arguments (including nested input/source/trustedPluginUi)
+      // are never authority, even when the model omits schema validation.
+      const uiInput =
+        invocation.trustedPluginUi === true
+          ? (record(invocation.arguments["input"]) ?? {})
+          : null;
       const args = uiInput ?? invocation.arguments;
       switch (toolName) {
         case "zenx_rooms_list": {
@@ -201,6 +219,13 @@ export function createZenXTrustedPlugin(
             string(args, "operationId", MAX_ID_BYTES),
             string(args, "text", MAX_MESSAGE_TEXT_BYTES),
           );
+        case "zenx_rooms_cancel_prepared":
+          if (uiInput === null || !service.cancelPreparedRoomOperation)
+            throw new Error("Trusted Room UI required");
+          return await service.cancelPreparedRoomOperation(
+            string(args, "roomId", MAX_ID_BYTES),
+            string(args, "operationId", MAX_ID_BYTES),
+          );
         case "zenx_rooms_operation":
           if (uiInput === null || !service.roomOperation)
             throw new Error("Trusted Room UI required");
@@ -274,7 +299,10 @@ export function createZenXTrustedPlugin(
           throw new Error(`Unsupported Rooms tool: ${toolName}`);
       }
     },
-    close: async () => await service.stopPlugin?.(PLUGIN_ID),
+    close: async () => {
+      await service.stopPlugin?.(PLUGIN_ID, runtimeSdk);
+      runtimeSdk = undefined;
+    },
   };
 }
 

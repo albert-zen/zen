@@ -4,6 +4,7 @@ import type {
   CreateRoomInput,
   CreateTriggerInput,
   RoomMember,
+  RoomDeliveryView,
   TriggerProgramConfig,
   TriggerProgramSpec,
   TriggerSnapshot,
@@ -71,9 +72,16 @@ export interface ZenXAutomationControlPort {
   addRoomMember(roomId: string, member: RoomMember): Promise<void>;
   removeRoomMember(roomId: string, threadId: string): Promise<void>;
   postAgentRoomMessage(roomId: string, text: string): Promise<void>;
+  cancelPreparedRoomOperation?(
+    roomId: string,
+    operationId: string,
+  ): Promise<RoomDeliveryView>;
   postRoomMessage?(roomId: string, author: string, text: string): Promise<void>;
   startPlugin?(pluginId: string, sdk: ZenXPluginHostSdkV1): Promise<void>;
-  stopPlugin?(pluginId: string): Promise<void>;
+  stopPlugin?(
+    pluginId: string,
+    runtimeSdk?: ZenXPluginHostSdkV1,
+  ): Promise<void>;
 }
 
 const programSpecSchema = {
@@ -312,7 +320,12 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
     if (name !== invocation.name)
       throw new Error("Automation tool name mismatch");
     invocation.signal.throwIfAborted();
-    const uiInput = record(invocation.arguments.input);
+    // Legacy first-party package path follows the same Host-minted boundary:
+    // nested Agent input never authorizes a human Room post.
+    const uiInput =
+      invocation.trustedPluginUi === true
+        ? (record(invocation.arguments.input) ?? {})
+        : null;
     const args = uiInput ?? invocation.arguments;
     switch (name) {
       case "zenx_triggers_threads":

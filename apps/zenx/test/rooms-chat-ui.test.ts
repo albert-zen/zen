@@ -168,10 +168,14 @@ test("trusted Room composer switches rooms, sends once, and treats post error as
       document.querySelector<HTMLTextAreaElement>("#room-chat-input")?.value,
       "",
     );
+    assert.equal(
+      document.querySelector('.rooms-chat-status [role="status"]'),
+      null,
+      "confirmed technical receipt leaves the chat rail",
+    );
     assert.match(
-      document.querySelector('.rooms-chat-status [role="status"]')!
-        .textContent!,
-      /Message saved/u,
+      document.querySelector(".room-message-details")!.textContent!,
+      /Message ID: saved/u,
     );
   } finally {
     await act(async () => root.unmount());

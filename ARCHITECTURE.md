@@ -264,6 +264,9 @@
 - **ZenXRoom** — `zenx-rooms` Plugin Package 在自身 storage namespace 持有的共享协作转录与 Thread 路由表面；Room 本身不是
   Agent 上下文，只有明确命中 membership / mention 时才把带来源的内容投递给成员 Thread；读取转录使用有界分页而非把全部历史压入一次插件命令结果。
 - **ZenXRoomSendOperation** — ZenX Rooms plugin storage 中有界的 Host 可信发送准备/提交回执，按 Host 持有的 Room epoch 与客户端非权威 UUID 绑定 Room 与正文、保存稳定消息 ID 和提交时成员唤醒匹配事实；它只供 UI 查询/明确确认，不是 Thread/Turn 会话状态或重试调度器，丢失回执只表示未知而非可重发。
+- **ZenXTrustedPluginUiInvocation** — Host 的直接插件 UI 命令入口独立于工具参数标记本次调用来源，Agent ToolEnvironment 永远不继承可伪造的参数声明；Room 只允许此来源准备、提交、确认及取消人类消息。
+- **ZenXRoomPreparedCancellation** — Room storage 在同一串行 mutation 内只对未提交的精确 operation key 记有界、可查询的取消回执，阻止同 key 再提交，并仅在安全裁剪时旋转 epoch；它不撤销已保存消息或唤醒，也不是重试器。
+- **ZenXRoomGenerationLease** — 同一个 Host 的 Room plugin 在旧已启用 profile 升级换代时持有按 runtime SDK 身份区分的瞬时租约，旧代退出不能撤销新代的 Room storage 持久化资格；旧 1.0.x 无身份 close 按启动顺序释放旧代。
 - **ZenXWakeupProjection** — ZenX 把 Trigger 命中的 `clientUserMessageId` 与外部审计记录
   关联成系统级唤醒卡片，并把有界、带明确来源的 completed Turn / Room 上下文作为
   新 Turn 输入投影；它不是第二份权威 transcript，canonical `user_message` 仍是唯一输入事实。

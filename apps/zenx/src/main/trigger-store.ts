@@ -458,6 +458,9 @@ function canonicalRoom(room: ZenXRoom): ZenXRoom {
             messageId: operation.messageId,
             createdAt: operation.createdAt,
             acknowledged: operation.acknowledged,
+            ...(operation.cancelled === true
+              ? { cancelled: true as const }
+              : {}),
             mentions: operation.mentions.map((mention) => ({
               name: mention.name,
               threadId: mention.threadId,
@@ -786,6 +789,7 @@ function isRoomOperation(
       "messageId",
       "createdAt",
       "acknowledged",
+      ...(operation["cancelled"] === undefined ? [] : ["cancelled"]),
       "mentions",
     ]) &&
     string(operation["id"], MAX_ID_BYTES) &&
@@ -793,6 +797,10 @@ function isRoomOperation(
     nullableString(operation["messageId"], MAX_ID_BYTES) &&
     finiteNumber(operation["createdAt"]) &&
     typeof operation["acknowledged"] === "boolean" &&
+    (operation["cancelled"] === undefined ||
+      (operation["cancelled"] === true &&
+        operation["messageId"] === null &&
+        operation["acknowledged"] === true)) &&
     arrayOf(
       operation["mentions"],
       (

@@ -183,6 +183,7 @@ async function readPluginValue(
 export class ZenXBundledAutomationPluginService implements ZenXAutomationControlPort {
   readonly #service: ZenXTriggerService;
   readonly #active: Set<string>;
+  readonly #roomRuntimeLeases: ZenXPluginHostSdkV1[] = [];
   readonly #targets: ThreadTargetPort | undefined;
   readonly #appServer: ZenXTriggerAppServerPort;
   #lifecycle: Promise<void> = Promise.resolve();
@@ -200,11 +201,15 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     this.#service = new ZenXTriggerService(appServer, store, { titles });
   }
 
-  async startPlugin(
-    pluginId: string,
-    _sdk: ZenXPluginHostSdkV1,
-  ): Promise<void> {
+  async startPlugin(pluginId: string, sdk: ZenXPluginHostSdkV1): Promise<void> {
     await this.#serialize(async () => {
+      if (
+        pluginId === ZENX_ROOMS_CAPABILITY_ID &&
+        this.#roomRuntimeLeases.includes(sdk)
+      )
+        return;
+      const roomLease = pluginId === ZENX_ROOMS_CAPABILITY_ID;
+      if (roomLease) this.#roomRuntimeLeases.push(sdk);
       if (this.#active.has(pluginId)) return;
       const first = this.#active.size === 0;
       if (first) {
@@ -215,10 +220,16 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
           );
         } catch (error) {
           this.#active.delete(pluginId);
+          if (roomLease) this.#roomRuntimeLeases.pop();
           throw error;
         }
       } else {
-        await this.#service.stop();
+        try {
+          await this.#service.stop();
+        } catch (error) {
+          if (roomLease) this.#roomRuntimeLeases.pop();
+          throw error;
+        }
         this.#active.add(pluginId);
         try {
           await this.#service.start(
@@ -226,6 +237,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
           );
         } catch (error) {
           this.#active.delete(pluginId);
+          if (roomLease) this.#roomRuntimeLeases.pop();
           await this.#service.start(
             this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID),
           );
@@ -235,8 +247,22 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     });
   }
 
-  async stopPlugin(pluginId: string): Promise<void> {
+  async stopPlugin(
+    pluginId: string,
+    runtimeSdk?: ZenXPluginHostSdkV1,
+  ): Promise<void> {
     await this.#serialize(async () => {
+      if (pluginId === ZENX_ROOMS_CAPABILITY_ID) {
+        // Old 1.0.x runtimes close without a token. Their lease was admitted
+        // first; never let that close retire the already staged new runtime.
+        const index =
+          runtimeSdk === undefined
+            ? 0
+            : this.#roomRuntimeLeases.indexOf(runtimeSdk);
+        if (index < 0 || index >= this.#roomRuntimeLeases.length) return;
+        this.#roomRuntimeLeases.splice(index, 1);
+        if (this.#roomRuntimeLeases.length > 0) return;
+      }
       if (!this.#active.has(pluginId)) return;
       if (this.#active.size === 1) {
         await this.#service.stop();
@@ -334,6 +360,9 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       operationId,
       text,
     );
+  }
+  async cancelPreparedRoomOperation(roomId: string, operationId: string) {
+    return await this.#service.cancelPreparedRoomOperation(roomId, operationId);
   }
   wakeupsEnabled(): boolean {
     return (

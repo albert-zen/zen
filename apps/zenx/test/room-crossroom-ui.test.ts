@@ -124,7 +124,7 @@ test("Room A unknown does not block B; same text from another sender cannot conf
     );
     assert.match(
       document.querySelector(".room-send-pending")!.textContent!,
-      /awaiting confirmation/u,
+      /Send unconfirmed/u,
     );
     assert.doesNotMatch(
       document.querySelector(".rooms-chat-status")!.textContent!,
@@ -157,7 +157,7 @@ test("Room A unknown does not block B; same text from another sender cannot conf
       );
       assert.match(
         document.querySelector(".room-send-pending")!.textContent!,
-        /awaiting confirmation/u,
+        /Send unconfirmed/u,
       );
       assert.equal(
         document.querySelector<HTMLButtonElement>(
@@ -273,8 +273,8 @@ test("new identical draft is never cleared by a late response to the previous op
       document.querySelector<HTMLTextAreaElement>("#room-chat-input")!.value,
       "@Bot 相同正文",
     );
-    assert.match(
-      document.querySelector(".rooms-chat-status")!.textContent!,
+    assert.doesNotMatch(
+      document.querySelector(".rooms-chat-status")?.textContent ?? "",
       /Message saved/u,
     );
   } finally {

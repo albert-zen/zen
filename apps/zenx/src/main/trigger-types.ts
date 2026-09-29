@@ -109,6 +109,8 @@ export interface RoomSendOperation {
   messageId: string | null;
   createdAt: number;
   acknowledged: boolean;
+  /** Persisted terminal fact: never permit a later post/prepare of this key. */
+  cancelled?: true;
   mentions: Array<{ name: string; threadId: string; triggerIds: string[] }>;
 }
 export interface RoomDeliveryView {
@@ -116,7 +118,7 @@ export interface RoomDeliveryView {
   roomId: string;
   text: string;
   messageId: string | null;
-  state: "prepared" | "saved";
+  state: "prepared" | "saved" | "cancelled";
   createdAt: number;
   mentions: Array<{
     name: string;

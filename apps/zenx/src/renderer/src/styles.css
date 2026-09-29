@@ -8720,6 +8720,14 @@ a:focus-visible {
   overflow-x: auto;
   max-width: 100%;
 }
+.rooms-chat-feed .room-message-details {
+  font-size: 11px;
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+.rooms-chat-feed .room-message-details span {
+  display: block;
+}
 .rooms-chat-feed .room-kind {
   font-size: 11px;
   color: var(--text-3);
@@ -8917,7 +8925,7 @@ a:focus-visible {
 }
 @media (max-width: 420px) {
   .rooms-chat-status {
-    max-height: 90px;
+    max-height: min(140px, 28vh);
     padding: 6px 8px;
   }
   .rooms-chat-compose > small {

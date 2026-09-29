@@ -39,6 +39,8 @@ const TOOL_OUTPUT_SUFFIX = Symbol("tool-output-suffix");
 
 export interface ToolInvocation {
   callId: string;
+  /** Host-minted only for direct plugin UI commands; never inherited from tool arguments. */
+  trustedPluginUi?: true;
   /** Runtime-owned canonical tool_call Item identity, independent of provider call IDs. */
   canonicalToolCallId?: string;
   name: string;

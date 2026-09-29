@@ -45,6 +45,7 @@ export interface PluginRuntimeInvocation {
     cwd: string;
     threadId?: string;
     canonicalToolCallId?: string;
+    trustedPluginUi?: true;
   };
   signal: AbortSignal;
 }
@@ -343,7 +344,17 @@ export class PluginRuntimeSupervisor {
       throw new Error(`Plugin runtime is not enabled: ${pluginId}`);
     }
     return await active.bundle.invoke({
-      ...invocation,
+      tool: invocation.tool,
+      arguments: invocation.arguments,
+      signal: invocation.signal,
+      context: {
+        callId: invocation.context.callId,
+        cwd: invocation.context.cwd,
+        ...(invocation.context.threadId === undefined
+          ? {}
+          : { threadId: invocation.context.threadId }),
+        trustedPluginUi: true,
+      },
       invocationId: invocation.invocationId ?? randomUUID(),
     });
   }
@@ -1250,6 +1261,9 @@ export function bundledPackageRegistration(
                 invocation.tool,
                 {
                   callId: invocation.context.callId,
+                  ...(invocation.context.trustedPluginUi === true
+                    ? { trustedPluginUi: true as const }
+                    : {}),
                   ...(invocation.context.canonicalToolCallId === undefined
                     ? {}
                     : {

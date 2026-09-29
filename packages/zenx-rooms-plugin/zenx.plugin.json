@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "zenx-rooms",
   "name": "Rooms",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "description": "Manage shared ZenX Room collaboration.",
   "compatibility": {
     "zenx": ">=0.1.0 <0.2.0"
@@ -239,6 +239,23 @@
       "maxOutputBytes": 65536
     },
     {
+      "name": "zenx_rooms_cancel_prepared",
+      "description": "Cancel only an exact, not-yet-posted trusted UI Room operation; never withdraw a saved message.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": { "type": "string", "maxLength": 512 },
+          "operationId": { "type": "string", "maxLength": 512 }
+        },
+        "required": ["roomId", "operationId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
       "name": "zenx_rooms_operation",
       "description": "Read trusted Room operation and wakeup status.",
       "inputSchema": {
@@ -429,6 +446,11 @@
         "id": "prepare-message",
         "title": "Prepare trusted human Room operation.",
         "tool": "zenx_rooms_prepare_message"
+      },
+      {
+        "id": "cancel-prepared",
+        "title": "Explicitly cancel a not-yet-posted Room operation.",
+        "tool": "zenx_rooms_cancel_prepared"
       },
       {
         "id": "operation",
