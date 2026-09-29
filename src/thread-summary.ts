@@ -23,6 +23,8 @@ export interface ThreadSummary {
   archived: boolean;
   createdAt: string;
   updatedAt: string;
+  /** Latest locally started Turn, or this Thread's creation (including forks). */
+  turnSortAt?: string;
   preview: string;
   status: "idle" | "active";
   forkedFromThreadId?: string;
@@ -149,6 +151,7 @@ export function isNativeThreadSummary(
     (value.status === "idle" || value.status === "active") &&
     typeof value.createdAt === "string" &&
     typeof value.updatedAt === "string" &&
+    (value.turnSortAt === undefined || typeof value.turnSortAt === "string") &&
     (value.forkedFromThreadId === undefined ||
       typeof value.forkedFromThreadId === "string") &&
     (value.forkedFromTurnId === undefined ||

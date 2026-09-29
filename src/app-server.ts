@@ -2194,13 +2194,15 @@ export class ZenAppServer {
         error,
       );
     }
-    const metadata = thread.items.find(
+    const items = thread.items;
+    const metadata = items.find(
       (item): item is ThreadMetadataItem => item.type === "thread_metadata",
     );
     if (metadata === undefined) {
       throw new Error(`Thread ${thread.id} has no metadata item`);
     }
-    const fork = latestThreadFork(thread.items);
+    const fork = latestThreadFork(items);
+    const forkIndex = fork === undefined ? -1 : items.indexOf(fork);
     return {
       threadId: thread.id,
       currentMetadata: configuration,
@@ -2209,14 +2211,20 @@ export class ZenAppServer {
         ? {}
         : { name: productMetadata.name }),
       createdAt: fork?.createdAt ?? metadata.createdAt,
-      updatedAt: thread.items.at(-1)?.createdAt ?? metadata.createdAt,
+      updatedAt: items.at(-1)?.createdAt ?? metadata.createdAt,
+      turnSortAt:
+        items.findLast(
+          (item, index) => index > forkIndex && item.type === "turn_started",
+        )?.createdAt ??
+        fork?.createdAt ??
+        metadata.createdAt,
       ...(fork === undefined
         ? {}
         : {
             forkedFromThreadId: fork.sourceThreadId,
             forkedFromTurnId: fork.sourceTurnId,
           }),
-      preview: firstUserMessagePreview(thread.items),
+      preview: firstUserMessagePreview(items),
       status: thread
         .deriveTurns(
           this.#activeTurns.get(thread.id)?.turnId === undefined
