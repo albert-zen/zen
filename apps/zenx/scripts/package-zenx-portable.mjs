@@ -158,9 +158,15 @@ async function packageZenX(arguments_) {
       const finalArtifact = path.join(artifactRoot, targetDirectory);
       let publishedArtifact;
       try {
-        publishedArtifact = await publishPackagedArtifact(packaged[0], finalArtifact);
+        publishedArtifact = await publishPackagedArtifact(
+          packaged[0],
+          finalArtifact,
+        );
       } catch (error) {
-        if (process.platform === "win32" && process.env.ZENX_PACKAGE_DIAG === "1") {
+        if (
+          process.platform === "win32" &&
+          process.env.ZENX_PACKAGE_DIAG === "1"
+        ) {
           await diagnoseWindowsPublishFailure(packaged[0], finalArtifact);
         }
         throw error;
@@ -580,47 +586,101 @@ Get-CimInstance Win32_Process | Where-Object {
     if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
     let processes;
     try {
-      processes = (await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-        timeout: 10000,
-        env: { ...process.env, ZENX_DIAG_STAGE: `${stagedArtifact}${path.sep}` },
-      })).stdout.trim();
+      processes = (
+        await run(
+          "powershell.exe",
+          ["-NoProfile", "-NonInteractive", "-Command", script],
+          {
+            timeout: 10000,
+            env: {
+              ...process.env,
+              ZENX_DIAG_STAGE: `${stagedArtifact}${path.sep}`,
+            },
+          },
+        )
+      ).stdout.trim();
     } catch (error) {
       processes = `query failed: ${error?.code ?? error?.message}`;
     }
-    console.error("Windows packaged publish diagnostic", JSON.stringify({
-      delayMs: delay,
-      node: process.version,
-      staged: await status(stagedArtifact),
-      final: await status(finalArtifact),
-      stagedExe: await status(path.join(stagedArtifact, "ZenXProviderSmoke.exe")),
-      ownedProcesses: processes || "[]",
-    }));
+    console.error(
+      "Windows packaged publish diagnostic",
+      JSON.stringify({
+        delayMs: delay,
+        node: process.version,
+        staged: await status(stagedArtifact),
+        final: await status(finalArtifact),
+        stagedExe: await status(
+          path.join(stagedArtifact, "ZenXProviderSmoke.exe"),
+        ),
+        ownedProcesses: processes || "[]",
+      }),
+    );
   }
 }
 
-export async function publishPackagedArtifact(stagedArtifact, finalArtifact) {
+// Windows can briefly retain a handle to a smoke-tested executable after its
+// parent exits. Only retry a failed staging rename; each failed attempt first
+// restores any prior published artifact before waiting.
+export async function publishPackagedArtifact(
+  stagedArtifact,
+  finalArtifact,
+  {
+    renameArtifact = rename,
+    wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    platform = process.platform,
+  } = {},
+) {
   await mkdir(path.dirname(finalArtifact), { recursive: true, mode: 0o700 });
   const retiredArtifact = path.join(
     path.dirname(finalArtifact),
     `.${path.basename(finalArtifact)}.${randomUUID()}.retired`,
   );
-  let retired = false;
-  try {
-    await rename(finalArtifact, retiredArtifact);
-    retired = true;
-  } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
+  const delays = platform === "win32" ? [100, 250, 500, 1000] : [];
+  for (let attempt = 0; ; attempt++) {
+    let retired = false;
+    try {
+      await renameArtifact(finalArtifact, retiredArtifact);
+      retired = true;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    try {
+      await renameArtifact(stagedArtifact, finalArtifact);
+    } catch (error) {
+      if (retired) {
+        try {
+          await renameArtifact(retiredArtifact, finalArtifact);
+        } catch (rollbackError) {
+          throw new AggregateError(
+            [error, rollbackError],
+            "Packaged artifact publication and rollback failed",
+          );
+        }
+      }
+      if (error?.code !== "EPERM" || attempt >= delays.length) throw error;
+      // A missing source or a surprise target is not a transient sharing
+      // violation. Never retry over a foreign artifact or a partial publish.
+      let source;
+      try {
+        source = await stat(stagedArtifact);
+      } catch {
+        throw error;
+      }
+      if (!source.isDirectory()) throw error;
+      const targetExists = await stat(finalArtifact).then(
+        () => true,
+        (statusError) => {
+          if (statusError?.code === "ENOENT") return false;
+          throw statusError;
+        },
+      );
+      if (targetExists !== retired) throw error;
+      await wait(delays[attempt]);
+      continue;
+    }
+    if (retired) await rm(retiredArtifact, { recursive: true, force: true });
+    return finalArtifact;
   }
-  try {
-    await rename(stagedArtifact, finalArtifact);
-  } catch (error) {
-    if (retired) await rename(retiredArtifact, finalArtifact);
-    throw error;
-  }
-  if (retired) {
-    await rm(retiredArtifact, { recursive: true, force: true });
-  }
-  return finalArtifact;
 }
 
 export async function stagePackage(options) {

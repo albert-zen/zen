@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import {
   access,
   mkdir,
@@ -8,6 +8,7 @@ import {
   realpath,
   readlink,
   readdir,
+  rename,
   rm,
   stat,
   symlink,
@@ -946,6 +947,202 @@ test("publishes a complete run artifact without exposing its staging path", asyn
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("publishing retries transient Windows EPERM without discarding the old artifact", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-publish-retry-"),
+  );
+  try {
+    const staged = path.join(directory, "run", "ZenX-fixture");
+    const published = path.join(directory, "artifact", "ZenX-fixture");
+    await mkdir(staged, { recursive: true });
+    await mkdir(published, { recursive: true });
+    await writeFile(path.join(staged, "version"), "new");
+    await writeFile(path.join(published, "version"), "old");
+    let failures = 2;
+    let waits = 0;
+    await publishPackagedArtifact(staged, published, {
+      platform: "win32",
+      renameArtifact: async (from, to) => {
+        if (from === staged && failures-- > 0) {
+          const error = new Error("injected sharing violation");
+          error.code = "EPERM";
+          throw error;
+        }
+        return await (await import("node:fs/promises")).rename(from, to);
+      },
+      wait: async () => {
+        waits++;
+        assert.equal(
+          await readFile(path.join(published, "version"), "utf8"),
+          "old",
+        );
+        assert.equal(
+          await readFile(path.join(staged, "version"), "utf8"),
+          "new",
+        );
+      },
+    });
+    assert.equal(waits, 2);
+    assert.equal(
+      await readFile(path.join(published, "version"), "utf8"),
+      "new",
+    );
+    assert.deepEqual(await readdir(path.dirname(published)), ["ZenX-fixture"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("exhausted EPERM preserves the old artifact and reports failure", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-publish-fail-"));
+  try {
+    const staged = path.join(directory, "run", "ZenX-fixture");
+    const published = path.join(directory, "artifact", "ZenX-fixture");
+    await mkdir(staged, { recursive: true });
+    await mkdir(published, { recursive: true });
+    await writeFile(path.join(staged, "version"), "new");
+    await writeFile(path.join(published, "version"), "old");
+    let waits = 0;
+    const error = Object.assign(new Error("permanent denial"), {
+      code: "EPERM",
+    });
+    await assert.rejects(
+      publishPackagedArtifact(staged, published, {
+        platform: "win32",
+        renameArtifact: async (from, to) => {
+          if (from === staged) throw error;
+          return await (await import("node:fs/promises")).rename(from, to);
+        },
+        wait: async () => {
+          waits++;
+        },
+      }),
+      (caught) => caught === error,
+    );
+    assert.equal(waits, 4);
+    assert.equal(
+      await readFile(path.join(published, "version"), "utf8"),
+      "old",
+    );
+    assert.equal(await readFile(path.join(staged, "version"), "utf8"), "new");
+    assert.deepEqual(await readdir(path.dirname(published)), ["ZenX-fixture"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("non-EPERM publication failure never retries or destroys the old artifact", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-publish-other-"),
+  );
+  try {
+    const staged = path.join(directory, "run", "ZenX-fixture");
+    const published = path.join(directory, "artifact", "ZenX-fixture");
+    await mkdir(staged, { recursive: true });
+    await mkdir(published, { recursive: true });
+    await writeFile(path.join(staged, "version"), "new");
+    await writeFile(path.join(published, "version"), "old");
+    let attempts = 0;
+    const error = Object.assign(new Error("bad filesystem"), { code: "EIO" });
+    await assert.rejects(
+      publishPackagedArtifact(staged, published, {
+        platform: "win32",
+        renameArtifact: async (from, to) => {
+          if (from === staged) {
+            attempts++;
+            throw error;
+          }
+          return await (await import("node:fs/promises")).rename(from, to);
+        },
+        wait: async () => {
+          throw new Error("must not wait");
+        },
+      }),
+      (caught) => caught === error,
+    );
+    assert.equal(attempts, 1);
+    assert.equal(
+      await readFile(path.join(published, "version"), "utf8"),
+      "old",
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test(
+  "Windows publishes after a smoke-owned file handle releases",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-publish-windows-"),
+    );
+    const staged = path.join(directory, "run", "ZenX-fixture");
+    const published = path.join(directory, "artifact", "ZenX-fixture");
+    let child;
+    try {
+      await mkdir(staged, { recursive: true });
+      await writeFile(path.join(staged, "version"), "new");
+      // A child owning a handle without FILE_SHARE_DELETE simulates a lingering
+      // packaged-smoke descendant. This does NOT identify the original holder.
+      child = spawn(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "$h=[IO.File]::Open($env:ZENX_TEST_LOCKED_FILE, 'Open', 'Read', 'Read'); Write-Output READY; Start-Sleep -Milliseconds 650; $h.Dispose()",
+        ],
+        {
+          env: {
+            ...process.env,
+            ZENX_TEST_LOCKED_FILE: path.join(staged, "version"),
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      await new Promise((resolve, reject) => {
+        let stdout = "";
+        child.once("error", reject);
+        child.stdout.on("data", (chunk) => {
+          stdout += chunk.toString();
+          if (stdout.includes("READY")) resolve();
+        });
+        child.once("exit", (code) =>
+          reject(new Error(`holder exited before ready: ${code}`)),
+        );
+      });
+      let blocked = 0;
+      assert.equal(
+        await publishPackagedArtifact(staged, published, {
+          renameArtifact: async (from, to) => {
+            try {
+              await rename(from, to);
+            } catch (error) {
+              if (from === staged && error?.code === "EPERM") blocked++;
+              throw error;
+            }
+          },
+        }),
+        published,
+      );
+      assert.ok(
+        blocked > 0,
+        "Windows handle fixture did not exercise the EPERM retry",
+      );
+      assert.equal(
+        await readFile(path.join(published, "version"), "utf8"),
+        "new",
+      );
+    } finally {
+      if (child && child.exitCode === null) {
+        await new Promise((resolve) => child.once("exit", resolve));
+      }
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 test("fails concurrent packaging of the same target explicitly", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-lock-test-"));
