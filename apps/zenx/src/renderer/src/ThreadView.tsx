@@ -1,6 +1,6 @@
 import type { SkillEntry } from "../../../../cli/src/skills.js";
 import { parseSkillDraft, withSkillDraft } from "./skill-draft.js";
-import { toolPresentation } from "./tool-presentation.js";
+import { commandStatus, toolPresentation } from "./tool-presentation.js";
 import { isCompactCommand } from "./compact-command.js";
 import { createPortal } from "react-dom";
 import {
@@ -45,7 +45,7 @@ import { Icon } from "./icons.js";
 import { PermissionSelect } from "./PermissionSelect.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
 import type { ModelMessage } from "../../../../../src/model.js";
-import { Markdown } from "./Markdown.js";
+import { Markdown, MessageLinkContext } from "./Markdown.js";
 import {
   AttachmentImage,
   ImagePreview,
@@ -101,12 +101,14 @@ interface ThreadViewProps {
   pluginSnapshot?: ZenXPluginSnapshot | null;
   pluginUiRegistry?: PluginUiRegistry | null;
   onDraftChange(draft: string): void;
+  onOpenMessageLink?(target: { kind: "file" | "browser"; value: string }): void;
   onImportImages?(files: readonly File[]): Promise<void>;
   onPickImages?(): Promise<void>;
   onRemoveImage?(imageId: string): void;
   onReadAttachment?(attachment: AttachmentRef): Promise<Uint8Array>;
   onInterrupt(turnId: string): Promise<void>;
   onCompact?(): Promise<void>;
+  onDismissCompaction?(): void;
   onModelChange?(model: string): void;
   onReasoningChange?(effort: string): void;
   onRespondToApproval(
@@ -158,10 +160,12 @@ export function ThreadView({
   },
   onInterrupt,
   onCompact,
+  onDismissCompaction,
   onModelChange,
   onReasoningChange,
   onRespondToApproval,
   onSubmit,
+  onOpenMessageLink,
 }: ThreadViewProps) {
   const [interrupting, setInterrupting] = useState(false);
   const [interruptError, setInterruptError] = useState<string | null>(null);
@@ -238,6 +242,15 @@ export function ThreadView({
     }
   }, [approvals, composer.compaction, thread?.canonicalItems, thread?.turns]);
 
+  // Keep a newly failed request visible when approvals, queued messages and a
+  // long draft overflow the bottom zone. User scrolling afterwards is left
+  // alone; focus can still scroll the queue and approval controls into view.
+  useLayoutEffect(() => {
+    if (composer.compaction?.status !== "failed") return;
+    const zone = bottomZoneRef.current;
+    if (zone !== null) zone.scrollTop = zone.scrollHeight;
+  }, [composer.compaction, thread?.id]);
+
   // The Composer overlays the bottom of the full-height transcript scroll
   // area. Publish its live height so the list reserves matching virtual
   // space and Back to live can float just above it; growth keeps a live
@@ -274,13 +287,16 @@ export function ThreadView({
     const resize = () => {
       textarea.style.height = "auto";
       const contentHeight = textarea.scrollHeight;
-      const declaredMaxHeight = Number.parseFloat(
-        window.getComputedStyle(textarea).maxHeight,
-      );
+      const style = window.getComputedStyle(textarea);
+      const declaredMinHeight = Number.parseFloat(style.minHeight);
+      const minHeight = Number.isFinite(declaredMinHeight)
+        ? declaredMinHeight
+        : 54;
+      const declaredMaxHeight = Number.parseFloat(style.maxHeight);
       const maxHeight = Number.isFinite(declaredMaxHeight)
         ? declaredMaxHeight
-        : 150;
-      const height = Math.min(Math.max(contentHeight, 68), maxHeight);
+        : 136;
+      const height = Math.min(Math.max(contentHeight, minHeight), maxHeight);
       textarea.style.height = `${height}px`;
       textarea.style.overflowY = contentHeight > height ? "auto" : "hidden";
     };
@@ -382,55 +398,56 @@ export function ThreadView({
           setAtLive(live);
         }}
       >
-        <ThreadImagesContext.Provider
-          value={{
-            cwd: thread?.cwd,
-            attachments: threadAttachments,
-            read: onReadAttachment,
-            open: (attachment, name, trigger) =>
-              setPreview({ attachment, name, trigger }),
-          }}
-        >
-          <div className="messages-inner">
-            {transcriptRows.length === 0
-              ? (emptyContent ?? (
-                  <div className="thread-empty">
-                    <h2>Start a new thread</h2>
-                    <p>
-                      Describe the outcome you want. ZenX will use this Thread’s
-                      workspace, model, and permission policy.
-                    </p>
-                  </div>
-                ))
-              : transcriptRows.map((row) =>
-                  row.type === "turn" ? (
-                    <TurnBlock
-                      index={row.index}
-                      key={row.turn.id}
-                      turn={row.turn}
-                      usage={threadUsage?.turns[row.turn.id]}
-                      wakeups={wakeups}
-                      attachments={threadAttachments}
-                      onOpenImage={(attachment, name, trigger) =>
-                        setPreview({ attachment, name, trigger })
-                      }
-                      onReadAttachment={onReadAttachment}
-                      pluginSnapshot={pluginSnapshot}
-                      pluginUiRegistry={pluginUiRegistry}
-                    />
-                  ) : (
-                    <ContextCompactionEvent
-                      key={row.compaction.item.id}
-                      projection={row.compaction}
-                    />
-                  ),
-                )}
-            {composer.compaction?.status === "pending" ||
-            composer.compaction?.status === "failed" ? (
-              <ContextCompactionProgress state={composer.compaction} />
-            ) : null}
-          </div>
-        </ThreadImagesContext.Provider>
+        <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
+          <ThreadImagesContext.Provider
+            value={{
+              cwd: thread?.cwd,
+              attachments: threadAttachments,
+              read: onReadAttachment,
+              open: (attachment, name, trigger) =>
+                setPreview({ attachment, name, trigger }),
+            }}
+          >
+            <div className="messages-inner">
+              {transcriptRows.length === 0
+                ? (emptyContent ?? (
+                    <div className="thread-empty">
+                      <h2>Start a new thread</h2>
+                      <p>
+                        Describe the outcome you want. ZenX will use this
+                        Thread’s workspace, model, and permission policy.
+                      </p>
+                    </div>
+                  ))
+                : transcriptRows.map((row) =>
+                    row.type === "turn" ? (
+                      <TurnBlock
+                        index={row.index}
+                        key={row.turn.id}
+                        turn={row.turn}
+                        usage={threadUsage?.turns[row.turn.id]}
+                        wakeups={wakeups}
+                        attachments={threadAttachments}
+                        onOpenImage={(attachment, name, trigger) =>
+                          setPreview({ attachment, name, trigger })
+                        }
+                        onReadAttachment={onReadAttachment}
+                        pluginSnapshot={pluginSnapshot}
+                        pluginUiRegistry={pluginUiRegistry}
+                      />
+                    ) : (
+                      <ContextCompactionEvent
+                        key={row.compaction.item.id}
+                        projection={row.compaction}
+                      />
+                    ),
+                  )}
+              {composer.compaction?.status === "pending" ? (
+                <ContextCompactionProgress state={composer.compaction} />
+              ) : null}
+            </div>
+          </ThreadImagesContext.Provider>
+        </MessageLinkContext.Provider>
       </div>
 
       {atLive ? null : (
@@ -486,6 +503,12 @@ export function ThreadView({
               </button>
             ) : null}
           </div>
+        ) : null}
+        {composer.compaction?.status === "failed" ? (
+          <ContextCompactionProgress
+            state={composer.compaction}
+            onDismiss={onDismissCompaction}
+          />
         ) : null}
         <form
           className="composer"
@@ -841,8 +864,10 @@ function buildTranscriptRows(
 
 function ContextCompactionProgress({
   state,
+  onDismiss,
 }: {
   state: NonNullable<ComposerState["compaction"]>;
+  onDismiss?(): void;
 }) {
   const failed = state.status === "failed";
   return (
@@ -855,7 +880,28 @@ function ContextCompactionProgress({
       ) : (
         <span className="mini-spinner" aria-hidden="true" />
       )}
-      <span>{state.message}</span>
+      <div className="context-compaction-progress-content">
+        <span>{state.message}</span>
+        {failed ? (
+          <div className="context-compaction-error-actions">
+            {state.detail ? (
+              <details className="context-compaction-error-detail">
+                <summary tabIndex={0}>Technical details</summary>
+                <p>{state.detail}</p>
+              </details>
+            ) : null}
+            {onDismiss ? (
+              <button
+                type="button"
+                onClick={onDismiss}
+                aria-label="Dismiss compaction error"
+              >
+                Dismiss
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -1515,9 +1561,7 @@ function StatusMark({ item }: { item: ThreadItem }) {
     return null;
   }
   if (item.type !== "commandExecution") return null;
-  return item.status === "inProgress" ? (
-    <span className="mini-spinner" aria-label="Running" />
-  ) : (
+  return (
     <small className={`tool-status ${item.status}`}>
       {commandStatus(item)}
     </small>
@@ -1883,7 +1927,11 @@ function ApprovalBar({
 function traceItemLabel(item: ThreadItem): string {
   if (item.type === "reasoning") {
     const summary = item.summary.join("\n").trim();
-    return summary.length > 0 ? summary : "Reasoning details";
+    return summary.length > 0
+      ? summary
+      : reasoningContentText(item).trim().length > 0
+        ? "Reasoning"
+        : "Reasoning details";
   }
   return item.type === "commandExecution"
     ? item.toolName === "run_code" &&
@@ -1940,36 +1988,6 @@ function formatDuration(milliseconds: number): string {
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${seconds % 60}s`;
-}
-
-function commandStatus(
-  item: Extract<ThreadItem, { type: "commandExecution" }>,
-): string {
-  const data = item.structuredContent;
-  if (
-    item.contentType === "application/vnd.zen.tool-task+json" &&
-    typeof data === "object" &&
-    data !== null &&
-    !Array.isArray(data) &&
-    "status" in data
-  ) {
-    if (data.status === "queued") return "Queued";
-    if (data.status === "running")
-      return item.toolName === "wait" ? "Waiting" : "Started";
-    if (data.status === "cancel_requested") return "Cancelling";
-    if (data.status === "cancellation_unconfirmed")
-      return "Cancellation unconfirmed";
-    if (data.status === "failed") return "Failed";
-    if (data.status === "completed") return "Done";
-    if (data.status === "timed_out") return "Timed out";
-    if (data.status === "cancelled") return "Cancelled";
-  }
-  return {
-    inProgress: "Running",
-    completed: "Done",
-    failed: "Failed",
-    declined: "Declined",
-  }[item.status];
 }
 
 function describeError(error: unknown): string {

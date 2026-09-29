@@ -68,6 +68,7 @@ import {
   beginComposerSubmission,
   editComposer,
   emptyComposerState,
+  dismissCompactionFeedback,
   failComposerSubmission,
   removeComposerImage,
   type ComposerIntent,
@@ -461,6 +462,12 @@ export function App() {
   const [browserPanels, setBrowserPanels] = useState<Record<string, boolean>>(
     {},
   );
+  const [messageLinkRequest, setMessageLinkRequest] = useState<{
+    id: number;
+    threadId: string;
+    kind: "file" | "browser";
+    value: string;
+  } | null>(null);
   const editingProjectFocusWorkspace = useRef<string | null>(null);
   const [editingProject, setEditingProject] = useState<{
     workspace: string;
@@ -2228,6 +2235,14 @@ export function App() {
           />
         ) : (
           <AgentSurface
+            onOpenMessageLink={(threadId, target) => {
+              setMessageLinkRequest((previous) => ({
+                ...target,
+                id: (previous?.id ?? 0) + 1,
+                threadId,
+              }));
+              setBrowserPanels((current) => ({ ...current, [threadId]: true }));
+            }}
             composerSendMode={composerSendMode}
             approvals={approvals}
             pluginSnapshot={pluginSnapshot}
@@ -2356,6 +2371,9 @@ export function App() {
             onOpenSidebar={() => setSidebarOpen(true)}
             onRespondToApproval={respondToApproval}
             onCompact={compactFromContext}
+            onDismissCompaction={(threadId) =>
+              updateComposer(threadId, dismissCompactionFeedback)
+            }
             onSubmit={submitComposer}
             onSubmitNewThread={submitNewThreadDraft}
             selectedSettings={selectedSettings}
@@ -2375,6 +2393,11 @@ export function App() {
         threadDetail !== null &&
         selectedThreadId === threadDetail.id ? (
           <AuxiliaryPanel
+            messageLinkRequest={
+              messageLinkRequest?.threadId === threadDetail.id
+                ? messageLinkRequest
+                : null
+            }
             onWidthChange={setWorkspacePanelWidth}
             fileDrafts={fileDrafts}
             workspacePath={threadDetail.cwd}
@@ -2640,6 +2663,7 @@ function PageTitleBar({
 }
 
 function AgentSurface({
+  onOpenMessageLink,
   composerSendMode,
   approvals,
   pluginSnapshot,
@@ -2677,6 +2701,7 @@ function AgentSurface({
   onOpenSidebar,
   onRespondToApproval,
   onCompact,
+  onDismissCompaction,
   onSubmit,
   onSubmitNewThread,
   selectedSettings,
@@ -2688,6 +2713,10 @@ function AgentSurface({
   threadError,
   threadLoading,
 }: {
+  onOpenMessageLink(
+    threadId: string,
+    target: { kind: "file" | "browser"; value: string },
+  ): void;
   composerSendMode: "queue" | "soft" | "hard";
   approvals: ApprovalCardState[];
   pluginSnapshot: ZenXPluginSnapshot | null;
@@ -2730,6 +2759,7 @@ function AgentSurface({
     decision: ApprovalDecision,
   ): Promise<void>;
   onCompact(): Promise<void>;
+  onDismissCompaction(threadId: string): void;
   onSubmit(
     intent: ComposerIntent,
     expectedTurnId: string | null,
@@ -2883,6 +2913,9 @@ function AgentSurface({
         <>
           <ThreadView
             composerSendMode={composerSendMode}
+            onOpenMessageLink={(target) => {
+              onOpenMessageLink(threadDetail.id, target);
+            }}
             onResumeQueue={async () => {
               await window.zenx.protocol.request("turn/queue/resume", {
                 threadId: threadDetail.id,
@@ -2950,6 +2983,7 @@ function AgentSurface({
             onReasoningChange={onReasoningChange}
             onRespondToApproval={onRespondToApproval}
             onCompact={onCompact}
+            onDismissCompaction={() => onDismissCompaction(threadDetail.id)}
             onSubmit={onSubmit}
           />
         </>

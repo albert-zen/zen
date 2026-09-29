@@ -19,7 +19,7 @@
 - **ZenX Computer 实时观察** — Host 以 Thread、Tool invocation 与精确窗口 target 关联最近八次 Computer 操作，并只在可见订阅期间串行捕获有界、可取消且带时间戳的窗口帧；观察失败不改变工具结果或建立桌面接管状态。
 - **ZenX macOS Computer 原生 helper** — macOS 打包在签名前把 AX 与前台输入 helper 编译为固定 App Resource，运行时只执行该资源；显式开发运行才允许在临时目录编译同源 fallback，权限拒绝须报告实际 helper 路径和当前 App 的重新授权方法。
 - **ZenX 文件草稿** — Renderer 在窗口生命周期内按 Thread/path 保存易失编辑草稿，独立于会话历史；Host 以读取版本检测外部冲突并原子替换现有 UTF-8 文件，人工编辑不作为 Agent 工具执行，不更改线程权限策略。
-- **ZenX 辅助右栏** — Host 将线程 Browser observation、cwd 文本预览与显式编辑保存与已注册 Plugin panel 放入统一 tab 容器，选择与打开请求仅为易失 UI 状态，不拥有会话执行或持久历史。
+- **ZenX 辅助右栏** — Host 将线程 Browser observation、cwd 文本预览与显式编辑保存与已注册 Plugin panel 放入统一 tab 容器，选择与打开请求仅为易失 UI 状态，不拥有会话执行或持久历史。消息 Markdown 链接只是该容器的点击入口：本地路径由既有 Host 工作区文件读取边界校验，HTTP(S) 由既有 Host Browser 导航边界校验，不建立独立路由或文件权限权威。
 
 - **实验 Shell 输出展示** — 默认关闭的 Host 执行依赖仅在直接模型调用中对已保存在有界原始 spool 的输出做固定版本 RTK 过滤，过滤事实与原文回读凭据随既有工具结果写入 ItemList，程序化嵌套调用保持原始返回语义。
 
@@ -135,6 +135,8 @@
 - **ZenXThreadWorkspace** — Thread 右侧唯一的平级内容选项卡容器；每个文件、共享浏览器页面、Computer 观察或插件注册的 panel 直接占一个顶层 Tab，通过加号选择内容类型，不增加 Browser/Files 分类路由层。Host 持有打开顺序与选中项，插件仍用自身 surface 渲染内容；打开、宽度和编辑草稿是本机 UI 状态，真实文件写入由 Host 校验并使用版本冲突保护，不引入会话语义。
 - **ZenXSidebarMenuPopover** — 项目与会话菜单共用锚点定位的临时浮层，在侧栏右侧显示并按视口边界回退，不参与列表布局或持久化状态。
 - **ZenXProjectNamePreference** — host-profile 按已配置 workspace 保存可编辑显示名称；名称不改变目录身份、Thread cwd 或 journal，修改只刷新 Project 投影，不重启 Host。
+- **ZenXGitWorktreeGrouping** — Host 仅在 Project 列表投影中用本机 Git 的 canonical common-directory 身份将同一仓库的工作树归组；显式配置的路径各自保留独立 Project，Thread cwd、配置 workspace 和新建执行路径不变，Git 不可用时退回路径身份。
+  精确 canonical cwd 优先归入其显式配置；其余同仓库 cwd 归入配置顺序最先的 workspace（默认 workspace 优先），没有配置时归入本次列表中首个遇到的 cwd；主项目名称、默认标记、排序键、新建 Thread 路径均取所属 workspace，侧栏 Thread tooltip 保留真实 cwd。Git 探测每次列表最多处理 32 个唯一路径，实例级并发上限 8、每个子进程 1.2 秒超时，同一实例的并发列表复用探测；另设 **600 毫秒 Git 探测总等待预算**，超过即向仍运行的子进程发出取消信号并以路径身份返回，不启动剩余批次、不后台补写身份；尚未完成的文件系统调用可能继续运行但结果不可回填缓存。该数值让常见本机 Git 探测有机会完成，同时把故障注入的约 4.9 秒等待降至可交互的亚秒级；它不包含前置 cwd realpath、结果组装或操作系统调度，不能宣传为整个 IPC 的硬时限。已验证成功/失败和预算内未探测/取消的路径降级分别标识，**对外身份均最多缓存 10 秒**；未触达的 null 冷却拦住并发第二波但不等同真实 Git 失败。Host 实例另以最多 30 秒、最多 256 路径的成功提示**只安排下一次过期后的探测顺序**，不可用旧 common-dir 延长身份或建立归组；实际失败立即撤销提示，迟到结果不更新。普通读取先复核配置首 workspace 和仍有效的曾成功路径，其余新/失败/未触达候选按已启动位置继续有界轮换，候选变动按当次长度归一索引；提示不参与配置授权、Thread 运行或会话状态。超过上限、缺失/不可读 cwd 或 Git 不可用时维持路径投影，不强改旧 Thread 或假装目录存在。
 - **ZenXProjectProjection** — ZenX main 的同一个实例把 host-profile workspace 与 ZAS
   原生 Thread cwd 按最近存在祖先的异步 realpath 归一为 UI 和 Agent self-control 共用的
   Project 读模型；Windows 路径折叠大小写，POSIX 路径保留大小写，配置保留用户选择的展示路径，

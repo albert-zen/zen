@@ -4,6 +4,8 @@ import test from "node:test";
 import type { Thread, ThreadItem, Turn } from "../src/protocol-client/index.js";
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import { threadHasActiveTurn } from "../src/renderer/src/thread-list.js";
+import { projectTurn } from "../src/renderer/src/turn-projection.js";
+import { commandStatus } from "../src/renderer/src/tool-presentation.js";
 import {
   activeTurn,
   applyNativeThreadEvent,
@@ -512,6 +514,116 @@ test("native projection keeps a live canonical compaction once for product UI", 
 
   assert.deepEqual(twice.canonicalItems, [item]);
   assert.deepEqual(twice.turns, current.turns);
+});
+
+test("live native result and journal replay agree on a waiting task group", () => {
+  const createdAt = "2026-09-09T11:25:22Z";
+  const metadata = {
+    id: "metadata-wait",
+    type: "thread_metadata" as const,
+    threadId: "thread-1",
+    createdAt,
+    cwd: "/workspace",
+    providerProfileId: "fake",
+    modelId: "fake",
+    reasoningEffort: null,
+    sandbox: "danger-full-access" as const,
+    approvalPolicy: "never" as const,
+  };
+  const started = {
+    id: "turn-start-wait",
+    type: "turn_started" as const,
+    threadId: "thread-1",
+    turnId: "turn-wait",
+    createdAt,
+    selection: {
+      providerProfileId: "fake",
+      modelId: "fake",
+      reasoningEffort: null,
+    },
+  };
+  const reasoning = {
+    id: "reason-wait",
+    type: "reasoning" as const,
+    threadId: "thread-1",
+    turnId: "turn-wait",
+    createdAt,
+    contentVisibility: "public" as const,
+    reasoningContent: "Waiting for the task",
+  };
+  const call = {
+    id: "call-wait",
+    type: "tool_call" as const,
+    threadId: "thread-1",
+    turnId: "turn-wait",
+    createdAt,
+    callId: "wait-call",
+    name: "wait",
+    arguments: { task_id: "task-1" },
+  };
+  const result = {
+    id: "result-wait",
+    type: "tool_result" as const,
+    threadId: "thread-1",
+    turnId: "turn-wait",
+    createdAt,
+    callId: "wait-call",
+    output: "Task is still running",
+    exitCode: 0,
+    contentType: "application/vnd.zen.tool-task+json",
+    structuredContent: { status: "running", task_id: "task-1" },
+  };
+  const items = [started, reasoning, call, result];
+  const snapshot: NativeThreadRecoverySnapshot["thread"] = {
+    id: "thread-1",
+    items: [metadata, ...items],
+    turns: [
+      {
+        id: "turn-wait",
+        status: "inProgress",
+        items,
+        selection: started.selection,
+        model: "fake",
+      },
+    ],
+    cwd: "/workspace",
+    providerProfileId: "fake",
+    modelId: "fake",
+    reasoningEffort: null,
+    model: "fake",
+    provider: "fake",
+    sandbox: "danger-full-access",
+    approvalPolicy: "never",
+    archived: false,
+  };
+  let live = projectNativeRecovery({
+    processEpoch: "current",
+    threadId: "thread-1",
+    watermark: 3,
+    events: [],
+    thread: {
+      ...snapshot,
+      items: [metadata, ...items.slice(0, -1)],
+      turns: [{ ...snapshot.turns[0]!, items: items.slice(0, -1) }],
+    },
+  });
+  live = applyNativeThreadEvent(live, { type: "item_completed", item: result });
+  const replayed = projectNativeRecovery({
+    processEpoch: "current",
+    threadId: "thread-1",
+    watermark: 4,
+    events: [],
+    thread: snapshot,
+  });
+  for (const projected of [live, replayed]) {
+    const group = projectTurn(projected.turns[0]!).history[0];
+    assert.equal(group?.kind, "traceGroup");
+    if (group?.kind !== "traceGroup") continue;
+    assert.equal(group.summary, "Reasoning · Waiting wait");
+    assert.equal(group.items[1]?.type, "commandExecution");
+    if (group.items[1]?.type === "commandExecution")
+      assert.equal(commandStatus(group.items[1]), "Waiting");
+  }
 });
 
 test("replayed native tool call preserves its completed result", () => {

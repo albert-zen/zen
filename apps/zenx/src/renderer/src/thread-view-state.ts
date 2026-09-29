@@ -195,13 +195,7 @@ export function applyNativeThreadEvent(
   if (event.type === "item_completed") {
     if (event.item.type === "context_compaction") return thread;
     if (event.item.type === "tool_result") {
-      return updateCommandResult(
-        thread,
-        event.item.callId,
-        event.item.output,
-        event.item.exitCode,
-        event.item.executionStatus,
-      );
+      return updateCommandResult(thread, event.item);
     }
     const item =
       event.item.type === "tool_call"
@@ -460,25 +454,26 @@ function eventCoveredByCanonical(
   return false;
 }
 
-function updateCommandResult(
-  thread: Thread,
-  callId: string,
-  output: string,
-  exitCode: number,
-  executionStatus: "completed" | "failed" | "declined" | undefined,
-): Thread {
+function updateCommandResult(thread: Thread, result: ToolResultItem): Thread {
   return {
     ...thread,
     turns: thread.turns.map((turn) => ({
       ...turn,
       items: turn.items.map((item) =>
-        item.type === "commandExecution" && item.callId === callId
+        item.type === "commandExecution" && item.callId === result.callId
           ? {
               ...item,
-              status:
-                executionStatus ?? (exitCode === 0 ? "completed" : "failed"),
-              aggregatedOutput: output,
-              exitCode,
+              status: nativeCommandExecutionStatus(result),
+              aggregatedOutput: result.output,
+              exitCode: result.exitCode,
+              ...(result.contentType === undefined
+                ? {}
+                : {
+                    contentType: result.contentType,
+                    structuredContent: structuredClone(
+                      result.structuredContent,
+                    ),
+                  }),
             }
           : item,
       ),

@@ -22,7 +22,11 @@ export interface ComposerSubmission {
 
 export interface ComposerState {
   /** Transient command feedback; never a message or durable execution state. */
-  compaction?: { status: "pending" | "succeeded" | "failed"; message: string };
+  compaction?: {
+    status: "pending" | "succeeded" | "failed";
+    message: string;
+    detail?: string;
+  };
   draft: ComposerDraft;
   submission: ComposerSubmission | null;
 }
@@ -52,7 +56,7 @@ export function editComposer(
       ? null
       : state.submission;
   return {
-    ...clearCompactionFeedback(state),
+    ...state,
     draft: { ...state.draft, text },
     submission,
   };
@@ -64,7 +68,7 @@ export function addComposerImages(
 ): ComposerState {
   if (images.length === 0) return state;
   return {
-    ...clearCompactionFeedback(state),
+    ...state,
     draft: { ...state.draft, images: [...state.draft.images, ...images] },
     submission: state.submission?.status === "failed" ? null : state.submission,
   };
@@ -77,7 +81,7 @@ export function removeComposerImage(
   const images = state.draft.images.filter((image) => image.id !== imageId);
   if (images.length === state.draft.images.length) return state;
   return {
-    ...clearCompactionFeedback(state),
+    ...state,
     draft: { ...state.draft, images },
     submission: state.submission?.status === "failed" ? null : state.submission,
   };
@@ -129,6 +133,7 @@ export function acceptComposerSubmission(
   const submission = matchingSubmission(state, clientUserMessageId);
   if (submission === null) return state;
   return {
+    ...(state.compaction === undefined ? {} : { compaction: state.compaction }),
     draft: sameDraft(state.draft, submission.draftAtSubmit)
       ? { text: "", images: [] }
       : state.draft,
@@ -170,7 +175,7 @@ function matchingSubmission(
     : null;
 }
 
-function clearCompactionFeedback(state: ComposerState): ComposerState {
+export function dismissCompactionFeedback(state: ComposerState): ComposerState {
   if (state.compaction === undefined || state.compaction.status === "pending")
     return state;
   const { compaction: _feedback, ...rest } = state;

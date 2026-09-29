@@ -21,6 +21,8 @@ import {
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 const { ThreadView } = await import("../src/renderer/src/ThreadView.js");
+const { requestContextCompaction } =
+  await import("../src/renderer/src/compact-command.js");
 
 const noop = async () => undefined;
 
@@ -176,6 +178,8 @@ test("context ring opens an accessible popover before its compact action runs", 
 
     const ring = requiredButton(".context-usage-trigger");
     assert.equal(ring.getAttribute("aria-expanded"), "false");
+    ring.focus();
+    assert.equal(document.activeElement, ring);
     await act(async () => ring.click());
     assert.equal(compactCalls, 0);
     assert.equal(ring.getAttribute("aria-expanded"), "true");
@@ -256,6 +260,123 @@ test("compaction progress is a transcript item and completed items reveal exact 
       /Compacting context/u,
     );
     assert.equal(document.querySelector(".composer-command-status"), null);
+  });
+});
+
+test("compaction error is a keyboard-reachable context notice with plain details and explicit dismiss", async () => {
+  await withDom(async (root) => {
+    let composer: ComposerState = {
+      ...emptyComposerState(),
+      compaction: {
+        status: "failed",
+        message: "Could not confirm this compaction request.",
+        detail: "Error invoking <script> & token hidden",
+      },
+    };
+    let selected = thread([]);
+    const renderView = () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer,
+          thread: selected,
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+          onDismissCompaction: () => {
+            composer = { ...composer, compaction: undefined };
+            renderView();
+          },
+        }),
+      );
+    await act(async () => renderView());
+    const alert = requiredElement('[role="alert"].context-compaction-progress');
+    assert.equal(alert.closest(".messages-inner"), null);
+    assert.equal(alert.closest(".composer-error"), null);
+    const details = requiredElement<HTMLDetailsElement>(
+      ".context-compaction-error-detail",
+    );
+    assert.equal(details.open, false);
+    const summary = requiredElement<HTMLElement>(
+      ".context-compaction-error-detail summary",
+    );
+    assert.equal(summary.tabIndex, 0);
+    assert.equal(document.querySelector("script"), null);
+    assert.match(details.textContent ?? "", /<script>/u);
+    await act(async () =>
+      requiredButton('[aria-label="Dismiss compaction error"]').click(),
+    );
+    assert.equal(
+      document.querySelector(".context-compaction-progress.is-error"),
+      null,
+    );
+    selected = { ...selected, id: "other-thread" };
+    await act(async () => renderView());
+    assert.equal(
+      document.querySelector(".context-compaction-progress.is-error"),
+      null,
+    );
+  });
+});
+
+test("real compaction request rejection stays with its Thread, ignores stale completion and coexists with a canonical success", async () => {
+  await withDom(async (root) => {
+    const states: Record<string, ComposerState> = {
+      a: emptyComposerState(),
+      b: emptyComposerState(),
+    };
+    const a = { ...thread([]), id: "a", canonicalItems: compactionHistory() };
+    const b = { ...thread([]), id: "b" };
+    let selected: Thread = a;
+    const renderView = () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: states[selected.id]!,
+          thread: selected,
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      );
+    let reject!: (reason: unknown) => void;
+    const pending = requestContextCompaction({
+      threadId: "a",
+      active: false,
+      clearCommandDraft: false,
+      read: () => states.a!,
+      update: (change) => {
+        states.a = change(states.a!);
+        renderView();
+      },
+      compact: () =>
+        new Promise((_, rejectRequest) => {
+          reject = rejectRequest;
+        }),
+    });
+    await act(async () => renderView());
+    selected = b;
+    await act(async () => renderView());
+    reject(new Error("Error invoking remote method: private=secret"));
+    await act(async () => pending);
+    assert.equal(
+      document.querySelector(".context-compaction-progress.is-error"),
+      null,
+    );
+    selected = a;
+    await act(async () => renderView());
+    assert.match(
+      requiredElement(".context-compaction-event").textContent ?? "",
+      /Context compacted/u,
+    );
+    assert.match(
+      requiredElement(".context-compaction-progress.is-error").textContent ??
+        "",
+      /Could not confirm/u,
+    );
+    assert.doesNotMatch(document.body.textContent ?? "", /private=secret/u);
   });
 });
 
@@ -360,12 +481,12 @@ test("composer textarea grows to its cap, scrolls, and shrinks after deletion", 
 
     await act(async () => root.render(props("long draft")));
     const textarea = requiredElement<HTMLTextAreaElement>("#thread-composer");
-    assert.equal(textarea.style.height, "150px");
+    assert.equal(textarea.style.height, "136px");
     assert.equal(textarea.style.overflowY, "auto");
 
     contentHeight = 42;
     await act(async () => root.render(props("")));
-    assert.equal(textarea.style.height, "68px");
+    assert.equal(textarea.style.height, "54px");
     assert.equal(textarea.style.overflowY, "hidden");
   });
 });
@@ -384,7 +505,8 @@ test("composer respects the viewport cap and remeasures on resize", async () => 
     const computedStyle = window.getComputedStyle;
     window.getComputedStyle = (() =>
       ({
-        maxHeight: `${Math.max(68, Math.min(150, window.innerHeight * 0.35))}px`,
+        minHeight: "54px",
+        maxHeight: `${Math.max(54, Math.min(136, window.innerHeight * 0.35 - 14))}px`,
       }) as unknown as CSSStyleDeclaration) as typeof window.getComputedStyle;
     try {
       const props = createElement(ThreadView, {
@@ -398,7 +520,7 @@ test("composer respects the viewport cap and remeasures on resize", async () => 
       });
       await act(async () => root.render(props));
       const textarea = requiredElement<HTMLTextAreaElement>("#thread-composer");
-      assert.equal(textarea.style.height, "70px");
+      assert.equal(textarea.style.height, "56px");
       assert.equal(textarea.style.overflowY, "auto");
 
       Object.defineProperty(window, "innerHeight", {
@@ -406,7 +528,7 @@ test("composer respects the viewport cap and remeasures on resize", async () => 
         value: 168,
       });
       await act(async () => window.dispatchEvent(new window.Event("resize")));
-      assert.equal(textarea.style.height, "68px");
+      assert.equal(textarea.style.height, "54px");
       assert.equal(textarea.style.overflowY, "auto");
 
       Object.defineProperty(window, "innerHeight", {
@@ -414,7 +536,7 @@ test("composer respects the viewport cap and remeasures on resize", async () => 
         value: 600,
       });
       await act(async () => window.dispatchEvent(new window.Event("resize")));
-      assert.equal(textarea.style.height, "150px");
+      assert.equal(textarea.style.height, "136px");
       assert.equal(textarea.style.overflowY, "auto");
     } finally {
       window.getComputedStyle = computedStyle;
@@ -1152,7 +1274,7 @@ test("public reasoning without a summary keeps a neutral expandable label", asyn
     );
     assert.equal(
       requiredWithin(toggle, ":scope > span").textContent,
-      "Reasoning details",
+      "Reasoning",
     );
 
     await act(async () => toggle.click());
@@ -1723,7 +1845,42 @@ test("keyboard modifiers and send button honor all running send modes", async ()
   });
 });
 
-test("yielded shell work is labelled Started or Waiting rather than Done", async () => {
+test("shell headings and pending calls do not claim that a started call is running", async () => {
+  await withDom(async (root) => {
+    const base = commandItem("shell-start", "sleep 10");
+    assert.equal(base.type, "commandExecution");
+    if (base.type !== "commandExecution") return;
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        {
+          ...base,
+          toolName: "shell",
+          status: "inProgress",
+          toolArguments: { command: "sleep 10" },
+        },
+      ]),
+    );
+    assert.match(
+      requiredElement(".trace-item-toggle").textContent ?? "",
+      /Shell/,
+    );
+    assert.equal(requiredElement(".tool-status").textContent, "Started");
+    assert.equal(document.querySelector(".trace-item .mini-spinner"), null);
+  });
+});
+
+test("public reasoning content without a summary has an honest heading", () => {
+  const html = renderTurns([
+    turnWithItems("inProgress", [
+      reasoningItem("public-reason", [], ["Visible thought"]),
+    ]),
+  ]);
+  assert.match(html, /Think[\s\S]*Reasoning/u);
+  assert.doesNotMatch(html, /Reasoning details/u);
+});
+
+test("yielded shell work reports the actual task receipt phase", async () => {
   await withDom(async (root) => {
     const base = commandItem("shell-start", "npm run dev");
     assert.equal(base.type, "commandExecution");
@@ -1745,7 +1902,7 @@ test("yielded shell work is labelled Started or Waiting rather than Done", async
     );
     assert.equal(
       document.querySelector(".tool-status")?.textContent,
-      "Started",
+      "Running",
     );
     await renderInteractive(
       root,
@@ -1778,6 +1935,48 @@ test("yielded shell work is labelled Started or Waiting rather than Done", async
   });
 });
 
+test("folded task group and expanded wait row use the same receipt phase", async () => {
+  await withDom(async (root) => {
+    const base = commandItem("wait-item", "wait");
+    if (base.type !== "commandExecution") throw new Error("missing command");
+    const wait = {
+      ...base,
+      toolName: "wait",
+      contentType: "application/vnd.zen.tool-task+json",
+      structuredContent: { status: "running" },
+    };
+    const reasoning = reasoningItem("reason-wait", [], ["Waiting for task"]);
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [reasoning, wait]),
+    );
+    const group = requiredButton(".trace-toggle");
+    assert.equal(group.getAttribute("aria-expanded"), "false");
+    assert.match(group.textContent ?? "", /Reasoning · Waiting wait/u);
+    await act(async () => group.click());
+    assert.equal(group.getAttribute("aria-expanded"), "true");
+    assert.equal(
+      requiredElement(".trace-items .tool-status").textContent,
+      "Waiting",
+    );
+
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        reasoning,
+        { ...wait, structuredContent: { status: "timed_out" } },
+      ]),
+    );
+    assert.match(group.textContent ?? "", /Reasoning · Timed out wait/u);
+    assert.equal(
+      requiredElement(".trace-items .tool-status").textContent,
+      "Timed out",
+    );
+    await act(async () => group.click());
+    assert.equal(group.getAttribute("aria-expanded"), "false");
+  });
+});
+
 test("generic tool task observations distinguish waiting and unconfirmed cancellation", async () => {
   await withDom(async (root) => {
     const base = commandItem("image-task", "generate image");
@@ -1785,7 +1984,7 @@ test("generic tool task observations distinguish waiting and unconfirmed cancell
     const cases = [
       ["browser_click", "queued", "Queued"],
       ["wait", "queued", "Queued"],
-      ["image_generate", "running", "Started"],
+      ["image_generate", "running", "Running"],
       ["wait", "running", "Waiting"],
       ["wait", "cancel_requested", "Cancelling"],
       ["wait", "cancellation_unconfirmed", "Cancellation unconfirmed"],

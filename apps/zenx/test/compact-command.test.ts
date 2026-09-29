@@ -88,9 +88,9 @@ test("compact consumes only its unchanged command and maps backend failure witho
       },
       compact: async () => {
         if (fail)
-          throw new Error(
-            "compaction_not_available: no eligible completed Turn boundary",
-          );
+          throw Object.assign(new Error("private token=secret"), {
+            code: "compaction_not_available",
+          });
       },
     });
     assert.equal(state.draft.text, fail ? "/compact" : "");
@@ -118,4 +118,106 @@ test("context action shares the command executor without consuming an unrelated 
   assert.equal(calls, 1);
   assert.equal(state.draft.text, "Keep this draft");
   assert.equal(state.compaction?.status, "succeeded");
+});
+
+test("compaction failures classify only typed codes and never expose raw IPC or private text", async () => {
+  for (const [reason, expected] of [
+    [
+      Object.assign(new Error("secret"), { code: "thread_busy" }),
+      /Wait for the current reply/u,
+    ],
+    [
+      Object.assign(new Error("secret"), {
+        zenCode: "compaction_not_available",
+      }),
+      /no new completed conversation/u,
+    ],
+    [
+      new Error(
+        "Error invoking remote method 'zenx:protocol:request': token=secret",
+      ),
+      /Could not confirm/u,
+    ],
+    [new Error("thread_busy private token=secret"), /Could not confirm/u],
+    [{ nested: { token: "secret" } }, /Could not confirm/u],
+  ] as const) {
+    let state = emptyComposerState();
+    await requestContextCompaction({
+      threadId: "thread-a",
+      active: false,
+      clearCommandDraft: false,
+      read: () => state,
+      update: (change) => {
+        state = change(state);
+      },
+      compact: async () => {
+        throw reason;
+      },
+    });
+    assert.equal(state.compaction?.status, "failed");
+    assert.match(state.compaction.message, expected);
+    assert.doesNotMatch(
+      JSON.stringify(state.compaction),
+      /secret|invoking remote method/u,
+    );
+    assert.ok(state.compaction.detail);
+  }
+});
+
+test("old compaction request cannot replace a newer action on the same thread", async () => {
+  let state = emptyComposerState();
+  let rejectOld!: (reason: unknown) => void;
+  const update = (change: (value: typeof state) => typeof state) => {
+    state = change(state);
+  };
+  const old = requestContextCompaction({
+    threadId: "a",
+    active: false,
+    clearCommandDraft: false,
+    read: () => state,
+    update,
+    compact: () =>
+      new Promise((_, reject) => {
+        rejectOld = reject;
+      }),
+  });
+  state = { ...state, compaction: undefined };
+  await requestContextCompaction({
+    threadId: "a",
+    active: false,
+    clearCommandDraft: false,
+    read: () => state,
+    update,
+    compact: async () => {},
+  });
+  rejectOld(new Error("token=secret"));
+  await old;
+  assert.equal(state.compaction?.status, "succeeded");
+});
+
+test("failed notice persists through an unrelated draft edit until dismiss or explicit compact retry", async () => {
+  let state = emptyComposerState();
+  let calls = 0;
+  const options = {
+    threadId: "thread-a",
+    active: false,
+    clearCommandDraft: false,
+    read: () => state,
+    update: (change: (value: typeof state) => typeof state) => {
+      state = change(state);
+    },
+    compact: async () => {
+      calls++;
+      if (calls === 1) throw new Error("private secret");
+    },
+  };
+  await requestContextCompaction(options);
+  assert.equal(calls, 1);
+  assert.equal(state.compaction?.status, "failed");
+  state = editComposer(state, "Unrelated message");
+  assert.equal(state.compaction?.status, "failed");
+  await requestContextCompaction(options);
+  assert.equal(calls, 2);
+  assert.equal(state.compaction?.status, "succeeded");
+  assert.equal(state.draft.text, "Unrelated message");
 });
