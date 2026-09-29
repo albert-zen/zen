@@ -224,9 +224,25 @@ function TriggerManager({
   const [targetPreview, setTargetPreview] =
     useState<AutomationTargetPreview | null>(null);
   const [targetNotice, setTargetNotice] = useState("");
+  const [retiredNotices, setRetiredNotices] = useState<string[]>([]);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [previews, setPreviews] = useState<Record<string, string>>({});
   const createForm = useRef<HTMLFormElement>(null);
+  const generation = useRef(0);
+  const flight = useRef<{ generation: number } | null>(null);
+  const pendingTarget = useRef<{ generation: number; threadId: string } | null>(
+    null,
+  );
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      generation.current++;
+      flight.current = null;
+      pendingTarget.current = null;
+    };
+  }, []);
   const visible =
     scopedThreadId === undefined
       ? data.triggers
@@ -235,84 +251,191 @@ function TriggerManager({
     scopedThreadId === undefined
       ? data.history
       : data.history.filter((entry) => entry.threadId === scopedThreadId);
-  const change = (patch: Partial<TriggerEditor>) =>
-    setEditor((current) => ({ ...current, ...patch }));
-  const run = async (command: string, input: Record<string, unknown>) => {
+  useEffect(() => {
+    const pending = pendingTarget.current;
+    if (
+      !pending ||
+      pending.generation !== generation.current ||
+      !mounted.current ||
+      !threads.some((candidate) => candidate.threadId === pending.threadId)
+    )
+      return;
+    pendingTarget.current = null;
+    setEditor((value) =>
+      generation.current === pending.generation
+        ? { ...value, threadId: pending.threadId }
+        : value,
+    );
+  }, [threads]);
+  const invalidateDraft = () => {
+    generation.current++;
+    flight.current = null; // This retires UI writes, not a Host request already admitted.
+    pendingTarget.current = null;
+    setBusy(false);
+  };
+  const begin = () => {
+    if (flight.current !== null) return null; // Synchronous, even before React renders disabled.
+    const token = { generation: generation.current };
+    flight.current = token;
     setBusy(true);
+    return token;
+  };
+  const current = (token: { generation: number }) =>
+    mounted.current &&
+    flight.current === token &&
+    generation.current === token.generation;
+  const finish = (token: { generation: number }) => {
+    if (flight.current !== token) return;
+    flight.current = null;
+    if (mounted.current) setBusy(false);
+  };
+  const change = (patch: Partial<TriggerEditor>) => {
+    if (flight.current !== null) invalidateDraft();
+    setEditor((value) => ({ ...value, ...patch }));
+  };
+  const noteRetired = (message: string) => {
+    if (mounted.current)
+      setRetiredNotices((notices) => [...notices, message].slice(-5));
+    else console.warn(message);
+  };
+  const run = async (command: string, input: Record<string, unknown>) => {
+    const token = begin();
+    if (token === null) return false;
     setError(null);
     try {
       try {
         await sdk.commands.execute(command, input);
       } catch (reason) {
-        setError(
-          `${describeError(reason)}. If the outcome is uncertain, inspect the list before retrying.`,
-        );
+        if (current(token))
+          setError(
+            `${describeError(reason)}. If the outcome is uncertain, inspect the list before retrying.`,
+          );
         return false;
       }
+      if (!current(token)) return false;
       try {
         await refresh();
       } catch (reason) {
-        setError(
-          `Action may have saved, but refresh failed: ${describeError(reason)}. Reopen before retrying.`,
-        );
+        if (current(token))
+          setError(
+            `Action may have saved, but refresh failed: ${describeError(reason)}. Reopen before retrying.`,
+          );
       }
-      return true;
+      return current(token);
     } finally {
-      setBusy(false);
+      finish(token);
     }
   };
   const previewDedicatedTarget = async () => {
     if (!workspace) return;
-    setBusy(true);
+    const token = begin();
+    if (token === null) return;
     setError(null);
     setTargetPreview(null);
     try {
-      setTargetPreview(
-        (await sdk.commands.execute("preview-target", {
-          workspace,
-        })) as AutomationTargetPreview,
-      );
+      const preview = (await sdk.commands.execute("preview-target", {
+        workspace,
+      })) as AutomationTargetPreview;
+      if (current(token)) setTargetPreview(preview);
     } catch (reason) {
-      setError(describeError(reason));
+      if (current(token)) setError(describeError(reason));
     } finally {
-      setBusy(false);
+      finish(token);
     }
   };
   const createTarget = async () => {
     if (!workspace || targetPreview?.workspace !== workspace) return;
-    setBusy(true);
+    const token = begin();
+    if (token === null) return;
     setError(null);
+    let createdId: string | null = null;
     try {
       const result = (await sdk.commands.execute("create-target", {
         workspace,
         preview: targetPreview,
       })) as { threadId: string; effective: AutomationTargetPreview };
-      setTargetPreview(null);
-      change({ threadId: result.threadId });
+      createdId = result.threadId;
+      if (!current(token)) {
+        noteRetired(
+          `An earlier request created idle Thread ${result.threadId} after its form was left. Inspect it in Threads; no Trigger was saved or cancelled.`,
+        );
+        return;
+      }
       setTargetNotice(
         `Dedicated Thread ${result.threadId} created with ${result.effective.sandbox} / ${result.effective.approvalPolicy}, model ${result.effective.modelId}. Save this trigger to bind it; if saving fails, this idle Thread remains available.`,
       );
+      pendingTarget.current = {
+        generation: token.generation,
+        threadId: result.threadId,
+      };
       await refresh();
-    } catch (reason) {
+      if (!current(token)) {
+        pendingTarget.current = null;
+        noteRetired(
+          `An earlier request created idle Thread ${result.threadId} after its form was left. Inspect it in Threads; no Trigger was saved or cancelled.`,
+        );
+        return;
+      }
       setTargetPreview(null);
-      setError(
-        `${describeError(reason)}. If the response was lost, inspect Threads before retrying.`,
-      );
+      // The effect binds only after discovery has committed the new option.
+    } catch (reason) {
+      if (current(token)) {
+        setTargetPreview(null);
+        setError(
+          `${createdId === null ? "" : `Idle Thread ${createdId} was created; `}${describeError(reason)}. Inspect Threads before retrying; do not assume the request was cancelled.`,
+        );
+      } else
+        noteRetired(
+          createdId === null
+            ? "An earlier Thread creation did not return a confirmed outcome. Inspect Threads before retrying; leaving its form did not cancel the Host request."
+            : `An earlier request created idle Thread ${createdId} after its form was left. Inspect it in Threads; no Trigger was saved or cancelled.`,
+        );
     } finally {
-      setBusy(false);
+      finish(token);
     }
   };
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const token = begin();
+    if (token === null) return;
+    setError(null);
     try {
       const input = triggerEditorInput(editor);
-      if (await run(editor.id ? "update" : "create", input)) {
-        setEditing(false);
-        setEditor(blankEditor(scopedThreadId));
-        setTargetNotice("");
+      const result = (await sdk.commands.execute(
+        editor.id ? "update" : "create",
+        input,
+      )) as { id?: string };
+      if (!current(token)) {
+        noteRetired(
+          `An earlier form ${editor.id ? "updated" : "created"} Trigger ${result.id ?? editor.id ?? "(ID unavailable)"} after it was left. Inspect the list; it was not cancelled.`,
+        );
+        if (mounted.current) void refresh().catch(() => {});
+        return;
       }
+      try {
+        await refresh();
+      } catch (reason) {
+        if (current(token))
+          setError(
+            `Action may have saved, but refresh failed: ${describeError(reason)}. Reopen before retrying.`,
+          );
+      }
+      if (!current(token)) return;
+      invalidateDraft();
+      setEditing(false);
+      setEditor(blankEditor(scopedThreadId));
+      setTargetNotice("");
     } catch (reason) {
-      setError(describeError(reason));
+      if (current(token))
+        setError(
+          `${describeError(reason)}. If the outcome is uncertain, inspect the list before retrying.`,
+        );
+      else
+        noteRetired(
+          "An earlier Trigger save returned an uncertain outcome after its form was left. Inspect definitions before retrying; no Host cancellation was implied.",
+        );
+    } finally {
+      finish(token);
     }
   };
   return (
@@ -356,10 +479,20 @@ function TriggerManager({
         ) : null}
       </header>
       {error ? <p role="alert">{error}</p> : null}
+      {retiredNotices.map((notice, index) => (
+        <p role="status" key={`${index}:${notice}`}>
+          {notice}
+        </p>
+      ))}
       <button
         type="button"
         className="primary-button"
         onClick={() => {
+          invalidateDraft();
+          setError(null);
+          setTargetPreview(null);
+          setTargetNotice("");
+          setWorkspace("");
           setEditor(blankEditor(scopedThreadId));
           setEditing(true);
         }}
@@ -403,7 +536,12 @@ function TriggerManager({
                   label="Target Thread"
                   threads={threads}
                   value={editor.threadId}
-                  onChange={(value) => change({ threadId: value })}
+                  onChange={(value) => {
+                    if (value === editor.threadId) return;
+                    invalidateDraft();
+                    setTargetPreview(null);
+                    change({ threadId: value });
+                  }}
                 />
                 {!editor.id ? (
                   <div className="trigger-dedicated">
@@ -412,6 +550,8 @@ function TriggerManager({
                       <Select
                         value={workspace}
                         onValueChange={(value) => {
+                          if (value === workspace) return;
+                          invalidateDraft();
                           setWorkspace(value);
                           setTargetPreview(null);
                         }}
@@ -440,6 +580,13 @@ function TriggerManager({
                       >
                         <p>Host defaults for this unattended Thread:</p>
                         <p>Configured workspace: {targetPreview.workspace}</p>
+                        {targetPreview.resolvedWorkspace !==
+                        targetPreview.workspace ? (
+                          <p>
+                            Actual directory for this Thread:{" "}
+                            {targetPreview.resolvedWorkspace}
+                          </p>
+                        ) : null}
                         <p>
                           Model: {targetPreview.modelId} (profile{" "}
                           {targetPreview.providerProfileId}); effort{" "}
@@ -465,8 +612,10 @@ function TriggerManager({
                         </button>
                         <button
                           type="button"
-                          disabled={busy}
-                          onClick={() => setTargetPreview(null)}
+                          onClick={() => {
+                            invalidateDraft();
+                            setTargetPreview(null);
+                          }}
                         >
                           Cancel
                         </button>
@@ -564,7 +713,11 @@ function TriggerManager({
             <button
               type="button"
               className="quiet-button"
-              onClick={() => setEditing(false)}
+              onClick={() => {
+                invalidateDraft();
+                setEditing(false);
+                setTargetPreview(null);
+              }}
             >
               Cancel
             </button>
@@ -613,6 +766,7 @@ function TriggerManager({
                   }
                   className="quiet-button"
                   onClick={() => {
+                    invalidateDraft();
                     setEditor(editorFromTrigger(trigger));
                     setEditing(true);
                     createForm.current?.scrollIntoView({ block: "nearest" });

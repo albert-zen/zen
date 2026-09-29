@@ -387,7 +387,7 @@
 - **ZenXBundledAutomationPluginService** — 两个 bundled Plugin Package 共享仅承载 Room mention、reply route
   与 Trigger wakeup 真实交叉约束的第一方 domain service；Catalog runtime admission 分别控制各 package，
   Trigger/Room durable document 分居各自 namespace，只有显式唤醒继续调用既有 App Server port。
-- **Trigger 双入口绑定** — 同一个已启用 Plugin 的线程右栏和全局页面只读写 Host Trigger 定义与历史；全局页只在受信 Project 配置的 workspace，经 Host 预览实际模型、权限与版本、用户明确确认及创建边界复核后创建 idle Thread 并绑定目标，不在 renderer 创建运行时或调度状态；定义的单调 revision 与完整定义比较保护异步目标校验后的恢复，Host 验证目标与时间并继续既有定时器。
+- **Trigger 双入口绑定** — 同一个已启用 Plugin 的线程右栏和全局页面只读写 Host Trigger 定义与历史；全局页只在受信 Project 配置的 workspace，经 Host 预览实际模型、权限、版本及当时存在的物理目录、用户明确确认及创建边界复核后以该物理目录创建 idle Thread，不改变 Project 别名或已有 Thread 的 cwd；renderer 的瞬态单次操作栅栏与草稿代次只防重复提交和迟到结果污染，不撤销已受理的 Host 副作用，也不创建调度状态；定义的单调 revision 与完整定义比较保护异步目标校验后的恢复，Host 验证目标与时间并继续既有定时器。
 - **ZenXTriggerRoomRetention** — Trigger/Room plugin data 在 domain mutation 中执行显式数量、字段与
   UTF-8 字节上限；保留全部非 terminal wakeup，并只保留 bounded terminal audit 与 Room 消息，同时保留
   admission-failure audit，确保 65th admission-failure 事实不会被同一 mutation 淘汰。

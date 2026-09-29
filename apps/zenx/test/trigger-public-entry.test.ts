@@ -76,7 +76,7 @@ test(
         },
         startThread: async (preview) =>
           await manager.request("thread/start", {
-            cwd: preview.workspace,
+            cwd: preview.resolvedWorkspace,
             model: preview.model,
             sandbox: preview.sandbox,
             approvalPolicy: preview.approvalPolicy,

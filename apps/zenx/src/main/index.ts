@@ -590,7 +590,7 @@ async function bootstrapZenX(): Promise<void> {
         )
           throw new Error("Host defaults changed; refresh and confirm again");
         const started = await automationManager.request("thread/start", {
-          cwd: preview.workspace,
+          cwd: preview.resolvedWorkspace,
           model: preview.model,
           sandbox: preview.sandbox,
           approvalPolicy: preview.approvalPolicy,

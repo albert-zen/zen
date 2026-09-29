@@ -87,6 +87,10 @@
                 "type": "string",
                 "maxLength": 4096
               },
+              "resolvedWorkspace": {
+                "type": "string",
+                "maxLength": 4096
+              },
               "model": {
                 "type": "string",
                 "maxLength": 1024
@@ -121,6 +125,7 @@
             },
             "required": [
               "workspace",
+              "resolvedWorkspace",
               "model",
               "providerProfileId",
               "modelId",

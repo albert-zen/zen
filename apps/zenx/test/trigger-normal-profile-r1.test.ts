@@ -94,7 +94,7 @@ test(
         },
         startThread: async (preview) => {
           const result = await manager.request("thread/start", {
-            cwd: preview.workspace,
+            cwd: preview.resolvedWorkspace,
             model: preview.model,
             sandbox: preview.sandbox,
             approvalPolicy: preview.approvalPolicy,
@@ -395,7 +395,7 @@ test(
         },
         startThread: async (preview) => {
           const result = await manager.request("thread/start", {
-            cwd: preview.workspace,
+            cwd: preview.resolvedWorkspace,
             model: preview.model,
             sandbox: preview.sandbox,
             approvalPolicy: preview.approvalPolicy,

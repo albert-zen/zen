@@ -40,6 +40,7 @@ test("corrupt optional automation state does not block service construction", as
 });
 
 test("completion setup resolves readable targets without ambiguous writes and reads the exact source result", async () => {
+  const configuredPath = process.cwd();
   let saved: TriggerSnapshot = { triggers: [], history: [], rooms: [] };
   let listener:
     | ((
@@ -125,8 +126,8 @@ test("completion setup resolves readable targets without ambiguous writes and re
       projectProjection: {
         canonicalKeys: async (values) => values,
         configuredWorkspace: async (value) =>
-          value === "/work" ? "/work" : null,
-        configuredWorkspaces: async () => ["/work"],
+          value === configuredPath ? configuredPath : null,
+        configuredWorkspaces: async () => [configuredPath],
       },
       request: async (_method, params) => ({
         data: params.archived ? archivedRows : rows,
@@ -144,10 +145,10 @@ test("completion setup resolves readable targets without ambiguous writes and re
       revision: 1,
     }),
     async (preview) => {
-      assert.equal(preview.workspace, "/work");
+      assert.equal(preview.workspace, configuredPath);
       return {
         thread: { id: "dedicated-111" },
-        cwd: preview.workspace,
+        cwd: preview.resolvedWorkspace,
         model: preview.model,
         sandbox: { type: "dangerFullAccess" },
         approvalPolicy: preview.approvalPolicy,
@@ -159,8 +160,8 @@ test("completion setup resolves readable targets without ambiguous writes and re
     service.previewTarget("/not-a-discovered-workspace"),
     /not configured/,
   );
-  const preview = await service.previewTarget("/work");
-  assert.deepEqual(await service.createTarget("/work", preview), {
+  const preview = await service.previewTarget(configuredPath);
+  assert.deepEqual(await service.createTarget(configuredPath, preview), {
     threadId: "dedicated-111",
     effective: preview,
   });
@@ -220,6 +221,7 @@ test("completion setup resolves readable targets without ambiguous writes and re
 });
 
 test("configured workspace and Host defaults are rechecked before dedicated Thread admission", async () => {
+  const configuredPath = process.cwd();
   let configured = true;
   let revision = 3;
   let starts = 0;
@@ -235,8 +237,8 @@ test("configured workspace and Host defaults are rechecked before dedicated Thre
       projectProjection: {
         canonicalKeys: async (paths) => paths,
         configuredWorkspace: async (workspace) =>
-          configured && workspace === "/configured" ? workspace : null,
-        configuredWorkspaces: async () => (configured ? ["/configured"] : []),
+          configured && workspace === configuredPath ? workspace : null,
+        configuredWorkspaces: async () => (configured ? [configuredPath] : []),
       },
       request: async () => ({
         data: [
@@ -259,7 +261,7 @@ test("configured workspace and Host defaults are rechecked before dedicated Thre
       starts++;
       return {
         thread: { id: "idle" },
-        cwd: preview.workspace,
+        cwd: preview.resolvedWorkspace,
         model: preview.model,
         sandbox: { type: "dangerFullAccess" },
         approvalPolicy: preview.approvalPolicy,
@@ -268,22 +270,25 @@ test("configured workspace and Host defaults are rechecked before dedicated Thre
     },
   );
   await assert.rejects(service.previewTarget("/old"), /not configured/);
-  assert.deepEqual(await service.workspaces(), ["/configured"]);
-  const preview = await service.previewTarget("/configured");
+  assert.deepEqual(await service.workspaces(), [configuredPath]);
+  const preview = await service.previewTarget(configuredPath);
   revision++;
-  await assert.rejects(service.createTarget("/configured", preview), /changed/);
+  await assert.rejects(
+    service.createTarget(configuredPath, preview),
+    /changed/,
+  );
   assert.equal(starts, 0);
-  const fresh = await service.previewTarget("/configured");
+  const fresh = await service.previewTarget(configuredPath);
   configured = false;
   await assert.rejects(
-    service.createTarget("/configured", fresh),
+    service.createTarget(configuredPath, fresh),
     /not configured/,
   );
   assert.equal(starts, 0);
   configured = true;
-  const accepted = await service.previewTarget("/configured");
+  const accepted = await service.previewTarget(configuredPath);
   assert.equal(
-    (await service.createTarget("/configured", accepted)).threadId,
+    (await service.createTarget(configuredPath, accepted)).threadId,
     "idle",
   );
   assert.equal(starts, 1);

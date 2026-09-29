@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import {
   listThreadCandidates,
@@ -34,6 +34,7 @@ import type {
 
 export interface AutomationTargetPreview {
   workspace: string;
+  resolvedWorkspace: string;
   model: string;
   providerProfileId: string;
   modelId: string;
@@ -49,7 +50,9 @@ export async function createBundledAutomationPluginService(options: {
   appServer: ZenXTriggerAppServerPort;
   titles?: ZenXTriggerTitlePort;
   threadTargets?: ThreadTargetPort;
-  targetDefaults?: () => Promise<Omit<AutomationTargetPreview, "workspace">>;
+  targetDefaults?: () => Promise<
+    Omit<AutomationTargetPreview, "workspace" | "resolvedWorkspace">
+  >;
   startThread?: (preview: AutomationTargetPreview) => Promise<{
     thread: { id: string };
     cwd: string;
@@ -108,6 +111,19 @@ export async function createBundledAutomationPluginService(options: {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Only this new automation admission needs an existing physical directory. */
+async function resolveAutomationDirectory(workspace: string): Promise<string> {
+  try {
+    const resolved = await realpath(workspace);
+    if ((await stat(resolved)).isDirectory()) return resolved;
+  } catch {
+    // Project's historical alias fallback is deliberately not admission here.
+  }
+  throw new Error(
+    "Workspace directory is missing or not a directory; review it again",
+  );
 }
 
 async function initializeOptionalStorage(
@@ -207,7 +223,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   readonly #targets: ThreadTargetPort | undefined;
   readonly #appServer: ZenXTriggerAppServerPort;
   readonly #targetDefaults?: () => Promise<
-    Omit<AutomationTargetPreview, "workspace">
+    Omit<AutomationTargetPreview, "workspace" | "resolvedWorkspace">
   >;
   readonly #startThread?: NonNullable<
     Parameters<typeof createBundledAutomationPluginService>[0]["startThread"]
@@ -220,7 +236,9 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     active: Set<string>,
     titles?: ZenXTriggerTitlePort,
     targets?: ThreadTargetPort,
-    targetDefaults?: () => Promise<Omit<AutomationTargetPreview, "workspace">>,
+    targetDefaults?: () => Promise<
+      Omit<AutomationTargetPreview, "workspace" | "resolvedWorkspace">
+    >,
     startThread?: NonNullable<
       Parameters<typeof createBundledAutomationPluginService>[0]["startThread"]
     >,
@@ -313,12 +331,17 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     const configured = await projection.configuredWorkspace(workspace);
     if (configured === null)
       throw new Error("Workspace is not configured; refresh projects");
+    const resolvedWorkspace = await resolveAutomationDirectory(configured);
     const defaults = await this.#targetDefaults();
     if ((await projection.configuredWorkspace(configured)) !== configured)
       throw new Error(
         "Workspace configuration changed; refresh and confirm again",
       );
-    return { workspace: configured, ...defaults };
+    if ((await resolveAutomationDirectory(configured)) !== resolvedWorkspace)
+      throw new Error(
+        "Workspace directory changed; review its actual location again",
+      );
+    return { workspace: configured, resolvedWorkspace, ...defaults };
   }
   async createTarget(
     workspace: string,
@@ -340,6 +363,13 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       throw new Error(
         "Workspace was unconfigured; refresh preview and confirm again",
       );
+    if (
+      (await resolveAutomationDirectory(current.workspace)) !==
+      current.resolvedWorkspace
+    )
+      throw new Error(
+        "Workspace directory changed; review its actual location again",
+      );
     const result = await this.#startThread(current);
     const sandboxType =
       current.sandbox === "danger-full-access"
@@ -348,7 +378,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
           ? "readOnly"
           : "workspaceWrite";
     if (
-      result.cwd !== current.workspace ||
+      result.cwd !== current.resolvedWorkspace ||
       result.model !== current.model ||
       result.sandbox.type !== sandboxType ||
       result.approvalPolicy !== current.approvalPolicy ||

@@ -162,6 +162,7 @@ const targetPreviewSchema = {
   type: "object",
   properties: {
     workspace: { type: "string", maxLength: 4096 },
+    resolvedWorkspace: { type: "string", maxLength: 4096 },
     model: { type: "string", maxLength: 1024 },
     providerProfileId: { type: "string", maxLength: 256 },
     modelId: { type: "string", maxLength: 256 },
@@ -176,6 +177,7 @@ const targetPreviewSchema = {
   },
   required: [
     "workspace",
+    "resolvedWorkspace",
     "model",
     "providerProfileId",
     "modelId",
