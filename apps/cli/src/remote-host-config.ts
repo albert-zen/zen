@@ -9,6 +9,7 @@ export interface RemoteHostConfig {
   tlsCertFile: string;
   tlsKeyFile: string;
   pairCodeFile: string;
+  originEndpoint?: string;
   workspaces: RemoteWorkspace[];
 }
 /** This is an explicit isolated CLI Host opt-in, never the ZenX daily profile. */
@@ -85,6 +86,9 @@ export async function loadRemoteHostConfig(
     tlsCertFile: absolute("tlsCertFile"),
     tlsKeyFile,
     pairCodeFile: absolute("pairCodeFile"),
+    ...(config.originEndpoint === undefined
+      ? {}
+      : { originEndpoint: string("originEndpoint") }),
     workspaces: entries,
   };
 }

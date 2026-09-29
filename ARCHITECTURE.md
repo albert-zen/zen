@@ -859,6 +859,7 @@ claim，不得被称为 Codex extension 或因固定 CAS schema 缺失而删除�
   读取不授予发送就绪状态，发送本身不得隐式初始化连接。
 - **WebSocket 访问控制在宿主侧**：loopback listener 拒绝浏览器 `Origin`，可选
   bearer credential 仅用于 transport 握手，不进入 Zen Core、Thread 或 journal。
+- **远程 Host 单一可信对外 Origin 是显式部署配置**：仅为直连 TLS WebSocket 握手核验配置证书 SAN、HTTP Host 和严格 Origin，不是设备身份或会话权威，缺省仍拒 Origin。
 - **stdio ↔ WebSocket bridge 只是 transport adapter**：它原样转发共享 endpoint 消息，
   不创建 runtime、Thread 或任何可持久化状态。
 - **ZAS 调用面先由产品生命周期定义**：先实现 Zen 自建客户端需要的原生语义，

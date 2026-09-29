@@ -27,6 +27,21 @@ test("remote config demands explicit TLS identity, protected file and configured
     );
     await writeFile(
       file,
+      JSON.stringify({ ...base, originEndpoint: "https://localhost:443" }),
+      { mode: 0o600 },
+    );
+    assert.equal(
+      (await loadRemoteHostConfig(file)).originEndpoint,
+      "https://localhost:443",
+    );
+    await writeFile(
+      file,
+      JSON.stringify({ ...base, originEndpoint: ["https://localhost:443"] }),
+      { mode: 0o600 },
+    );
+    await assert.rejects(loadRemoteHostConfig(file), /originEndpoint/);
+    await writeFile(
+      file,
       JSON.stringify({
         ...base,
         workspaces: [{ id: "ws", label: "Oops", cwd: "relative" }],
