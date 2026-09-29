@@ -1071,6 +1071,55 @@ test("non-EPERM publication failure never retries or destroys the old artifact",
   }
 });
 
+test("missing source or surprise target cannot be treated as a transient EPERM", async () => {
+  for (const scenario of ["source removed", "target appeared"]) {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-publish-state-"),
+    );
+    try {
+      const staged = path.join(directory, "run", "ZenX-fixture");
+      const published = path.join(directory, "artifact", "ZenX-fixture");
+      await mkdir(staged, { recursive: true });
+      await writeFile(path.join(staged, "version"), "new");
+      let waits = 0;
+      let attempts = 0;
+      const error = Object.assign(new Error("injected EPERM"), {
+        code: "EPERM",
+      });
+      await assert.rejects(
+        publishPackagedArtifact(staged, published, {
+          platform: "win32",
+          renameArtifact: async (from, to) => {
+            if (from === staged) {
+              attempts++;
+              if (scenario === "source removed")
+                await rm(staged, { recursive: true });
+              else await mkdir(published, { recursive: true });
+              throw error;
+            }
+            return await rename(from, to);
+          },
+          wait: async () => {
+            waits++;
+          },
+        }),
+        (caught) => caught === error,
+      );
+      assert.equal(attempts, 1);
+      assert.equal(waits, 0);
+      if (scenario === "target appeared") {
+        assert.equal((await stat(published)).isDirectory(), true);
+        assert.equal(
+          await readFile(path.join(staged, "version"), "utf8"),
+          "new",
+        );
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
 test(
   "Windows publishes after a smoke-owned file handle releases",
   { skip: process.platform !== "win32" },
