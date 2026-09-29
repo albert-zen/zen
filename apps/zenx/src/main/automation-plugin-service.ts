@@ -28,6 +28,8 @@ import type {
   CreateRoomInput,
   CreateTriggerInput,
   RoomMember,
+  RoomSendOperation,
+  RoomDeliveryView,
   TriggerSnapshot,
   UpdateTriggerInput,
 } from "./trigger-types.js";
@@ -314,6 +316,42 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   }
   async signal(name: string, detail: string): Promise<void> {
     await this.#service.signal(name, detail);
+  }
+  async prepareRoomMessage(
+    roomId: string,
+    operationId: string,
+    text: string,
+  ): Promise<RoomSendOperation> {
+    return await this.#service.prepareRoomMessage(roomId, operationId, text);
+  }
+  async postPreparedRoomMessage(
+    roomId: string,
+    operationId: string,
+    text: string,
+  ): Promise<RoomSendOperation> {
+    return await this.#service.postPreparedRoomMessage(
+      roomId,
+      operationId,
+      text,
+    );
+  }
+  wakeupsEnabled(): boolean {
+    return (
+      this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID) &&
+      this.#service.wakeupsEnabled()
+    );
+  }
+  roomOperation(roomId: string, operationId: string): RoomDeliveryView {
+    return this.#service.roomOperation(roomId, operationId);
+  }
+  roomDelivery(roomId: string, messageId: string) {
+    return this.#service.roomDelivery(roomId, messageId);
+  }
+  async acknowledgeRoomOperation(
+    roomId: string,
+    operationId: string,
+  ): Promise<void> {
+    await this.#service.acknowledgeRoomOperation(roomId, operationId);
   }
   async createRoom(input: CreateRoomInput) {
     return await this.#service.createRoom(input);

@@ -28,7 +28,47 @@ interface TriggerListResult {
 }
 
 interface RoomListResult {
-  rooms: ZenXRoom[];
+  nextCursor?: number | null;
+  rooms: Array<
+    Omit<ZenXRoom, "operations"> & {
+      pendingCount?: number;
+      operationEpoch?: string;
+      messageCount?: number;
+      nextCursor?: number | null;
+      operations?: Array<{
+        id: string;
+        text: string;
+        messageId: string | null;
+        createdAt: number;
+      }>;
+      responders?: Array<{ name: string; configured: boolean }>;
+    }
+  >;
+}
+interface RoomDeliveryResult {
+  text?: string;
+  state: "prepared" | "saved" | "unknown";
+  messageId: string | null;
+  mentions: Array<{
+    name: string;
+    configuredNow: boolean;
+    deliveries: Array<{
+      status:
+        | "unconfigured"
+        | "pending"
+        | "queued"
+        | "running"
+        | "completed"
+        | "failed"
+        | "unknown";
+    }>;
+  }>;
+}
+interface RoomPendingSend {
+  id: string;
+  text: string;
+  revision: number | null;
+  messageId: string | null;
 }
 
 export function registerBundledAutomationUi(
@@ -510,58 +550,206 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [threads, setThreads] = useState<NativeThreadSummary[]>([]);
   const [busy, setBusy] = useState(false);
-  const sending = useRef(false);
-  const [pending, setPending] = useState<{
-    roomId: string;
-    ids: string[];
-    text: string;
-  } | null>(null);
-  const pendingRef = useRef<{
-    roomId: string;
-    ids: string[];
-    text: string;
-  } | null>(null);
+  const sending = useRef<Record<string, boolean>>({});
+  const [sendingRooms, setSendingRooms] = useState<Record<string, boolean>>({});
+  const selectedRef = useRef<string | null>(null);
+  const historyCache = useRef<
+    Record<
+      string,
+      {
+        messages: ZenXRoom["messages"];
+        count: number;
+        nextCursor: number | null;
+      }
+    >
+  >({});
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [roomErrors, setRoomErrors] = useState<Record<string, string>>({});
+  const [pendingByRoom, setPendingByRoom] = useState<
+    Record<string, RoomPendingSend>
+  >({});
+  const pendingRef = useRef<Record<string, RoomPendingSend>>({});
+  const revisions = useRef<Record<string, number>>({});
+  const refreshSequence = useRef(0);
+  const [feedback, setFeedback] = useState<Record<string, string>>({});
+  const [deliveries, setDeliveries] = useState<
+    Record<string, RoomDeliveryResult>
+  >({});
+  const composer = useRef<HTMLTextAreaElement>(null);
+  const dialogClose = useRef<HTMLButtonElement>(null);
+  const dialog = useRef<HTMLElement>(null);
+  const dialogInvoker = useRef<HTMLElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const feed = useRef<HTMLDivElement>(null);
   const lastMessage = useRef<string | null>(null);
   const lastRoom = useRef<string | null>(null);
   const stickToBottom = useRef(true);
+  const setRoomPending = (roomId: string, value: RoomPendingSend | null) => {
+    const next = { ...pendingRef.current };
+    if (value === null) delete next[roomId];
+    else next[roomId] = value;
+    pendingRef.current = next;
+    setPendingByRoom(next);
+  };
+  const finishSaved = async (
+    roomId: string,
+    entry: RoomPendingSend,
+    result: RoomDeliveryResult,
+  ) => {
+    if (result.state !== "saved" || !result.messageId) return;
+    setRoomErrors((current) => ({ ...current, [roomId]: "" }));
+    refreshSequence.current += 1;
+    if (
+      entry.revision !== null &&
+      revisions.current[roomId] === entry.revision
+    ) {
+      setDrafts((current) => ({ ...current, [roomId]: "" }));
+    }
+    if (pendingRef.current[roomId]?.id === entry.id)
+      setRoomPending(roomId, null);
+    setFeedback((current) => ({
+      ...current,
+      [roomId]: "Message saved. Check wake status on the message.",
+    }));
+    await sdk.commands
+      .execute("ack-operation", { roomId, operationId: entry.id })
+      .catch((reason: unknown) =>
+        setError(
+          `Saved, but acknowledgment is unknown: ${describeError(reason)}`,
+        ),
+      );
+  };
   const refresh = async () => {
-    const next = (await sdk.commands.execute("list")) as RoomListResult;
-    setData(next);
+    const sequence = ++refreshSequence.current;
+    const next: RoomListResult = { rooms: [] };
+    let cursor: number | null = 0;
+    while (cursor !== null && next.rooms.length < 128) {
+      const page = (await sdk.commands.execute("list", {
+        cursor,
+      })) as RoomListResult;
+      if (sequence !== refreshSequence.current) return;
+      next.rooms.push(...page.rooms);
+      cursor = page.nextCursor ?? null;
+    }
+    const target =
+      next.rooms.find((entry) => entry.id === selectedRef.current) ??
+      next.rooms[0];
+    if (target?.messageCount !== undefined) {
+      const recent = (await sdk.commands.execute("messages", {
+        roomId: target.id,
+        cursor: 0,
+      })) as { messages: ZenXRoom["messages"]; nextCursor: number | null };
+      if (
+        sequence !== refreshSequence.current ||
+        (selectedRef.current !== null && selectedRef.current !== target.id)
+      )
+        return;
+      const cached = historyCache.current[target.id];
+      const tailIds = new Set(recent.messages.map((message) => message.id));
+      const messages = [
+        ...(cached?.messages.filter((message) => !tailIds.has(message.id)) ??
+          []),
+        ...recent.messages,
+      ].slice(-target.messageCount);
+      const loaded = Math.max(
+        recent.messages.length,
+        (cached?.nextCursor ?? 0) +
+          Math.max(0, target.messageCount - (cached?.count ?? 0)),
+      );
+      const nextCursor = loaded < target.messageCount ? loaded : null;
+      historyCache.current[target.id] = {
+        messages,
+        count: target.messageCount,
+        nextCursor,
+      };
+      target.messages = messages;
+      target.nextCursor = nextCursor;
+    }
+    if (sequence !== refreshSequence.current) return;
+    setData({ ...next });
     setSelected((current) =>
       current !== null && next.rooms.some((entry) => entry.id === current)
         ? current
         : (next.rooms[0]?.id ?? null),
     );
-    const uncertain = pendingRef.current;
-    if (uncertain !== null) {
-      const room = next.rooms.find((entry) => entry.id === uncertain.roomId);
-      if (
-        room?.messages.some(
-          (entry) =>
-            !uncertain.ids.includes(entry.id) &&
-            entry.kind === "human" &&
-            entry.text === uncertain.text,
-        )
-      ) {
-        pendingRef.current = null;
-        setPending(null);
-        setDrafts((drafts) => ({
-          ...drafts,
-          [uncertain.roomId]:
-            drafts[uncertain.roomId] === uncertain.text
-              ? ""
-              : (drafts[uncertain.roomId] ?? ""),
-        }));
-        setError(
-          "Message saved. Mention delivery may still have failed; check Trigger history.",
-        );
+    // The Host is the authority. Unacknowledged prepared/committed operations
+    // survive renderer unmount; lack of a retained receipt NEVER means unsent.
+    const merged = { ...pendingRef.current };
+    for (const room of next.rooms)
+      for (const operation of room.operations ?? []) {
+        if (!merged[room.id] || merged[room.id]?.id === operation.id) {
+          merged[room.id] = {
+            id: operation.id,
+            text: operation.text,
+            revision:
+              merged[room.id]?.id === operation.id
+                ? merged[room.id]!.revision
+                : null,
+            messageId: operation.messageId,
+          };
+        }
       }
+    pendingRef.current = merged;
+    setPendingByRoom(merged);
+    const active = next.rooms.find((entry) => entry.id === selectedRef.current);
+    if (active?.pendingCount && !active.operations?.length) {
+      const collected: NonNullable<typeof active.operations> = [];
+      let cursor: number | null = 0;
+      while (cursor !== null && collected.length < 128) {
+        const page = (await sdk.commands.execute("operations", {
+          roomId: active.id,
+          cursor,
+        })) as { operations: typeof collected; nextCursor: number | null };
+        if (
+          sequence !== refreshSequence.current ||
+          selectedRef.current !== active.id
+        )
+          return;
+        collected.push(...page.operations);
+        cursor = page.nextCursor;
+      }
+      active.operations = collected;
+      setData({ ...next, rooms: [...next.rooms] });
+      const merged = { ...pendingRef.current };
+      if (!merged[active.id] && collected[0])
+        merged[active.id] = {
+          id: collected[0].id,
+          text: collected[0].text,
+          revision: null,
+          messageId: collected[0].messageId,
+        };
+      pendingRef.current = merged;
+      setPendingByRoom(merged);
+    }
+    if (active) {
+      const latest = active.messages
+        .filter((message) => message.kind === "human")
+        .slice(-10);
+      void Promise.all(
+        latest.map(async (message) => {
+          try {
+            const status = (await sdk.commands.execute("delivery", {
+              roomId: active.id,
+              messageId: message.id,
+            })) as RoomDeliveryResult;
+            if (sequence === refreshSequence.current)
+              setDeliveries((previous) => ({
+                ...previous,
+                [message.id]: status,
+              }));
+          } catch {
+            /* No retained result is unknown, never unsent. */
+          }
+        }),
+      );
     }
     setLoading(false);
   };
+  useEffect(() => {
+    selectedRef.current = selected;
+    if (selected) void refresh().catch(() => {});
+  }, [selected]);
   useEffect(() => {
     void window.zenx.threads
       .list()
@@ -580,8 +768,16 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     );
     return () => clearInterval(timer);
   }, [sdk]);
+  useEffect(() => {
+    if (panel !== null) dialogClose.current?.focus();
+  }, [panel]);
+  const closeDialog = () => {
+    setPanel(null);
+    requestAnimationFrame(() => dialogInvoker.current?.focus());
+  };
   const room = data.rooms.find((entry) => entry.id === selected);
   const draft = room === undefined ? "" : (drafts[room.id] ?? "");
+  const pending = room === undefined ? null : (pendingByRoom[room.id] ?? null);
   const tail = room?.messages.at(-1)?.id ?? null;
   useEffect(() => {
     if (
@@ -594,7 +790,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     lastMessage.current = tail;
   }, [selected, tail]);
   const run = async (command: string, input: unknown) => {
-    if (sending.current || busy) return false;
+    if (busy) return false;
     setBusy(true);
     setError(null);
     try {
@@ -619,37 +815,161 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       setBusy(false);
     }
   };
+  const loadEarlier = async (roomId: string, cursor: number) => {
+    if (loadingOlder) return;
+    setLoadingOlder(true);
+    ++refreshSequence.current;
+    try {
+      let offset: number | null = cursor;
+      let cache = historyCache.current[roomId];
+      for (let n = 0; n < 4 && offset !== null; n++) {
+        const page = (await sdk.commands.execute("messages", {
+          roomId,
+          cursor: offset,
+        })) as { messages: ZenXRoom["messages"]; nextCursor: number | null };
+        const known = new Set(
+          cache?.messages.map((message) => message.id) ?? [],
+        );
+        cache = {
+          messages: [
+            ...page.messages.filter((message) => !known.has(message.id)),
+            ...(cache?.messages ?? []),
+          ].slice(-256),
+          count: cache?.count ?? 0,
+          nextCursor: page.nextCursor,
+        };
+        offset = page.nextCursor;
+      }
+      if (cache) {
+        historyCache.current[roomId] = cache;
+        const height = feed.current?.scrollHeight ?? 0;
+        setData((current) => ({
+          ...current,
+          rooms: current.rooms.map((entry) =>
+            entry.id === roomId
+              ? {
+                  ...entry,
+                  messages: cache!.messages,
+                  nextCursor: cache!.nextCursor,
+                }
+              : entry,
+          ),
+        }));
+        requestAnimationFrame(() => {
+          if (feed.current)
+            feed.current.scrollTop += feed.current.scrollHeight - height;
+        });
+      }
+    } catch (reason) {
+      setRoomErrors((current) => ({
+        ...current,
+        [roomId]: `Older messages unavailable: ${describeError(reason)}`,
+      }));
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
   const send = async () => {
-    if (!room || !draft.trim() || sending.current || busy || pending !== null)
+    if (
+      !room ||
+      !draft.trim() ||
+      sending.current[room.id] ||
+      busy ||
+      pendingByRoom[room.id] ||
+      (room.operations?.length ?? 0) > 0
+    )
       return;
     const text = draft;
     const roomId = room.id;
-    const ids = room.messages.map((entry) => entry.id);
-    sending.current = true;
-    setBusy(true);
-    setError(null);
+    const entry: RoomPendingSend = {
+      id: `${room.operationEpoch ?? "legacy"}:${crypto.randomUUID()}`,
+      text,
+      revision: revisions.current[roomId] ?? 0,
+      messageId: null,
+    };
+    sending.current[roomId] = true;
+    setSendingRooms((current) => ({ ...current, [roomId]: true }));
+    setRoomPending(roomId, entry);
+    setRoomErrors((current) => ({ ...current, [roomId]: "" }));
     try {
-      await sdk.commands.execute("post-message", { roomId, text });
-      setDrafts((current) => ({
-        ...current,
-        [roomId]: current[roomId] === text ? "" : (current[roomId] ?? ""),
-      }));
-      setError(
-        text.includes("@")
-          ? "Message saved. Mention delivery is separate; check Trigger history for wake status."
-          : null,
-      );
+      await sdk.commands.execute("prepare-message", {
+        roomId,
+        operationId: entry.id,
+        text,
+      });
+      const committed = (await sdk.commands.execute("post-message", {
+        roomId,
+        operationId: entry.id,
+        text,
+      })) as { messageId: string };
+      if (!committed.messageId)
+        throw new Error("No immutable Room message ID returned");
+      const status = (await sdk.commands.execute("operation", {
+        roomId,
+        operationId: entry.id,
+      })) as RoomDeliveryResult;
+      await finishSaved(roomId, entry, status);
       await refresh();
     } catch (reason) {
-      pendingRef.current = { roomId, ids, text };
-      setPending(pendingRef.current);
+      // Do not infer success from matching text, even when a new ID appeared.
       setError(
-        `Send result unknown; do not resend. Refresh to check if the message was saved. ${describeError(reason)}`,
+        `Send result unknown for this operation; do not resend. ${describeError(reason)}`,
       );
+      try {
+        const status = (await sdk.commands.execute("operation", {
+          roomId,
+          operationId: entry.id,
+        })) as RoomDeliveryResult;
+        if (status.state === "saved" && status.messageId)
+          await finishSaved(roomId, entry, status);
+      } catch {
+        /* Unknown remains unresolved across Room switches. */
+      }
       void refresh().catch(() => {});
     } finally {
-      sending.current = false;
-      setBusy(false);
+      sending.current[roomId] = false;
+      setSendingRooms((current) => ({ ...current, [roomId]: false }));
+    }
+  };
+  const inspectPending = async (
+    roomId: string,
+    entry: RoomPendingSend,
+    resume: boolean,
+  ) => {
+    setRoomErrors((current) => ({ ...current, [roomId]: "" }));
+    try {
+      let state = (await sdk.commands.execute("operation", {
+        roomId,
+        operationId: entry.id,
+      })) as RoomDeliveryResult;
+      if (state.state === "prepared" && resume) {
+        if (!state.text)
+          throw new Error(
+            "Prepared operation text is not available; do not resend",
+          );
+        await sdk.commands.execute("post-message", {
+          roomId,
+          operationId: entry.id,
+          text: state.text,
+        });
+        state = (await sdk.commands.execute("operation", {
+          roomId,
+          operationId: entry.id,
+        })) as RoomDeliveryResult;
+      }
+      if (state.state === "saved" && state.messageId)
+        await finishSaved(roomId, entry, state);
+      else
+        setFeedback((current) => ({
+          ...current,
+          [roomId]:
+            "Prepared but not sent; no message has been confirmed. Retry only by explicitly choosing Send prepared operation.",
+        }));
+      await refresh();
+    } catch (reason) {
+      setError(
+        `Result unknown; this operation stays unresolved. ${describeError(reason)}`,
+      );
     }
   };
   return (
@@ -659,7 +979,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           <strong>Rooms</strong>
           <button
             type="button"
-            onClick={() => {
+            onClick={(event) => {
+              dialogInvoker.current = event.currentTarget;
               setName("");
               setMemberName("");
               setThreadId("");
@@ -675,6 +996,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             key={entry.id}
             aria-current={entry.id === selected ? "page" : undefined}
             onClick={() => {
+              selectedRef.current = entry.id;
               setSelected(entry.id);
               setPanel(null);
               setError(null);
@@ -709,7 +1031,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               </div>
               <button
                 type="button"
-                onClick={() => {
+                onClick={(event) => {
+                  dialogInvoker.current = event.currentTarget;
                   setName(room.name);
                   setPanel("manage");
                 }}
@@ -717,6 +1040,124 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 Members & settings
               </button>
             </header>
+            {error ||
+            roomErrors[room.id] ||
+            feedback[room.id] ||
+            pending ||
+            room.responders?.some((entry) => !entry.configured) ||
+            (room.operations ?? []).some(
+              (entry) => entry.id !== pendingByRoom[room.id]?.id,
+            ) ? (
+              <div
+                className="rooms-chat-status"
+                aria-label="Room delivery and setup"
+              >
+                {error || roomErrors[room.id] ? (
+                  <p role="alert" className="form-error">
+                    {roomErrors[room.id] || error}
+                  </p>
+                ) : null}
+                {room.responders?.some((entry) => !entry.configured) ? (
+                  <p className="room-setup-note">
+                    No automatic wakeup for:{" "}
+                    {room.responders
+                      .filter((entry) => !entry.configured)
+                      .map((entry) => `@${entry.name}`)
+                      .join(", ")}
+                    .{" "}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        sdk.navigation.navigate(
+                          "/plugins/zenx-triggers/triggers",
+                        )
+                      }
+                    >
+                      Configure Trigger…
+                    </button>
+                  </p>
+                ) : null}
+                {feedback[room.id] ? (
+                  <p role="status">{feedback[room.id]}</p>
+                ) : null}
+                {pending ? (
+                  <div role="status" className="room-send-pending">
+                    {pending.messageId
+                      ? `Message ${pending.messageId} saved; verify its wakeup status.`
+                      : "Operation awaiting confirmation. This Room cannot silently resend it."}{" "}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void inspectPending(room.id, pending, false)
+                      }
+                    >
+                      Check exact operation
+                    </button>
+                    {!pending.messageId ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void inspectPending(room.id, pending, true)
+                        }
+                      >
+                        Send prepared operation (explicit)
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+                {(room.operations ?? [])
+                  .filter((operation) => operation.id !== pending?.id)
+                  .map((operation) => (
+                    <div
+                      className="room-send-pending"
+                      key={operation.id}
+                      role="status"
+                    >
+                      Unreviewed Room operation {operation.id.slice(0, 8)}:{" "}
+                      {operation.messageId
+                        ? "saved"
+                        : "prepared / result unknown"}{" "}
+                      · {Array.from(operation.text).slice(0, 70).join("")}{" "}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void inspectPending(
+                            room.id,
+                            {
+                              id: operation.id,
+                              text: operation.text,
+                              revision: null,
+                              messageId: operation.messageId,
+                            },
+                            false,
+                          )
+                        }
+                      >
+                        Check exact operation
+                      </button>
+                      {!operation.messageId ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void inspectPending(
+                              room.id,
+                              {
+                                id: operation.id,
+                                text: operation.text,
+                                revision: null,
+                                messageId: null,
+                              },
+                              true,
+                            )
+                          }
+                        >
+                          Send prepared operation (explicit)
+                        </button>
+                      ) : null}
+                    </div>
+                  ))}
+              </div>
+            ) : null}
             <div
               className="rooms-chat-feed"
               ref={feed}
@@ -729,6 +1170,16 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   80;
               }}
             >
+              {room.nextCursor !== null && room.nextCursor !== undefined ? (
+                <button
+                  type="button"
+                  className="room-load-earlier"
+                  disabled={loadingOlder}
+                  onClick={() => void loadEarlier(room.id, room.nextCursor!)}
+                >
+                  {loadingOlder ? "Loading…" : "Load earlier messages"}
+                </button>
+              ) : null}
               {room.messages.length === 0 ? (
                 <div className="rooms-chat-empty">
                   Start the conversation. @mention a registered member to
@@ -745,53 +1196,49 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     </time>
                   </header>
                   <Markdown text={message.text} />
+                  {message.kind === "human" &&
+                  deliveries[message.id]?.state === "saved" ? (
+                    <small className="room-delivery">
+                      Saved ·{" "}
+                      {deliveries[message.id]!.mentions.map(
+                        (mention) =>
+                          `@${mention.name}: ${mention.deliveries.map((entry) => entry.status).join(", ")}`,
+                      ).join(" · ") || "No @ wake requested"}
+                    </small>
+                  ) : message.kind === "human" &&
+                    deliveries[message.id]?.state === "unknown" ? (
+                    <small className="room-delivery">
+                      Saved message · wake result unavailable
+                    </small>
+                  ) : null}
                 </article>
               ))}
             </div>
             <div className="rooms-chat-compose">
-              {error ? (
-                <p role="alert" className="form-error">
-                  {error}
-                </p>
-              ) : null}
-              {pending?.roomId === room.id ? (
-                <div role="status">
-                  Send result unknown. Refresh and inspect the timeline before
-                  composing a new message.{" "}
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void refresh().catch((reason: unknown) =>
-                        setError(describeError(reason)),
-                      )
-                    }
-                  >
-                    Refresh
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      pendingRef.current = null;
-                      setPending(null);
-                      setDrafts((current) => ({ ...current, [room.id]: "" }));
-                      setError(null);
-                    }}
-                  >
-                    Discard draft & compose new
-                  </button>
-                </div>
-              ) : null}
               <div className="rooms-chat-mentions">
                 {room.members.map((member) => (
                   <button
                     key={member.threadId}
                     type="button"
-                    onClick={() =>
+                    onClick={() => {
+                      const input = composer.current;
+                      const start = input?.selectionStart ?? draft.length;
+                      const end = input?.selectionEnd ?? draft.length;
+                      const token = `@${member.name} `;
+                      revisions.current[room.id] =
+                        (revisions.current[room.id] ?? 0) + 1;
                       setDrafts((current) => ({
                         ...current,
-                        [room.id]: `${current[room.id] ?? ""}@${member.name} `,
-                      }))
-                    }
+                        [room.id]: `${(current[room.id] ?? "").slice(0, start)}${token}${(current[room.id] ?? "").slice(end)}`,
+                      }));
+                      requestAnimationFrame(() => {
+                        input?.focus();
+                        input?.setSelectionRange(
+                          start + token.length,
+                          start + token.length,
+                        );
+                      });
+                    }}
                   >
                     @{member.name}
                   </button>
@@ -801,16 +1248,19 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 Message
               </label>
               <textarea
+                ref={composer}
                 id="room-chat-input"
                 placeholder={`Message #${room.name} · Enter to send, Shift+Enter for newline`}
                 value={draft}
-                disabled={pending?.roomId === room.id}
-                onChange={(event) =>
+                disabled={false}
+                onChange={(event) => {
+                  revisions.current[room.id] =
+                    (revisions.current[room.id] ?? 0) + 1;
                   setDrafts((current) => ({
                     ...current,
                     [room.id]: event.target.value,
-                  }))
-                }
+                  }));
+                }}
                 onKeyDown={(event) => {
                   if (
                     event.key === "Enter" &&
@@ -825,10 +1275,15 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               <button
                 type="button"
                 className="primary-button"
-                disabled={busy || pending?.roomId === room.id || !draft.trim()}
+                disabled={
+                  busy ||
+                  sendingRooms[room.id] ||
+                  pending !== null ||
+                  !draft.trim()
+                }
                 onClick={() => void send()}
               >
-                {busy ? "Sending…" : "Send"}
+                {sendingRooms[room.id] ? "Sending…" : "Send"}
               </button>
               <small>
                 Only explicit @mentions with an active Room mention Trigger wake
@@ -842,10 +1297,34 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
         <div
           className="rooms-chat-overlay"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setPanel(null);
+            if (event.target === event.currentTarget) closeDialog();
           }}
         >
           <section
+            ref={dialog}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                closeDialog();
+                return;
+              }
+              if (event.key !== "Tab") return;
+              const targets = [
+                ...(dialog.current?.querySelectorAll<HTMLElement>(
+                  "button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [role=combobox], summary, a[href]",
+                ) ?? []),
+              ];
+              const first = targets[0],
+                last = targets.at(-1);
+              if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last?.focus();
+              }
+              if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first?.focus();
+              }
+            }}
             role="dialog"
             aria-modal="true"
             aria-label={panel === "create" ? "Create Room" : "Room settings"}
@@ -855,7 +1334,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               <h2>
                 {panel === "create" ? "New Room" : `#${room?.name} settings`}
               </h2>
-              <button type="button" onClick={() => setPanel(null)}>
+              <button ref={dialogClose} type="button" onClick={closeDialog}>
                 Close
               </button>
             </header>

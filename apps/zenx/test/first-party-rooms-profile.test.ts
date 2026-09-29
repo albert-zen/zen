@@ -152,7 +152,7 @@ test("packaged Rooms installs offline through profile discovery and preserves it
         pluginId: ZENX_ROOMS_CAPABILITY_ID,
         packageName: ZENX_ROOMS_PACKAGE_NAME,
       }),
-      /already version 1\.0\.0/u,
+      /already version 1\.0\.1/u,
     );
     const unchangedCatalog = JSON.parse(
       await readFile(path.join(userData, "capability-grants.json"), "utf8"),
@@ -219,11 +219,7 @@ test("packaged Rooms installs offline through profile discovery and preserves it
       "remove-member",
       { roomId: temporaryId, threadId: "thread-reviewer-2" },
     );
-    await capabilities.executePluginCommand(
-      ZENX_ROOMS_CAPABILITY_ID,
-      "post-message",
-      { roomId: temporaryId, text: "temporary message" },
-    );
+    await postTrustedHuman(capabilities, temporaryId, "temporary message");
     assert.equal(
       domain.snapshot().rooms.find((room) => room.id === temporaryId)?.name,
       "renamed",
@@ -248,10 +244,10 @@ test("packaged Rooms installs offline through profile discovery and preserves it
         members: [{ name: "Builder", threadId: "thread-builder" }],
       },
     );
-    await capabilities.executePluginCommand(
-      ZENX_ROOMS_CAPABILITY_ID,
-      "post-message",
-      { roomId: domain.snapshot().rooms.at(-1)!.id, text: "ready" },
+    await postTrustedHuman(
+      capabilities,
+      domain.snapshot().rooms.at(-1)!.id,
+      "ready",
     );
     assert.equal(domain.snapshot().rooms.at(-1)?.messages[0]?.author, "You");
 
@@ -284,10 +280,7 @@ test("packaged Rooms installs offline through profile discovery and preserves it
     try {
       await restarted.initialize();
       assert.equal(restarted.pluginSnapshot().plugins[0]?.lifecycle, "enabled");
-      const restored = (await restarted.executePluginCommand(
-        ZENX_ROOMS_CAPABILITY_ID,
-        "list",
-      )) as { rooms: Array<{ name: string }> };
+      const restored = await listAllRoomPages(restarted);
       assert.equal(
         restored.rooms.some((room) => room.name === "release"),
         true,
@@ -326,10 +319,7 @@ test("packaged Rooms installs offline through profile discovery and preserves it
       );
       assert.match(preserved, /release/u);
       await lifecycle.reinstall(ZENX_ROOMS_CAPABILITY_ID);
-      const reinstalled = (await lifecycle.executePluginCommand(
-        ZENX_ROOMS_CAPABILITY_ID,
-        "list",
-      )) as { rooms: Array<{ name: string }> };
+      const reinstalled = await listAllRoomPages(lifecycle);
       assert.equal(
         reinstalled.rooms.some((room) => room.name === "release"),
         true,
@@ -338,10 +328,7 @@ test("packaged Rooms installs offline through profile discovery and preserves it
       await lifecycle.uninstall(ZENX_ROOMS_CAPABILITY_ID);
       await lifecycle.deletePluginData(ZENX_ROOMS_CAPABILITY_ID);
       await lifecycle.reinstall(ZENX_ROOMS_CAPABILITY_ID);
-      const cleared = (await lifecycle.executePluginCommand(
-        ZENX_ROOMS_CAPABILITY_ID,
-        "list",
-      )) as { rooms: unknown[] };
+      const cleared = await listAllRoomPages(lifecycle);
       assert.deepEqual(cleared.rooms, []);
       assert.equal(await readFile(legacyFile, "utf8").then(Boolean), true);
     } finally {
@@ -705,4 +692,57 @@ function deferred<T>() {
     resolve = resolvePromise;
   });
   return { promise, resolve };
+}
+
+async function listAllRoomPages(
+  capabilities: ZenXCapabilityService,
+): Promise<{ rooms: Array<{ name: string }> }> {
+  const rooms: Array<{ name: string }> = [];
+  let cursor: number | null = 0;
+  while (cursor !== null) {
+    const page = (await capabilities.executePluginCommand(
+      ZENX_ROOMS_CAPABILITY_ID,
+      "list",
+      { cursor },
+    )) as { rooms: Array<{ name: string }>; nextCursor: number | null };
+    rooms.push(...page.rooms);
+    cursor = page.nextCursor;
+  }
+  return { rooms };
+}
+
+async function postTrustedHuman(
+  capabilities: ZenXCapabilityService,
+  roomId: string,
+  text: string,
+): Promise<void> {
+  let cursor: number | null = 0;
+  let operationEpoch: string | undefined;
+  while (cursor !== null) {
+    const page = (await capabilities.executePluginCommand(
+      ZENX_ROOMS_CAPABILITY_ID,
+      "list",
+      { cursor },
+    )) as {
+      rooms: Array<{ id: string; operationEpoch?: string }>;
+      nextCursor: number | null;
+    };
+    operationEpoch = page.rooms.find(
+      (room) => room.id === roomId,
+    )?.operationEpoch;
+    if (operationEpoch) break;
+    cursor = page.nextCursor;
+  }
+  if (!operationEpoch) throw new Error("Room send epoch not found");
+  const operationId = `${operationEpoch}:${crypto.randomUUID()}`;
+  await capabilities.executePluginCommand(
+    ZENX_ROOMS_CAPABILITY_ID,
+    "prepare-message",
+    { roomId, operationId, text },
+  );
+  await capabilities.executePluginCommand(
+    ZENX_ROOMS_CAPABILITY_ID,
+    "post-message",
+    { roomId, operationId, text },
+  );
 }

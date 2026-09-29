@@ -8773,9 +8773,11 @@ a:focus-visible {
   inset: 0;
   display: flex;
   justify-content: flex-end;
-  background: rgb(0 0 0 / 45%);
+  background: var(--overlay);
 }
 .rooms-chat-dialog {
+  box-sizing: border-box;
+  max-width: 100vw;
   width: min(430px, 100vw);
   height: 100%;
   overflow-y: auto;
@@ -8785,7 +8787,7 @@ a:focus-visible {
   align-items: stretch;
   gap: 16px;
   background: var(--surface);
-  box-shadow: -10px 0 35px rgb(0 0 0 / 15%);
+  box-shadow: -10px 0 35px var(--shadow-color-low);
 }
 .rooms-chat-dialog header,
 .rooms-chat-member {
@@ -8847,5 +8849,78 @@ a:focus-visible {
   }
   .rooms-chat-header h2 {
     font-size: 15px;
+  }
+}
+
+.rooms-chat-dialog header {
+  min-width: 0;
+}
+.rooms-chat-dialog header h2 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 18px;
+}
+.room-setup-note,
+.room-send-pending {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.room-setup-note button,
+.room-send-pending button {
+  color: var(--text-accent);
+  text-decoration: underline;
+}
+.room-delivery {
+  display: block;
+  margin-top: 5px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+@media (max-width: 420px) {
+  .rooms-chat-dialog {
+    padding: 14px;
+  }
+  .rooms-chat {
+    grid-template-columns: 88px minmax(0, 1fr);
+  }
+  .rooms-chat-list-head {
+    flex-wrap: wrap;
+  }
+  .rooms-chat-compose {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .rooms-chat-compose > button {
+    justify-self: end;
+  }
+}
+
+.rooms-chat-status {
+  flex: none;
+  max-height: min(130px, 22vh);
+  min-height: 0;
+  overflow-y: auto;
+  border-bottom: 1px solid var(--border-soft);
+  padding: 8px 16px;
+  font-size: 12px;
+}
+.rooms-chat-status .room-send-pending,
+.rooms-chat-status .room-setup-note,
+.rooms-chat-status p {
+  margin: 0 0 4px;
+}
+.rooms-chat-status button {
+  min-height: 24px;
+  padding: 3px 5px;
+}
+@media (max-width: 420px) {
+  .rooms-chat-status {
+    max-height: 90px;
+    padding: 6px 8px;
+  }
+  .rooms-chat-compose > small {
+    display: none;
   }
 }

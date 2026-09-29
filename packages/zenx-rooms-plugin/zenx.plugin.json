@@ -2,10 +2,15 @@
   "schemaVersion": 2,
   "id": "zenx-rooms",
   "name": "Rooms",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Manage shared ZenX Room collaboration.",
-  "compatibility": { "zenx": ">=0.1.0 <0.2.0" },
-  "runtime": { "type": "bundled", "entry": "./dist/runtime.js" },
+  "compatibility": {
+    "zenx": ">=0.1.0 <0.2.0"
+  },
+  "runtime": {
+    "type": "bundled",
+    "entry": "./dist/runtime.js"
+  },
   "mainDocument": "Use Rooms to manage shared collaboration and explicit member routing.",
   "storageVersion": 1,
   "provider": {
@@ -31,10 +36,15 @@
   "tools": [
     {
       "name": "zenx_rooms_list",
-      "description": "List Rooms, members, and bounded recent messages.",
+      "description": "Page Rooms and bounded preview metadata; use zenx_rooms_messages for full transcript.",
       "inputSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "cursor": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
         "required": [],
         "additionalProperties": false
       },
@@ -49,7 +59,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "name": { "type": "string", "maxLength": 256 },
+          "name": {
+            "type": "string",
+            "maxLength": 256
+          },
           "members": {
             "type": "array",
             "minItems": 1,
@@ -57,8 +70,14 @@
             "items": {
               "type": "object",
               "properties": {
-                "name": { "type": "string", "maxLength": 128 },
-                "threadId": { "type": "string", "maxLength": 512 }
+                "name": {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                "threadId": {
+                  "type": "string",
+                  "maxLength": 512
+                }
               },
               "required": ["name", "threadId"],
               "additionalProperties": false
@@ -79,8 +98,14 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "roomId": { "type": "string", "maxLength": 512 },
-          "name": { "type": "string", "maxLength": 256 }
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 256
+          }
         },
         "required": ["roomId", "name"],
         "additionalProperties": false
@@ -95,7 +120,12 @@
       "description": "Delete a Room when no nonterminal wakeup owns its reply route.",
       "inputSchema": {
         "type": "object",
-        "properties": { "roomId": { "type": "string", "maxLength": 512 } },
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
         "required": ["roomId"],
         "additionalProperties": false
       },
@@ -110,9 +140,18 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "roomId": { "type": "string", "maxLength": 512 },
-          "name": { "type": "string", "maxLength": 128 },
-          "threadId": { "type": "string", "maxLength": 512 }
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "threadId": {
+            "type": "string",
+            "maxLength": 512
+          }
         },
         "required": ["roomId", "name", "threadId"],
         "additionalProperties": false
@@ -128,8 +167,14 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "roomId": { "type": "string", "maxLength": 512 },
-          "threadId": { "type": "string", "maxLength": 512 }
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "threadId": {
+            "type": "string",
+            "maxLength": 512
+          }
         },
         "required": ["roomId", "threadId"],
         "additionalProperties": false
@@ -145,13 +190,165 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "roomId": { "type": "string", "maxLength": 512 },
-          "text": { "type": "string", "maxLength": 8000 }
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 8000
+          },
+          "operationId": {
+            "type": "string",
+            "maxLength": 512
+          }
         },
         "required": ["roomId", "text"],
         "additionalProperties": false
       },
       "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_rooms_prepare_message",
+      "description": "Prepare trusted human Room operation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "operationId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 8000
+          }
+        },
+        "required": ["roomId", "operationId", "text"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_rooms_operation",
+      "description": "Read trusted Room operation and wakeup status.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "operationId": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "required": ["roomId", "operationId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_rooms_ack_operation",
+      "description": "Acknowledge viewed Room operation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "operationId": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "required": ["roomId", "operationId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_rooms_delivery",
+      "description": "Read retained message-associated Room delivery by immutable message ID.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "messageId": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "required": ["roomId", "messageId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_rooms_operations",
+      "description": "Page retained unacknowledged Room operations for trusted UI.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "cursor": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["roomId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_rooms_messages",
+      "description": "Read a bounded chronological page of canonical Room messages.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "cursor": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["roomId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.read"],
       "interactionMode": "background_safe",
       "capabilities": ["zenx.rooms.manage"],
       "maxOutputBytes": 65536
@@ -167,7 +364,11 @@
       }
     ],
     "surfaces": [
-      { "id": "rooms-page", "bundleId": "main", "exportName": "rooms-page" }
+      {
+        "id": "rooms-page",
+        "bundleId": "main",
+        "exportName": "rooms-page"
+      }
     ]
   },
   "contributions": {
@@ -223,6 +424,36 @@
         "id": "post-message",
         "title": "Post an Agent-attributed Room message; explicit mentions may wake registered members.",
         "tool": "zenx_rooms_post_message"
+      },
+      {
+        "id": "prepare-message",
+        "title": "Prepare trusted human Room operation.",
+        "tool": "zenx_rooms_prepare_message"
+      },
+      {
+        "id": "operation",
+        "title": "Read trusted Room operation.",
+        "tool": "zenx_rooms_operation"
+      },
+      {
+        "id": "ack-operation",
+        "title": "Acknowledge viewed Room operation.",
+        "tool": "zenx_rooms_ack_operation"
+      },
+      {
+        "id": "delivery",
+        "title": "Read message delivery by Room message ID.",
+        "tool": "zenx_rooms_delivery"
+      },
+      {
+        "id": "operations",
+        "title": "Page unresolved Room operations.",
+        "tool": "zenx_rooms_operations"
+      },
+      {
+        "id": "messages",
+        "title": "Read bounded Room messages page.",
+        "tool": "zenx_rooms_messages"
       }
     ]
   }

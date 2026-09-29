@@ -7,7 +7,7 @@ import { JSDOM } from "jsdom";
 import { RoomsPage } from "../src/renderer/src/bundled-automation-ui.js";
 import type { PluginUiSdkV1 } from "../src/renderer/src/plugin-ui-host.js";
 
-test("trusted Room composer switches rooms, sends once, and treats post error as unknown until reconciled", async () => {
+test("R1 probe: a concurrent same-text message must NOT acknowledge a failed post", async () => {
   const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
   Object.assign(globalThis, {
     window: dom.window,
@@ -70,8 +70,9 @@ test("trusted Room composer switches rooms, sends once, and treats post error as
         if (id === "post-message" && input) {
           posts.push(input);
           if (rejectAfterSave) {
+            // Simulated message from another sender, NOT the attempted operation.
             rooms[0]!.messages.push({
-              id: "saved",
+              id: "other-sender",
               roomId: input.roomId,
               author: "You",
               text: input.text,
@@ -80,7 +81,6 @@ test("trusted Room composer switches rooms, sends once, and treats post error as
               originThreadId: null,
               originTurnId: null,
             });
-            operations.get(input.operationId)!.messageId = "saved";
             throw new Error("wake failed");
           }
           await new Promise<void>((resolve) => {
@@ -166,11 +166,10 @@ test("trusted Room composer switches rooms, sends once, and treats post error as
     );
     assert.equal(
       document.querySelector<HTMLTextAreaElement>("#room-chat-input")?.value,
-      "",
+      "@Bot 中文长消息", // own post failed; unrelated sender must NOT clear draft
     );
-    assert.match(
-      document.querySelector('.rooms-chat-status [role="status"]')!
-        .textContent!,
+    assert.doesNotMatch(
+      document.querySelector('[role="alert"]')!.textContent!,
       /Message saved/u,
     );
   } finally {

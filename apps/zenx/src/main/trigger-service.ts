@@ -33,6 +33,7 @@ import {
   MAX_ROOM_COUNT,
   MAX_ROOM_MEMBERS,
   MAX_ROOM_MESSAGES,
+  MAX_ROOM_OPERATIONS,
   MAX_ROOM_NAME_BYTES,
   MAX_TRIGGER_COUNT,
   MAX_TRIGGER_LABEL_BYTES,
@@ -46,6 +47,8 @@ import type {
   CreateTriggerInput,
   RoomMember,
   RoomMessage,
+  RoomSendOperation,
+  RoomDeliveryView,
   TriggerHistoryEntry,
   TriggerProgramConfig,
   TriggerProgramOutcome,
@@ -467,6 +470,8 @@ export class ZenXTriggerService {
         name: required(input.name, "room name", MAX_ROOM_NAME_BYTES),
         members: validateMembers(input.members),
         messages: [],
+        operations: [],
+        operationEpoch: randomUUID(),
         createdAt: this.#now(),
       };
       snapshot.rooms.push(value);
@@ -536,6 +541,184 @@ export class ZenXTriggerService {
     });
   }
 
+  async prepareRoomMessage(
+    roomId: string,
+    operationId: string,
+    text: string,
+  ): Promise<RoomSendOperation> {
+    const generation = this.#runningGeneration();
+    const id = required(operationId, "operation ID", MAX_ID_BYTES);
+    const normalizedText = required(text, "message", MAX_MESSAGE_TEXT_BYTES);
+    return await this.#mutate(generation, async (snapshot) => {
+      const room = snapshot.rooms.find((entry) => entry.id === roomId);
+      if (!room) throw new Error("Room was not found");
+      const operations = (room.operations ??= []);
+      const existing = operations.find((operation) => operation.id === id);
+      if (existing) {
+        if (existing.text !== normalizedText)
+          throw new Error("Operation is bound to a different message");
+        return structuredClone(existing);
+      }
+      const epoch = room.operationEpoch ?? "legacy";
+      const suffix = id.startsWith(`${epoch}:`)
+        ? id.slice(epoch.length + 1)
+        : "";
+      if (
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+          suffix,
+        )
+      )
+        throw new Error(
+          "Room operation key is stale or invalid; result unknown, refresh before a NEW send",
+        );
+      room.operationEpoch ??= epoch;
+      let evicted = false;
+      while (operations.length >= MAX_ROOM_OPERATIONS) {
+        const index = operations.findIndex((entry) => entry.acknowledged);
+        if (index < 0) break;
+        operations.splice(index, 1);
+        evicted = true;
+      }
+      if (evicted) room.operationEpoch = randomUUID();
+      if (operations.length >= MAX_ROOM_OPERATIONS)
+        throw new Error(
+          "Unresolved Room operation limit reached; review pending sends",
+        );
+      const value: RoomSendOperation = {
+        id,
+        text: normalizedText,
+        messageId: null,
+        createdAt: this.#now(),
+        acknowledged: false,
+        mentions: [],
+      };
+      operations.push(value);
+      return structuredClone(value);
+    });
+  }
+
+  async postPreparedRoomMessage(
+    roomId: string,
+    operationId: string,
+    text: string,
+  ): Promise<RoomSendOperation> {
+    const operation = await this.#postRoomMessage(
+      roomId,
+      "You",
+      text,
+      "human",
+      null,
+      null,
+      operationId,
+    );
+    if (!operation) throw new Error("Room operation is unavailable");
+    return operation;
+  }
+
+  wakeupsEnabled(): boolean {
+    return (
+      this.#generation?.wakeupAdmission === true && this.#generation.active
+    );
+  }
+
+  roomOperation(roomId: string, operationId: string): RoomDeliveryView {
+    const snapshot = this.#snapshot;
+    const room = snapshot.rooms.find((entry) => entry.id === roomId);
+    if (!room) throw new Error("Room was not found");
+    const operation = room.operations?.find(
+      (entry) => entry.id === operationId,
+    );
+    if (!operation)
+      throw new Error("Room operation is not retained; result unknown");
+    return {
+      operationId: operation.id,
+      roomId,
+      text: operation.text,
+      messageId: operation.messageId,
+      state: operation.messageId === null ? "prepared" : "saved",
+      createdAt: operation.createdAt,
+      mentions: operation.mentions.map((mention) => ({
+        name: mention.name,
+        threadId: mention.threadId,
+        configuredNow:
+          this.wakeupsEnabled() &&
+          snapshot.triggers.some(
+            (trigger) =>
+              trigger.active &&
+              trigger.kind === "roomMention" &&
+              trigger.threadId === mention.threadId &&
+              trigger.room?.roomId === roomId &&
+              trigger.room.mention.toLocaleLowerCase() ===
+                mention.name.toLocaleLowerCase(),
+          ),
+        deliveries:
+          mention.triggerIds.length === 0
+            ? [
+                {
+                  triggerId: "",
+                  status: "unconfigured" as const,
+                  historyId: null,
+                },
+              ]
+            : mention.triggerIds.map((triggerId) => {
+                const entry = snapshot.history.find(
+                  (history) =>
+                    history.triggerId === triggerId &&
+                    history.sourceRoomId === roomId &&
+                    history.sourceRoomMessageId === operation.messageId,
+                );
+                return {
+                  triggerId,
+                  status:
+                    entry === undefined
+                      ? ("unknown" as const)
+                      : entry.delivery === "unknown"
+                        ? ("unknown" as const)
+                        : entry.status === "failed"
+                          ? ("failed" as const)
+                          : entry.status === "completed"
+                            ? ("completed" as const)
+                            : entry.status === "running"
+                              ? ("running" as const)
+                              : ("pending" as const),
+                  historyId: entry?.id ?? null,
+                };
+              }),
+      })),
+    };
+  }
+
+  roomDelivery(
+    roomId: string,
+    messageId: string,
+  ):
+    | RoomDeliveryView
+    | { roomId: string; messageId: string; state: "unknown"; mentions: [] } {
+    const room = this.#snapshot.rooms.find((entry) => entry.id === roomId);
+    if (!room) throw new Error("Room was not found");
+    const operation = room.operations?.find(
+      (entry) => entry.messageId === messageId,
+    );
+    return operation
+      ? this.roomOperation(roomId, operation.id)
+      : { roomId, messageId, state: "unknown", mentions: [] };
+  }
+
+  async acknowledgeRoomOperation(
+    roomId: string,
+    operationId: string,
+  ): Promise<void> {
+    const generation = this.#runningGeneration();
+    await this.#mutate(generation, async (snapshot) => {
+      const operation = snapshot.rooms
+        .find((room) => room.id === roomId)
+        ?.operations?.find((entry) => entry.id === operationId);
+      if (!operation || operation.messageId === null)
+        throw new Error("Cannot acknowledge an uncommitted Room operation");
+      operation.acknowledged = true;
+    });
+  }
+
   async postRoomMessage(
     roomId: string,
     author: string,
@@ -555,7 +738,8 @@ export class ZenXTriggerService {
     kind: RoomMessage["kind"],
     originThreadId: string | null,
     originTurnId: string | null,
-  ): Promise<void> {
+    operationId?: string,
+  ): Promise<RoomSendOperation | undefined> {
     const generation = this.#runningGeneration();
     const normalizedRoomId = required(roomId, "room", MAX_ID_BYTES);
     const normalizedAuthor = required(
@@ -569,6 +753,22 @@ export class ZenXTriggerService {
         (entry) => entry.id === normalizedRoomId,
       );
       if (room === undefined) throw new Error("Room was not found");
+      const operation =
+        operationId === undefined
+          ? undefined
+          : room.operations?.find((entry) => entry.id === operationId);
+      if (
+        operationId !== undefined &&
+        (!operation ||
+          kind !== "human" ||
+          normalizedAuthor !== "You" ||
+          operation.text !== normalizedText)
+      )
+        throw new Error(
+          "Room operation is missing or bound to a different message",
+        );
+      if (operation !== undefined && operation.messageId !== null)
+        return { wakeups: [], operation: structuredClone(operation) };
       const value = message(
         room.id,
         normalizedAuthor,
@@ -584,7 +784,7 @@ export class ZenXTriggerService {
         mentionMatches(normalizedText, member.name),
       );
       for (const member of mentions) {
-        const triggerIds = snapshot.triggers
+        const triggerIds = (generation.wakeupAdmission ? snapshot.triggers : [])
           .filter(
             (trigger) =>
               trigger.active &&
@@ -595,6 +795,11 @@ export class ZenXTriggerService {
                 member.name.toLocaleLowerCase(),
           )
           .map((trigger) => trigger.id);
+        operation?.mentions.push({
+          name: member.name,
+          threadId: member.threadId,
+          triggerIds,
+        });
         for (const triggerId of triggerIds) {
           const commit = this.#commitWakeup(snapshot, triggerId, {
             reason: `Room #${room.name} mention from ${value.author}: ${value.text}`,
@@ -607,11 +812,17 @@ export class ZenXTriggerService {
             wakeups.push(commit);
         }
       }
-      return { wakeups };
+      if (operation) operation.messageId = value.id;
+      return {
+        wakeups,
+        operation:
+          operation === undefined ? undefined : structuredClone(operation),
+      };
     });
     this.#rescheduleTimers(generation);
     for (const wakeup of committed.wakeups)
       await this.#runCommittedWakeup(generation, wakeup);
+    return committed.operation;
   }
 
   async #handleTurnCompleted(
@@ -1845,6 +2056,8 @@ function retainSnapshot(snapshot: TriggerSnapshot): void {
       throw new Error(
         `Room cannot have more than ${String(MAX_ROOM_MEMBERS)} members`,
       );
+    if ((room.operations?.length ?? 0) > MAX_ROOM_OPERATIONS)
+      throw new Error("Unresolved Room operation limit reached");
     room.messages = room.messages.slice(-MAX_ROOM_MESSAGES);
   }
 }

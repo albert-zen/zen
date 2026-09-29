@@ -262,7 +262,8 @@
 - **ZenXTriggerRegistry** — `zenx-triggers` Plugin Package 在自身 storage namespace 持久化的可审计
   唤醒条件与命中历史；每次命中以稳定幂等 key 通过 App Server 提交普通输入，Thread 完成通知使用既有 canonical queue，失败明确记录且不自动补偿。
 - **ZenXRoom** — `zenx-rooms` Plugin Package 在自身 storage namespace 持有的共享协作转录与 Thread 路由表面；Room 本身不是
-  Agent 上下文，只有明确命中 membership / mention 时才把带来源的内容投递给成员 Thread。
+  Agent 上下文，只有明确命中 membership / mention 时才把带来源的内容投递给成员 Thread；读取转录使用有界分页而非把全部历史压入一次插件命令结果。
+- **ZenXRoomSendOperation** — ZenX Rooms plugin storage 中有界的 Host 可信发送准备/提交回执，按 Host 持有的 Room epoch 与客户端非权威 UUID 绑定 Room 与正文、保存稳定消息 ID 和提交时成员唤醒匹配事实；它只供 UI 查询/明确确认，不是 Thread/Turn 会话状态或重试调度器，丢失回执只表示未知而非可重发。
 - **ZenXWakeupProjection** — ZenX 把 Trigger 命中的 `clientUserMessageId` 与外部审计记录
   关联成系统级唤醒卡片，并把有界、带明确来源的 completed Turn / Room 上下文作为
   新 Turn 输入投影；它不是第二份权威 transcript，canonical `user_message` 仍是唯一输入事实。

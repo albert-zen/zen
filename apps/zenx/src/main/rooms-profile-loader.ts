@@ -2,7 +2,7 @@ import type { ZenXAutomationControlPort } from "./capabilities/automation-contro
 import type { ZenXTrustedProfilePluginLoader } from "./plugin-profile.js";
 
 export const ZENX_ROOMS_PACKAGE_NAME = "@zenx/rooms-plugin";
-export const ZENX_ROOMS_TARBALL = "zenx-rooms-plugin-1.0.0.tgz";
+export const ZENX_ROOMS_TARBALL = "zenx-rooms-plugin-1.0.1.tgz";
 
 export function createZenXRoomsProfileLoader(
   service: () => ZenXAutomationControlPort,
