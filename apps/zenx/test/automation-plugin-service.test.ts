@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -498,5 +498,49 @@ test("resume rejects same-target prompt, timer, program and deletion races", asy
     );
   } finally {
     await service.stopPlugin("zenx-triggers");
+  }
+});
+
+test("overlapping enabled Trigger runtime generations keep durable wakeup admission until the last lease closes", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-trigger-runtime-lease-"),
+  );
+  const service = await createBundledAutomationPluginService({
+    userDataDirectory: directory,
+    appServer: {
+      request: async () => ({}) as never,
+      onNotification: () => () => {},
+      enqueue: async () => {},
+    },
+  });
+  try {
+    await service.startPlugin("zenx-triggers", {} as never); // committed runtime
+    await service.startPlugin("zenx-rooms", {} as never);
+    await service.startPlugin("zenx-triggers", {} as never); // staged replacement starts
+    await service.stopPlugin("zenx-triggers"); // previous generation retires after publish
+    const created = await service.create({
+      kind: "timer",
+      threadId: "target",
+      label: "Retained",
+      prompt: "Fake local wakeup",
+      runAt: Date.now() + 60_000,
+    });
+    const stored = JSON.parse(
+      await readFile(
+        path.join(directory, "plugin-data", "zenx-triggers", "storage.json"),
+        "utf8",
+      ),
+    ) as {
+      value: { triggers: Array<{ id: string }> };
+    };
+    assert.equal(
+      stored.value.triggers.find((trigger) => trigger.id === created.id)?.id,
+      created.id,
+      "enabled Catalog tool success must commit its Trigger definition before returning",
+    );
+  } finally {
+    await service.stopPlugin("zenx-triggers");
+    await service.stopPlugin("zenx-rooms");
+    await rm(directory, { recursive: true, force: true });
   }
 });

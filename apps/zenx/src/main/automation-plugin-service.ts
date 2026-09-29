@@ -220,6 +220,10 @@ async function readPluginValue(
 export class ZenXBundledAutomationPluginService implements ZenXAutomationControlPort {
   readonly #service: ZenXTriggerService;
   readonly #active: Set<string>;
+  // A bundled profile replacement may start its new runtime before the old
+  // generation closes. Catalog enablement is one logical capability, but
+  // both runtime instances must release their own transient lease.
+  #triggerRuntimeLeases = 0;
   readonly #targets: ThreadTargetPort | undefined;
   readonly #appServer: ZenXTriggerAppServerPort;
   readonly #targetDefaults?: () => Promise<
@@ -256,27 +260,42 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     _sdk: ZenXPluginHostSdkV1,
   ): Promise<void> {
     await this.#serialize(async () => {
+      if (
+        pluginId === ZENX_TRIGGERS_CAPABILITY_ID &&
+        this.#active.has(pluginId)
+      ) {
+        this.#triggerRuntimeLeases++;
+        return;
+      }
       if (this.#active.has(pluginId)) return;
       const first = this.#active.size === 0;
       if (first) {
         this.#active.add(pluginId);
+        if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID)
+          this.#triggerRuntimeLeases = 1;
         try {
           await this.#service.start(
             this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID),
           );
         } catch (error) {
           this.#active.delete(pluginId);
+          if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID)
+            this.#triggerRuntimeLeases = 0;
           throw error;
         }
       } else {
         await this.#service.stop();
         this.#active.add(pluginId);
+        if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID)
+          this.#triggerRuntimeLeases = 1;
         try {
           await this.#service.start(
             this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID),
           );
         } catch (error) {
           this.#active.delete(pluginId);
+          if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID)
+            this.#triggerRuntimeLeases = 0;
           await this.#service.start(
             this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID),
           );
@@ -289,12 +308,21 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   async stopPlugin(pluginId: string): Promise<void> {
     await this.#serialize(async () => {
       if (!this.#active.has(pluginId)) return;
+      if (
+        pluginId === ZENX_TRIGGERS_CAPABILITY_ID &&
+        this.#triggerRuntimeLeases > 1
+      ) {
+        this.#triggerRuntimeLeases--;
+        return;
+      }
       if (this.#active.size === 1) {
         await this.#service.stop();
         this.#active.delete(pluginId);
       } else {
         this.#active.delete(pluginId);
       }
+      if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID)
+        this.#triggerRuntimeLeases = 0;
       if (this.#active.size > 0 && pluginId === ZENX_TRIGGERS_CAPABILITY_ID)
         this.#service.suspendWakeups();
     });

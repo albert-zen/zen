@@ -224,18 +224,28 @@ test(
       }
       assert(watched, "one-shot watch did not complete");
       assert.equal(watched.sourceTurnId, sourceTurn.id);
-      const watchedRead = await manager.request("thread/read", {
-        threadId: bound.threadId,
-        includeTurns: true,
-      });
-      assert(
-        watchedRead.thread.turns
+      // Delivery history is admission, not a synchronous journal flush or a
+      // claim that the target Agent Turn has already finished.
+      let canonicalWatchInput = false;
+      const canonicalDeadline = Date.now() + 10_000;
+      while (Date.now() < canonicalDeadline) {
+        const watchedRead = await manager.request("thread/read", {
+          threadId: bound.threadId,
+          includeTurns: true,
+        });
+        canonicalWatchInput = watchedRead.thread.turns
           .flatMap((turn) => turn.items)
           .some(
             (item) =>
               item.type === "userMessage" &&
               item.clientId === watched?.clientUserMessageId,
-          ),
+          );
+        if (canonicalWatchInput) break;
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      }
+      assert(
+        canonicalWatchInput,
+        "watch notification did not commit canonical target input",
       );
       const final = (await invoke("zenx_triggers_list", {})) as {
         triggers: Array<{ id: string; active: boolean }>;
