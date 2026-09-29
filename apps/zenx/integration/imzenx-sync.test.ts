@@ -63,11 +63,13 @@ test(
         }
       });
       const imRoot = path.resolve("../imzen");
-      const python = path.join(
-        imRoot,
-        ".venv",
-        process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
-      );
+      const python =
+        process.env.IMZEN_TEST_PYTHON ??
+        path.join(
+          imRoot,
+          ".venv",
+          process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
+        );
       child = spawn(python, [path.join(imRoot, "tests/zenx_sync_probe.py")], {
         stdio: ["pipe", "pipe", "pipe"],
       });
