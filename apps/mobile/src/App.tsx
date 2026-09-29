@@ -11,7 +11,9 @@ import {
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { createSession } from "./session.mjs";
-import { fixtureHosts, fixtureTransport } from "./fixture.mjs";
+import { createAppActions } from "./app-actions.mjs";
+import { fixtureHosts } from "./fixture.mjs";
+import { combinedTransport, setHostList, transport } from "./transport";
 
 type ScreenState = ReturnType<ReturnType<typeof createSession>["get"]>;
 const colors = {
@@ -26,11 +28,39 @@ export default function App() {
   const [screen, setScreen] = useState<ScreenState | null>(null);
   const [draft, setDraft] = useState("");
   const [address, setAddress] = useState("");
+  const [hostId, setHostId] = useState("");
+  const [pairCode, setPairCode] = useState("");
+  const [pairState, setPairState] = useState<string | null>(null);
   const [hosts, setHosts] = useState(fixtureHosts);
   const [storageError, setStorageError] = useState<string | null>(null);
   const userSelected = useRef(false);
-  const session = useMemo(() => createSession(fixtureTransport, setScreen), []);
+  const draftRef = useRef("");
+  const pairCodeRef = useRef("");
+  const updateDraft = (value: string) => {
+    draftRef.current = value;
+    setDraft(value);
+  };
+  const updatePairCode = (value: string) => {
+    pairCodeRef.current = value;
+    setPairCode(value);
+  };
+  const session = useMemo(
+    () => createSession(combinedTransport, setScreen),
+    [],
+  );
+  const actions = useMemo(
+    () =>
+      createAppActions(session, transport, {
+        getDraft: () => draftRef.current,
+        setDraft: updateDraft,
+        getPairCode: () => pairCodeRef.current,
+        setPairCode: updatePairCode,
+        setPairState,
+      }),
+    [session],
+  );
   useEffect(() => {
+    setHostList(hosts);
     session.setHosts(hosts);
   }, [session, hosts]);
   useEffect(() => () => session.dispose(), [session]);
@@ -42,28 +72,29 @@ export default function App() {
     ])
       .then(([selected, saved]) => {
         if (!active) return;
-        const addresses: string[] = saved ? JSON.parse(saved) : [];
+        const addresses: { id: string; endpoint: string }[] = saved
+          ? JSON.parse(saved)
+          : [];
         const valid = addresses
           .filter(
             (value) =>
-              typeof value === "string" &&
-              /^https:\/\/[^\s/]+(?:\/[^\s]*)?$/.test(value),
+              typeof value?.id === "string" &&
+              typeof value?.endpoint === "string" &&
+              /^https:\/\/[^\s/]+(?::\d+)?\/?$/.test(value.endpoint),
           )
           .slice(0, 10);
-        setHosts([
+        const list = [
           ...fixtureHosts,
-          ...valid.map((value) => ({
-            id: value,
-            name: value,
-            endpoint: value,
-          })),
-        ]);
+          ...valid.map((value) => ({ ...value, name: value.id })),
+        ];
+        setHostList(list);
+        setHosts(list);
         if (
           !userSelected.current &&
           selected &&
-          (selected === fixtureHosts[0].id || valid.includes(selected))
+          list.some((h) => h.id === selected)
         )
-          session.selectHost(selected);
+          actions.selectHost(selected);
       })
       .catch((e) => {
         if (active)
@@ -72,11 +103,11 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [session]);
+  }, [session, actions]);
   const s = screen ?? session.get();
   function selectHost(id: string) {
     userSelected.current = true;
-    session.selectHost(id);
+    actions.selectHost(id);
     void SecureStore.setItemAsync("zenx-mobile-host-preference-v1", id).catch(
       (e) => setStorageError(`Could not save device preference: ${String(e)}`),
     );
@@ -84,20 +115,28 @@ export default function App() {
   function addHost() {
     // An address is never interpreted as an authenticated connection by the fixture.
     const value = address.trim();
-    if (!/^https:\/\/[^\s/]+(?:\/[^\s]*)?$/.test(value)) return;
-    if (hosts.some((host) => host.id === value) || hosts.length > 10) return;
+    const id = hostId.trim();
+    if (
+      !/^https:\/\/[^\s/]+(?::\d+)?\/?$/.test(value) ||
+      !/^[a-zA-Z0-9-]{8,80}$/.test(id)
+    ) {
+      setStorageError("Enter HTTPS origin and Host ID from the Host operator.");
+      return;
+    }
+    if (hosts.some((host) => host.id === id) || hosts.length > 10) return;
     const addresses = [
       ...hosts
         .filter((host) => host.id !== fixtureHosts[0].id)
-        .map((host) => host.endpoint),
-      value,
+        .map((host) => ({ id: host.id, endpoint: host.endpoint })),
+      { id, endpoint: value },
     ];
-    setHosts([...hosts, { id: value, name: value, endpoint: value }]);
+    setHosts([...hosts, { id, name: id, endpoint: value }]);
     void SecureStore.setItemAsync(
       "zenx-mobile-addresses-v1",
       JSON.stringify(addresses),
     ).catch((e) => setStorageError(`Could not save address: ${String(e)}`));
     setAddress("");
+    setHostId("");
   }
   const button = (label: string, action: () => void, disabled = false) => (
     <Pressable
@@ -117,8 +156,9 @@ export default function App() {
         <Text style={styles.overline}>ZENX / ANDROID</Text>
         <Text style={styles.title}>Your desktop, within reach.</Text>
         <Text style={styles.banner}>
-          DEVELOPMENT FIXTURE · No remote Host is connected. Commands are
-          disabled by the fixture.
+          Demo desktop is a fixture only. Real hosts require verified TLS, a
+          fresh pairing code, and a separate isolated CLI Host. No tool/approval
+          transcript is exposed.
         </Text>
         <Text style={styles.heading}>Primary device</Text>
         {s.hosts.map((h) => (
@@ -146,7 +186,37 @@ export default function App() {
           autoCapitalize="none"
           accessibilityLabel="Host address"
         />
+        <TextInput
+          style={styles.input}
+          placeholder="Host ID from desktop"
+          placeholderTextColor={colors.muted}
+          value={hostId}
+          onChangeText={setHostId}
+          autoCapitalize="none"
+          accessibilityLabel="Host ID"
+        />
         {button("Add address (unpaired)", addHost)}
+        {s.host && s.host !== fixtureHosts[0].id && (
+          <>
+            <TextInput
+              style={styles.input}
+              placeholder="Fresh pairing code"
+              placeholderTextColor={colors.muted}
+              value={pairCode}
+              onChangeText={updatePairCode}
+              autoCapitalize="none"
+              secureTextEntry
+              accessibilityLabel="Pairing code"
+            />
+            {button("Pair selected Host", () => {
+              void actions.pair();
+            })}
+            {pairState && <Text style={styles.meta}>{pairState}</Text>}
+          </>
+        )}
+        {s.status === "offline" &&
+          s.host &&
+          button("Reconnect (read Host state)", () => selectHost(s.host!))}
         {s.error && <Text style={styles.error}>{s.error}</Text>}
         {storageError && <Text style={styles.error}>{storageError}</Text>}
         <Text style={styles.heading}>Workspace</Text>
@@ -156,11 +226,20 @@ export default function App() {
             <Text style={styles.name}>{w.name}</Text>
             {button(
               s.workspace === w.id ? "Selected workspace" : "Switch workspace",
-              () => session.selectWorkspace(w.id),
+              () => {
+                actions.selectWorkspace(w.id);
+              },
             )}
           </View>
         ))}
         <Text style={styles.heading}>Threads</Text>
+        {s.workspace && s.host !== fixtureHosts[0].id && (
+          <Text style={styles.banner}>
+            Remote threads are read-only + approval-required. This client cannot
+            approve tools or access tool outputs. Full Access threads cannot be
+            started remotely.
+          </Text>
+        )}
         {!s.workspace && (
           <Text style={styles.meta}>
             Choose a workspace to view its threads.
@@ -171,7 +250,7 @@ export default function App() {
             <View key={t.id} style={styles.card}>
               <Text style={styles.name}>{t.title}</Text>
               <Text style={styles.meta}>{t.status}</Text>
-              {button("Open thread", () => session.openThread(t.id))}
+              {button("Open thread", () => actions.openThread(t.id))}
             </View>
           ))}
         {s.thread && (
@@ -185,30 +264,40 @@ export default function App() {
                 <Text style={styles.name}>{item.text}</Text>
               </View>
             ))}
+            {s.turns.map((turn) => (
+              <Text key={turn.id} style={styles.meta}>
+                Turn {turn.id}: {turn.status}
+              </Text>
+            ))}
+            {s.lastRequest && (
+              <Text style={styles.meta}>
+                {s.lastRequest.kind === "send" ? "Send" : "Stop"} accepted for
+                Turn {s.lastRequest.turnId}. Admission is not the Turn outcome.
+              </Text>
+            )}
             <TextInput
               style={styles.input}
               multiline
               placeholder="Message"
               placeholderTextColor={colors.muted}
               value={draft}
-              onChangeText={setDraft}
+              onChangeText={actions.editDraft}
             />
             {button(
               "Send message",
               () => {
-                void session.command("send", {
-                  threadId: s.thread,
-                  text: draft,
-                });
+                void actions.send();
               },
-              !draft.trim() || s.command === "pending",
+              !draft.trim() ||
+                s.command === "pending" ||
+                s.command === "uncertain",
             )}
             {button(
               "Stop current turn",
               () => {
-                void session.command("stop", { threadId: s.thread });
+                void actions.stop();
               },
-              s.command === "pending",
+              s.command === "pending" || s.command === "uncertain",
             )}
           </>
         )}
@@ -218,9 +307,22 @@ export default function App() {
             () => {
               void session.command("create", {});
             },
-            s.command === "pending",
+            s.command === "pending" || s.command === "uncertain",
           )}
-        {s.command && <Text style={styles.meta}>Command: {s.command}</Text>}
+        {s.command === "uncertain" && (
+          <Text style={styles.error}>
+            Delivery unknown. Do not resend; reconnect and inspect canonical
+            Host history first.
+          </Text>
+        )}
+        {s.command && (
+          <Text style={styles.meta}>
+            Request:{" "}
+            {s.command === "accepted"
+              ? "accepted (not Turn outcome)"
+              : s.command}
+          </Text>
+        )}
       </ScrollView>
     </SafeAreaView>
   );

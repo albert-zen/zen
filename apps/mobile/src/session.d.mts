@@ -9,6 +9,8 @@ export type State = {
   workspaces: Workspace[];
   threads: Thread[];
   items: Item[];
+  turns: { id: string; status: string }[];
+  lastRequest: { kind: string; turnId: string | null } | null;
   thread: string | null;
   status: string;
   error: string | null;
@@ -27,6 +29,8 @@ export function createSession(
         type: string;
         threads: Thread[];
         items: Record<string, Item[]>;
+        turns?: Record<string, { id: string; status: string }[]>;
+        revoked?: boolean;
       }) => void,
     ): () => void;
     read(host: string, workspace: string, id: string): Promise<Item[]>;
@@ -35,7 +39,7 @@ export function createSession(
       workspace: string,
       kind: string,
       payload: object,
-    ): Promise<{ accepted: boolean; error?: string }>;
+    ): Promise<{ accepted: boolean; error?: string; turnId?: string }>;
   },
   publish: (s: State) => void,
 ): {
@@ -44,6 +48,9 @@ export function createSession(
   selectHost(h: string | null): void;
   selectWorkspace(w: string | null): void;
   openThread(id: string): void;
-  command(kind: string, payload: object): Promise<void>;
+  command(
+    kind: string,
+    payload: { threadId?: string; text?: string },
+  ): Promise<{ accepted: boolean; turnId?: string } | void>;
   dispose(): void;
 };

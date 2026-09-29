@@ -215,7 +215,7 @@ jobs:
         run: npm --workspace apps/zenx run smoke:providers
 
   android-mobile:
-    name: Android fixture tests and debug APK
+    name: Android TLS Host integration and debug APK
     runs-on: ubuntu-latest
     timeout-minutes: 35
     defaults:
@@ -233,11 +233,22 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run typecheck
+      - run: npm ci
+        working-directory: .
+      - run: npm run test:host
       - run: npm run prebuild -- --no-install
       - run: ./gradlew assembleDebug
         working-directory: apps/mobile/android
+      - name: Try preinstalled headless Android emulator screenshot (fixture only)
+        run: timeout 240 ./scripts/capture-installed-emulator.sh
+        continue-on-error: true
+      - uses: actions/upload-artifact@v4
+        if: hashFiles('apps/mobile/evidence/android-fixture-emulator.png') != ''
+        with:
+          name: zenx-mobile-android-fixture-screenshot
+          path: apps/mobile/evidence/android-fixture-emulator.png
       - uses: actions/upload-artifact@v4
         with:
-          name: zenx-mobile-fixture-debug-apk
+          name: zenx-mobile-integration-debug-apk
           path: apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
