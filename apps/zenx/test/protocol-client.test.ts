@@ -16,6 +16,122 @@ import {
   type ServerNotificationMethod,
 } from "../src/protocol-client/index.js";
 
+test("admission reply lost on an open socket fails unknown without resending or stopping Host", async () => {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  let sends = 0;
+  let socket: WebSocket | undefined;
+  let firstId: number | undefined;
+  server.on("connection", (connected) => {
+    socket = connected;
+    connected.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as {
+        id?: number;
+        method?: string;
+      };
+      if (request.method === "turn/start") {
+        sends++;
+        firstId = request.id;
+        return;
+      }
+      if (request.id !== undefined)
+        connected.send(
+          JSON.stringify({
+            id: request.id,
+            result:
+              request.method === "account/read"
+                ? { account: null, requiresOpenaiAuth: false }
+                : {},
+          }),
+        );
+    });
+  });
+  const client = await ZenXProtocolClient.connect(
+    clientOptions(
+      `ws://127.0.0.1:${String(address.port)}`,
+      "lost-admission-reply",
+      { admissionReplyTimeoutMs: 40 },
+    ),
+  );
+  try {
+    await assert.rejects(
+      within(
+        client.request("turn/start", {
+          threadId: "private-thread",
+          input: [{ type: "text", text: "private" }],
+          clientUserMessageId: "stable-id",
+        }),
+        2_000,
+      ),
+      /outcome unknown/u,
+    );
+    assert.equal(sends, 1);
+    assert.equal(client.connected, true);
+    assert.deepEqual(await client.request("account/read", {}), {
+      account: null,
+      requiresOpenaiAuth: false,
+    });
+    socket?.send(JSON.stringify({ id: firstId, result: {} }));
+    assert.equal(sends, 1);
+  } finally {
+    client.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("socket loss during input admission reports unknown and resubscribes without resending", async () => {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  let sends = 0;
+  server.on("connection", (socket) =>
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as {
+        id?: number;
+        method?: string;
+      };
+      if (request.method === "turn/start") {
+        sends++;
+        socket.terminate();
+        return;
+      }
+      if (request.id !== undefined)
+        socket.send(JSON.stringify({ id: request.id, result: {} }));
+    }),
+  );
+  const client = await ZenXProtocolClient.connect(
+    clientOptions(
+      `ws://127.0.0.1:${String(address.port)}`,
+      "lost-socket-admission",
+      { reconnect: { maxAttempts: 8, minDelayMs: 5, maxDelayMs: 10 } },
+    ),
+  );
+  const reconnected = deferred<void>();
+  client.onStatus((status) => {
+    if (status.type === "ready" && status.reconnected) reconnected.resolve();
+  });
+  try {
+    await assert.rejects(
+      within(
+        client.request("turn/start", {
+          threadId: "private-thread",
+          input: [{ type: "text", text: "private" }],
+          clientUserMessageId: "stable-id",
+        }),
+      ),
+      /outcome unknown/u,
+    );
+    await within(reconnected.promise);
+    assert.equal(sends, 1);
+  } finally {
+    client.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test("types paginated thread/list cursors from the wire response", () => {
   const nextCursor: ClientRequestResults["thread/list"]["nextCursor"] =
     "opaque-next-cursor";

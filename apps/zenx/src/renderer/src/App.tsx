@@ -70,12 +70,14 @@ import {
 } from "./approval-state.js";
 import {
   acceptComposerSubmission,
+  advanceComposerDraftRevision,
   addComposerImages,
   beginComposerSubmission,
   editComposer,
   emptyComposerState,
   dismissCompactionFeedback,
   failComposerSubmission,
+  reconcileCanonicalAdmission,
   removeComposerImage,
   type ComposerIntent,
   type ComposerState,
@@ -406,6 +408,33 @@ export function App() {
   const [composerSendMode, setComposerSendMode] = useState<
     "batch" | "queue" | "soft" | "hard"
   >("soft");
+  const composerSendModeRef = useRef(composerSendMode);
+  const applyComposerSendMode = (mode: typeof composerSendMode) => {
+    if (mode !== composerSendModeRef.current) {
+      composerSendModeRef.current = mode;
+      const states = Object.fromEntries(
+        Object.entries(composerStatesRef.current).map(([threadId, state]) => [
+          threadId,
+          advanceComposerDraftRevision(state),
+        ]),
+      );
+      composerStatesRef.current = states;
+      setComposerStates(states);
+      const draft = newThreadDraftRef.current;
+      if (draft !== null)
+        confirmNewThreadDraft({
+          ...draft,
+          composer: advanceComposerDraftRevision(draft.composer),
+        });
+      const pending = newThreadPendingDraftRef.current;
+      if (pending !== null && pending.id !== draft?.id)
+        newThreadPendingDraftRef.current = {
+          ...pending,
+          composer: advanceComposerDraftRevision(pending.composer),
+        };
+    }
+    setComposerSendMode(mode);
+  };
   const [composerSendModeMigration, setComposerSendModeMigration] =
     useState<ZenXHostProfile["composerSendModeMigration"]>(undefined);
   const [workflowCommands, setWorkflowCommands] = useState<WorkflowCommand[]>(
@@ -428,7 +457,7 @@ export function App() {
       .get()
       .then((value) => {
         if (active) {
-          setComposerSendMode(value.profile.composerSendMode ?? "soft");
+          applyComposerSendMode(value.profile.composerSendMode ?? "soft");
           setComposerSendModeMigration(value.profile.composerSendModeMigration);
           setWorkflowCommands(value.profile.workflowCommands ?? []);
         }
@@ -442,7 +471,7 @@ export function App() {
     const onChanged = window.zenx.settings.onChanged;
     if (onChanged === undefined) return undefined;
     return onChanged((value) => {
-      setComposerSendMode(value.profile.composerSendMode ?? "soft");
+      applyComposerSendMode(value.profile.composerSendMode ?? "soft");
       setComposerSendModeMigration(value.profile.composerSendModeMigration);
       setWorkflowCommands(value.profile.workflowCommands ?? []);
     });
@@ -816,6 +845,14 @@ export function App() {
       );
       threadProjectionCacheRef.current.set(threadId, projected);
       setThreadDetail(projected.thread);
+      if (
+        projected.thread.id === threadId &&
+        projected.thread.canonicalItems !== undefined
+      ) {
+        updateComposer(threadId, (state) =>
+          reconcileCanonicalAdmission(state, projected.thread.canonicalItems!),
+        );
+      }
       setSelectedSettings(projected.settings);
       void window.zenx.imageAttachments
         .forThread(threadId)
@@ -992,6 +1029,27 @@ export function App() {
           threadProjectionCacheRef.current,
           notification,
         );
+        if (method === "zen/thread/event" && cached !== undefined) {
+          const event = params as ServerNotificationParams["zen/thread/event"];
+          if (
+            cached.processEpoch === event.processEpoch &&
+            cached.watermark === event.watermark &&
+            (event.event.type === "item_completed" ||
+              event.event.type === "turn_completed") &&
+            cached.thread.id === event.threadId &&
+            cached.thread.canonicalItems !== undefined
+          ) {
+            updateComposer(event.threadId, (state) =>
+              reconcileCanonicalAdmission(
+                state,
+                cached.thread.canonicalItems!,
+                event.event.type === "turn_completed"
+                  ? { turnId: event.event.turnId, status: event.event.status }
+                  : undefined,
+              ),
+            );
+          }
+        }
         const bufferingResume =
           pendingResume !== null &&
           pendingResume.epoch === selectionEpoch.current &&
@@ -2107,7 +2165,7 @@ export function App() {
         : (current.profile.composerSendModeExplicit ?? false),
       composerSendModeMigration: { ...migration, acknowledged: true },
     });
-    setComposerSendMode(saved.profile.composerSendMode ?? "soft");
+    applyComposerSendMode(saved.profile.composerSendMode ?? "soft");
     setComposerSendModeMigration(saved.profile.composerSendModeMigration);
   };
 

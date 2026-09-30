@@ -1680,6 +1680,41 @@ test("opaque reasoning with a summary is a static summary row", async () => {
   });
 });
 
+test("adjacent no-details reasoning shares an honest count while tools and public summaries remain in order", async () => {
+  await withDom(async (root) => {
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        reasoningItem("opaque-a", [], []),
+        reasoningItem("opaque-b", [], []),
+        commandItem("tool-between", "shell"),
+        reasoningItem("opaque-c", [], []),
+        reasoningItem("public-summary", ["Public summary"], []),
+        reasoningItem("opaque-d", [], []),
+        reasoningItem("opaque-e", [], []),
+      ]),
+    );
+    await act(async () => requiredButton(".trace-toggle").click());
+    const details = requiredElement(".trace-items");
+    const rows = [...details.children].map((row) => row.textContent ?? "");
+    assert.equal(rows.length, 5);
+    assert.match(rows[0]!, /2 reasoning items · no public details/u);
+    assert.match(rows[1]!, /Shell/u);
+    assert.match(rows[2]!, /Reasoning details/u);
+    assert.match(rows[3]!, /Public summary/u);
+    assert.match(rows[4]!, /2 reasoning items · no public details/u);
+    assert.equal(
+      details.querySelectorAll(".trace-reasoning-without-details").length,
+      2,
+    );
+    assert.equal(
+      details.querySelectorAll(".trace-reasoning-without-details button")
+        .length,
+      0,
+    );
+  });
+});
+
 test("opaque reasoning without a summary exposes only a neutral static row", async () => {
   await withDom(async (root) => {
     const row = await openReasoningRow(

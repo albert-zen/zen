@@ -21,10 +21,8 @@ import { windowBackdropOptions } from "./window-appearance.js";
 import { FileAttachmentStore } from "../../../../src/attachment.js";
 
 import { isAllowedZenXExternalUrl } from "../external-link-policy.js";
-import {
-  isClientRequestMethod,
-  type ServerNotificationParams,
-} from "../protocol-client/index.js";
+import { type ServerNotificationParams } from "../protocol-client/index.js";
+import { registerProtocolRequestIpc } from "./protocol-request-ipc.js";
 import { ipcChannels } from "../preload/ipc.js";
 import { AppServerManager } from "./app-server-manager.js";
 import type { ApprovalDecision } from "./app-server-manager.js";
@@ -1146,28 +1144,11 @@ function installProtocolIpc(
         readProjectThreadStartOptions(selection),
       ),
   );
-  ipcMain.handle(
-    ipcChannels.request,
-    async (_event, method: unknown, params: unknown) => {
-      if (!isClientRequestMethod(method)) {
-        throw new Error(`Unsupported ZenX protocol method: ${String(method)}`);
-      }
-      const result = await manager.request(method, params as never);
-      if (method === "thread/resume" || method === "thread/read") {
-        const snapshot =
-          result as import("../protocol-client/index.js").ClientRequestResults["thread/read"];
-        void observeThreadSnapshotTitle(titles, snapshot.thread).catch(
-          (error: unknown) => {
-            console.warn(
-              "Could not observe Thread snapshot for ZenX title",
-              error,
-            );
-          },
-        );
-      }
-      return result;
-    },
-  );
+  registerProtocolRequestIpc(manager, (thread) => {
+    void observeThreadSnapshotTitle(titles, thread).catch((error: unknown) => {
+      console.warn("Could not observe Thread snapshot for ZenX title", error);
+    });
+  });
   ipcMain.handle(
     ipcChannels.respondApproval,
     (_event, requestId: unknown, decision: unknown) => {
