@@ -66,6 +66,7 @@ import {
 } from "./approval-state.js";
 import {
   acceptComposerSubmission,
+  advanceComposerDraftRevision,
   addComposerImages,
   beginComposerSubmission,
   editComposer,
@@ -402,6 +403,33 @@ export function App() {
   const [composerSendMode, setComposerSendMode] = useState<
     "batch" | "queue" | "soft" | "hard"
   >("soft");
+  const composerSendModeRef = useRef(composerSendMode);
+  const applyComposerSendMode = (mode: typeof composerSendMode) => {
+    if (mode !== composerSendModeRef.current) {
+      composerSendModeRef.current = mode;
+      const states = Object.fromEntries(
+        Object.entries(composerStatesRef.current).map(([threadId, state]) => [
+          threadId,
+          advanceComposerDraftRevision(state),
+        ]),
+      );
+      composerStatesRef.current = states;
+      setComposerStates(states);
+      const draft = newThreadDraftRef.current;
+      if (draft !== null)
+        confirmNewThreadDraft({
+          ...draft,
+          composer: advanceComposerDraftRevision(draft.composer),
+        });
+      const pending = newThreadPendingDraftRef.current;
+      if (pending !== null && pending.id !== draft?.id)
+        newThreadPendingDraftRef.current = {
+          ...pending,
+          composer: advanceComposerDraftRevision(pending.composer),
+        };
+    }
+    setComposerSendMode(mode);
+  };
   const [composerSendModeMigration, setComposerSendModeMigration] =
     useState<ZenXHostProfile["composerSendModeMigration"]>(undefined);
   const [workflowCommands, setWorkflowCommands] = useState<WorkflowCommand[]>(
@@ -424,7 +452,7 @@ export function App() {
       .get()
       .then((value) => {
         if (active) {
-          setComposerSendMode(value.profile.composerSendMode ?? "soft");
+          applyComposerSendMode(value.profile.composerSendMode ?? "soft");
           setComposerSendModeMigration(value.profile.composerSendModeMigration);
           setWorkflowCommands(value.profile.workflowCommands ?? []);
         }
@@ -438,7 +466,7 @@ export function App() {
     const onChanged = window.zenx.settings.onChanged;
     if (onChanged === undefined) return undefined;
     return onChanged((value) => {
-      setComposerSendMode(value.profile.composerSendMode ?? "soft");
+      applyComposerSendMode(value.profile.composerSendMode ?? "soft");
       setComposerSendModeMigration(value.profile.composerSendModeMigration);
       setWorkflowCommands(value.profile.workflowCommands ?? []);
     });
@@ -2132,7 +2160,7 @@ export function App() {
         : (current.profile.composerSendModeExplicit ?? false),
       composerSendModeMigration: { ...migration, acknowledged: true },
     });
-    setComposerSendMode(saved.profile.composerSendMode ?? "soft");
+    applyComposerSendMode(saved.profile.composerSendMode ?? "soft");
     setComposerSendModeMigration(saved.profile.composerSendModeMigration);
   };
 

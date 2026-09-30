@@ -2108,6 +2108,127 @@ test("running queue, soft steer and hard steer each own one pending admission", 
   }
 });
 
+for (const path of [
+  "rpc",
+  "canonical",
+  "canonical-before-error-with-mode-return",
+  "unknown-then-edit",
+] as const) {
+  test(`React App ${path}: late old admission cannot clear a new draft generation`, async () => {
+    const response = deferred<unknown>();
+    let clientId: string | undefined;
+    let notify:
+      Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+    let settingsChanged:
+      ((value: ReturnType<typeof publicSettings>) => void) | undefined;
+    const harness = await mountThreadApp({
+      onSettingsChanged: (listener) => {
+        settingsChanged = listener;
+        return () => {
+          settingsChanged = undefined;
+        };
+      },
+      onNotification: (listener) => {
+        notify = listener;
+        return () => {
+          notify = undefined;
+        };
+      },
+      request: async (method, params) => {
+        if (method === "zen/thread/resume") return resumed(runningThread());
+        if (method === "turn/queue") {
+          clientId = (params as { clientUserMessageId: string })
+            .clientUserMessageId;
+          return await response.promise;
+        }
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+    });
+    try {
+      const composer = await selectedComposer();
+      await setTextareaValue(composer, "original");
+      await invokeFormSubmit(
+        document.querySelector<HTMLFormElement>("form.composer")!,
+      );
+      await waitFor(() => clientId !== undefined);
+      if (path === "unknown-then-edit") {
+        await act(async () => {
+          response.reject(new Error("request outcome unknown"));
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        await waitFor(() => document.querySelector(".composer-error"));
+      }
+      if (path !== "canonical-before-error-with-mode-return") {
+        await setTextareaValue(composer, "changed");
+        await setTextareaValue(composer, "original");
+      }
+      if (path === "unknown-then-edit")
+        assert.equal(document.querySelector(".composer-error"), null);
+      if (path === "canonical-before-error-with-mode-return") {
+        assert.ok(settingsChanged);
+        await act(async () => {
+          const soft = publicSettings([]);
+          soft.profile.composerSendMode = "soft";
+          settingsChanged?.(soft);
+          const back = publicSettings([]);
+          back.profile.composerSendMode = "queue";
+          settingsChanged?.(back);
+          await Promise.resolve();
+        });
+      }
+      const confirm = () =>
+        notify?.("zen/thread/event", {
+          threadId: "thread-1",
+          processEpoch: "test-process-epoch",
+          watermark: 1,
+          event: {
+            type: "item_completed",
+            item: {
+              type: "user_message_queued",
+              id: "qa-queued",
+              clientId: clientId!,
+              threadId: "thread-1",
+              createdAt: new Date().toISOString(),
+              input: [{ type: "text", text: "original" }],
+            },
+          },
+        });
+      if (path === "rpc") {
+        await act(async () => {
+          response.resolve({});
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+      } else if (path === "canonical") {
+        await act(async () => {
+          response.reject(new Error("request outcome unknown"));
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        await act(async () => confirm());
+      } else if (path === "unknown-then-edit") {
+        await act(async () => confirm());
+      } else {
+        await act(async () => confirm());
+        await act(async () => {
+          response.reject(new Error("request outcome unknown"));
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+      }
+      assert.equal(composer.value, "original");
+      if (path !== "rpc")
+        assert.match(
+          document.body.textContent ?? "",
+          /admitted to the queue; delivery is not confirmed/u,
+        );
+    } finally {
+      await unmountApp(harness);
+    }
+  });
+}
+
 test("late canonical queue ID settles only the original unknown submission, not another Thread's draft", async () => {
   let notify:
     Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
@@ -3147,6 +3268,9 @@ async function mountApp(
     onSettingsSave?(
       settings: import("../src/main/host-profile.js").ZenXSettingsUpdate,
     ): void;
+    onSettingsChanged?(
+      listener: (value: ReturnType<typeof publicSettings>) => void,
+    ): () => void;
     onNotification?: Window["zenx"]["protocol"]["onNotification"];
     onStatus?(listener: (status: AppServerHostStatus) => void): () => void;
     onPinnedThreadIds?(threadIds: readonly string[]): void;
@@ -3291,6 +3415,9 @@ async function mountApp(
     },
     settings: {
       get: async () => currentSettings,
+      onChanged: (
+        listener: (value: ReturnType<typeof publicSettings>) => void,
+      ) => options.onSettingsChanged?.(listener) ?? (() => undefined),
       save: async (
         update: import("../src/main/host-profile.js").ZenXSettingsUpdate,
       ) => {

@@ -15,6 +15,7 @@ export interface ComposerSubmission {
   intent: ComposerIntent;
   expectedTurnId: string | null;
   clientUserMessageId: string;
+  draftRevision: number;
   draftAtSubmit: ComposerDraft;
   text: string;
   images: readonly ComposerDraftImage[];
@@ -23,6 +24,8 @@ export interface ComposerSubmission {
 }
 
 export interface ComposerState {
+  /** Local draft identity: editing away and back never restores clear authority. */
+  draftRevision: number;
   /** Ephemeral UI acknowledgement of an uncertain admission, not an execution record. */
   confirmedAdmission?: {
     clientId: string;
@@ -39,7 +42,22 @@ export interface ComposerState {
 }
 
 export function emptyComposerState(): ComposerState {
-  return { draft: { text: "", images: [] }, submission: null };
+  return {
+    draftRevision: 0,
+    draft: { text: "", images: [] },
+    submission: null,
+  };
+}
+
+/** Invalidate old submission clear authority when the global send mode changes. */
+export function advanceComposerDraftRevision(
+  state: ComposerState,
+): ComposerState {
+  return {
+    ...state,
+    draftRevision: state.draftRevision + 1,
+    confirmedAdmission: undefined,
+  };
 }
 
 export type ComposerSendMode = "batch" | "queue" | "soft" | "hard";
@@ -64,15 +82,12 @@ export function editComposer(
   state: ComposerState,
   text: string,
 ): ComposerState {
-  const submission =
-    state.submission?.status === "failed" &&
-    text !== state.submission.draftAtSubmit.text
-      ? null
-      : state.submission;
   return {
     ...state,
+    draftRevision: state.draftRevision + (text !== state.draft.text ? 1 : 0),
     draft: { ...state.draft, text },
-    submission,
+    // Retain a failed old operation's ID for canonical reconciliation; its
+    // error belongs to that operation, not to the newly edited draft.
     ...(text !== state.draft.text ? { confirmedAdmission: undefined } : {}),
   };
 }
@@ -84,9 +99,9 @@ export function addComposerImages(
   if (images.length === 0) return state;
   return {
     ...state,
+    draftRevision: state.draftRevision + 1,
     confirmedAdmission: undefined,
     draft: { ...state.draft, images: [...state.draft.images, ...images] },
-    submission: state.submission?.status === "failed" ? null : state.submission,
   };
 }
 
@@ -98,9 +113,9 @@ export function removeComposerImage(
   if (images.length === state.draft.images.length) return state;
   return {
     ...state,
+    draftRevision: state.draftRevision + 1,
     confirmedAdmission: undefined,
     draft: { ...state.draft, images },
-    submission: state.submission?.status === "failed" ? null : state.submission,
   };
 }
 
@@ -125,6 +140,7 @@ export function beginComposerSubmission(
     state.submission?.status === "failed" &&
     state.submission.intent === intent &&
     state.submission.expectedTurnId === expectedTurnId &&
+    state.submission.draftRevision === state.draftRevision &&
     sameDraft(state.submission.draftAtSubmit, state.draft);
   return {
     ...state,
@@ -132,6 +148,7 @@ export function beginComposerSubmission(
     submission: {
       intent,
       expectedTurnId,
+      draftRevision: state.draftRevision,
       clientUserMessageId: retry
         ? state.submission!.clientUserMessageId
         : createId(),
@@ -208,7 +225,7 @@ export function reconcileCanonicalAdmission(
   if (submission !== null) {
     return {
       ...state,
-      draft: sameDraft(state.draft, submission.draftAtSubmit)
+      draft: canClearSubmittedDraft(state, submission)
         ? { text: "", images: [] }
         : state.draft,
       submission: null,
@@ -226,7 +243,8 @@ export function acceptComposerSubmission(
   if (submission === null) return state;
   return {
     ...(state.compaction === undefined ? {} : { compaction: state.compaction }),
-    draft: sameDraft(state.draft, submission.draftAtSubmit)
+    draftRevision: state.draftRevision,
+    draft: canClearSubmittedDraft(state, submission)
       ? { text: "", images: [] }
       : state.draft,
     submission: null,
@@ -242,6 +260,16 @@ function sameDraft(left: ComposerDraft, right: ComposerDraft): boolean {
     left.text === right.text &&
     left.images.length === right.images.length &&
     left.images.every((image, index) => image.id === right.images[index]?.id)
+  );
+}
+
+function canClearSubmittedDraft(
+  state: ComposerState,
+  submission: ComposerSubmission,
+): boolean {
+  return (
+    state.draftRevision === submission.draftRevision &&
+    sameDraft(state.draft, submission.draftAtSubmit)
   );
 }
 

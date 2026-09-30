@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   reconcileCanonicalAdmission,
+  advanceComposerDraftRevision,
   acceptComposerSubmission,
   addComposerImages,
   beginComposerSubmission,
@@ -70,10 +71,11 @@ test("other intent rejects queued evidence; changed draft and new submission nev
     unknown,
   );
   const edited = editComposer(unknown, "new text");
-  assert.equal(
-    reconcileCanonicalAdmission(edited, [messageItem("stable-1", "turn-1")]),
-    edited,
-  );
+  const oldConfirmation = reconcileCanonicalAdmission(edited, [
+    messageItem("stable-1", "turn-1"),
+  ]);
+  assert.equal(oldConfirmation.draft.text, "new text");
+  assert.equal(oldConfirmation.confirmedAdmission?.stage, "delivered");
   const newSubmission = beginComposerSubmission(
     edited,
     "queue",
@@ -117,6 +119,102 @@ test("explicit refusal stays refused; queue disappearance is not admission evide
   ]);
   assert.equal(confirmed.draft.text, "new draft");
   assert.equal(confirmed.confirmedAdmission?.stage, "queued");
+});
+
+test("A→B→A cannot clear newer text by late RPC or canonical admission", () => {
+  const pending = beginComposerSubmission(
+    editComposer(emptyComposerState(), "original"),
+    "queue",
+    "turn-1",
+    () => "stable",
+  );
+  const edited = editComposer(editComposer(pending, "changed"), "original");
+  assert.notEqual(edited.draftRevision, pending.submission?.draftRevision);
+  const accepted = acceptComposerSubmission(edited, "stable");
+  assert.equal(accepted.draft.text, "original");
+  const unknown = failComposerSubmission(
+    edited,
+    "stable",
+    "request outcome unknown",
+  );
+  const confirmed = reconcileCanonicalAdmission(unknown, [queueItem("stable")]);
+  assert.equal(confirmed.draft.text, "original");
+  assert.equal(confirmed.confirmedAdmission?.stage, "queued");
+  assert.equal(
+    acceptComposerSubmission(confirmed, "stable").draft.text,
+    "original",
+  );
+  assert.equal(acceptComposerSubmission(pending, "stable").draft.text, "");
+  assert.equal(
+    reconcileCanonicalAdmission(
+      failComposerSubmission(pending, "stable", "request outcome unknown"),
+      [queueItem("stable")],
+    ).draft.text,
+    "",
+  );
+  const editedAfterUnknown = editComposer(
+    editComposer(
+      failComposerSubmission(pending, "stable", "request outcome unknown"),
+      "changed",
+    ),
+    "original",
+  );
+  const late = reconcileCanonicalAdmission(editedAfterUnknown, [
+    queueItem("stable"),
+  ]);
+  assert.equal(late.draft.text, "original");
+  assert.equal(late.confirmedAdmission?.stage, "queued");
+});
+
+test("image removal and restore, and mode switch and return, invalidate old clear authority", () => {
+  const picture = image("same-image");
+  const pendingImage = beginComposerSubmission(
+    addComposerImages(emptyComposerState(), [picture]),
+    "start",
+    null,
+    () => "image-id",
+  );
+  const restored = addComposerImages(
+    removeComposerImage(pendingImage, picture.id),
+    [picture],
+  );
+  assert.deepEqual(
+    restored.draft.images.map((item) => item.id),
+    [picture.id],
+  );
+  assert.equal(
+    acceptComposerSubmission(restored, "image-id").draft.images.length,
+    1,
+  );
+  assert.equal(
+    reconcileCanonicalAdmission(
+      failComposerSubmission(restored, "image-id", "request outcome unknown"),
+      [messageItem("image-id", "turn-1")],
+    ).draft.images.length,
+    1,
+  );
+
+  const pending = beginComposerSubmission(
+    editComposer(emptyComposerState(), "same text"),
+    "queue",
+    "turn-1",
+    () => "mode-id",
+  );
+  const modeBack = advanceComposerDraftRevision(
+    advanceComposerDraftRevision(pending),
+  );
+  assert.equal(
+    acceptComposerSubmission(modeBack, "mode-id").draft.text,
+    "same text",
+  );
+  assert.equal(
+    reconcileCanonicalAdmission(
+      failComposerSubmission(modeBack, "mode-id", "request outcome unknown"),
+      [queueItem("mode-id")],
+    ).draft.text,
+    "same text",
+  );
+  assert.equal(acceptComposerSubmission(pending, "mode-id").draft.text, "");
 });
 
 function queueItem(clientId: string) {
@@ -173,6 +271,7 @@ test("maps idle, active, and replacement submissions without a queue", () => {
     intent: "start",
     expectedTurnId: null,
     clientUserMessageId: "message-1",
+    draftRevision: 1,
     draftAtSubmit: { text: "first", images: [] },
     text: "first",
     images: [],
@@ -264,7 +363,11 @@ test("acceptance clears only the submitted draft and never invents history", () 
   state = acceptComposerSubmission(state, "message-1");
   assert.equal(state.draft.text, "typed while sending");
   assert.equal(state.submission, null);
-  assert.deepEqual(Object.keys(state).sort(), ["draft", "submission"]);
+  assert.deepEqual(Object.keys(state).sort(), [
+    "draft",
+    "draftRevision",
+    "submission",
+  ]);
 });
 
 test("ordered images form one draft, removal preserves text, and image-only drafts submit", () => {

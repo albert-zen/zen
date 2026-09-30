@@ -383,7 +383,9 @@ export function ThreadView({
     (queueFailure === null ? visibleResumeError : null) ??
     attachmentError ??
     (blockedByImageCapability ? imageCapabilityError : null) ??
-    composer.submission?.error ??
+    (composer.submission?.draftRevision === composer.draftRevision
+      ? composer.submission.error
+      : null) ??
     modelError;
 
   return (
