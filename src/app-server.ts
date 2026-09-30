@@ -1776,8 +1776,8 @@ export class ZenAppServer {
                     active.contextCompactionNoticeIssued = false;
                   }
                 },
-                afterToolBatch: async ({ inputTokens, agenticCompaction }) =>
-                  await this.#handleActiveTurnCompaction({
+                afterToolBatch: async ({ inputTokens, agenticCompaction }) => {
+                  const compacted = await this.#handleActiveTurnCompaction({
                     threadId,
                     turnId,
                     resolved,
@@ -1785,7 +1785,9 @@ export class ZenAppServer {
                     inputTokens,
                     agenticCompaction,
                     signal: controller.signal,
-                  }),
+                  });
+                  if (compacted) highestInputTokens = undefined;
+                },
                 emit: (event) => {
                   if (
                     event.type === "token_usage" &&
@@ -2179,14 +2181,14 @@ export class ZenAppServer {
     inputTokens: number | undefined;
     agenticCompaction: boolean;
     signal: AbortSignal;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const contextWindow = options.resolved.model.contextWindow;
     const inputTokens = options.inputTokens;
-    if (contextWindow === null || inputTokens === undefined) return;
+    if (contextWindow === null || inputTokens === undefined) return false;
 
-    await this.#withThreadMutation(options.threadId, async () => {
+    return await this.#withThreadMutation(options.threadId, async () => {
       const active = this.#activeTurns.get(options.threadId);
-      if (active?.turnId !== options.turnId) return;
+      if (active?.turnId !== options.turnId) return false;
       const trigger = automaticCompactionThreshold(
         contextWindow,
         options.contextCompaction.triggerPercent,
@@ -2194,12 +2196,12 @@ export class ZenAppServer {
       if (inputTokens < trigger) {
         active.contextCompactionNotice = undefined;
         active.contextCompactionNoticeIssued = false;
-        return;
+        return false;
       }
       if (options.agenticCompaction) {
         active.contextCompactionNotice = undefined;
         active.contextCompactionNoticeIssued = false;
-        return;
+        return false;
       }
 
       const fallbackPercent = Math.min(
@@ -2222,17 +2224,17 @@ export class ZenAppServer {
           )}% of the configured window. Consider calling compact_context with a concise continuation summary; the current Turn can continue.`;
           active.contextCompactionNoticeIssued = false;
         }
-        return;
+        return false;
       }
 
       const thread = await this.#requireThread(options.threadId);
       const boundary = latestCompletedCompactionBoundary(thread.items);
-      if (boundary === undefined) return;
+      if (boundary === undefined) return false;
       if (
         latestCompaction(thread.items)?.coveredThroughItemId ===
         boundary.item.id
       ) {
-        return;
+        return false;
       }
       await this.#appendContextCompaction({
         thread,
@@ -2245,6 +2247,7 @@ export class ZenAppServer {
       });
       active.contextCompactionNotice = undefined;
       active.contextCompactionNoticeIssued = false;
+      return true;
     });
   }
 

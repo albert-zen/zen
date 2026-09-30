@@ -3089,11 +3089,19 @@ test("active Turn hard budget fallback compacts before the next model sample", a
     await server.startTurn(thread.id, "active request")
   ).done;
 
+  const snapshot = await server.readThread(thread.id);
   assert(
-    (await server.readThread(thread.id)).items.some(
+    snapshot.items.some(
       (item) =>
         item.type === "context_compaction" && item.initiator === "automatic",
     ),
+  );
+  assert.equal(
+    snapshot.items.filter(
+      (item) =>
+        item.type === "context_compaction" && item.initiator === "automatic",
+    ).length,
+    1,
   );
   assert.equal(
     (await server.readThread(thread.id)).items.filter(

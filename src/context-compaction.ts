@@ -336,7 +336,8 @@ export function latestEligibleCompactionBoundary(
 
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
-    if (item?.type !== "turn_completed") continue;
+    if (item?.type !== "turn_completed" || item.status !== "completed")
+      continue;
     return {
       item,
       index,
@@ -359,7 +360,8 @@ export function latestCompletedCompactionBoundary(
 ): CompactionBoundary | undefined {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
-    if (item?.type !== "turn_completed") continue;
+    if (item?.type !== "turn_completed" || item.status !== "completed")
+      continue;
     return {
       item,
       index,
