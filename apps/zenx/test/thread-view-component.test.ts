@@ -617,6 +617,245 @@ test("mounted Thread queue disappears on canonical acceptance without navigation
   });
 });
 
+test("mounted queue cancel waits for canonical event instead of optimistically hiding a row", async () => {
+  await withDom(async (root) => {
+    let current: Thread = {
+      ...thread([turn()]),
+      canonicalItems: [],
+      queuedMessages: [],
+    };
+    const queued = ["first", "second"].map((clientId) => ({
+      id: `queued-${clientId}`,
+      type: "user_message_queued" as const,
+      threadId: current.id,
+      clientId,
+      createdAt: new Date().toISOString(),
+      input: [{ type: "text" as const, text: "identical" }],
+    }));
+    for (const item of queued)
+      current = applyNativeThreadEvent(current, {
+        type: "item_completed",
+        item,
+      });
+    let resolve!: (value: {
+      results: [
+        { queuedItemId: string; clientId: string; status: "cancelled" },
+      ];
+    }) => void;
+    const pending = new Promise<{
+      results: [
+        { queuedItemId: string; clientId: string; status: "cancelled" },
+      ];
+    }>((done) => {
+      resolve = done;
+    });
+    const requests: Array<{ queuedItemId: string; clientId: string }[]> = [];
+    const show = async () =>
+      await act(async () =>
+        root.render(
+          createElement(ThreadView, {
+            approvals: [],
+            composer: emptyComposerState(),
+            thread: current,
+            onCancelQueued: async (targets) => {
+              requests.push([...targets]);
+              return await pending;
+            },
+            onDraftChange: () => undefined,
+            onInterrupt: noop,
+            onRespondToApproval: noop,
+            onSubmit: noop,
+          }),
+        ),
+      );
+    await show();
+    await act(async () =>
+      requiredButton('[aria-label="Cancel queued message 1"]').click(),
+    );
+    assert.deepEqual(requests, [
+      [{ queuedItemId: queued[0]!.id, clientId: "first" }],
+    ]);
+    assert.match(
+      document.querySelector(".queued-messages")?.textContent ?? "",
+      /2 queued/u,
+    );
+    await act(async () =>
+      resolve({
+        results: [
+          {
+            queuedItemId: queued[0]!.id,
+            clientId: "first",
+            status: "cancelled",
+          },
+        ],
+      }),
+    );
+    assert.match(
+      document.querySelector(".queued-messages")?.textContent ?? "",
+      /2 queued/u,
+    );
+    current = applyNativeThreadEvent(current, {
+      type: "item_completed",
+      item: {
+        id: "cancel-first",
+        type: "user_message_queue_cancelled",
+        threadId: current.id,
+        queuedItemId: queued[0]!.id,
+        clientId: "first",
+        createdAt: new Date().toISOString(),
+      },
+    });
+    await show();
+    assert.match(
+      document.querySelector(".queued-messages")?.textContent ?? "",
+      /1 queued/u,
+    );
+    assert.equal(document.querySelectorAll(".queued-messages li").length, 1);
+  });
+});
+
+test("bulk queue confirmation captures IDs before a later append", async () => {
+  await withDom(async (root) => {
+    let current: Thread = {
+      ...thread([turn()]),
+      canonicalItems: [],
+      queuedMessages: [],
+    };
+    const make = (id: string) => ({
+      id: `queued-${id}`,
+      type: "user_message_queued" as const,
+      threadId: current.id,
+      clientId: id,
+      createdAt: new Date().toISOString(),
+      input: [{ type: "text" as const, text: id }],
+    });
+    for (const id of ["alpha", "beta"])
+      current = applyNativeThreadEvent(current, {
+        type: "item_completed",
+        item: make(id),
+      });
+    const requests: string[][] = [];
+    const show = async () =>
+      await act(async () =>
+        root.render(
+          createElement(ThreadView, {
+            approvals: [],
+            composer: emptyComposerState(),
+            thread: current,
+            onCancelQueued: async (targets) => {
+              requests.push(targets.map((item) => item.clientId));
+              return {
+                results: targets.map((item) => ({
+                  ...item,
+                  status: "cancelled" as const,
+                })),
+              };
+            },
+            onDraftChange: () => undefined,
+            onInterrupt: noop,
+            onRespondToApproval: noop,
+            onSubmit: noop,
+          }),
+        ),
+      );
+    await show();
+    await act(async () =>
+      requiredButton(
+        '.queued-messages button[title="Cancel this pending message only"]',
+      )
+        .closest(".queued-messages")
+        ?.querySelectorAll("button")
+        ?.item(2)
+        ?.click(),
+    );
+    assert.match(
+      document.querySelector('[role="dialog"]')?.textContent ?? "",
+      /Cancel 2 queued messages/u,
+    );
+    current = applyNativeThreadEvent(current, {
+      type: "item_completed",
+      item: make("later"),
+    });
+    await show();
+    assert.match(
+      document.querySelector(".queued-messages")?.textContent ?? "",
+      /3 queued/u,
+    );
+    await act(async () =>
+      requiredButton('[role="dialog"] button:last-child').click(),
+    );
+    assert.deepEqual(requests, [["alpha", "beta"]]);
+  });
+});
+
+test("a message that started before cancellation reports a conflict even after queue projection clears", async () => {
+  await withDom(async (root) => {
+    let current: Thread = {
+      ...thread([turn()]),
+      canonicalItems: [],
+      queuedMessages: [],
+    };
+    const queued = {
+      id: "queued-race",
+      type: "user_message_queued" as const,
+      threadId: current.id,
+      clientId: "racing-client",
+      createdAt: new Date().toISOString(),
+      input: [{ type: "text" as const, text: "race" }],
+    };
+    current = applyNativeThreadEvent(current, {
+      type: "item_completed",
+      item: queued,
+    });
+    const show = async () =>
+      await act(async () =>
+        root.render(
+          createElement(ThreadView, {
+            approvals: [],
+            composer: emptyComposerState(),
+            thread: current,
+            onCancelQueued: async (targets) => ({
+              results: targets.map((item) => ({
+                ...item,
+                status: "already_started" as const,
+              })),
+            }),
+            onDraftChange: () => undefined,
+            onInterrupt: noop,
+            onRespondToApproval: noop,
+            onSubmit: noop,
+          }),
+        ),
+      );
+    await show();
+    await act(async () =>
+      requiredButton('[aria-label="Cancel queued message 1"]').click(),
+    );
+    assert.match(
+      document.querySelector(".queued-cancel-notice")?.textContent ?? "",
+      /already starting or delivered/u,
+    );
+    current = applyNativeThreadEvent(current, {
+      type: "item_completed",
+      item: {
+        id: "accepted-race",
+        type: "user_message",
+        threadId: current.id,
+        turnId: "turn-1",
+        clientId: queued.clientId,
+        createdAt: new Date().toISOString(),
+        content: queued.input,
+      },
+    });
+    await show();
+    assert.equal(document.querySelector(".queued-messages"), null);
+    assert.match(
+      document.querySelector(".queued-cancel-notice")?.textContent ?? "",
+      /cannot be canceled/u,
+    );
+  });
+});
+
 test("pending approvals render in the bottom zone next to the composer", () => {
   const fullCode =
     'const child = await tools.shell({ command: "printf <full>" });\ntext(child.output);';

@@ -998,6 +998,8 @@ Host 为兼容模型流解析失败保存独立、限量轮转的结构化诊断
 
 ZenX 在 app ready 后先打开无需IPC的静态启动页，同一窗口在Host/IPC准备就绪后切入应用；启动错误显示在该窗口，启动中再次激活只聚焦或恢复启动窗口。
 
+显式取消排队输入通过 append-only `user_message_queue_cancelled` 按原 `queuedItemId/clientId` 标记未接纳的输入，同一Host进程在同一Thread mutation fence 内与首批launch瞬时占用裁定输赢，取消成功不再由该Host交付，已占用或已有 canonical 用户消息不得假撤回；占用不是第二套持久会话权威，进程重启后仅由ItemList恢复待发/已取消事实，此锁不宣称解决两个独立Host共用journal目录的跨进程所有权问题。
+
 Context pressure estimation includes tool `modelContent` as the additional user content sent by adapters; image dimensions contribute a provider-neutral patch estimate, not an exact provider token count.
 
 工具适配器返回的 ToolExecutionResult 必须代表底层操作的真实最终结果（包括非零退出）；仅停止本地等待或不确认远端状态时必须 reject，不能伪造最终结果。默认取消后 reject 保留未知状态与资源 fence，但其诊断输出会回传一次。wait 的固定控制 envelope 不占用已独立校验的原工具 structuredContent 预算。

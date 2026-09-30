@@ -21,7 +21,11 @@ import {
 } from "react";
 
 import type { AttachmentRef } from "../../../../../src/attachment.js";
-import type { AppServerEvent } from "../../../../../src/app-server.js";
+import type {
+  AppServerEvent,
+  QueuedCancellationResult,
+  QueuedCancellationTarget,
+} from "../../../../../src/app-server.js";
 import type { EffectiveThreadConfiguration } from "../../../../../src/thread.js";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
@@ -117,6 +121,7 @@ import {
   projectNativeRecovery,
 } from "./thread-view-state.js";
 import { ThreadView } from "./ThreadView.js";
+import { cancellationResultsFromItems } from "./queue-cancel-state.js";
 import type { WorkflowCommand } from "./workflow-commands.js";
 import { ZenXBrand } from "./ZenXBrand.js";
 
@@ -2106,6 +2111,38 @@ export function App() {
     setComposerSendModeMigration(saved.profile.composerSendModeMigration);
   };
 
+  const cancelQueued = async (
+    threadId: string,
+    targets: readonly QueuedCancellationTarget[],
+  ): Promise<{ results: QueuedCancellationResult[] }> => {
+    try {
+      return await window.zenx.protocol.request("zen/thread/queue/cancel", {
+        threadId,
+        items: targets,
+      });
+    } catch {
+      // Uncertain transport results require one authoritative read by stable
+      // queued IDs. Never automatically send a second cancellation request.
+      try {
+        const { thread } = await window.zenx.protocol.request(
+          "zen/thread/read",
+          { threadId },
+        );
+        const known = cancellationResultsFromItems(thread.items, targets);
+        if (known !== null) {
+          if (selectedThreadIdRef.current === threadId)
+            await resumeThread(threadId, true);
+          return { results: known };
+        }
+      } catch {
+        // A failed read cannot prove the outcome either.
+      }
+      throw new Error(
+        "Cancellation is unconfirmed; pending messages were not assumed canceled. Check this Thread before choosing to try again.",
+      );
+    }
+  };
+
   return (
     <div
       className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarOpen ? " sidebar-open" : ""}`}
@@ -2335,6 +2372,7 @@ export function App() {
               setBrowserPanels((current) => ({ ...current, [threadId]: true }));
             }}
             composerSendMode={composerSendMode}
+            onCancelQueued={cancelQueued}
             composerSendModeMigration={composerSendModeMigration}
             queueFailure={queueFailure}
             onSettleLegacySendChoice={settleLegacySendChoice}
@@ -2761,6 +2799,7 @@ function PageTitleBar({
 function AgentSurface({
   onOpenMessageLink,
   composerSendMode,
+  onCancelQueued,
   composerSendModeMigration,
   queueFailure,
   onSettleLegacySendChoice,
@@ -2818,6 +2857,10 @@ function AgentSurface({
     target: { kind: "file" | "browser"; value: string },
   ): void;
   composerSendMode: "batch" | "queue" | "soft" | "hard";
+  onCancelQueued(
+    threadId: string,
+    targets: readonly QueuedCancellationTarget[],
+  ): Promise<{ results: QueuedCancellationResult[] }>;
   composerSendModeMigration: ZenXHostProfile["composerSendModeMigration"];
   queueFailure: Extract<AppServerEvent, { type: "queue_failed" }> | null;
   onSettleLegacySendChoice(restoreQueue: boolean): Promise<void>;
@@ -3020,6 +3063,9 @@ function AgentSurface({
             onOpenMessageLink={(target) => {
               onOpenMessageLink(threadDetail.id, target);
             }}
+            onCancelQueued={(targets) =>
+              onCancelQueued(threadDetail.id, targets)
+            }
             composerContext={
               composerSendModeMigration?.acknowledged === false &&
               composerSendMode === "soft" ? (

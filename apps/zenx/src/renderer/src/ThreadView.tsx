@@ -15,6 +15,10 @@ import {
 
 import type { AttachmentRef } from "../../../../../src/attachment.js";
 import type {
+  QueuedCancellationResult,
+  QueuedCancellationTarget,
+} from "../../../../../src/app-server.js";
+import type {
   ModelContextUsageProjection,
   ModelUsageAggregate,
   ModelUsageProjection,
@@ -64,6 +68,7 @@ import {
 import { WorkflowCommandMenu } from "./WorkflowCommandMenu.js";
 import type { WorkflowCommand } from "./workflow-commands.js";
 import { useComposerSelector } from "./use-composer-selector.js";
+import { Dialog } from "./ui/controls.js";
 import {
   compactionInitiatorLabel,
   projectContextCompactions,
@@ -78,6 +83,9 @@ interface ThreadViewProps {
     message: string;
   } | null;
   onResumeQueue?(): Promise<void>;
+  onCancelQueued?(
+    targets: readonly QueuedCancellationTarget[],
+  ): Promise<{ results: QueuedCancellationResult[] }>;
   approvals: readonly ApprovalCardState[];
   composer: ComposerState;
   composerContext?: ReactNode;
@@ -130,6 +138,7 @@ export function ThreadView({
   composerSendMode = "soft",
   queueFailure = null,
   onResumeQueue,
+  onCancelQueued,
   approvals,
   composer,
   composerContext = null,
@@ -180,6 +189,20 @@ export function ThreadView({
     queuedItemId: string;
     message: string;
   } | null>(null);
+  const [cancelingQueue, setCancelingQueue] = useState(false);
+  const [cancelConfirmation, setCancelConfirmation] = useState<{
+    threadId: string;
+    targets: QueuedCancellationTarget[];
+    previews: string[];
+  } | null>(null);
+  const [cancelNotice, setCancelNotice] = useState<{
+    threadId: string;
+    message: string;
+  } | null>(null);
+  useEffect(() => {
+    setCancelConfirmation(null);
+    setCancelNotice(null);
+  }, [thread?.id]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [draggingImages, setDraggingImages] = useState(false);
   const [preview, setPreview] = useState<{
@@ -368,6 +391,31 @@ export function ThreadView({
     if (primaryMode === "stop") void interrupt();
     else submit(sendIntent);
   };
+  const cancelQueued = async (targets: readonly QueuedCancellationTarget[]) => {
+    if (thread === null || onCancelQueued === undefined || cancelingQueue)
+      return;
+    const threadId = thread.id;
+    setCancelingQueue(true);
+    setCancelNotice(null);
+    try {
+      const result = await onCancelQueued(targets);
+      const started = result.results.filter(
+        (entry) => entry.status === "already_started",
+      ).length;
+      const missing = result.results.filter(
+        (entry) => entry.status === "not_found",
+      ).length;
+      if (started > 0 || missing > 0)
+        setCancelNotice({
+          threadId,
+          message: `${started} message(s) already starting or delivered and cannot be canceled; ${missing} no longer match this Thread. Only still-pending entries were canceled. Use Stop separately if you need to interrupt the active Turn.`,
+        });
+    } catch (error) {
+      setCancelNotice({ threadId, message: describeError(error) });
+    } finally {
+      setCancelingQueue(false);
+    }
+  };
   const visibleResumeError =
     queueResumeError !== null &&
     thread !== null &&
@@ -513,9 +561,28 @@ export function ThreadView({
           >
             <strong>{thread!.queuedMessages!.length} queued</strong>
             <ol>
-              {thread!.queuedMessages!.map((message) => (
+              {thread!.queuedMessages!.map((message, index) => (
                 <li key={message.id}>
                   {message.text || `${message.imageCount} image(s)`}
+                  {onCancelQueued === undefined ? null : (
+                    <button
+                      className="queued-cancel-button"
+                      type="button"
+                      aria-label={`Cancel queued message ${index + 1}`}
+                      title="Cancel this pending message only"
+                      disabled={cancelingQueue || composerDisabled}
+                      onClick={() =>
+                        void cancelQueued([
+                          {
+                            queuedItemId: message.id,
+                            clientId: message.clientId,
+                          },
+                        ])
+                      }
+                    >
+                      Cancel
+                    </button>
+                  )}
                   {queueFailure?.queuedItemId === message.id ? (
                     <p className="queued-failure" role="alert">
                       Not delivered ({queueFailure.code}):{" "}
@@ -525,6 +592,37 @@ export function ThreadView({
                 </li>
               ))}
             </ol>
+            {onCancelQueued !== undefined &&
+            thread!.queuedMessages!.length > 1 ? (
+              <button
+                type="button"
+                disabled={
+                  cancelingQueue ||
+                  composerDisabled ||
+                  thread!.queuedMessages!.length > 128
+                }
+                title={
+                  thread!.queuedMessages!.length > 128
+                    ? "Too many messages for one cancellation; cancel individual messages"
+                    : undefined
+                }
+                onClick={() =>
+                  setCancelConfirmation({
+                    threadId: thread!.id,
+                    targets: thread!.queuedMessages!.map((message) => ({
+                      queuedItemId: message.id,
+                      clientId: message.clientId,
+                    })),
+                    previews: thread!.queuedMessages!.map(
+                      (message) =>
+                        message.text || `${message.imageCount} image(s)`,
+                    ),
+                  })
+                }
+              >
+                Cancel these {thread!.queuedMessages!.length} queued messages…
+              </button>
+            ) : null}
             {runningTurn === null && onResumeQueue !== undefined ? (
               <button
                 type="button"
@@ -550,6 +648,11 @@ export function ThreadView({
             state={composer.compaction}
             onDismiss={onDismissCompaction}
           />
+        ) : null}
+        {cancelNotice !== null && cancelNotice.threadId === thread?.id ? (
+          <p className="queued-cancel-notice" role="alert">
+            {cancelNotice.message}
+          </p>
         ) : null}
         <form
           className="composer"
@@ -869,6 +972,47 @@ export function ThreadView({
           ) : null}
         </form>
       </div>
+      {cancelConfirmation === null ? null : (
+        <Dialog
+          open={cancelConfirmation.threadId === thread?.id}
+          onOpenChange={(open) => {
+            if (!open) setCancelConfirmation(null);
+          }}
+          title={`Cancel ${cancelConfirmation.targets.length} queued messages?`}
+        >
+          <div className="queued-cancel-confirmation">
+            <h2>Cancel {cancelConfirmation.targets.length} queued messages?</h2>
+            <p>
+              Only these pending messages are requested. Messages queued later
+              are not included. A message already starting or delivered cannot
+              be recalled or stopped by this action.
+            </p>
+            <ol>
+              {cancelConfirmation.previews.map((preview, index) => (
+                <li key={cancelConfirmation.targets[index]?.queuedItemId}>
+                  {preview}
+                </li>
+              ))}
+            </ol>
+            <div className="queued-cancel-confirmation-actions">
+              <button type="button" onClick={() => setCancelConfirmation(null)}>
+                Keep messages
+              </button>
+              <button
+                type="button"
+                disabled={cancelingQueue}
+                onClick={() => {
+                  const targets = cancelConfirmation.targets;
+                  setCancelConfirmation(null);
+                  void cancelQueued(targets);
+                }}
+              >
+                Confirm cancel {cancelConfirmation.targets.length}
+              </button>
+            </div>
+          </div>
+        </Dialog>
+      )}
       {preview === null ? null : (
         <ImagePreview
           attachment={preview.attachment}

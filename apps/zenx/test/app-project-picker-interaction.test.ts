@@ -1843,6 +1843,91 @@ test("Composer keyboard and form routes do not duplicate one submit event", asyn
   }
 });
 
+for (const committed of [true, false] as const) {
+  test(`uncertain native cancel ${committed ? "reads its committed fact" : "keeps its pending row"} without replay`, async () => {
+    const base = nativeRecoveryForThread(runningThread());
+    const queued = {
+      id: "qa-queued",
+      clientId: "qa-client",
+      threadId: "thread-1",
+      type: "user_message_queued" as const,
+      createdAt: new Date(20_000).toISOString(),
+      input: [{ type: "text" as const, text: "keep identity" }],
+    };
+    const cancellation = {
+      id: "qa-cancelled",
+      type: "user_message_queue_cancelled" as const,
+      threadId: "thread-1",
+      queuedItemId: queued.id,
+      clientId: queued.clientId,
+      createdAt: new Date(21_000).toISOString(),
+    };
+    let cancelCalls = 0;
+    let readCalls = 0;
+    const recovery = () => ({
+      ...base,
+      thread: {
+        ...base.thread,
+        items: [
+          ...base.thread.items,
+          queued,
+          ...(committed && cancelCalls > 0 ? [cancellation] : []),
+        ],
+      },
+    });
+    const harness = await mountThreadApp({
+      request: async (method) => {
+        if (method === "zen/thread/resume") return recovery();
+        if (method === "zen/thread/queue/cancel") {
+          cancelCalls++;
+          throw new Error("Transport closed after request; outcome unknown");
+        }
+        if (method === "zen/thread/read") {
+          readCalls++;
+          return { thread: recovery().thread };
+        }
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+    });
+    try {
+      await selectedComposer();
+      const button = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          '[aria-label="Cancel queued message 1"]',
+        ),
+      );
+      await act(async () => {
+        button.click();
+        await Promise.resolve();
+      });
+      await waitFor(() => (readCalls === 1 ? true : undefined));
+      assert.equal(cancelCalls, 1);
+      assert.equal(readCalls, 1);
+      if (committed) {
+        await waitFor(() =>
+          document.querySelector(".queued-messages") === null
+            ? true
+            : undefined,
+        );
+      } else {
+        assert.match(
+          document.querySelector(".queued-messages")?.textContent ?? "",
+          /1 queued/u,
+        );
+        await waitFor(() =>
+          (
+            document.querySelector(".queued-cancel-notice")?.textContent ?? ""
+          ).includes("unconfirmed")
+            ? true
+            : undefined,
+        );
+      }
+    } finally {
+      await unmountApp(harness);
+    }
+  });
+}
+
 test("ambiguous historic Queue warns on current Thread, restores explicitly, and does not repeat", async () => {
   const migrated = {
     composerSendMode: "soft" as const,

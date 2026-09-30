@@ -5629,6 +5629,31 @@ a:focus-visible {
   color: var(--color-status-danger);
   line-height: 1.45;
 }
+.queued-cancel-button {
+  margin-inline-start: 8px;
+  min-height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.queued-cancel-notice {
+  margin: 6px 0;
+  color: var(--color-status-danger);
+  line-height: 1.45;
+}
+.queued-cancel-confirmation ol {
+  max-height: 180px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+.queued-cancel-confirmation-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 
 .available-model-picker {
   margin-block: 16px;
