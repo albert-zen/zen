@@ -386,7 +386,7 @@ export function planCompactionRetention(
     options.retention ?? normalizeContextCompactionConfig().retention;
   const pinned = expandRetainedToolClosure(
     retainableItems,
-    explicitlyRetainedIds(retainableItems, retention),
+    explicitlyRetainedIds(retainableItems, coveredItems, retention),
   );
 
   if (retention.mode !== "budget") {
@@ -487,58 +487,73 @@ function recentItemCandidates(
 }
 
 function explicitlyRetainedIds(
+  retainableItems: readonly CanonicalItem[],
   coveredItems: readonly CanonicalItem[],
   retention: ResolvedContextCompactionConfig["retention"],
 ): Set<string> {
   const retained = new Set<string>();
-  const byId = new Map(coveredItems.map((item) => [item.id, item]));
+  const byId = new Map(retainableItems.map((item) => [item.id, item]));
   for (const range of retention.itemRanges) {
-    const from = coveredItems.findIndex((item) => item.id === range.fromItemId);
-    const to = coveredItems.findIndex((item) => item.id === range.toItemId);
+    const from = retainableItems.findIndex(
+      (item) => item.id === range.fromItemId,
+    );
+    const to = retainableItems.findIndex((item) => item.id === range.toItemId);
+    const fullFrom = coveredItems.findIndex(
+      (item) => item.id === range.fromItemId,
+    );
+    const fullTo = coveredItems.findIndex((item) => item.id === range.toItemId);
     if (
       from < 0 ||
       to < from ||
-      coveredItems[from]?.type === "user_message_queued" ||
-      coveredItems[to]?.type === "user_message_queued"
-    )
-      throw new Error("Invalid compaction retention Item range");
-    for (const item of coveredItems.slice(from, to + 1)) {
+      fullFrom < 0 ||
+      fullTo < fullFrom ||
+      coveredItems
+        .slice(fullFrom, fullTo + 1)
+        .some(
+          (item) =>
+            item.threadId !== retainableItems[from]?.threadId ||
+            (!isStructuralCompactionItem(item) &&
+              (!projectsIntoModelContext(item) || !byId.has(item.id))),
+        )
+    ) {
+      throw new Error(
+        "Invalid compaction retention Item range: contains unavailable content; select eligible Item IDs, a category, or recent Turns",
+      );
+    }
+    for (const item of retainableItems.slice(from, to + 1)) {
       if (projectsIntoModelContext(item)) retained.add(item.id);
     }
   }
   for (const id of retention.itemIds) {
     const item = byId.get(id);
-    if (
-      item === undefined ||
-      !projectsIntoModelContext(item) ||
-      item.type === "reasoning"
-    ) {
-      throw new Error(`Item is not eligible for compaction retention: ${id}`);
+    if (item === undefined || !projectsIntoModelContext(item)) {
+      throw new Error("Item is not eligible for compaction retention");
     }
     retained.add(id);
   }
   if (retention.recentTurnCount > 0) {
+    // Resolve Turn identity from the full covered journal. The previous
+    // agentic reset may have removed turn_started from retainableItems.
     const started = coveredItems.filter((item) => item.type === "turn_started");
     const turns = new Set(
       started.slice(-retention.recentTurnCount).map((item) => item.turnId),
     );
-    for (const item of coveredItems) {
+    for (const item of retainableItems) {
       if (
         item.turnId !== undefined &&
         turns.has(item.turnId) &&
-        projectsIntoModelContext(item) &&
-        item.type !== "reasoning"
+        projectsIntoModelContext(item)
       )
         retained.add(item.id);
     }
   }
   if (retention.preserveUserMessages) {
-    for (const item of coveredItems) {
+    for (const item of retainableItems) {
       if (item.type === "user_message") retained.add(item.id);
     }
   }
   if (retention.finalMessages !== "none") {
-    const finals = successfulFinalMessages(coveredItems);
+    const finals = successfulFinalMessages(retainableItems);
     const selected =
       retention.finalMessages === "all"
         ? finals
@@ -546,6 +561,22 @@ function explicitlyRetainedIds(
     for (const item of selected) retained.add(item.id);
   }
   return retained;
+}
+
+/** Non-projecting journal control Items can anchor a range, not enter model context. */
+function isStructuralCompactionItem(item: CanonicalItem): boolean {
+  return (
+    item.type === "turn_started" ||
+    item.type === "turn_completed" ||
+    item.type === "turn_aborted" ||
+    item.type === "turn_replacement_requested" ||
+    item.type === "thread_metadata" ||
+    item.type === "thread_forked" ||
+    item.type === "thread_configuration_changed" ||
+    item.type === "context_compaction" ||
+    item.type === "model_usage" ||
+    item.type === "code_state"
+  );
 }
 
 function successfulFinalMessages(
