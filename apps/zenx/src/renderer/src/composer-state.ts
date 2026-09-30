@@ -1,4 +1,5 @@
-export type ComposerIntent = "start" | "queue" | "steer" | "replace";
+export type ComposerIntent =
+  "start" | "batch-next" | "queue" | "steer" | "replace";
 
 import type { ZenXImageDraft } from "../../main/image-attachments.js";
 
@@ -35,15 +36,22 @@ export function emptyComposerState(): ComposerState {
   return { draft: { text: "", images: [] }, submission: null };
 }
 
-export type ComposerSendMode = "queue" | "soft" | "hard";
+export type ComposerSendMode = "batch" | "queue" | "soft" | "hard";
 export function defaultComposerIntent(
   active: boolean,
-  mode: ComposerSendMode = "queue",
+  mode: ComposerSendMode = "soft",
   alternate = false,
 ): ComposerIntent {
   if (!active) return "start";
-  if (alternate) return mode === "queue" ? "steer" : "queue";
-  return mode === "queue" ? "queue" : mode === "soft" ? "steer" : "replace";
+  if (alternate)
+    return mode === "queue" || mode === "batch" ? "steer" : "batch-next";
+  return mode === "batch"
+    ? "batch-next"
+    : mode === "queue"
+      ? "queue"
+      : mode === "soft"
+        ? "steer"
+        : "replace";
 }
 
 export function editComposer(

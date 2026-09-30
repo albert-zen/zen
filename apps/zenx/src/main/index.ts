@@ -409,9 +409,18 @@ async function bootstrapZenX(): Promise<void> {
     }
     const selfControlPackage = new ZenXSelfControlCapabilityPackage({
       appServer: selfControlPort,
-      sendPreference: async () =>
-        (await settingsService!.publicSettings()).profile.composerSendMode ??
-        "queue",
+      // Desktop manual composer preference must not silently change
+      // automation/tool-result routing. Explicit guidance still steers.
+      sendPreference: async () => {
+        const profile = (await settingsService!.publicSettings()).profile;
+        // Do not apply a newly implicit desktop steer to automation. Older
+        // soft/hard choices were explicitly selected against a queue default.
+        if (!profile.composerSendModeExplicit) return "queue";
+        return profile.composerSendMode === "soft" ||
+          profile.composerSendMode === "hard"
+          ? profile.composerSendMode
+          : "queue";
+      },
       workflows: {
         workflowConfiguration: async () =>
           await settingsService!.workflowConfiguration(),
@@ -1637,8 +1646,18 @@ function installSettingsIpc(
       const after = (await settings.publicSettings()).profile;
       if (
         !apiKey &&
-        JSON.stringify({ ...before, composerSendMode: undefined }) ===
-          JSON.stringify({ ...after, composerSendMode: undefined })
+        JSON.stringify({
+          ...before,
+          composerSendMode: undefined,
+          composerSendModeExplicit: undefined,
+          composerSendModeMigration: undefined,
+        }) ===
+          JSON.stringify({
+            ...after,
+            composerSendMode: undefined,
+            composerSendModeExplicit: undefined,
+            composerSendModeMigration: undefined,
+          })
       ) {
         return await settings.publicSettings();
       }

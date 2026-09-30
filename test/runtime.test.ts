@@ -5,9 +5,20 @@ import path from "node:path";
 import test from "node:test";
 
 import { pendingQueuedMessages } from "../src/input-queue.js";
-import { shellPrintCommand } from "./fixtures.js";
+import { applyNativeThreadEvent } from "../apps/zenx/src/renderer/src/thread-view-state.js";
+import {
+  AttachmentStoreError,
+  InMemoryAttachmentStore,
+  type AttachmentStore,
+} from "../src/attachment.js";
+import type { Thread as ZenXThread } from "../apps/zenx/src/protocol-client/index.js";
+import { png1x1, shellPrintCommand } from "./fixtures.js";
 
-import { type AppServerEvent, ZenAppServer } from "../src/app-server.js";
+import {
+  AppServerError,
+  type AppServerEvent,
+  ZenAppServer,
+} from "../src/app-server.js";
 import type {
   CanonicalItem,
   ThreadMetadataItem,
@@ -62,6 +73,7 @@ function createServer(
     threadMetadata?: ThreadMetadataStore;
     threadSummaryProjection?: ThreadSummaryProjection;
     tools?: ToolRuntime;
+    attachments?: AttachmentStore;
     idFactory?: () => string;
     runtimeIdFactory?: () => string;
     runtime?: AgentRuntime;
@@ -75,6 +87,9 @@ function createServer(
     ]);
   return new ZenAppServer({
     journal: options.journal ?? new InMemoryThreadJournal(),
+    ...(options.attachments === undefined
+      ? {}
+      : { attachments: options.attachments }),
     runtime:
       options.runtime ??
       new AgentRuntime({
@@ -3080,6 +3095,216 @@ test("failed sample trace survives journal reload without executing a queued too
   }
 });
 
+test("opted-in queued messages share one next Turn without losing canonical identity", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const finished = testDeferred<void>();
+  const sampled: string[][] = [];
+  const model: ModelAdapter = {
+    provider: "queue-batch-test",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      sampled.push(
+        request.messages.flatMap((message) =>
+          message.role !== "user"
+            ? []
+            : [
+                "text" in message
+                  ? message.text
+                  : message.content
+                      .filter((part) => part.type === "text")
+                      .map((part) => part.text)
+                      .join("\n"),
+              ],
+        ),
+      );
+      if (sampled.length === 1) {
+        entered.resolve();
+        await release.promise;
+      }
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const server = createServer({
+    model,
+    modelCatalog: new StaticModelCatalog([
+      {
+        id: "fake",
+        isDefault: true,
+        contextWindow: 32_768,
+        inputModalities: ["text", "image"],
+      },
+    ]),
+  });
+  let completions = 0;
+  server.subscribe((event) => {
+    if (event.type === "turn_completed" && ++completions === 2)
+      finished.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  for (const [index, text] of ["same", "same"].entries()) {
+    await server.queueMessage(thread.id, text, `batch-${index}`, {
+      deliveryMode: "batch-next",
+    });
+  }
+  await assert.rejects(server.queueMessage(thread.id, "same", "batch-0"), {
+    code: "idempotency_conflict",
+  });
+  const attachment = await server.importImageBytes(png1x1());
+  await server.queueMessage(
+    thread.id,
+    [
+      { type: "text", text: "third" },
+      { type: "image", attachment },
+    ],
+    "batch-2",
+    { deliveryMode: "batch-next" },
+  );
+  release.resolve();
+  await first.done;
+  await finished.promise;
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(snapshot.turns.length, 2);
+  assert.deepEqual(
+    snapshot.items
+      .filter((item) => item.type === "user_message")
+      .map((item) => item.clientId),
+    [undefined, "batch-0", "batch-1", "batch-2"],
+  );
+  assert.deepEqual(sampled[1]?.slice(-3), ["same", "same", "third"]);
+  assert.deepEqual(
+    snapshot.items.filter((item) => item.type === "user_message").at(-1)
+      ?.content,
+    [
+      { type: "text", text: "third" },
+      { type: "image", attachment },
+    ],
+  );
+  assert.equal(pendingQueuedMessages(snapshot.items).length, 0);
+});
+
+test("live same-thread projection clears each identical queue entry only on canonical acceptance", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const finished = testDeferred<void>();
+  let calls = 0;
+  const server = createServer({
+    model: {
+      provider: "blocked-live-queue",
+      async *stream(): AsyncIterable<ModelEvent> {
+        if (++calls === 1) {
+          entered.resolve();
+          await release.promise;
+        }
+        yield { type: "text_delta", delta: "done" };
+      },
+    },
+  });
+  let completions = 0;
+  server.subscribe((event) => {
+    if (event.type === "turn_completed" && ++completions === 3)
+      finished.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  const initial = await server.readThread(thread.id);
+  let visible: ZenXThread = {
+    ...projectThread(initial, { includeTurns: true }),
+    canonicalItems: initial.items,
+  };
+  const evidence: string[][] = [];
+  server.subscribe((event) => {
+    visible = applyNativeThreadEvent(visible, event);
+    if (
+      event.type === "item_completed" &&
+      (event.item.type === "user_message_queued" ||
+        event.item.type === "user_message")
+    ) {
+      evidence.push(visible.queuedMessages?.map((item) => item.clientId) ?? []);
+    }
+  });
+  await server.queueMessage(thread.id, "same", "same-1");
+  await server.queueMessage(thread.id, "same", "same-2");
+  assert.equal(calls, 1); // The fake Provider remains active; no !shell shortcut.
+  assert.deepEqual(
+    visible.queuedMessages?.map((item) => item.clientId),
+    ["same-1", "same-2"],
+  );
+  release.resolve();
+  await first.done;
+  await finished.promise;
+  assert.deepEqual(evidence, [
+    ["same-1"],
+    ["same-1", "same-2"],
+    ["same-2"],
+    [],
+  ]);
+  assert.deepEqual(visible.queuedMessages, []);
+});
+
+test("batch admission stops at legacy items and appends after the boundary wait", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const batchStarted = testDeferred<void>();
+  const releaseBatch = testDeferred<void>();
+  const finished = testDeferred<void>();
+  let calls = 0;
+  const server = createServer({
+    model: {
+      provider: "batch-boundary",
+      async *stream(): AsyncIterable<ModelEvent> {
+        calls++;
+        if (calls === 1) {
+          entered.resolve();
+          await release.promise;
+        }
+        if (calls === 2) {
+          batchStarted.resolve();
+          await releaseBatch.promise;
+        }
+        yield { type: "text_delta", delta: "done" };
+      },
+    },
+  });
+  let completions = 0;
+  server.subscribe((event) => {
+    if (event.type === "turn_completed" && ++completions === 4)
+      finished.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  await server.queueMessage(thread.id, "batch-a", "a", {
+    deliveryMode: "batch-next",
+  });
+  await server.queueMessage(thread.id, "batch-b", "b", {
+    deliveryMode: "batch-next",
+  });
+  await server.queueMessage(thread.id, "legacy", "legacy");
+  await server.queueMessage(thread.id, "batch-c", "c", {
+    deliveryMode: "batch-next",
+  });
+  release.resolve();
+  await first.done;
+  await batchStarted.promise;
+  await server.queueMessage(thread.id, "late", "late", {
+    deliveryMode: "batch-next",
+  });
+  releaseBatch.resolve();
+  await finished.promise;
+  const snapshot = await server.readThread(thread.id);
+  assert.deepEqual(
+    snapshot.turns.map((turn) =>
+      turn.items
+        .filter((item) => item.type === "user_message")
+        .map((item) => item.clientId),
+    ),
+    [[undefined], ["a", "b"], ["legacy"], ["c", "late"]],
+  );
+});
+
 test("queued input waits for the active turn and drains in FIFO order", async () => {
   const release = testDeferred<void>();
   const entered = testDeferred<void>();
@@ -3181,4 +3406,521 @@ test("queued input survives restart and pauses after interruption until explicit
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("batch intent survives interrupted restart and explicitly resumes once", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-batch-reload-"));
+  try {
+    const entered = testDeferred<void>();
+    const server = createServer({
+      journal: new JsonlThreadJournal(directory),
+      model: {
+        provider: "batch-restart",
+        async *stream(request): AsyncIterable<ModelEvent> {
+          entered.resolve();
+          await new Promise<void>((_resolve, reject) =>
+            request.signal.addEventListener(
+              "abort",
+              () => reject(request.signal.reason),
+              { once: true },
+            ),
+          );
+        },
+      },
+    });
+    const thread = await server.startThread();
+    const first = await server.startTurn(thread.id, "first");
+    await entered.promise;
+    for (const id of ["one", "two", "three"])
+      await server.queueMessage(thread.id, id, id, {
+        deliveryMode: "batch-next",
+      });
+    await server.interruptTurn(thread.id, first.id);
+    await first.done;
+    const restored = createServer({
+      journal: new JsonlThreadJournal(directory),
+      model: {
+        provider: "batch-restart",
+        async *stream() {
+          yield { type: "text_delta" as const, delta: "done" };
+        },
+      },
+    });
+    const pending = pendingQueuedMessages(
+      (await restored.readThread(thread.id)).items,
+    );
+    assert.deepEqual(
+      pending.map((item) => item.deliveryMode),
+      ["batch-next", "batch-next", "batch-next"],
+    );
+    const finished = testDeferred<void>();
+    restored.subscribe((event) => {
+      if (event.type === "turn_completed") finished.resolve();
+    });
+    await restored.resumeQueue(thread.id);
+    await finished.promise;
+    const snapshot = await restored.readThread(thread.id);
+    assert.deepEqual(
+      snapshot.turns
+        .at(-1)
+        ?.items.filter((item) => item.type === "user_message")
+        .map((item) => item.clientId),
+      ["one", "two", "three"],
+    );
+    assert.deepEqual(pendingQueuedMessages(snapshot.items), []);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("automatic and explicit batch admission reject the actual undeliverable Item without retrying", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const failure = testDeferred<void>();
+  const completed = testDeferred<void>();
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "queue-admission-qa",
+    async *stream(): AsyncIterable<ModelEvent> {
+      if (++samples === 1) {
+        entered.resolve();
+        await release.promise;
+      }
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const store = new InMemoryAttachmentStore();
+  const server = createServer({
+    model,
+    attachments: store,
+    modelCatalog: new StaticModelCatalog([
+      {
+        id: "images",
+        isDefault: true,
+        contextWindow: 32_768,
+        inputModalities: ["text", "image"],
+      },
+      { id: "text", contextWindow: 32_768, inputModalities: ["text"] },
+    ]),
+  });
+  const events: AppServerEvent[] = [];
+  const otherWindow: AppServerEvent[] = [];
+  server.subscribe((event) => {
+    if (
+      event.type === "queue_failed" ||
+      event.type === "queue_admission_started"
+    ) {
+      events.push(event);
+      if (event.type === "queue_failed") failure.resolve();
+    }
+    if (
+      event.type === "turn_completed" &&
+      event.status === "completed" &&
+      ++completions === 2
+    )
+      completed.resolve();
+  });
+  server.subscribe((event) => {
+    if (event.type === "queue_failed") otherWindow.push(event);
+  });
+  let completions = 0;
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  const image = await server.importImageBytes(png1x1());
+  await server.queueMessage(thread.id, "text-first", "batch-text", {
+    deliveryMode: "batch-next",
+  });
+  await server.queueMessage(
+    thread.id,
+    [{ type: "image", attachment: image }],
+    "batch-image",
+    { deliveryMode: "batch-next" },
+  );
+  const queued = pendingQueuedMessages(
+    (await server.readThread(thread.id)).items,
+  );
+  assert.equal(queued.length, 2);
+  await server.updateThreadSettings(thread.id, { model: "text" });
+  release.resolve();
+  await first.done;
+  await failure.promise;
+  const failures = () =>
+    events.filter((entry) => entry.type === "queue_failed");
+  assert.equal(failures().length, 1);
+  assert.deepEqual(failures()[0], {
+    type: "queue_failed",
+    threadId: thread.id,
+    queuedItemId: queued[1]!.id,
+    clientId: "batch-image",
+    attemptId: failures()[0]!.attemptId,
+    code: "image_input_unsupported",
+    message:
+      "The selected model cannot accept images. Choose an image-capable model, then Continue queue.",
+  });
+  assert.equal(otherWindow.length, 1);
+  assert.equal(samples, 1);
+  assert.deepEqual(
+    pendingQueuedMessages((await server.readThread(thread.id)).items).map(
+      (item) => item.clientId,
+    ),
+    ["batch-text", "batch-image"],
+  );
+  await assert.rejects(server.resumeQueue(thread.id), {
+    code: "image_input_unsupported",
+  });
+  assert.equal(failures().length, 2); // one explicit rejected attempt, no background duplicate
+  assert.notEqual(failures()[0]!.attemptId, failures()[1]!.attemptId);
+  await server.updateThreadSettings(thread.id, { model: "images" });
+  await server.resumeQueue(thread.id);
+  await completed.promise;
+  const restored = await server.readThread(thread.id);
+  assert.deepEqual(
+    restored.turns
+      .at(-1)
+      ?.items.filter((item) => item.type === "user_message")
+      .map((item) => item.clientId),
+    ["batch-text", "batch-image"],
+  );
+  assert.equal(pendingQueuedMessages(restored.items).length, 0);
+  assert.equal(samples, 2);
+  assert.equal(failures().length, 2);
+});
+
+test("lost queued attachment produces a safe native failure and keeps the canonical Item", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const failed = testDeferred<void>();
+  const finished = testDeferred<void>();
+  let calls = 0;
+  let missing = false;
+  const attachments = new InMemoryAttachmentStore();
+  const read = attachments.read.bind(attachments);
+  attachments.read = async (reference) => {
+    if (missing)
+      throw new AttachmentStoreError(
+        "attachment_missing",
+        "secret-token-from-provider-request",
+      );
+    return await read(reference);
+  };
+  const server = createServer({
+    attachments,
+    model: {
+      provider: "lost-attachment",
+      async *stream(): AsyncIterable<ModelEvent> {
+        if (++calls === 1) {
+          entered.resolve();
+          await release.promise;
+        }
+        yield { type: "text_delta", delta: "done" };
+      },
+    },
+    modelCatalog: new StaticModelCatalog([
+      {
+        id: "fake",
+        isDefault: true,
+        contextWindow: 32_768,
+        inputModalities: ["text", "image"],
+      },
+    ]),
+  });
+  const failures: Extract<AppServerEvent, { type: "queue_failed" }>[] = [];
+  let completions = 0;
+  server.subscribe((event) => {
+    if (event.type === "queue_failed") {
+      failures.push(event);
+      failed.resolve();
+    }
+    if (
+      event.type === "turn_completed" &&
+      event.status === "completed" &&
+      ++completions === 2
+    )
+      finished.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  const image = await server.importImageBytes(png1x1());
+  await server.queueMessage(
+    thread.id,
+    [{ type: "image", attachment: image }],
+    "lost-image",
+  );
+  missing = true;
+  release.resolve();
+  await first.done;
+  await failed.promise;
+  assert.equal(failures[0]?.code, "attachment_missing");
+  assert.equal(JSON.stringify(failures).includes("secret-token"), false);
+  assert.equal(calls, 1);
+  assert.deepEqual(
+    pendingQueuedMessages((await server.readThread(thread.id)).items).map(
+      (item) => item.clientId,
+    ),
+    ["lost-image"],
+  );
+  missing = false;
+  await server.resumeQueue(thread.id);
+  await finished.promise;
+  assert.deepEqual(
+    pendingQueuedMessages((await server.readThread(thread.id)).items),
+    [],
+  );
+  assert.equal(calls, 2);
+});
+
+test("concurrent explicit batch resumes share late second-item launch rejection and return after ready", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const enteredSecond = testDeferred<void>();
+  const releaseSecond = testDeferred<void>();
+  const autoFailed = testDeferred<void>();
+  const finished = testDeferred<void>();
+  let calls = 0;
+  let reads = 0;
+  let failAt = Number.POSITIVE_INFINITY;
+  const attachments = new InMemoryAttachmentStore();
+  const read = attachments.read.bind(attachments);
+  attachments.read = async (attachment) => {
+    if (++reads === failAt)
+      throw new AttachmentStoreError(
+        "attachment_missing",
+        "secret launch payload",
+      );
+    return await read(attachment);
+  };
+  const model: ModelAdapter = {
+    provider: "resume-admission-boundary",
+    async *stream(): AsyncIterable<ModelEvent> {
+      if (++calls === 1) {
+        entered.resolve();
+        await release.promise;
+      } else if (calls === 2) {
+        enteredSecond.resolve();
+        await releaseSecond.promise;
+      }
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const server = createServer({
+    model,
+    attachments,
+    modelCatalog: new StaticModelCatalog([
+      {
+        id: "images",
+        isDefault: true,
+        contextWindow: 32_768,
+        inputModalities: ["text", "image"],
+      },
+      { id: "text-only", contextWindow: 32_768, inputModalities: ["text"] },
+    ]),
+  });
+  const failures: Extract<AppServerEvent, { type: "queue_failed" }>[] = [];
+  const attempts: Extract<
+    AppServerEvent,
+    { type: "queue_admission_started" }
+  >[] = [];
+  let completions = 0;
+  server.subscribe((event) => {
+    if (event.type === "queue_failed") {
+      failures.push(event);
+      autoFailed.resolve();
+    }
+    if (event.type === "queue_admission_started") attempts.push(event);
+    if (
+      event.type === "turn_completed" &&
+      event.status === "completed" &&
+      ++completions === 2
+    )
+      finished.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  const image = await server.importImageBytes(png1x1());
+  await server.queueMessage(thread.id, "first batched", "batch-text", {
+    deliveryMode: "batch-next",
+  });
+  await server.queueMessage(
+    thread.id,
+    [{ type: "image", attachment: image }],
+    "batch-image",
+    { deliveryMode: "batch-next" },
+  );
+  const pending = pendingQueuedMessages(
+    (await server.readThread(thread.id)).items,
+  );
+  await server.updateThreadSettings(thread.id, { model: "text-only" });
+  release.resolve();
+  await first.done;
+  await autoFailed.promise;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(failures[0]?.clientId, "batch-image");
+  assert.equal(calls, 1);
+  await server.updateThreadSettings(thread.id, { model: "images" });
+  reads = 0;
+  failAt = 2; // first preflight read succeeds; second read inside #launchTurn fails.
+  const rejected = await Promise.allSettled([
+    server.resumeQueue(thread.id),
+    server.resumeQueue(thread.id),
+  ]);
+  assert.deepEqual(
+    rejected.map((entry) => entry.status),
+    ["rejected", "rejected"],
+  );
+  assert.deepEqual(
+    rejected.map((entry) =>
+      entry.status === "rejected" && entry.reason instanceof AppServerError
+        ? entry.reason.code
+        : null,
+    ),
+    ["attachment_missing", "attachment_missing"],
+  );
+  assert.equal(reads, 2);
+  assert.equal(calls, 1);
+  assert.equal(failures.length, 2); // one automatic + one explicit attempt, not per caller
+  assert.equal(failures[1]?.queuedItemId, pending[1]?.id);
+  assert.equal(failures[1]?.clientId, "batch-image");
+  assert.equal(
+    JSON.stringify(failures).includes("secret launch payload"),
+    false,
+  );
+  assert.equal(
+    attempts.filter((entry) => entry.attemptId === failures[1]?.attemptId)
+      .length,
+    2,
+  );
+  assert.deepEqual(
+    pendingQueuedMessages((await server.readThread(thread.id)).items).map(
+      (entry) => entry.clientId,
+    ),
+    ["batch-text", "batch-image"],
+  );
+
+  failAt = Number.POSITIVE_INFINITY;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let admitted = false;
+  try {
+    admitted = await Promise.race([
+      Promise.all([
+        server.resumeQueue(thread.id),
+        server.resumeQueue(thread.id),
+      ]).then(() => true),
+      new Promise<false>((resolve) => {
+        timeout = setTimeout(() => resolve(false), 1_500);
+      }),
+    ]);
+    assert.equal(
+      admitted,
+      true,
+      "first batch admission must not wait for the blocked Provider or all queue turns",
+    );
+    await enteredSecond.promise;
+    const during = await server.readThread(thread.id);
+    assert.equal(during.turns.at(-1)?.status, "inProgress");
+    assert.deepEqual(
+      during.turns
+        .at(-1)
+        ?.items.filter((item) => item.type === "user_message")
+        .map((item) => item.clientId),
+      ["batch-text", "batch-image"],
+    );
+  } finally {
+    clearTimeout(timeout);
+    releaseSecond.resolve();
+  }
+  await finished.promise;
+  assert.equal(calls, 2);
+  assert.equal(failures.length, 2);
+  assert.deepEqual(
+    pendingQueuedMessages((await server.readThread(thread.id)).items),
+    [],
+  );
+});
+
+test("a successfully admitted queued Turn that later fails is not another admission failure", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const enteredSecond = testDeferred<void>();
+  const releaseSecond = testDeferred<void>();
+  const autoFailed = testDeferred<void>();
+  const turnFailed = testDeferred<void>();
+  let calls = 0;
+  const model: ModelAdapter = {
+    provider: "post-admission-failure",
+    async *stream(): AsyncIterable<ModelEvent> {
+      if (++calls === 1) {
+        entered.resolve();
+        await release.promise;
+        yield { type: "text_delta", delta: "first completed" };
+      } else {
+        enteredSecond.resolve();
+        await releaseSecond.promise;
+        throw new Error(
+          "Model failed after canonical user message was accepted",
+        );
+      }
+    },
+  };
+  const server = createServer({
+    model,
+    modelCatalog: new StaticModelCatalog([
+      {
+        id: "images",
+        isDefault: true,
+        contextWindow: 32_768,
+        inputModalities: ["text", "image"],
+      },
+      { id: "text-only", contextWindow: 32_768, inputModalities: ["text"] },
+    ]),
+  });
+  let admissionFailures = 0;
+  server.subscribe((event) => {
+    if (event.type === "queue_failed") {
+      admissionFailures++;
+      autoFailed.resolve();
+    }
+    if (event.type === "turn_completed" && event.status === "failed")
+      turnFailed.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  const image = await server.importImageBytes(png1x1());
+  await server.queueMessage(
+    thread.id,
+    [{ type: "image", attachment: image }],
+    "admitted-then-failed",
+  );
+  await server.updateThreadSettings(thread.id, { model: "text-only" });
+  release.resolve();
+  await first.done;
+  await autoFailed.promise;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await server.updateThreadSettings(thread.id, { model: "images" });
+  try {
+    await server.resumeQueue(thread.id); // first message committed, Provider may still run
+    await enteredSecond.promise;
+    const running = await server.readThread(thread.id);
+    assert.equal(running.turns.at(-1)?.status, "inProgress");
+    assert.deepEqual(pendingQueuedMessages(running.items), []);
+    assert.equal(calls, 2);
+  } finally {
+    releaseSecond.resolve();
+  }
+  await turnFailed.promise;
+  assert.equal(admissionFailures, 1); // earlier auto-preflight only
+  const after = await server.readThread(thread.id);
+  assert.equal(after.turns.at(-1)?.status, "failed");
+  assert.deepEqual(
+    after.items.filter(
+      (item) =>
+        item.type === "user_message" &&
+        item.clientId === "admitted-then-failed",
+    ).length,
+    1,
+  );
+  assert.deepEqual(pendingQueuedMessages(after.items), []);
 });

@@ -2679,10 +2679,17 @@ a:focus-visible {
 }
 .composer-actions {
   gap: 5px;
+  min-width: 0;
+}
+.composer-current-mode {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+  white-space: nowrap;
 }
 .steer-button {
+  min-width: 0;
   min-height: 34px;
-  padding: 0 10px;
+  padding: 0 6px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -2692,6 +2699,14 @@ a:focus-visible {
 .steer-button:hover {
   color: var(--color-text-primary);
   background: var(--color-surface-elevated);
+}
+@media (max-width: 480px) {
+  .composer-rail {
+    flex-wrap: wrap;
+  }
+  .composer-actions {
+    margin-left: auto;
+  }
 }
 .action-orb {
   position: relative;
@@ -5578,6 +5593,26 @@ a:focus-visible {
   border-radius: 12px;
   font-size: 13px;
 }
+.composer-migration-notice {
+  margin: 8px 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.composer-migration-notice p {
+  margin: 0 0 8px;
+}
+.composer-migration-notice button {
+  margin: 2px 10px 2px 0;
+  padding: 6px 0;
+  border: 0;
+  background: none;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  text-decoration: underline;
+}
 .queued-messages ol {
   margin: 8px 0;
   padding-left: 20px;
@@ -5588,6 +5623,11 @@ a:focus-visible {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   margin: 4px 0;
+}
+.queued-failure {
+  margin: 6px 0;
+  color: var(--color-status-danger);
+  line-height: 1.45;
 }
 
 .available-model-picker {

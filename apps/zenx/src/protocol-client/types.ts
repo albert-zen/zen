@@ -129,7 +129,7 @@ export type UserInputPart =
 export interface ClientRequestParams {
   "zen/turn/send": {
     threadId: string;
-    mode: "start" | "queue" | "steer" | "replace";
+    mode: "start" | "queue" | "batch-next" | "steer" | "replace";
     expectedTurnId?: string;
     clientUserMessageId: string;
     input: readonly (

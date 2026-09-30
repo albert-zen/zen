@@ -141,6 +141,8 @@ export interface RunTurnOptions {
   turnId?: string;
   input: UserInput;
   clientId?: string;
+  /** Fixed FIFO admission snapshot; each entry retains a canonical identity. */
+  initialMessages?: readonly { input: UserInput; clientId: string }[];
   configuration: RuntimeConfiguration;
   modelAdapter: ModelAdapter;
   signal: AbortSignal;
@@ -273,18 +275,22 @@ export class AgentRuntime {
     let initialInputCommitted = false;
     try {
       this.#assertSandbox(options.configuration.sandbox);
-      const userItem: UserMessageItem = {
-        id: this.#id(),
-        threadId: options.thread.id,
-        turnId,
-        createdAt: this.#now(),
-        type: "user_message",
-        content: options.input,
-        ...(options.clientId === undefined
-          ? {}
-          : { clientId: options.clientId }),
-      };
-      await this.#completeItem(userItem, options);
+      for (const message of options.initialMessages ?? [
+        { input: options.input, clientId: options.clientId },
+      ]) {
+        const userItem: UserMessageItem = {
+          id: this.#id(),
+          threadId: options.thread.id,
+          turnId,
+          createdAt: this.#now(),
+          type: "user_message",
+          content: message.input,
+          ...(message.clientId === undefined
+            ? {}
+            : { clientId: message.clientId }),
+        };
+        await this.#completeItem(userItem, options);
+      }
       initialInputCommitted = true;
       options.initialInputCommitted?.();
 

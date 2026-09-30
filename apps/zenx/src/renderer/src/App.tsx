@@ -21,6 +21,7 @@ import {
 } from "react";
 
 import type { AttachmentRef } from "../../../../../src/attachment.js";
+import type { AppServerEvent } from "../../../../../src/app-server.js";
 import type { EffectiveThreadConfiguration } from "../../../../../src/thread.js";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
@@ -35,6 +36,7 @@ import type {
   ZenXProjectProjectionSnapshot,
 } from "../../main/project-projection.js";
 import type {
+  ZenXHostProfile,
   ZenXProviderProfile,
   ZenXSidebarOrder,
 } from "../../main/host-profile.js";
@@ -397,8 +399,10 @@ export function App() {
   const sidebarOrderRef = useRef<ZenXSidebarOrder>(EMPTY_SIDEBAR_ORDER);
   const profilePreferenceQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [composerSendMode, setComposerSendMode] = useState<
-    "queue" | "soft" | "hard"
-  >("queue");
+    "batch" | "queue" | "soft" | "hard"
+  >("soft");
+  const [composerSendModeMigration, setComposerSendModeMigration] =
+    useState<ZenXHostProfile["composerSendModeMigration"]>(undefined);
   const [workflowCommands, setWorkflowCommands] = useState<WorkflowCommand[]>(
     [],
   );
@@ -419,7 +423,8 @@ export function App() {
       .get()
       .then((value) => {
         if (active) {
-          setComposerSendMode(value.profile.composerSendMode ?? "queue");
+          setComposerSendMode(value.profile.composerSendMode ?? "soft");
+          setComposerSendModeMigration(value.profile.composerSendModeMigration);
           setWorkflowCommands(value.profile.workflowCommands ?? []);
         }
       })
@@ -432,7 +437,8 @@ export function App() {
     const onChanged = window.zenx.settings.onChanged;
     if (onChanged === undefined) return undefined;
     return onChanged((value) => {
-      setComposerSendMode(value.profile.composerSendMode ?? "queue");
+      setComposerSendMode(value.profile.composerSendMode ?? "soft");
+      setComposerSendModeMigration(value.profile.composerSendModeMigration);
       setWorkflowCommands(value.profile.workflowCommands ?? []);
     });
   }, []);
@@ -535,6 +541,11 @@ export function App() {
     }
   });
   const [requestError, setRequestError] = useState<string | null>(null);
+  const [queueFailure, setQueueFailure] = useState<Extract<
+    AppServerEvent,
+    { type: "queue_failed" }
+  > | null>(null);
+  const queueAttemptsRef = useRef(new Map<string, string>());
   const [optimisticSummary, setOptimisticSummary] =
     useState<NativeThreadSummary | null>(null);
   const [draftRecoveryNotice, setDraftRecoveryNotice] = useState<{
@@ -992,6 +1003,50 @@ export function App() {
         if (method === "zen/thread/event") {
           const projected =
             params as ServerNotificationParams["zen/thread/event"];
+          const nativeEvent = projected.event;
+          if (nativeEvent.type === "queue_admission_started") {
+            const key = `${projected.threadId}:${nativeEvent.queuedItemId}`;
+            queueAttemptsRef.current.set(key, nativeEvent.attemptId);
+            if (selectedThreadIdRef.current === projected.threadId)
+              setQueueFailure((current) =>
+                current?.queuedItemId === nativeEvent.queuedItemId
+                  ? null
+                  : current,
+              );
+          }
+          if (nativeEvent.type === "queue_failed") {
+            const key = `${projected.threadId}:${nativeEvent.queuedItemId}`;
+            if (
+              selectedThreadIdRef.current === projected.threadId &&
+              queueAttemptsRef.current.get(key) === nativeEvent.attemptId &&
+              cached?.thread.queuedMessages?.some(
+                (item) =>
+                  item.id === nativeEvent.queuedItemId &&
+                  item.clientId === nativeEvent.clientId,
+              )
+            )
+              setQueueFailure(nativeEvent);
+          }
+          if (
+            nativeEvent.type === "item_completed" &&
+            nativeEvent.item.type === "user_message" &&
+            nativeEvent.item.clientId !== undefined &&
+            selectedThreadIdRef.current === projected.threadId
+          ) {
+            const acceptedId = nativeEvent.item.clientId;
+            const queuedItemId = cached?.thread.canonicalItems?.find(
+              (item) =>
+                item.type === "user_message_queued" &&
+                item.clientId === acceptedId,
+            )?.id;
+            if (queuedItemId !== undefined)
+              queueAttemptsRef.current.delete(
+                `${projected.threadId}:${queuedItemId}`,
+              );
+            setQueueFailure((current) =>
+              current?.clientId === acceptedId ? null : current,
+            );
+          }
           if (
             projected.event.type === "item_completed" ||
             projected.event.type === "turn_completed"
@@ -1356,6 +1411,23 @@ export function App() {
       await window.zenx.protocol.request("turn/start", {
         threadId,
         input,
+        clientUserMessageId: submission.clientUserMessageId,
+      });
+    } else if (submission.intent === "batch-next") {
+      if (archivingThreadIdsRef.current.has(threadId))
+        throw new Error("This Thread is being archived.");
+      await window.zenx.protocol.request("zen/turn/send", {
+        threadId,
+        mode: "batch-next",
+        input: input.map((part) =>
+          part.type === "attachment"
+            ? { type: "image" as const, attachment: part.attachment }
+            : part.type === "text"
+              ? part
+              : (() => {
+                  throw new Error("Unsupported batch input part");
+                })(),
+        ),
         clientUserMessageId: submission.clientUserMessageId,
       });
     } else if (submission.intent === "queue") {
@@ -2015,6 +2087,25 @@ export function App() {
     }));
   };
 
+  const settleLegacySendChoice = async (restoreQueue: boolean) => {
+    const current = await window.zenx.settings.get();
+    const migration = current.profile.composerSendModeMigration;
+    if (migration === undefined || migration.acknowledged) return;
+    const saved = await window.zenx.settings.save({
+      ...current.profile,
+      baseRevision: current.profile.revision ?? 0,
+      composerSendMode: restoreQueue
+        ? "queue"
+        : (current.profile.composerSendMode ?? "soft"),
+      composerSendModeExplicit: restoreQueue
+        ? true
+        : (current.profile.composerSendModeExplicit ?? false),
+      composerSendModeMigration: { ...migration, acknowledged: true },
+    });
+    setComposerSendMode(saved.profile.composerSendMode ?? "soft");
+    setComposerSendModeMigration(saved.profile.composerSendModeMigration);
+  };
+
   return (
     <div
       className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarOpen ? " sidebar-open" : ""}`}
@@ -2244,6 +2335,10 @@ export function App() {
               setBrowserPanels((current) => ({ ...current, [threadId]: true }));
             }}
             composerSendMode={composerSendMode}
+            composerSendModeMigration={composerSendModeMigration}
+            queueFailure={queueFailure}
+            onSettleLegacySendChoice={settleLegacySendChoice}
+            onNoticeError={setRequestError}
             approvals={approvals}
             pluginSnapshot={pluginSnapshot}
             onOpenBrowserSettings={() => {
@@ -2666,6 +2761,10 @@ function PageTitleBar({
 function AgentSurface({
   onOpenMessageLink,
   composerSendMode,
+  composerSendModeMigration,
+  queueFailure,
+  onSettleLegacySendChoice,
+  onNoticeError,
   approvals,
   pluginSnapshot,
   onOpenBrowserSettings,
@@ -2718,7 +2817,11 @@ function AgentSurface({
     threadId: string,
     target: { kind: "file" | "browser"; value: string },
   ): void;
-  composerSendMode: "queue" | "soft" | "hard";
+  composerSendMode: "batch" | "queue" | "soft" | "hard";
+  composerSendModeMigration: ZenXHostProfile["composerSendModeMigration"];
+  queueFailure: Extract<AppServerEvent, { type: "queue_failed" }> | null;
+  onSettleLegacySendChoice(restoreQueue: boolean): Promise<void>;
+  onNoticeError(message: string): void;
   approvals: ApprovalCardState[];
   pluginSnapshot: ZenXPluginSnapshot | null;
   onOpenBrowserSettings(): void;
@@ -2917,6 +3020,48 @@ function AgentSurface({
             onOpenMessageLink={(target) => {
               onOpenMessageLink(threadDetail.id, target);
             }}
+            composerContext={
+              composerSendModeMigration?.acknowledged === false &&
+              composerSendMode === "soft" ? (
+                <div className="composer-migration-notice" role="status">
+                  <p>
+                    Your older Queue preference could not distinguish the old
+                    default from a manual choice. Running-turn sends now steer
+                    the current Turn; messages already queued keep their choice.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void onSettleLegacySendChoice(true).catch(
+                        (error: unknown) => onNoticeError(describeError(error)),
+                      )
+                    }
+                  >
+                    Restore per-message Queue
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void onSettleLegacySendChoice(false).catch(
+                        (error: unknown) => onNoticeError(describeError(error)),
+                      )
+                    }
+                  >
+                    Keep Steer
+                  </button>
+                </div>
+              ) : null
+            }
+            queueFailure={
+              queueFailure?.threadId === threadDetail.id &&
+              threadDetail.queuedMessages?.some(
+                (item) =>
+                  item.id === queueFailure.queuedItemId &&
+                  item.clientId === queueFailure.clientId,
+              )
+                ? queueFailure
+                : null
+            }
             onResumeQueue={async () => {
               await window.zenx.protocol.request("turn/queue/resume", {
                 threadId: threadDetail.id,
