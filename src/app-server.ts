@@ -3144,7 +3144,7 @@ function latestThreadFork(
 function findLatestClosedTurnIndex(items: readonly CanonicalItem[]): number {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
-    if (item?.type === "turn_completed" || item?.type === "turn_aborted") {
+    if (item?.type === "turn_completed" && item.status === "completed") {
       return index;
     }
   }
