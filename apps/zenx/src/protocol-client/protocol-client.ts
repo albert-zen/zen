@@ -33,6 +33,8 @@ export interface ZenXProtocolClientOptions {
   clientInfo: ClientInfo;
   bearerToken?: string;
   bearerTokenFile?: string;
+  /** Bounds only input admission replies, not model or tool execution. */
+  admissionReplyTimeoutMs?: number;
   reconnect?: {
     maxAttempts?: number;
     minDelayMs?: number;
@@ -52,14 +54,27 @@ const defaultReconnectPolicy: ReconnectPolicy = {
   maxDelayMs: 3_000,
 };
 
+const inputAdmissionMethods = new Set<string>([
+  "turn/start",
+  "turn/steer",
+  "turn/replace",
+  "turn/queue",
+  "zen/turn/send",
+]);
+
 export class ZenXProtocolClient {
   readonly #url: string;
   readonly #clientInfo: ClientInfo;
   readonly #bearerToken: string | undefined;
   readonly #reconnectPolicy: ReconnectPolicy;
+  readonly #admissionReplyTimeoutMs: number;
   readonly #pending = new Map<
     RequestId,
-    { resolve: (value: unknown) => void; reject: (error: Error) => void }
+    {
+      method: ClientRequestMethod;
+      resolve: (value: unknown) => void;
+      reject: (error: Error) => void;
+    }
   >();
   readonly #notificationHandlers = new Map<
     string,
@@ -94,6 +109,12 @@ export class ZenXProtocolClient {
       ...options.reconnect,
     };
     validateReconnectPolicy(this.#reconnectPolicy);
+    this.#admissionReplyTimeoutMs = options.admissionReplyTimeoutMs ?? 30_000;
+    if (
+      !Number.isSafeInteger(this.#admissionReplyTimeoutMs) ||
+      this.#admissionReplyTimeoutMs < 1
+    )
+      throw new Error("Invalid input admission reply timeout");
   }
 
   static async connect(
@@ -263,7 +284,7 @@ export class ZenXProtocolClient {
   ): Promise<ClientRequestResults[M]> {
     const id = this.#nextRequestId++;
     const response = new Promise<unknown>((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
+      this.#pending.set(id, { method, resolve, reject });
     });
     try {
       this.#send({ id, method, params });
@@ -271,7 +292,23 @@ export class ZenXProtocolClient {
       this.#pending.delete(id);
       throw error;
     }
-    return (await response) as ClientRequestResults[M];
+    const timer = inputAdmissionMethods.has(method)
+      ? setTimeout(() => {
+          const pending = this.#pending.get(id);
+          if (pending === undefined) return;
+          this.#pending.delete(id);
+          pending.reject(
+            new Error(
+              "Input admission reply timed out; request outcome unknown. Check the Thread before retrying. No request was resent.",
+            ),
+          );
+        }, this.#admissionReplyTimeoutMs)
+      : undefined;
+    try {
+      return (await response) as ClientRequestResults[M];
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   async #receive(
@@ -475,7 +512,15 @@ export class ZenXProtocolClient {
   }
 
   #rejectPending(error: Error): void {
-    for (const pending of this.#pending.values()) pending.reject(error);
+    for (const pending of this.#pending.values()) {
+      pending.reject(
+        inputAdmissionMethods.has(pending.method)
+          ? new Error(
+              `Input admission response unavailable; request outcome unknown. Check the Thread before retrying. No request was resent. (${error.message})`,
+            )
+          : error,
+      );
+    }
     this.#pending.clear();
   }
 
