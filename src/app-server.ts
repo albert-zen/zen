@@ -2206,26 +2206,41 @@ export class ZenAppServer {
   }): Promise<boolean> {
     const contextWindow = options.resolved.model.contextWindow;
     const inputTokens = options.inputTokens;
-    if (contextWindow === null || inputTokens === undefined) return false;
+    if (contextWindow === null) return false;
 
     return await this.#withThreadMutation(options.threadId, async () => {
       const active = this.#activeTurns.get(options.threadId);
       if (active?.turnId !== options.turnId) return false;
-      const trigger = automaticCompactionThreshold(
-        contextWindow,
-        options.contextCompaction.triggerPercent,
+      const thread = await this.#requireThread(options.threadId);
+      // Provider usage describes the request that just completed. Tool results
+      // are appended afterwards, so estimate the complete projection that is
+      // about to be sampled as well. This closes the gap where a large result
+      // crosses the window between two Provider usage reports.
+      const estimatedInputTokens = estimateModelMessageInputTokens(
+        compileModelMessages(thread.items, options.resolved.selection),
       );
-      if (inputTokens < trigger) {
-        active.contextCompactionNotice = undefined;
-        active.contextCompactionNoticeIssued = false;
-        return false;
-      }
+      const observedInputTokens = Math.max(
+        inputTokens ?? 0,
+        estimatedInputTokens,
+      );
+      // An agent initiated reset has its own durable success/failure result
+      // and projection rules. Do not let the usage from the reset request
+      // immediately trigger a second Host reset (or attach a Host notice to
+      // the exact continuation the agent supplied).
       if (options.agenticCompaction) {
         active.contextCompactionNotice = undefined;
         active.contextCompactionNoticeIssued = false;
         return false;
       }
-
+      const trigger = automaticCompactionThreshold(
+        contextWindow,
+        options.contextCompaction.triggerPercent,
+      );
+      if (observedInputTokens < trigger) {
+        active.contextCompactionNotice = undefined;
+        active.contextCompactionNoticeIssued = false;
+        return false;
+      }
       const fallbackPercent = Math.min(
         100,
         Math.max(
@@ -2234,24 +2249,61 @@ export class ZenAppServer {
         ),
       );
       const hardFallback =
-        inputTokens >=
+        observedInputTokens >=
         automaticCompactionThreshold(contextWindow, fallbackPercent);
-      if (!hardFallback) {
+      // With agentic mode disabled, the Host owns automatic compaction and
+      // should act at the configured trigger rather than waiting for the
+      // emergency margin. Agentic mode gets the reminder window first.
+      const automaticAtTrigger = !options.contextCompaction.agenticEnabled;
+      if (!hardFallback && !automaticAtTrigger) {
         if (
           options.contextCompaction.agenticEnabled &&
           active.contextCompactionNotice === undefined
         ) {
           active.contextCompactionNotice = `[Host context notice] The next model context is estimated at ${String(
-            Math.round((inputTokens / contextWindow) * 100),
+            Math.round((observedInputTokens / contextWindow) * 100),
           )}% of the configured window. Consider calling compact_context with a concise continuation summary; the current Turn can continue.`;
           active.contextCompactionNoticeIssued = false;
         }
         return false;
       }
 
-      const thread = await this.#requireThread(options.threadId);
-      const boundary = latestCompletedCompactionBoundary(thread.items);
-      if (boundary === undefined) return false;
+      // Use the same bounded retention planner as ordinary compaction. In
+      // particular, an active first Turn has no completed boundary: the
+      // planner returns undefined and we can fail closed before admitting a
+      // request that is already known to exceed the model window.
+      let boundary: ReturnType<typeof latestCompletedCompactionBoundary>;
+      try {
+        boundary = boundedCompactionBoundary(thread.items, {
+          retainedTokenBudget: contextCompactionTokenBudget(
+            contextWindow,
+            options.contextCompaction.targetPercent,
+          ),
+          estimateRetainedTokens: (retainedItems) =>
+            estimateModelMessageInputTokens(
+              compileModelMessages(retainedItems, options.resolved.selection),
+            ),
+          retention: options.contextCompaction.retention,
+          allowOpenTurns: true,
+        });
+      } catch (error) {
+        throw new AppServerError(
+          "automatic_compaction_failed",
+          `Automatic context compaction could not produce a bounded projection: ${describeCompactionError(error, "bounded projection unavailable")}`,
+        );
+      }
+      if (boundary === undefined) {
+        // There is no completed Turn that can safely be summarized (for
+        // example, the very first active Turn). Never send the next sample if
+        // the post-tool projection already fills the configured window.
+        if (observedInputTokens >= contextWindow) {
+          throw new AppServerError(
+            "context_window_exceeded",
+            `The active Turn reached the configured context window (${String(observedInputTokens)} estimated input tokens); no completed history is available for compaction`,
+          );
+        }
+        return false;
+      }
       if (
         latestCompaction(thread.items)?.coveredThroughItemId ===
         boundary.item.id
