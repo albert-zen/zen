@@ -58,6 +58,8 @@ export interface AppServerManagerOptions {
   execArgv?: string[];
   environment?: NodeJS.ProcessEnv;
   startupTimeoutMs?: number;
+  /** Bounds only the read-only usage IPC reply; never aborts an Agent/Host task. */
+  threadUsageReadTimeoutMs?: number;
   recoveryDelaysMs?: readonly number[];
   capabilityHost?: ZenXCapabilityHost;
   capabilityReplacementTimeoutMs?: number;
@@ -925,21 +927,37 @@ export class AppServerManager {
       throw new Error(`Zen App Server is not ready${detail}`);
     }
     const requestId = `thread-usage-${String(this.#nextThreadUsageRequest++)}`;
-    return await new Promise<ModelUsageProjection>((resolve, reject) => {
-      this.#pendingThreadUsageRequests.set(requestId, { resolve, reject });
-      this.#child!.send(
-        {
-          type: "thread-usage/read",
-          requestId,
-          threadId,
-        } satisfies HostCommand,
-        (error) => {
-          if (error === null) return;
-          this.#pendingThreadUsageRequests.delete(requestId);
-          reject(error);
-        },
-      );
-    });
+    const timeoutMs = this.#options.threadUsageReadTimeoutMs ?? 30_000;
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)
+      throw new Error("Invalid Thread usage read timeout");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await new Promise<ModelUsageProjection>((resolve, reject) => {
+        this.#pendingThreadUsageRequests.set(requestId, { resolve, reject });
+        timer = setTimeout(() => {
+          if (!this.#pendingThreadUsageRequests.delete(requestId)) return;
+          reject(
+            new Error(
+              "Thread usage read timed out; Host execution was not interrupted",
+            ),
+          );
+        }, timeoutMs);
+        this.#child!.send(
+          {
+            type: "thread-usage/read",
+            requestId,
+            threadId,
+          } satisfies HostCommand,
+          (error) => {
+            if (error === null) return;
+            if (this.#pendingThreadUsageRequests.delete(requestId))
+              reject(error);
+          },
+        );
+      });
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   async completePluginTurn(

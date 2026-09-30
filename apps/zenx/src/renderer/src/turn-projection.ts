@@ -35,6 +35,46 @@ export interface TraceDisplayRow {
   parentToolName: string | null;
 }
 
+/** Only adjacent completed reasoning items with no public summary or content share a visual row; visibility is not projected. */
+export function groupReasoningWithoutDetailsRows(
+  rows: readonly TraceDisplayRow[],
+): Array<
+  TraceDisplayRow | { kind: "reasoningWithoutDetailsRun"; ids: string[] }
+> {
+  const result: Array<
+    TraceDisplayRow | { kind: "reasoningWithoutDetailsRun"; ids: string[] }
+  > = [];
+  let run: TraceDisplayRow[] = [];
+  const flush = () => {
+    if (run.length > 1) {
+      result.push({
+        kind: "reasoningWithoutDetailsRun",
+        ids: run.map((row) => row.item.id),
+      });
+    } else if (run[0] !== undefined) {
+      result.push(run[0]);
+    }
+    run = [];
+  };
+  for (const row of rows) {
+    const item = row.item;
+    if (
+      item.type === "reasoning" &&
+      item.status !== "inProgress" &&
+      item.status !== "interrupted" &&
+      item.summary.every((part) => part.trim().length === 0) &&
+      item.content.every((part) => part.trim().length === 0)
+    ) {
+      run.push(row);
+    } else {
+      flush();
+      result.push(row);
+    }
+  }
+  flush();
+  return result;
+}
+
 /** Derive visual lineage solely from canonical call ids carried by the wire projection. */
 export function traceDisplayRows(
   items: readonly Extract<
