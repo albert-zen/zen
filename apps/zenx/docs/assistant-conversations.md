@@ -28,13 +28,18 @@ Thread. Messages sent while paused remain saved; enabling replies does not
 replay them. Use the source conversation's ordinary interruption controls to
 stop an active Turn.
 
-Delivery reuses the existing immutable Room operation and one-attempt Trigger
-path. A busy target currently reports a failed wakeup; there is no hidden retry
-or assistant-specific queue. Inspect the saved message's delivery and the source
-Thread before intentionally sending again. A response-loss/unknown result must
-be reconciled with its existing operation rather than resubmitted as a new send.
-A future busy-queue slice should reuse the canonical input queue and correlate
-its exact resulting Turn before projecting a reply, not add a second queue.
+Delivery reuses the existing immutable Room operation and canonical App Server
+input queue. Busy targets receive queued input without creating another Thread.
+The receipt remains queued until the completed Turn proves it consumed that exact
+client input identity; only then is its answer projected to the originating Room.
+An acknowledgment never means the Agent has completed the work. Failure or unknown
+admission is visible and never automatically retried. A legacy test/Host port
+without queue support retains explicit direct-start failures.
+
+Pausing replies does not cancel an input already accepted by the queue. Use the
+source conversation's existing queue/cancellation controls for already admitted
+input. A restart marks unsettled receipt delivery unknown and does not replay
+Room messages or invent an answer; inspect the canonical source conversation.
 
 One completed Trigger Turn projects its final answer to the Room with source
 Thread/Turn identity. The setup prompt asks the model not to also post that same

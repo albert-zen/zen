@@ -1076,7 +1076,10 @@ roomMention Trigger; an explicit trusted UI action atomically creates both in th
 existing automation store. It introduces no runtime, Thread, scheduler or journal.
 Only human Room posts use the implicit recipient; Agent posts do not implicitly
 wake the assistant. Reading/opening the Room never starts a Turn. The owned Trigger
-retains existing one-attempt delivery and failure behavior; busy Threads report a
-failed wakeup rather than silently retrying. Pausing replies stops future admission,
-not a Turn already admitted. Window close and explicit Quit keep their existing
+uses the existing canonical App Server queue when available, retaining the existing
+wakeup receipt until a completed Turn contains its exact client input identity.
+Admission acknowledgment is not completion; early and duplicate completion cannot
+resurrect or duplicate a reply. Legacy ports without queue support retain explicit
+direct-start failure. Pausing replies stops future admission, not an input or Turn
+already admitted. Window close and explicit Quit keep their existing
 Host lifecycle. Models cannot invoke the trusted-only setup/pause commands.

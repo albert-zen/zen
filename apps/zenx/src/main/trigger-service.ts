@@ -824,9 +824,11 @@ export class ZenXTriggerService {
                           ? ("failed" as const)
                           : entry.status === "completed"
                             ? ("completed" as const)
-                            : entry.status === "running"
-                              ? ("running" as const)
-                              : ("pending" as const),
+                            : entry.delivery === "queued"
+                              ? ("queued" as const)
+                              : entry.status === "running"
+                                ? ("running" as const)
+                                : ("pending" as const),
                   historyId: entry?.id ?? null,
                 };
               }),
@@ -991,7 +993,15 @@ export class ZenXTriggerService {
     const running = this.#snapshot.history.find(
       (entry) =>
         entry.threadId === event.threadId &&
-        entry.turnId === event.turn.id &&
+        (entry.turnId === event.turn.id ||
+          (entry.turnId === null &&
+            entry.replyRoomId !== null &&
+            (entry.delivery === "pending" || entry.delivery === "queued") &&
+            completedItems.some(
+              (item) =>
+                item.type === "userMessage" &&
+                item.clientId === entry.clientUserMessageId,
+            ))) &&
         (entry.status === "starting" || entry.status === "running") &&
         generation.activeWakeups.has(entry.clientUserMessageId),
     );
@@ -1235,7 +1245,10 @@ export class ZenXTriggerService {
       programInvocationId: null,
       programOutcome: null,
       programOutcomes: [],
-      ...(trigger.kind === "thread" &&
+      ...((trigger.kind === "thread" ||
+        snapshot.rooms.some(
+          (room) => room.assistant?.triggerId === trigger.id,
+        )) &&
       this.#manager.enqueue !== undefined &&
       trigger.program === undefined
         ? { delivery: rejected ? ("failed" as const) : ("pending" as const) }
@@ -1384,6 +1397,39 @@ export class ZenXTriggerService {
         return;
       }
       if (!this.#isOperational(generation)) return;
+      if (
+        this.#manager.enqueue !== undefined &&
+        this.#snapshot.rooms.some(
+          (room) => room.assistant?.triggerId === trigger.id,
+        )
+      ) {
+        // The App Server owns the queue. Keep this existing wakeup receipt alive
+        // until canonical completion proves which Turn consumed its input.
+        await this.#manager.enqueue({
+          threadId: trigger.threadId,
+          clientUserMessageId: active.clientUserMessageId,
+          input: [
+            {
+              type: "text",
+              text: wakeupInput(
+                trigger,
+                this.#history(active.historyId),
+                wakeup.projection,
+              ),
+            },
+          ],
+        });
+        await this.#mutate(generation, async (snapshot) => {
+          const entry = snapshot.history.find(
+            (item) => item.id === active.historyId,
+          );
+          if (!entry) return;
+          entry.delivery = "queued";
+          // Completion can race the admission acknowledgment; never resurrect it.
+          if (!isTerminal(entry.status)) entry.status = "running";
+        });
+        return;
+      }
       if (trigger.kind === "thread" && this.#manager.enqueue !== undefined) {
         if (this.#history(active.historyId).delivery === undefined) {
           await this.#mutate(generation, async (snapshot) => {
