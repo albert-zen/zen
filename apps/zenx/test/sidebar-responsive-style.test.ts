@@ -153,7 +153,11 @@ test("592px Settings reflows tabs and moves the sidebar off canvas", async () =>
   );
   assert.match(
     narrow,
-    /\.sidebar\s*\{[^}]*position:\s*absolute;[^}]*transform:\s*translateX\(-102%\);/su,
+    /\.sidebar\s*\{[^}]*position:\s*absolute;[^}]*transform:\s*translateX\(-102%\);[^}]*visibility:\s*hidden;[^}]*pointer-events:\s*none;/su,
+  );
+  assert.match(
+    narrow,
+    /\.sidebar\.open\s*\{[^}]*visibility:\s*visible;[^}]*pointer-events:\s*auto;/su,
   );
   assert.match(
     narrow,
@@ -163,6 +167,22 @@ test("592px Settings reflows tabs and moves the sidebar off canvas", async () =>
     mobile,
     /\.settings-nav\s*\{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);/su,
   );
+});
+
+test("narrow global notices wrap long errors and keep recovery controls usable", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /\.app-notice span\s*\{[^}]*min-width:\s*0;[^}]*overflow-wrap:\s*anywhere;/su,
+  );
+  assert.match(
+    styles,
+    /@media \(max-width: 420px\)\s*\{[^}]*\.app-notice\s*\{[^}]*flex-wrap:\s*wrap;/su,
+  );
+  assert.match(styles, /\.app-notice button\s*\{[^}]*min-height:\s*44px;/su);
 });
 
 test("200% text zoom keeps Settings copy and Appearance controls reflowable", async () => {
