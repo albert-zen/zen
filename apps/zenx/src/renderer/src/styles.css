@@ -9176,7 +9176,7 @@ a:focus-visible {
 }
 .room-assistant-controls > small {
   flex-basis: 100%;
-  color: var(--muted);
+  color: var(--text-3);
 }
 .room-assistant-state {
   margin: 4px 0 0;
