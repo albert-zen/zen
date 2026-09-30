@@ -5619,6 +5619,11 @@ a:focus-visible {
   max-height: 120px;
   overflow: auto;
 }
+.queued-messages.cancellable ol {
+  /* Cancellable rows contain real buttons; keep the Stop/send controls in
+     the 360x560 bottom zone and scroll the list rather than the Composer. */
+  max-height: 64px;
+}
 .queued-messages li {
   white-space: pre-wrap;
   overflow-wrap: anywhere;

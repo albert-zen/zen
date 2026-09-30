@@ -555,7 +555,7 @@ export function ThreadView({
         ))}
         {(thread?.queuedMessages?.length ?? 0) > 0 ? (
           <div
-            className="queued-messages"
+            className={`queued-messages${onCancelQueued === undefined ? "" : " cancellable"}`}
             aria-label="Message queue"
             aria-live="polite"
           >
