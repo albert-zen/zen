@@ -149,7 +149,7 @@ test("context usage renders beside the composer with honest tooltip details", ()
   );
   assert.match(
     html,
-    /class="context-usage-trigger"[^>]*aria-label="Open context details\. Context 30% est[^"]*Thread cache 50%/u,
+    /class="context-usage-trigger"[^>]*aria-label="Open context details\. Context 30% · 78\.2K estimated next input \/ 262K configured window[^"]*Thread cache 50%/u,
   );
   assert.match(html, /aria-haspopup="dialog"/u);
   assert.match(html, /aria-expanded="false"/u);
@@ -187,6 +187,12 @@ test("context ring opens an accessible popover before its compact action runs", 
     assert.ok(document.querySelector('[role="dialog"]'));
     assert.match(document.body.textContent ?? "", /estimated next input/u);
     assert.match(document.body.textContent ?? "", /configured window tokens/u);
+    assert.match(document.body.textContent ?? "", /Configured window/u);
+    assert.match(
+      requiredElement('[role="progressbar"]').getAttribute("aria-valuetext") ??
+        "",
+      /configured window/u,
+    );
 
     await act(async () => requiredButton(".context-usage-compact").click());
     assert.equal(compactCalls, 1);
@@ -207,6 +213,7 @@ test("context pressure above the configured window keeps the real percent in its
   );
   assert.match(html, /Context 216%/u);
   assert.match(html, /Thread cache 96%/u);
+  assert.match(html, /587\.5K last provider input \/ 272K configured window/u);
   assert.match(html, /stroke-dasharray="1 1"/u);
 });
 
@@ -422,7 +429,10 @@ test("context tooltip exposes exact zero and unknown Thread cache rates", () => 
       },
     },
   );
-  assert.match(zero, /Context 30% est[^"]*Thread cache 0%/u);
+  assert.match(
+    zero,
+    /Context 30% · 78\.2K estimated next input \/ 262K configured window[^"]*Thread cache 0%/u,
+  );
 
   const unknown = renderTurns(
     [],
@@ -440,7 +450,10 @@ test("context tooltip exposes exact zero and unknown Thread cache rates", () => 
       },
     },
   );
-  assert.match(unknown, /Context 30% est[^"]*Thread cache unknown/u);
+  assert.match(
+    unknown,
+    /Context 30% · 78\.2K estimated next input \/ 262K configured window[^"]*Thread cache unknown/u,
+  );
 });
 
 test("context indicator hides unknown ratio instead of presenting zero", () => {

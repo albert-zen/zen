@@ -1856,13 +1856,11 @@ test("rejects active, incomplete, empty, and duplicate boundaries before mutatio
   });
   await expectAppServerCode(
     incomplete.compactThread("thread"),
-    "compaction_not_available",
+    "compaction_incomplete_turn",
   );
-  assert.equal(
-    (await incompleteJournal.read("thread")).filter(
-      (item) => item.type === "turn_aborted",
-    ).length,
-    1,
+  assert.deepEqual(
+    await incompleteJournal.read("thread"),
+    canonicalIncompleteHistory(),
   );
 
   const modelStarted = deferred<void>();
