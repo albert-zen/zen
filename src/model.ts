@@ -9,7 +9,7 @@ import {
   type UserInput,
 } from "./item.js";
 import {
-  CONTEXT_COMPACTION_SUMMARY_PREFIX,
+  compactionSummaryText,
   isAgenticContextCompaction,
   itemsAfterLatestAgenticCompaction,
   latestCompaction,
@@ -216,7 +216,7 @@ function compileConversationMessages(
     ...compileCanonicalModelMessages(retained, targetSelection, turnSelections),
     {
       role: "user",
-      text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${compaction.summary}`,
+      text: compactionSummaryText(compaction),
     },
     ...(policy !== undefined &&
     (policy !== "danger-full-access" ||

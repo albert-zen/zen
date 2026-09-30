@@ -173,7 +173,26 @@ export interface ClientRequestParams {
     model: string;
     effort?: string;
   };
-  "thread/compact": { threadId: string };
+  "thread/original/read": {
+    threadId: string;
+    throughItemId: string;
+    beforeItemId?: string;
+    limit?: number;
+  };
+  "thread/compact": {
+    threadId: string;
+    includeOriginalReference?: boolean;
+    retention?: {
+      mode?: "budget" | "recent-items" | "selected-items";
+      recentItemCount?: number;
+      recentTurnCount?: number;
+      itemIds?: string[];
+      itemRanges?: { fromItemId: string; toItemId: string }[];
+      preserveUserMessages?: boolean;
+      finalMessages?: "none" | "all" | "recent";
+      finalMessageCount?: number;
+    };
+  };
   "thread/unsubscribe": { threadId: string };
   "turn/start": {
     threadId: string;
@@ -230,6 +249,10 @@ export interface ClientRequestResults {
   "thread/unarchive": { thread: Thread };
   "thread/permissions/update": Record<string, never>;
   "thread/settings/update": Record<string, never>;
+  "thread/original/read": {
+    items: Thread["turns"][number]["items"];
+    nextBeforeItemId: string | null;
+  };
   "thread/compact": { compactionItemId: string };
   "thread/unsubscribe": {
     status: "unsubscribed" | "notSubscribed";

@@ -7,14 +7,14 @@ import type {
 } from "./item.js";
 import type { ModelTool } from "./model.js";
 
-export const CONTEXT_COMPACTION_ALGORITHM_VERSION = "zen.context-compaction.v2";
+export const CONTEXT_COMPACTION_ALGORITHM_VERSION = "zen.context-compaction.v3";
 export const AGENTIC_CONTEXT_COMPACTION_ALGORITHM_VERSION =
-  "zen.context-compaction.agentic.v1";
+  "zen.context-compaction.agentic.v2";
 export const AGENTIC_CONTEXT_COMPACTION_TOOL_NAME = "compact_context";
 export const AGENTIC_CONTEXT_COMPACTION_TOOL: ModelTool = Object.freeze({
   name: AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
   description:
-    "Replace the working context for this active Turn with the supplied continuation text. Call this alone as a top-level tool. After success, earlier working context including this tool trace is no longer provided to the model; only the supplied text and newer user input continue. The complete trace remains in the journal for people to inspect.",
+    "Compact this active Turn. Supply your own continuation text; optionally retain canonical Items by recent count, Turn count, IDs or user-message category. A bounded, Host-owned original Thread reference is included by default. Call alone as a top-level tool; retention exceeding context capacity fails without reset.",
   inputSchema: Object.freeze({
     type: "object",
     properties: Object.freeze({
@@ -22,6 +22,40 @@ export const AGENTIC_CONTEXT_COMPACTION_TOOL: ModelTool = Object.freeze({
         type: "string",
         description:
           "Exact continuation text retained for subsequent reasoning. Before calling, save details that must remain available to durable files when useful, then include their ordinary paths and the next steps here so they can be read on demand.",
+      }),
+      retention: Object.freeze({
+        type: "object",
+        description:
+          "Programmatic, bounded retention of existing canonical Items.",
+        properties: Object.freeze({
+          recentItemCount: { type: "integer", minimum: 1 },
+          recentTurnCount: { type: "integer", minimum: 0 },
+          itemIds: { type: "array", items: { type: "string" } },
+          itemRanges: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                fromItemId: { type: "string" },
+                toItemId: { type: "string" },
+              },
+              required: ["fromItemId", "toItemId"],
+              additionalProperties: false,
+            },
+          },
+          preserveUserMessages: { type: "boolean" },
+          finalMessages: {
+            type: "string",
+            enum: ["none", "all", "recent"],
+          },
+          finalMessageCount: { type: "integer", minimum: 1 },
+        }),
+        additionalProperties: false,
+      }),
+      includeOriginalReference: Object.freeze({
+        type: "boolean",
+        description:
+          "Include a bounded original Thread locator (default true).",
       }),
     }),
     required: Object.freeze(["text"]),
@@ -37,6 +71,7 @@ Preserve concrete user goals, decisions, constraints, unfinished work, exact ide
 and tool outcomes that affect future work. Do not call tools. Return only the summary.`;
 
 export interface ContextCompactionConfig {
+  includeOriginalReference?: boolean;
   agenticEnabled?: boolean;
   summaryInstruction?: string;
   triggerPercent?: number;
@@ -47,10 +82,14 @@ export interface ContextCompactionConfig {
     preserveUserMessages?: boolean;
     finalMessages?: "none" | "all" | "recent";
     finalMessageCount?: number;
+    recentTurnCount?: number;
+    itemIds?: string[];
+    itemRanges?: { fromItemId: string; toItemId: string }[];
   };
 }
 
 export interface ResolvedContextCompactionConfig {
+  includeOriginalReference: boolean;
   agenticEnabled: boolean;
   summaryInstruction: string;
   triggerPercent: number;
@@ -61,11 +100,14 @@ export interface ResolvedContextCompactionConfig {
     preserveUserMessages: boolean;
     finalMessages: "none" | "all" | "recent";
     finalMessageCount: number;
+    recentTurnCount: number;
+    itemIds: string[];
+    itemRanges: { fromItemId: string; toItemId: string }[];
   };
 }
 
 export interface CompactionBoundary {
-  item: Extract<CanonicalItem, { type: "turn_completed" }>;
+  item: CanonicalItem;
   index: number;
   retainedItemIds: string[];
 }
@@ -82,11 +124,17 @@ export function normalizeContextCompactionConfig(
   requirePlainObject(config, "config");
   requireKnownKeys(config, "config", [
     "agenticEnabled",
+    "includeOriginalReference",
     "summaryInstruction",
     "triggerPercent",
     "targetPercent",
     "retention",
   ]);
+  const includeOriginalReference = config.includeOriginalReference ?? true;
+  if (typeof includeOriginalReference !== "boolean")
+    throw new Error(
+      "Context compaction includeOriginalReference must be a boolean",
+    );
   const agenticEnabled = config.agenticEnabled ?? false;
   if (typeof agenticEnabled !== "boolean") {
     throw new Error("Context compaction agenticEnabled must be a boolean");
@@ -111,6 +159,9 @@ export function normalizeContextCompactionConfig(
     "preserveUserMessages",
     "finalMessages",
     "finalMessageCount",
+    "recentTurnCount",
+    "itemIds",
+    "itemRanges",
   ]);
   const mode = retention.mode ?? "budget";
   if (!["budget", "recent-items", "selected-items"].includes(mode)) {
@@ -130,8 +181,40 @@ export function normalizeContextCompactionConfig(
   }
   const finalMessageCount = retention.finalMessageCount ?? 10;
   requirePositiveInteger(finalMessageCount, "retention.finalMessageCount");
+  const recentTurnCount = retention.recentTurnCount ?? 0;
+  requireNonNegativeInteger(recentTurnCount, "retention.recentTurnCount");
+  const itemIds = retention.itemIds ?? [];
+  if (
+    !Array.isArray(itemIds) ||
+    itemIds.some((id) => typeof id !== "string" || !id.trim())
+  ) {
+    throw new Error(
+      "Context compaction retention.itemIds must be non-empty strings",
+    );
+  }
+  const itemRanges = retention.itemRanges ?? [];
+  if (
+    !Array.isArray(itemRanges) ||
+    itemRanges.some(
+      (range) =>
+        typeof range !== "object" ||
+        range === null ||
+        Array.isArray(range) ||
+        Object.keys(range).some(
+          (key) => !["fromItemId", "toItemId"].includes(key),
+        ) ||
+        typeof range.fromItemId !== "string" ||
+        !range.fromItemId.trim() ||
+        typeof range.toItemId !== "string" ||
+        !range.toItemId.trim(),
+    )
+  )
+    throw new Error(
+      "Context compaction retention.itemRanges must have fromItemId and toItemId",
+    );
   return {
     agenticEnabled,
+    includeOriginalReference,
     summaryInstruction,
     triggerPercent,
     targetPercent,
@@ -141,6 +224,9 @@ export function normalizeContextCompactionConfig(
       preserveUserMessages,
       finalMessages,
       finalMessageCount,
+      recentTurnCount,
+      itemIds: [...itemIds],
+      itemRanges: itemRanges.map((range) => ({ ...range })),
     },
   };
 }
@@ -277,6 +363,15 @@ export function boundedCompactionBoundary(
   const boundary = latestEligibleCompactionBoundary(items);
   if (boundary === undefined) return undefined;
 
+  return planCompactionRetention(items, boundary, options);
+}
+
+/** Shared deterministic retention plan for generated and active-Turn compaction. */
+export function planCompactionRetention(
+  items: readonly CanonicalItem[],
+  boundary: CompactionBoundary,
+  options: BoundedCompactionBoundaryOptions,
+): CompactionBoundary {
   const coveredItems = items.slice(0, boundary.index + 1);
   const retainableItems = itemsAfterLatestAgenticCompaction(coveredItems);
   const turnItems = retainableItems.filter(
@@ -291,7 +386,7 @@ export function boundedCompactionBoundary(
     options.retention ?? normalizeContextCompactionConfig().retention;
   const pinned = expandRetainedToolClosure(
     retainableItems,
-    explicitlyRetainedIds(retainableItems, retention),
+    explicitlyRetainedIds(retainableItems, coveredItems, retention),
   );
 
   if (retention.mode !== "budget") {
@@ -366,8 +461,7 @@ function projectsIntoModelContext(item: CanonicalItem): boolean {
     item.type === "agent_message" ||
     item.type === "tool_call" ||
     item.type === "tool_result" ||
-    item.type === "failure" ||
-    (item.type === "reasoning" && item.incomplete !== true)
+    item.type === "failure"
   );
 }
 
@@ -393,17 +487,73 @@ function recentItemCandidates(
 }
 
 function explicitlyRetainedIds(
+  retainableItems: readonly CanonicalItem[],
   coveredItems: readonly CanonicalItem[],
   retention: ResolvedContextCompactionConfig["retention"],
 ): Set<string> {
   const retained = new Set<string>();
+  const byId = new Map(retainableItems.map((item) => [item.id, item]));
+  for (const range of retention.itemRanges) {
+    const from = retainableItems.findIndex(
+      (item) => item.id === range.fromItemId,
+    );
+    const to = retainableItems.findIndex((item) => item.id === range.toItemId);
+    const fullFrom = coveredItems.findIndex(
+      (item) => item.id === range.fromItemId,
+    );
+    const fullTo = coveredItems.findIndex((item) => item.id === range.toItemId);
+    if (
+      from < 0 ||
+      to < from ||
+      fullFrom < 0 ||
+      fullTo < fullFrom ||
+      coveredItems
+        .slice(fullFrom, fullTo + 1)
+        .some(
+          (item) =>
+            item.threadId !== retainableItems[from]?.threadId ||
+            (!isStructuralCompactionItem(item) &&
+              (!projectsIntoModelContext(item) || !byId.has(item.id))),
+        )
+    ) {
+      throw new Error(
+        "Invalid compaction retention Item range: contains unavailable content; select eligible Item IDs, a category, or recent Turns",
+      );
+    }
+    for (const item of retainableItems.slice(from, to + 1)) {
+      if (projectsIntoModelContext(item)) retained.add(item.id);
+    }
+  }
+  for (const id of retention.itemIds) {
+    const item = byId.get(id);
+    if (item === undefined || !projectsIntoModelContext(item)) {
+      throw new Error("Item is not eligible for compaction retention");
+    }
+    retained.add(id);
+  }
+  if (retention.recentTurnCount > 0) {
+    // Resolve Turn identity from the full covered journal. The previous
+    // agentic reset may have removed turn_started from retainableItems.
+    const started = coveredItems.filter((item) => item.type === "turn_started");
+    const turns = new Set(
+      started.slice(-retention.recentTurnCount).map((item) => item.turnId),
+    );
+    for (const item of retainableItems) {
+      if (
+        item.turnId !== undefined &&
+        turns.has(item.turnId) &&
+        projectsIntoModelContext(item)
+      )
+        retained.add(item.id);
+    }
+  }
   if (retention.preserveUserMessages) {
-    for (const item of coveredItems) {
+    for (const item of retainableItems) {
       if (item.type === "user_message") retained.add(item.id);
     }
   }
   if (retention.finalMessages !== "none") {
-    const finals = successfulFinalMessages(coveredItems);
+    const finals = successfulFinalMessages(retainableItems);
     const selected =
       retention.finalMessages === "all"
         ? finals
@@ -411,6 +561,22 @@ function explicitlyRetainedIds(
     for (const item of selected) retained.add(item.id);
   }
   return retained;
+}
+
+/** Non-projecting journal control Items can anchor a range, not enter model context. */
+function isStructuralCompactionItem(item: CanonicalItem): boolean {
+  return (
+    item.type === "turn_started" ||
+    item.type === "turn_completed" ||
+    item.type === "turn_aborted" ||
+    item.type === "turn_replacement_requested" ||
+    item.type === "thread_metadata" ||
+    item.type === "thread_forked" ||
+    item.type === "thread_configuration_changed" ||
+    item.type === "context_compaction" ||
+    item.type === "model_usage" ||
+    item.type === "code_state"
+  );
 }
 
 function successfulFinalMessages(
@@ -614,9 +780,7 @@ function validateAgenticContextCompactionItem(
   requireNonEmpty(item.turnId, "turnId");
   requireNonEmpty(item.callId, "callId");
   requireNonEmpty(item.sourceModelResponseId, "sourceModelResponseId");
-  if (item.retainedItemIds.length !== 0) {
-    throw new Error("Agentic context compaction cannot retain covered Items");
-  }
+
   const boundaryIndex = items.findIndex(
     (candidate) => candidate.id === item.coveredThroughItemId,
   );
@@ -694,6 +858,25 @@ function validateAgenticContextCompactionItem(
   ) {
     throw new Error("Agentic context compaction requires an active Turn");
   }
+  const retainable = itemsAfterLatestAgenticCompaction(
+    items.slice(0, boundaryIndex + 1),
+  );
+  const available = new Set(retainable.map((candidate) => candidate.id));
+  let lastIndex = -1;
+  for (const id of item.retainedItemIds) {
+    const index = items.findIndex((candidate) => candidate.id === id);
+    if (
+      !available.has(id) ||
+      index <= lastIndex ||
+      items[index]?.type === "reasoning"
+    ) {
+      throw new Error(
+        `Agentic compaction retained Item is invalid or out of order: ${id}`,
+      );
+    }
+    lastIndex = index;
+  }
+  validateRetainedToolClosure(retainable, new Set(item.retainedItemIds));
   const previous = latestCompaction(items);
   if (previous !== undefined) {
     const previousBoundaryIndex = items.findIndex(
@@ -833,6 +1016,14 @@ function requirePercentage(value: number, name: string): void {
   }
 }
 
+function requireNonNegativeInteger(value: number, name: string): void {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(
+      `Context compaction ${name} must be a non-negative integer`,
+    );
+  }
+}
+
 function requirePositiveInteger(value: number, name: string): void {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new Error(`Context compaction ${name} must be a positive integer`);
@@ -859,4 +1050,15 @@ function requireKnownKeys(
       `Context compaction ${name} contains unknown field ${unknown}`,
     );
   }
+}
+
+/** Stable logical locator; reading it requires the same authorized Thread API as ordinary history. */
+export function originalItemListReference(
+  threadId: string,
+  cutoffId: string,
+): string {
+  return `zen-thread://${encodeURIComponent(threadId)}/items?through=${encodeURIComponent(cutoffId)}`;
+}
+export function compactionSummaryText(item: ContextCompactionItem): string {
+  return `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${item.summary}${item.includeOriginalReference !== true ? "" : `\n[Original ItemList: ${originalItemListReference(item.threadId, item.coveredThroughItemId)}; use authorized thread/original/read, do not infer hidden content]`}`;
 }

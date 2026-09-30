@@ -10,6 +10,7 @@ import {
 import {
   boundedCompactionBoundary,
   normalizeContextCompactionConfig,
+  planCompactionRetention,
   validateContextCompactionItem,
   type ContextCompactionConfig,
 } from "../src/context-compaction.js";
@@ -38,6 +39,322 @@ import { ShellToolRuntime, ToolEnvironment } from "../src/tool.js";
 
 const SUMMARY_MARKER = "ZEN_CONTEXT_COMPACTION_V1";
 
+test("R1 regression: second reset selects admitted late steer by full-journal Turn identity", () => {
+  const base = {
+    threadId: "private",
+    turnId: "active",
+    createdAt: "2026-01-01T00:00:00Z",
+  };
+  const items = [
+    { ...base, id: "start", type: "turn_started" },
+    { ...base, id: "first", type: "user_message", text: "old covered input" },
+    {
+      ...base,
+      id: "first-reset",
+      type: "context_compaction",
+      provenance: "agentic",
+      coveredThroughItemId: "first",
+      sourceModelResponseId: "first-response",
+    },
+    { ...base, id: "late", type: "user_message", text: "admitted steer" },
+  ] as CanonicalItem[];
+  const planned = planCompactionRetention(
+    items,
+    {
+      item: items[3]!,
+      index: 3,
+      retainedItemIds: [],
+    },
+    {
+      retention: normalizeContextCompactionConfig({
+        retention: { mode: "selected-items", recentTurnCount: 1 },
+      }).retention,
+      retainedTokenBudget: 100,
+      estimateRetainedTokens: (retained) => retained.length,
+    },
+  );
+  assert.deepEqual(planned.retainedItemIds, ["late"]);
+});
+
+test("R1 regression: explicit ranges reject internal queued and hidden content without disclosure", () => {
+  const base = {
+    threadId: "private",
+    turnId: "turn",
+    createdAt: "2026-01-01T00:00:00Z",
+  };
+  const first = {
+    ...base,
+    id: "first",
+    type: "user_message",
+    text: "first",
+  } as CanonicalItem;
+  const last = {
+    ...base,
+    id: "last",
+    type: "user_message",
+    text: "last",
+  } as CanonicalItem;
+  const hidden = {
+    ...base,
+    id: "hidden",
+    type: "reasoning",
+    reasoningContent: "PRIVATE_NOT_FOR_OUTPUT",
+    contentVisibility: "opaque",
+  } as CanonicalItem;
+  const queued = {
+    ...base,
+    id: "queued",
+    type: "user_message_queued",
+    clientId: "queued-client",
+    input: [{ type: "text", text: "UNDELIVERED_NOT_FOR_OUTPUT" }],
+  } as CanonicalItem;
+  const range = normalizeContextCompactionConfig({
+    retention: {
+      mode: "selected-items",
+      itemRanges: [{ fromItemId: "first", toItemId: "last" }],
+    },
+  }).retention;
+  for (const unsafe of [hidden, queued]) {
+    const items = [first, unsafe, last];
+    assert.throws(
+      () =>
+        planCompactionRetention(
+          items,
+          {
+            item: last,
+            index: 2,
+            retainedItemIds: [],
+          },
+          {
+            retention: range,
+            retainedTokenBudget: 100,
+            estimateRetainedTokens: (retained) => retained.length,
+          },
+        ),
+      (error: unknown) =>
+        error instanceof Error &&
+        /range/u.test(error.message) &&
+        !/PRIVATE_NOT_FOR_OUTPUT|UNDELIVERED_NOT_FOR_OUTPUT/u.test(
+          error.message,
+        ),
+    );
+  }
+});
+
+test("R1 regression: strict ranges allow structural anchors and reject invalid selections", () => {
+  const base = {
+    threadId: "private",
+    turnId: "turn",
+    createdAt: "2026-01-01T00:00:00Z",
+  };
+  const first = {
+    ...base,
+    id: "first",
+    type: "user_message",
+    text: "first",
+  } as CanonicalItem;
+  const last = {
+    ...base,
+    id: "last",
+    type: "user_message",
+    text: "last",
+  } as CanonicalItem;
+  const structural = {
+    ...base,
+    id: "usage",
+    type: "model_usage",
+  } as CanonicalItem;
+  const safe = [first, structural, last];
+  const range = normalizeContextCompactionConfig({
+    retention: {
+      mode: "selected-items",
+      itemRanges: [{ fromItemId: "first", toItemId: "last" }],
+    },
+  }).retention;
+  const plan = (
+    items: CanonicalItem[],
+    retention: typeof range,
+    budget = 100,
+  ) =>
+    planCompactionRetention(
+      items,
+      {
+        item: items.at(-1)!,
+        index: items.length - 1,
+        retainedItemIds: [],
+      },
+      {
+        retention,
+        retainedTokenBudget: budget,
+        estimateRetainedTokens: (retained) => retained.length,
+      },
+    );
+  assert.deepEqual(plan(safe, range).retainedItemIds, ["first", "last"]);
+  const repeated = normalizeContextCompactionConfig({
+    retention: {
+      mode: "selected-items",
+      itemRanges: [
+        { fromItemId: "first", toItemId: "last" },
+        { fromItemId: "first", toItemId: "last" },
+      ],
+    },
+  }).retention;
+  assert.deepEqual(plan(safe, repeated).retainedItemIds, ["first", "last"]);
+  const other = {
+    ...last,
+    id: "other-thread",
+    threadId: "elsewhere",
+  } as CanonicalItem;
+  for (const invalid of [
+    { fromItemId: "last", toItemId: "first" },
+    { fromItemId: "missing", toItemId: "last" },
+    { fromItemId: "first", toItemId: "other-thread" },
+  ]) {
+    assert.throws(
+      () =>
+        plan(
+          [...safe, other],
+          normalizeContextCompactionConfig({
+            retention: {
+              mode: "selected-items",
+              itemRanges: [invalid],
+            },
+          }).retention,
+        ),
+      /range/u,
+    );
+  }
+  for (const type of ["reasoning", "user_message_queued"] as const) {
+    const unsafe = { ...base, id: "unsafe", type } as CanonicalItem;
+    assert.throws(
+      () =>
+        plan(
+          [first, unsafe, last],
+          normalizeContextCompactionConfig({
+            retention: {
+              mode: "selected-items",
+              itemIds: ["unsafe"],
+            },
+          }).retention,
+        ),
+      /not eligible/u,
+    );
+    assert.throws(
+      () =>
+        plan(
+          [unsafe, first, last],
+          normalizeContextCompactionConfig({
+            retention: {
+              mode: "selected-items",
+              itemRanges: [{ fromItemId: "unsafe", toItemId: "last" }],
+            },
+          }).retention,
+        ),
+      /range/u,
+    );
+  }
+  assert.throws(() => plan(safe, range, 1), /bounded projection/u);
+});
+
+test("R1 regression: a source trace excluded by the previous reset cannot disappear inside an explicit range", () => {
+  const base = {
+    threadId: "private",
+    turnId: "same-turn",
+    createdAt: "2026-01-01T00:00:00Z",
+  };
+  const covered = [
+    { ...base, id: "first", type: "user_message", text: "covered" },
+    {
+      ...base,
+      id: "first-reset",
+      type: "context_compaction",
+      provenance: "agentic",
+      coveredThroughItemId: "first",
+      sourceModelResponseId: "source-response",
+    },
+    { ...base, id: "left", type: "user_message", text: "left" },
+    {
+      ...base,
+      id: "excluded",
+      type: "tool_call",
+      callId: "reset-call",
+      name: "compact_context",
+      modelResponseId: "source-response",
+      arguments: {},
+    },
+    { ...base, id: "right", type: "user_message", text: "right" },
+  ] as CanonicalItem[];
+  assert.throws(
+    () =>
+      planCompactionRetention(
+        covered,
+        {
+          item: covered.at(-1)!,
+          index: covered.length - 1,
+          retainedItemIds: [],
+        },
+        {
+          retention: normalizeContextCompactionConfig({
+            retention: {
+              mode: "selected-items",
+              itemRanges: [{ fromItemId: "left", toItemId: "right" }],
+            },
+          }).retention,
+          retainedTokenBudget: 100,
+          estimateRetainedTokens: (retained) => retained.length,
+        },
+      ),
+    /range/u,
+  );
+});
+
+test("R1 Host: forbidden hidden range cannot append a fake successful reset", async () => {
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (isSummaryRequest(request)) {
+        yield { type: "text_delta", delta: "summary not a reset" };
+        return;
+      }
+      yield {
+        type: "reasoning",
+        reasoningContent: "PRIVATE_NOT_FOR_OUTPUT",
+        contentVisibility: "opaque",
+      };
+      yield { type: "text_delta", delta: "final response" };
+    },
+  };
+  const journal = new InMemoryThreadJournal();
+  const server = createServer({ journal, model });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "public input")
+  ).done;
+  const before = await journal.read(thread.id);
+  const start = before.find((item) => item.type === "user_message");
+  const end = before.find((item) => item.type === "agent_message");
+  assert(start?.type === "user_message" && end?.type === "agent_message");
+  await assert.rejects(
+    server.compactThread(thread.id, {
+      retention: {
+        mode: "selected-items",
+        itemRanges: [{ fromItemId: start.id, toItemId: end.id }],
+      },
+    }),
+    (error: unknown) =>
+      error instanceof AppServerError &&
+      error.code === "compaction_budget_exceeded" &&
+      !error.message.includes("PRIVATE_NOT_FOR_OUTPUT"),
+  );
+  assert.deepEqual(await journal.read(thread.id), before);
+  assert.equal(
+    (await server.readThread(thread.id)).items.some(
+      (item) => item.type === "context_compaction",
+    ),
+    false,
+  );
+});
+
 test("agentic compaction replaces the active context and replays identically", async () => {
   const requests: ModelRequest[] = [];
   let normalSamples = 0;
@@ -65,7 +382,7 @@ test("agentic compaction replaces the active context and replays identically", a
           type: "tool_call",
           callId: "compact-call",
           name: "compact_context",
-          arguments: { text: source },
+          arguments: { text: source, includeOriginalReference: false },
         };
         yield { type: "usage", inputTokens: 900, outputTokens: 20 };
         return;
@@ -139,6 +456,87 @@ test("agentic compaction replaces the active context and replays identically", a
   );
 });
 
+test("agentic tool shares canonical retention planning and defaults to bounded original reference", async () => {
+  const requests: ModelRequest[] = [];
+  let samples = 0;
+  let firstUserId = "";
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      samples += 1;
+      if (samples === 2) {
+        yield {
+          type: "tool_call",
+          callId: "structured-reset",
+          name: "compact_context",
+          arguments: {
+            text: "handwritten summary",
+            retention: {
+              itemIds: [firstUserId, firstUserId],
+              preserveUserMessages: true,
+              recentTurnCount: 1,
+            },
+          },
+        };
+        return;
+      }
+      yield { type: "text_delta", delta: "answer" };
+    },
+  };
+  const journal = new InMemoryThreadJournal();
+  const server = createServer({
+    journal,
+    model,
+    contextCompaction: { agenticEnabled: true },
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "first user input")
+  ).done;
+  const prior = await server.readThread(thread.id);
+  firstUserId = prior.items.find((item) => item.type === "user_message")!.id;
+  await (
+    await server.startTurn(thread.id, "second user input")
+  ).done;
+  const snapshot = await server.readThread(thread.id);
+  const compaction = snapshot.items.find(
+    (item) =>
+      item.type === "context_compaction" && item.provenance === "agentic",
+  );
+  assert(compaction?.type === "context_compaction");
+  assert.equal(compaction.includeOriginalReference, true);
+  assert.deepEqual(
+    compaction.retainedItemIds.filter((id) => id === firstUserId),
+    [firstUserId],
+  );
+  assert(
+    requests[2]?.messages.some(
+      (message) =>
+        message.role === "user" &&
+        "text" in message &&
+        message.text.includes(
+          `zen-thread://${thread.id}/items?through=${compaction.coveredThroughItemId}`,
+        ),
+    ),
+  );
+  assert(
+    requests[2]?.messages.some(
+      (message) =>
+        message.role === "user" &&
+        "content" in message &&
+        JSON.stringify(message.content).includes("first user input"),
+    ),
+  );
+  assert.deepEqual(
+    compileModelMessages(
+      (await createServer({ journal, model }).readThread(thread.id)).items,
+    ),
+    compileModelMessages(snapshot.items),
+  );
+  assert.equal(requests.some(isSummaryRequest), false);
+});
+
 test("agentic compaction preserves user steering unseen by its model sample", async () => {
   const firstSampleStarted = deferred<void>();
   const releaseFirstSample = deferred<void>();
@@ -156,7 +554,7 @@ test("agentic compaction preserves user steering unseen by its model sample", as
           type: "tool_call",
           callId: "steered-compact",
           name: "compact_context",
-          arguments: { text: "continuation" },
+          arguments: { text: "continuation", includeOriginalReference: false },
         };
         return;
       }
@@ -186,6 +584,292 @@ test("agentic compaction preserves user steering unseen by its model sample", as
   ]);
 });
 
+test("R1 Runtime/Host: second reset retains pre-sample steer, not after-sample input", async () => {
+  const firstSampling = deferred<void>();
+  const releaseFirst = deferred<void>();
+  const secondSampling = deferred<void>();
+  const releaseSecond = deferred<void>();
+  const requests: ModelRequest[] = [];
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      samples += 1;
+      if (samples === 1) {
+        firstSampling.resolve();
+        await releaseFirst.promise;
+        yield {
+          type: "tool_call",
+          callId: "first-reset",
+          name: "compact_context",
+          arguments: { text: "first summary", includeOriginalReference: false },
+        };
+      } else if (samples === 2) {
+        secondSampling.resolve();
+        await releaseSecond.promise;
+        yield {
+          type: "tool_call",
+          callId: "second-reset",
+          name: "compact_context",
+          arguments: {
+            text: "second summary",
+            includeOriginalReference: false,
+            retention: { recentTurnCount: 1 },
+          },
+        };
+      } else {
+        yield { type: "text_delta", delta: "final reply" };
+      }
+    },
+  };
+  const journal = new InMemoryThreadJournal();
+  const server = createServer({
+    journal,
+    model,
+    contextCompaction: { agenticEnabled: true },
+  });
+  const thread = await server.startThread();
+  const turn = await server.startTurn(thread.id, "covered before first reset");
+  await firstSampling.promise;
+  await server.steerTurn(thread.id, turn.id, "admitted before second sample", {
+    clientId: "late-before",
+  });
+  releaseFirst.resolve();
+  await secondSampling.promise;
+  await server.steerTurn(thread.id, turn.id, "arrived after second sample", {
+    clientId: "late-after",
+  });
+  releaseSecond.resolve();
+  await turn.done;
+
+  const snapshot = await server.readThread(thread.id);
+  const resets = snapshot.items.filter(
+    (item) =>
+      item.type === "context_compaction" && item.provenance === "agentic",
+  );
+  assert.equal(resets.length, 2);
+  const before = snapshot.items.find(
+    (item) => item.type === "user_message" && item.clientId === "late-before",
+  );
+  const after = snapshot.items.find(
+    (item) => item.type === "user_message" && item.clientId === "late-after",
+  );
+  const initial = snapshot.items.find(
+    (item) =>
+      item.type === "user_message" &&
+      JSON.stringify(item.content).includes("covered before first reset"),
+  );
+  assert(before?.type === "user_message");
+  assert(after?.type === "user_message");
+  assert(initial?.type === "user_message");
+  assert.deepEqual(resets[1]?.retainedItemIds, [before.id]);
+  assert.equal(resets[1]?.retainedItemIds.includes(initial.id), false);
+  assert.equal(resets[1]?.retainedItemIds.includes(after.id), false);
+  assert.equal(requests.some(isSummaryRequest), false);
+  const text = JSON.stringify(requests[2]?.messages);
+  assert(text.includes("admitted before second sample"));
+  assert(text.includes("arrived after second sample"));
+  assert(!text.includes("covered before first reset"));
+  assert.deepEqual(
+    compileModelMessages(
+      (await createServer({ journal, model }).readThread(thread.id)).items,
+    ),
+    compileModelMessages(snapshot.items),
+  );
+  assert.equal((await journal.read(thread.id)).length, snapshot.items.length);
+});
+
+test("R1 Runtime/Host: hard recent-Turn retention over budget fails without losing admitted input", async () => {
+  const beforeSecondSample = deferred<void>();
+  const releaseSecondSample = deferred<void>();
+  let samples = 0;
+  let summaries = 0;
+  class PauseSecondSampleRuntime extends AgentRuntime {
+    override async runTurn(options: RunTurnOptions): Promise<void> {
+      let preparations = 0;
+      await super.runTurn({
+        ...options,
+        prepareModelSample: async (responseId) => {
+          preparations += 1;
+          if (preparations === 2) {
+            beforeSecondSample.resolve();
+            await releaseSecondSample.promise;
+          }
+          return await options.prepareModelSample(responseId);
+        },
+      });
+    }
+  }
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (isSummaryRequest(request)) {
+        summaries += 1;
+        yield { type: "text_delta", delta: "unexpected generated summary" };
+        return;
+      }
+      samples += 1;
+      if (samples === 1) {
+        yield {
+          type: "tool_call",
+          callId: "first-reset",
+          name: "compact_context",
+          arguments: { text: "short reset", includeOriginalReference: false },
+        };
+      } else if (samples === 2) {
+        yield {
+          type: "tool_call",
+          callId: "overbudget-reset",
+          name: "compact_context",
+          arguments: {
+            text: "second reset",
+            includeOriginalReference: false,
+            retention: { recentTurnCount: 1 },
+          },
+        };
+      } else {
+        yield { type: "text_delta", delta: "continuing after failed reset" };
+      }
+    },
+  };
+  const journal = new InMemoryThreadJournal();
+  const runtime = new PauseSecondSampleRuntime({
+    toolEnvironment: new ToolEnvironment({
+      runtimes: [new ShellToolRuntime()],
+    }),
+  });
+  const server = createServer({
+    journal,
+    model,
+    runtime,
+    contextCompaction: { agenticEnabled: true },
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 400 },
+    ]),
+  });
+  const thread = await server.startThread();
+  const turn = await server.startTurn(thread.id, "small original");
+  await beforeSecondSample.promise;
+  const longInput = "PINNED_INPUT".repeat(250);
+  await server.steerTurn(thread.id, turn.id, longInput, {
+    clientId: "large-admitted",
+  });
+  releaseSecondSample.resolve();
+  await turn.done;
+  const items = (await server.readThread(thread.id)).items;
+  assert.equal(
+    items.filter((item) => item.type === "context_compaction").length,
+    1,
+  );
+  assert.equal(
+    items.some(
+      (item) =>
+        item.type === "user_message" && item.clientId === "large-admitted",
+    ),
+    true,
+  );
+  const failed = items.find(
+    (item) => item.type === "tool_result" && item.callId === "overbudget-reset",
+  );
+  assert(failed?.type === "tool_result");
+  assert.equal(failed.exitCode, 1);
+  assert.match(
+    failed.output,
+    /compaction failed|bounded projection|context window/u,
+  );
+  assert.equal(summaries, 0);
+  assert.deepEqual(await journal.read(thread.id), items);
+});
+
+test("R1 Host: generated compaction counts Turns across prior agentic reset without restoring old trace", async () => {
+  let samples = 0;
+  let summaryCalls = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (isSummaryRequest(request)) {
+        summaryCalls += 1;
+        yield { type: "text_delta", delta: "generated summary" };
+        return;
+      }
+      samples += 1;
+      if (samples === 1) {
+        yield {
+          type: "tool_call",
+          callId: "source-reset",
+          name: "compact_context",
+          arguments: {
+            text: "agent continuation",
+            includeOriginalReference: false,
+          },
+        };
+      } else {
+        yield {
+          type: "text_delta",
+          delta: samples === 2 ? "first final after reset" : "second final",
+        };
+      }
+    },
+  };
+  const journal = new InMemoryThreadJournal();
+  const server = createServer({
+    journal,
+    model,
+    contextCompaction: { agenticEnabled: true },
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "first covered user")
+  ).done;
+  await (
+    await server.startTurn(thread.id, "second user")
+  ).done;
+  const before = await server.readThread(thread.id);
+  const firstFinal = before.items.find(
+    (item) =>
+      item.type === "agent_message" && item.text === "first final after reset",
+  );
+  const secondFinal = before.items.find(
+    (item) => item.type === "agent_message" && item.text === "second final",
+  );
+  const secondUser = before.items.find(
+    (item) =>
+      item.type === "user_message" &&
+      JSON.stringify(item.content).includes("second user"),
+  );
+  assert(
+    firstFinal?.type === "agent_message" &&
+      secondFinal?.type === "agent_message" &&
+      secondUser?.type === "user_message",
+  );
+  await server.compactThread(thread.id, {
+    includeOriginalReference: false,
+    retention: { mode: "selected-items", recentTurnCount: 2 },
+  });
+  const snapshot = await server.readThread(thread.id);
+  const generated = snapshot.items.at(-1);
+  assert(
+    generated?.type === "context_compaction" &&
+      generated.provenance !== "agentic",
+  );
+  assert.deepEqual(generated.retainedItemIds, [
+    firstFinal.id,
+    secondUser.id,
+    secondFinal.id,
+  ]);
+  assert.equal(summaryCalls, 1);
+  const projection = JSON.stringify(compileModelMessages(snapshot.items));
+  assert(!projection.includes("first covered user"));
+  assert(!projection.includes("source-reset"));
+  assert.deepEqual(
+    compileModelMessages(
+      (await createServer({ journal, model }).readThread(thread.id)).items,
+    ),
+    compileModelMessages(snapshot.items),
+  );
+});
+
 test("agentic compaction accepts a sample following an active settings change", async () => {
   const requests: ModelRequest[] = [];
   let samples = 0;
@@ -206,7 +890,10 @@ test("agentic compaction accepts a sample following an active settings change", 
           type: "tool_call",
           callId: "compact-after-settings",
           name: "compact_context",
-          arguments: { text: "resume after settings change" },
+          arguments: {
+            text: "resume after settings change",
+            includeOriginalReference: false,
+          },
         };
       } else {
         yield { type: "text_delta", delta: "done" };
@@ -303,7 +990,10 @@ test("repeated agentic resets supersede deterministically in one active Turn", a
           type: "tool_call",
           callId: `compact-${String(samples)}`,
           name: "compact_context",
-          arguments: { text: `continuation-${String(samples)}` },
+          arguments: {
+            text: `continuation-${String(samples)}`,
+            includeOriginalReference: false,
+          },
         };
         return;
       }
@@ -361,7 +1051,10 @@ test("later generated compaction cannot retain an agentic reset source trace", a
           type: "tool_call",
           callId: "reset-source",
           name: "compact_context",
-          arguments: { text: "agent continuation" },
+          arguments: {
+            text: "agent continuation",
+            includeOriginalReference: false,
+          },
         };
         return;
       }
@@ -378,7 +1071,7 @@ test("later generated compaction cannot retain an agentic reset source trace", a
   await (
     await server.startTurn(thread.id, "old input")
   ).done;
-  await server.compactThread(thread.id);
+  await server.compactThread(thread.id, { includeOriginalReference: false });
 
   const snapshot = await server.readThread(thread.id);
   const latest = snapshot.items.at(-1);
@@ -428,7 +1121,10 @@ test("agentic compaction stays off by default and mixed calls fail locally", asy
               type: "tool_call",
               callId: "rejected-compact",
               name: "compact_context",
-              arguments: { text: "must not replace" },
+              arguments: {
+                text: "must not replace",
+                includeOriginalReference: false,
+              },
             };
             if (scenario === "mixed") {
               yield {
@@ -505,7 +1201,10 @@ test("oversized agentic text fails without changing the effective projection", a
           type: "tool_call",
           callId: "oversized-compact",
           name: "compact_context",
-          arguments: { text: "x".repeat(2_000) },
+          arguments: {
+            text: "x".repeat(2_000),
+            includeOriginalReference: false,
+          },
         };
         return;
       }
@@ -560,7 +1259,10 @@ test("agentic compaction abort and journal failure never admit another sample", 
           type: "tool_call",
           callId: "aborted-compact",
           name: "compact_context",
-          arguments: { text: "must not become effective" },
+          arguments: {
+            text: "must not become effective",
+            includeOriginalReference: false,
+          },
         };
       },
     };
@@ -607,7 +1309,10 @@ test("agentic compaction abort and journal failure never admit another sample", 
           type: "tool_call",
           callId: "failed-persist-compact",
           name: "compact_context",
-          arguments: { text: "must not become effective" },
+          arguments: {
+            text: "must not become effective",
+            includeOriginalReference: false,
+          },
         };
       },
     };
@@ -669,7 +1374,9 @@ test("manually compacts long history without changing the complete transcript", 
   const beforeBytes = before.items.map((item) => JSON.stringify(item));
   const events: AppServerEvent[] = [];
   const unsubscribe = server.subscribe((event) => events.push(event));
-  const result = await server.compactThread(thread.id);
+  const result = await server.compactThread(thread.id, {
+    includeOriginalReference: false,
+  });
   unsubscribe();
   const compacted = await server.readThread(thread.id);
 
@@ -693,7 +1400,7 @@ test("manually compacts long history without changing the complete transcript", 
   );
   assert.equal(item.coveredThroughItemId, before.items.at(-1)?.id);
   assert.equal(item.summary, "summary bytes\nkept verbatim");
-  assert.equal(item.algorithmVersion, "zen.context-compaction.v2");
+  assert.equal(item.algorithmVersion, "zen.context-compaction.v3");
   assert.deepEqual(item.tokenUsage, { inputTokens: 101, outputTokens: 7 });
   assert.deepEqual(
     item.retainedItemIds,
@@ -785,7 +1492,7 @@ test("uses the configured context compaction prompt exactly", async () => {
     await server.startTurn(thread.id, "one")
   ).done;
 
-  await server.compactThread(thread.id);
+  await server.compactThread(thread.id, { includeOriginalReference: false });
 
   const summaryRequest = requests.at(-1);
   assert(summaryRequest !== undefined);
@@ -811,35 +1518,23 @@ test("rejects an empty configured context compaction prompt", () => {
 });
 
 test("normalizes legacy prompt-only and complete compaction policy defaults", () => {
-  assert.deepEqual(normalizeContextCompactionConfig(), {
-    agenticEnabled: false,
-    summaryInstruction:
-      "ZEN_CONTEXT_COMPACTION_V1\nSummarize the conversation context above for a provider-neutral agent continuation.\nPreserve concrete user goals, decisions, constraints, unfinished work, exact identifiers,\nand tool outcomes that affect future work. Do not call tools. Return only the summary.",
-    triggerPercent: 80,
-    targetPercent: 80,
-    retention: {
-      mode: "budget",
-      recentItemCount: 20,
-      preserveUserMessages: false,
-      finalMessages: "none",
-      finalMessageCount: 10,
-    },
+  const defaults = normalizeContextCompactionConfig();
+  assert.equal(defaults.includeOriginalReference, true);
+  assert.equal(defaults.agenticEnabled, false);
+  assert.deepEqual(defaults.retention, {
+    mode: "budget",
+    recentItemCount: 20,
+    preserveUserMessages: false,
+    finalMessages: "none",
+    finalMessageCount: 10,
+    recentTurnCount: 0,
+    itemIds: [],
+    itemRanges: [],
   });
-  assert.deepEqual(
-    normalizeContextCompactionConfig({ summaryInstruction: "legacy prompt" }),
-    {
-      agenticEnabled: false,
-      summaryInstruction: "legacy prompt",
-      triggerPercent: 80,
-      targetPercent: 80,
-      retention: {
-        mode: "budget",
-        recentItemCount: 20,
-        preserveUserMessages: false,
-        finalMessages: "none",
-        finalMessageCount: 10,
-      },
-    },
+  assert.equal(
+    normalizeContextCompactionConfig({ summaryInstruction: "legacy prompt" })
+      .summaryInstruction,
+    "legacy prompt",
   );
 });
 
@@ -874,6 +1569,9 @@ test("selected retention keeps users and only finals from successful completed T
       preserveUserMessages: true,
       finalMessages: "recent",
       finalMessageCount: 2,
+      recentTurnCount: 0,
+      itemIds: [],
+      itemRanges: [],
     },
   });
   assert.deepEqual(boundary?.retainedItemIds, [
@@ -883,6 +1581,73 @@ test("selected retention keeps users and only finals from successful completed T
     "user-3",
     "final-3",
   ]);
+});
+
+test("explicit IDs, completed Turns, and user category compose in canonical order", () => {
+  const items = canonicalRetentionHistory();
+  const retained = boundedCompactionBoundary(items, {
+    retainedTokenBudget: 10_000,
+    estimateRetainedTokens: (selected) => selected.length,
+    retention: normalizeContextCompactionConfig({
+      retention: {
+        mode: "selected-items",
+        itemIds: ["final-1", "user-1", "final-1"],
+        itemRanges: [{ fromItemId: "user-2", toItemId: "final-2" }],
+        recentTurnCount: 1,
+        preserveUserMessages: true,
+      },
+    }).retention,
+  });
+  assert.deepEqual(retained?.retainedItemIds, [
+    "user-1",
+    "final-1",
+    "user-2",
+    "final-2",
+    "user-3",
+    "final-3",
+  ]);
+  assert.throws(
+    () =>
+      boundedCompactionBoundary(items, {
+        retainedTokenBudget: 10_000,
+        estimateRetainedTokens: (selected) => selected.length,
+        retention: normalizeContextCompactionConfig({
+          retention: {
+            mode: "selected-items",
+            itemIds: ["unknown-or-queued"],
+          },
+        }).retention,
+      }),
+    /not eligible/u,
+  );
+  assert.throws(
+    () =>
+      boundedCompactionBoundary(items, {
+        retainedTokenBudget: 10_000,
+        estimateRetainedTokens: (selected) => selected.length,
+        retention: normalizeContextCompactionConfig({
+          retention: {
+            mode: "selected-items",
+            itemRanges: [{ fromItemId: "final-3", toItemId: "user-2" }],
+          },
+        }).retention,
+      }),
+    /Invalid compaction retention Item range/u,
+  );
+  assert.throws(
+    () =>
+      boundedCompactionBoundary(items, {
+        retainedTokenBudget: 1,
+        estimateRetainedTokens: (selected) => selected.length,
+        retention: normalizeContextCompactionConfig({
+          retention: {
+            mode: "selected-items",
+            itemIds: ["user-1", "final-1"],
+          },
+        }).retention,
+      }),
+    /bounded projection/u,
+  );
 });
 
 test("recent retention counts model-context Items and expands complete tool closure", () => {
@@ -896,6 +1661,9 @@ test("recent retention counts model-context Items and expands complete tool clos
       preserveUserMessages: false,
       finalMessages: "none",
       finalMessageCount: 10,
+      recentTurnCount: 0,
+      itemIds: [],
+      itemRanges: [],
     },
   });
   assert.deepEqual(boundary?.retainedItemIds, [
@@ -920,6 +1688,9 @@ test("recent retention supports exact 10 and 20 Item selections across Turns", (
         preserveUserMessages: false,
         finalMessages: "none",
         finalMessageCount: 10,
+        recentTurnCount: 0,
+        itemIds: [],
+        itemRanges: [],
       },
     });
     assert.equal(boundary?.retainedItemIds.length, count);
@@ -947,6 +1718,9 @@ test("tool closure follows nested parent calls and response siblings", () => {
       preserveUserMessages: false,
       finalMessages: "none",
       finalMessageCount: 10,
+      recentTurnCount: 0,
+      itemIds: [],
+      itemRanges: [],
     },
   });
   assert.deepEqual(boundary?.retainedItemIds, [
@@ -973,6 +1747,9 @@ test("explicit retained selections fail instead of being trimmed over budget", (
           preserveUserMessages: true,
           finalMessages: "all",
           finalMessageCount: 10,
+          recentTurnCount: 0,
+          itemIds: [],
+          itemRanges: [],
         },
       }),
     /bounded projection/u,
@@ -1144,11 +1921,11 @@ test("recompacts a legacy projection with the selected retention policy and repl
   await (
     await server.startTurn(thread.id, "one")
   ).done;
-  await server.compactThread(thread.id);
+  await server.compactThread(thread.id, { includeOriginalReference: false });
   await (
     await server.startTurn(thread.id, "two")
   ).done;
-  await server.compactThread(thread.id);
+  await server.compactThread(thread.id, { includeOriginalReference: false });
 
   const snapshot = await server.readThread(thread.id);
   const messages = snapshot.items.filter(
@@ -1190,7 +1967,7 @@ test("does not append when explicit selected Items exceed the target", async () 
   ).done;
   const before = await journal.read(thread.id);
   await expectAppServerCode(
-    server.compactThread(thread.id),
+    server.compactThread(thread.id, { includeOriginalReference: false }),
     "compaction_budget_exceeded",
   );
   assert.deepEqual(await journal.read(thread.id), before);
@@ -1357,7 +2134,7 @@ test("does not append a compaction when its summary alone exceeds the target", a
   const before = await journal.read(thread.id);
 
   await expectAppServerCode(
-    server.compactThread(thread.id),
+    server.compactThread(thread.id, { includeOriginalReference: false }),
     "compaction_budget_exceeded",
   );
 
@@ -1972,7 +2749,10 @@ test("generation, abort, invalid summary, and journal failures append no compact
         await server.startTurn(thread.id, "one")
       ).done;
       const before = await journal.read(thread.id);
-      await expectAppServerCode(server.compactThread(thread.id), scenario.code);
+      await expectAppServerCode(
+        server.compactThread(thread.id, { includeOriginalReference: false }),
+        scenario.code,
+      );
       assert.equal(summaryCalls, 1);
       assert.deepEqual(await journal.read(thread.id), before);
     });
@@ -2063,10 +2843,10 @@ test("later compaction supersedes projection deterministically and restart is by
   await (
     await first.startTurn(thread.id, "second")
   ).done;
-  await first.compactThread(thread.id);
+  await first.compactThread(thread.id, { includeOriginalReference: false });
   assert.equal(summaryCalls, 1);
   await expectAppServerCode(
-    first.compactThread(thread.id),
+    first.compactThread(thread.id, { includeOriginalReference: false }),
     "compaction_not_available",
   );
   assert.equal(summaryCalls, 1);
@@ -2074,7 +2854,7 @@ test("later compaction supersedes projection deterministically and restart is by
   await (
     await first.startTurn(thread.id, "third")
   ).done;
-  await first.compactThread(thread.id);
+  await first.compactThread(thread.id, { includeOriginalReference: false });
   assert.equal(summaryCalls, 2);
   const beforeRestart = await first.readThread(thread.id);
   const projectedBefore = compileModelMessages(beforeRestart.items);
@@ -2136,7 +2916,9 @@ test("freezes the admitted Provider selection while a settings update waits", as
     await server.startTurn(thread.id, "one")
   ).done;
 
-  const compaction = server.compactThread(thread.id);
+  const compaction = server.compactThread(thread.id, {
+    includeOriginalReference: false,
+  });
   await summaryStarted.promise;
   let updateResolved = false;
   const update = server
@@ -2201,9 +2983,10 @@ function createServer(options: {
       sandbox: "danger-full-access",
       approvalPolicy: "never",
     },
-    ...(options.contextCompaction === undefined
-      ? {}
-      : { contextCompaction: options.contextCompaction }),
+    contextCompaction: {
+      includeOriginalReference: false,
+      ...options.contextCompaction,
+    },
   });
 }
 

@@ -10,7 +10,10 @@ export interface ContextCompactionRequest {
   clearCommandDraft: boolean;
   read(): ComposerState;
   update(change: (state: ComposerState) => ComposerState): void;
-  compact(threadId: string): Promise<unknown>;
+  compact(
+    threadId: string,
+    includeOriginalReference: boolean,
+  ): Promise<unknown>;
 }
 
 /** Handles the composer command before any turn, queue, steer, or replacement. */
@@ -19,22 +22,26 @@ export async function handleCompactCommand(options: {
   active: boolean;
   read(): ComposerState;
   update(change: (state: ComposerState) => ComposerState): void;
-  compact(threadId: string): Promise<unknown>;
+  compact(
+    threadId: string,
+    includeOriginalReference: boolean,
+  ): Promise<unknown>;
 }): Promise<boolean> {
   const state = options.read();
   if (state.compaction?.status === "pending") return true;
   if (!isCompactCommand(state.draft.text)) return false;
   if (state.submission?.status === "pending") return true;
-  const error =
-    state.draft.text.trim() !== "/compact"
-      ? "Use /compact on its own, without arguments."
-      : state.draft.images.length > 0
-        ? "Remove attachments before compacting context."
-        : options.threadId === null
-          ? "There is no conversation to compact yet."
-          : options.active
-            ? "Wait for the current reply to finish before compacting context."
-            : null;
+  const error = !["/compact", "/compact --no-reference"].includes(
+    state.draft.text.trim(),
+  )
+    ? "Use /compact or /compact --no-reference, without other arguments."
+    : state.draft.images.length > 0
+      ? "Remove attachments before compacting context."
+      : options.threadId === null
+        ? "There is no conversation to compact yet."
+        : options.active
+          ? "Wait for the current reply to finish before compacting context."
+          : null;
   if (error !== null) {
     options.update((current) => ({
       ...current,
@@ -82,7 +89,13 @@ export async function requestContextCompaction(
     compaction: pending,
   }));
   try {
-    await options.compact(options.threadId!);
+    await options.compact(
+      options.threadId!,
+      !(
+        options.clearCommandDraft &&
+        state.draft.text.trim() === "/compact --no-reference"
+      ),
+    );
     options.update((current) =>
       current.compaction !== pending
         ? current

@@ -315,6 +315,8 @@ interface ContextCompactionItemBase extends ItemBase {
   coveredThroughItemId: string;
   summary: string;
   retainedItemIds: string[];
+  /** Legacy Items have no flag and retain their original projection unchanged. */
+  includeOriginalReference?: boolean;
   algorithmVersion: string;
 }
 
@@ -629,6 +631,14 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         item.retainedItemIds,
         "context_compaction.retainedItemIds",
       );
+      if (
+        item.includeOriginalReference !== undefined &&
+        typeof item.includeOriginalReference !== "boolean"
+      ) {
+        throw new Error(
+          "context_compaction.includeOriginalReference must be a boolean",
+        );
+      }
       if (item.provenance === "agentic") {
         requireTurnId(item, type);
         requireNonEmptyString(item.callId, "context_compaction.callId");
