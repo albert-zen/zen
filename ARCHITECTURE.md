@@ -780,6 +780,9 @@ canonical `reasoning` Item 用 `reasoningContent`、可选 `summary` 与显式
 `contentVisibility` 统一表达公开或 opaque reasoning，并只在 adapter 确实需要 round-trip
 identity 时保留 `providerItemId`；Core 不解释 reasoning content 的 Provider 编码，重放仍要求
 它所属 Turn 的 `turn_started.selection` 与目标 profile/model 兼容，公共协议只展示允许公开的语义内容。
+**Private reasoning display run** — ZenX 仅把相邻、已完成且无公开摘要/内容的 reasoning 显示行合并计数，保持原 ItemList、每项 ID、工具顺序及公开条目不变，不制造任何思考文本。
+**Input admission reply fence** — ZenX 客户端只对输入接纳 RPC 的未答复设易失等待界限，失联或超期告知送达结果未知且不自动重发、不终止 Host 执行；后续 canonical 事实仍由正常恢复读取。
+**Thread usage reply bound** — ZenX main 只给 Host IPC 的只读计量请求设有界失败并丢弃迟到回执，不对模型或工具运行施加总时限。
 ModelAdapter 的 reasoning stream 只传递 provider-neutral lifecycle correlation、summary delta
 或 content delta；Runtime 为同一 lifecycle 分配一个稳定 canonical Item id，完成时只 append
 一次完整 `reasoning` Item。OpenAI subscription 只把可公开 summary 作为 transient delta，

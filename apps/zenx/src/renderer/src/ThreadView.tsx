@@ -57,6 +57,7 @@ import type { PluginUiRegistry } from "./plugin-ui-host.js";
 import { ToolResultRenderer } from "./ToolResultRenderer.js";
 import {
   commandLabel,
+  groupPrivateReasoningRows,
   projectTurn,
   traceDisplayRows,
   type TurnDisplayNode,
@@ -1497,8 +1498,25 @@ function TraceSequence({
               aria-label="Execution details"
               tabIndex={0}
             >
-              {traceDisplayRows(node.items).map(
-                ({ item, nested, parentToolName }) => {
+              {groupPrivateReasoningRows(traceDisplayRows(node.items)).map(
+                (row) => {
+                  if ("kind" in row) {
+                    return (
+                      <div
+                        className="trace-item trace-private-reasoning"
+                        key={row.ids[0]}
+                      >
+                        <div className="trace-item-static">
+                          <Icon name="reasoning" size={14} />
+                          <strong>Think</strong>
+                          <span>
+                            {row.ids.length} reasoning items · no public details
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  }
+                  const { item, nested, parentToolName } = row;
                   const open = openItems.has(item.id);
                   const expandable = traceItemExpandable(item);
                   return (
