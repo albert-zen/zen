@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  reconcileCanonicalAdmission,
   acceptComposerSubmission,
   addComposerImages,
   beginComposerSubmission,
@@ -12,6 +13,143 @@ import {
   failComposerSubmission,
   removeComposerImage,
 } from "../src/renderer/src/composer-state.js";
+
+test("unknown queued admission settles only from canonical same clientId and tracks delivery", () => {
+  const initial = beginComposerSubmission(
+    editComposer(emptyComposerState(), "same text"),
+    "queue",
+    "active",
+    () => "stable-1",
+  );
+  const unknown = failComposerSubmission(
+    initial,
+    "stable-1",
+    "request outcome unknown",
+  );
+  const other = [
+    queueItem("different-id"),
+    messageItem("different-id", "turn-1"),
+  ];
+  assert.equal(reconcileCanonicalAdmission(unknown, other), unknown);
+  const queued = reconcileCanonicalAdmission(unknown, [
+    ...other,
+    queueItem("stable-1"),
+  ]);
+  assert.equal(queued.submission, null);
+  assert.equal(queued.draft.text, "");
+  assert.equal(queued.confirmedAdmission?.stage, "queued");
+  const delivered = reconcileCanonicalAdmission(queued, [
+    ...other,
+    queueItem("stable-1"),
+    messageItem("stable-1", "turn-2"),
+  ]);
+  assert.equal(delivered.confirmedAdmission?.stage, "delivered");
+  const completed = reconcileCanonicalAdmission(delivered, [
+    ...other,
+    queueItem("stable-1"),
+    messageItem("stable-1", "turn-2"),
+    completedItem("turn-2"),
+  ]);
+  assert.equal(completed.confirmedAdmission?.stage, "completed");
+});
+
+test("other intent rejects queued evidence; changed draft and new submission never clear on late old ID", () => {
+  const start = beginComposerSubmission(
+    editComposer(emptyComposerState(), "same text"),
+    "start",
+    null,
+    () => "stable-1",
+  );
+  const unknown = failComposerSubmission(
+    start,
+    "stable-1",
+    "request outcome unknown",
+  );
+  assert.equal(
+    reconcileCanonicalAdmission(unknown, [queueItem("stable-1")]),
+    unknown,
+  );
+  const edited = editComposer(unknown, "new text");
+  assert.equal(
+    reconcileCanonicalAdmission(edited, [messageItem("stable-1", "turn-1")]),
+    edited,
+  );
+  const newSubmission = beginComposerSubmission(
+    edited,
+    "queue",
+    "turn-2",
+    () => "stable-2",
+  );
+  assert.equal(
+    reconcileCanonicalAdmission(newSubmission, [
+      messageItem("stable-1", "turn-1"),
+    ]),
+    newSubmission,
+  );
+  assert.equal(newSubmission.draft.text, "new text");
+});
+
+test("explicit refusal stays refused; queue disappearance is not admission evidence", () => {
+  const queued = beginComposerSubmission(
+    editComposer(emptyComposerState(), "draft"),
+    "queue",
+    "turn-1",
+    () => "stable",
+  );
+  const explicit = failComposerSubmission(
+    queued,
+    "stable",
+    "explicit admission rejected",
+  );
+  assert.equal(
+    reconcileCanonicalAdmission(explicit, [queueItem("stable")]),
+    explicit,
+  );
+  const unknown = failComposerSubmission(
+    queued,
+    "stable",
+    "request outcome unknown",
+  );
+  assert.equal(reconcileCanonicalAdmission(unknown, []), unknown);
+  const editedPending = editComposer(queued, "new draft");
+  const confirmed = reconcileCanonicalAdmission(editedPending, [
+    queueItem("stable"),
+  ]);
+  assert.equal(confirmed.draft.text, "new draft");
+  assert.equal(confirmed.confirmedAdmission?.stage, "queued");
+});
+
+function queueItem(clientId: string) {
+  return {
+    id: `queue-${clientId}`,
+    type: "user_message_queued" as const,
+    threadId: "thread-1",
+    createdAt: "2026-09-30T00:00:00Z",
+    clientId,
+    input: [{ type: "text" as const, text: "same text" }],
+  };
+}
+function messageItem(clientId: string, turnId: string) {
+  return {
+    id: `message-${clientId}`,
+    type: "user_message" as const,
+    threadId: "thread-1",
+    turnId,
+    createdAt: "2026-09-30T00:00:00Z",
+    clientId,
+    text: "same text",
+  };
+}
+function completedItem(turnId: string) {
+  return {
+    id: `complete-${turnId}`,
+    type: "turn_completed" as const,
+    threadId: "thread-1",
+    turnId,
+    createdAt: "2026-09-30T00:00:00Z",
+    status: "completed" as const,
+  };
+}
 
 const image = (id: string) => ({
   id,

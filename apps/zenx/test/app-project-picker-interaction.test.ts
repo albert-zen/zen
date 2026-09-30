@@ -2108,6 +2108,200 @@ test("running queue, soft steer and hard steer each own one pending admission", 
   }
 });
 
+test("late canonical queue ID settles only the original unknown submission, not another Thread's draft", async () => {
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  const sends: Array<{ clientUserMessageId: string }> = [];
+  const harness = await mountApp(
+    {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: true,
+          threadIds: ["thread-1", "thread-2"],
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/zen",
+    },
+    {
+      threads: async (archived) =>
+        archived
+          ? []
+          : [summary(false), summary(false, "thread-2", "Thread two")],
+      onNotification: (listener) => {
+        notify = listener;
+        return () => {
+          notify = undefined;
+        };
+      },
+      request: async (method, params) => {
+        if (method === "zen/thread/resume") {
+          const threadId = (params as { threadId: string }).threadId;
+          return resumed({
+            ...runningThread(),
+            id: threadId,
+            sessionId: threadId,
+          });
+        }
+        if (method === "turn/queue" || method === "turn/start") {
+          sends.push(params as { clientUserMessageId: string });
+          throw new Error(
+            "Input admission reply timed out; request outcome unknown. No request was resent.",
+          );
+        }
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+    },
+  );
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "identical text");
+    await invokeFormSubmit(
+      document.querySelector<HTMLFormElement>("form.composer")!,
+    );
+    await waitFor(() => document.querySelector(".composer-error"));
+    assert.equal(sends.length, 1);
+    const clientId = sends[0]!.clientUserMessageId;
+    assert.match(document.body.textContent ?? "", /outcome unknown/u);
+    assert.equal(composer.value, "identical text");
+    await act(async () =>
+      notify?.("zen/thread/event", {
+        threadId: "thread-1",
+        processEpoch: "test-process-epoch",
+        watermark: 1,
+        event: {
+          type: "item_completed",
+          item: {
+            type: "user_message_queued",
+            id: "other-item",
+            clientId: "other-client-id",
+            threadId: "thread-1",
+            createdAt: new Date().toISOString(),
+            input: [{ type: "text", text: "identical text" }],
+          },
+        },
+      }),
+    );
+    assert.equal(composer.value, "identical text");
+    const rowTwo = [
+      ...document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+    ].find((row) => row.textContent?.includes("Thread two"));
+    assert.ok(rowTwo);
+    await invokeButtonClick(rowTwo);
+    const otherComposer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(otherComposer, "different thread draft");
+    await act(async () =>
+      notify?.("zen/thread/event", {
+        threadId: "thread-1",
+        processEpoch: "test-process-epoch",
+        watermark: 2,
+        event: {
+          type: "item_completed",
+          item: {
+            type: "user_message_queued",
+            id: "admitted-item",
+            clientId,
+            threadId: "thread-1",
+            createdAt: new Date().toISOString(),
+            input: [{ type: "text", text: "identical text" }],
+          },
+        },
+      }),
+    );
+    assert.equal(otherComposer.value, "different thread draft");
+    const rowOne = [
+      ...document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+    ].find((row) => row.textContent?.includes("Thread one"));
+    assert.ok(rowOne);
+    await invokeButtonClick(rowOne);
+    await waitFor(
+      () =>
+        document.querySelector<HTMLTextAreaElement>("#thread-composer")
+          ?.value === "",
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /admitted to the queue; delivery is not confirmed/u,
+    );
+    await act(async () =>
+      notify?.("zen/thread/event", {
+        threadId: "thread-1",
+        processEpoch: "test-process-epoch",
+        watermark: 3,
+        event: {
+          type: "item_completed",
+          item: {
+            type: "user_message",
+            id: "delivered-item",
+            clientId,
+            threadId: "thread-1",
+            turnId: "turn-1",
+            createdAt: new Date().toISOString(),
+            text: "identical text",
+          },
+        },
+      }),
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /added to a Turn; execution may still be running/u,
+    );
+    await act(async () =>
+      notify?.("zen/thread/event", {
+        threadId: "thread-1",
+        processEpoch: "test-process-epoch",
+        watermark: 4,
+        event: {
+          type: "turn_completed",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          status: "completed",
+        },
+      }),
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /Turn containing this message completed/u,
+    );
+    await setTextareaValue(composer, "new draft after reconnect");
+    await invokeFormSubmit(
+      document.querySelector<HTMLFormElement>("form.composer")!,
+    );
+    await waitFor(() => sends.length === 2);
+    assert.notEqual(sends[1]!.clientUserMessageId, clientId);
+    await waitFor(() => document.querySelector(".composer-error"));
+    await act(async () =>
+      notify?.("zen/thread/event", {
+        threadId: "thread-1",
+        processEpoch: "test-process-epoch",
+        watermark: 5,
+        event: {
+          type: "item_completed",
+          item: {
+            type: "user_message",
+            id: "late-old-message",
+            clientId,
+            threadId: "thread-1",
+            turnId: "turn-1",
+            createdAt: new Date().toISOString(),
+            text: "identical text",
+          },
+        },
+      }),
+    );
+    assert.equal(composer.value, "new draft after reconnect");
+    assert.match(document.body.textContent ?? "", /outcome unknown/u);
+    assert.equal(sends.length, 2);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("failed Send preserves its draft and stable id for a deliberate retry", async () => {
   const turnStartRequests: Array<{
     clientUserMessageId?: string;

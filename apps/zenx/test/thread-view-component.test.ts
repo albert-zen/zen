@@ -1441,7 +1441,7 @@ test("opaque reasoning with a summary is a static summary row", async () => {
   });
 });
 
-test("adjacent opaque reasoning shares an honest count while tools and public summaries remain in order", async () => {
+test("adjacent no-details reasoning shares an honest count while tools and public summaries remain in order", async () => {
   await withDom(async (root) => {
     await renderInteractive(
       root,
@@ -1465,11 +1465,12 @@ test("adjacent opaque reasoning shares an honest count while tools and public su
     assert.match(rows[3]!, /Public summary/u);
     assert.match(rows[4]!, /2 reasoning items · no public details/u);
     assert.equal(
-      details.querySelectorAll(".trace-private-reasoning").length,
+      details.querySelectorAll(".trace-reasoning-without-details").length,
       2,
     );
     assert.equal(
-      details.querySelectorAll(".trace-private-reasoning button").length,
+      details.querySelectorAll(".trace-reasoning-without-details button")
+        .length,
       0,
     );
   });

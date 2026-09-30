@@ -2,6 +2,7 @@ export type ComposerIntent =
   "start" | "batch-next" | "queue" | "steer" | "replace";
 
 import type { ZenXImageDraft } from "../../main/image-attachments.js";
+import type { CanonicalItem } from "../../../../../src/item.js";
 
 export type ComposerDraftImage = ZenXImageDraft;
 
@@ -22,6 +23,11 @@ export interface ComposerSubmission {
 }
 
 export interface ComposerState {
+  /** Ephemeral UI acknowledgement of an uncertain admission, not an execution record. */
+  confirmedAdmission?: {
+    clientId: string;
+    stage: "queued" | "delivered" | "completed" | "ended";
+  };
   /** Transient command feedback; never a message or durable execution state. */
   compaction?: {
     status: "pending" | "succeeded" | "failed";
@@ -67,6 +73,7 @@ export function editComposer(
     ...state,
     draft: { ...state.draft, text },
     submission,
+    ...(text !== state.draft.text ? { confirmedAdmission: undefined } : {}),
   };
 }
 
@@ -77,6 +84,7 @@ export function addComposerImages(
   if (images.length === 0) return state;
   return {
     ...state,
+    confirmedAdmission: undefined,
     draft: { ...state.draft, images: [...state.draft.images, ...images] },
     submission: state.submission?.status === "failed" ? null : state.submission,
   };
@@ -90,6 +98,7 @@ export function removeComposerImage(
   if (images.length === state.draft.images.length) return state;
   return {
     ...state,
+    confirmedAdmission: undefined,
     draft: { ...state.draft, images },
     submission: state.submission?.status === "failed" ? null : state.submission,
   };
@@ -119,6 +128,7 @@ export function beginComposerSubmission(
     sameDraft(state.submission.draftAtSubmit, state.draft);
   return {
     ...state,
+    confirmedAdmission: undefined,
     submission: {
       intent,
       expectedTurnId,
@@ -132,6 +142,80 @@ export function beginComposerSubmission(
       error: null,
     },
   };
+}
+
+/** Reconcile only exact canonical client identity, never text or queue disappearance. */
+export function reconcileCanonicalAdmission(
+  state: ComposerState,
+  items: readonly CanonicalItem[],
+  terminalEvent?: {
+    turnId: string;
+    status: "completed" | "failed" | "interrupted";
+  },
+): ComposerState {
+  const submission = state.submission;
+  const clientId =
+    submission?.clientUserMessageId ?? state.confirmedAdmission?.clientId;
+  if (
+    clientId === undefined ||
+    (submission?.status === "failed" &&
+      !submission.error?.includes("outcome unknown"))
+  )
+    return state;
+  const delivered = items.find(
+    (item) => item.type === "user_message" && item.clientId === clientId,
+  );
+  const queued = items.some(
+    (item) => item.type === "user_message_queued" && item.clientId === clientId,
+  );
+  // A queued record only confirms a queue submission; other modes require
+  // the actual user_message associated with a Turn.
+  if (
+    delivered === undefined &&
+    (!queued || (submission !== null && submission.intent !== "queue"))
+  )
+    return state;
+  const terminal =
+    delivered === undefined
+      ? undefined
+      : items.find(
+          (item) =>
+            (item.type === "turn_completed" || item.type === "turn_aborted") &&
+            item.turnId === delivered.turnId,
+        );
+  const stage =
+    terminal?.type === "turn_completed" && terminal.status === "completed"
+      ? "completed"
+      : terminal !== undefined
+        ? "ended"
+        : delivered !== undefined && terminalEvent?.turnId === delivered.turnId
+          ? terminalEvent?.status === "completed"
+            ? "completed"
+            : "ended"
+          : delivered !== undefined
+            ? "delivered"
+            : "queued";
+  if (
+    submission === null &&
+    state.confirmedAdmission?.clientId === clientId &&
+    (state.confirmedAdmission.stage === "completed" ||
+      state.confirmedAdmission.stage === "ended") &&
+    (stage === "queued" || stage === "delivered")
+  )
+    return state;
+  if (submission === null && state.confirmedAdmission?.stage === stage)
+    return state;
+  if (submission !== null) {
+    return {
+      ...state,
+      draft: sameDraft(state.draft, submission.draftAtSubmit)
+        ? { text: "", images: [] }
+        : state.draft,
+      submission: null,
+      confirmedAdmission: { clientId, stage },
+    };
+  }
+  return { ...state, confirmedAdmission: { clientId, stage } };
 }
 
 export function acceptComposerSubmission(

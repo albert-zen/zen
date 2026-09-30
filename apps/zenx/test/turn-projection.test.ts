@@ -3,13 +3,13 @@ import test from "node:test";
 
 import type { ThreadItem, Turn } from "../src/protocol-client/index.js";
 import {
-  groupPrivateReasoningRows,
+  groupReasoningWithoutDetailsRows,
   projectTurn,
   traceDisplayRows,
   traceSummary,
 } from "../src/renderer/src/turn-projection.js";
 
-test("adjacent private reasoning without a public summary has one honest row, not one per item", () => {
+test("adjacent reasoning without public details has one honest row, not one per item", () => {
   const privateItem = (id: string) => ({
     ...reasoning(id, ""),
     summary: [],
@@ -24,7 +24,7 @@ test("adjacent private reasoning without a public summary has one honest row, no
     privateItem("opaque-d"),
     privateItem("opaque-e"),
   ]);
-  const grouped = groupPrivateReasoningRows(rows);
+  const grouped = groupReasoningWithoutDetailsRows(rows);
   assert.deepEqual(
     grouped.map((row) =>
       "kind" in row
@@ -32,11 +32,11 @@ test("adjacent private reasoning without a public summary has one honest row, no
         : { kind: row.item.type, id: row.item.id },
     ),
     [
-      { kind: "privateReasoningRun", ids: ["opaque-a", "opaque-b"] },
+      { kind: "reasoningWithoutDetailsRun", ids: ["opaque-a", "opaque-b"] },
       { kind: "commandExecution", id: "tool" },
       { kind: "reasoning", id: "opaque-c" },
       { kind: "reasoning", id: "public" },
-      { kind: "privateReasoningRun", ids: ["opaque-d", "opaque-e"] },
+      { kind: "reasoningWithoutDetailsRun", ids: ["opaque-d", "opaque-e"] },
     ],
   );
 });

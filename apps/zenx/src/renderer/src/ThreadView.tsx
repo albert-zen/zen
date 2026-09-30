@@ -57,7 +57,7 @@ import type { PluginUiRegistry } from "./plugin-ui-host.js";
 import { ToolResultRenderer } from "./ToolResultRenderer.js";
 import {
   commandLabel,
-  groupPrivateReasoningRows,
+  groupReasoningWithoutDetailsRows,
   projectTurn,
   traceDisplayRows,
   type TurnDisplayNode,
@@ -861,6 +861,17 @@ export function ThreadView({
               {composerError}
             </p>
           ) : null}
+          {composer.confirmedAdmission !== undefined ? (
+            <p className="composer-note" role="status">
+              {composer.confirmedAdmission.stage === "queued"
+                ? "Message was admitted to the queue; delivery is not confirmed."
+                : composer.confirmedAdmission.stage === "delivered"
+                  ? "Message added to a Turn; execution may still be running."
+                  : composer.confirmedAdmission.stage === "completed"
+                    ? "The Turn containing this message completed."
+                    : "The Turn containing this message ended without completion."}
+            </p>
+          ) : null}
           {composer.draft.images.length > 0 &&
           imageCapabilityNotice !== null &&
           !blockedByImageCapability ? (
@@ -1565,76 +1576,76 @@ function TraceSequence({
               aria-label="Execution details"
               tabIndex={0}
             >
-              {groupPrivateReasoningRows(traceDisplayRows(node.items)).map(
-                (row) => {
-                  if ("kind" in row) {
-                    return (
-                      <div
-                        className="trace-item trace-private-reasoning"
-                        key={row.ids[0]}
-                      >
-                        <div className="trace-item-static">
-                          <Icon name="reasoning" size={14} />
-                          <strong>Think</strong>
-                          <span>
-                            {row.ids.length} reasoning items · no public details
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  }
-                  const { item, nested, parentToolName } = row;
-                  const open = openItems.has(item.id);
-                  const expandable = traceItemExpandable(item);
+              {groupReasoningWithoutDetailsRows(
+                traceDisplayRows(node.items),
+              ).map((row) => {
+                if ("kind" in row) {
                   return (
                     <div
-                      className={`trace-item${nested ? " trace-item-nested" : ""}`}
-                      aria-label={
-                        nested
-                          ? `Nested tool invoked by ${parentToolName ?? "parent code"}`
-                          : undefined
-                      }
-                      key={item.id}
+                      className="trace-item trace-reasoning-without-details"
+                      key={row.ids[0]}
                     >
-                      {expandable ? (
-                        <button
-                          className="trace-item-toggle"
-                          type="button"
-                          aria-expanded={open}
-                          onClick={() => {
-                            setVisitedItems((current) =>
-                              new Set(current).add(item.id),
-                            );
-                            setOpenItems((current) => {
-                              const next = new Set(current);
-                              if (next.has(item.id)) next.delete(item.id);
-                              else next.add(item.id);
-                              return next;
-                            });
-                          }}
-                        >
-                          <TraceItemHeader item={item} expandable />
-                        </button>
-                      ) : (
-                        <div className="trace-item-static">
-                          <TraceItemHeader item={item} expandable={false} />
-                        </div>
-                      )}
-                      {expandable ? (
-                        <TraceReveal open={open}>
-                          {visitedItems.has(item.id) ? (
-                            <TraceDetail
-                              item={item}
-                              pluginSnapshot={pluginSnapshot}
-                              pluginUiRegistry={pluginUiRegistry}
-                            />
-                          ) : null}
-                        </TraceReveal>
-                      ) : null}
+                      <div className="trace-item-static">
+                        <Icon name="reasoning" size={14} />
+                        <strong>Think</strong>
+                        <span>
+                          {row.ids.length} reasoning items · no public details
+                        </span>
+                      </div>
                     </div>
                   );
-                },
-              )}
+                }
+                const { item, nested, parentToolName } = row;
+                const open = openItems.has(item.id);
+                const expandable = traceItemExpandable(item);
+                return (
+                  <div
+                    className={`trace-item${nested ? " trace-item-nested" : ""}`}
+                    aria-label={
+                      nested
+                        ? `Nested tool invoked by ${parentToolName ?? "parent code"}`
+                        : undefined
+                    }
+                    key={item.id}
+                  >
+                    {expandable ? (
+                      <button
+                        className="trace-item-toggle"
+                        type="button"
+                        aria-expanded={open}
+                        onClick={() => {
+                          setVisitedItems((current) =>
+                            new Set(current).add(item.id),
+                          );
+                          setOpenItems((current) => {
+                            const next = new Set(current);
+                            if (next.has(item.id)) next.delete(item.id);
+                            else next.add(item.id);
+                            return next;
+                          });
+                        }}
+                      >
+                        <TraceItemHeader item={item} expandable />
+                      </button>
+                    ) : (
+                      <div className="trace-item-static">
+                        <TraceItemHeader item={item} expandable={false} />
+                      </div>
+                    )}
+                    {expandable ? (
+                      <TraceReveal open={open}>
+                        {visitedItems.has(item.id) ? (
+                          <TraceDetail
+                            item={item}
+                            pluginSnapshot={pluginSnapshot}
+                            pluginUiRegistry={pluginUiRegistry}
+                          />
+                        ) : null}
+                      </TraceReveal>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           ) : null}
         </TraceReveal>

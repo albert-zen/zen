@@ -35,18 +35,20 @@ export interface TraceDisplayRow {
   parentToolName: string | null;
 }
 
-/** Only completed, opaque, adjacent items without public text share a visual row. */
-export function groupPrivateReasoningRows(
+/** Only adjacent completed reasoning items with no public summary or content share a visual row; visibility is not projected. */
+export function groupReasoningWithoutDetailsRows(
   rows: readonly TraceDisplayRow[],
-): Array<TraceDisplayRow | { kind: "privateReasoningRun"; ids: string[] }> {
+): Array<
+  TraceDisplayRow | { kind: "reasoningWithoutDetailsRun"; ids: string[] }
+> {
   const result: Array<
-    TraceDisplayRow | { kind: "privateReasoningRun"; ids: string[] }
+    TraceDisplayRow | { kind: "reasoningWithoutDetailsRun"; ids: string[] }
   > = [];
   let run: TraceDisplayRow[] = [];
   const flush = () => {
     if (run.length > 1) {
       result.push({
-        kind: "privateReasoningRun",
+        kind: "reasoningWithoutDetailsRun",
         ids: run.map((row) => row.item.id),
       });
     } else if (run[0] !== undefined) {

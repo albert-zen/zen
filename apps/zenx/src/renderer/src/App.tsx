@@ -72,6 +72,7 @@ import {
   emptyComposerState,
   dismissCompactionFeedback,
   failComposerSubmission,
+  reconcileCanonicalAdmission,
   removeComposerImage,
   type ComposerIntent,
   type ComposerState,
@@ -811,6 +812,14 @@ export function App() {
       );
       threadProjectionCacheRef.current.set(threadId, projected);
       setThreadDetail(projected.thread);
+      if (
+        projected.thread.id === threadId &&
+        projected.thread.canonicalItems !== undefined
+      ) {
+        updateComposer(threadId, (state) =>
+          reconcileCanonicalAdmission(state, projected.thread.canonicalItems!),
+        );
+      }
       setSelectedSettings(projected.settings);
       void window.zenx.imageAttachments
         .forThread(threadId)
@@ -987,6 +996,27 @@ export function App() {
           threadProjectionCacheRef.current,
           notification,
         );
+        if (method === "zen/thread/event" && cached !== undefined) {
+          const event = params as ServerNotificationParams["zen/thread/event"];
+          if (
+            cached.processEpoch === event.processEpoch &&
+            cached.watermark === event.watermark &&
+            (event.event.type === "item_completed" ||
+              event.event.type === "turn_completed") &&
+            cached.thread.id === event.threadId &&
+            cached.thread.canonicalItems !== undefined
+          ) {
+            updateComposer(event.threadId, (state) =>
+              reconcileCanonicalAdmission(
+                state,
+                cached.thread.canonicalItems!,
+                event.event.type === "turn_completed"
+                  ? { turnId: event.event.turnId, status: event.event.status }
+                  : undefined,
+              ),
+            );
+          }
+        }
         const bufferingResume =
           pendingResume !== null &&
           pendingResume.epoch === selectionEpoch.current &&
