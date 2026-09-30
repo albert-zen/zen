@@ -560,9 +560,10 @@ export function ThreadView({
           <div
             className={`queued-messages${onCancelQueued === undefined ? "" : " cancellable"}`}
             aria-label="Message queue"
-            aria-live="polite"
           >
-            <strong>{thread!.queuedMessages!.length} queued</strong>
+            <strong role="status" aria-live="polite" aria-atomic="true">
+              {thread!.queuedMessages!.length} queued
+            </strong>
             <ol>
               {thread!.queuedMessages!.map((message, index) => (
                 <li key={message.id}>

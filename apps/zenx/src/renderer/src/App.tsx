@@ -2370,7 +2370,7 @@ export function App() {
       draftRecoveryNotice !== null ? (
         <div className="app-notice" role="alert">
           <span>
-            {projectError ?? requestError ?? draftRecoveryNotice?.message}
+            {draftRecoveryNotice?.message ?? projectError ?? requestError}
           </span>
           {draftRecoveryNotice !== null ? (
             <button
@@ -2395,9 +2395,12 @@ export function App() {
           <button
             type="button"
             onClick={() => {
+              if (draftRecoveryNotice !== null) {
+                discardRecoverableDraft();
+                return;
+              }
               setProjectError(null);
               setRequestError(null);
-              discardRecoverableDraft();
             }}
           >
             Dismiss

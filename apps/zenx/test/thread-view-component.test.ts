@@ -632,6 +632,14 @@ test("mounted Thread queue disappears on canonical acceptance without navigation
       document.querySelector('[aria-label="Message queue"]')?.textContent ?? "",
       /1 queued.*identical/u,
     );
+    const queue = document.querySelector<HTMLElement>(
+      '[aria-label="Message queue"]',
+    );
+    assert.equal(queue?.getAttribute("aria-live"), null);
+    assert.equal(
+      queue?.querySelector('[role="status"]')?.textContent,
+      "1 queued",
+    );
     current = applyNativeThreadEvent(current, {
       type: "item_completed",
       item: {
