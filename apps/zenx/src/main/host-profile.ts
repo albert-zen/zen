@@ -913,10 +913,15 @@ export function applyBuiltInModelCatalogPresets(
       (preset) => {
         const existing = existingById.get(preset.id);
         if (existing !== undefined) existingById.delete(preset.id);
+        // Manual capability edits remain authoritative. For built-in presets,
+        // refresh metadata while carrying the user's visibility choice across
+        // restarts so a hidden model is not resurrected into normal selection.
         if (existing?.source === "manual") return existing;
         const normalized = normalizeModelCatalogEntry(preset);
         const { isDefault: _isDefault, ...model } = normalized;
-        return model;
+        return existing === undefined
+          ? model
+          : { ...model, hidden: existing.hidden };
       },
     );
     return {

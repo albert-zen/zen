@@ -241,7 +241,9 @@ export function traceSummary(
   if (commands.length === 0) return "Reasoned through the next step";
   const stages = commands.map((item) => {
     const status = commandStatus(item);
-    return status === "Done" ? "Used" : status;
+    return ["Done", "Completed", "Ran command", "Waited"].includes(status)
+      ? "Used"
+      : status;
   });
   if (stages.some((value) => value !== "Used")) {
     const groups = [...new Set(stages)];

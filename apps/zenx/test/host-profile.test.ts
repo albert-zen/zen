@@ -369,6 +369,40 @@ test("upgrades an existing subscription catalog with current presets while prese
   assert.equal(upgraded.providerProfiles[0]?.models[2]?.source, "manual");
 });
 
+test("built-in preset refresh preserves a user's hidden selection", () => {
+  const hidden = {
+    ...structuredLegacyModelCatalog("openai-subscription", [
+      "gpt-5.6-terra",
+    ])[0]!,
+    hidden: true,
+  };
+  const upgraded = applyBuiltInModelCatalogPresets({
+    ...profile,
+    providerProfiles: [
+      {
+        providerProfileId: "openai-codex",
+        type: "openai-subscription",
+        displayName: "OpenAI subscription",
+        models: [hidden],
+      },
+    ],
+    defaultModel: {
+      providerProfileId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+    },
+    titleModel: {
+      providerProfileId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+    },
+  });
+  assert.equal(
+    upgraded.providerProfiles[0]?.models.find(
+      (model) => model.id === "gpt-5.6-terra",
+    )?.hidden,
+    true,
+  );
+});
+
 test("migrates unconfigured compatible models to text-only without inferring provider controls", () => {
   const unconfigured = {
     ...profile.providerProfiles[0]!.models[1]!,
