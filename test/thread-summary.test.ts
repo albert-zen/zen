@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { ZenAppServer } from "../src/app-server.js";
 import { JsonlThreadJournal } from "../src/journal.js";
+import type { ThreadJournal } from "../src/journal.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
 import { FakeModel } from "../src/model.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
@@ -15,14 +16,17 @@ import { JsonlThreadMetadataStore } from "../src/thread-metadata.js";
 import { JsonThreadSummaryProjection } from "../src/thread-summary.js";
 import { ShellToolRuntime, ToolEnvironment } from "../src/tool.js";
 
-function createServer(directory: string): ZenAppServer {
+function createServer(
+  directory: string,
+  journal?: ThreadJournal,
+): ZenAppServer {
   const model = new FakeModel();
   const modelCatalog = new StaticModelCatalog([
     { id: "fake", isDefault: true, contextWindow: 32_768 },
     { id: "other", contextWindow: 32_768 },
   ]);
   return new ZenAppServer({
-    journal: new JsonlThreadJournal(path.join(directory, "threads")),
+    journal: journal ?? new JsonlThreadJournal(path.join(directory, "threads")),
     runtime: new AgentRuntime({
       toolEnvironment: new ToolEnvironment({
         runtimes: [new ShellToolRuntime()],
@@ -279,6 +283,18 @@ test("native summary status follows the current in-process Turn", async () => {
     const beforeSteer = (await server.listThreadSummaries())[0];
     assert(beforeSteer && beforeSteer.status !== "systemError");
     assert.equal(beforeSteer.status, "active");
+    assert.equal(
+      (await server.readThread(started.id)).turns.at(-1)?.status,
+      "inProgress",
+    );
+    assert.equal(
+      (
+        await new JsonlThreadJournal(path.join(directory, "threads")).read(
+          started.id,
+        )
+      ).filter((item) => item.type === "turn_aborted").length,
+      0,
+    );
     await server.steerTurn(started.id, turn.id, "same Turn steer");
     const afterSteer = (await server.listThreadSummaries())[0];
     assert(afterSteer && afterSteer.status !== "systemError");
@@ -288,6 +304,196 @@ test("native summary status follows the current in-process Turn", async () => {
     assert.equal((await server.listThreadSummaries())[0]?.status, "idle");
   } finally {
     releaseApproval();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("replacement successor lacking its initial message remains incomplete", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-incomplete-replacement-"),
+  );
+  try {
+    const journal = new JsonlThreadJournal(path.join(directory, "threads"));
+    const started = await createServer(directory).startThread();
+    const now = new Date().toISOString();
+    await journal.append({
+      id: "old-start",
+      threadId: started.id,
+      turnId: "old",
+      type: "turn_started",
+      createdAt: now,
+    });
+    await journal.append({
+      id: "replacement",
+      threadId: started.id,
+      turnId: "old",
+      successorTurnId: "successor",
+      clientId: "replace-id",
+      input: [{ type: "text", text: "later" }],
+      type: "turn_replacement_requested",
+      createdAt: now,
+    });
+    await journal.append({
+      id: "old-stop",
+      threadId: started.id,
+      turnId: "old",
+      type: "turn_aborted",
+      createdAt: now,
+      reason: "replaced",
+    });
+    await journal.append({
+      id: "new-start",
+      threadId: started.id,
+      turnId: "successor",
+      type: "turn_started",
+      createdAt: now,
+    });
+    await createServer(directory).readThread(started.id);
+    assert.equal(
+      (await journal.read(started.id)).filter(
+        (item) => item.type === "turn_aborted",
+      ).length,
+      1,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("reader never retries a tool whose side effect happened but result is unknown", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-unknown-tool-"));
+  try {
+    const disk = new JsonlThreadJournal(path.join(directory, "threads"));
+    const journal: ThreadJournal = {
+      listThreadIds: () => disk.listThreadIds(),
+      read: (id) => disk.read(id),
+      create: (items) => disk.create(items),
+      append: async (item) => {
+        if (item.type === "tool_result")
+          throw new Error("tool result append outcome unknown");
+        await disk.append(item);
+      },
+    };
+    const owner = createServer(directory, journal);
+    const thread = await owner.startThread();
+    const turn = await owner.startTurn(thread.id, "!shell printf x >> marker");
+    await assert.rejects(turn.done, /tool result append outcome unknown/u);
+    assert.equal(await readFile(path.join(directory, "marker"), "utf8"), "x");
+    await createServer(directory).readThread(thread.id);
+    await createServer(directory).readThread(thread.id);
+    assert.equal(await readFile(path.join(directory, "marker"), "utf8"), "x");
+    const items = await disk.read(thread.id);
+    assert.equal(items.filter((item) => item.type === "tool_call").length, 1);
+    assert.equal(
+      items.filter(
+        (item) => item.type === "tool_result" || item.type === "turn_aborted",
+      ).length,
+      0,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("another live Host reading the same journal never signs its owner's Turn", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-shared-owner-"));
+  let release = (): void => undefined;
+  const approval = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  try {
+    const owner = createServer(directory);
+    const thread = await owner.startThread({ approvalPolicy: "always" });
+    const active = await owner.startTurn(thread.id, "!shell printf once", {
+      requestApproval: async () => {
+        await approval;
+        return "decline";
+      },
+    });
+    const journal = new JsonlThreadJournal(path.join(directory, "threads"));
+    await Promise.all([
+      createServer(directory).readThread(thread.id),
+      createServer(directory).readThread(thread.id),
+    ]);
+    assert.equal(
+      (await journal.read(thread.id)).filter(
+        (item) => item.type === "turn_aborted",
+      ).length,
+      0,
+    );
+    assert.equal(
+      (await owner.readThread(thread.id)).turns.at(-1)?.status,
+      "inProgress",
+    );
+    release();
+    await active.done;
+    const items = await journal.read(thread.id);
+    assert.equal(
+      items.filter((item) => item.type === "turn_aborted").length,
+      0,
+    );
+    assert.equal(
+      items.filter(
+        (item) => item.type === "turn_completed" && item.turnId === active.id,
+      ).length,
+      1,
+    );
+  } finally {
+    release();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("parallel cold reads never write a terminal or consume queued input", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-lost-owner-"));
+  try {
+    const journal = new JsonlThreadJournal(path.join(directory, "threads"));
+    const started = await createServer(directory).startThread();
+    const now = new Date().toISOString();
+    await journal.append({
+      id: "old-start",
+      threadId: started.id,
+      turnId: "old-turn",
+      type: "turn_started",
+      createdAt: now,
+    });
+    await journal.append({
+      id: "queued",
+      threadId: started.id,
+      type: "user_message_queued",
+      createdAt: now,
+      clientId: "queued-client",
+      input: [{ type: "text", text: "later" }],
+    });
+    const recovered = createServer(directory);
+    const [read, summaries] = await Promise.all([
+      recovered.readThread(started.id),
+      recovered.listThreadSummaries(),
+    ]);
+    assert.equal(read.turns.at(-1)?.status, "interrupted");
+    assert.equal(
+      summaries.find((s) => s.threadId === started.id)?.status,
+      "idle",
+    );
+    await recovered.readThread(started.id);
+    await createServer(directory).readThread(started.id);
+    const items = await journal.read(started.id);
+    assert.equal(
+      items.filter((i) => i.type === "turn_aborted" && i.turnId === "old-turn")
+        .length,
+      0,
+    );
+    assert.equal(
+      items.filter((i) => i.type === "user_message_queued").length,
+      1,
+    );
+    assert.equal(
+      items.filter(
+        (i) => i.type === "user_message" && i.clientId === "queued-client",
+      ).length,
+      0,
+    );
+  } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });

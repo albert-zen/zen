@@ -822,9 +822,14 @@ steer 仍是普通 canonical `user_message`；若它在一次模型响应或其�
 到达，`deliveryAfter` 记录该模型响应的稳定 id。journal 顺序继续表达事实发生
 顺序，模型采样投影则把 steer 放在该响应及其 tool results 之后。执行中的当前
 anchor 仅是可丢弃 checkpoint；会改变重放或上下文的排序事实已经进入 Item。
-崩溃重放时，尾部只有 `turn_started` 而没有终止 Item 的 Turn 派生为
-interrupted，不追加 synthetic recovery record，也不恢复半截 stream。wire
+冷读不能凭本进程缺少执行 handle 就证明 `turn_started` 的原执行 owner 已丢失：
+CLI 与桌面可共享同一 journal，陌生读者不得替执行 owner 写 `turn_aborted`。
+没有终止 Item 的 Turn 在非 owner 读者处仍按既有规则投影为 interrupted；
+这是保守的本地视图，**不是**已确认跨 Host 的执行终态，也不追加 synthetic
+recovery record 或重放半截 stream。可靠自动接管需要另行证明跨进程 authority
+和写入 fencing，目前未交付。wire
 `turn/started` / `turn/completed` 是这些 canonical lifecycle Item 的协议投影。
+**Cold load coalescing** — App Server 在内存中共享同一 Thread 的只读冷加载 Promise，减少同进程重复读取；它不确认跨 Host ownership、不写会话终态，失败即丢弃以便从 journal 重读。
 Hard steer 在任何副作用前先追加 `turn_replacement_requested`，再以普通
 `turn_aborted` 结束旧 Turn，并以普通 `turn_started` + `user_message` 开始保留 id
 的后继 Turn。replacement intent 不进入模型上下文；后继用户消息落盘后它即由
