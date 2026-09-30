@@ -3086,7 +3086,7 @@ a:focus-visible {
 }
 .field textarea {
   min-height: 86px;
-  resize: vertical;
+  resize: none;
   padding: 10px 11px;
   line-height: 1.55;
 }
@@ -5763,7 +5763,7 @@ a:focus-visible {
 }
 .compaction-settings textarea {
   min-height: 180px;
-  resize: vertical;
+  resize: none;
 }
 @media (max-width: 640px) {
   .compaction-field-grid {
@@ -7070,7 +7070,7 @@ a:focus-visible {
   width: 100%;
   min-height: 320px;
   height: 100%;
-  resize: vertical;
+  resize: none;
   padding: 12px;
   border: 1px solid var(--color-border-subtle);
   border-radius: 6px;
