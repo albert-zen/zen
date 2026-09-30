@@ -54,10 +54,10 @@ test("Rooms disambiguate same-title conversations and submit the exact searched 
     });
   try {
     await act(async () => root.render(React.createElement(RoomsPage, { sdk })));
-    const choose = async (index: number, id: string) => {
-      const trigger = document.querySelectorAll<HTMLButtonElement>(
+    const choose = async (id: string) => {
+      const trigger = document.querySelector<HTMLButtonElement>(
         '[aria-label="Member conversation"]',
-      )[index]!;
+      )!;
       await act(async () => trigger.click());
       const labels = [...document.querySelectorAll('[role="option"]')].map(
         (option) => option.textContent,
@@ -79,9 +79,14 @@ test("Rooms disambiguate same-title conversations and submit the exact searched 
       await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
       assert.ok(trigger.textContent?.includes(id.slice(0, 12)));
     };
-    await choose(0, ids[1]!);
+    await act(async () =>
+      [...document.querySelectorAll("button")]
+        .find((button) => button.textContent === "+ New")!
+        .click(),
+    );
+    await choose(ids[1]!);
     const inputs = document.querySelectorAll<HTMLInputElement>(
-      ".room-create-card input",
+      ".rooms-chat-dialog input",
     );
     await fill(inputs[0]!, "New");
     await fill(inputs[1]!, "member");
@@ -94,7 +99,12 @@ test("Rooms disambiguate same-title conversations and submit the exact searched 
       calls.find((call) => call.id === "create")?.input.members[0].threadId,
       ids[1],
     );
-    await choose(1, ids[0]!);
+    await act(async () =>
+      [...document.querySelectorAll("button")]
+        .find((button) => button.textContent === "Members & settings")!
+        .click(),
+    );
+    await choose(ids[0]!);
     await act(async () =>
       [...document.querySelectorAll("button")]
         .find((button) => button.textContent === "Add member")!

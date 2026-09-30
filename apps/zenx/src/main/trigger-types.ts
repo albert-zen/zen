@@ -105,11 +105,48 @@ export interface RoomMessage {
   originThreadId: string | null;
   originTurnId: string | null;
 }
+export interface RoomSendOperation {
+  id: string;
+  text: string;
+  messageId: string | null;
+  createdAt: number;
+  acknowledged: boolean;
+  /** Persisted terminal fact: never permit a later post/prepare of this key. */
+  cancelled?: true;
+  mentions: Array<{ name: string; threadId: string; triggerIds: string[] }>;
+}
+export interface RoomDeliveryView {
+  operationId: string;
+  roomId: string;
+  text: string;
+  messageId: string | null;
+  state: "prepared" | "saved" | "cancelled";
+  createdAt: number;
+  mentions: Array<{
+    name: string;
+    threadId: string;
+    configuredNow: boolean;
+    deliveries: Array<{
+      triggerId: string;
+      status:
+        | "unconfigured"
+        | "pending"
+        | "queued"
+        | "running"
+        | "completed"
+        | "failed"
+        | "unknown";
+      historyId: string | null;
+    }>;
+  }>;
+}
 export interface ZenXRoom {
   id: string;
   name: string;
+  operationEpoch?: string;
   members: RoomMember[];
   messages: RoomMessage[];
+  operations?: RoomSendOperation[];
   createdAt: number;
 }
 
