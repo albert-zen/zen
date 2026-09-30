@@ -41,6 +41,8 @@ interface RoomListResult {
         text: string;
         messageId: string | null;
         createdAt: number;
+        acknowledged?: boolean;
+        cancelled?: boolean;
       }>;
       responders?: Array<{ name: string; configured: boolean }>;
     }
@@ -71,6 +73,7 @@ interface RoomPendingSend {
   text: string;
   revision: number | null;
   messageId: string | null;
+  cancelled?: boolean;
 }
 
 export function registerBundledAutomationUi(
@@ -1186,6 +1189,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 ? merged[room.id]!.revision
                 : null,
             messageId: operation.messageId,
+            cancelled: operation.cancelled,
           };
         }
       }
@@ -1217,6 +1221,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           text: collected[0].text,
           revision: null,
           messageId: collected[0].messageId,
+          cancelled: collected[0].cancelled,
         };
       pendingRef.current = merged;
       setPendingByRoom(merged);
@@ -1277,6 +1282,17 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const room = data.rooms.find((entry) => entry.id === selected);
   const draft = room === undefined ? "" : (drafts[room.id] ?? "");
   const pending = room === undefined ? null : (pendingByRoom[room.id] ?? null);
+  const roomOperations = room?.operations ?? [];
+  const visibleRoomOperations = roomOperations.slice(-3);
+  const olderRoomOperations = roomOperations.slice(0, -3);
+  const operationStateLabel = (operation: (typeof roomOperations)[number]) =>
+    operation.cancelled
+      ? "cancelled"
+      : operation.messageId
+        ? operation.acknowledged
+          ? "saved · acknowledged"
+          : "saved"
+        : "prepared · result unknown";
   const tail = room?.messages.at(-1)?.id ?? null;
   useEffect(() => {
     if (
@@ -1662,9 +1678,11 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 ) : null}
                 {pending ? (
                   <div role="status" className="room-send-pending">
-                    {pending.messageId
-                      ? "Message saved; check its exact delivery."
-                      : "Send unconfirmed. Check, cancel if still prepared, or explicitly send."}{" "}
+                    {pending.cancelled
+                      ? "Operation cancelled; no message was sent."
+                      : pending.messageId
+                        ? "Message saved; check its exact delivery."
+                        : "Send unconfirmed. Check, cancel if still prepared, or explicitly send."}{" "}
                     <button
                       type="button"
                       onClick={() =>
@@ -1673,7 +1691,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     >
                       Check exact operation
                     </button>
-                    {!pending.messageId ? (
+                    {!pending.messageId && !pending.cancelled ? (
                       <>
                         <button
                           type="button"
@@ -1693,7 +1711,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     ) : null}
                   </div>
                 ) : null}
-                {(room.operations ?? [])
+                {visibleRoomOperations
                   .filter((operation) => operation.id !== pending?.id)
                   .map((operation) => (
                     <div
@@ -1702,10 +1720,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       role="status"
                     >
                       Unreviewed Room operation {operation.id.slice(0, 8)}:{" "}
-                      {operation.messageId
-                        ? "saved"
-                        : "prepared / result unknown"}{" "}
-                      · {Array.from(operation.text).slice(0, 70).join("")}{" "}
+                      {operationStateLabel(operation)} ·{" "}
+                      {Array.from(operation.text).slice(0, 70).join("")}{" "}
                       <button
                         type="button"
                         onClick={() =>
@@ -1723,7 +1739,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       >
                         Check exact operation
                       </button>
-                      {!operation.messageId ? (
+                      {!operation.messageId && !operation.cancelled ? (
                         <>
                           <button
                             type="button"
@@ -1759,6 +1775,20 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       ) : null}
                     </div>
                   ))}
+                {olderRoomOperations.length > 0 ? (
+                  <details className="room-status-history">
+                    <summary>
+                      Older operations ({olderRoomOperations.length})
+                    </summary>
+                    {olderRoomOperations.map((operation) => (
+                      <p className="room-send-pending" key={operation.id}>
+                        {operation.id.slice(0, 8)} ·{" "}
+                        {operationStateLabel(operation)} ·{" "}
+                        {Array.from(operation.text).slice(0, 70).join("")}
+                      </p>
+                    ))}
+                  </details>
+                ) : null}
               </div>
             ) : null}
             <div
@@ -1792,8 +1822,13 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               {room.messages.map((message) => (
                 <article className="room-message" key={message.id}>
                   <header>
+                    <span
+                      className={`room-role room-role-${message.kind}`}
+                      aria-label={`Message role: ${roomRoleLabel(message.kind)}`}
+                    >
+                      {roomRoleLabel(message.kind)}
+                    </span>
                     <strong>{message.author}</strong>
-                    <span className="room-kind">{message.kind}</span>
                     <time dateTime={new Date(message.createdAt).toISOString()}>
                       {new Date(message.createdAt).toLocaleString()}
                     </time>
@@ -1899,10 +1934,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               >
                 {sendingRooms[room.id] ? "Sending…" : "Send"}
               </button>
-              <small>
-                Only explicit @mentions with an active Room mention Trigger wake
-                agents.
-              </small>
+              <small>Mention an agent to wake it.</small>
             </div>
           </>
         )}
@@ -2096,6 +2128,12 @@ function Field({
       <input value={value} onChange={(event) => onChange(event.target.value)} />
     </label>
   );
+}
+
+function roomRoleLabel(kind: ZenXRoom["messages"][number]["kind"]): string {
+  if (kind === "human") return "You";
+  if (kind === "agent") return "Agent";
+  return "System";
 }
 
 function describeError(error: unknown): string {

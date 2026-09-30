@@ -23,6 +23,7 @@ import {
   contextCompactionTokenBudget,
   originalItemListReference,
   latestCompaction,
+  latestCompletedCompactionBoundary,
   latestEligibleCompactionBoundary,
   normalizeContextCompactionConfig,
   type ContextCompactionConfig,
@@ -319,6 +320,8 @@ export class ZenAppServer {
       done: Promise<void>;
       inputModalities: readonly string[] | null;
       deliveryAnchorId?: string;
+      contextCompactionNotice: string | undefined;
+      contextCompactionNoticeIssued: boolean;
     }
   >();
   readonly #subscribers = new Set<(event: AppServerEvent) => void>();
@@ -1722,8 +1725,29 @@ export class ZenAppServer {
                         "Model sample has no canonical context boundary",
                       );
                     }
+                    const messages = compileModelMessages(
+                      items,
+                      resolved.selection,
+                    );
+                    const notice =
+                      active.contextCompactionNotice !== undefined &&
+                      active.contextCompactionNoticeIssued !== true
+                        ? active.contextCompactionNotice
+                        : undefined;
+                    if (notice !== undefined) {
+                      active.contextCompactionNoticeIssued = true;
+                    }
                     return {
-                      messages: compileModelMessages(items, resolved.selection),
+                      messages:
+                        notice === undefined
+                          ? messages
+                          : [
+                              ...messages,
+                              {
+                                role: "user" as const,
+                                text: notice,
+                              },
+                            ],
                       contextBoundaryItemId,
                     };
                   }),
@@ -1746,6 +1770,23 @@ export class ZenAppServer {
                 },
                 agenticCompactionCommitted: () => {
                   highestInputTokens = undefined;
+                  const active = this.#activeTurns.get(threadId);
+                  if (active?.turnId === turnId) {
+                    active.contextCompactionNotice = undefined;
+                    active.contextCompactionNoticeIssued = false;
+                  }
+                },
+                afterToolBatch: async ({ inputTokens, agenticCompaction }) => {
+                  const compacted = await this.#handleActiveTurnCompaction({
+                    threadId,
+                    turnId,
+                    resolved,
+                    contextCompaction: admitted.configuration.contextCompaction,
+                    inputTokens,
+                    agenticCompaction,
+                    signal: controller.signal,
+                  });
+                  if (compacted) highestInputTokens = undefined;
                 },
                 emit: (event) => {
                   if (
@@ -1816,6 +1857,8 @@ export class ZenAppServer {
         controller,
         done,
         inputModalities: resolved.model.inputModalities,
+        contextCompactionNotice: undefined,
+        contextCompactionNoticeIssued: false,
       });
       return { handle: { id: turnId, done }, ready: ready.promise };
     });
@@ -1859,6 +1902,17 @@ export class ZenAppServer {
         (item): item is UserMessageItem =>
           item.type === "user_message" && item.clientId === options.clientId,
       );
+      const queuedIntent = thread.items.find(
+        (item): item is QueuedUserMessageItem =>
+          item.type === "user_message_queued" &&
+          item.clientId === options.clientId,
+      );
+      if (queuedIntent !== undefined) {
+        throw new AppServerError(
+          "idempotency_conflict",
+          `clientUserMessageId ${options.clientId} is already reserved by a queued message`,
+        );
+      }
       if (existing === undefined && existingUserMessage !== undefined) {
         throw new AppServerError(
           "idempotency_conflict",
@@ -2050,6 +2104,17 @@ export class ZenAppServer {
           (item): item is UserMessageItem =>
             item.type === "user_message" && item.clientId === options.clientId,
         );
+        const queuedIntent = thread.items.find(
+          (item): item is QueuedUserMessageItem =>
+            item.type === "user_message_queued" &&
+            item.clientId === options.clientId,
+        );
+        if (queuedIntent !== undefined) {
+          throw new AppServerError(
+            "idempotency_conflict",
+            `clientUserMessageId ${options.clientId} is already reserved by a queued message`,
+          );
+        }
         if (duplicate !== undefined) {
           if (
             duplicate.turnId === expectedTurnId &&
@@ -2117,20 +2182,147 @@ export class ZenAppServer {
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {
-    const activeHandle = await this.#withThreadMutation(threadId, async () => {
-      const active = this.#activeTurns.get(threadId);
-      if (active === undefined || active.turnId !== turnId) {
+    const active = this.#activeTurns.get(threadId);
+    if (active === undefined || active.turnId !== turnId) {
+      throw new AppServerError(
+        "turn_not_running",
+        `Turn ${turnId} is not running on thread ${threadId}`,
+      );
+    }
+    active.controller.abort(
+      new DOMException("Interrupted by user", "AbortError"),
+    );
+    await active.done;
+  }
+
+  async #handleActiveTurnCompaction(options: {
+    threadId: string;
+    turnId: string;
+    resolved: ResolvedProviderSelection;
+    contextCompaction: ResolvedContextCompactionConfig;
+    inputTokens: number | undefined;
+    agenticCompaction: boolean;
+    signal: AbortSignal;
+  }): Promise<boolean> {
+    const contextWindow = options.resolved.model.contextWindow;
+    const inputTokens = options.inputTokens;
+    if (contextWindow === null) return false;
+
+    return await this.#withThreadMutation(options.threadId, async () => {
+      const active = this.#activeTurns.get(options.threadId);
+      if (active?.turnId !== options.turnId) return false;
+      const thread = await this.#requireThread(options.threadId);
+      // Provider usage describes the request that just completed. Tool results
+      // are appended afterwards, so estimate the complete projection that is
+      // about to be sampled as well. This closes the gap where a large result
+      // crosses the window between two Provider usage reports.
+      const estimatedInputTokens = estimateModelMessageInputTokens(
+        compileModelMessages(thread.items, options.resolved.selection),
+      );
+      const observedInputTokens = Math.max(
+        inputTokens ?? 0,
+        estimatedInputTokens,
+      );
+      // An agent initiated reset has its own durable success/failure result
+      // and projection rules. Do not let the usage from the reset request
+      // immediately trigger a second Host reset (or attach a Host notice to
+      // the exact continuation the agent supplied).
+      if (options.agenticCompaction) {
+        active.contextCompactionNotice = undefined;
+        active.contextCompactionNoticeIssued = false;
+        return false;
+      }
+      const trigger = automaticCompactionThreshold(
+        contextWindow,
+        options.contextCompaction.triggerPercent,
+      );
+      if (observedInputTokens < trigger) {
+        active.contextCompactionNotice = undefined;
+        active.contextCompactionNoticeIssued = false;
+        return false;
+      }
+      const fallbackPercent = Math.min(
+        100,
+        Math.max(
+          options.contextCompaction.triggerPercent,
+          Math.min(99, options.contextCompaction.triggerPercent + 15),
+        ),
+      );
+      const hardFallback =
+        observedInputTokens >=
+        automaticCompactionThreshold(contextWindow, fallbackPercent);
+      // With agentic mode disabled, the Host owns automatic compaction and
+      // should act at the configured trigger rather than waiting for the
+      // emergency margin. Agentic mode gets the reminder window first.
+      const automaticAtTrigger = !options.contextCompaction.agenticEnabled;
+      if (!hardFallback && !automaticAtTrigger) {
+        if (
+          options.contextCompaction.agenticEnabled &&
+          active.contextCompactionNotice === undefined
+        ) {
+          active.contextCompactionNotice = `[Host context notice] The next model context is estimated at ${String(
+            Math.round((observedInputTokens / contextWindow) * 100),
+          )}% of the configured window. Consider calling compact_context with a concise continuation summary; the current Turn can continue.`;
+          active.contextCompactionNoticeIssued = false;
+        }
+        return false;
+      }
+
+      // Use the same bounded retention planner as ordinary compaction. In
+      // particular, an active first Turn has no completed boundary: the
+      // planner returns undefined and we can fail closed before admitting a
+      // request that is already known to exceed the model window.
+      let boundary: ReturnType<typeof latestCompletedCompactionBoundary>;
+      try {
+        boundary = boundedCompactionBoundary(thread.items, {
+          retainedTokenBudget: contextCompactionTokenBudget(
+            contextWindow,
+            options.contextCompaction.targetPercent,
+          ),
+          estimateRetainedTokens: (retainedItems) =>
+            estimateModelMessageInputTokens(
+              compileModelMessages(retainedItems, options.resolved.selection),
+            ),
+          retention: options.contextCompaction.retention,
+          allowOpenTurns: true,
+        });
+      } catch (error) {
         throw new AppServerError(
-          "turn_not_running",
-          `Turn ${turnId} is not running on thread ${threadId}`,
+          "automatic_compaction_failed",
+          `Automatic context compaction could not produce a bounded projection: ${describeCompactionError(error, "bounded projection unavailable")}`,
         );
       }
-      active.controller.abort(
-        new DOMException("Interrupted by user", "AbortError"),
-      );
-      return { done: active.done };
+      if (boundary === undefined) {
+        // There is no completed Turn that can safely be summarized (for
+        // example, the very first active Turn). Never send the next sample if
+        // the post-tool projection already fills the configured window.
+        if (observedInputTokens >= contextWindow) {
+          throw new AppServerError(
+            "context_window_exceeded",
+            `The active Turn reached the configured context window (${String(observedInputTokens)} estimated input tokens); no completed history is available for compaction`,
+          );
+        }
+        return false;
+      }
+      if (
+        latestCompaction(thread.items)?.coveredThroughItemId ===
+        boundary.item.id
+      ) {
+        return false;
+      }
+      await this.#appendContextCompaction({
+        thread,
+        boundary,
+        initiator: "automatic",
+        selection: options.resolved,
+        contextCompaction: options.contextCompaction,
+        signal: options.signal,
+        allowOpenTurns: true,
+      });
+      active.contextCompactionNotice = undefined;
+      active.contextCompactionNoticeIssued = false;
+      return true;
     });
-    await activeHandle.done;
   }
 
   async #commitFinalResponse(
@@ -2182,6 +2374,9 @@ export class ZenAppServer {
           ...automaticCompaction,
         });
       } catch (error) {
+        if (error instanceof ThreadJournalAppendOutcomeUnknownError) {
+          throw error;
+        }
         console.warn(
           `Could not automatically compact completed Turn ${turnId}`,
           error,
@@ -2248,6 +2443,9 @@ export class ZenAppServer {
         signal: options.signal,
       });
     } catch (error) {
+      if (error instanceof ThreadJournalAppendOutcomeUnknownError) {
+        throw error;
+      }
       throw new AppServerError(
         "automatic_compaction_failed",
         `Automatic context compaction failed: ${describeCompactionError(
@@ -2337,6 +2535,7 @@ export class ZenAppServer {
     selection: ResolvedProviderSelection;
     contextCompaction: ResolvedContextCompactionConfig;
     signal: AbortSignal;
+    allowOpenTurns?: boolean;
   }): Promise<ContextCompactionItem> {
     const sourceMessages = compileModelMessages(
       options.thread.items.slice(0, options.boundary.index + 1),
@@ -2391,6 +2590,9 @@ export class ZenAppServer {
             ),
           ),
         retention: options.contextCompaction.retention,
+        ...(options.allowOpenTurns === undefined
+          ? {}
+          : { allowOpenTurns: options.allowOpenTurns }),
       });
     } catch (error) {
       throw new AppServerError(
@@ -2428,6 +2630,9 @@ export class ZenAppServer {
       await this.#commit(options.thread, item);
       this.#emit({ type: "item_completed", item });
     } catch (error) {
+      if (error instanceof ThreadJournalAppendOutcomeUnknownError) {
+        throw error;
+      }
       throw new AppServerError(
         "compaction_persistence_failed",
         describeCompactionError(
@@ -3013,7 +3218,7 @@ function latestThreadFork(
 function findLatestClosedTurnIndex(items: readonly CanonicalItem[]): number {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
-    if (item?.type === "turn_completed" || item?.type === "turn_aborted") {
+    if (item?.type === "turn_completed" && item.status === "completed") {
       return index;
     }
   }

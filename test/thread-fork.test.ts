@@ -318,3 +318,29 @@ test("fork rejects Threads without a closed Turn", async () => {
       error.code === "fork_boundary_unavailable",
   );
 });
+
+test("latest-complete fork rejects a failed Turn", async () => {
+  const model: ModelAdapter = {
+    provider: "failing",
+    async *stream(): AsyncIterable<ModelEvent> {
+      throw new Error("failed turn");
+    },
+  };
+  const server = createServer(model);
+  const source = await server.startThread();
+  await (
+    await server.startTurn(source.id, "fail")
+  ).done;
+
+  await assert.rejects(
+    server.forkThread({
+      sourceThreadId: source.id,
+      through: { type: "latest-complete" },
+      workspace: { type: "same-directory" },
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "fork_boundary_unavailable",
+  );
+});

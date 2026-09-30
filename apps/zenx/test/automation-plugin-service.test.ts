@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -34,6 +42,241 @@ test("corrupt optional automation state does not block service construction", as
       },
     });
     assert.ok(service);
+  } finally {
+    await rm(userDataDirectory, { recursive: true, force: true });
+  }
+});
+
+test("migration preserves an existing Room namespace when the shared Trigger document lacks rooms", async () => {
+  const userDataDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-room-migration-authority-"),
+  );
+  const room = {
+    id: "room-1",
+    name: "Existing room",
+    members: [],
+    messages: [],
+    operations: [],
+    operationEpoch: "epoch-1",
+    createdAt: 1,
+  };
+  try {
+    const storageRoot = path.join(userDataDirectory, "plugin-data");
+    await mkdir(path.join(storageRoot, "zenx-triggers"), { recursive: true });
+    await mkdir(path.join(storageRoot, "zenx-rooms"), { recursive: true });
+    await writeFile(
+      path.join(storageRoot, "zenx-triggers", "storage.json"),
+      JSON.stringify({ version: 1, value: { triggers: [], history: [] } }),
+      { mode: 0o600 },
+    );
+    await writeFile(
+      path.join(storageRoot, "zenx-rooms", "storage.json"),
+      JSON.stringify({ version: 1, value: { rooms: [room] } }),
+      { mode: 0o600 },
+    );
+    await createBundledAutomationPluginService({
+      userDataDirectory,
+      appServer: {
+        request: async () => ({}) as never,
+        onNotification: () => () => {},
+      },
+    });
+    const canonical = JSON.parse(
+      await readFile(
+        path.join(storageRoot, "zenx-triggers", "storage.json"),
+        "utf8",
+      ),
+    ) as { value: { rooms: unknown[] } };
+    assert.deepEqual(canonical.value.rooms, [room]);
+  } finally {
+    await rm(userDataDirectory, { recursive: true, force: true });
+  }
+});
+
+test("invalid Room projection is not promoted into the shared Trigger document", async () => {
+  const userDataDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-room-migration-invalid-projection-"),
+  );
+  try {
+    const storageRoot = path.join(userDataDirectory, "plugin-data");
+    await mkdir(path.join(storageRoot, "zenx-triggers"), { recursive: true });
+    await mkdir(path.join(storageRoot, "zenx-rooms"), { recursive: true });
+    await writeFile(
+      path.join(storageRoot, "zenx-triggers", "storage.json"),
+      JSON.stringify({ version: 1, value: { triggers: [], history: [] } }),
+      { mode: 0o600 },
+    );
+    await writeFile(
+      path.join(storageRoot, "zenx-rooms", "storage.json"),
+      JSON.stringify({ version: 1, value: { rooms: { bad: true } } }),
+      { mode: 0o600 },
+    );
+    const service = await createBundledAutomationPluginService({
+      userDataDirectory,
+      appServer: {
+        request: async () => ({}) as never,
+        onNotification: () => () => {},
+      },
+    });
+    assert.deepEqual(service.snapshot(), {
+      triggers: [],
+      history: [],
+      rooms: [],
+    });
+    const canonical = JSON.parse(
+      await readFile(
+        path.join(storageRoot, "zenx-triggers", "storage.json"),
+        "utf8",
+      ),
+    ) as { value: { rooms: unknown } };
+    assert.deepEqual(canonical.value.rooms, []);
+    assert.deepEqual(
+      JSON.parse(
+        await readFile(
+          path.join(storageRoot, "zenx-rooms", "storage.json"),
+          "utf8",
+        ),
+      ),
+      { version: 1, value: { rooms: [] } },
+    );
+  } finally {
+    await rm(userDataDirectory, { recursive: true, force: true });
+  }
+});
+
+test("corrupt Room compatibility projection is rebuilt from canonical storage", async () => {
+  const userDataDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-room-projection-recovery-"),
+  );
+  try {
+    const storageRoot = path.join(userDataDirectory, "plugin-data");
+    await mkdir(path.join(storageRoot, "zenx-triggers"), { recursive: true });
+    await mkdir(path.join(storageRoot, "zenx-rooms"), { recursive: true });
+    await writeFile(
+      path.join(storageRoot, "zenx-triggers", "storage.json"),
+      JSON.stringify({
+        version: 1,
+        value: { triggers: [], history: [], rooms: [] },
+      }),
+      { mode: 0o600 },
+    );
+    await writeFile(
+      path.join(storageRoot, "zenx-rooms", "storage.json"),
+      "not-json",
+      { mode: 0o600 },
+    );
+    const service = await createBundledAutomationPluginService({
+      userDataDirectory,
+      appServer: {
+        request: async () => ({}) as never,
+        onNotification: () => () => {},
+      },
+    });
+    assert.deepEqual(service.snapshot(), {
+      triggers: [],
+      history: [],
+      rooms: [],
+    });
+    assert.deepEqual(
+      JSON.parse(
+        await readFile(
+          path.join(storageRoot, "zenx-rooms", "storage.json"),
+          "utf8",
+        ),
+      ),
+      { version: 1, value: { rooms: [] } },
+    );
+  } finally {
+    await rm(userDataDirectory, { recursive: true, force: true });
+  }
+});
+
+test("projection write failure after canonical commit does not fail the mutation", async () => {
+  const userDataDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-room-projection-post-commit-"),
+  );
+  let failProjection = false;
+  const storageFileSystem = {
+    readFile,
+    mkdir,
+    writeFile,
+    rename: async (source: string, destination: string) => {
+      if (failProjection && destination.includes("zenx-rooms")) {
+        failProjection = false;
+        throw Object.assign(new Error("injected projection failure"), {
+          code: "EACCES",
+        });
+      }
+      await rename(source, destination);
+    },
+    unlink,
+  };
+  try {
+    const service = await createBundledAutomationPluginService({
+      userDataDirectory,
+      storageFileSystem,
+      appServer: {
+        request: async () => ({}) as never,
+        onNotification: () => () => {},
+      },
+    });
+    await service.startPlugin("zenx-rooms", {} as never);
+    await service.startPlugin("zenx-triggers", {} as never);
+    failProjection = true;
+    const created = await service.create({
+      kind: "timer",
+      threadId: "target",
+      label: "canonical",
+      prompt: "committed",
+      runAt: Date.now() + 60_000,
+    });
+    assert.equal(created.label, "canonical");
+    const canonical = JSON.parse(
+      await readFile(
+        path.join(
+          userDataDirectory,
+          "plugin-data",
+          "zenx-triggers",
+          "storage.json",
+        ),
+        "utf8",
+      ),
+    ) as { value: { triggers: Array<{ id: string }> } };
+    assert.equal(canonical.value.triggers[0]?.id, created.id);
+    await service.stopPlugin("zenx-triggers");
+    await service.stopPlugin("zenx-rooms");
+  } finally {
+    await rm(userDataDirectory, { recursive: true, force: true });
+  }
+});
+
+test("future-version Room projection is preserved and does not block startup", async () => {
+  const userDataDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-room-projection-future-"),
+  );
+  const projection = JSON.stringify({ version: 2, value: { rooms: [] } });
+  try {
+    const storageRoot = path.join(userDataDirectory, "plugin-data");
+    await mkdir(path.join(storageRoot, "zenx-rooms"), { recursive: true });
+    await writeFile(
+      path.join(storageRoot, "zenx-rooms", "storage.json"),
+      projection,
+      { mode: 0o600 },
+    );
+    await createBundledAutomationPluginService({
+      userDataDirectory,
+      appServer: {
+        request: async () => ({}) as never,
+        onNotification: () => () => {},
+      },
+    });
+    assert.equal(
+      await readFile(
+        path.join(storageRoot, "zenx-rooms", "storage.json"),
+        "utf8",
+      ),
+      projection,
+    );
   } finally {
     await rm(userDataDirectory, { recursive: true, force: true });
   }
@@ -541,6 +784,69 @@ test("overlapping enabled Trigger runtime generations keep durable wakeup admiss
   } finally {
     await service.stopPlugin("zenx-triggers");
     await service.stopPlugin("zenx-rooms");
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a failed shared-container rename leaves both namespaces at the prior snapshot after reopen", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-automation-container-fault-"),
+  );
+  let failNextRename = false;
+  const storageFileSystem = {
+    readFile,
+    mkdir,
+    writeFile,
+    rename: async (source: string, destination: string) => {
+      if (failNextRename) {
+        failNextRename = false;
+        throw Object.assign(
+          new Error("injected second namespace write failure"),
+          {
+            code: "EACCES",
+          },
+        );
+      }
+      await rename(source, destination);
+    },
+    unlink,
+  };
+  const appServer = {
+    request: async () => ({}) as never,
+    onNotification: () => () => {},
+    enqueue: async () => {},
+  };
+  try {
+    const service = await createBundledAutomationPluginService({
+      userDataDirectory: directory,
+      appServer,
+      storageFileSystem,
+    });
+    await service.startPlugin("zenx-triggers", {} as never);
+    failNextRename = true;
+    await assert.rejects(
+      service.create({
+        kind: "timer",
+        threadId: "target",
+        label: "faulted",
+        prompt: "must not commit",
+        runAt: Date.now() + 60_000,
+      }),
+      /injected second namespace write failure/u,
+    );
+    const reopened = await createBundledAutomationPluginService({
+      userDataDirectory: directory,
+      appServer,
+    });
+    await reopened.startPlugin("zenx-triggers", {} as never);
+    assert.deepEqual(reopened.snapshot(), {
+      triggers: [],
+      history: [],
+      rooms: [],
+    });
+    await reopened.stopPlugin("zenx-triggers");
+    await service.stopPlugin("zenx-triggers").catch(() => {});
+  } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });

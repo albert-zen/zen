@@ -560,9 +560,10 @@ export function ThreadView({
           <div
             className={`queued-messages${onCancelQueued === undefined ? "" : " cancellable"}`}
             aria-label="Message queue"
-            aria-live="polite"
           >
-            <strong>{thread!.queuedMessages!.length} queued</strong>
+            <strong role="status" aria-live="polite" aria-atomic="true">
+              {thread!.queuedMessages!.length} queued
+            </strong>
             <ol>
               {thread!.queuedMessages!.map((message, index) => (
                 <li key={message.id}>
@@ -1427,9 +1428,12 @@ export function ContextUsageIndicator({
   const popoverId = useId();
   const [popoverPosition, setPopoverPosition] = useState({
     left: 0,
+    top: 0,
     width: 286,
+    placement: "above" as "above" | "below",
   });
   const rootRef = useRef<HTMLDivElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
     const closeOutside = (event: MouseEvent) => {
@@ -1452,11 +1456,26 @@ export function ContextUsageIndicator({
           bounds?.width ? bounds.right : window.innerWidth,
         ) - 8;
       const width = Math.min(286, Math.max(0, right - left));
+      // Keep the fixed popover inside the viewport even when the indicator is
+      // near the top edge. The CSS transform places an above popover entirely
+      // above its anchor, so choose below before clamping rather than allowing
+      // the panel to be clipped out of view.
+      const estimatedHeight =
+        popoverRef.current?.getBoundingClientRect().height ?? 190;
+      const canPlaceAbove = anchor.top - 8 >= estimatedHeight;
       setPopoverPosition({
-        left:
-          Math.max(left, Math.min(anchor.right - width, right - width)) -
-          anchor.left,
+        left: Math.max(left, Math.min(anchor.right - width, right - width)),
+        top: canPlaceAbove
+          ? anchor.top - 8
+          : Math.max(
+              8,
+              Math.min(
+                window.innerHeight - estimatedHeight - 8,
+                anchor.bottom + 8,
+              ),
+            ),
         width,
+        placement: canPlaceAbove ? "above" : "below",
       });
     };
     place();
@@ -1467,6 +1486,7 @@ export function ContextUsageIndicator({
         : new ResizeObserver(place);
     observer?.observe(root);
     if (boundary) observer?.observe(boundary);
+    if (popoverRef.current) observer?.observe(popoverRef.current);
     return () => {
       window.removeEventListener("resize", place);
       observer?.disconnect();
@@ -1524,7 +1544,9 @@ export function ContextUsageIndicator({
       {open ? (
         <div
           className="context-usage-popover"
+          ref={popoverRef}
           style={popoverPosition}
+          data-placement={popoverPosition.placement}
           id={popoverId}
           role="dialog"
           aria-label="Context details"
@@ -1722,76 +1744,95 @@ function TraceSequence({
               aria-label="Execution details"
               tabIndex={0}
             >
-              {groupReasoningWithoutDetailsRows(
-                traceDisplayRows(node.items),
-              ).map((row) => {
-                if ("kind" in row) {
+              {groupReasoningWithoutDetailsRows(traceDisplayRows(node.items))
+                // Models that do not expose reasoning should leave no
+                // completed "Think" heading behind in the transcript.
+                .filter((row) => {
+                  if ("kind" in row) {
+                    return node.items.some(
+                      (item) =>
+                        row.ids.includes(item.id) &&
+                        item.type === "reasoning" &&
+                        item.status === "inProgress",
+                    );
+                  }
+                  const item = row.item;
+                  return !(
+                    item.type === "reasoning" &&
+                    item.status !== "inProgress" &&
+                    item.status !== "interrupted" &&
+                    item.summary.every((part) => part.trim().length === 0) &&
+                    item.content.every((part) => part.trim().length === 0)
+                  );
+                })
+                .map((row) => {
+                  if ("kind" in row) {
+                    return (
+                      <div
+                        className="trace-item trace-reasoning-without-details"
+                        key={row.ids[0]}
+                      >
+                        <div className="trace-item-static">
+                          <Icon name="reasoning" size={14} />
+                          <strong>Think</strong>
+                          <span>
+                            {row.ids.length} reasoning items · no public details
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  }
+                  const { item, nested, parentToolName } = row;
+                  const open = openItems.has(item.id);
+                  const expandable = traceItemExpandable(item);
                   return (
                     <div
-                      className="trace-item trace-reasoning-without-details"
-                      key={row.ids[0]}
+                      className={`trace-item${nested ? " trace-item-nested" : ""}`}
+                      aria-label={
+                        nested
+                          ? `Nested tool invoked by ${parentToolName ?? "parent code"}`
+                          : undefined
+                      }
+                      key={item.id}
                     >
-                      <div className="trace-item-static">
-                        <Icon name="reasoning" size={14} />
-                        <strong>Think</strong>
-                        <span>
-                          {row.ids.length} reasoning items · no public details
-                        </span>
-                      </div>
+                      {expandable ? (
+                        <button
+                          className="trace-item-toggle"
+                          type="button"
+                          aria-expanded={open}
+                          onClick={() => {
+                            setVisitedItems((current) =>
+                              new Set(current).add(item.id),
+                            );
+                            setOpenItems((current) => {
+                              const next = new Set(current);
+                              if (next.has(item.id)) next.delete(item.id);
+                              else next.add(item.id);
+                              return next;
+                            });
+                          }}
+                        >
+                          <TraceItemHeader item={item} expandable />
+                        </button>
+                      ) : (
+                        <div className="trace-item-static">
+                          <TraceItemHeader item={item} expandable={false} />
+                        </div>
+                      )}
+                      {expandable ? (
+                        <TraceReveal open={open}>
+                          {visitedItems.has(item.id) ? (
+                            <TraceDetail
+                              item={item}
+                              pluginSnapshot={pluginSnapshot}
+                              pluginUiRegistry={pluginUiRegistry}
+                            />
+                          ) : null}
+                        </TraceReveal>
+                      ) : null}
                     </div>
                   );
-                }
-                const { item, nested, parentToolName } = row;
-                const open = openItems.has(item.id);
-                const expandable = traceItemExpandable(item);
-                return (
-                  <div
-                    className={`trace-item${nested ? " trace-item-nested" : ""}`}
-                    aria-label={
-                      nested
-                        ? `Nested tool invoked by ${parentToolName ?? "parent code"}`
-                        : undefined
-                    }
-                    key={item.id}
-                  >
-                    {expandable ? (
-                      <button
-                        className="trace-item-toggle"
-                        type="button"
-                        aria-expanded={open}
-                        onClick={() => {
-                          setVisitedItems((current) =>
-                            new Set(current).add(item.id),
-                          );
-                          setOpenItems((current) => {
-                            const next = new Set(current);
-                            if (next.has(item.id)) next.delete(item.id);
-                            else next.add(item.id);
-                            return next;
-                          });
-                        }}
-                      >
-                        <TraceItemHeader item={item} expandable />
-                      </button>
-                    ) : (
-                      <div className="trace-item-static">
-                        <TraceItemHeader item={item} expandable={false} />
-                      </div>
-                    )}
-                    {expandable ? (
-                      <TraceReveal open={open}>
-                        {visitedItems.has(item.id) ? (
-                          <TraceDetail
-                            item={item}
-                            pluginSnapshot={pluginSnapshot}
-                            pluginUiRegistry={pluginUiRegistry}
-                          />
-                        ) : null}
-                      </TraceReveal>
-                    ) : null}
-                  </div>
-                );
-              })}
+                })}
             </div>
           ) : null}
         </TraceReveal>

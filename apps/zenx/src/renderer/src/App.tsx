@@ -2117,6 +2117,11 @@ export function App() {
     });
   };
 
+  const openSidebar = () => {
+    setSidebarCollapsed(false);
+    setSidebarOpen(true);
+  };
+
   const forkThread = async (sourceThreadId: string) => {
     const result = await window.zenx.protocol.request("thread/fork", {
       sourceThreadId,
@@ -2226,7 +2231,7 @@ export function App() {
         newThreadDraft === null &&
         selectedSummary !== null ? (
           <ConversationTitleBar
-            onOpenSidebar={() => setSidebarOpen(true)}
+            onOpenSidebar={openSidebar}
             browserEnabled={true}
             browserOpen={browserPanels[selectedSummary.threadId] === true}
             onToggleBrowser={() =>
@@ -2248,13 +2253,13 @@ export function App() {
           />
         ) : page === "settings" ? (
           <PageTitleBar
-            onOpenSidebar={() => setSidebarOpen(true)}
+            onOpenSidebar={openSidebar}
             subtitle="Account, appearance, models, plugins, and local host"
             title="Settings"
           />
         ) : genericPluginTarget !== undefined ? (
           <PageTitleBar
-            onOpenSidebar={() => setSidebarOpen(true)}
+            onOpenSidebar={openSidebar}
             subtitle={`Provided by ${genericPluginTarget.pluginId}`}
             title={genericPluginTarget.title}
           />
@@ -2365,7 +2370,7 @@ export function App() {
       draftRecoveryNotice !== null ? (
         <div className="app-notice" role="alert">
           <span>
-            {projectError ?? requestError ?? draftRecoveryNotice?.message}
+            {draftRecoveryNotice?.message ?? projectError ?? requestError}
           </span>
           {draftRecoveryNotice !== null ? (
             <button
@@ -2390,9 +2395,12 @@ export function App() {
           <button
             type="button"
             onClick={() => {
+              if (draftRecoveryNotice !== null) {
+                discardRecoverableDraft();
+                return;
+              }
               setProjectError(null);
               setRequestError(null);
-              discardRecoverableDraft();
             }}
           >
             Dismiss
@@ -2409,7 +2417,7 @@ export function App() {
           onRetryArchived={() => void loadThreadSummaries(true)}
           onTabChange={setSettingsTab}
           onUnarchive={performThreadLifecycle}
-          onOpenSidebar={() => setSidebarOpen(true)}
+          onOpenSidebar={openSidebar}
           tab={settingsTab}
           pluginSnapshot={pluginSnapshot}
           browserSettingsFocusRequest={browserSettingsFocusRequest}
@@ -2562,7 +2570,7 @@ export function App() {
             permissionError={permissionError}
             switchingPermission={switchingPermission}
             onReasoningChange={(effort) => void changeReasoning(effort)}
-            onOpenSidebar={() => setSidebarOpen(true)}
+            onOpenSidebar={openSidebar}
             onRespondToApproval={respondToApproval}
             onCompact={compactFromContext}
             onDismissCompaction={(threadId) =>

@@ -651,6 +651,10 @@ export class CodexConnection {
           ...(requestedSelectionInput === undefined
             ? {}
             : { selection: requestedSelectionInput }),
+          requirePermissions: {
+            sandbox: snapshot.sandbox,
+            approvalPolicy: snapshot.approvalPolicy,
+          },
           requestApproval: async (approval) =>
             await this.requestApproval(approval),
         });

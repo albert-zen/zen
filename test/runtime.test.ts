@@ -2559,6 +2559,26 @@ test("soft steer stays in one Turn and forces a new sample after streamed output
   });
   await firstSampleEntered.promise;
 
+  await server.queueMessage(thread.id, "queued request", "queued-client-id");
+  await assert.rejects(
+    server.steerTurn(thread.id, active.id, "late steer", {
+      clientId: "queued-client-id",
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "idempotency_conflict",
+  );
+  const queued = (await server.readThread(thread.id)).items.find(
+    (item) =>
+      item.type === "user_message_queued" &&
+      item.clientId === "queued-client-id",
+  );
+  assert(queued?.type === "user_message_queued");
+  await server.cancelQueuedMessages(thread.id, [
+    { queuedItemId: queued.id, clientId: queued.clientId },
+  ]);
+
   const steered = await server.steerTurn(
     thread.id,
     active.id,

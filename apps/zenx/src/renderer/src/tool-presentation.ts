@@ -20,13 +20,23 @@ export function commandStatus(
     if (data.status === "cancellation_unconfirmed")
       return "Cancellation unconfirmed";
     if (data.status === "failed") return "Failed";
-    if (data.status === "completed") return "Done";
+    if (data.status === "completed")
+      return item.toolName === "wait"
+        ? "Waited"
+        : item.toolName === "shell"
+          ? "Ran command"
+          : "Completed";
     if (data.status === "timed_out") return "Timed out";
     if (data.status === "cancelled") return "Cancelled";
   }
+  if (item.status === "completed")
+    return item.toolName === "wait"
+      ? "Waited"
+      : item.toolName === "shell"
+        ? "Ran command"
+        : "Completed";
   return {
     inProgress: "Started",
-    completed: "Done",
     failed: "Failed",
     declined: "Declined",
   }[item.status];
@@ -66,7 +76,7 @@ export function toolPresentation(name: string): {
   if (key === "shell")
     return { category: "Shell", icon: "terminal", action: "Run command" };
   if (key === "wait")
-    return { category: "Wait", icon: "terminal", action: "Wait for task" };
+    return { category: "Wait", icon: "trigger", action: "Wait for task" };
   const action = actions[key];
   if (action)
     return {

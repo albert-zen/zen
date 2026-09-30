@@ -20,7 +20,11 @@ import type {
   ProviderGeneratedContextCompactionItem,
   ThreadMetadataItem,
 } from "../src/item.js";
-import { InMemoryThreadJournal, type ThreadJournal } from "../src/journal.js";
+import {
+  InMemoryThreadJournal,
+  ThreadJournalAppendOutcomeUnknownError,
+  type ThreadJournal,
+} from "../src/journal.js";
 import { StaticModelCatalog, type ModelCatalog } from "../src/model-catalog.js";
 import { estimateModelMessageInputTokens } from "../src/model-usage.js";
 import {
@@ -1285,7 +1289,7 @@ test("agentic compaction abort and journal failure never admit another sample", 
       snapshot.items.some((item) => item.type === "context_compaction"),
       false,
     );
-    assert.equal(snapshot.turns[0]?.status, "interrupted");
+    assert.equal(snapshot.turns.at(-1)?.status, "interrupted");
   });
 
   await test("journal append outcome failure", async () => {
@@ -2366,7 +2370,10 @@ test("automatic compaction failure does not fail a completed Turn", async (t) =>
     persistenceThread.id,
     "persist",
   );
-  await persistenceHandle.done;
+  await assert.rejects(
+    persistenceHandle.done,
+    ThreadJournalAppendOutcomeUnknownError,
+  );
   assert.equal(persistenceSummaryCalls, 1);
   assert.equal(
     (await persistence.readThread(persistenceThread.id)).turns[0]?.status,
@@ -2378,7 +2385,7 @@ test("automatic compaction failure does not fail a completed Turn", async (t) =>
     ),
     false,
   );
-  assert.equal(warnings.length, 3);
+  assert.equal(warnings.length, 2);
   assert(
     warnings.every((warning) =>
       warning.startsWith("Could not automatically compact completed Turn"),
@@ -2821,9 +2828,9 @@ test("generation, abort, invalid summary, and journal failures append no compact
     await persistence.startTurn(persistenceThread.id, "one")
   ).done;
   const beforePersistence = await backing.read(persistenceThread.id);
-  await expectAppServerCode(
+  await assert.rejects(
     persistence.compactThread(persistenceThread.id),
-    "compaction_persistence_failed",
+    ThreadJournalAppendOutcomeUnknownError,
   );
   assert.equal(persistenceSummaryCalls, 1);
   assert.deepEqual(await backing.read(persistenceThread.id), beforePersistence);
@@ -2943,6 +2950,481 @@ test("freezes the admitted Provider selection while a settings update waits", as
   assert.equal(compacted.modelId, "recording-model");
   assert.equal(compacted.providerProfileId, "recording");
   assert.equal(compacted.reasoningEffort, "medium");
+});
+
+test("agentic threshold gives one host notice before the same Turn continues", async () => {
+  const requests: ModelRequest[] = [];
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      if (request.tools.length === 0) {
+        yield { type: "text_delta", delta: "summary" };
+        yield { type: "usage", inputTokens: 5, outputTokens: 1 };
+        return;
+      }
+      samples += 1;
+      if (samples === 1) {
+        yield { type: "text_delta", delta: "seed" };
+        yield { type: "usage", inputTokens: 5, outputTokens: 1 };
+        return;
+      }
+      if (samples === 2) {
+        yield {
+          type: "tool_call",
+          callId: "notice-tool",
+          name: "shell",
+          arguments: { command: "printf ok" },
+        };
+        yield { type: "usage", inputTokens: 850, outputTokens: 1 };
+        return;
+      }
+      assert(
+        requests
+          .at(-1)
+          ?.messages.some(
+            (message) =>
+              message.role === "user" &&
+              "text" in message &&
+              message.text.startsWith("[Host context notice]"),
+          ),
+      );
+      yield { type: "text_delta", delta: "continued" };
+      yield { type: "usage", inputTokens: 10, outputTokens: 1 };
+    },
+  };
+  const journal = new InMemoryThreadJournal();
+  const server = createServer({
+    journal,
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 1_000 },
+    ]),
+    contextCompaction: { agenticEnabled: true },
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "seed request")
+  ).done;
+  await (
+    await server.startTurn(thread.id, "active request")
+  ).done;
+
+  assert.equal(
+    requests.filter((request) =>
+      request.messages.some(
+        (message) =>
+          message.role === "user" &&
+          "text" in message &&
+          message.text.startsWith("[Host context notice]"),
+      ),
+    ).length,
+    1,
+  );
+  assert.equal(
+    (await server.readThread(thread.id)).items.filter(
+      (item) => item.type === "turn_started",
+    ).length,
+    2,
+  );
+});
+
+test("active Turn hard budget fallback compacts before the next model sample", async () => {
+  const requests: ModelRequest[] = [];
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      if (request.tools.length === 0) {
+        yield { type: "text_delta", delta: "summary" };
+        yield { type: "usage", inputTokens: 5, outputTokens: 1 };
+        return;
+      }
+      samples += 1;
+      if (samples === 1) {
+        yield { type: "text_delta", delta: "seed" };
+        yield { type: "usage", inputTokens: 5, outputTokens: 1 };
+        return;
+      }
+      if (samples === 2) {
+        yield {
+          type: "tool_call",
+          callId: "fallback-tool",
+          name: "shell",
+          arguments: { command: "printf ok" },
+        };
+        yield { type: "usage", inputTokens: 960, outputTokens: 1 };
+        return;
+      }
+      assert(
+        requests
+          .at(-1)
+          ?.messages.some(
+            (message) =>
+              message.role === "user" &&
+              "text" in message &&
+              message.text.startsWith("[Zen compacted context]"),
+          ),
+      );
+      yield { type: "text_delta", delta: "continued after host compaction" };
+      yield { type: "usage", inputTokens: 10, outputTokens: 1 };
+    },
+  };
+  const journal = new InMemoryThreadJournal();
+  const server = createServer({
+    journal,
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 1_000 },
+    ]),
+    contextCompaction: { agenticEnabled: true },
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "seed request")
+  ).done;
+  await (
+    await server.startTurn(thread.id, "active request")
+  ).done;
+
+  const snapshot = await server.readThread(thread.id);
+  assert(
+    snapshot.items.some(
+      (item) =>
+        item.type === "context_compaction" && item.initiator === "automatic",
+    ),
+  );
+  assert.equal(
+    snapshot.items.filter(
+      (item) =>
+        item.type === "context_compaction" && item.initiator === "automatic",
+    ).length,
+    1,
+  );
+  assert.equal(
+    (await server.readThread(thread.id)).items.filter(
+      (item) => item.type === "turn_started",
+    ).length,
+    2,
+  );
+});
+
+test("agentic-off active compaction runs at the trigger threshold", async () => {
+  let normalSamples = 0;
+  let summaryCalls = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (isSummaryRequest(request)) {
+        summaryCalls += 1;
+        yield { type: "text_delta", delta: "active summary" };
+        return;
+      }
+      normalSamples += 1;
+      if (normalSamples === 1) {
+        yield { type: "text_delta", delta: "seed" };
+        return;
+      }
+      if (normalSamples === 2) {
+        yield {
+          type: "tool_call",
+          callId: "trigger-tool",
+          name: "shell",
+          arguments: { command: "printf ok" },
+        };
+        // 810 is above the 80% trigger and below the old trigger+15 fallback.
+        yield { type: "usage", inputTokens: 810, outputTokens: 1 };
+        return;
+      }
+      assert(
+        request.messages.some(
+          (message) =>
+            message.role === "user" &&
+            "text" in message &&
+            message.text.startsWith("[Zen compacted context]"),
+        ),
+      );
+      yield { type: "text_delta", delta: "after trigger" };
+    },
+  };
+  const server = createServer({
+    journal: new InMemoryThreadJournal(),
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 1_000 },
+    ]),
+    contextCompaction: { agenticEnabled: false },
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "seed request")
+  ).done;
+  await (
+    await server.startTurn(thread.id, "active request")
+  ).done;
+  assert.equal(summaryCalls, 1);
+});
+
+test("active compaction estimates the complete post-tool projection", async () => {
+  const largeOutput = "x".repeat(4_000);
+  let normalSamples = 0;
+  let summaryCalls = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (isSummaryRequest(request)) {
+        summaryCalls += 1;
+        yield { type: "text_delta", delta: "post-tool summary" };
+        return;
+      }
+      normalSamples += 1;
+      if (normalSamples === 1) {
+        yield { type: "text_delta", delta: "seed" };
+        return;
+      }
+      if (normalSamples === 2) {
+        yield {
+          type: "tool_call",
+          callId: "large-tool",
+          name: "shell",
+          arguments: { command: `printf ${largeOutput}` },
+        };
+        // Deliberately omit a useful usage value. The canonical tool result
+        // itself must still trigger the pre-sample pressure check.
+        yield { type: "usage", inputTokens: 1, outputTokens: 1 };
+        return;
+      }
+      yield { type: "text_delta", delta: "after post-tool compaction" };
+    },
+  };
+  const server = createServer({
+    journal: new InMemoryThreadJournal(),
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 1_000 },
+    ]),
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "seed request")
+  ).done;
+  await (
+    await server.startTurn(thread.id, "active request")
+  ).done;
+  assert.equal(summaryCalls, 1);
+});
+
+test("an oversized first active Turn fails closed without a completed boundary", async () => {
+  const requests: ModelRequest[] = [];
+  let normalSamples = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      normalSamples += 1;
+      yield {
+        type: "tool_call",
+        callId: "first-large-tool",
+        name: "shell",
+        arguments: { command: `printf ${"x".repeat(2_000)}` },
+      };
+      yield { type: "usage", inputTokens: 1, outputTokens: 1 };
+    },
+  };
+  const journal = new InMemoryThreadJournal();
+  const server = createServer({
+    journal,
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 100 },
+    ]),
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "first request")
+  ).done;
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(normalSamples, 1);
+  assert.equal(requests.length, 1);
+  assert.equal(
+    snapshot.items.some((item) => item.type === "context_compaction"),
+    false,
+  );
+  assert.equal(snapshot.turns[0]?.status, "failed");
+});
+
+test("active host compaction preserves same-Turn late steering", async () => {
+  const summaryStarted = deferred<void>();
+  const releaseSummary = deferred<void>();
+  let activeTurnId = "";
+  let normalSamples = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (isSummaryRequest(request)) {
+        summaryStarted.resolve();
+        await releaseSummary.promise;
+        yield { type: "text_delta", delta: "steered summary" };
+        return;
+      }
+      normalSamples += 1;
+      if (normalSamples === 1) {
+        yield { type: "text_delta", delta: "seed" };
+        return;
+      }
+      if (normalSamples === 2) {
+        yield {
+          type: "tool_call",
+          callId: "steer-tool",
+          name: "shell",
+          arguments: { command: "printf ok" },
+        };
+        yield { type: "usage", inputTokens: 810, outputTokens: 1 };
+        return;
+      }
+      assert(
+        request.messages.some(
+          (message) =>
+            message.role === "user" &&
+            "text" in message &&
+            message.text.includes("late steer"),
+        ),
+      );
+      yield { type: "text_delta", delta: "finished" };
+    },
+  };
+  const server = createServer({
+    journal: new InMemoryThreadJournal(),
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 1_000 },
+    ]),
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "seed request")
+  ).done;
+  const active = await server.startTurn(thread.id, "active request");
+  activeTurnId = active.id;
+  await summaryStarted.promise;
+  const steer = server.steerTurn(thread.id, activeTurnId, "late steer", {
+    clientId: "late-steer",
+  });
+  releaseSummary.resolve();
+  await steer;
+  await active.done;
+});
+
+test("active compaction preserves unknown journal outcomes and stop handling", async () => {
+  await test("unknown compaction append", async () => {
+    const backing = new InMemoryThreadJournal();
+    const journal: ThreadJournal = {
+      append: async (item) => {
+        if (item.type === "context_compaction")
+          throw new Error("active compaction journal unavailable");
+        await backing.append(item);
+      },
+      listThreadIds: async () => await backing.listThreadIds(),
+      read: async (threadId) => await backing.read(threadId),
+    };
+    let normalSamples = 0;
+    const model: ModelAdapter = {
+      provider: "recording",
+      async *stream(request): AsyncIterable<ModelEvent> {
+        if (isSummaryRequest(request)) {
+          yield { type: "text_delta", delta: "summary" };
+          return;
+        }
+        normalSamples += 1;
+        if (normalSamples === 1) {
+          yield { type: "text_delta", delta: "seed" };
+          return;
+        }
+        yield {
+          type: "tool_call",
+          callId: "unknown-active",
+          name: "shell",
+          arguments: { command: "printf ok" },
+        };
+        yield { type: "usage", inputTokens: 810, outputTokens: 1 };
+      },
+    };
+    const server = createServer({
+      journal,
+      model,
+      modelCatalog: new StaticModelCatalog([
+        { id: "recording-model", isDefault: true, contextWindow: 1_000 },
+      ]),
+    });
+    const thread = await server.startThread();
+    await (
+      await server.startTurn(thread.id, "seed request")
+    ).done;
+    const active = await server.startTurn(thread.id, "active request");
+    await assert.rejects(active.done, /active compaction journal unavailable/u);
+    assert.equal(normalSamples, 2);
+    assert.equal(
+      (await backing.read(thread.id)).some(
+        (item) => item.type === "context_compaction",
+      ),
+      false,
+    );
+  });
+
+  await test("stop during active summary", async () => {
+    const summaryStarted = deferred<void>();
+    let normalSamples = 0;
+    const model: ModelAdapter = {
+      provider: "recording",
+      async *stream(request): AsyncIterable<ModelEvent> {
+        if (isSummaryRequest(request)) {
+          summaryStarted.resolve();
+          await new Promise<void>((resolve) => {
+            request.signal.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
+          });
+          return;
+        }
+        normalSamples += 1;
+        if (normalSamples === 1) {
+          yield { type: "text_delta", delta: "seed" };
+          return;
+        }
+        yield { type: "text_delta", delta: "seed" };
+        yield {
+          type: "tool_call",
+          callId: "stop-active",
+          name: "shell",
+          arguments: { command: "printf ok" },
+        };
+        yield { type: "usage", inputTokens: 810, outputTokens: 1 };
+      },
+    };
+    const server = createServer({
+      journal: new InMemoryThreadJournal(),
+      model,
+      modelCatalog: new StaticModelCatalog([
+        { id: "recording-model", isDefault: true, contextWindow: 1_000 },
+      ]),
+    });
+    const thread = await server.startThread();
+    await (
+      await server.startTurn(thread.id, "seed request")
+    ).done;
+    const active = await server.startTurn(thread.id, "active request");
+    await summaryStarted.promise;
+    await server.interruptTurn(thread.id, active.id);
+    await active.done;
+    const snapshot = await server.readThread(thread.id);
+    assert.equal(snapshot.turns.at(-1)?.status, "interrupted");
+    assert.equal(
+      snapshot.items.some((item) => item.type === "context_compaction"),
+      false,
+    );
+  });
 });
 
 function createServer(options: {

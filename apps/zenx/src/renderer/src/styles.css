@@ -2367,10 +2367,10 @@ a:focus-visible {
     inset 0 1px var(--color-surface-wash);
 }
 .composer:focus-within {
-  border-color: var(--color-focus-ring);
+  border-color: var(--color-border-control);
   box-shadow:
     0 18px 52px var(--color-shadow-low),
-    0 0 0 1px var(--color-focus-ring);
+    0 0 0 1px var(--color-border-control);
 }
 
 .composer > textarea {
@@ -3086,7 +3086,7 @@ a:focus-visible {
 }
 .field textarea {
   min-height: 86px;
-  resize: vertical;
+  resize: none;
   padding: 10px 11px;
   line-height: 1.55;
 }
@@ -5131,6 +5131,8 @@ a:focus-visible {
     /* The drawer uses the same opaque Sidebar surface. */
     background: var(--color-surface-sidebar);
     transform: translateX(-102%);
+    visibility: hidden;
+    pointer-events: none;
     box-shadow: 18px 0 60px var(--shadow-color-strong);
     transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
   }
@@ -5586,6 +5588,27 @@ a:focus-visible {
   color: var(--text-secondary);
 }
 
+.app-notice span {
+  min-width: 0;
+  flex: 1 1 16ch;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 420px) {
+  .app-notice {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .app-notice span {
+    flex-basis: 100%;
+  }
+
+  .app-notice button {
+    min-height: 44px;
+  }
+}
+
 .queued-messages {
   margin: 8px 16px;
   padding: 12px 16px;
@@ -5740,7 +5763,7 @@ a:focus-visible {
 }
 .compaction-settings textarea {
   min-height: 180px;
-  resize: vertical;
+  resize: none;
 }
 @media (max-width: 640px) {
   .compaction-field-grid {
@@ -7047,7 +7070,7 @@ a:focus-visible {
   width: 100%;
   min-height: 320px;
   height: 100%;
-  resize: vertical;
+  resize: none;
   padding: 12px;
   border: 1px solid var(--color-border-subtle);
   border-radius: 6px;
@@ -7232,10 +7255,13 @@ a:focus-visible {
   background: var(--color-surface-elevated);
 }
 .context-usage-popover {
-  position: absolute;
+  position: fixed;
   z-index: 55;
-  bottom: calc(100% + 8px);
+  top: 0;
+  transform: translateY(-100%);
   width: min(286px, calc(100vw - 32px));
+  max-height: min(360px, calc(100vh - 16px));
+  overflow: auto;
   display: grid;
   gap: 6px;
   padding: 12px;
@@ -7245,6 +7271,9 @@ a:focus-visible {
   box-shadow: 0 8px 24px var(--shadow-color);
   color: var(--color-text-primary);
   text-align: left;
+}
+.context-usage-popover[data-placement="below"] {
+  transform: none;
 }
 .context-usage-heading {
   display: flex;
@@ -8715,7 +8744,7 @@ a:focus-visible {
   border-radius: 8px;
 }
 .app-shell:has(.auxiliary-panel[data-open="true"]) #thread-browser-toggle {
-  display: none;
+  display: inline-grid;
 }
 :root[data-platform="win32"] .thread-panel-toggle {
   right: calc(var(--windows-control-region) + 4px);
@@ -8895,6 +8924,28 @@ a:focus-visible {
   font-size: 11px;
   color: var(--text-3);
 }
+.rooms-chat-feed .room-role {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.rooms-chat-feed .room-role-human {
+  background: var(--accent-soft);
+  color: var(--text-accent);
+}
+.rooms-chat-feed .room-role-agent {
+  background: var(--status-good-soft);
+  color: var(--good);
+}
+.rooms-chat-feed .room-role-system {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
 .rooms-chat-compose {
   flex: none;
   display: grid;
@@ -8907,9 +8958,9 @@ a:focus-visible {
 .rooms-chat-compose textarea {
   grid-column: 1;
   min-width: 0;
-  min-height: 70px;
-  max-height: 25vh;
-  resize: vertical;
+  min-height: 48px;
+  max-height: 120px;
+  resize: none;
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -9085,6 +9136,20 @@ a:focus-visible {
 .rooms-chat-status button {
   min-height: 24px;
   padding: 3px 5px;
+}
+.room-status-history {
+  margin-top: 4px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 4px;
+}
+.room-status-history summary {
+  cursor: pointer;
+  color: var(--text-3);
+  font-size: 11px;
+}
+.room-status-history[open] {
+  display: grid;
+  gap: 4px;
 }
 @media (max-width: 420px) {
   .rooms-chat-status {
