@@ -221,3 +221,21 @@ test("failed notice persists through an unrelated draft edit until dismiss or ex
   assert.equal(state.compaction?.status, "succeeded");
   assert.equal(state.draft.text, "Unrelated message");
 });
+
+test("slash command disables original reference only when explicitly requested", async () => {
+  let state = editComposer(emptyComposerState(), "/compact --no-reference");
+  const flags: boolean[] = [];
+  await handleCompactCommand({
+    threadId: "private-thread",
+    active: false,
+    read: () => state,
+    update: (change) => {
+      state = change(state);
+    },
+    compact: async (_threadId, includeOriginalReference) => {
+      flags.push(includeOriginalReference);
+    },
+  });
+  assert.deepEqual(flags, [false]);
+  assert.equal(state.draft.text, "");
+});

@@ -3,9 +3,10 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { WebSocketServer, type WebSocket } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 
 import { createHostedAppServer } from "../../../apps/cli/src/host.js";
+import type { CanonicalItem } from "../../../src/item.js";
 import { InMemoryThreadJournal } from "../../../src/journal.js";
 import { serveCodexWebSocket } from "../../../src/protocol/codex/websocket.js";
 import {
@@ -743,15 +744,120 @@ test("typed manual compaction appends one reset with refreshed AGENTS rules and 
     ).done;
     const before = await appServer.readThread(thread.id);
     await writeFile(path.join(directory, "AGENTS.md"), "LATEST_RULES");
+    const userId = before.items.find(
+      (item) => item.type === "user_message",
+    )?.id;
+    assert(userId !== undefined);
     const result = await client.request("thread/compact", {
       threadId: thread.id,
+      retention: { mode: "selected-items", itemIds: [userId, userId] },
     });
     const after = await appServer.readThread(thread.id);
     const compaction = after.items.find(
       (item) => item.id === result.compactionItemId,
     );
     assert(compaction?.type === "context_compaction");
+    assert.deepEqual(compaction.retainedItemIds, [userId]);
     assert.equal(compaction.workspaceInstructions?.[0]?.text, "LATEST_RULES");
+    assert.equal(compaction.includeOriginalReference, true);
+    const original = await client.request("thread/original/read", {
+      threadId: thread.id,
+      throughItemId: compaction.coveredThroughItemId,
+      limit: 1,
+    });
+    assert.equal(original.items.length, 1);
+    assert.equal(original.items[0]?.type, "agentMessage");
+    assert(original.nextBeforeItemId !== null);
+    const earlier = await client.request("thread/original/read", {
+      threadId: thread.id,
+      throughItemId: compaction.coveredThroughItemId,
+      beforeItemId: original.nextBeforeItemId,
+      limit: 50,
+    });
+    assert(earlier.items.some((item) => item.type === "userMessage"));
+    for (const beforeItemId of ["not-a-canonical-item", compaction.id]) {
+      await assert.rejects(
+        client.request("thread/original/read", {
+          threadId: thread.id,
+          throughItemId: compaction.coveredThroughItemId,
+          beforeItemId,
+        }),
+        /cursor/u,
+      );
+    }
+    for (const limit of [0, 51]) {
+      await assert.rejects(
+        client.request("thread/original/read", {
+          threadId: thread.id,
+          throughItemId: compaction.coveredThroughItemId,
+          limit,
+        }),
+        /limit/u,
+      );
+    }
+    const { thread: fork } = await client.request("thread/fork", {
+      sourceThreadId: thread.id,
+      through: { type: "latest-complete" },
+      workspace: { type: "same-directory" },
+    });
+    const forkCompaction = (await appServer.readThread(fork.id)).items.find(
+      (item) => item.type === "context_compaction",
+    );
+    assert(forkCompaction?.type === "context_compaction");
+    assert.equal(forkCompaction.includeOriginalReference, true);
+    assert.notEqual(
+      forkCompaction.coveredThroughItemId,
+      compaction.coveredThroughItemId,
+    );
+    const forkOriginal = await client.request("thread/original/read", {
+      threadId: fork.id,
+      throughItemId: forkCompaction.coveredThroughItemId,
+      limit: 1,
+    });
+    assert.equal(forkOriginal.items.length, 1);
+    await assert.rejects(
+      client.request("thread/original/read", {
+        threadId: fork.id,
+        throughItemId: compaction.coveredThroughItemId,
+      }),
+      /not enabled/u,
+    );
+    const { thread: noRef } = await client.request("thread/start", {});
+    await (
+      await appServer.startTurn(noRef.id, "not publicly referenced")
+    ).done;
+    const noRefResult = await client.request("thread/compact", {
+      threadId: noRef.id,
+      includeOriginalReference: false,
+    });
+    const noRefItem = (await appServer.readThread(noRef.id)).items.find(
+      (item) => item.id === noRefResult.compactionItemId,
+    );
+    assert(noRefItem?.type === "context_compaction");
+    assert.equal(noRefItem.includeOriginalReference, false);
+    await assert.rejects(
+      client.request("thread/original/read", {
+        threadId: noRef.id,
+        throughItemId: compaction.coveredThroughItemId,
+      }),
+      /not enabled/u,
+    );
+    await assert.rejects(
+      client.request("thread/original/read", {
+        threadId: thread.id,
+        throughItemId: compaction.coveredThroughItemId,
+        beforeItemId: noRefItem.id,
+      }),
+      /cursor/u,
+    );
+    await assert.rejects(
+      client.request("thread/original/read", {
+        threadId: noRef.id,
+        throughItemId: noRefItem.coveredThroughItemId,
+      }),
+      /not enabled/u,
+    );
+
     assert.equal(after.turns.length, before.turns.length);
     assert.equal(
       after.items.filter((item) => item.type === "context_compaction").length,
@@ -773,6 +879,173 @@ test("typed manual compaction appends one reset with refreshed AGENTS rules and 
     client.close();
     await server.close();
     await appServer.closeHostResources();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("original read at the local bearer endpoint excludes queued, opaque and post-boundary Items; legacy flag cannot activate it", async () => {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-original-read-negative-"),
+  );
+  await promisify(execFile)("git", ["init", directory]);
+  const hostOptions = {
+    cwd: directory,
+    dataDirectory: directory,
+    model: "fake",
+    models: ["fake"],
+    approvalPolicy: "never" as const,
+    provider: { type: "fake" as const },
+    toolPresentation: "direct" as const,
+  };
+  const sourceJournal = new InMemoryThreadJournal();
+  const source = createHostedAppServer({
+    ...hostOptions,
+    journal: sourceJournal,
+  });
+  try {
+    const thread = await source.startThread();
+    await (
+      await source.startTurn(thread.id, "VISIBLE_FIRST_INPUT")
+    ).done;
+    await source.compactThread(thread.id);
+    await (
+      await source.startTurn(thread.id, "POST_BOUNDARY_SENTINEL")
+    ).done;
+    const originalItems = await sourceJournal.read(thread.id);
+    const compaction = originalItems.find(
+      (item) => item.type === "context_compaction",
+    );
+    const firstUser = originalItems.find(
+      (item) => item.type === "user_message",
+    );
+    assert(
+      compaction?.type === "context_compaction" &&
+        firstUser?.type === "user_message",
+    );
+    const seeded = structuredClone(originalItems);
+    const firstAgentIndex = seeded.findIndex(
+      (item) =>
+        item.type === "agent_message" && item.turnId === firstUser.turnId,
+    );
+    assert(firstAgentIndex >= 0);
+    seeded.splice(firstAgentIndex, 0, {
+      id: "fixture-opaque-reasoning",
+      threadId: thread.id,
+      turnId: firstUser.turnId,
+      createdAt: firstUser.createdAt,
+      type: "reasoning",
+      reasoningContent: "OPAQUE_NOT_FOR_OUTPUT",
+      contentVisibility: "opaque",
+    });
+    const completedIndex = seeded.findIndex(
+      (item) =>
+        item.type === "turn_completed" && item.turnId === firstUser.turnId,
+    );
+    assert(completedIndex >= 0);
+    seeded.splice(completedIndex, 0, {
+      id: "fixture-unaccepted-queued",
+      threadId: thread.id,
+      createdAt: firstUser.createdAt,
+      type: "user_message_queued",
+      clientId: "queued-private-client",
+      input: [{ type: "text", text: "QUEUED_NOT_FOR_OUTPUT" }],
+    });
+    const seededJournal = new InMemoryThreadJournal();
+    await seededJournal.create(seeded);
+    const seededHost = createHostedAppServer({
+      ...hostOptions,
+      journal: seededJournal,
+    });
+    const endpoint = await serveCodexWebSocket({
+      appServer: seededHost,
+      zenHome: directory,
+      listen: "ws://127.0.0.1:0",
+      bearerToken: "fixture-original-read",
+    });
+    await new Promise<void>((resolve, reject) => {
+      const unauthorized = new WebSocket(endpoint.url, {
+        headers: { authorization: "Bearer wrong" },
+      });
+      unauthorized.once("unexpected-response", (_request, response) => {
+        try {
+          assert.equal(response.statusCode, 401);
+          response.resume();
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
+      });
+      unauthorized.once("open", () =>
+        reject(new Error("Wrong bearer opened the local endpoint")),
+      );
+      unauthorized.once("error", reject);
+    });
+    const client = await ZenXProtocolClient.connect(
+      clientOptions(endpoint.url, "fixture-original-read", {
+        bearerToken: "fixture-original-read",
+      }),
+    );
+    try {
+      const original = await client.request("thread/original/read", {
+        threadId: thread.id,
+        throughItemId: compaction.coveredThroughItemId,
+        limit: 50,
+      });
+      const projected = JSON.stringify(original.items);
+      assert(projected.includes("VISIBLE_FIRST_INPUT"));
+      assert(
+        !/OPAQUE_NOT_FOR_OUTPUT|QUEUED_NOT_FOR_OUTPUT|POST_BOUNDARY_SENTINEL/u.test(
+          projected,
+        ),
+      );
+      assert(original.items.every((item) => item.type !== "reasoning"));
+      assert.equal(original.nextBeforeItemId, null);
+    } finally {
+      client.close();
+      await endpoint.close();
+      await seededHost.closeHostResources();
+    }
+
+    const legacy = seeded.map((item) => {
+      const copy: CanonicalItem = { ...item };
+      if (copy.type === "context_compaction")
+        delete copy.includeOriginalReference;
+      return copy;
+    });
+    const legacyJournal = new InMemoryThreadJournal();
+    await legacyJournal.create(legacy);
+    const legacyHost = createHostedAppServer({
+      ...hostOptions,
+      journal: legacyJournal,
+    });
+    const legacyEndpoint = await serveCodexWebSocket({
+      appServer: legacyHost,
+      zenHome: directory,
+      listen: "ws://127.0.0.1:0",
+      bearerToken: "fixture-legacy-read",
+    });
+    const legacyClient = await ZenXProtocolClient.connect(
+      clientOptions(legacyEndpoint.url, "fixture-legacy-read", {
+        bearerToken: "fixture-legacy-read",
+      }),
+    );
+    try {
+      await assert.rejects(
+        legacyClient.request("thread/original/read", {
+          threadId: thread.id,
+          throughItemId: compaction.coveredThroughItemId,
+        }),
+        /not enabled/u,
+      );
+    } finally {
+      legacyClient.close();
+      await legacyEndpoint.close();
+      await legacyHost.closeHostResources();
+    }
+  } finally {
+    await source.closeHostResources();
     await rm(directory, { recursive: true, force: true });
   }
 });

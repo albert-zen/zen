@@ -21,6 +21,7 @@ import {
   CONTEXT_COMPACTION_ALGORITHM_VERSION,
   CONTEXT_COMPACTION_SUMMARY_PREFIX,
   contextCompactionTokenBudget,
+  originalItemListReference,
   latestCompaction,
   latestEligibleCompactionBoundary,
   normalizeContextCompactionConfig,
@@ -155,6 +156,8 @@ export interface QueuedCancellationResult extends QueuedCancellationTarget {
 
 export interface CompactThreadOptions {
   signal?: AbortSignal;
+  includeOriginalReference?: boolean;
+  retention?: ContextCompactionConfig["retention"];
 }
 
 export interface CompactThreadResult {
@@ -1343,6 +1346,15 @@ export class ZenAppServer {
         );
       }
 
+      if (
+        options.includeOriginalReference !== undefined &&
+        typeof options.includeOriginalReference !== "boolean"
+      ) {
+        throw new AppServerError(
+          "compaction_invalid_options",
+          "includeOriginalReference must be a boolean",
+        );
+      }
       const configuration = thread.effectiveConfiguration();
       const admitted = this.#admitProviderOperation(
         "compaction",
@@ -1355,7 +1367,16 @@ export class ZenAppServer {
           boundary,
           initiator: "human",
           selection: admitted.provider,
-          contextCompaction: admitted.configuration.contextCompaction,
+          contextCompaction:
+            options.retention === undefined
+              ? admitted.configuration.contextCompaction
+              : normalizeContextCompactionConfig({
+                  ...admitted.configuration.contextCompaction,
+                  retention: options.retention,
+                }),
+          includeOriginalReference:
+            options.includeOriginalReference ??
+            admitted.configuration.contextCompaction.includeOriginalReference,
           signal,
         });
         return { compactionItemId: item.id };
@@ -2312,6 +2333,7 @@ export class ZenAppServer {
     thread: Thread;
     boundary: NonNullable<ReturnType<typeof latestEligibleCompactionBoundary>>;
     initiator: "human" | "automatic";
+    includeOriginalReference?: boolean;
     selection: ResolvedProviderSelection;
     contextCompaction: ResolvedContextCompactionConfig;
     signal: AbortSignal;
@@ -2343,7 +2365,7 @@ export class ZenAppServer {
     const summaryTokens = estimateModelMessageInputTokens([
       {
         role: "user",
-        text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${summary.text}`,
+        text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${summary.text}${(options.includeOriginalReference ?? options.contextCompaction.includeOriginalReference) === false ? "" : `\n[Original ItemList: ${originalItemListReference(options.thread.id, options.boundary.item.id)}; use authorized thread/original/read, do not infer hidden content]`}`,
       },
     ]);
     if (summaryTokens > targetTokenBudget) {
@@ -2393,6 +2415,9 @@ export class ZenAppServer {
       coveredThroughItemId: options.boundary.item.id,
       summary: summary.text,
       retainedItemIds: boundedBoundary.retainedItemIds,
+      includeOriginalReference:
+        options.includeOriginalReference ??
+        options.contextCompaction.includeOriginalReference,
       providerProfileId: options.selection.selection.providerProfileId,
       modelId: options.selection.selection.modelId,
       reasoningEffort: options.selection.selection.reasoningEffort,
