@@ -6,6 +6,8 @@ import {
   cp,
   mkdir,
   mkdtemp,
+  lstat,
+  stat,
   open,
   readFile,
   rename,
@@ -154,10 +156,29 @@ async function packageZenX(arguments_) {
       if (target === "smoke") {
         await runExecutable(executablePath(packaged[0], target));
       }
-      const publishedArtifact = await publishPackagedArtifact(
-        packaged[0],
-        path.join(artifactRoot, targetDirectory),
-      );
+      const finalArtifact = path.join(artifactRoot, targetDirectory);
+      let publishedArtifact;
+      try {
+        publishedArtifact = await publishPackagedArtifact(
+          packaged[0],
+          finalArtifact,
+        );
+      } catch (error) {
+        if (
+          process.platform === "win32" &&
+          process.env.ZENX_PACKAGE_DIAG === "1"
+        ) {
+          try {
+            await diagnoseWindowsPublishFailure(packaged[0], finalArtifact);
+          } catch (diagnosticError) {
+            console.error(
+              "Windows packaged publish diagnostic failed",
+              diagnosticError?.code ?? "unknown",
+            );
+          }
+        }
+        throw error;
+      }
       const executable = executablePath(publishedArtifact, target);
       console.log(
         JSON.stringify(
@@ -550,29 +571,189 @@ export async function withPackagingTargetLock(
   }
 }
 
-export async function publishPackagedArtifact(stagedArtifact, finalArtifact) {
+// QA-only, opt-in: inspect the owned staging artifact after a failed publish.
+// Do not retry or change the artifact during observation; never print command lines or env.
+async function diagnoseWindowsPublishFailure(stagedArtifact, finalArtifact) {
+  const status = async (file) => {
+    try {
+      const entry = await stat(file);
+      return { exists: true, directory: entry.isDirectory() };
+    } catch (error) {
+      return { exists: false, code: error?.code };
+    }
+  };
+  const script = `
+$prefix = $env:ZENX_DIAG_STAGE
+Get-CimInstance Win32_Process | Where-Object {
+  $_.ExecutablePath -and $_.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)
+} | ForEach-Object {
+  [PSCustomObject]@{ pid = $_.ProcessId; parent = $_.ParentProcessId; name = $_.Name }
+} | ConvertTo-Json -Compress
+`;
+  for (const delay of [0, 750, 2000]) {
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    let processes;
+    try {
+      processes = (
+        await run(
+          "powershell.exe",
+          ["-NoProfile", "-NonInteractive", "-Command", script],
+          {
+            timeout: 10000,
+            env: {
+              ...process.env,
+              ZENX_DIAG_STAGE: `${stagedArtifact}${path.sep}`,
+            },
+          },
+        )
+      ).stdout.trim();
+    } catch (error) {
+      processes = `query failed: ${error?.code ?? error?.message}`;
+    }
+    console.error(
+      "Windows packaged publish diagnostic",
+      JSON.stringify({
+        delayMs: delay,
+        node: process.version,
+        staged: await status(stagedArtifact),
+        final: await status(finalArtifact),
+        stagedExe: await status(
+          path.join(stagedArtifact, "ZenXProviderSmoke.exe"),
+        ),
+        ownedProcesses: processes || "[]",
+      }),
+    );
+  }
+}
+
+// A no-follow identity snapshot keeps retries bound to the original source and
+// target. Paths alone are insufficient across a backoff; this is not an OS-level
+// no-clobber operation against a writer racing *between* validation and rename.
+async function publishDirectoryIdentity(file) {
+  let entry;
+  try {
+    entry = await lstat(file, { bigint: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+  if (!entry.isDirectory())
+    throw new Error(`Packaged artifact is not a directory: ${file}`);
+  if (entry.ino === 0n && entry.birthtimeNs === 0n) {
+    throw new Error(`Packaged artifact has no usable identity: ${file}`);
+  }
+  return `${entry.dev}:${entry.ino}:${entry.birthtimeNs}`;
+}
+
+function assertPublishIdentity(actual, expected, label) {
+  if (actual !== expected)
+    throw new Error(`Packaged artifact ${label} changed during publication`);
+}
+
+// A lingering Windows handle can block directory rename even after the
+// smoke parent exits. Only retry a failed staging rename; each attempt first
+// restores any prior published artifact before waiting.
+export async function publishPackagedArtifact(
+  stagedArtifact,
+  finalArtifact,
+  {
+    renameArtifact = rename,
+    wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    platform = process.platform,
+  } = {},
+) {
   await mkdir(path.dirname(finalArtifact), { recursive: true, mode: 0o700 });
+  const stagedIdentity = await publishDirectoryIdentity(stagedArtifact);
+  if (stagedIdentity === null)
+    throw new Error("Packaged artifact staging source is missing");
+  const oldIdentity = await publishDirectoryIdentity(finalArtifact);
   const retiredArtifact = path.join(
     path.dirname(finalArtifact),
     `.${path.basename(finalArtifact)}.${randomUUID()}.retired`,
   );
-  let retired = false;
-  try {
-    await rename(finalArtifact, retiredArtifact);
-    retired = true;
-  } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
+  const delays = platform === "win32" ? [100, 250, 500, 1000] : [];
+  for (let attempt = 0; ; attempt++) {
+    // Revalidate *after* each wait, before touching either artifact. The lock
+    // serializes cooperating packagers; an unrelated writer need not honor it.
+    assertPublishIdentity(
+      await publishDirectoryIdentity(stagedArtifact),
+      stagedIdentity,
+      "source",
+    );
+    assertPublishIdentity(
+      await publishDirectoryIdentity(finalArtifact),
+      oldIdentity,
+      "target",
+    );
+    let retired = false;
+    if (oldIdentity !== null) {
+      await renameArtifact(finalArtifact, retiredArtifact);
+      retired = true;
+      assertPublishIdentity(
+        await publishDirectoryIdentity(retiredArtifact),
+        oldIdentity,
+        "backup",
+      );
+    }
+    try {
+      await renameArtifact(stagedArtifact, finalArtifact);
+    } catch (error) {
+      if (retired) {
+        try {
+          assertPublishIdentity(
+            await publishDirectoryIdentity(retiredArtifact),
+            oldIdentity,
+            "backup",
+          );
+          assertPublishIdentity(
+            await publishDirectoryIdentity(finalArtifact),
+            null,
+            "target before rollback",
+          );
+          await renameArtifact(retiredArtifact, finalArtifact);
+          assertPublishIdentity(
+            await publishDirectoryIdentity(finalArtifact),
+            oldIdentity,
+            "restored target",
+          );
+        } catch (rollbackError) {
+          // Keep the owned backup if restoration cannot be proven safe. The
+          // caller removes only the private run staging directory in finally.
+          throw new AggregateError(
+            [error, rollbackError],
+            "Packaged artifact publication and rollback failed",
+          );
+        }
+      }
+      if (error?.code !== "EPERM" || attempt >= delays.length) throw error;
+      assertPublishIdentity(
+        await publishDirectoryIdentity(stagedArtifact),
+        stagedIdentity,
+        "source",
+      );
+      assertPublishIdentity(
+        await publishDirectoryIdentity(finalArtifact),
+        oldIdentity,
+        "target",
+      );
+      await wait(delays[attempt]);
+      continue;
+    }
+    assertPublishIdentity(
+      await publishDirectoryIdentity(finalArtifact),
+      stagedIdentity,
+      "published target",
+    );
+    if (retired) {
+      assertPublishIdentity(
+        await publishDirectoryIdentity(retiredArtifact),
+        oldIdentity,
+        "backup before removal",
+      );
+      await rm(retiredArtifact, { recursive: true, force: true });
+    }
+    return finalArtifact;
   }
-  try {
-    await rename(stagedArtifact, finalArtifact);
-  } catch (error) {
-    if (retired) await rename(retiredArtifact, finalArtifact);
-    throw error;
-  }
-  if (retired) {
-    await rm(retiredArtifact, { recursive: true, force: true });
-  }
-  return finalArtifact;
 }
 
 export async function stagePackage(options) {
