@@ -93,6 +93,57 @@ test("migration preserves an existing Room namespace when the shared Trigger doc
   }
 });
 
+test("invalid Room projection is not promoted into the shared Trigger document", async () => {
+  const userDataDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-room-migration-invalid-projection-"),
+  );
+  try {
+    const storageRoot = path.join(userDataDirectory, "plugin-data");
+    await mkdir(path.join(storageRoot, "zenx-triggers"), { recursive: true });
+    await mkdir(path.join(storageRoot, "zenx-rooms"), { recursive: true });
+    await writeFile(
+      path.join(storageRoot, "zenx-triggers", "storage.json"),
+      JSON.stringify({ version: 1, value: { triggers: [], history: [] } }),
+      { mode: 0o600 },
+    );
+    await writeFile(
+      path.join(storageRoot, "zenx-rooms", "storage.json"),
+      JSON.stringify({ version: 1, value: { rooms: { bad: true } } }),
+      { mode: 0o600 },
+    );
+    const service = await createBundledAutomationPluginService({
+      userDataDirectory,
+      appServer: {
+        request: async () => ({}) as never,
+        onNotification: () => () => {},
+      },
+    });
+    assert.deepEqual(service.snapshot(), {
+      triggers: [],
+      history: [],
+      rooms: [],
+    });
+    const canonical = JSON.parse(
+      await readFile(
+        path.join(storageRoot, "zenx-triggers", "storage.json"),
+        "utf8",
+      ),
+    ) as { value: { rooms: unknown } };
+    assert.deepEqual(canonical.value.rooms, []);
+    assert.deepEqual(
+      JSON.parse(
+        await readFile(
+          path.join(storageRoot, "zenx-rooms", "storage.json"),
+          "utf8",
+        ),
+      ),
+      { version: 1, value: { rooms: [] } },
+    );
+  } finally {
+    await rm(userDataDirectory, { recursive: true, force: true });
+  }
+});
+
 test("corrupt Room compatibility projection is rebuilt from canonical storage", async () => {
   const userDataDirectory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-room-projection-recovery-"),
@@ -103,7 +154,10 @@ test("corrupt Room compatibility projection is rebuilt from canonical storage", 
     await mkdir(path.join(storageRoot, "zenx-rooms"), { recursive: true });
     await writeFile(
       path.join(storageRoot, "zenx-triggers", "storage.json"),
-      JSON.stringify({ version: 1, value: { triggers: [], history: [], rooms: [] } }),
+      JSON.stringify({
+        version: 1,
+        value: { triggers: [], history: [], rooms: [] },
+      }),
       { mode: 0o600 },
     );
     await writeFile(
@@ -118,10 +172,17 @@ test("corrupt Room compatibility projection is rebuilt from canonical storage", 
         onNotification: () => () => {},
       },
     });
-    assert.deepEqual(service.snapshot(), { triggers: [], history: [], rooms: [] });
+    assert.deepEqual(service.snapshot(), {
+      triggers: [],
+      history: [],
+      rooms: [],
+    });
     assert.deepEqual(
       JSON.parse(
-        await readFile(path.join(storageRoot, "zenx-rooms", "storage.json"), "utf8"),
+        await readFile(
+          path.join(storageRoot, "zenx-rooms", "storage.json"),
+          "utf8",
+        ),
       ),
       { version: 1, value: { rooms: [] } },
     );
@@ -172,7 +233,12 @@ test("projection write failure after canonical commit does not fail the mutation
     assert.equal(created.label, "canonical");
     const canonical = JSON.parse(
       await readFile(
-        path.join(userDataDirectory, "plugin-data", "zenx-triggers", "storage.json"),
+        path.join(
+          userDataDirectory,
+          "plugin-data",
+          "zenx-triggers",
+          "storage.json",
+        ),
         "utf8",
       ),
     ) as { value: { triggers: Array<{ id: string }> } };

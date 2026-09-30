@@ -7260,6 +7260,8 @@ a:focus-visible {
   top: 0;
   transform: translateY(-100%);
   width: min(286px, calc(100vw - 32px));
+  max-height: min(360px, calc(100vh - 16px));
+  overflow: auto;
   display: grid;
   gap: 6px;
   padding: 12px;

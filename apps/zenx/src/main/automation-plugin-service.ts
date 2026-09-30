@@ -117,8 +117,11 @@ export async function createBundledAutomationPluginService(options: {
   let roomProjection: JsonPluginStorage | undefined;
   let existingRooms: unknown;
   let roomProjectionError: unknown;
+  const readStorageFile =
+    options.storageFileSystem?.readFile ??
+    ((filename: string, encoding: "utf8") => readFile(filename, encoding));
   try {
-    await readFile(roomProjectionFile, "utf8");
+    await readStorageFile(roomProjectionFile, "utf8");
     roomProjection = await JsonPluginStorage.open({
       pluginId: ZENX_ROOMS_CAPABILITY_ID,
       root: storageRoot,
@@ -126,7 +129,16 @@ export async function createBundledAutomationPluginService(options: {
       initialValue: { rooms: legacy.rooms },
       fileSystem: options.storageFileSystem,
     });
-    existingRooms = (await roomProjection.get())["rooms"];
+    const projectedRooms = (await roomProjection.get())["rooms"];
+    // A generic plugin container only validates JSON shape. Validate the Room
+    // namespace before allowing a legacy projection to seed the shared
+    // Trigger document, otherwise malformed but parseable data can poison the
+    // canonical store during migration.
+    existingRooms = canonicalTriggerSnapshot({
+      triggers: [],
+      history: [],
+      rooms: projectedRooms,
+    }).rooms;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       roomProjectionError = error;
@@ -223,7 +235,7 @@ export async function createBundledAutomationPluginService(options: {
 
 function isReconstructibleProjectionError(error: unknown): boolean {
   const message = describeError(error);
-  return /invalid JSON|document is invalid|value must be|exceeds its byte limit/u.test(
+  return /invalid JSON|document is invalid|invalid entry shape|value must be|exceeds its byte limit/u.test(
     message,
   );
 }

@@ -1433,6 +1433,7 @@ export function ContextUsageIndicator({
     placement: "above" as "above" | "below",
   });
   const rootRef = useRef<HTMLDivElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
     const closeOutside = (event: MouseEvent) => {
@@ -1459,7 +1460,8 @@ export function ContextUsageIndicator({
       // near the top edge. The CSS transform places an above popover entirely
       // above its anchor, so choose below before clamping rather than allowing
       // the panel to be clipped out of view.
-      const estimatedHeight = 190;
+      const estimatedHeight =
+        popoverRef.current?.getBoundingClientRect().height ?? 190;
       const canPlaceAbove = anchor.top - 8 >= estimatedHeight;
       setPopoverPosition({
         left: Math.max(left, Math.min(anchor.right - width, right - width)),
@@ -1484,6 +1486,7 @@ export function ContextUsageIndicator({
         : new ResizeObserver(place);
     observer?.observe(root);
     if (boundary) observer?.observe(boundary);
+    if (popoverRef.current) observer?.observe(popoverRef.current);
     return () => {
       window.removeEventListener("resize", place);
       observer?.disconnect();
@@ -1541,6 +1544,7 @@ export function ContextUsageIndicator({
       {open ? (
         <div
           className="context-usage-popover"
+          ref={popoverRef}
           style={popoverPosition}
           data-placement={popoverPosition.placement}
           id={popoverId}
@@ -1743,26 +1747,24 @@ function TraceSequence({
               {groupReasoningWithoutDetailsRows(traceDisplayRows(node.items))
                 // Models that do not expose reasoning should leave no
                 // completed "Think" heading behind in the transcript.
-                .filter(
-                  (row) => {
-                    if ("kind" in row) {
-                      return node.items.some(
-                        (item) =>
-                          row.ids.includes(item.id) &&
-                          item.type === "reasoning" &&
-                          item.status === "inProgress",
-                      );
-                    }
-                    const item = row.item;
-                    return !(
-                      item.type === "reasoning" &&
-                      item.status !== "inProgress" &&
-                      item.status !== "interrupted" &&
-                      item.summary.every((part) => part.trim().length === 0) &&
-                      item.content.every((part) => part.trim().length === 0)
+                .filter((row) => {
+                  if ("kind" in row) {
+                    return node.items.some(
+                      (item) =>
+                        row.ids.includes(item.id) &&
+                        item.type === "reasoning" &&
+                        item.status === "inProgress",
                     );
-                  },
-                )
+                  }
+                  const item = row.item;
+                  return !(
+                    item.type === "reasoning" &&
+                    item.status !== "inProgress" &&
+                    item.status !== "interrupted" &&
+                    item.summary.every((part) => part.trim().length === 0) &&
+                    item.content.every((part) => part.trim().length === 0)
+                  );
+                })
                 .map((row) => {
                   if ("kind" in row) {
                     return (
