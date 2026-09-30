@@ -32,6 +32,7 @@ interface RoomListResult {
   nextCursor?: number | null;
   rooms: Array<
     Omit<ZenXRoom, "operations"> & {
+      assistantRepliesEnabled?: boolean;
       pendingCount?: number;
       operationEpoch?: string;
       messageCount?: number;
@@ -1033,6 +1034,7 @@ export function TriggersPanel({ sdk }: PluginUiSurfaceProps) {
 }
 
 export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
+  const [assistantMode, setAssistantMode] = useState(false);
   const [data, setData] = useState<RoomListResult>({ rooms: [] });
   const [selected, setSelected] = useState<string | null>(null);
   const [panel, setPanel] = useState<"create" | "manage" | null>(null);
@@ -1042,6 +1044,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [threads, setThreads] = useState<NativeThreadSummary[]>([]);
   const [busy, setBusy] = useState(false);
+  const actionBusy = useRef(false);
   const sending = useRef<Record<string, boolean>>({});
   const [sendingRooms, setSendingRooms] = useState<Record<string, boolean>>({});
   const selectedRef = useRef<string | null>(null);
@@ -1305,14 +1308,15 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     lastMessage.current = tail;
   }, [selected, tail]);
   const run = async (command: string, input: unknown) => {
-    if (busy) return false;
+    if (actionBusy.current) return false;
+    actionBusy.current = true;
     setBusy(true);
     setError(null);
     try {
       const result = await sdk.commands.execute(command, input);
       await refresh();
       if (
-        command === "create" &&
+        (command === "create" || command === "create-assistant") &&
         result &&
         typeof result === "object" &&
         "id" in result &&
@@ -1327,6 +1331,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       void refresh().catch(() => {});
       return false;
     } finally {
+      actionBusy.current = false;
       setBusy(false);
     }
   };
@@ -1574,6 +1579,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             type="button"
             onClick={(event) => {
               dialogInvoker.current = event.currentTarget;
+              setAssistantMode(false);
               setName("");
               setMemberName("");
               setThreadId("");
@@ -1581,6 +1587,19 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             }}
           >
             + New
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              dialogInvoker.current = event.currentTarget;
+              setAssistantMode(true);
+              setName("My assistant");
+              setMemberName("Assistant");
+              setThreadId("");
+              setPanel("create");
+            }}
+          >
+            + Assistant
           </button>
         </div>
         {data.rooms.map((entry) => (
@@ -1613,7 +1632,14 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           <>
             <header className="rooms-chat-header">
               <div>
-                <h2>#{room.name}</h2>
+                <h2>{room.assistant ? room.name : `#${room.name}`}</h2>
+                {room.assistant ? (
+                  <p className="room-assistant-state" role="status">
+                    {room.assistantRepliesEnabled
+                      ? "Automatic replies on"
+                      : "Automatic replies paused or unavailable"}
+                  </p>
+                ) : null}
                 <span>
                   {room.members.length
                     ? room.members
@@ -1633,11 +1659,38 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 Members & settings
               </button>
             </header>
+            {room.assistant ? (
+              <div className="room-assistant-controls">
+                <span>
+                  Uses an existing conversation. Sending may consume its model
+                  quota. Close the window to keep running; Quit stops ZenX.
+                </span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    void run("assistant-replies", {
+                      roomId: room.id,
+                      enabled: !room.assistantRepliesEnabled,
+                    })
+                  }
+                >
+                  {room.assistantRepliesEnabled
+                    ? "Pause replies"
+                    : "Enable replies"}
+                </button>
+                <small>
+                  Pause affects future messages only; already admitted work
+                  continues in its source conversation.
+                </small>
+              </div>
+            ) : null}
             {error ||
             roomErrors[room.id] ||
             feedback[room.id] ||
             pending ||
-            room.responders?.some((entry) => !entry.configured) ||
+            (!room.assistant &&
+              room.responders?.some((entry) => !entry.configured)) ||
             (room.operations ?? []).some(
               (entry) => entry.id !== pendingByRoom[room.id]?.id,
             ) ? (
@@ -1653,6 +1706,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 ) : null}
                 {!pending &&
                 (room.operations ?? []).length === 0 &&
+                !room.assistant &&
                 room.responders?.some((entry) => !entry.configured) ? (
                   <p className="room-setup-note">
                     No automatic wakeup for:{" "}
@@ -1815,8 +1869,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               ) : null}
               {room.messages.length === 0 ? (
                 <div className="rooms-chat-empty">
-                  Start the conversation. @mention a registered member to
-                  request an agent response.
+                  {room.assistant
+                    ? "Talk to your assistant here. No @mention needed. Opening this conversation does not start a task."
+                    : "Start the conversation. @mention a registered member to request an agent response."}
                 </div>
               ) : null}
               {room.messages.map((message) => (
@@ -1834,6 +1889,14 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     </time>
                   </header>
                   <Markdown text={message.text} />
+                  {message.originThreadId ? (
+                    <small className="room-delivery">
+                      Source conversation: {message.originThreadId}
+                      {message.originTurnId
+                        ? ` · Turn ${message.originTurnId}`
+                        : ""}
+                    </small>
+                  ) : null}
                   {message.kind === "human" &&
                   deliveries[message.id]?.state === "saved" ? (
                     <small className="room-delivery">
@@ -1865,7 +1928,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             </div>
             <div className="rooms-chat-compose">
               <div className="rooms-chat-mentions">
-                {room.members.map((member) => (
+                {(room.assistant ? [] : room.members).map((member) => (
                   <button
                     key={member.threadId}
                     type="button"
@@ -1934,7 +1997,13 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               >
                 {sendingRooms[room.id] ? "Sending…" : "Send"}
               </button>
-              <small>Mention an agent to wake it.</small>
+              <small>
+                {room.assistant
+                  ? room.assistantRepliesEnabled
+                    ? "Send requests an assistant reply using the existing conversation settings."
+                    : "Replies are paused or unavailable. Messages are saved only; enabling replies does not replay them."
+                  : "Mention an agent to wake it."}
+              </small>
             </div>
           </>
         )}
@@ -1978,12 +2047,24 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           >
             <header>
               <h2>
-                {panel === "create" ? "New Room" : `#${room?.name} settings`}
+                {panel === "create"
+                  ? assistantMode
+                    ? "New assistant conversation"
+                    : "New Room"
+                  : `#${room?.name} settings`}
               </h2>
               <button ref={dialogClose} type="button" onClick={closeDialog}>
                 Close
               </button>
             </header>
+            {panel === "create" && assistantMode ? (
+              <p className="room-assistant-disclosure">
+                Choose an existing Thread. This creates a Room and enables
+                automatic replies to your future messages, using that Thread’s
+                current model and permissions. Setup itself makes no model call.
+                Rooms and Triggers must be enabled.
+              </p>
+            ) : null}
             <Field label="Room name" value={name} onChange={setName} />
             {panel === "manage" ? (
               <button
@@ -1998,28 +2079,32 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 Rename
               </button>
             ) : null}
-            <Field
-              label="Member name"
-              value={memberName}
-              onChange={setMemberName}
-            />
-            <label className="field">
-              <span>Member conversation</span>
-              <Combobox
-                label="Member conversation"
-                value={threadId}
-                onValueChange={setThreadId}
-              >
-                {threads.map((thread) => (
-                  <option key={thread.threadId} value={thread.threadId}>
-                    {threadTitle(thread)} · {thread.threadId} ·{" "}
-                    {"currentMetadata" in thread
-                      ? thread.currentMetadata.cwd
-                      : "Unavailable workspace"}
-                  </option>
-                ))}
-              </Combobox>
-            </label>
+            {panel === "create" || !room?.assistant ? (
+              <>
+                <Field
+                  label="Member name"
+                  value={memberName}
+                  onChange={setMemberName}
+                />
+                <label className="field">
+                  <span>Member conversation</span>
+                  <Combobox
+                    label="Member conversation"
+                    value={threadId}
+                    onValueChange={setThreadId}
+                  >
+                    {threads.map((thread) => (
+                      <option key={thread.threadId} value={thread.threadId}>
+                        {threadTitle(thread)} · {thread.threadId} ·{" "}
+                        {"currentMetadata" in thread
+                          ? thread.currentMetadata.cwd
+                          : "Unavailable workspace"}
+                      </option>
+                    ))}
+                  </Combobox>
+                </label>
+              </>
+            ) : null}
             {panel === "create" ? (
               <button
                 type="button"
@@ -2028,7 +2113,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   busy || !name.trim() || !memberName.trim() || !threadId
                 }
                 onClick={() =>
-                  void run("create", {
+                  void run(assistantMode ? "create-assistant" : "create", {
                     name,
                     members: [{ name: memberName, threadId }],
                   }).then((ok) => {
@@ -2036,13 +2121,18 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   })
                 }
               >
-                Create Room
+                {assistantMode ? "Create & enable replies" : "Create Room"}
               </button>
             ) : (
               <>
                 <button
                   type="button"
-                  disabled={busy || !memberName.trim() || !threadId}
+                  disabled={
+                    busy ||
+                    Boolean(room?.assistant) ||
+                    !memberName.trim() ||
+                    !threadId
+                  }
                   onClick={() =>
                     void run("add-member", {
                       roomId: room?.id,
@@ -2068,7 +2158,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     </details>
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={busy || Boolean(room.assistant)}
                       onClick={() => {
                         if (
                           window.confirm(

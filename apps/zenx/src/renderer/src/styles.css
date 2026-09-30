@@ -9160,3 +9160,36 @@ a:focus-visible {
     display: none;
   }
 }
+
+.room-assistant-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  align-items: center;
+}
+.room-assistant-controls > span {
+  flex: 1;
+  min-width: 200px;
+}
+.room-assistant-controls > small {
+  flex-basis: 100%;
+  color: var(--muted);
+}
+.room-assistant-state {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+.room-assistant-disclosure {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.rooms-chat-list-head {
+  flex-wrap: wrap;
+}
+.rooms-chat-list-head > strong {
+  flex-basis: 100%;
+}

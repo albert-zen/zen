@@ -730,6 +730,40 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   ): Promise<void> {
     await this.#service.acknowledgeRoomOperation(roomId, operationId);
   }
+  async createAssistantRoom(input: CreateRoomInput) {
+    if (
+      !this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID) ||
+      !this.#active.has(ZENX_ROOMS_CAPABILITY_ID)
+    )
+      throw new Error("Enable Rooms and Triggers before creating an assistant");
+    if (input.members.length !== 1 || this.#targets === undefined)
+      throw new Error("Select one available existing Thread");
+    const member = input.members[0]!;
+    const target = await resolveThreadTarget(this.#targets, {
+      target: member.threadId,
+    });
+    if (target.status !== "resolved" || target.candidate.archived)
+      throw new Error("Assistant Thread is unavailable or archived");
+    if (
+      !this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID) ||
+      !this.#active.has(ZENX_ROOMS_CAPABILITY_ID)
+    )
+      throw new Error("Rooms or Triggers stopped during setup");
+    return await this.#service.createAssistantRoom({
+      name: input.name,
+      members: [{ name: member.name, threadId: target.threadId }],
+    });
+  }
+  async setAssistantReplies(roomId: string, enabled: boolean) {
+    if (!this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID))
+      throw new Error("Triggers are disabled");
+    const room = this.#service
+      .snapshot()
+      .rooms.find((entry) => entry.id === roomId);
+    if (!room?.assistant) throw new Error("Assistant Room was not found");
+    if (enabled) await this.resume(room.assistant.triggerId);
+    else await this.cancel(room.assistant.triggerId);
+  }
   async createRoom(input: CreateRoomInput) {
     return await this.#service.createRoom(input);
   }

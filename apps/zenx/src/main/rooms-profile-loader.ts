@@ -66,6 +66,16 @@ export function createZenXRoomsProfileLoader(
         call();
         return domain.wakeupsEnabled();
       },
+      createAssistantRoom: (
+        input: Parameters<typeof domain.createAssistantRoom>[0],
+      ) => {
+        requireUi();
+        return domain.createAssistantRoom(input);
+      },
+      setAssistantReplies: (id: string, enabled: boolean) => {
+        requireUi();
+        return domain.setAssistantReplies(id, enabled);
+      },
       createRoom: (input: Parameters<typeof domain.createRoom>[0]) => {
         call();
         return domain.createRoom(input);

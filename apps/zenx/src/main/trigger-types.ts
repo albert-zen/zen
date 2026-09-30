@@ -141,6 +141,7 @@ export interface RoomDeliveryView {
   }>;
 }
 export interface ZenXRoom {
+  assistant?: { threadId: string; triggerId: string };
   id: string;
   name: string;
   operationEpoch?: string;

@@ -399,6 +399,10 @@ export class ZenXTriggerService {
         (candidate) => candidate.id === input.id,
       );
       if (index < 0) throw new Error("Trigger was not found");
+      if (snapshot.rooms.some((room) => room.assistant?.triggerId === input.id))
+        throw new Error(
+          "Assistant routing is fixed; pause replies or create a new conversation",
+        );
       const existing = snapshot.triggers[index]!;
       const replacement = triggerFromInput(
         input,
@@ -466,6 +470,12 @@ export class ZenXTriggerService {
         (item) => item.id === normalized,
       );
       if (index < 0) throw new Error("Trigger was not found");
+      if (
+        snapshot.rooms.some((room) => room.assistant?.triggerId === normalized)
+      )
+        throw new Error(
+          "Assistant reply Trigger is owned by its Room; pause it or delete the Room",
+        );
       snapshot.triggers.splice(index, 1);
     });
     this.#rescheduleTimers(generation);
@@ -512,6 +522,54 @@ export class ZenXTriggerService {
     return structuredClone(room);
   }
 
+  async createAssistantRoom(input: CreateRoomInput): Promise<ZenXRoom> {
+    const generation = this.#runningGeneration();
+    if (!generation.wakeupAdmission)
+      throw new Error("Enable Triggers before creating an assistant");
+    const members = validateMembers(input.members);
+    if (members.length !== 1)
+      throw new Error("An assistant needs exactly one existing Thread");
+    return await this.#mutate(generation, async (snapshot) => {
+      if (!generation.wakeupAdmission)
+        throw new Error("Triggers are not enabled");
+      if (
+        snapshot.rooms.length >= MAX_ROOM_COUNT ||
+        snapshot.triggers.length >= MAX_TRIGGER_COUNT
+      )
+        throw new Error("Room or Trigger limit reached");
+      const member = members[0]!;
+      const id = randomUUID();
+      const trigger = triggerFromInput(
+        {
+          kind: "roomMention",
+          threadId: member.threadId,
+          roomId: id,
+          mention: member.name,
+          label: "Assistant replies",
+          prompt:
+            "Respond to the user's latest Room message. Read available context directly before considering additional execution. Your final response is delivered to this Room; do not also post the same response with a Room tool. Preserve the user's requested scope and execution settings.",
+        },
+        randomUUID(),
+        this.#now(),
+        true,
+        this.#now(),
+      );
+      const room: ZenXRoom = {
+        id,
+        name: required(input.name, "room name", MAX_ROOM_NAME_BYTES),
+        members,
+        assistant: { threadId: member.threadId, triggerId: trigger.id },
+        messages: [],
+        operations: [],
+        operationEpoch: randomUUID(),
+        createdAt: this.#now(),
+      };
+      snapshot.rooms.push(room);
+      snapshot.triggers.push(trigger);
+      return structuredClone(room);
+    });
+  }
+
   async renameRoom(roomId: string, name: string): Promise<void> {
     const generation = this.#runningGeneration();
     await this.#mutate(generation, async (snapshot) => {
@@ -540,6 +598,14 @@ export class ZenXTriggerService {
         throw new Error(
           "Room cannot be deleted while a nonterminal wakeup owns its reply route",
         );
+      if (room.assistant && !generation.wakeupAdmission)
+        throw new Error(
+          "Enable Triggers before deleting an assistant Room and its reply Trigger",
+        );
+      if (room.assistant)
+        snapshot.triggers = snapshot.triggers.filter(
+          (trigger) => trigger.id !== room.assistant!.triggerId,
+        );
       snapshot.rooms = snapshot.rooms.filter(
         (candidate) => candidate.id !== normalized,
       );
@@ -553,6 +619,10 @@ export class ZenXTriggerService {
         (entry) => entry.id === required(roomId, "room", MAX_ID_BYTES),
       );
       if (room === undefined) throw new Error("Room was not found");
+      if (room.assistant)
+        throw new Error(
+          "Assistant membership is fixed; create a separate conversation",
+        );
       room.members = validateMembers([...room.members, member]);
     });
   }
@@ -564,6 +634,10 @@ export class ZenXTriggerService {
         (entry) => entry.id === required(roomId, "room", MAX_ID_BYTES),
       );
       if (room === undefined) throw new Error("Room was not found");
+      if (room.assistant)
+        throw new Error(
+          "Assistant membership is fixed; pause replies or delete the Room",
+        );
       const normalized = required(threadId, "member thread", MAX_ID_BYTES);
       if (!room.members.some((member) => member.threadId === normalized))
         throw new Error("Room member was not found");
@@ -855,13 +929,17 @@ export class ZenXTriggerService {
       room.messages.push(value);
       const wakeups: CommittedWakeup[] = [];
       const mentions = room.members.filter((member) =>
-        mentionMatches(normalizedText, member.name),
+        room.assistant
+          ? kind === "human" && member.threadId === room.assistant.threadId
+          : mentionMatches(normalizedText, member.name),
       );
       for (const member of mentions) {
         const triggerIds = (generation.wakeupAdmission ? snapshot.triggers : [])
           .filter(
             (trigger) =>
               trigger.active &&
+              (room.assistant === undefined ||
+                trigger.id === room.assistant.triggerId) &&
               trigger.threadId === member.threadId &&
               trigger.kind === "roomMention" &&
               trigger.room?.roomId === normalizedRoomId &&

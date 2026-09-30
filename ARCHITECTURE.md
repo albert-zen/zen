@@ -1068,3 +1068,15 @@ queued 输入不可作为留存 Item；手动/自动生成仍须在同 Thread mu
 ZenX 的 `/compact --no-reference` 仅将关闭原文定位符作为 `thread/compact`
 请求参数传给 Host；普通 `/compact` 与按钮沿默认开启路径运行，不在 UI
 内建立另一个压缩状态源或将 `/compact` 写成 user message。
+
+### Personal assistant Room
+
+An assistant Room is a single-member Room with a pinned reference to one existing
+roomMention Trigger; an explicit trusted UI action atomically creates both in the
+existing automation store. It introduces no runtime, Thread, scheduler or journal.
+Only human Room posts use the implicit recipient; Agent posts do not implicitly
+wake the assistant. Reading/opening the Room never starts a Turn. The owned Trigger
+retains existing one-attempt delivery and failure behavior; busy Threads report a
+failed wakeup rather than silently retrying. Pausing replies stops future admission,
+not a Turn already admitted. Window close and explicit Quit keep their existing
+Host lifecycle. Models cannot invoke the trusted-only setup/pause commands.

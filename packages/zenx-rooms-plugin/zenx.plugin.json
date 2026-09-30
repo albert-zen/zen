@@ -244,8 +244,14 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "roomId": { "type": "string", "maxLength": 512 },
-          "operationId": { "type": "string", "maxLength": 512 }
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "operationId": {
+            "type": "string",
+            "maxLength": 512
+          }
         },
         "required": ["roomId", "operationId"],
         "additionalProperties": false
@@ -369,6 +375,67 @@
       "interactionMode": "background_safe",
       "capabilities": ["zenx.rooms.manage"],
       "maxOutputBytes": 65536
+    },
+    {
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536,
+      "name": "zenx_rooms_create_assistant",
+      "description": "Trusted UI only: create a single-member assistant Room and its automatic reply Trigger. Setup does not start a Turn; future human messages can start model execution.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "members": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                "threadId": {
+                  "type": "string",
+                  "maxLength": 512
+                }
+              },
+              "required": ["name", "threadId"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["name", "members"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536,
+      "name": "zenx_rooms_assistant_replies",
+      "description": "Trusted UI only: pause or enable future assistant replies. Does not interrupt already admitted work.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": ["roomId", "enabled"],
+        "additionalProperties": false
+      }
     }
   ],
   "ui": {
@@ -476,6 +543,16 @@
         "id": "messages",
         "title": "Read bounded Room messages page.",
         "tool": "zenx_rooms_messages"
+      },
+      {
+        "id": "create-assistant",
+        "title": "Create an assistant conversation with automatic replies",
+        "tool": "zenx_rooms_create_assistant"
+      },
+      {
+        "id": "assistant-replies",
+        "title": "Change future assistant replies",
+        "tool": "zenx_rooms_assistant_replies"
       }
     ]
   }

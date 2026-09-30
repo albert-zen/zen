@@ -145,6 +145,7 @@ const OUTCOME_KEYS = [
   "error",
 ] as const;
 const ROOM_KEYS = [
+  "assistant",
   "id",
   "name",
   "members",
@@ -434,6 +435,9 @@ function canonicalProgramOutcome(
 
 function canonicalRoom(room: ZenXRoom): ZenXRoom {
   return {
+    ...(room.assistant === undefined
+      ? {}
+      : { assistant: { ...room.assistant } }),
     id: room.id,
     name: room.name,
     members: room.members.map((member) => ({
@@ -777,6 +781,18 @@ function isRoom(value: unknown): value is ZenXRoom {
     !finiteNumber(room["createdAt"])
   )
     return false;
+  if (room["assistant"] !== undefined) {
+    const assistant = record(room["assistant"]);
+    if (
+      !assistant ||
+      !exactKeys(assistant, ["threadId", "triggerId"]) ||
+      !string(assistant["threadId"], MAX_ID_BYTES) ||
+      !string(assistant["triggerId"], MAX_ID_BYTES) ||
+      room["members"].length !== 1 ||
+      room["members"][0]?.threadId !== assistant["threadId"]
+    )
+      return false;
+  }
   const names = new Set<string>();
   const threads = new Set<string>();
   for (const member of room["members"]) {

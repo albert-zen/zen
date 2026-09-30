@@ -33,6 +33,7 @@ export interface RoomOperation {
 }
 
 export interface Room {
+  assistant?: { threadId: string; triggerId: string };
   id: string;
   name: string;
   members: RoomMember[];
@@ -43,6 +44,11 @@ export interface Room {
 }
 
 export interface ZenXRoomsTrustedService {
+  createAssistantRoom?(input: {
+    name: string;
+    members: RoomMember[];
+  }): Promise<Room>;
+  setAssistantReplies?(roomId: string, enabled: boolean): Promise<void>;
   createRoom(input: { name: string; members: RoomMember[] }): Promise<Room>;
   renameRoom(roomId: string, name: string): Promise<void>;
   deleteRoom(roomId: string): Promise<void>;
@@ -71,6 +77,7 @@ export interface ZenXRoomsTrustedService {
   snapshot(): {
     rooms: Room[];
     triggers?: Array<{
+      id?: string;
       active: boolean;
       kind: string;
       threadId: string;
@@ -143,6 +150,17 @@ export function createZenXTrustedPlugin(
               ...(uiInput === null
                 ? {}
                 : {
+                    assistantRepliesEnabled: room.assistant
+                      ? (service.wakeupsEnabled?.() ?? false) &&
+                        state.triggers?.some(
+                          (t) =>
+                            t.active &&
+                            t.kind === "roomMention" &&
+                            t.threadId === room.assistant!.threadId &&
+                            t.room?.roomId === room.id &&
+                            t.id === room.assistant!.triggerId,
+                        ) === true
+                      : undefined,
                     operationEpoch: room.operationEpoch ?? "legacy",
                     pendingCount: (room.operations ?? []).filter(
                       (operation) => !operation.acknowledged,
@@ -248,6 +266,23 @@ export function createZenXTrustedPlugin(
             string(args, "operationId", MAX_ID_BYTES),
           );
           return { acknowledged: true };
+        case "zenx_rooms_create_assistant":
+          if (uiInput === null || !service.createAssistantRoom)
+            throw new Error("Trusted Room UI required");
+          return await service.createAssistantRoom({
+            name: string(args, "name", MAX_ROOM_NAME_BYTES),
+            members: members(args["members"]),
+          });
+        case "zenx_rooms_assistant_replies":
+          if (uiInput === null || !service.setAssistantReplies)
+            throw new Error("Trusted Room UI required");
+          if (typeof args["enabled"] !== "boolean")
+            throw new Error("enabled must be boolean");
+          await service.setAssistantReplies(
+            string(args, "roomId", MAX_ID_BYTES),
+            args["enabled"],
+          );
+          return { updated: true };
         case "zenx_rooms_create":
           return await service.createRoom({
             name: string(args, "name", MAX_ROOM_NAME_BYTES),
@@ -325,6 +360,7 @@ function members(value: unknown): RoomMember[] {
 
 function readSafeRoom(room: Room) {
   return {
+    ...(room.assistant ? { assistant: { ...room.assistant } } : {}),
     id: room.id,
     name: room.name,
     createdAt: room.createdAt,
