@@ -106,27 +106,36 @@ export async function createBundledAutomationPluginService(options: {
     legacy = { triggers: [], history: [], rooms: [] };
   }
   const storageRoot = path.join(options.userDataDirectory, "plugin-data");
-  await initializeOptionalStorage(
-    {
-      pluginId: ZENX_TRIGGERS_CAPABILITY_ID,
-      root: storageRoot,
-      version: 1,
-      initialValue: {
-        triggers: legacy.triggers,
-        history: legacy.history,
-      },
-    },
-    ZENX_TRIGGERS_CAPABILITY_ID,
+  // A pre-existing Room namespace is authoritative during migration. Read it
+  // before filling the shared Trigger container so a missing `rooms` field in
+  // that container cannot overwrite newer Room data with the legacy fallback.
+  const roomProjectionFile = path.join(
+    storageRoot,
+    ZENX_ROOMS_CAPABILITY_ID,
+    "storage.json",
   );
-  await initializeOptionalStorage(
-    {
+  let roomProjection: JsonPluginStorage | undefined;
+  let existingRooms: unknown;
+  let roomProjectionError: unknown;
+  try {
+    await readFile(roomProjectionFile, "utf8");
+    roomProjection = await JsonPluginStorage.open({
       pluginId: ZENX_ROOMS_CAPABILITY_ID,
       root: storageRoot,
       version: 1,
       initialValue: { rooms: legacy.rooms },
-    },
-    ZENX_ROOMS_CAPABILITY_ID,
-  );
+      fileSystem: options.storageFileSystem,
+    });
+    existingRooms = (await roomProjection.get())["rooms"];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      roomProjectionError = error;
+      console.error(
+        `ZenX Room compatibility projection is unavailable: ${describeError(error)}`,
+      );
+    }
+    roomProjection = undefined;
+  }
   // Keep the historical Trigger filename as the physical container so old
   // readers continue to find their namespace; the document now also carries
   // the Room projection and is the sole commit point.
@@ -137,7 +146,7 @@ export async function createBundledAutomationPluginService(options: {
     initialValue: {
       triggers: legacy.triggers,
       history: legacy.history,
-      rooms: legacy.rooms,
+      rooms: existingRooms ?? legacy.rooms,
     },
     fileSystem: options.storageFileSystem,
   });
@@ -146,43 +155,60 @@ export async function createBundledAutomationPluginService(options: {
     await automationStorage.set({
       triggers: persistedAutomation["triggers"] ?? legacy.triggers,
       history: persistedAutomation["history"] ?? legacy.history,
-      rooms: legacy.rooms,
+      rooms: existingRooms ?? legacy.rooms,
     });
   }
-  let roomProjection: JsonPluginStorage;
-  try {
-    roomProjection = await JsonPluginStorage.open({
-      pluginId: ZENX_ROOMS_CAPABILITY_ID,
-      root: storageRoot,
-      version: 1,
-      initialValue: { rooms: persistedAutomation["rooms"] ?? legacy.rooms },
-      fileSystem: options.storageFileSystem,
-    });
-  } catch (error) {
-    // This file is a reconstructible compatibility projection. If an older
-    // runtime left it malformed, remove only that projection and rebuild it
-    // from the canonical shared Trigger container; optional Room state must
-    // not prevent ZenX from starting.
-    console.error(
-      `ZenX Room compatibility projection is corrupt; rebuilding from canonical state: ${describeError(error)}`,
-    );
-    const projectionFile = path.join(
-      storageRoot,
-      ZENX_ROOMS_CAPABILITY_ID,
-      "storage.json",
-    );
-    await (options.storageFileSystem?.unlink ?? unlink)(projectionFile);
-    roomProjection = await JsonPluginStorage.open({
-      pluginId: ZENX_ROOMS_CAPABILITY_ID,
-      root: storageRoot,
-      version: 1,
-      initialValue: { rooms: persistedAutomation["rooms"] ?? legacy.rooms },
-      fileSystem: options.storageFileSystem,
-    });
+  const canonicalRooms = persistedAutomation["rooms"] ?? legacy.rooms;
+  if (roomProjection === undefined && roomProjectionError === undefined) {
+    try {
+      roomProjection = await JsonPluginStorage.open({
+        pluginId: ZENX_ROOMS_CAPABILITY_ID,
+        root: storageRoot,
+        version: 1,
+        initialValue: { rooms: canonicalRooms },
+        fileSystem: options.storageFileSystem,
+      });
+    } catch (error) {
+      console.error(
+        `ZenX Room compatibility projection is unavailable: ${describeError(error)}`,
+      );
+    }
   }
-  await roomProjection.set({
-    rooms: (await automationStorage.get())["rooms"] ?? [],
-  });
+  if (roomProjection === undefined && roomProjectionError !== undefined) {
+    // Only malformed, reconstructible data may be quarantined. Future-version
+    // and permission failures must leave the original file untouched.
+    if (isReconstructibleProjectionError(roomProjectionError)) {
+      try {
+        canonicalTriggerSnapshot({
+          triggers: persistedAutomation["triggers"] ?? [],
+          history: persistedAutomation["history"] ?? [],
+          rooms: canonicalRooms,
+        });
+        await (options.storageFileSystem?.unlink ?? unlink)(roomProjectionFile);
+        roomProjection = await JsonPluginStorage.open({
+          pluginId: ZENX_ROOMS_CAPABILITY_ID,
+          root: storageRoot,
+          version: 1,
+          initialValue: { rooms: canonicalRooms },
+          fileSystem: options.storageFileSystem,
+        });
+      } catch (error) {
+        console.error(
+          `ZenX Room compatibility projection remains unavailable: ${describeError(error)}`,
+        );
+        roomProjection = undefined;
+      }
+    }
+  }
+  if (roomProjection !== undefined) {
+    try {
+      await roomProjection.set({ rooms: canonicalRooms });
+    } catch (error) {
+      console.error(
+        `ZenX Room compatibility projection is stale; canonical state remains authoritative: ${describeError(error)}`,
+      );
+    }
+  }
   const active = new Set<string>();
   return new ZenXBundledAutomationPluginService(
     options.appServer,
@@ -192,6 +218,13 @@ export async function createBundledAutomationPluginService(options: {
     options.threadTargets,
     options.targetDefaults,
     options.startThread,
+  );
+}
+
+function isReconstructibleProjectionError(error: unknown): boolean {
+  const message = describeError(error);
+  return /invalid JSON|document is invalid|value must be|exceeds its byte limit/u.test(
+    message,
   );
 }
 
@@ -212,30 +245,15 @@ async function resolveAutomationDirectory(workspace: string): Promise<string> {
   );
 }
 
-async function initializeOptionalStorage(
-  options: Parameters<typeof JsonPluginStorage.open>[0],
-  pluginId: string,
-): Promise<void> {
-  try {
-    await JsonPluginStorage.open(options);
-  } catch (error) {
-    // Keep a corrupt optional store in place for explicit repair. The
-    // capability runtime will remain unavailable, but ZenX itself can start.
-    console.error(
-      `ZenX optional plugin storage is unavailable for ${pluginId}: ${describeError(error)}`,
-    );
-  }
-}
-
 class PluginAutomationStore implements ZenXTriggerStorePort {
   readonly #storage: JsonPluginStorage;
   readonly #active: ReadonlySet<string>;
-  readonly #roomProjection: JsonPluginStorage;
+  readonly #roomProjection: JsonPluginStorage | undefined;
 
   constructor(
     storage: JsonPluginStorage,
     active: ReadonlySet<string>,
-    roomProjection: JsonPluginStorage,
+    roomProjection: JsonPluginStorage | undefined,
   ) {
     this.#storage = storage;
     this.#active = active;
@@ -272,7 +290,8 @@ class PluginAutomationStore implements ZenXTriggerStorePort {
     // authoritative commit; startup resynchronizes this compatibility file.
     if (this.#active.has(ZENX_ROOMS_CAPABILITY_ID)) {
       try {
-        await this.#roomProjection.set({ rooms: committed.rooms });
+        if (this.#roomProjection !== undefined)
+          await this.#roomProjection.set({ rooms: committed.rooms });
       } catch (error) {
         console.error(
           `ZenX Room compatibility projection is stale; canonical state committed: ${describeError(error)}`,
