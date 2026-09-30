@@ -60,7 +60,7 @@ test("maps idle, active, and replacement submissions without a queue", () => {
   assert.equal(replacement.submission?.intent, "replace");
   assert.equal("queue" in replacement, false);
   assert.equal(defaultComposerIntent(false), "start");
-  assert.equal(defaultComposerIntent(true), "queue");
+  assert.equal(defaultComposerIntent(true), "steer");
 });
 
 test("a pending request is a click fence, not a local queue", () => {
@@ -156,9 +156,10 @@ test("ordered images form one draft, removal preserves text, and image-only draf
 
 test("running send modes implement the Enter and Cmd/Ctrl+Enter matrix", () => {
   for (const [mode, normal, alternate] of [
+    ["batch", "batch-next", "steer"],
     ["queue", "queue", "steer"],
-    ["soft", "steer", "queue"],
-    ["hard", "replace", "queue"],
+    ["soft", "steer", "batch-next"],
+    ["hard", "replace", "batch-next"],
   ] as const) {
     assert.equal(defaultComposerIntent(true, mode), normal);
     assert.equal(defaultComposerIntent(true, mode, true), alternate);

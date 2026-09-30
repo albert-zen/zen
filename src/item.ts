@@ -349,6 +349,8 @@ export interface QueuedUserMessageItem extends ItemBase {
   type: "user_message_queued";
   clientId: string;
   input: UserInput;
+  /** Explicit native manual choice; absent preserves legacy FIFO turns. */
+  deliveryMode?: "batch-next";
 }
 
 export interface CodeStateItem extends ItemBase {

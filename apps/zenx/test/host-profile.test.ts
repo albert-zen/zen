@@ -114,10 +114,11 @@ test("round-trips credential-free v3 profiles and builds all host registry entri
     const store = new ZenXHostProfileStore(
       path.join(directory, "host-profile.json"),
     );
-    await store.write(profile);
+    await store.write({ ...profile, composerSendModeExplicit: true });
     const read = await store.read(profile);
     assert.deepEqual(read, {
       ...profile,
+      composerSendModeExplicit: true,
       workspace: path.resolve(profile.workspace!),
       workspaces: [path.resolve(profile.workspace!)],
     });
@@ -652,13 +653,50 @@ test("concurrent profile stores use independent atomic staging files", async () 
 });
 
 test("composer send modes persist and reject unknown modes", async () => {
+  assert.equal(
+    validateHostProfile({ ...profile, composerSendMode: undefined })
+      .composerSendMode,
+    "soft",
+  );
+  assert.equal(
+    validateHostProfile({ ...profile, composerSendMode: undefined })
+      .composerSendModeExplicit,
+    false,
+  );
+  assert.equal(
+    validateHostProfile({ ...profile, composerSendMode: "soft" })
+      .composerSendModeExplicit,
+    true,
+  );
+  assert.equal(
+    validateHostProfile({ ...profile, composerSendMode: "queue" })
+      .composerSendModeExplicit,
+    false,
+  );
+  assert.equal(
+    validateHostProfile({
+      ...profile,
+      composerSendMode: "soft",
+      composerSendModeExplicit: false,
+    }).composerSendModeExplicit,
+    false,
+  );
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-send-mode-"));
   try {
     const store = new ZenXHostProfileStore(
       path.join(directory, "profile.json"),
     );
-    for (const composerSendMode of ["queue", "soft", "hard"] as const) {
-      await store.write({ ...profile, composerSendMode });
+    for (const composerSendMode of [
+      "batch",
+      "queue",
+      "soft",
+      "hard",
+    ] as const) {
+      await store.write({
+        ...profile,
+        composerSendMode,
+        composerSendModeExplicit: true,
+      });
       assert.equal(
         (await store.read(profile)).composerSendMode,
         composerSendMode,
@@ -667,6 +705,59 @@ test("composer send modes persist and reject unknown modes", async () => {
     assert.throws(
       () => validateHostProfile({ ...profile, composerSendMode: "invalid" }),
       /send mode/u,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("old ambiguous Queue is migrated once with an undo record; trustworthy choices survive", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-old-queue-"));
+  try {
+    const filename = path.join(directory, "host-profile.json");
+    const store = new ZenXHostProfileStore(filename);
+    // Earlier versions wrote Queue into the profile even when no user chose it.
+    await writeFile(filename, JSON.stringify(profile));
+    const migrated = await store.read(profile);
+    assert.equal(migrated.composerSendMode, "soft");
+    assert.equal(migrated.composerSendModeExplicit, false);
+    assert.deepEqual(migrated.composerSendModeMigration, {
+      version: 1,
+      previousMode: "queue",
+      acknowledged: false,
+    });
+    assert.equal(
+      JSON.parse(await readFile(filename, "utf8")).composerSendMode,
+      "soft",
+    );
+    assert.deepEqual(await store.read(profile), migrated);
+
+    // The explicit restore is persisted, not a repeated migration on reopen.
+    await store.write({
+      ...migrated,
+      composerSendMode: "queue",
+      composerSendModeExplicit: true,
+      composerSendModeMigration: {
+        version: 1,
+        previousMode: "queue",
+        acknowledged: true,
+      },
+    });
+    assert.equal((await store.read(profile)).composerSendMode, "queue");
+    assert.equal((await store.read(profile)).composerSendModeExplicit, true);
+    for (const mode of ["soft", "hard", "batch"] as const) {
+      const fromPast = validateHostProfile({
+        ...profile,
+        composerSendMode: mode,
+        ...(mode === "batch" ? { composerSendModeExplicit: false } : {}),
+      });
+      assert.equal(fromPast.composerSendMode, mode);
+      assert.equal(fromPast.composerSendModeMigration, undefined);
+    }
+    assert.equal(
+      validateHostProfile({ ...profile, composerSendModeExplicit: true })
+        .composerSendMode,
+      "queue",
     );
   } finally {
     await rm(directory, { recursive: true, force: true });
