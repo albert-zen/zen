@@ -297,6 +297,7 @@ export class ZenAppServer {
   readonly #id: () => string;
   readonly #now: () => string;
   readonly #threads = new Map<string, Thread>();
+  readonly #threadLoads = new Map<string, Promise<Thread | undefined>>();
   readonly #activeTurns = new Map<
     string,
     {
@@ -2273,17 +2274,25 @@ export class ZenAppServer {
     if (cached !== undefined) {
       return cached;
     }
-    const items = await this.#journal.read(threadId);
-    if (items.length === 0) {
-      return undefined;
+    // Share a read-only cold load across readers and admission. Another Host
+    // may still own an open Turn in the same journal: this reader must never
+    // manufacture its terminal Item from a missing local active handle.
+    const loading = this.#threadLoads.get(threadId);
+    if (loading !== undefined) return await loading;
+    const load = (async () => {
+      const items = await this.#journal.read(threadId);
+      if (items.length === 0) return undefined;
+      const thread = new Thread(threadId, items);
+      this.#threads.set(threadId, thread);
+      return thread;
+    })();
+    this.#threadLoads.set(threadId, load);
+    try {
+      return await load;
+    } finally {
+      if (this.#threadLoads.get(threadId) === load)
+        this.#threadLoads.delete(threadId);
     }
-    const concurrentlyLoaded = this.#threads.get(threadId);
-    if (concurrentlyLoaded !== undefined) {
-      return concurrentlyLoaded;
-    }
-    const thread = new Thread(threadId, items);
-    this.#threads.set(threadId, thread);
-    return thread;
   }
 
   async #requireThread(threadId: string): Promise<Thread> {

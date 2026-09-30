@@ -1233,14 +1233,17 @@ export function contextUsageLabel(
     const window = context.contextWindow;
     return window === null
       ? null
-      : `Context unknown · ${formatTokenCount(window)} max`;
+      : `Context unknown · ${formatTokenCount(window)} configured window`;
   }
   const input = formatTokenCount(context.inputTokens);
-  const source = context.inputTokenSource === "estimated" ? " est." : "";
+  const source =
+    context.inputTokenSource === "estimated"
+      ? "estimated next input"
+      : "last provider input";
   if (context.contextWindow === null || context.ratio === null) {
-    return `Context unknown · ${input} in${source}`;
+    return `Context unknown · ${input} ${source}`;
   }
-  return `Context ${String(Math.round(context.ratio * 100))}%${source} · ${input} / ${formatTokenCount(context.contextWindow)}`;
+  return `Context ${String(Math.round(context.ratio * 100))}% · ${input} ${source} / ${formatTokenCount(context.contextWindow)} configured window`;
 }
 
 export function threadCacheUsageLabel(
@@ -1369,7 +1372,7 @@ export function ContextUsageIndicator({
           aria-label="Context details"
         >
           <div className="context-usage-heading">
-            <span>Context window</span>
+            <span>Configured window</span>
             <strong>{String(percent)}%</strong>
           </div>
           <div
@@ -1379,16 +1382,17 @@ export function ContextUsageIndicator({
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={visualPercent}
+            aria-valuetext={contextLabel}
           >
             <span style={{ width: `${String(visualPercent)}%` }} />
           </div>
           <p>
             {context.inputTokens === null
               ? "Usage unknown"
-              : `${formatTokenCount(context.inputTokens)}${context.inputTokenSource === "estimated" ? " estimated" : ""}`}
+              : `${formatTokenCount(context.inputTokens)} ${context.inputTokenSource === "estimated" ? "estimated next input" : "last provider input"}`}
             {context.contextWindow === null
               ? " tokens"
-              : ` / ${formatTokenCount(context.contextWindow)} tokens`}
+              : ` / ${formatTokenCount(context.contextWindow)} configured window tokens`}
           </p>
           <p>{threadCacheUsageLabel(threadCacheHitRate)}</p>
           <p className="context-usage-explanation">
