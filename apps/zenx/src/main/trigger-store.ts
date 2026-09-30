@@ -35,6 +35,7 @@ import {
   MAX_ROOM_COUNT,
   MAX_ROOM_MEMBERS,
   MAX_ROOM_MESSAGES,
+  MAX_ROOM_OPERATIONS,
   MAX_ROOM_NAME_BYTES,
   MAX_TRIGGER_COUNT,
   MAX_TRIGGER_LABEL_BYTES,
@@ -143,7 +144,15 @@ const OUTCOME_KEYS = [
   "exitCode",
   "error",
 ] as const;
-const ROOM_KEYS = ["id", "name", "members", "messages", "createdAt"] as const;
+const ROOM_KEYS = [
+  "id",
+  "name",
+  "members",
+  "messages",
+  "operations",
+  "operationEpoch",
+  "createdAt",
+] as const;
 const MEMBER_KEYS = ["name", "threadId"] as const;
 const MESSAGE_KEYS = [
   "id",
@@ -441,6 +450,28 @@ function canonicalRoom(room: ZenXRoom): ZenXRoom {
       originThreadId: message.originThreadId,
       originTurnId: message.originTurnId,
     })),
+    ...(room.operationEpoch === undefined
+      ? {}
+      : { operationEpoch: room.operationEpoch }),
+    ...(room.operations === undefined
+      ? {}
+      : {
+          operations: room.operations.map((operation) => ({
+            id: operation.id,
+            text: operation.text,
+            messageId: operation.messageId,
+            createdAt: operation.createdAt,
+            acknowledged: operation.acknowledged,
+            ...(operation.cancelled === true
+              ? { cancelled: true as const }
+              : {}),
+            mentions: operation.mentions.map((mention) => ({
+              name: mention.name,
+              threadId: mention.threadId,
+              triggerIds: [...mention.triggerIds],
+            })),
+          })),
+        }),
     createdAt: room.createdAt,
   };
 }
@@ -739,6 +770,10 @@ function isRoom(value: unknown): value is ZenXRoom {
     !string(room["name"], MAX_ROOM_NAME_BYTES) ||
     !arrayOf(room["members"], isRoomMember, MAX_ROOM_MEMBERS) ||
     !arrayOf(room["messages"], isRoomMessage, MAX_ROOM_MESSAGES) ||
+    (room["operationEpoch"] !== undefined &&
+      !string(room["operationEpoch"], MAX_ID_BYTES)) ||
+    (room["operations"] !== undefined &&
+      !arrayOf(room["operations"], isRoomOperation, MAX_ROOM_OPERATIONS)) ||
     !finiteNumber(room["createdAt"])
   )
     return false;
@@ -751,6 +786,53 @@ function isRoom(value: unknown): value is ZenXRoom {
     threads.add(member.threadId);
   }
   return room["messages"].every((message) => message.roomId === room["id"]);
+}
+
+function isRoomOperation(
+  value: unknown,
+): value is NonNullable<ZenXRoom["operations"]>[number] {
+  const operation = record(value);
+  return (
+    operation !== null &&
+    exactKeys(operation, [
+      "id",
+      "text",
+      "messageId",
+      "createdAt",
+      "acknowledged",
+      ...(operation["cancelled"] === undefined ? [] : ["cancelled"]),
+      "mentions",
+    ]) &&
+    string(operation["id"], MAX_ID_BYTES) &&
+    string(operation["text"], MAX_MESSAGE_TEXT_BYTES) &&
+    nullableString(operation["messageId"], MAX_ID_BYTES) &&
+    finiteNumber(operation["createdAt"]) &&
+    typeof operation["acknowledged"] === "boolean" &&
+    (operation["cancelled"] === undefined ||
+      (operation["cancelled"] === true &&
+        operation["messageId"] === null &&
+        operation["acknowledged"] === true)) &&
+    arrayOf(
+      operation["mentions"],
+      (
+        entry,
+      ): entry is { name: string; threadId: string; triggerIds: string[] } => {
+        const mention = record(entry);
+        return (
+          mention !== null &&
+          exactKeys(mention, ["name", "threadId", "triggerIds"]) &&
+          string(mention["name"], MAX_MEMBER_NAME_BYTES) &&
+          string(mention["threadId"], MAX_ID_BYTES) &&
+          arrayOf(
+            mention["triggerIds"],
+            (id): id is string => string(id, MAX_ID_BYTES),
+            MAX_TRIGGER_COUNT,
+          )
+        );
+      },
+      MAX_ROOM_MEMBERS,
+    )
+  );
 }
 
 function isRoomMember(value: unknown): value is RoomMember {
