@@ -329,6 +329,7 @@ export function projectCompletedItem(
     case "turn_aborted":
     case "turn_completed":
     case "user_message_queued":
+    case "user_message_queue_cancelled":
     case "turn_replacement_requested":
     case "turn_started":
       return null;

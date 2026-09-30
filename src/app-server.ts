@@ -42,6 +42,7 @@ import type {
   UserInput,
   UserMessageItem,
   QueuedUserMessageItem,
+  QueuedUserMessageCancelledItem,
 } from "./item.js";
 import {
   contentFromUserMessage,
@@ -141,6 +142,15 @@ export type ThreadListEntry = ThreadSnapshot | UnavailableThreadSnapshot;
 export interface TurnHandle {
   id: string;
   done: Promise<void>;
+}
+
+export interface QueuedCancellationTarget {
+  queuedItemId: string;
+  clientId: string;
+}
+
+export interface QueuedCancellationResult extends QueuedCancellationTarget {
+  status: "cancelled" | "already_cancelled" | "already_started" | "not_found";
 }
 
 export interface CompactThreadOptions {
@@ -844,6 +854,19 @@ export class ZenAppServer {
         duplicate?.type === "user_message_queued" ||
         duplicate?.type === "user_message"
       ) {
+        if (
+          duplicate.type === "user_message_queued" &&
+          thread.items.some(
+            (item) =>
+              item.type === "user_message_queue_cancelled" &&
+              item.queuedItemId === duplicate.id &&
+              item.clientId === clientId,
+          )
+        )
+          throw new AppServerError(
+            "queue_id_cancelled",
+            "This queued client ID was canceled; use a new ID for a new message",
+          );
         const prior =
           duplicate.type === "user_message_queued"
             ? duplicate.input
@@ -883,6 +906,84 @@ export class ZenAppServer {
     await this.resumeQueue(threadId, options);
   }
 
+  /** A canonical cancellation cannot undo a launched or delivered input. */
+  async cancelQueuedMessages(
+    threadId: string,
+    targets: readonly QueuedCancellationTarget[],
+  ): Promise<QueuedCancellationResult[]> {
+    if (
+      targets.length < 1 ||
+      targets.length > 128 ||
+      new Set(targets.map((item) => item.queuedItemId)).size !==
+        targets.length ||
+      targets.some(
+        (item) =>
+          typeof item.queuedItemId !== "string" ||
+          item.queuedItemId.trim().length === 0 ||
+          typeof item.clientId !== "string" ||
+          item.clientId.trim().length === 0,
+      )
+    )
+      throw new AppServerError(
+        "invalid_request",
+        "Provide 1–128 distinct queued message IDs and client IDs",
+      );
+    return await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#requireThread(threadId);
+      const outcomes: QueuedCancellationResult[] = [];
+      for (const target of targets) {
+        const queued = thread.items.find(
+          (item) =>
+            item.type === "user_message_queued" &&
+            item.id === target.queuedItemId &&
+            item.clientId === target.clientId,
+        );
+        let status: QueuedCancellationResult["status"];
+        if (queued === undefined) status = "not_found";
+        else if (
+          thread.items.some(
+            (item) =>
+              item.type === "user_message" && item.clientId === target.clientId,
+          ) ||
+          this.#reservedQueuedItems.get(threadId)?.has(target.queuedItemId)
+        )
+          status = "already_started";
+        else if (
+          thread.items.some(
+            (item) =>
+              item.type === "user_message_queue_cancelled" &&
+              item.queuedItemId === target.queuedItemId &&
+              item.clientId === target.clientId,
+          )
+        )
+          status = "already_cancelled";
+        else {
+          const canceled: QueuedUserMessageCancelledItem = {
+            id: this.#id(),
+            type: "user_message_queue_cancelled",
+            threadId,
+            createdAt: this.#now(),
+            queuedItemId: target.queuedItemId,
+            clientId: target.clientId,
+          };
+          await this.#commit(thread, canceled);
+          this.#emit({ type: "item_completed", item: canceled });
+          status = "cancelled";
+        }
+        outcomes.push({ ...target, status });
+      }
+      return outcomes;
+    });
+  }
+
+  readonly #reservedQueuedItems = new Map<string, Set<string>>();
+
+  #releaseQueuedReservation(threadId: string, queuedItemId: string): void {
+    const reserved = this.#reservedQueuedItems.get(threadId);
+    reserved?.delete(queuedItemId);
+    if (reserved?.size === 0) this.#reservedQueuedItems.delete(threadId);
+  }
+
   async resumeQueue(
     threadId: string,
     options: { requestApproval?: ApprovalHandler } = {},
@@ -895,7 +996,7 @@ export class ZenAppServer {
     }
     if (this.#activeTurns.has(threadId) || this.#drainingQueues.has(threadId))
       return;
-    const first = pendingQueuedMessages(thread.items)[0];
+    let first = pendingQueuedMessages(thread.items)[0];
     if (first === undefined) return;
     // Claim the admission before the first asynchronous validation. A second
     // explicit resume observes the same result, not a duplicate launch.
@@ -926,17 +1027,30 @@ export class ZenAppServer {
         admission.reject(new AppServerError(safe.code, safe.message));
       }
     };
-    const attemptId = randomUUID();
-    this.#announceQueueAttempt(first, attemptId);
+    let attemptId: string;
     let batch: QueuedUserMessageItem[];
-    try {
-      batch = await this.#preflightQueue(thread, first, attemptId);
-    } catch (error) {
-      this.#drainingQueues.delete(threadId);
-      this.#reportQueueFailure(threadId, error);
-      settleFirst({ type: "rejected", reason: error });
-      await gate;
-      return;
+    while (true) {
+      const pending = pendingQueuedMessages(thread.items)[0];
+      if (pending === undefined) {
+        this.#drainingQueues.delete(threadId);
+        settleFirst({ type: "admitted" }); // canceled while preflight was in flight
+        await gate;
+        return;
+      }
+      first = pending;
+      attemptId = randomUUID();
+      this.#announceQueueAttempt(first, attemptId);
+      try {
+        batch = await this.#preflightQueue(thread, first, attemptId);
+        break;
+      } catch (error) {
+        if (error instanceof QueueBatchChanged) continue;
+        this.#drainingQueues.delete(threadId);
+        this.#reportQueueFailure(threadId, error);
+        settleFirst({ type: "rejected", reason: error });
+        await gate;
+        return;
+      }
     }
     void this.#drainQueue(
       threadId,
@@ -999,6 +1113,12 @@ export class ZenAppServer {
     try {
       selection = this.#requireSelection(thread.effectiveConfiguration());
     } catch (error) {
+      if (
+        !pendingQueuedMessages(thread.items).some(
+          (item) => item.id === first.id,
+        )
+      )
+        throw new QueueBatchChanged();
       throw new QueueAdmissionRejection(first, attemptId, error);
     }
     const pending = pendingQueuedMessages(thread.items);
@@ -1024,8 +1144,20 @@ export class ZenAppServer {
       try {
         await this.#validateInput(item.input, selection.model.inputModalities);
       } catch (error) {
+        if (
+          !pendingQueuedMessages(thread.items).some(
+            (entry) => entry.id === item.id,
+          )
+        )
+          throw new QueueBatchChanged();
         throw new QueueAdmissionRejection(item, attemptId, error);
       }
+      if (
+        !pendingQueuedMessages(thread.items).some(
+          (entry) => entry.id === item.id,
+        )
+      )
+        throw new QueueBatchChanged();
     }
     return batch;
   }
@@ -1082,7 +1214,15 @@ export class ZenAppServer {
         ) {
           batch = nextAttempt.batch;
         } else {
-          batch = await this.#preflightQueue(thread, queued, attemptId);
+          try {
+            batch = await this.#preflightQueue(thread, queued, attemptId);
+          } catch (error) {
+            if (error instanceof QueueBatchChanged) {
+              nextAttempt = undefined;
+              continue;
+            }
+            throw error;
+          }
         }
         nextAttempt = undefined;
         let turn: TurnHandle;
@@ -1096,6 +1236,7 @@ export class ZenAppServer {
             },
             {
               preparedInput: true,
+              queuedAdmission: { items: batch, attemptId },
               ...(batch.length === 1
                 ? {}
                 : {
@@ -1103,11 +1244,11 @@ export class ZenAppServer {
                       input,
                       clientId,
                     })),
-                    queuedAdmission: { items: batch, attemptId },
                   }),
             },
           );
         } catch (error) {
+          if (error instanceof QueueBatchChanged) continue;
           throw error instanceof QueueAdmissionRejection
             ? error
             : new QueueAdmissionRejection(queued, attemptId, error);
@@ -1270,6 +1411,29 @@ export class ZenAppServer {
   ): Promise<TurnHandle> {
     const launch = await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      if (
+        internal.queuedAdmission !== undefined &&
+        !internal.queuedAdmission.items.every((item) =>
+          pendingQueuedMessages(thread.items).some(
+            (candidate) =>
+              candidate.id === item.id && candidate.clientId === item.clientId,
+          ),
+        )
+      )
+        throw new QueueBatchChanged();
+      if (
+        internal.preparedInput !== true &&
+        options.clientId !== undefined &&
+        thread.items.some(
+          (item) =>
+            item.type === "user_message_queue_cancelled" &&
+            item.clientId === options.clientId,
+        )
+      )
+        throw new AppServerError(
+          "queue_id_cancelled",
+          "This queued client ID was canceled; use a new ID for a new message",
+        );
       // Only delivered user messages prove execution. Queue/replacement intents
       // still need their prepared internal launch, even with the same client ID.
       if (internal.preparedInput !== true && options.clientId !== undefined) {
@@ -1502,6 +1666,16 @@ export class ZenAppServer {
                 commit: async (item) => {
                   await this.#withThreadMutation(threadId, async () => {
                     await this.#commit(thread, item);
+                    if (
+                      item.type === "user_message" &&
+                      item.clientId !== undefined
+                    ) {
+                      const queued = internal.queuedAdmission?.items.find(
+                        (entry) => entry.clientId === item.clientId,
+                      );
+                      if (queued !== undefined)
+                        this.#releaseQueuedReservation(threadId, queued.id);
+                    }
                   });
                 },
                 prepareModelSample: async (modelResponseId) =>
@@ -1584,6 +1758,8 @@ export class ZenAppServer {
               const active = this.#activeTurns.get(threadId);
               if (active?.turnId === turnId) {
                 this.#activeTurns.delete(threadId);
+                for (const queued of internal.queuedAdmission?.items ?? [])
+                  this.#releaseQueuedReservation(threadId, queued.id);
                 if (
                   executionSucceeded &&
                   thread.items.some(
@@ -1607,6 +1783,13 @@ export class ZenAppServer {
         });
       });
 
+      if (internal.queuedAdmission !== undefined) {
+        const held =
+          this.#reservedQueuedItems.get(threadId) ?? new Set<string>();
+        for (const queued of internal.queuedAdmission.items)
+          held.add(queued.id);
+        this.#reservedQueuedItems.set(threadId, held);
+      }
       this.#activeTurns.set(threadId, {
         turnId,
         controller,
@@ -2855,6 +3038,9 @@ function remapForkItems(
   return items.map((item) => {
     const copied = structuredClone(item) as CanonicalItem;
     Object.assign(copied, { id: remap(item.id), threadId });
+    if (copied.type === "user_message_queue_cancelled") {
+      copied.queuedItemId = remap(copied.queuedItemId);
+    }
     if (copied.type === "user_message" && copied.deliveryAfter !== undefined) {
       copied.deliveryAfter = remap(copied.deliveryAfter);
     }
@@ -2894,6 +3080,12 @@ export class AppServerError extends Error {
 }
 
 /** An admission attempt is transient; only its queued Item is durable. */
+class QueueBatchChanged extends Error {
+  constructor() {
+    super("The pending FIFO boundary changed before admission");
+  }
+}
+
 class QueueAdmissionRejection extends Error {
   constructor(
     readonly item: QueuedUserMessageItem,

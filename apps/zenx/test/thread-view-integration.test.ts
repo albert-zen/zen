@@ -259,6 +259,140 @@ async function within<T>(promise: Promise<T>, milliseconds = 10_000) {
   }
 }
 
+test("hosted native cancel preserves CAS queue history and delivers only the uncanceled message", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-native-cancel-"),
+  );
+  const manager = new AppServerManager({
+    entryPath: path.resolve("src/main/app-server-host.ts"),
+    tokenFile: path.join(directory, "runtime", "app-server.token"),
+    hostConfig: {
+      cwd: process.cwd(),
+      dataDirectory: path.join(directory, "data"),
+      model: "fake",
+      models: ["fake"],
+      approvalPolicy: "always",
+      provider: { type: "fake" },
+    },
+    execArgv: ["--import", "tsx"],
+    startupTimeoutMs: 10_000,
+  });
+  try {
+    await manager.start();
+    const thread = (await manager.request("thread/start", {})).thread;
+    const approval = deferred<string>();
+    const finished = deferred<void>();
+    let completions = 0;
+    manager.onApprovalRequest((event) => approval.resolve(event.requestId));
+    manager.onNotification((method) => {
+      if (method === "turn/completed" && ++completions === 2)
+        finished.resolve();
+    });
+    await manager.request("turn/start", {
+      threadId: thread.id,
+      input: [
+        { type: "text", text: '!tool run_code {"code":"console.log(1)"}' },
+      ],
+    });
+    const approvalId = await within(approval.promise);
+    await manager.request("turn/queue", {
+      threadId: thread.id,
+      clientUserMessageId: "legacy-cancel",
+      input: [{ type: "text", text: "legacy pending" }],
+    });
+    await manager.request("zen/turn/send", {
+      threadId: thread.id,
+      mode: "batch-next",
+      clientUserMessageId: "native-kept",
+      input: [{ type: "text", text: "keep this next turn" }],
+    });
+    const before = (
+      await manager.request("zen/thread/read", { threadId: thread.id })
+    ).thread.items;
+    const firstQueue = before.find(
+      (item) =>
+        item.type === "user_message_queued" &&
+        item.clientId === "legacy-cancel",
+    );
+    assert.ok(firstQueue);
+    const target = { queuedItemId: firstQueue.id, clientId: "legacy-cancel" };
+    assert.deepEqual(
+      (
+        await manager.request("zen/thread/queue/cancel", {
+          threadId: thread.id,
+          items: [target],
+        })
+      ).results,
+      [{ ...target, status: "cancelled" }],
+    );
+    assert.deepEqual(
+      (
+        await manager.request("zen/thread/queue/cancel", {
+          threadId: thread.id,
+          items: [target],
+        })
+      ).results,
+      [{ ...target, status: "already_cancelled" }],
+    );
+    const whileActive = await manager.request("zen/thread/read", {
+      threadId: thread.id,
+    });
+    assert.ok(
+      whileActive.thread.items.some(
+        (item) =>
+          item.type === "user_message_queue_cancelled" &&
+          item.queuedItemId === target.queuedItemId,
+      ),
+    );
+    assert.deepEqual(
+      whileActive.thread.items.filter(
+        (item) => item.type === "user_message_queue_cancelled",
+      ).length,
+      1,
+    );
+    manager.respondToApproval(approvalId, "accept");
+    await within(finished.promise);
+    const after = (
+      await manager.request("zen/thread/read", { threadId: thread.id })
+    ).thread;
+    assert.deepEqual(
+      after.turns
+        .at(-1)
+        ?.items.filter((item) => item.type === "user_message")
+        .map((item) => item.clientId),
+      ["native-kept"],
+    );
+    assert.equal(
+      after.items.some(
+        (item) =>
+          item.type === "user_message" && item.clientId === "legacy-cancel",
+      ),
+      false,
+    );
+    assert.deepEqual(
+      (
+        await manager.request("zen/thread/queue/cancel", {
+          threadId: thread.id,
+          items: [
+            {
+              queuedItemId: before.find(
+                (item) =>
+                  item.type === "user_message_queued" &&
+                  item.clientId === "native-kept",
+              )!.id,
+              clientId: "native-kept",
+            },
+          ],
+        })
+      ).results.map((entry) => entry.status),
+      ["already_started"],
+    );
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("queued messages retain approval routing and drain through the hosted protocol", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-queue-"));
   const manager = new AppServerManager({

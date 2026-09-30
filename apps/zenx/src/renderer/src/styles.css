@@ -5619,6 +5619,11 @@ a:focus-visible {
   max-height: 120px;
   overflow: auto;
 }
+.queued-messages.cancellable ol {
+  /* Cancellable rows contain real buttons; keep the Stop/send controls in
+     the 360x560 bottom zone and scroll the list rather than the Composer. */
+  max-height: 64px;
+}
 .queued-messages li {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -5628,6 +5633,31 @@ a:focus-visible {
   margin: 6px 0;
   color: var(--color-status-danger);
   line-height: 1.45;
+}
+.queued-cancel-button {
+  margin-inline-start: 8px;
+  min-height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.queued-cancel-notice {
+  margin: 6px 0;
+  color: var(--color-status-danger);
+  line-height: 1.45;
+}
+.queued-cancel-confirmation ol {
+  max-height: 180px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+.queued-cancel-confirmation-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .available-model-picker {

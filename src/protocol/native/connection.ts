@@ -1,5 +1,5 @@
 import type { JsonRpcMessage, SendJson } from "../codex/wire.js";
-import type { ZenAppServer } from "../../app-server.js";
+import { AppServerError, type ZenAppServer } from "../../app-server.js";
 import type { ApprovalHandler } from "../../tool.js";
 import { validateUserInput, type UserInputPart } from "../../item.js";
 import type { SkillReference } from "../../skill-input.js";
@@ -14,6 +14,7 @@ import {
   NATIVE_THREAD_EVENT_METHOD,
   NATIVE_THREAD_RESUME_METHOD,
   NATIVE_THREAD_READ_METHOD,
+  NATIVE_QUEUE_CANCEL_METHOD,
 } from "./wire.js";
 
 export class NativeConnection {
@@ -68,6 +69,63 @@ export class NativeConnection {
 
   async receive(message: JsonRpcMessage): Promise<void> {
     if (this.#closed || !isRequest(message)) return;
+    if (message.method === NATIVE_QUEUE_CANCEL_METHOD) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        if (
+          !isRecord(params) ||
+          typeof params.threadId !== "string" ||
+          !Array.isArray(params.items) ||
+          params.items.some(
+            (item: unknown) =>
+              !isRecord(item) ||
+              typeof item.queuedItemId !== "string" ||
+              typeof item.clientId !== "string",
+          )
+        )
+          throw new AppServerError(
+            "invalid_request",
+            "threadId and queued item/client IDs are required",
+          );
+        if (this.#appServer === undefined)
+          throw new AppServerError(
+            "unavailable",
+            "Native queue cancellation is unavailable",
+          );
+        const items = params.items as {
+          queuedItemId: string;
+          clientId: string;
+        }[];
+        const results = await this.#appServer.cancelQueuedMessages(
+          params.threadId,
+          items,
+        );
+        this.#subscriptions.add(params.threadId);
+        this.#send({ id: message.id, result: { results } });
+      } catch (error) {
+        const reason =
+          error instanceof AppServerError
+            ? {
+                code: -32602,
+                message: error.message,
+                data: { zenCode: error.code },
+              }
+            : {
+                code: -32603,
+                message:
+                  "Queue cancellation outcome is unconfirmed. Read the Thread before retrying.",
+              };
+        this.#send({ id: message.id, error: reason });
+      }
+      return;
+    }
     if (message.method === "zen/turn/send") {
       if (!this.#initialized && !this.#isInitialized()) {
         this.#send({

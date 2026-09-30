@@ -70,6 +70,69 @@ test("native consumption removes only the accepted queue id on the current page"
   );
 });
 
+test("native canceled queue ID disappears immediately and stale queue snapshots cannot revive it", () => {
+  const queued = (id: string, clientId: string) => ({
+    id,
+    clientId,
+    threadId: "thread-1",
+    type: "user_message_queued" as const,
+    createdAt: new Date(10000).toISOString(),
+    input: [{ type: "text" as const, text: "identical" }],
+  });
+  const first = queued("queue-1", "client-1");
+  const second = queued("queue-2", "client-2");
+  let current: Thread = { ...thread(), canonicalItems: [], queuedMessages: [] };
+  for (const item of [first, second])
+    current = applyNativeThreadEvent(current, { type: "item_completed", item });
+  const old = current.queuedMessages ?? [];
+  const canceled = {
+    id: "cancel-1",
+    type: "user_message_queue_cancelled" as const,
+    threadId: "thread-1",
+    createdAt: new Date(11000).toISOString(),
+    queuedItemId: first.id,
+    clientId: first.clientId,
+  };
+  current = applyNativeThreadEvent(current, {
+    type: "item_completed",
+    item: canceled,
+  });
+  assert.deepEqual(
+    current.queuedMessages?.map((item) => item.id),
+    [second.id],
+  );
+  current = applyThreadViewNotification(current, "thread/queue/updated", {
+    threadId: current.id,
+    queuedMessages: old,
+  });
+  current = applyNativeThreadEvent(current, {
+    type: "item_completed",
+    item: canceled,
+  });
+  assert.deepEqual(
+    current.queuedMessages?.map((item) => item.id),
+    [second.id],
+  );
+  assert.equal(
+    current.canonicalItems?.filter(
+      (item) => item.type === "user_message_queue_cancelled",
+    ).length,
+    1,
+  );
+  current = applyNativeThreadEvent(current, {
+    type: "item_completed",
+    item: {
+      ...canceled,
+      id: "cancel-foreign",
+      threadId: "other-thread",
+    },
+  });
+  assert.deepEqual(
+    current.queuedMessages?.map((item) => item.id),
+    [second.id],
+  );
+});
+
 test("keeps interrupted history from thread/resume as terminal history", () => {
   const interrupted = turn("turn-old", "interrupted", [
     userItem("user-old", "stop here"),

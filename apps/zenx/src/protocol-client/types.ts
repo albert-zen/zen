@@ -137,6 +137,10 @@ export interface ClientRequestParams {
       | import("../../../../src/skill-input.js").SkillReference
     )[];
   };
+  "zen/thread/queue/cancel": {
+    threadId: string;
+    items: readonly { queuedItemId: string; clientId: string }[];
+  };
   initialize: InitializeParams;
   "zen/initialize": Record<string, never>;
   "account/read": Record<string, never>;
@@ -200,6 +204,9 @@ export interface ClientRequestParams {
 
 export interface ClientRequestResults {
   "zen/turn/send": { turnId?: string };
+  "zen/thread/queue/cancel": {
+    results: import("../../../../src/app-server.js").QueuedCancellationResult[];
+  };
   initialize: InitializeResult;
   "zen/initialize": { processEpoch: string };
   "account/read": { account: null; requiresOpenaiAuth: false };
