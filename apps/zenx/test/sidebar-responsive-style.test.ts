@@ -185,6 +185,18 @@ test("narrow global notices wrap long errors and keep recovery controls usable",
   assert.match(styles, /\.app-notice button\s*\{[^}]*min-height:\s*44px;/su);
 });
 
+test("mobile sidebar opening clears a persisted desktop collapse", async () => {
+  const app = await readFile(
+    new URL("../src/renderer/src/App.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    app,
+    /const openSidebar = \(\) => \{\s*setSidebarCollapsed\(false\);\s*setSidebarOpen\(true\);/su,
+  );
+  assert.doesNotMatch(app, /onOpenSidebar=\{\(\) => setSidebarOpen\(true\)\}/u);
+});
+
 test("200% text zoom keeps Settings copy and Appearance controls reflowable", async () => {
   const styles = await readFile(
     new URL("../src/renderer/src/styles.css", import.meta.url),
