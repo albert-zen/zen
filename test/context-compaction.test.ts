@@ -3158,8 +3158,12 @@ test("agentic-off active compaction runs at the trigger threshold", async () => 
     contextCompaction: { agenticEnabled: false },
   });
   const thread = await server.startThread();
-  await (await server.startTurn(thread.id, "seed request")).done;
-  await (await server.startTurn(thread.id, "active request")).done;
+  await (
+    await server.startTurn(thread.id, "seed request")
+  ).done;
+  await (
+    await server.startTurn(thread.id, "active request")
+  ).done;
   assert.equal(summaryCalls, 1);
 });
 
@@ -3203,8 +3207,12 @@ test("active compaction estimates the complete post-tool projection", async () =
     ]),
   });
   const thread = await server.startThread();
-  await (await server.startTurn(thread.id, "seed request")).done;
-  await (await server.startTurn(thread.id, "active request")).done;
+  await (
+    await server.startTurn(thread.id, "seed request")
+  ).done;
+  await (
+    await server.startTurn(thread.id, "active request")
+  ).done;
   assert.equal(summaryCalls, 1);
 });
 
@@ -3234,7 +3242,9 @@ test("an oversized first active Turn fails closed without a completed boundary",
     ]),
   });
   const thread = await server.startThread();
-  await (await server.startTurn(thread.id, "first request")).done;
+  await (
+    await server.startTurn(thread.id, "first request")
+  ).done;
   const snapshot = await server.readThread(thread.id);
   assert.equal(normalSamples, 1);
   assert.equal(requests.length, 1);
@@ -3293,7 +3303,9 @@ test("active host compaction preserves same-Turn late steering", async () => {
     ]),
   });
   const thread = await server.startThread();
-  await (await server.startTurn(thread.id, "seed request")).done;
+  await (
+    await server.startTurn(thread.id, "seed request")
+  ).done;
   const active = await server.startTurn(thread.id, "active request");
   activeTurnId = active.id;
   await summaryStarted.promise;
@@ -3347,7 +3359,9 @@ test("active compaction preserves unknown journal outcomes and stop handling", a
       ]),
     });
     const thread = await server.startThread();
-    await (await server.startTurn(thread.id, "seed request")).done;
+    await (
+      await server.startTurn(thread.id, "seed request")
+    ).done;
     const active = await server.startTurn(thread.id, "active request");
     await assert.rejects(active.done, /active compaction journal unavailable/u);
     assert.equal(normalSamples, 2);
@@ -3397,7 +3411,9 @@ test("active compaction preserves unknown journal outcomes and stop handling", a
       ]),
     });
     const thread = await server.startThread();
-    await (await server.startTurn(thread.id, "seed request")).done;
+    await (
+      await server.startTurn(thread.id, "seed request")
+    ).done;
     const active = await server.startTurn(thread.id, "active request");
     await summaryStarted.promise;
     await server.interruptTurn(thread.id, active.id);

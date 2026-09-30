@@ -1720,8 +1720,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       role="status"
                     >
                       Unreviewed Room operation {operation.id.slice(0, 8)}:{" "}
-                      {operationStateLabel(operation)}{" "}
-                      · {Array.from(operation.text).slice(0, 70).join("")}{" "}
+                      {operationStateLabel(operation)} ·{" "}
+                      {Array.from(operation.text).slice(0, 70).join("")}{" "}
                       <button
                         type="button"
                         onClick={() =>
@@ -1782,7 +1782,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     </summary>
                     {olderRoomOperations.map((operation) => (
                       <p className="room-send-pending" key={operation.id}>
-                        {operation.id.slice(0, 8)} · {operationStateLabel(operation)} ·{" "}
+                        {operation.id.slice(0, 8)} ·{" "}
+                        {operationStateLabel(operation)} ·{" "}
                         {Array.from(operation.text).slice(0, 70).join("")}
                       </p>
                     ))}
