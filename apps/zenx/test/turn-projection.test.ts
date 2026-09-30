@@ -3,10 +3,43 @@ import test from "node:test";
 
 import type { ThreadItem, Turn } from "../src/protocol-client/index.js";
 import {
+  groupPrivateReasoningRows,
   projectTurn,
   traceDisplayRows,
   traceSummary,
 } from "../src/renderer/src/turn-projection.js";
+
+test("adjacent private reasoning without a public summary has one honest row, not one per item", () => {
+  const privateItem = (id: string) => ({
+    ...reasoning(id, ""),
+    summary: [],
+    content: [],
+  });
+  const rows = traceDisplayRows([
+    privateItem("opaque-a"),
+    privateItem("opaque-b"),
+    command("tool", "shell"),
+    privateItem("opaque-c"),
+    { ...privateItem("public"), summary: ["Public summary"] },
+    privateItem("opaque-d"),
+    privateItem("opaque-e"),
+  ]);
+  const grouped = groupPrivateReasoningRows(rows);
+  assert.deepEqual(
+    grouped.map((row) =>
+      "kind" in row
+        ? { kind: row.kind, ids: row.ids }
+        : { kind: row.item.type, id: row.item.id },
+    ),
+    [
+      { kind: "privateReasoningRun", ids: ["opaque-a", "opaque-b"] },
+      { kind: "commandExecution", id: "tool" },
+      { kind: "reasoning", id: "opaque-c" },
+      { kind: "reasoning", id: "public" },
+      { kind: "privateReasoningRun", ids: ["opaque-d", "opaque-e"] },
+    ],
+  );
+});
 
 test("group summary does not claim unfinished tools have been used", () => {
   const pending = {
