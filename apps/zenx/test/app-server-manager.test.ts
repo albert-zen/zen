@@ -21,7 +21,10 @@ import { ZenXAutomationControlCapabilityPackage } from "../src/main/capabilities
 import { ZenXTriggerService } from "../src/main/trigger-service.js";
 import { ZenXTriggerStore } from "../src/main/trigger-store.js";
 
-function managerFor(directory: string): AppServerManager {
+function managerFor(
+  directory: string,
+  threadUsageReadTimeoutMs?: number,
+): AppServerManager {
   return new AppServerManager({
     entryPath: path.resolve("src/main/app-server-host.ts"),
     tokenFile: path.join(directory, "runtime", "app-server.token"),
@@ -35,8 +38,80 @@ function managerFor(directory: string): AppServerManager {
     },
     execArgv: ["--import", "tsx"],
     startupTimeoutMs: 10_000,
+    ...(threadUsageReadTimeoutMs === undefined
+      ? {}
+      : { threadUsageReadTimeoutMs }),
   });
 }
+
+test("same live Host bounds a missing read-only usage IPC reply without restarting it", async (t) => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-usage-reply-lost-"),
+  );
+  const originalEmit = ChildProcess.prototype.emit;
+  let dropped = false;
+  t.mock.method(
+    ChildProcess.prototype,
+    "emit",
+    function (this: ChildProcess, event: string | symbol, ...args: unknown[]) {
+      if (event === "spawn" && this.send !== undefined) {
+        const originalSend = this.send;
+        t.mock.method(
+          this,
+          "send",
+          function (
+            this: ChildProcess,
+            message: unknown,
+            ...sendArgs: unknown[]
+          ) {
+            if (
+              !dropped &&
+              typeof message === "object" &&
+              message !== null &&
+              "type" in message &&
+              message.type === "thread-usage/read"
+            ) {
+              dropped = true;
+              const callback = sendArgs.find(
+                (arg): arg is (error: null) => void =>
+                  typeof arg === "function",
+              );
+              callback?.(null);
+              return true;
+            }
+            return Reflect.apply(originalSend, this, [message, ...sendArgs]);
+          },
+        );
+      }
+      return Reflect.apply(originalEmit, this, [event, ...args]);
+    },
+  );
+  const manager = managerFor(directory, 50);
+  try {
+    await manager.start();
+    const pid = manager.processId;
+    const started = await manager.request("thread/start", {
+      cwd: process.cwd(),
+      model: "fake",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+    await assert.rejects(
+      within(manager.readThreadUsage(started.thread.id), 2_000),
+      /Thread usage read timed out/u,
+    );
+    assert.equal(dropped, true);
+    assert.equal(manager.processId, pid);
+    assert.equal(
+      (await manager.readThreadUsage(started.thread.id)).thread.responseCount,
+      0,
+    );
+    assert.equal(manager.processId, pid);
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("startup timeout terminates an exact child that ignores graceful shutdown and TERM", async (t) => {
   // Observe real IPC/signals at the parent boundary; child callbacks may not
