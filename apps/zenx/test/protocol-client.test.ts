@@ -627,15 +627,58 @@ test("typed manual compaction appends one reset with refreshed AGENTS rules and 
     ).done;
     const before = await appServer.readThread(thread.id);
     await writeFile(path.join(directory, "AGENTS.md"), "LATEST_RULES");
+    const userId = before.items.find(
+      (item) => item.type === "user_message",
+    )?.id;
+    assert(userId !== undefined);
     const result = await client.request("thread/compact", {
       threadId: thread.id,
+      retention: { mode: "selected-items", itemIds: [userId, userId] },
     });
     const after = await appServer.readThread(thread.id);
     const compaction = after.items.find(
       (item) => item.id === result.compactionItemId,
     );
     assert(compaction?.type === "context_compaction");
+    assert.deepEqual(compaction.retainedItemIds, [userId]);
     assert.equal(compaction.workspaceInstructions?.[0]?.text, "LATEST_RULES");
+    assert.equal(compaction.includeOriginalReference, true);
+    const original = await client.request("thread/original/read", {
+      threadId: thread.id,
+      throughItemId: compaction.coveredThroughItemId,
+      limit: 1,
+    });
+    assert.equal(original.items.length, 1);
+    assert.equal(original.items[0]?.type, "agentMessage");
+    assert(original.nextBeforeItemId !== null);
+    const earlier = await client.request("thread/original/read", {
+      threadId: thread.id,
+      throughItemId: compaction.coveredThroughItemId,
+      beforeItemId: original.nextBeforeItemId,
+      limit: 50,
+    });
+    assert(earlier.items.some((item) => item.type === "userMessage"));
+    const { thread: noRef } = await client.request("thread/start", {});
+    await (
+      await appServer.startTurn(noRef.id, "not publicly referenced")
+    ).done;
+    const noRefResult = await client.request("thread/compact", {
+      threadId: noRef.id,
+      includeOriginalReference: false,
+    });
+    const noRefItem = (await appServer.readThread(noRef.id)).items.find(
+      (item) => item.id === noRefResult.compactionItemId,
+    );
+    assert(noRefItem?.type === "context_compaction");
+    assert.equal(noRefItem.includeOriginalReference, false);
+    await assert.rejects(
+      client.request("thread/original/read", {
+        threadId: noRef.id,
+        throughItemId: noRefItem.coveredThroughItemId,
+      }),
+      /not enabled/u,
+    );
+
     assert.equal(after.turns.length, before.turns.length);
     assert.equal(
       after.items.filter((item) => item.type === "context_compaction").length,

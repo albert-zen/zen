@@ -237,3 +237,9 @@ New Thread discovery is broadcast as `thread/started` to all initialized
 connections after the canonical Thread metadata commits. It does not subscribe
 those connections to transcript output or activate their UI. The creator gets
 one notification through the same event projection, alongside its request result.
+
+`thread/compact` 的 ZAS 扩展参数 `includeOriginalReference`（默认 true）与
+`retention`（Core policy 字段，包括 `itemIds`、`itemRanges`、`recentTurnCount`）不是 CAS 0.146.0
+的 schema；仅原生 ZAS 客户端可使用。`thread/original/read` 从存储的
+开启引用的压缩边界分页回读公开 Thread 投影，最多 50 项，不返回隐藏 reasoning
+或排队输入；原始 ItemList 本身不变。

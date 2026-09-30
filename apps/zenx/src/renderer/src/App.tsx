@@ -1693,9 +1693,12 @@ export function App() {
           threadDetail.turns.some((turn) => turn.status === "inProgress"),
         read: () => composerStatesRef.current[threadId] ?? emptyComposerState(),
         update: (change) => updateComposer(threadId, change),
-        compact: async (id) => {
+        compact: async (id, includeOriginalReference) => {
           await window.zenx.protocol.request("thread/compact", {
             threadId: id,
+            ...(includeOriginalReference
+              ? {}
+              : { includeOriginalReference: false }),
           });
           if (selectedThreadIdRef.current === id) await resumeThread(id, true);
         },

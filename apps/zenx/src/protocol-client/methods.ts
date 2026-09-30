@@ -20,6 +20,7 @@ export const clientRequestMethods = [
   "thread/permissions/update",
   "thread/unsubscribe",
   "thread/compact",
+  "thread/original/read",
   "turn/start",
   "turn/steer",
   "turn/queue",

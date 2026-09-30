@@ -1024,3 +1024,20 @@ Provider 删除、能力更新与连接替换只改变后续执行目录。AppSe
 - **ZenX scrollbar visibility** — one renderer document controller reveals native scrollbars on scrolling, edge pointer and keyboard activity; this transient presentation state never replaces native scrolling or changes layout geometry.
 
 - **ZenX tool input disclosure** — tool details measure their two-line input preview at the current width; only overflowing input gains an expandable disclosure, with no change to canonical call arguments.
+
+**OriginalItemListReference** — 压缩 Item 上的 Host-owned 布尔选择将同一 Thread 的身份与
+`coveredThroughItemId` 派生为 `zen-thread://<Thread>/items?through=<Item>` 逻辑定位符；
+新写入默认开启、可关闭，legacy 缺失字段保持原投影不变。定位符不是磁盘路径、权限
+令牌或另一个会话事实：只由当前连接对已持久化且开启引用的压缩边界请求
+`thread/original/read`，每页至多 50 条既有公开投影 Item（不含 reasoning、queued），
+截止压缩采样边界；历史 journal 原样 append-only。Agent 工具的手写摘要与自动摘要
+均经 Core 的同一保留规划函数确定 canonical Item ID、工具闭包和预算，Host 不信任
+摘要中自称的角色、ID、原文路径；手写不调用摘要模型。最近 Turn/Item、指定 ID/ID 闭区间与
+用户消息类别为硬约束，按原顺序去重，超预算拒绝、不静默丢弃。active Turn 的
+采样快照截止在采样时的 canonical Item；晚到的已投递输入仍在压缩边界之外，
+queued 输入不可作为留存 Item；手动/自动生成仍须在同 Thread mutation lock 内
+取得完整 Turn 边界。不在 CAS 0.146.0 接口中增加此语义。
+
+ZenX 的 `/compact --no-reference` 仅将关闭原文定位符作为 `thread/compact`
+请求参数传给 Host；普通 `/compact` 与按钮沿默认开启路径运行，不在 UI
+内建立另一个压缩状态源或将 `/compact` 写成 user message。
