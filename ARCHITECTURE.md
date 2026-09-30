@@ -117,6 +117,10 @@
 - **ContextCompactionConfig** — Host-owned 压缩策略配置；它规范化摘要指令、触发与目标占比及
   canonical Item 保留规则，并以默认关闭的实验开关控制 agentic compaction admission；省略字段时
   使用 Core 默认，配置本身不写入 Thread canonical ItemList。
+- **Active-Turn Host Compaction** — Runtime 在工具结果提交后的下一次模型采样边界用最近一次
+  Provider usage 评估上下文压力；Agentic 模式先注入一次易失的 Host context notice，硬预算或
+  关闭 Agentic 时复用同一 provider-generated projection 压缩已完成历史并继续原 Turn，空闲
+  Thread 不会因此创建新 Turn。
 - **ModelUsageItem** — Provider 对一次稳定 model response 报告的 canonical 执行事实，
   保存包含 cached 部分的 total input、可选 cached input、output 与可选 reasoning output tokens。
 - **TurnSortAt** — 原生 Thread summary 从本地 `turn_started` 的最新时间（fork 后的 Turn；没有则本线程创建时间）推导默认列表排序键，独立于 updatedAt，可随 journal 重建。

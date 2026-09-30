@@ -116,6 +116,7 @@ export interface BoundedCompactionBoundaryOptions {
   retainedTokenBudget: number;
   estimateRetainedTokens: (items: readonly CanonicalItem[]) => number;
   retention?: ResolvedContextCompactionConfig["retention"];
+  allowOpenTurns?: boolean;
 }
 
 export function normalizeContextCompactionConfig(
@@ -348,6 +349,29 @@ export function latestEligibleCompactionBoundary(
   return undefined;
 }
 
+/**
+ * Return the newest completed Turn boundary while an unrelated Turn remains
+ * active. Active-Turn host compaction summarizes history up to this boundary
+ * and leaves the current Turn items in the projected suffix.
+ */
+export function latestCompletedCompactionBoundary(
+  items: readonly CanonicalItem[],
+): CompactionBoundary | undefined {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item?.type !== "turn_completed") continue;
+    return {
+      item,
+      index,
+      retainedItemIds: items
+        .slice(0, index + 1)
+        .filter((candidate) => candidate.turnId === item.turnId)
+        .map((candidate) => candidate.id),
+    };
+  }
+  return undefined;
+}
+
 export function boundedCompactionBoundary(
   items: readonly CanonicalItem[],
   options: BoundedCompactionBoundaryOptions,
@@ -360,7 +384,9 @@ export function boundedCompactionBoundary(
       "Context compaction retained token budget must be a non-negative integer",
     );
   }
-  const boundary = latestEligibleCompactionBoundary(items);
+  const boundary = options.allowOpenTurns
+    ? latestCompletedCompactionBoundary(items)
+    : latestEligibleCompactionBoundary(items);
   if (boundary === undefined) return undefined;
 
   return planCompactionRetention(items, boundary, options);
@@ -715,7 +741,7 @@ export function validateContextCompactionItem(
       "Context compaction boundary must be a turn_completed Item",
     );
   }
-  const latestBoundary = latestEligibleCompactionBoundary(items);
+  const latestBoundary = latestCompletedCompactionBoundary(items);
   if (latestBoundary?.item.id !== item.coveredThroughItemId) {
     throw new Error(
       "Context compaction boundary must be the latest eligible completed Turn",

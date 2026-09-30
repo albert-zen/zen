@@ -160,6 +160,10 @@ export interface RunTurnOptions {
   emit: (event: RuntimeEvent) => void;
   initialInputCommitted?: () => void;
   agenticCompactionCommitted?: () => void;
+  afterToolBatch?: (usage: {
+    inputTokens: number | undefined;
+    agenticCompaction: boolean;
+  }) => Promise<void>;
   requestApproval?: ApprovalHandler;
 }
 
@@ -365,6 +369,13 @@ export class AgentRuntime {
           options,
           scheduler,
         );
+        await options.afterToolBatch?.({
+          inputTokens: result.inputTokens,
+          agenticCompaction: result.toolCalls.some(
+            (toolCall) =>
+              toolCall.name === AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
+          ),
+        });
       }
     } catch (error) {
       if (!initialInputCommitted) throw error;
@@ -437,6 +448,7 @@ export class AgentRuntime {
     text: string;
     presentation: ToolPresentationSnapshot;
     contextBoundaryItemId: string;
+    inputTokens: number | undefined;
     toolCalls: Array<{
       callId: string;
       name: string;
@@ -698,6 +710,7 @@ export class AgentRuntime {
       toolCalls,
       presentation,
       contextBoundaryItemId,
+      inputTokens: latestUsage?.inputTokens,
     };
   }
 

@@ -23,6 +23,7 @@ import {
   contextCompactionTokenBudget,
   originalItemListReference,
   latestCompaction,
+  latestCompletedCompactionBoundary,
   latestEligibleCompactionBoundary,
   normalizeContextCompactionConfig,
   type ContextCompactionConfig,
@@ -319,6 +320,8 @@ export class ZenAppServer {
       done: Promise<void>;
       inputModalities: readonly string[] | null;
       deliveryAnchorId?: string;
+      contextCompactionNotice: string | undefined;
+      contextCompactionNoticeIssued: boolean;
     }
   >();
   readonly #subscribers = new Set<(event: AppServerEvent) => void>();
@@ -1722,8 +1725,29 @@ export class ZenAppServer {
                         "Model sample has no canonical context boundary",
                       );
                     }
+                    const messages = compileModelMessages(
+                      items,
+                      resolved.selection,
+                    );
+                    const notice =
+                      active.contextCompactionNotice !== undefined &&
+                      active.contextCompactionNoticeIssued !== true
+                        ? active.contextCompactionNotice
+                        : undefined;
+                    if (notice !== undefined) {
+                      active.contextCompactionNoticeIssued = true;
+                    }
                     return {
-                      messages: compileModelMessages(items, resolved.selection),
+                      messages:
+                        notice === undefined
+                          ? messages
+                          : [
+                              ...messages,
+                              {
+                                role: "user" as const,
+                                text: notice,
+                              },
+                            ],
                       contextBoundaryItemId,
                     };
                   }),
@@ -1746,7 +1770,22 @@ export class ZenAppServer {
                 },
                 agenticCompactionCommitted: () => {
                   highestInputTokens = undefined;
+                  const active = this.#activeTurns.get(threadId);
+                  if (active?.turnId === turnId) {
+                    active.contextCompactionNotice = undefined;
+                    active.contextCompactionNoticeIssued = false;
+                  }
                 },
+                afterToolBatch: async ({ inputTokens, agenticCompaction }) =>
+                  await this.#handleActiveTurnCompaction({
+                    threadId,
+                    turnId,
+                    resolved,
+                    contextCompaction: admitted.configuration.contextCompaction,
+                    inputTokens,
+                    agenticCompaction,
+                    signal: controller.signal,
+                  }),
                 emit: (event) => {
                   if (
                     event.type === "token_usage" &&
@@ -1816,6 +1855,8 @@ export class ZenAppServer {
         controller,
         done,
         inputModalities: resolved.model.inputModalities,
+        contextCompactionNotice: undefined,
+        contextCompactionNoticeIssued: false,
       });
       return { handle: { id: turnId, done }, ready: ready.promise };
     });
@@ -2117,20 +2158,94 @@ export class ZenAppServer {
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {
-    const activeHandle = await this.#withThreadMutation(threadId, async () => {
-      const active = this.#activeTurns.get(threadId);
-      if (active === undefined || active.turnId !== turnId) {
-        throw new AppServerError(
-          "turn_not_running",
-          `Turn ${turnId} is not running on thread ${threadId}`,
-        );
-      }
-      active.controller.abort(
-        new DOMException("Interrupted by user", "AbortError"),
+    const active = this.#activeTurns.get(threadId);
+    if (active === undefined || active.turnId !== turnId) {
+      throw new AppServerError(
+        "turn_not_running",
+        `Turn ${turnId} is not running on thread ${threadId}`,
       );
-      return { done: active.done };
+    }
+    active.controller.abort(
+      new DOMException("Interrupted by user", "AbortError"),
+    );
+    await active.done;
+  }
+
+  async #handleActiveTurnCompaction(options: {
+    threadId: string;
+    turnId: string;
+    resolved: ResolvedProviderSelection;
+    contextCompaction: ResolvedContextCompactionConfig;
+    inputTokens: number | undefined;
+    agenticCompaction: boolean;
+    signal: AbortSignal;
+  }): Promise<void> {
+    const contextWindow = options.resolved.model.contextWindow;
+    const inputTokens = options.inputTokens;
+    if (contextWindow === null || inputTokens === undefined) return;
+
+    await this.#withThreadMutation(options.threadId, async () => {
+      const active = this.#activeTurns.get(options.threadId);
+      if (active?.turnId !== options.turnId) return;
+      const trigger = automaticCompactionThreshold(
+        contextWindow,
+        options.contextCompaction.triggerPercent,
+      );
+      if (inputTokens < trigger) {
+        active.contextCompactionNotice = undefined;
+        active.contextCompactionNoticeIssued = false;
+        return;
+      }
+      if (options.agenticCompaction) {
+        active.contextCompactionNotice = undefined;
+        active.contextCompactionNoticeIssued = false;
+        return;
+      }
+
+      const fallbackPercent = Math.min(
+        100,
+        Math.max(
+          options.contextCompaction.triggerPercent,
+          Math.min(99, options.contextCompaction.triggerPercent + 15),
+        ),
+      );
+      const hardFallback =
+        inputTokens >=
+        automaticCompactionThreshold(contextWindow, fallbackPercent);
+      if (!hardFallback) {
+        if (
+          options.contextCompaction.agenticEnabled &&
+          active.contextCompactionNotice === undefined
+        ) {
+          active.contextCompactionNotice = `[Host context notice] The next model context is estimated at ${String(
+            Math.round((inputTokens / contextWindow) * 100),
+          )}% of the configured window. Consider calling compact_context with a concise continuation summary; the current Turn can continue.`;
+          active.contextCompactionNoticeIssued = false;
+        }
+        return;
+      }
+
+      const thread = await this.#requireThread(options.threadId);
+      const boundary = latestCompletedCompactionBoundary(thread.items);
+      if (boundary === undefined) return;
+      if (
+        latestCompaction(thread.items)?.coveredThroughItemId ===
+        boundary.item.id
+      ) {
+        return;
+      }
+      await this.#appendContextCompaction({
+        thread,
+        boundary,
+        initiator: "automatic",
+        selection: options.resolved,
+        contextCompaction: options.contextCompaction,
+        signal: options.signal,
+        allowOpenTurns: true,
+      });
+      active.contextCompactionNotice = undefined;
+      active.contextCompactionNoticeIssued = false;
     });
-    await activeHandle.done;
   }
 
   async #commitFinalResponse(
@@ -2182,6 +2297,9 @@ export class ZenAppServer {
           ...automaticCompaction,
         });
       } catch (error) {
+        if (error instanceof ThreadJournalAppendOutcomeUnknownError) {
+          throw error;
+        }
         console.warn(
           `Could not automatically compact completed Turn ${turnId}`,
           error,
@@ -2248,6 +2366,9 @@ export class ZenAppServer {
         signal: options.signal,
       });
     } catch (error) {
+      if (error instanceof ThreadJournalAppendOutcomeUnknownError) {
+        throw error;
+      }
       throw new AppServerError(
         "automatic_compaction_failed",
         `Automatic context compaction failed: ${describeCompactionError(
@@ -2337,6 +2458,7 @@ export class ZenAppServer {
     selection: ResolvedProviderSelection;
     contextCompaction: ResolvedContextCompactionConfig;
     signal: AbortSignal;
+    allowOpenTurns?: boolean;
   }): Promise<ContextCompactionItem> {
     const sourceMessages = compileModelMessages(
       options.thread.items.slice(0, options.boundary.index + 1),
@@ -2391,6 +2513,9 @@ export class ZenAppServer {
             ),
           ),
         retention: options.contextCompaction.retention,
+        ...(options.allowOpenTurns === undefined
+          ? {}
+          : { allowOpenTurns: options.allowOpenTurns }),
       });
     } catch (error) {
       throw new AppServerError(
@@ -2428,6 +2553,9 @@ export class ZenAppServer {
       await this.#commit(options.thread, item);
       this.#emit({ type: "item_completed", item });
     } catch (error) {
+      if (error instanceof ThreadJournalAppendOutcomeUnknownError) {
+        throw error;
+      }
       throw new AppServerError(
         "compaction_persistence_failed",
         describeCompactionError(

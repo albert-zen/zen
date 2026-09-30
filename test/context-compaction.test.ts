@@ -20,7 +20,11 @@ import type {
   ProviderGeneratedContextCompactionItem,
   ThreadMetadataItem,
 } from "../src/item.js";
-import { InMemoryThreadJournal, type ThreadJournal } from "../src/journal.js";
+import {
+  InMemoryThreadJournal,
+  ThreadJournalAppendOutcomeUnknownError,
+  type ThreadJournal,
+} from "../src/journal.js";
 import { StaticModelCatalog, type ModelCatalog } from "../src/model-catalog.js";
 import { estimateModelMessageInputTokens } from "../src/model-usage.js";
 import {
@@ -2366,7 +2370,10 @@ test("automatic compaction failure does not fail a completed Turn", async (t) =>
     persistenceThread.id,
     "persist",
   );
-  await persistenceHandle.done;
+  await assert.rejects(
+    persistenceHandle.done,
+    ThreadJournalAppendOutcomeUnknownError,
+  );
   assert.equal(persistenceSummaryCalls, 1);
   assert.equal(
     (await persistence.readThread(persistenceThread.id)).turns[0]?.status,
@@ -2378,7 +2385,7 @@ test("automatic compaction failure does not fail a completed Turn", async (t) =>
     ),
     false,
   );
-  assert.equal(warnings.length, 3);
+  assert.equal(warnings.length, 2);
   assert(
     warnings.every((warning) =>
       warning.startsWith("Could not automatically compact completed Turn"),
@@ -2821,9 +2828,9 @@ test("generation, abort, invalid summary, and journal failures append no compact
     await persistence.startTurn(persistenceThread.id, "one")
   ).done;
   const beforePersistence = await backing.read(persistenceThread.id);
-  await expectAppServerCode(
+  await assert.rejects(
     persistence.compactThread(persistenceThread.id),
-    "compaction_persistence_failed",
+    ThreadJournalAppendOutcomeUnknownError,
   );
   assert.equal(persistenceSummaryCalls, 1);
   assert.deepEqual(await backing.read(persistenceThread.id), beforePersistence);
@@ -2943,6 +2950,157 @@ test("freezes the admitted Provider selection while a settings update waits", as
   assert.equal(compacted.modelId, "recording-model");
   assert.equal(compacted.providerProfileId, "recording");
   assert.equal(compacted.reasoningEffort, "medium");
+});
+
+test("agentic threshold gives one host notice before the same Turn continues", async () => {
+  const requests: ModelRequest[] = [];
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      if (request.tools.length === 0) {
+        yield { type: "text_delta", delta: "summary" };
+        yield { type: "usage", inputTokens: 5, outputTokens: 1 };
+        return;
+      }
+      samples += 1;
+      if (samples === 1) {
+        yield { type: "text_delta", delta: "seed" };
+        yield { type: "usage", inputTokens: 5, outputTokens: 1 };
+        return;
+      }
+      if (samples === 2) {
+        yield {
+          type: "tool_call",
+          callId: "notice-tool",
+          name: "shell",
+          arguments: { command: "printf ok" },
+        };
+        yield { type: "usage", inputTokens: 850, outputTokens: 1 };
+        return;
+      }
+      assert(
+        requests
+          .at(-1)
+          ?.messages.some(
+            (message) =>
+              message.role === "user" &&
+              "text" in message &&
+              message.text.startsWith("[Host context notice]"),
+          ),
+      );
+      yield { type: "text_delta", delta: "continued" };
+      yield { type: "usage", inputTokens: 10, outputTokens: 1 };
+    },
+  };
+  const journal = new InMemoryThreadJournal();
+  const server = createServer({
+    journal,
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 1_000 },
+    ]),
+    contextCompaction: { agenticEnabled: true },
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "seed request")
+  ).done;
+  await (
+    await server.startTurn(thread.id, "active request")
+  ).done;
+
+  assert.equal(
+    requests.filter((request) =>
+      request.messages.some(
+        (message) =>
+          message.role === "user" &&
+          "text" in message &&
+          message.text.startsWith("[Host context notice]"),
+      ),
+    ).length,
+    1,
+  );
+  assert.equal(
+    (await server.readThread(thread.id)).items.filter(
+      (item) => item.type === "turn_started",
+    ).length,
+    2,
+  );
+});
+
+test("active Turn hard budget fallback compacts before the next model sample", async () => {
+  const requests: ModelRequest[] = [];
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      if (request.tools.length === 0) {
+        yield { type: "text_delta", delta: "summary" };
+        yield { type: "usage", inputTokens: 5, outputTokens: 1 };
+        return;
+      }
+      samples += 1;
+      if (samples === 1) {
+        yield { type: "text_delta", delta: "seed" };
+        yield { type: "usage", inputTokens: 5, outputTokens: 1 };
+        return;
+      }
+      if (samples === 2) {
+        yield {
+          type: "tool_call",
+          callId: "fallback-tool",
+          name: "shell",
+          arguments: { command: "printf ok" },
+        };
+        yield { type: "usage", inputTokens: 960, outputTokens: 1 };
+        return;
+      }
+      assert(
+        requests
+          .at(-1)
+          ?.messages.some(
+            (message) =>
+              message.role === "user" &&
+              "text" in message &&
+              message.text.startsWith("[Zen compacted context]"),
+          ),
+      );
+      yield { type: "text_delta", delta: "continued after host compaction" };
+      yield { type: "usage", inputTokens: 10, outputTokens: 1 };
+    },
+  };
+  const journal = new InMemoryThreadJournal();
+  const server = createServer({
+    journal,
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 1_000 },
+    ]),
+    contextCompaction: { agenticEnabled: true },
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "seed request")
+  ).done;
+  await (
+    await server.startTurn(thread.id, "active request")
+  ).done;
+
+  assert(
+    (await server.readThread(thread.id)).items.some(
+      (item) =>
+        item.type === "context_compaction" && item.initiator === "automatic",
+    ),
+  );
+  assert.equal(
+    (await server.readThread(thread.id)).items.filter(
+      (item) => item.type === "turn_started",
+    ).length,
+    2,
+  );
 });
 
 function createServer(options: {
