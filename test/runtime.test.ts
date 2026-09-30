@@ -1587,7 +1587,7 @@ test("canonical items and exposed snapshots are immutable at runtime", async () 
   );
 });
 
-test("derives an interrupted turn after restart without writing a synthetic record", async () => {
+test("records a lost owner's interruption once after restart", async () => {
   const journal = new InMemoryThreadJournal();
   const threadId = "recovered_thread";
   const oldTurnId = "old_turn";
@@ -1628,7 +1628,12 @@ test("derives an interrupted turn after restart without writing a synthetic reco
   await next.done;
   const snapshot = await server.readThread(threadId);
   assert.equal(snapshot.turns[0]?.status, "interrupted");
-  assert(!snapshot.items.some((item) => item.type === "turn_aborted"));
+  assert.equal(
+    snapshot.items.filter(
+      (item) => item.type === "turn_aborted" && item.turnId === oldTurnId,
+    ).length,
+    1,
+  );
   assert.equal(snapshot.turns[1]?.status, "completed");
 });
 

@@ -281,6 +281,7 @@ export class ZenAppServer {
   readonly #id: () => string;
   readonly #now: () => string;
   readonly #threads = new Map<string, Thread>();
+  readonly #threadLoads = new Map<string, Promise<Thread | undefined>>();
   readonly #activeTurns = new Map<
     string,
     {
@@ -2012,17 +2013,75 @@ export class ZenAppServer {
     if (cached !== undefined) {
       return cached;
     }
-    const items = await this.#journal.read(threadId);
-    if (items.length === 0) {
-      return undefined;
+    // Share cold replay across readers and admission (which may already hold
+    // the mutation lock). Publish only after recovery facts are durable.
+    const loading = this.#threadLoads.get(threadId);
+    if (loading !== undefined) return await loading;
+    const load = (async () => {
+      const items = await this.#journal.read(threadId);
+      if (items.length === 0) return undefined;
+      const thread = new Thread(threadId, items);
+      const terminal = new Set(
+        items
+          .filter(
+            (item) =>
+              item.type === "turn_completed" || item.type === "turn_aborted",
+          )
+          .map((item) => item.turnId),
+      );
+      const replacementSuccessors = new Set(
+        items.flatMap((item) =>
+          item.type === "turn_replacement_requested"
+            ? [item.successorTurnId]
+            : [],
+        ),
+      );
+      const admitted = new Set(
+        items.flatMap((item) =>
+          item.type === "user_message" ? [item.turnId] : [],
+        ),
+      );
+      const starts = items.filter((item) => item.type === "turn_started");
+      for (const start of starts) {
+        if (
+          terminal.has(start.turnId) ||
+          this.#activeTurns.get(threadId)?.turnId === start.turnId
+        )
+          continue;
+        if (
+          replacementSuccessors.has(start.turnId) &&
+          !admitted.has(start.turnId)
+        )
+          continue;
+        const interruption: TurnAbortedItem = {
+          id: this.#id(),
+          threadId,
+          turnId: start.turnId,
+          createdAt: this.#now(),
+          type: "turn_aborted",
+          reason:
+            "Execution owner lost before the Turn completed; external operation outcomes may be unknown. No action was retried.",
+        };
+        thread.validateAppend(interruption);
+        try {
+          await this.#journal.append(interruption);
+        } catch (error) {
+          // An append rejection might still have reached disk. Do not cache or
+          // retry it here: a later replay must read the journal first.
+          throw new ThreadJournalAppendOutcomeUnknownError(error);
+        }
+        thread.append(interruption);
+      }
+      this.#threads.set(threadId, thread);
+      return thread;
+    })();
+    this.#threadLoads.set(threadId, load);
+    try {
+      return await load;
+    } finally {
+      if (this.#threadLoads.get(threadId) === load)
+        this.#threadLoads.delete(threadId);
     }
-    const concurrentlyLoaded = this.#threads.get(threadId);
-    if (concurrentlyLoaded !== undefined) {
-      return concurrentlyLoaded;
-    }
-    const thread = new Thread(threadId, items);
-    this.#threads.set(threadId, thread);
-    return thread;
   }
 
   async #requireThread(threadId: string): Promise<Thread> {

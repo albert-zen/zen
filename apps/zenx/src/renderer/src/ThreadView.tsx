@@ -1322,10 +1322,10 @@ export function ContextUsageIndicator({
           <p>
             {context.inputTokens === null
               ? "Usage unknown"
-              : `${formatTokenCount(context.inputTokens)}${context.inputTokenSource === "estimated" ? " estimated" : ""}`}
+              : `${formatTokenCount(context.inputTokens)} ${context.inputTokenSource === "estimated" ? "estimated next input" : "last provider input"}`}
             {context.contextWindow === null
               ? " tokens"
-              : ` / ${formatTokenCount(context.contextWindow)} tokens`}
+              : ` / ${formatTokenCount(context.contextWindow)} configured window tokens`}
           </p>
           <p>{threadCacheUsageLabel(threadCacheHitRate)}</p>
           <p className="context-usage-explanation">

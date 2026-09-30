@@ -279,6 +279,18 @@ test("native summary status follows the current in-process Turn", async () => {
     const beforeSteer = (await server.listThreadSummaries())[0];
     assert(beforeSteer && beforeSteer.status !== "systemError");
     assert.equal(beforeSteer.status, "active");
+    assert.equal(
+      (await server.readThread(started.id)).turns.at(-1)?.status,
+      "inProgress",
+    );
+    assert.equal(
+      (
+        await new JsonlThreadJournal(path.join(directory, "threads")).read(
+          started.id,
+        )
+      ).filter((item) => item.type === "turn_aborted").length,
+      0,
+    );
     await server.steerTurn(started.id, turn.id, "same Turn steer");
     const afterSteer = (await server.listThreadSummaries())[0];
     assert(afterSteer && afterSteer.status !== "systemError");
@@ -288,6 +300,112 @@ test("native summary status follows the current in-process Turn", async () => {
     assert.equal((await server.listThreadSummaries())[0]?.status, "idle");
   } finally {
     releaseApproval();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("replacement successor lacking its initial message remains incomplete", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-incomplete-replacement-"),
+  );
+  try {
+    const journal = new JsonlThreadJournal(path.join(directory, "threads"));
+    const started = await createServer(directory).startThread();
+    const now = new Date().toISOString();
+    await journal.append({
+      id: "old-start",
+      threadId: started.id,
+      turnId: "old",
+      type: "turn_started",
+      createdAt: now,
+    });
+    await journal.append({
+      id: "replacement",
+      threadId: started.id,
+      turnId: "old",
+      successorTurnId: "successor",
+      clientId: "replace-id",
+      input: [{ type: "text", text: "later" }],
+      type: "turn_replacement_requested",
+      createdAt: now,
+    });
+    await journal.append({
+      id: "old-stop",
+      threadId: started.id,
+      turnId: "old",
+      type: "turn_aborted",
+      createdAt: now,
+      reason: "replaced",
+    });
+    await journal.append({
+      id: "new-start",
+      threadId: started.id,
+      turnId: "successor",
+      type: "turn_started",
+      createdAt: now,
+    });
+    await createServer(directory).readThread(started.id);
+    assert.equal(
+      (await journal.read(started.id)).filter(
+        (item) => item.type === "turn_aborted",
+      ).length,
+      1,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("replay appends one interruption for a lost owner without consuming queued input", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-lost-owner-"));
+  try {
+    const journal = new JsonlThreadJournal(path.join(directory, "threads"));
+    const started = await createServer(directory).startThread();
+    const now = new Date().toISOString();
+    await journal.append({
+      id: "old-start",
+      threadId: started.id,
+      turnId: "old-turn",
+      type: "turn_started",
+      createdAt: now,
+    });
+    await journal.append({
+      id: "queued",
+      threadId: started.id,
+      type: "user_message_queued",
+      createdAt: now,
+      clientId: "queued-client",
+      input: [{ type: "text", text: "later" }],
+    });
+    const recovered = createServer(directory);
+    const [read, summaries] = await Promise.all([
+      recovered.readThread(started.id),
+      recovered.listThreadSummaries(),
+    ]);
+    assert.equal(read.turns.at(-1)?.status, "interrupted");
+    assert.equal(
+      summaries.find((s) => s.threadId === started.id)?.status,
+      "idle",
+    );
+    await recovered.readThread(started.id);
+    await createServer(directory).readThread(started.id);
+    const items = await journal.read(started.id);
+    assert.equal(
+      items.filter((i) => i.type === "turn_aborted" && i.turnId === "old-turn")
+        .length,
+      1,
+    );
+    assert.equal(
+      items.filter((i) => i.type === "user_message_queued").length,
+      1,
+    );
+    assert.equal(
+      items.filter(
+        (i) => i.type === "user_message" && i.clientId === "queued-client",
+      ).length,
+      0,
+    );
+  } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
