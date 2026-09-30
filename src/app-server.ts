@@ -1902,6 +1902,17 @@ export class ZenAppServer {
         (item): item is UserMessageItem =>
           item.type === "user_message" && item.clientId === options.clientId,
       );
+      const queuedIntent = thread.items.find(
+        (item): item is QueuedUserMessageItem =>
+          item.type === "user_message_queued" &&
+          item.clientId === options.clientId,
+      );
+      if (queuedIntent !== undefined) {
+        throw new AppServerError(
+          "idempotency_conflict",
+          `clientUserMessageId ${options.clientId} is already reserved by a queued message`,
+        );
+      }
       if (existing === undefined && existingUserMessage !== undefined) {
         throw new AppServerError(
           "idempotency_conflict",
@@ -2093,6 +2104,17 @@ export class ZenAppServer {
           (item): item is UserMessageItem =>
             item.type === "user_message" && item.clientId === options.clientId,
         );
+        const queuedIntent = thread.items.find(
+          (item): item is QueuedUserMessageItem =>
+            item.type === "user_message_queued" &&
+            item.clientId === options.clientId,
+        );
+        if (queuedIntent !== undefined) {
+          throw new AppServerError(
+            "idempotency_conflict",
+            `clientUserMessageId ${options.clientId} is already reserved by a queued message`,
+          );
+        }
         if (duplicate !== undefined) {
           if (
             duplicate.turnId === expectedTurnId &&
