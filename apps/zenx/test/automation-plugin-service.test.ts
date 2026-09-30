@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -541,6 +549,69 @@ test("overlapping enabled Trigger runtime generations keep durable wakeup admiss
   } finally {
     await service.stopPlugin("zenx-triggers");
     await service.stopPlugin("zenx-rooms");
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a failed shared-container rename leaves both namespaces at the prior snapshot after reopen", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-automation-container-fault-"),
+  );
+  let failNextRename = false;
+  const storageFileSystem = {
+    readFile,
+    mkdir,
+    writeFile,
+    rename: async (source: string, destination: string) => {
+      if (failNextRename) {
+        failNextRename = false;
+        throw Object.assign(
+          new Error("injected second namespace write failure"),
+          {
+            code: "EACCES",
+          },
+        );
+      }
+      await rename(source, destination);
+    },
+    unlink,
+  };
+  const appServer = {
+    request: async () => ({}) as never,
+    onNotification: () => () => {},
+    enqueue: async () => {},
+  };
+  try {
+    const service = await createBundledAutomationPluginService({
+      userDataDirectory: directory,
+      appServer,
+      storageFileSystem,
+    });
+    await service.startPlugin("zenx-triggers", {} as never);
+    failNextRename = true;
+    await assert.rejects(
+      service.create({
+        kind: "timer",
+        threadId: "target",
+        label: "faulted",
+        prompt: "must not commit",
+        runAt: Date.now() + 60_000,
+      }),
+      /injected second namespace write failure/u,
+    );
+    const reopened = await createBundledAutomationPluginService({
+      userDataDirectory: directory,
+      appServer,
+    });
+    await reopened.startPlugin("zenx-triggers", {} as never);
+    assert.deepEqual(reopened.snapshot(), {
+      triggers: [],
+      history: [],
+      rooms: [],
+    });
+    await reopened.stopPlugin("zenx-triggers");
+    await service.stopPlugin("zenx-triggers").catch(() => {});
+  } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });

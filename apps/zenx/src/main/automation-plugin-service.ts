@@ -13,7 +13,7 @@ import {
 } from "./capabilities/automation-control-package.js";
 import {
   JsonPluginStorage,
-  type PluginStorageValue,
+  type PluginStorageFileSystem,
   type ZenXPluginHostSdkV1,
 } from "./plugin-host-sdk.js";
 import {
@@ -47,8 +47,36 @@ export interface AutomationTargetPreview {
   revision: number;
 }
 
+/** Remove the Room portion of the shared container when plugin data is deleted. */
+export async function clearBundledAutomationRoomsData(
+  userDataDirectory: string,
+): Promise<void> {
+  const root = path.join(userDataDirectory, "plugin-data");
+  const filename = path.join(root, ZENX_TRIGGERS_CAPABILITY_ID, "storage.json");
+  try {
+    await readFile(filename, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  const storage = await JsonPluginStorage.open({
+    pluginId: ZENX_TRIGGERS_CAPABILITY_ID,
+    root,
+    version: 1,
+    initialValue: { triggers: [], history: [], rooms: [] },
+  });
+  const value = await storage.get();
+  await storage.set({
+    triggers: value["triggers"] ?? [],
+    history: value["history"] ?? [],
+    rooms: [],
+  });
+}
+
 export async function createBundledAutomationPluginService(options: {
   userDataDirectory: string;
+  /** Test seam for validating a failed container rename and restart. */
+  storageFileSystem?: PluginStorageFileSystem;
   appServer: ZenXTriggerAppServerPort;
   titles?: ZenXTriggerTitlePort;
   threadTargets?: ThreadTargetPort;
@@ -99,10 +127,41 @@ export async function createBundledAutomationPluginService(options: {
     },
     ZENX_ROOMS_CAPABILITY_ID,
   );
+  // Keep the historical Trigger filename as the physical container so old
+  // readers continue to find their namespace; the document now also carries
+  // the Room projection and is the sole commit point.
+  const automationStorage = await JsonPluginStorage.open({
+    pluginId: ZENX_TRIGGERS_CAPABILITY_ID,
+    root: storageRoot,
+    version: 1,
+    initialValue: {
+      triggers: legacy.triggers,
+      history: legacy.history,
+      rooms: legacy.rooms,
+    },
+    fileSystem: options.storageFileSystem,
+  });
+  const persistedAutomation = await automationStorage.get();
+  if (!("rooms" in persistedAutomation)) {
+    await automationStorage.set({
+      triggers: persistedAutomation["triggers"] ?? legacy.triggers,
+      history: persistedAutomation["history"] ?? legacy.history,
+      rooms: legacy.rooms,
+    });
+  }
+  const roomProjection = await JsonPluginStorage.open({
+    pluginId: ZENX_ROOMS_CAPABILITY_ID,
+    root: storageRoot,
+    version: 1,
+    initialValue: { rooms: persistedAutomation["rooms"] ?? legacy.rooms },
+  });
+  await roomProjection.set({
+    rooms: (await automationStorage.get())["rooms"] ?? [],
+  });
   const active = new Set<string>();
   return new ZenXBundledAutomationPluginService(
     options.appServer,
-    new PluginAutomationStore(storageRoot, active),
+    new PluginAutomationStore(automationStorage, active, roomProjection),
     active,
     options.titles,
     options.threadTargets,
@@ -144,78 +203,48 @@ async function initializeOptionalStorage(
 }
 
 class PluginAutomationStore implements ZenXTriggerStorePort {
-  readonly #root: string;
+  readonly #storage: JsonPluginStorage;
   readonly #active: ReadonlySet<string>;
+  readonly #roomProjection: JsonPluginStorage;
 
-  constructor(root: string, active: ReadonlySet<string>) {
-    this.#root = root;
+  constructor(
+    storage: JsonPluginStorage,
+    active: ReadonlySet<string>,
+    roomProjection: JsonPluginStorage,
+  ) {
+    this.#storage = storage;
     this.#active = active;
+    this.#roomProjection = roomProjection;
   }
 
   async read(): Promise<TriggerSnapshot> {
-    const [triggerData, roomData] = await Promise.all([
-      readPluginValue(this.#root, ZENX_TRIGGERS_CAPABILITY_ID, {
-        triggers: [],
-        history: [],
-      }),
-      readPluginValue(this.#root, ZENX_ROOMS_CAPABILITY_ID, { rooms: [] }),
-    ]);
+    await this.#storage.reload();
+    const data = await this.#storage.get();
     return canonicalTriggerSnapshot({
-      triggers: triggerData["triggers"],
-      history: triggerData["history"],
-      rooms: roomData["rooms"],
+      triggers: data["triggers"],
+      history: data["history"],
+      rooms: data["rooms"],
     });
   }
 
   async write(snapshot: TriggerSnapshot): Promise<void> {
-    if (this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID)) {
-      const triggers = await JsonPluginStorage.open({
-        pluginId: ZENX_TRIGGERS_CAPABILITY_ID,
-        root: this.#root,
-        version: 1,
-        initialValue: { triggers: [], history: [] },
-      });
-      await triggers.set({
-        triggers: snapshot.triggers,
-        history: snapshot.history,
-      });
-    }
-    if (this.#active.has(ZENX_ROOMS_CAPABILITY_ID)) {
-      const rooms = await JsonPluginStorage.open({
-        pluginId: ZENX_ROOMS_CAPABILITY_ID,
-        root: this.#root,
-        version: 1,
-        initialValue: { rooms: [] },
-      });
-      await rooms.set({ rooms: snapshot.rooms });
-    }
-  }
-}
-
-async function readPluginValue(
-  root: string,
-  pluginId: string,
-  fallback: PluginStorageValue,
-): Promise<PluginStorageValue> {
-  try {
-    const parsed = JSON.parse(
-      await readFile(path.join(root, pluginId, "storage.json"), "utf8"),
-    ) as unknown;
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      (parsed as { version?: unknown }).version !== 1 ||
-      typeof (parsed as { value?: unknown }).value !== "object" ||
-      (parsed as { value?: unknown }).value === null ||
-      Array.isArray((parsed as { value?: unknown }).value)
-    ) {
-      throw new Error(`Plugin storage document is invalid: ${pluginId}`);
-    }
-    return structuredClone((parsed as { value: PluginStorageValue }).value);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT")
-      return structuredClone(fallback);
-    throw error;
+    const current = await this.#storage.get();
+    const committed = {
+      triggers: this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID)
+        ? snapshot.triggers
+        : (current["triggers"] ?? []),
+      history: this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID)
+        ? snapshot.history
+        : (current["history"] ?? []),
+      rooms: this.#active.has(ZENX_ROOMS_CAPABILITY_ID)
+        ? snapshot.rooms
+        : (current["rooms"] ?? []),
+    };
+    await this.#storage.set(committed);
+    // The room namespace remains as a compatibility projection for older
+    // runtimes. The shared Trigger document above is the sole authority.
+    if (this.#active.has(ZENX_ROOMS_CAPABILITY_ID))
+      await this.#roomProjection.set({ rooms: committed.rooms });
   }
 }
 

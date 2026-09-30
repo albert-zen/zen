@@ -356,6 +356,17 @@ export class JsonPluginStorage {
     return structuredClone(this.#value);
   }
 
+  /** Refresh a long-lived host view after an external lifecycle mutation. */
+  async reload(): Promise<void> {
+    await this.#mutationTail;
+    const data = decodeStoredPluginData(
+      await this.#fileSystem.readFile(this.#filename, "utf8"),
+    );
+    if (data.version !== this.version)
+      throw new Error("Plugin storage version changed while running");
+    this.#value = data.value;
+  }
+
   async set(value: PluginStorageValue): Promise<void> {
     const validated = cloneAndValidate(value);
     const operation = this.#mutationTail.then(async () => {

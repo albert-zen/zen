@@ -56,6 +56,7 @@ import type {
   PluginHostUiPort,
 } from "./plugin-host-sdk.js";
 import { createZenXPluginHostSdk } from "./plugin-host-sdk.js";
+import { clearBundledAutomationRoomsData } from "./automation-plugin-service.js";
 import type { AppServerRequestPort } from "./capabilities/self-control-package.js";
 import type { ZenXProjectProjection } from "./project-projection.js";
 import {
@@ -1223,9 +1224,11 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   }
 
   async deletePluginData(pluginId: string): Promise<void> {
-    await this.#serializeServiceMutation(
-      async () => await this.#registry.deleteData(pluginId),
-    );
+    await this.#serializeServiceMutation(async () => {
+      await this.#registry.deleteData(pluginId);
+      if (pluginId === "zenx-rooms")
+        await clearBundledAutomationRoomsData(this.#userDataDirectory);
+    });
   }
 
   async resetTransient(): Promise<void> {

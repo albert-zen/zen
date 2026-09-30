@@ -87,6 +87,7 @@
 - **ZenX Plugin Host SDK v1** — Plugin Host 按 package identity 注入的 provider-neutral 公共合同，以 `query / actions / ui / storage` 四组能力让 bundled 与隔离 runtime 使用相同产品语义，而不取得 ZenX 内部 store authority。
 - **ZenX Plugin Developer Kit** — 仓库内公开的 `@zenx/plugin-sdk` package 提供与 Host SDK v1、Plugin Runtime/UI 和 manifest v2 一致的类型、runtime schema、无会话 authority 的内存 fixture Host，以及只负责 `create` / `validate` / 标准 npm `pack` 的薄开发者 CLI。
 - **ZenX Plugin Storage** — Plugin Host 在 plugin id namespace 下原子持久化一个有界版本化 JSON document，按 package 提供的逐版本 migration 串行前移，disable/uninstall 不删除数据且失败不发布半状态。
+- **ZenX Automation Storage Container** — Rooms 与 Triggers 的共享 automation snapshot 以一个版本化 JSON document 提交；旧 plugin namespace 文件只作为一次性兼容迁移来源，不再组成跨文件提交。
 - **ZenX Plugin AppServer Port** — Host SDK 唯一允许修改 Thread 的显式 `actions.threads.startTurn` 边界；它调用既有 AppServer 并返回该 authority 产生的 canonical Item 投影，不复制 Turn 或 transcript。
 - **Plugin Package** — 一个普通 npm package，其 `package.json#zenx.plugin` 定位 `zenx.plugin.json`，由该 manifest 声明 main document、tools、UI contributions 与数据 namespace，生命周期只有 `installed`、`enabled`、`uninstalled`。
 - **Plugin Package Source** — Catalog 为直接 dependency 记录 npm、commit-pinned Git、tarball、稳定本地复制或显式开发 `link:` 来源，实际解析继续使用 pnpm package spec。
