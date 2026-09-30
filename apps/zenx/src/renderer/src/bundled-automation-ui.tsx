@@ -4,6 +4,7 @@ import type { AutomationTargetPreview } from "../../main/automation-plugin-servi
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import { threadTitle } from "./thread-list.js";
 import { Select, Combobox } from "./ui/controls.js";
+import { Markdown } from "./Markdown.js";
 
 import type {
   TriggerKind,
@@ -28,7 +29,48 @@ interface TriggerListResult {
 }
 
 interface RoomListResult {
-  rooms: ZenXRoom[];
+  nextCursor?: number | null;
+  rooms: Array<
+    Omit<ZenXRoom, "operations"> & {
+      pendingCount?: number;
+      operationEpoch?: string;
+      messageCount?: number;
+      nextCursor?: number | null;
+      operations?: Array<{
+        id: string;
+        text: string;
+        messageId: string | null;
+        createdAt: number;
+      }>;
+      responders?: Array<{ name: string; configured: boolean }>;
+    }
+  >;
+}
+interface RoomDeliveryResult {
+  operationId?: string;
+  text?: string;
+  state: "prepared" | "saved" | "cancelled" | "unknown";
+  messageId: string | null;
+  mentions: Array<{
+    name: string;
+    configuredNow: boolean;
+    deliveries: Array<{
+      status:
+        | "unconfigured"
+        | "pending"
+        | "queued"
+        | "running"
+        | "completed"
+        | "failed"
+        | "unknown";
+    }>;
+  }>;
+}
+interface RoomPendingSend {
+  id: string;
+  text: string;
+  revision: number | null;
+  messageId: string | null;
 }
 
 export function registerBundledAutomationUi(
@@ -990,200 +1032,1051 @@ export function TriggersPanel({ sdk }: PluginUiSurfaceProps) {
 export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const [data, setData] = useState<RoomListResult>({ rooms: [] });
   const [selected, setSelected] = useState<string | null>(null);
+  const [panel, setPanel] = useState<"create" | "manage" | null>(null);
   const [name, setName] = useState("");
   const [memberName, setMemberName] = useState("");
   const [threadId, setThreadId] = useState("");
-  const [draft, setDraft] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [threads, setThreads] = useState<NativeThreadSummary[]>([]);
   const [busy, setBusy] = useState(false);
+  const sending = useRef<Record<string, boolean>>({});
+  const [sendingRooms, setSendingRooms] = useState<Record<string, boolean>>({});
+  const selectedRef = useRef<string | null>(null);
+  const historyCache = useRef<
+    Record<
+      string,
+      {
+        messages: ZenXRoom["messages"];
+        count: number;
+        nextCursor: number | null;
+      }
+    >
+  >({});
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [roomErrors, setRoomErrors] = useState<Record<string, string>>({});
+  const [pendingByRoom, setPendingByRoom] = useState<
+    Record<string, RoomPendingSend>
+  >({});
+  const pendingRef = useRef<Record<string, RoomPendingSend>>({});
+  const revisions = useRef<Record<string, number>>({});
+  const refreshSequence = useRef(0);
+  const [feedback, setFeedback] = useState<Record<string, string>>({});
+  const [deliveries, setDeliveries] = useState<
+    Record<string, RoomDeliveryResult>
+  >({});
+  const composer = useRef<HTMLTextAreaElement>(null);
+  const dialogClose = useRef<HTMLButtonElement>(null);
+  const dialog = useRef<HTMLElement>(null);
+  const dialogInvoker = useRef<HTMLElement>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const feed = useRef<HTMLDivElement>(null);
+  const lastMessage = useRef<string | null>(null);
+  const lastRoom = useRef<string | null>(null);
+  const stickToBottom = useRef(true);
+  const setRoomPending = (roomId: string, value: RoomPendingSend | null) => {
+    const next = { ...pendingRef.current };
+    if (value === null) delete next[roomId];
+    else next[roomId] = value;
+    pendingRef.current = next;
+    setPendingByRoom(next);
+  };
+  const finishSaved = async (
+    roomId: string,
+    entry: RoomPendingSend,
+    result: RoomDeliveryResult,
+  ) => {
+    if (result.state !== "saved" || !result.messageId) return;
+    setRoomErrors((current) => ({ ...current, [roomId]: "" }));
+    refreshSequence.current += 1;
+    if (
+      entry.revision !== null &&
+      revisions.current[roomId] === entry.revision
+    ) {
+      setDrafts((current) => ({ ...current, [roomId]: "" }));
+    }
+    if (pendingRef.current[roomId]?.id === entry.id)
+      setRoomPending(roomId, null);
+    // Confirmed receipts live on the message, not in the persistent chat rail.
+    setFeedback((current) => ({ ...current, [roomId]: "" }));
+    await sdk.commands
+      .execute("ack-operation", { roomId, operationId: entry.id })
+      .catch((reason: unknown) =>
+        setError(
+          `Saved, but acknowledgment is unknown: ${describeError(reason)}`,
+        ),
+      );
+  };
   const refresh = async () => {
-    const next = (await sdk.commands.execute("list")) as RoomListResult;
-    setData(next);
+    const sequence = ++refreshSequence.current;
+    const next: RoomListResult = { rooms: [] };
+    let cursor: number | null = 0;
+    while (cursor !== null && next.rooms.length < 128) {
+      const page = (await sdk.commands.execute("list", {
+        cursor,
+      })) as RoomListResult;
+      if (sequence !== refreshSequence.current) return;
+      next.rooms.push(...page.rooms);
+      cursor = page.nextCursor ?? null;
+    }
+    const target =
+      next.rooms.find((entry) => entry.id === selectedRef.current) ??
+      next.rooms[0];
+    if (target?.messageCount !== undefined) {
+      const recent = (await sdk.commands.execute("messages", {
+        roomId: target.id,
+        cursor: 0,
+      })) as { messages: ZenXRoom["messages"]; nextCursor: number | null };
+      if (
+        sequence !== refreshSequence.current ||
+        (selectedRef.current !== null && selectedRef.current !== target.id)
+      )
+        return;
+      const cached = historyCache.current[target.id];
+      const tailIds = new Set(recent.messages.map((message) => message.id));
+      const messages = [
+        ...(cached?.messages.filter((message) => !tailIds.has(message.id)) ??
+          []),
+        ...recent.messages,
+      ].slice(-target.messageCount);
+      const loaded = Math.max(
+        recent.messages.length,
+        (cached?.nextCursor ?? 0) +
+          Math.max(0, target.messageCount - (cached?.count ?? 0)),
+      );
+      const nextCursor = loaded < target.messageCount ? loaded : null;
+      historyCache.current[target.id] = {
+        messages,
+        count: target.messageCount,
+        nextCursor,
+      };
+      target.messages = messages;
+      target.nextCursor = nextCursor;
+    }
+    if (sequence !== refreshSequence.current) return;
+    setData({ ...next });
     setSelected((current) =>
-      current !== null && next.rooms.some((room) => room.id === current)
+      current !== null && next.rooms.some((entry) => entry.id === current)
         ? current
         : (next.rooms[0]?.id ?? null),
     );
+    // The Host is the authority. Unacknowledged prepared/committed operations
+    // survive renderer unmount; lack of a retained receipt NEVER means unsent.
+    const merged = { ...pendingRef.current };
+    for (const room of next.rooms) {
+      const local = merged[room.id];
+      // Only an exactly observed saved message and no outstanding Host
+      // operation permit clearing a stale local success banner.
+      if (
+        local?.messageId &&
+        room.messages.some((message) => message.id === local.messageId) &&
+        !room.operations?.some((operation) => operation.id === local.id) &&
+        room.pendingCount === 0
+      )
+        delete merged[room.id];
+    }
+    for (const room of next.rooms)
+      for (const operation of room.operations ?? []) {
+        if (!merged[room.id] || merged[room.id]?.id === operation.id) {
+          merged[room.id] = {
+            id: operation.id,
+            text: operation.text,
+            revision:
+              merged[room.id]?.id === operation.id
+                ? merged[room.id]!.revision
+                : null,
+            messageId: operation.messageId,
+          };
+        }
+      }
+    pendingRef.current = merged;
+    setPendingByRoom(merged);
+    const active = next.rooms.find((entry) => entry.id === selectedRef.current);
+    if (active?.pendingCount && !active.operations?.length) {
+      const collected: NonNullable<typeof active.operations> = [];
+      let cursor: number | null = 0;
+      while (cursor !== null && collected.length < 128) {
+        const page = (await sdk.commands.execute("operations", {
+          roomId: active.id,
+          cursor,
+        })) as { operations: typeof collected; nextCursor: number | null };
+        if (
+          sequence !== refreshSequence.current ||
+          selectedRef.current !== active.id
+        )
+          return;
+        collected.push(...page.operations);
+        cursor = page.nextCursor;
+      }
+      active.operations = collected;
+      setData({ ...next, rooms: [...next.rooms] });
+      const merged = { ...pendingRef.current };
+      if (!merged[active.id] && collected[0])
+        merged[active.id] = {
+          id: collected[0].id,
+          text: collected[0].text,
+          revision: null,
+          messageId: collected[0].messageId,
+        };
+      pendingRef.current = merged;
+      setPendingByRoom(merged);
+    }
+    if (active) {
+      const latest = active.messages
+        .filter((message) => message.kind === "human")
+        .slice(-10);
+      void Promise.all(
+        latest.map(async (message) => {
+          try {
+            const status = (await sdk.commands.execute("delivery", {
+              roomId: active.id,
+              messageId: message.id,
+            })) as RoomDeliveryResult;
+            if (sequence === refreshSequence.current)
+              setDeliveries((previous) => ({
+                ...previous,
+                [message.id]: status,
+              }));
+          } catch {
+            /* No retained result is unknown, never unsent. */
+          }
+        }),
+      );
+    }
+    setLoading(false);
   };
+  useEffect(() => {
+    selectedRef.current = selected;
+    if (selected) void refresh().catch(() => {});
+  }, [selected]);
   useEffect(() => {
     void window.zenx.threads
       .list()
       .then(setThreads)
       .catch((reason: unknown) => setError(describeError(reason)));
-    void refresh().catch((reason: unknown) => setError(describeError(reason)));
+    void refresh().catch((reason: unknown) => {
+      setLoading(false);
+      setError(describeError(reason));
+    });
+    const timer = setInterval(
+      () =>
+        void refresh().catch((reason: unknown) =>
+          setError(describeError(reason)),
+        ),
+      3000,
+    );
+    return () => clearInterval(timer);
   }, [sdk]);
-  const room = data.rooms.find((candidate) => candidate.id === selected);
+  useEffect(() => {
+    if (panel !== null) dialogClose.current?.focus();
+  }, [panel]);
+  const closeDialog = () => {
+    setPanel(null);
+    requestAnimationFrame(() => dialogInvoker.current?.focus());
+  };
+  const room = data.rooms.find((entry) => entry.id === selected);
+  const draft = room === undefined ? "" : (drafts[room.id] ?? "");
+  const pending = room === undefined ? null : (pendingByRoom[room.id] ?? null);
+  const tail = room?.messages.at(-1)?.id ?? null;
+  useEffect(() => {
+    if (
+      selected !== lastRoom.current ||
+      (tail !== lastMessage.current && stickToBottom.current)
+    ) {
+      if (feed.current) feed.current.scrollTop = feed.current.scrollHeight;
+    }
+    lastRoom.current = selected;
+    lastMessage.current = tail;
+  }, [selected, tail]);
   const run = async (command: string, input: unknown) => {
     if (busy) return false;
     setBusy(true);
     setError(null);
     try {
-      await sdk.commands.execute(command, input);
+      const result = await sdk.commands.execute(command, input);
       await refresh();
+      if (
+        command === "create" &&
+        result &&
+        typeof result === "object" &&
+        "id" in result &&
+        typeof result.id === "string"
+      )
+        setSelected(result.id);
       return true;
     } catch (reason) {
-      setError(describeError(reason));
+      setError(
+        `Result unknown; refresh before repeating. ${describeError(reason)}`,
+      );
+      void refresh().catch(() => {});
       return false;
     } finally {
       setBusy(false);
     }
   };
+  const loadEarlier = async (roomId: string, cursor: number) => {
+    if (loadingOlder) return;
+    setLoadingOlder(true);
+    ++refreshSequence.current;
+    try {
+      let offset: number | null = cursor;
+      let cache = historyCache.current[roomId];
+      for (let n = 0; n < 4 && offset !== null; n++) {
+        const page = (await sdk.commands.execute("messages", {
+          roomId,
+          cursor: offset,
+        })) as { messages: ZenXRoom["messages"]; nextCursor: number | null };
+        const known = new Set(
+          cache?.messages.map((message) => message.id) ?? [],
+        );
+        cache = {
+          messages: [
+            ...page.messages.filter((message) => !known.has(message.id)),
+            ...(cache?.messages ?? []),
+          ].slice(-256),
+          count: cache?.count ?? 0,
+          nextCursor: page.nextCursor,
+        };
+        offset = page.nextCursor;
+      }
+      if (cache) {
+        historyCache.current[roomId] = cache;
+        const height = feed.current?.scrollHeight ?? 0;
+        setData((current) => ({
+          ...current,
+          rooms: current.rooms.map((entry) =>
+            entry.id === roomId
+              ? {
+                  ...entry,
+                  messages: cache!.messages,
+                  nextCursor: cache!.nextCursor,
+                }
+              : entry,
+          ),
+        }));
+        requestAnimationFrame(() => {
+          if (feed.current)
+            feed.current.scrollTop += feed.current.scrollHeight - height;
+        });
+      }
+    } catch (reason) {
+      setRoomErrors((current) => ({
+        ...current,
+        [roomId]: `Older messages unavailable: ${describeError(reason)}`,
+      }));
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
+  const send = async () => {
+    if (
+      !room ||
+      !draft.trim() ||
+      sending.current[room.id] ||
+      busy ||
+      pendingByRoom[room.id] ||
+      (room.operations?.length ?? 0) > 0
+    )
+      return;
+    const text = draft;
+    const roomId = room.id;
+    const entry: RoomPendingSend = {
+      id: `${room.operationEpoch ?? "legacy"}:${crypto.randomUUID()}`,
+      text,
+      revision: revisions.current[roomId] ?? 0,
+      messageId: null,
+    };
+    sending.current[roomId] = true;
+    setSendingRooms((current) => ({ ...current, [roomId]: true }));
+    setRoomPending(roomId, entry);
+    setRoomErrors((current) => ({ ...current, [roomId]: "" }));
+    try {
+      await sdk.commands.execute("prepare-message", {
+        roomId,
+        operationId: entry.id,
+        text,
+      });
+      const committed = (await sdk.commands.execute("post-message", {
+        roomId,
+        operationId: entry.id,
+        text,
+      })) as { messageId: string };
+      if (!committed.messageId)
+        throw new Error("No immutable Room message ID returned");
+      const status = (await sdk.commands.execute("operation", {
+        roomId,
+        operationId: entry.id,
+      })) as RoomDeliveryResult;
+      await finishSaved(roomId, entry, status);
+      await refresh();
+    } catch (reason) {
+      // Do not infer success from matching text, even when a new ID appeared.
+      setRoomErrors((current) => ({
+        ...current,
+        [roomId]: `Send result unknown for this operation; do not resend. ${describeError(reason)}`,
+      }));
+      try {
+        const status = (await sdk.commands.execute("operation", {
+          roomId,
+          operationId: entry.id,
+        })) as RoomDeliveryResult;
+        if (status.state === "saved" && status.messageId)
+          await finishSaved(roomId, entry, status);
+      } catch {
+        /* Unknown remains unresolved across Room switches. */
+      }
+      void refresh().catch(() => {});
+    } finally {
+      sending.current[roomId] = false;
+      setSendingRooms((current) => ({ ...current, [roomId]: false }));
+    }
+  };
+  const inspectPending = async (
+    roomId: string,
+    entry: RoomPendingSend,
+    resume: boolean,
+  ) => {
+    setRoomErrors((current) => ({ ...current, [roomId]: "" }));
+    try {
+      let state = (await sdk.commands.execute("operation", {
+        roomId,
+        operationId: entry.id,
+      })) as RoomDeliveryResult;
+      if (state.state === "prepared" && resume) {
+        if (!state.text)
+          throw new Error(
+            "Prepared operation text is not available; do not resend",
+          );
+        await sdk.commands.execute("post-message", {
+          roomId,
+          operationId: entry.id,
+          text: state.text,
+        });
+        state = (await sdk.commands.execute("operation", {
+          roomId,
+          operationId: entry.id,
+        })) as RoomDeliveryResult;
+      }
+      if (state.state === "saved" && state.messageId)
+        await finishSaved(roomId, entry, state);
+      else if (state.state === "cancelled") {
+        if (pendingRef.current[roomId]?.id === entry.id)
+          setRoomPending(roomId, null);
+        setFeedback((current) => ({ ...current, [roomId]: "" }));
+      } else
+        setFeedback((current) => ({
+          ...current,
+          [roomId]:
+            "Prepared but not sent; no message has been confirmed. Retry only by explicitly choosing Send prepared operation.",
+        }));
+      await refresh();
+    } catch (reason) {
+      setRoomErrors((current) => ({
+        ...current,
+        [roomId]: `Result unknown; this operation stays unresolved. ${describeError(reason)}`,
+      }));
+    }
+  };
+  const cancelPrepared = async (roomId: string, entry: RoomPendingSend) => {
+    setRoomErrors((current) => ({ ...current, [roomId]: "" }));
+    try {
+      // UNKNOWN is never a client-side cancellation fact.
+      const exact = (await sdk.commands.execute("operation", {
+        roomId,
+        operationId: entry.id,
+      })) as RoomDeliveryResult;
+      if (exact.state === "saved" && exact.messageId) {
+        await finishSaved(roomId, entry, exact);
+        setRoomErrors((current) => ({
+          ...current,
+          [roomId]: `Already saved as message ${exact.messageId}; cancellation cannot withdraw it.`,
+        }));
+        await refresh();
+        return;
+      }
+      if (exact.state === "prepared")
+        await sdk.commands.execute("cancel-prepared", {
+          roomId,
+          operationId: entry.id,
+        });
+      const result = (await sdk.commands.execute("operation", {
+        roomId,
+        operationId: entry.id,
+      })) as RoomDeliveryResult;
+      if (result.state !== "cancelled")
+        throw new Error("Cancellation not confirmed; check exact operation");
+      if (pendingRef.current[roomId]?.id === entry.id)
+        setRoomPending(roomId, null);
+      if (
+        entry.revision !== null &&
+        revisions.current[roomId] === entry.revision
+      )
+        setDrafts((current) =>
+          current[roomId] === entry.text
+            ? { ...current, [roomId]: "" }
+            : current,
+        );
+      setFeedback((current) => ({ ...current, [roomId]: "" }));
+      await refresh();
+    } catch (reason) {
+      // A lost cancel result is never permission to drop a possibly saved send.
+      try {
+        const exact = (await sdk.commands.execute("operation", {
+          roomId,
+          operationId: entry.id,
+        })) as RoomDeliveryResult;
+        if (exact.state === "cancelled") {
+          if (pendingRef.current[roomId]?.id === entry.id)
+            setRoomPending(roomId, null);
+          await refresh();
+          return;
+        }
+        if (exact.state === "saved" && exact.messageId) {
+          await finishSaved(roomId, entry, exact);
+          setRoomErrors((current) => ({
+            ...current,
+            [roomId]: `Already saved as message ${exact.messageId}; cancellation cannot withdraw it.`,
+          }));
+          await refresh();
+          return;
+        }
+      } catch {
+        // No exact receipt: keep the original intent and the next check path.
+      }
+      setRoomErrors((current) => ({
+        ...current,
+        [roomId]: `Cancellation result unknown; check the exact operation. ${describeError(reason)}`,
+      }));
+    }
+  };
   return (
-    <div className="page-scroll rooms-overview">
-      <div className="page-intro">
-        <div>
-          <h2>Rooms</h2>
-          <p>
-            Bring conversations together. Mention a registered member to wake
-            its agent; other messages stay in the room.
-          </p>
-        </div>
-      </div>
-      <div className="page-card room-create-card">
-        <h2>New Room</h2>
-        <Field label="Room name" value={name} onChange={setName} />
-        <Field
-          label="First member"
-          value={memberName}
-          onChange={setMemberName}
-        />
-        <label className="field">
-          <span>Member conversation</span>
-          <Combobox
-            label="Member conversation"
-            value={threadId}
-            onValueChange={setThreadId}
+    <div className="rooms-chat">
+      <nav className="rooms-chat-list" aria-label="Rooms">
+        <div className="rooms-chat-list-head">
+          <strong>Rooms</strong>
+          <button
+            type="button"
+            onClick={(event) => {
+              dialogInvoker.current = event.currentTarget;
+              setName("");
+              setMemberName("");
+              setThreadId("");
+              setPanel("create");
+            }}
           >
-            {threads.map((thread) => (
-              <option key={thread.threadId} value={thread.threadId}>
-                {threadTitle(thread)} · {thread.threadId} ·{" "}
-                {"currentMetadata" in thread
-                  ? thread.currentMetadata.cwd
-                  : "Unavailable workspace"}
-              </option>
-            ))}
-          </Combobox>
-        </label>
-        <button
-          className="primary-button"
-          disabled={busy || !name.trim() || !memberName.trim() || !threadId}
-          type="button"
-          onClick={() =>
-            void run("create", {
-              name,
-              members: [{ name: memberName, threadId }],
-            }).then((saved) => {
-              if (saved) setName("");
-            })
-          }
-        >
-          Create Room
-        </button>
-      </div>
-      {error === null ? null : <p role="alert">{error}</p>}
-      <div className="rooms-layout">
-        <nav className="room-list" aria-label="Rooms">
-          {data.rooms.map((candidate) => (
-            <button
-              key={candidate.id}
-              aria-current={candidate.id === selected ? "true" : undefined}
-              type="button"
-              onClick={() => setSelected(candidate.id)}
-            >
-              #{candidate.name}
-            </button>
-          ))}
-        </nav>
-        {room === undefined ? (
-          <p>Create a room above to start a shared conversation.</p>
+            + New
+          </button>
+        </div>
+        {data.rooms.map((entry) => (
+          <button
+            type="button"
+            key={entry.id}
+            aria-current={entry.id === selected ? "page" : undefined}
+            onClick={() => {
+              selectedRef.current = entry.id;
+              setSelected(entry.id);
+              setPanel(null);
+              setError(null);
+            }}
+          >
+            <strong>#{entry.name}</strong>
+            <small>{entry.messages.at(-1)?.text ?? "No messages yet"}</small>
+          </button>
+        ))}
+      </nav>
+      <main className="rooms-chat-main">
+        {loading ? (
+          <p className="rooms-chat-empty" role="status">
+            Loading rooms…
+          </p>
+        ) : room === undefined ? (
+          <div className="rooms-chat-empty">
+            No room selected. Create a room to start a conversation.
+          </div>
         ) : (
-          <section className="page-card" aria-label={`Room ${room.name}`}>
-            <h2>#{room.name}</h2>
-            <button
-              type="button"
-              onClick={() => void run("delete", { roomId: room.id })}
-            >
-              Delete Room
-            </button>
-            <div className="form-grid">
-              <Field
-                label="Member name"
-                value={memberName}
-                onChange={setMemberName}
-              />
-              <label className="field">
-                <span>Member conversation</span>
-                <Combobox
-                  label="Member conversation"
-                  value={threadId}
-                  onValueChange={setThreadId}
-                >
-                  {threads.map((thread) => (
-                    <option key={thread.threadId} value={thread.threadId}>
-                      {threadTitle(thread)} · {thread.threadId} ·{" "}
-                      {"currentMetadata" in thread
-                        ? thread.currentMetadata.cwd
-                        : "Unavailable workspace"}
-                    </option>
+          <>
+            <header className="rooms-chat-header">
+              <div>
+                <h2>#{room.name}</h2>
+                <span>
+                  {room.members.length
+                    ? room.members
+                        .map((member) => `@${member.name}`)
+                        .join(" · ")
+                    : "No agents yet"}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={(event) => {
+                  dialogInvoker.current = event.currentTarget;
+                  setName(room.name);
+                  setPanel("manage");
+                }}
+              >
+                Members & settings
+              </button>
+            </header>
+            {error ||
+            roomErrors[room.id] ||
+            feedback[room.id] ||
+            pending ||
+            room.responders?.some((entry) => !entry.configured) ||
+            (room.operations ?? []).some(
+              (entry) => entry.id !== pendingByRoom[room.id]?.id,
+            ) ? (
+              <div
+                className="rooms-chat-status"
+                aria-label="Room delivery and setup"
+                tabIndex={0}
+              >
+                {error || roomErrors[room.id] ? (
+                  <p role="alert" className="form-error">
+                    {roomErrors[room.id] || error}
+                  </p>
+                ) : null}
+                {!pending &&
+                (room.operations ?? []).length === 0 &&
+                room.responders?.some((entry) => !entry.configured) ? (
+                  <p className="room-setup-note">
+                    No automatic wakeup for:{" "}
+                    {room.responders
+                      .filter((entry) => !entry.configured)
+                      .map((entry) => `@${entry.name}`)
+                      .join(", ")}
+                    .{" "}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        sdk.navigation.navigate(
+                          "/plugins/zenx-triggers/triggers",
+                        )
+                      }
+                    >
+                      Configure Trigger…
+                    </button>
+                  </p>
+                ) : null}
+                {feedback[room.id] ? (
+                  <p role="status">{feedback[room.id]}</p>
+                ) : null}
+                {pending ? (
+                  <div role="status" className="room-send-pending">
+                    {pending.messageId
+                      ? "Message saved; check its exact delivery."
+                      : "Send unconfirmed. Check, cancel if still prepared, or explicitly send."}{" "}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void inspectPending(room.id, pending, false)
+                      }
+                    >
+                      Check exact operation
+                    </button>
+                    {!pending.messageId ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => void cancelPrepared(room.id, pending)}
+                        >
+                          Cancel if prepared
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void inspectPending(room.id, pending, true)
+                          }
+                        >
+                          Send prepared operation (explicit)
+                        </button>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+                {(room.operations ?? [])
+                  .filter((operation) => operation.id !== pending?.id)
+                  .map((operation) => (
+                    <div
+                      className="room-send-pending"
+                      key={operation.id}
+                      role="status"
+                    >
+                      Unreviewed Room operation {operation.id.slice(0, 8)}:{" "}
+                      {operation.messageId
+                        ? "saved"
+                        : "prepared / result unknown"}{" "}
+                      · {Array.from(operation.text).slice(0, 70).join("")}{" "}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void inspectPending(
+                            room.id,
+                            {
+                              id: operation.id,
+                              text: operation.text,
+                              revision: null,
+                              messageId: operation.messageId,
+                            },
+                            false,
+                          )
+                        }
+                      >
+                        Check exact operation
+                      </button>
+                      {!operation.messageId ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void cancelPrepared(room.id, {
+                                id: operation.id,
+                                text: operation.text,
+                                revision: null,
+                                messageId: null,
+                              })
+                            }
+                          >
+                            Cancel if prepared
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void inspectPending(
+                                room.id,
+                                {
+                                  id: operation.id,
+                                  text: operation.text,
+                                  revision: null,
+                                  messageId: null,
+                                },
+                                true,
+                              )
+                            }
+                          >
+                            Send prepared operation (explicit)
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
                   ))}
-                </Combobox>
-              </label>
-            </div>
-            <button
-              type="button"
-              onClick={() =>
-                void run("add-member", {
-                  roomId: room.id,
-                  name: memberName,
-                  threadId,
-                })
-              }
+              </div>
+            ) : null}
+            <div
+              className="rooms-chat-feed"
+              ref={feed}
+              role="log"
+              aria-label={`${room.name} messages`}
+              onScroll={(event) => {
+                const target = event.currentTarget;
+                stickToBottom.current =
+                  target.scrollHeight - target.scrollTop - target.clientHeight <
+                  80;
+              }}
             >
-              Add member
-            </button>
-            <ul>
-              {room.members.map((member) => (
-                <li key={member.threadId}>
-                  @{member.name} · {member.threadId}{" "}
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void run("remove-member", {
-                        roomId: room.id,
-                        threadId: member.threadId,
-                      })
-                    }
-                  >
-                    Remove
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <div className="room-messages">
+              {room.nextCursor !== null && room.nextCursor !== undefined ? (
+                <button
+                  type="button"
+                  className="room-load-earlier"
+                  disabled={loadingOlder}
+                  onClick={() => void loadEarlier(room.id, room.nextCursor!)}
+                >
+                  {loadingOlder ? "Loading…" : "Load earlier messages"}
+                </button>
+              ) : null}
+              {room.messages.length === 0 ? (
+                <div className="rooms-chat-empty">
+                  Start the conversation. @mention a registered member to
+                  request an agent response.
+                </div>
+              ) : null}
               {room.messages.map((message) => (
-                <p key={message.id}>
-                  <strong>{message.author}</strong>: {message.text}
-                </p>
+                <article className="room-message" key={message.id}>
+                  <header>
+                    <strong>{message.author}</strong>
+                    <span className="room-kind">{message.kind}</span>
+                    <time dateTime={new Date(message.createdAt).toISOString()}>
+                      {new Date(message.createdAt).toLocaleString()}
+                    </time>
+                  </header>
+                  <Markdown text={message.text} />
+                  {message.kind === "human" &&
+                  deliveries[message.id]?.state === "saved" ? (
+                    <small className="room-delivery">
+                      Saved ·{" "}
+                      {deliveries[message.id]!.mentions.map(
+                        (mention) =>
+                          `@${mention.name}: ${mention.deliveries.map((entry) => entry.status).join(", ")}`,
+                      ).join(" · ") || "No @ wake requested"}
+                    </small>
+                  ) : message.kind === "human" &&
+                    deliveries[message.id]?.state === "unknown" ? (
+                    <small className="room-delivery">
+                      Saved message · wake result unavailable
+                    </small>
+                  ) : null}
+                  {message.kind === "human" ? (
+                    <details className="room-message-details">
+                      <summary>Message details</summary>
+                      <span>Message ID: {message.id}</span>
+                      {deliveries[message.id]?.operationId ? (
+                        <span>
+                          Operation ID: {deliveries[message.id]!.operationId}
+                        </span>
+                      ) : null}
+                    </details>
+                  ) : null}
+                </article>
               ))}
             </div>
-            <Field label="Message" value={draft} onChange={setDraft} />
-            <button
-              type="button"
-              disabled={busy || !draft.trim()}
-              onClick={() =>
-                void run("post-message", { roomId: room.id, text: draft }).then(
-                  (saved) => {
-                    if (saved) setDraft("");
-                  },
-                )
-              }
-            >
-              Post message
-            </button>
-          </section>
+            <div className="rooms-chat-compose">
+              <div className="rooms-chat-mentions">
+                {room.members.map((member) => (
+                  <button
+                    key={member.threadId}
+                    type="button"
+                    onClick={() => {
+                      const input = composer.current;
+                      const start = input?.selectionStart ?? draft.length;
+                      const end = input?.selectionEnd ?? draft.length;
+                      const token = `@${member.name} `;
+                      revisions.current[room.id] =
+                        (revisions.current[room.id] ?? 0) + 1;
+                      setDrafts((current) => ({
+                        ...current,
+                        [room.id]: `${(current[room.id] ?? "").slice(0, start)}${token}${(current[room.id] ?? "").slice(end)}`,
+                      }));
+                      requestAnimationFrame(() => {
+                        input?.focus();
+                        input?.setSelectionRange(
+                          start + token.length,
+                          start + token.length,
+                        );
+                      });
+                    }}
+                  >
+                    @{member.name}
+                  </button>
+                ))}
+              </div>
+              <label htmlFor="room-chat-input" className="sr-only">
+                Message
+              </label>
+              <textarea
+                ref={composer}
+                id="room-chat-input"
+                placeholder={`Message #${room.name} · Enter to send, Shift+Enter for newline`}
+                value={draft}
+                disabled={false}
+                onChange={(event) => {
+                  revisions.current[room.id] =
+                    (revisions.current[room.id] ?? 0) + 1;
+                  setDrafts((current) => ({
+                    ...current,
+                    [room.id]: event.target.value,
+                  }));
+                }}
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "Enter" &&
+                    !event.shiftKey &&
+                    !event.nativeEvent.isComposing
+                  ) {
+                    event.preventDefault();
+                    void send();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="primary-button"
+                disabled={
+                  busy ||
+                  sendingRooms[room.id] ||
+                  pending !== null ||
+                  !draft.trim()
+                }
+                onClick={() => void send()}
+              >
+                {sendingRooms[room.id] ? "Sending…" : "Send"}
+              </button>
+              <small>
+                Only explicit @mentions with an active Room mention Trigger wake
+                agents.
+              </small>
+            </div>
+          </>
         )}
-      </div>
+      </main>
+      {panel !== null ? (
+        <div
+          className="rooms-chat-overlay"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeDialog();
+          }}
+        >
+          <section
+            ref={dialog}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                closeDialog();
+                return;
+              }
+              if (event.key !== "Tab") return;
+              const targets = [
+                ...(dialog.current?.querySelectorAll<HTMLElement>(
+                  "button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [role=combobox], summary, a[href]",
+                ) ?? []),
+              ];
+              const first = targets[0],
+                last = targets.at(-1);
+              if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last?.focus();
+              }
+              if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first?.focus();
+              }
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label={panel === "create" ? "Create Room" : "Room settings"}
+            className="rooms-chat-dialog"
+          >
+            <header>
+              <h2>
+                {panel === "create" ? "New Room" : `#${room?.name} settings`}
+              </h2>
+              <button ref={dialogClose} type="button" onClick={closeDialog}>
+                Close
+              </button>
+            </header>
+            <Field label="Room name" value={name} onChange={setName} />
+            {panel === "manage" ? (
+              <button
+                type="button"
+                disabled={busy || !name.trim() || name === room?.name}
+                onClick={() =>
+                  void run("rename", { roomId: room?.id, name }).then((ok) => {
+                    if (ok) setPanel(null);
+                  })
+                }
+              >
+                Rename
+              </button>
+            ) : null}
+            <Field
+              label="Member name"
+              value={memberName}
+              onChange={setMemberName}
+            />
+            <label className="field">
+              <span>Member conversation</span>
+              <Combobox
+                label="Member conversation"
+                value={threadId}
+                onValueChange={setThreadId}
+              >
+                {threads.map((thread) => (
+                  <option key={thread.threadId} value={thread.threadId}>
+                    {threadTitle(thread)} · {thread.threadId} ·{" "}
+                    {"currentMetadata" in thread
+                      ? thread.currentMetadata.cwd
+                      : "Unavailable workspace"}
+                  </option>
+                ))}
+              </Combobox>
+            </label>
+            {panel === "create" ? (
+              <button
+                type="button"
+                className="primary-button"
+                disabled={
+                  busy || !name.trim() || !memberName.trim() || !threadId
+                }
+                onClick={() =>
+                  void run("create", {
+                    name,
+                    members: [{ name: memberName, threadId }],
+                  }).then((ok) => {
+                    if (ok) setPanel(null);
+                  })
+                }
+              >
+                Create Room
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  disabled={busy || !memberName.trim() || !threadId}
+                  onClick={() =>
+                    void run("add-member", {
+                      roomId: room?.id,
+                      name: memberName,
+                      threadId,
+                    }).then((ok) => {
+                      if (ok) {
+                        setMemberName("");
+                        setThreadId("");
+                      }
+                    })
+                  }
+                >
+                  Add member
+                </button>
+                <h3>Members</h3>
+                {room?.members.map((member) => (
+                  <div className="rooms-chat-member" key={member.threadId}>
+                    <strong>@{member.name}</strong>
+                    <details>
+                      <summary>Details</summary>
+                      <code>{member.threadId}</code>
+                    </details>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            `Remove @${member.name} from #${room.name}?`,
+                          )
+                        )
+                          void run("remove-member", {
+                            roomId: room.id,
+                            threadId: member.threadId,
+                          });
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="rooms-chat-danger"
+                  disabled={busy}
+                  onClick={() => {
+                    if (
+                      room &&
+                      window.confirm(
+                        `Permanently delete #${room.name} and its message history?`,
+                      )
+                    )
+                      void run("delete", { roomId: room.id }).then((ok) => {
+                        if (ok) setPanel(null);
+                      });
+                  }}
+                >
+                  Delete Room…
+                </button>
+              </>
+            )}
+            {error ? <p role="alert">{error}</p> : null}
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

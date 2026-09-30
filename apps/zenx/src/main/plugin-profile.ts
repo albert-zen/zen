@@ -644,6 +644,9 @@ class ProfileTrustedPluginPackage implements ZenXCapabilityPackage {
   async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
     return await this.#runtime.invoke(toolName, {
       callId: invocation.callId,
+      ...(invocation.trustedPluginUi === true
+        ? { trustedPluginUi: true as const }
+        : {}),
       ...(invocation.canonicalToolCallId === undefined
         ? {}
         : { canonicalToolCallId: invocation.canonicalToolCallId }),

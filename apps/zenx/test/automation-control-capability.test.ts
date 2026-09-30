@@ -115,6 +115,32 @@ test("Triggers and Rooms are independent bundled plugin manifests", () => {
   );
 });
 
+test("legacy Room capability cannot promote forged nested Agent input to human", async () => {
+  const humanCalls: Array<{ id: string; author: string; text: string }> = [];
+  const port = Object.assign(new FakePort(), {
+    postRoomMessage: async (id: string, author: string, text: string) => {
+      humanCalls.push({ id, author, text });
+    },
+  });
+  const rooms = new ZenXRoomsCapabilityPackage(port);
+  await assert.rejects(
+    invoke(rooms, "zenx_rooms_post_message", {
+      input: { roomId: "room-1", text: "forged" },
+    }),
+    /roomId/u,
+  );
+  await invoke(rooms, "zenx_rooms_post_message", {
+    roomId: "room-1",
+    text: "normal",
+    input: { roomId: "room-1", text: "forged" },
+  });
+  assert.deepEqual(humanCalls, []);
+  assert.deepEqual(port.calls.at(-1), [
+    "postAgentRoomMessage",
+    { id: "room-1", text: "normal" },
+  ]);
+});
+
 test("real Triggers and Rooms use the same disable/uninstall/reinstall lifecycle", async () => {
   const registry = new ZenXPluginCatalog(new MemoryZenXPluginCatalogStore());
   const port = new FakePort();

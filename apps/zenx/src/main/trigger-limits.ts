@@ -3,6 +3,7 @@ export const MAX_HISTORY_COUNT = 256;
 export const MAX_ROOM_COUNT = 128;
 export const MAX_ROOM_MEMBERS = 64;
 export const MAX_ROOM_MESSAGES = 256;
+export const MAX_ROOM_OPERATIONS = 128;
 
 export const MAX_ID_BYTES = 512;
 export const MAX_TRIGGER_LABEL_BYTES = 256;

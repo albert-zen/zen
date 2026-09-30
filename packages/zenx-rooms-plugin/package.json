@@ -1,6 +1,6 @@
 {
   "name": "@zenx/rooms-plugin",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "First-party ZenX Rooms plugin",
   "type": "module",
   "files": [

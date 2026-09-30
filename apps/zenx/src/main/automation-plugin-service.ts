@@ -28,6 +28,8 @@ import type {
   CreateRoomInput,
   CreateTriggerInput,
   RoomMember,
+  RoomSendOperation,
+  RoomDeliveryView,
   TriggerSnapshot,
   UpdateTriggerInput,
 } from "./trigger-types.js";
@@ -224,6 +226,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   // generation closes. Catalog enablement is one logical capability, but
   // both runtime instances must release their own transient lease.
   #triggerRuntimeLeases = 0;
+  readonly #roomRuntimeLeases: ZenXPluginHostSdkV1[] = [];
   readonly #targets: ThreadTargetPort | undefined;
   readonly #appServer: ZenXTriggerAppServerPort;
   readonly #targetDefaults?: () => Promise<
@@ -255,10 +258,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     this.#service = new ZenXTriggerService(appServer, store, { titles });
   }
 
-  async startPlugin(
-    pluginId: string,
-    _sdk: ZenXPluginHostSdkV1,
-  ): Promise<void> {
+  async startPlugin(pluginId: string, sdk: ZenXPluginHostSdkV1): Promise<void> {
     await this.#serialize(async () => {
       if (
         pluginId === ZENX_TRIGGERS_CAPABILITY_ID &&
@@ -267,6 +267,13 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
         this.#triggerRuntimeLeases++;
         return;
       }
+      if (
+        pluginId === ZENX_ROOMS_CAPABILITY_ID &&
+        this.#roomRuntimeLeases.includes(sdk)
+      )
+        return;
+      const roomLease = pluginId === ZENX_ROOMS_CAPABILITY_ID;
+      if (roomLease) this.#roomRuntimeLeases.push(sdk);
       if (this.#active.has(pluginId)) return;
       const first = this.#active.size === 0;
       if (first) {
@@ -281,10 +288,16 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
           this.#active.delete(pluginId);
           if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID)
             this.#triggerRuntimeLeases = 0;
+          if (roomLease) this.#roomRuntimeLeases.pop();
           throw error;
         }
       } else {
-        await this.#service.stop();
+        try {
+          await this.#service.stop();
+        } catch (error) {
+          if (roomLease) this.#roomRuntimeLeases.pop();
+          throw error;
+        }
         this.#active.add(pluginId);
         if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID)
           this.#triggerRuntimeLeases = 1;
@@ -296,6 +309,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
           this.#active.delete(pluginId);
           if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID)
             this.#triggerRuntimeLeases = 0;
+          if (roomLease) this.#roomRuntimeLeases.pop();
           await this.#service.start(
             this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID),
           );
@@ -305,8 +319,22 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     });
   }
 
-  async stopPlugin(pluginId: string): Promise<void> {
+  async stopPlugin(
+    pluginId: string,
+    runtimeSdk?: ZenXPluginHostSdkV1,
+  ): Promise<void> {
     await this.#serialize(async () => {
+      if (pluginId === ZENX_ROOMS_CAPABILITY_ID) {
+        // Old 1.0.x runtimes close without a token. Their lease was admitted
+        // first; never let that close retire the already staged new runtime.
+        const index =
+          runtimeSdk === undefined
+            ? 0
+            : this.#roomRuntimeLeases.indexOf(runtimeSdk);
+        if (index < 0 || index >= this.#roomRuntimeLeases.length) return;
+        this.#roomRuntimeLeases.splice(index, 1);
+        if (this.#roomRuntimeLeases.length > 0) return;
+      }
       if (!this.#active.has(pluginId)) return;
       if (
         pluginId === ZENX_TRIGGERS_CAPABILITY_ID &&
@@ -491,6 +519,45 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   }
   async signal(name: string, detail: string): Promise<void> {
     await this.#service.signal(name, detail);
+  }
+  async prepareRoomMessage(
+    roomId: string,
+    operationId: string,
+    text: string,
+  ): Promise<RoomSendOperation> {
+    return await this.#service.prepareRoomMessage(roomId, operationId, text);
+  }
+  async postPreparedRoomMessage(
+    roomId: string,
+    operationId: string,
+    text: string,
+  ): Promise<RoomSendOperation> {
+    return await this.#service.postPreparedRoomMessage(
+      roomId,
+      operationId,
+      text,
+    );
+  }
+  async cancelPreparedRoomOperation(roomId: string, operationId: string) {
+    return await this.#service.cancelPreparedRoomOperation(roomId, operationId);
+  }
+  wakeupsEnabled(): boolean {
+    return (
+      this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID) &&
+      this.#service.wakeupsEnabled()
+    );
+  }
+  roomOperation(roomId: string, operationId: string): RoomDeliveryView {
+    return this.#service.roomOperation(roomId, operationId);
+  }
+  roomDelivery(roomId: string, messageId: string) {
+    return this.#service.roomDelivery(roomId, messageId);
+  }
+  async acknowledgeRoomOperation(
+    roomId: string,
+    operationId: string,
+  ): Promise<void> {
+    await this.#service.acknowledgeRoomOperation(roomId, operationId);
   }
   async createRoom(input: CreateRoomInput) {
     return await this.#service.createRoom(input);
