@@ -1705,15 +1705,12 @@ test("adjacent no-details reasoning shares an honest count while tools and publi
     await act(async () => requiredButton(".trace-toggle").click());
     const details = requiredElement(".trace-items");
     const rows = [...details.children].map((row) => row.textContent ?? "");
-    assert.equal(rows.length, 5);
-    assert.match(rows[0]!, /2 reasoning items · no public details/u);
-    assert.match(rows[1]!, /Shell/u);
-    assert.match(rows[2]!, /Reasoning details/u);
-    assert.match(rows[3]!, /Public summary/u);
-    assert.match(rows[4]!, /2 reasoning items · no public details/u);
+    assert.equal(rows.length, 2);
+    assert.match(rows[0]!, /Shell/u);
+    assert.match(rows[1]!, /Public summary/u);
     assert.equal(
       details.querySelectorAll(".trace-reasoning-without-details").length,
-      2,
+      0,
     );
     assert.equal(
       details.querySelectorAll(".trace-reasoning-without-details button")
@@ -2415,7 +2412,7 @@ test("generic tool task observations distinguish waiting and unconfirmed cancell
       ["wait", "cancelled", "Cancelled"],
       ["wait", "timed_out", "Timed out"],
       ["wait", "failed", "Failed"],
-      ["wait", "completed", "Done"],
+      ["wait", "completed", "Waited"],
     ] as const;
     for (const [toolName, status, expected] of cases) {
       await renderInteractive(

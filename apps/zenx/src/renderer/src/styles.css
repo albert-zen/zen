@@ -7270,6 +7270,9 @@ a:focus-visible {
   color: var(--color-text-primary);
   text-align: left;
 }
+.context-usage-popover[data-placement="below"] {
+  transform: none;
+}
 .context-usage-heading {
   display: flex;
   align-items: baseline;

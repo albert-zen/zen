@@ -1,4 +1,4 @@
-import { readFile, realpath, stat } from "node:fs/promises";
+import { readFile, realpath, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import {
   listThreadCandidates,
@@ -149,12 +149,37 @@ export async function createBundledAutomationPluginService(options: {
       rooms: legacy.rooms,
     });
   }
-  const roomProjection = await JsonPluginStorage.open({
-    pluginId: ZENX_ROOMS_CAPABILITY_ID,
-    root: storageRoot,
-    version: 1,
-    initialValue: { rooms: persistedAutomation["rooms"] ?? legacy.rooms },
-  });
+  let roomProjection: JsonPluginStorage;
+  try {
+    roomProjection = await JsonPluginStorage.open({
+      pluginId: ZENX_ROOMS_CAPABILITY_ID,
+      root: storageRoot,
+      version: 1,
+      initialValue: { rooms: persistedAutomation["rooms"] ?? legacy.rooms },
+      fileSystem: options.storageFileSystem,
+    });
+  } catch (error) {
+    // This file is a reconstructible compatibility projection. If an older
+    // runtime left it malformed, remove only that projection and rebuild it
+    // from the canonical shared Trigger container; optional Room state must
+    // not prevent ZenX from starting.
+    console.error(
+      `ZenX Room compatibility projection is corrupt; rebuilding from canonical state: ${describeError(error)}`,
+    );
+    const projectionFile = path.join(
+      storageRoot,
+      ZENX_ROOMS_CAPABILITY_ID,
+      "storage.json",
+    );
+    await (options.storageFileSystem?.unlink ?? unlink)(projectionFile);
+    roomProjection = await JsonPluginStorage.open({
+      pluginId: ZENX_ROOMS_CAPABILITY_ID,
+      root: storageRoot,
+      version: 1,
+      initialValue: { rooms: persistedAutomation["rooms"] ?? legacy.rooms },
+      fileSystem: options.storageFileSystem,
+    });
+  }
   await roomProjection.set({
     rooms: (await automationStorage.get())["rooms"] ?? [],
   });
@@ -242,9 +267,18 @@ class PluginAutomationStore implements ZenXTriggerStorePort {
     };
     await this.#storage.set(committed);
     // The room namespace remains as a compatibility projection for older
-    // runtimes. The shared Trigger document above is the sole authority.
-    if (this.#active.has(ZENX_ROOMS_CAPABILITY_ID))
-      await this.#roomProjection.set({ rooms: committed.rooms });
+    // runtimes. The shared Trigger document above is the sole authority. A
+    // projection failure must not report a failed mutation after the
+    // authoritative commit; startup resynchronizes this compatibility file.
+    if (this.#active.has(ZENX_ROOMS_CAPABILITY_ID)) {
+      try {
+        await this.#roomProjection.set({ rooms: committed.rooms });
+      } catch (error) {
+        console.error(
+          `ZenX Room compatibility projection is stale; canonical state committed: ${describeError(error)}`,
+        );
+      }
+    }
   }
 }
 

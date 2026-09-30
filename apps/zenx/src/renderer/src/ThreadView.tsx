@@ -1430,6 +1430,7 @@ export function ContextUsageIndicator({
     left: 0,
     top: 0,
     width: 286,
+    placement: "above" as "above" | "below",
   });
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1454,10 +1455,25 @@ export function ContextUsageIndicator({
           bounds?.width ? bounds.right : window.innerWidth,
         ) - 8;
       const width = Math.min(286, Math.max(0, right - left));
+      // Keep the fixed popover inside the viewport even when the indicator is
+      // near the top edge. The CSS transform places an above popover entirely
+      // above its anchor, so choose below before clamping rather than allowing
+      // the panel to be clipped out of view.
+      const estimatedHeight = 190;
+      const canPlaceAbove = anchor.top - 8 >= estimatedHeight;
       setPopoverPosition({
         left: Math.max(left, Math.min(anchor.right - width, right - width)),
-        top: Math.max(8, anchor.top - 8),
+        top: canPlaceAbove
+          ? anchor.top - 8
+          : Math.max(
+              8,
+              Math.min(
+                window.innerHeight - estimatedHeight - 8,
+                anchor.bottom + 8,
+              ),
+            ),
         width,
+        placement: canPlaceAbove ? "above" : "below",
       });
     };
     place();
@@ -1526,6 +1542,7 @@ export function ContextUsageIndicator({
         <div
           className="context-usage-popover"
           style={popoverPosition}
+          data-placement={popoverPosition.placement}
           id={popoverId}
           role="dialog"
           aria-label="Context details"
@@ -1727,16 +1744,24 @@ function TraceSequence({
                 // Models that do not expose reasoning should leave no
                 // completed "Think" heading behind in the transcript.
                 .filter(
-                  (row) =>
-                    !(
-                      "kind" in row &&
-                      !node.items.some(
+                  (row) => {
+                    if ("kind" in row) {
+                      return node.items.some(
                         (item) =>
                           row.ids.includes(item.id) &&
                           item.type === "reasoning" &&
                           item.status === "inProgress",
-                      )
-                    ),
+                      );
+                    }
+                    const item = row.item;
+                    return !(
+                      item.type === "reasoning" &&
+                      item.status !== "inProgress" &&
+                      item.status !== "interrupted" &&
+                      item.summary.every((part) => part.trim().length === 0) &&
+                      item.content.every((part) => part.trim().length === 0)
+                    );
+                  },
                 )
                 .map((row) => {
                   if ("kind" in row) {

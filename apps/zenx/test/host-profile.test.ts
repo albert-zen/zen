@@ -388,11 +388,11 @@ test("built-in preset refresh preserves a user's hidden selection", () => {
     ],
     defaultModel: {
       providerProfileId: "openai-codex",
-      modelId: "gpt-5.6-sol",
+      modelId: "gpt-5.6-terra",
     },
     titleModel: {
       providerProfileId: "openai-codex",
-      modelId: "gpt-5.6-sol",
+      modelId: "gpt-5.6-terra",
     },
   });
   assert.equal(

@@ -47,6 +47,43 @@ test("corrupt optional automation state does not block service construction", as
   }
 });
 
+test("corrupt Room compatibility projection is rebuilt from canonical storage", async () => {
+  const userDataDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-room-projection-recovery-"),
+  );
+  try {
+    const storageRoot = path.join(userDataDirectory, "plugin-data");
+    await mkdir(path.join(storageRoot, "zenx-triggers"), { recursive: true });
+    await mkdir(path.join(storageRoot, "zenx-rooms"), { recursive: true });
+    await writeFile(
+      path.join(storageRoot, "zenx-triggers", "storage.json"),
+      JSON.stringify({ version: 1, value: { triggers: [], history: [], rooms: [] } }),
+      { mode: 0o600 },
+    );
+    await writeFile(
+      path.join(storageRoot, "zenx-rooms", "storage.json"),
+      "not-json",
+      { mode: 0o600 },
+    );
+    const service = await createBundledAutomationPluginService({
+      userDataDirectory,
+      appServer: {
+        request: async () => ({}) as never,
+        onNotification: () => () => {},
+      },
+    });
+    assert.deepEqual(service.snapshot(), { triggers: [], history: [], rooms: [] });
+    assert.deepEqual(
+      JSON.parse(
+        await readFile(path.join(storageRoot, "zenx-rooms", "storage.json"), "utf8"),
+      ),
+      { version: 1, value: { rooms: [] } },
+    );
+  } finally {
+    await rm(userDataDirectory, { recursive: true, force: true });
+  }
+});
+
 test("completion setup resolves readable targets without ambiguous writes and reads the exact source result", async () => {
   const configuredPath = process.cwd();
   let saved: TriggerSnapshot = { triggers: [], history: [], rooms: [] };

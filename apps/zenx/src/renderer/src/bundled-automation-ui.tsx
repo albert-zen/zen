@@ -41,6 +41,8 @@ interface RoomListResult {
         text: string;
         messageId: string | null;
         createdAt: number;
+        acknowledged?: boolean;
+        cancelled?: boolean;
       }>;
       responders?: Array<{ name: string; configured: boolean }>;
     }
@@ -71,6 +73,7 @@ interface RoomPendingSend {
   text: string;
   revision: number | null;
   messageId: string | null;
+  cancelled?: boolean;
 }
 
 export function registerBundledAutomationUi(
@@ -1186,6 +1189,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 ? merged[room.id]!.revision
                 : null,
             messageId: operation.messageId,
+            cancelled: operation.cancelled,
           };
         }
       }
@@ -1217,6 +1221,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           text: collected[0].text,
           revision: null,
           messageId: collected[0].messageId,
+          cancelled: collected[0].cancelled,
         };
       pendingRef.current = merged;
       setPendingByRoom(merged);
@@ -1280,6 +1285,14 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const roomOperations = room?.operations ?? [];
   const visibleRoomOperations = roomOperations.slice(-3);
   const olderRoomOperations = roomOperations.slice(0, -3);
+  const operationStateLabel = (operation: (typeof roomOperations)[number]) =>
+    operation.cancelled
+      ? "cancelled"
+      : operation.messageId
+        ? operation.acknowledged
+          ? "saved · acknowledged"
+          : "saved"
+        : "prepared · result unknown";
   const tail = room?.messages.at(-1)?.id ?? null;
   useEffect(() => {
     if (
@@ -1665,9 +1678,11 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 ) : null}
                 {pending ? (
                   <div role="status" className="room-send-pending">
-                    {pending.messageId
-                      ? "Message saved; check its exact delivery."
-                      : "Send unconfirmed. Check, cancel if still prepared, or explicitly send."}{" "}
+                    {pending.cancelled
+                      ? "Operation cancelled; no message was sent."
+                      : pending.messageId
+                        ? "Message saved; check its exact delivery."
+                        : "Send unconfirmed. Check, cancel if still prepared, or explicitly send."}{" "}
                     <button
                       type="button"
                       onClick={() =>
@@ -1676,7 +1691,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     >
                       Check exact operation
                     </button>
-                    {!pending.messageId ? (
+                    {!pending.messageId && !pending.cancelled ? (
                       <>
                         <button
                           type="button"
@@ -1705,9 +1720,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       role="status"
                     >
                       Unreviewed Room operation {operation.id.slice(0, 8)}:{" "}
-                      {operation.messageId
-                        ? "saved"
-                        : "prepared / result unknown"}{" "}
+                      {operationStateLabel(operation)}{" "}
                       · {Array.from(operation.text).slice(0, 70).join("")}{" "}
                       <button
                         type="button"
@@ -1726,7 +1739,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       >
                         Check exact operation
                       </button>
-                      {!operation.messageId ? (
+                      {!operation.messageId && !operation.cancelled ? (
                         <>
                           <button
                             type="button"
@@ -1769,8 +1782,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     </summary>
                     {olderRoomOperations.map((operation) => (
                       <p className="room-send-pending" key={operation.id}>
-                        {operation.id.slice(0, 8)} ·{" "}
-                        {operation.messageId ? "saved" : "prepared"}
+                        {operation.id.slice(0, 8)} · {operationStateLabel(operation)} ·{" "}
+                        {Array.from(operation.text).slice(0, 70).join("")}
                       </p>
                     ))}
                   </details>
