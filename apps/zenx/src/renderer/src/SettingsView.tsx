@@ -202,7 +202,9 @@ export function SettingsView({
         approvalPolicy: draft.approvalPolicy,
         toolPresentation: draft.toolPresentation ?? "both",
         experimentalRtkEnabled: draft.experimentalRtkEnabled === true,
-        composerSendMode: draft.composerSendMode ?? "queue",
+        composerSendMode: draft.composerSendMode ?? "soft",
+        composerSendModeExplicit: draft.composerSendModeExplicit,
+        composerSendModeMigration: draft.composerSendModeMigration,
         maxToolRounds: draft.maxToolRounds,
         contextCompaction: draft.contextCompaction,
         workflowCommands: draft.workflowCommands ?? [],
@@ -260,8 +262,16 @@ export function SettingsView({
   const hostDirty = JSON.stringify(draft) !== JSON.stringify(settings.profile);
   const sendModeOnly =
     hostDirty &&
-    JSON.stringify({ ...draft, composerSendMode: undefined }) ===
-      JSON.stringify({ ...settings.profile, composerSendMode: undefined });
+    JSON.stringify({
+      ...draft,
+      composerSendMode: undefined,
+      composerSendModeExplicit: undefined,
+    }) ===
+      JSON.stringify({
+        ...settings.profile,
+        composerSendMode: undefined,
+        composerSendModeExplicit: undefined,
+      });
   const tabs: Array<{
     id: SettingsTab;
     label: string;
@@ -3131,23 +3141,37 @@ function GeneralPanel({
           <span id="composer-send-label">Send during a running turn</span>
           <Select
             aria-labelledby="composer-send-label"
-            value={draft.composerSendMode ?? "queue"}
+            value={draft.composerSendMode ?? "soft"}
             onValueChange={(value) =>
               setDraft({
                 ...draft,
-                composerSendMode: value as "queue" | "soft" | "hard",
+                composerSendMode: value as "batch" | "queue" | "soft" | "hard",
+                composerSendModeExplicit: true,
+                ...(draft.composerSendModeMigration === undefined
+                  ? {}
+                  : {
+                      composerSendModeMigration: {
+                        ...draft.composerSendModeMigration,
+                        acknowledged: true,
+                      },
+                    }),
               })
             }
             aria-describedby="composer-send-help"
           >
-            <option value="queue">Queue</option>
-            <option value="soft">Soft steer</option>
+            <option value="batch">Next turn together</option>
+            <option value="queue">Run each queued message separately</option>
+            <option value="soft">Steer current turn now (default)</option>
             <option value="hard">Hard steer (interrupt and send)</option>
           </Select>
           <small id="composer-send-help" className="settings-note">
             Enter and the send button use this choice. Cmd/Ctrl+Enter uses soft
-            steer when Queue is selected, and Queue when either steer mode is
-            selected. Shift+Enter adds a new line.
+            steer when a queue mode is selected, and Next turn together when a
+            steer mode is selected. Existing queued messages keep their original
+            delivery choice. Older Queue profiles with no reliable record of a
+            manual choice now default to Steer; use the restore action in the
+            conversation to return to per-message Queue. Shift+Enter adds a new
+            line.
           </small>
         </label>
       </section>

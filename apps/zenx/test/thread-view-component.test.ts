@@ -9,6 +9,7 @@ import test from "node:test";
 import type { Thread, ThreadItem, Turn } from "../src/protocol-client/index.js";
 import type { AttachmentRef } from "../../../src/attachment.js";
 import type { CanonicalItem } from "../../../src/item.js";
+import { applyNativeThreadEvent } from "../src/renderer/src/thread-view-state.js";
 import type { ModelUsageProjection } from "../../../src/model-usage.js";
 import { projectCompletedItem } from "../../../src/protocol/codex/mapper.js";
 import type { ApprovalCardState } from "../src/renderer/src/approval-state.js";
@@ -551,12 +552,69 @@ test("running empty composer exposes Stop without locking the editor", () => {
   assert.match(html, /aria-label="Stop"/u);
 });
 
-test("running draft defaults to Queue with a Soft steer alternative", () => {
+test("running draft defaults to Steer with both queue choices visible", () => {
   const composer = editComposer(emptyComposerState(), "change direction");
   const html = render(true, [], composer);
-  assert.match(html, />Soft steer</u);
-  assert.match(html, /aria-label="Queue message"/u);
+  assert.match(html, /aria-label="Steer now"/u);
+  assert.match(html, />Next turn</u);
+  assert.match(html, />Each turn</u);
   assert.doesNotMatch(html, /Interrupt without sending the draft/u);
+});
+
+test("mounted Thread queue disappears on canonical acceptance without navigation", async () => {
+  await withDom(async (root) => {
+    let current: Thread = {
+      ...thread([turn()]),
+      canonicalItems: [],
+      queuedMessages: [],
+    };
+    const queued = {
+      id: "queue-one",
+      type: "user_message_queued" as const,
+      threadId: current.id,
+      clientId: "client-one",
+      createdAt: new Date().toISOString(),
+      input: [{ type: "text" as const, text: "identical" }],
+    };
+    current = applyNativeThreadEvent(current, {
+      type: "item_completed",
+      item: queued,
+    });
+    const show = async () =>
+      await act(async () =>
+        root.render(
+          createElement(ThreadView, {
+            approvals: [],
+            composer: emptyComposerState(),
+            thread: current,
+            onDraftChange: () => undefined,
+            onInterrupt: noop,
+            onRespondToApproval: noop,
+            onSubmit: noop,
+          }),
+        ),
+      );
+    await show();
+    assert.match(
+      document.querySelector('[aria-label="Message queue"]')?.textContent ?? "",
+      /1 queued.*identical/u,
+    );
+    current = applyNativeThreadEvent(current, {
+      type: "item_completed",
+      item: {
+        id: "accepted-one",
+        type: "user_message",
+        threadId: current.id,
+        turnId: "turn-1",
+        clientId: "client-one",
+        createdAt: new Date().toISOString(),
+        content: queued.input,
+      },
+    });
+    await show();
+    assert.equal(document.querySelector('[aria-label="Message queue"]'), null);
+    assert.equal(document.querySelectorAll(".user-row").length, 1);
+  });
 });
 
 test("pending approvals render in the bottom zone next to the composer", () => {
@@ -1834,9 +1892,10 @@ test("failed turn opens received trace and preserves the error without a final a
 test("keyboard modifiers and send button honor all running send modes", async () => {
   await withDom(async (root) => {
     for (const [mode, normal, alternate] of [
+      ["batch", "batch-next", "steer"],
       ["queue", "queue", "steer"],
-      ["soft", "steer", "queue"],
-      ["hard", "replace", "queue"],
+      ["soft", "steer", "batch-next"],
+      ["hard", "replace", "batch-next"],
     ] as const) {
       const intents: string[] = [];
       await act(async () =>

@@ -114,12 +114,14 @@ export class NativeConnection {
         };
         this.#subscriptions.add(params.threadId);
         let result: { turnId?: string } = {};
-        if (params.mode === "queue")
+        if (params.mode === "queue" || params.mode === "batch-next")
           await this.#appServer.queueMessage(
             params.threadId,
             input,
             options.clientId,
-            options,
+            params.mode === "batch-next"
+              ? { ...options, deliveryMode: "batch-next" }
+              : options,
           );
         else if (params.mode === "start") {
           const turn = await this.#appServer.startTurn(

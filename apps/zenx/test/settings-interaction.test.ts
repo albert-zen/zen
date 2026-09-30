@@ -2,6 +2,9 @@ import "./dom-primitives.js";
 /// <reference path="../src/renderer/src/env.d.ts" />
 
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import * as React from "react";
@@ -18,8 +21,98 @@ import type {
   ZenXSettingsUpdate,
 } from "../src/main/host-profile.js";
 import type { SettingsTab } from "../src/renderer/src/SettingsView.js";
+import { ZenXHostProfileStore } from "../src/main/host-profile.js";
 import type { ZenXProviderCatalogSnapshot } from "../src/main/settings-service.js";
 import type { ZenXImageCapabilityProbeResult } from "../src/main/settings-service.js";
+
+test("actual Settings UI save persists Queue, Batch, Soft provenance across profile reload", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-preference-ui-"),
+  );
+  try {
+    const store = new ZenXHostProfileStore(
+      path.join(directory, "host-profile.json"),
+    );
+    const initial = {
+      ...settings.profile,
+      workspace: directory,
+      workspaces: [directory],
+      lastUsedWorkspace: directory,
+      composerSendMode: "soft" as const,
+      composerSendModeExplicit: false,
+    };
+    await store.write(initial);
+    const open = async (tab: SettingsTab) => {
+      const initialSettings = {
+        ...settings,
+        profile: await store.read(initial),
+      };
+      return await mountSettings(tab, {
+        initialSettings,
+        get: async () => ({ ...settings, profile: await store.read(initial) }),
+        // This is the actual UI->settings.save payload and the real Host
+        // profile normalization/atomic file round-trip, not draft-only state.
+        save: async (update) => {
+          await store.write({ ...(await store.read(initial)), ...update });
+          return { ...settings, profile: await store.read(initial) };
+        },
+      });
+    };
+    const unrelated = await open("models");
+    try {
+      await waitFor(() =>
+        labelControl<HTMLButtonElement>("Default model", "button.ui-select"),
+      );
+      const control = await labeledSelect("Default model");
+      assert.ok(control);
+      await changeControl(control, control.options[1]!.value);
+      await click(exactButtonRequired("Apply"));
+      await waitFor(async () =>
+        (await store.read(initial)).defaultModel.modelId !== "fake"
+          ? true
+          : undefined,
+      );
+    } finally {
+      await unmount(unrelated);
+    }
+    assert.equal((await store.read(initial)).composerSendModeExplicit, false);
+
+    for (const mode of ["queue", "batch", "soft"] as const) {
+      const harness = await open("general");
+      try {
+        await waitFor(() =>
+          labelControl<HTMLButtonElement>(
+            "Send during a running turn",
+            "button.ui-select",
+          ),
+        );
+        const control = await labeledSelect("Send during a running turn");
+        assert.ok(control);
+        await changeControl(control, mode);
+        await click(exactButtonRequired("Apply"));
+        await waitFor(async () => {
+          const saved = await store.read(initial);
+          return saved.composerSendMode === mode &&
+            saved.composerSendModeExplicit === true
+            ? true
+            : undefined;
+        });
+      } finally {
+        await unmount(harness);
+      }
+      const restarted = new ZenXHostProfileStore(
+        path.join(directory, "host-profile.json"),
+      );
+      assert.equal((await restarted.read(initial)).composerSendMode, mode);
+      assert.equal(
+        (await restarted.read(initial)).composerSendModeExplicit,
+        true,
+      );
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 const { act, createElement, useState } = React;
 const bootstrapDom = new JSDOM(
@@ -37,6 +130,35 @@ Object.assign(globalThis, {
 });
 const { createRoot } = await import("react-dom/client");
 const { SettingsView } = await import("../src/renderer/src/SettingsView.js");
+
+test("Settings send mode choice forwards explicit provenance through save", async () => {
+  const submitted: ZenXSettingsUpdate[] = [];
+  const initial: PublicHostSettings = {
+    ...settings,
+    profile: {
+      ...settings.profile,
+      composerSendMode: "soft",
+      composerSendModeExplicit: false,
+    },
+  };
+  const harness = await mountSettings("general", {
+    initialSettings: initial,
+    save: async (update) => {
+      submitted.push(update);
+      return { ...initial, profile: { ...initial.profile, ...update } };
+    },
+  });
+  try {
+    const control = await labeledSelect("Send during a running turn");
+    assert.ok(control);
+    await changeControl(control, "queue");
+    await click(exactButtonRequired("Apply"));
+    assert.equal(submitted.at(-1)?.composerSendMode, "queue");
+    assert.equal(submitted.at(-1)?.composerSendModeExplicit, true);
+  } finally {
+    await unmount(harness);
+  }
+});
 
 const settings: PublicHostSettings = {
   profile: {

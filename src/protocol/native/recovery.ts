@@ -229,6 +229,8 @@ function eventEstablishesCanonicalBoundary(event: AppServerEvent): boolean {
     case "reasoning_content_delta":
     case "token_usage":
     case "model_catalog_updated":
+    case "queue_failed":
+    case "queue_admission_started":
       return false;
   }
 }
@@ -246,6 +248,9 @@ function eventRepresentedInSnapshot(
   switch (event.type) {
     case "model_catalog_updated":
       return true;
+    case "queue_failed":
+    case "queue_admission_started":
+      return true; // Ephemeral feedback is not journal-backed state.
     case "thread_started":
       return snapshot.id === event.threadId;
     case "thread_archived_updated":

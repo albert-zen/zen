@@ -1843,10 +1843,235 @@ test("Composer keyboard and form routes do not duplicate one submit event", asyn
   }
 });
 
+test("ambiguous historic Queue warns on current Thread, restores explicitly, and does not repeat", async () => {
+  const migrated = {
+    composerSendMode: "soft" as const,
+    composerSendModeExplicit: false,
+    composerSendModeMigration: {
+      version: 1 as const,
+      previousMode: "queue" as const,
+      acknowledged: false,
+    },
+  };
+  const savedUpdates: import("../src/main/host-profile.js").ZenXSettingsUpdate[] =
+    [];
+  const options = {
+    initialProfile: migrated,
+    onSettingsSave: (
+      update: import("../src/main/host-profile.js").ZenXSettingsUpdate,
+    ) => {
+      savedUpdates.push(update);
+    },
+    request: async (method: string) => {
+      if (method === "zen/thread/resume") return resumed(runningThread());
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  };
+  const harness = await mountThreadApp(options);
+  try {
+    await selectedComposer();
+    const notice = await waitFor(() =>
+      document.querySelector(".composer-migration-notice"),
+    );
+    assert.match(notice.textContent ?? "", /older Queue preference/u);
+    const restore = [...notice.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Restore per-message Queue"),
+    );
+    assert.ok(restore);
+    await act(async () => restore.click());
+    await waitFor(() =>
+      savedUpdates.at(-1)?.composerSendMode === "queue" ? true : undefined,
+    );
+    assert.equal(savedUpdates.at(-1)?.composerSendModeExplicit, true);
+    assert.equal(
+      savedUpdates.at(-1)?.composerSendModeMigration?.acknowledged,
+      true,
+    );
+    await waitFor(() =>
+      document.querySelector(".composer-migration-notice") === null
+        ? true
+        : undefined,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+  const reopened = await mountThreadApp({
+    ...options,
+    initialProfile: savedUpdates.at(-1) ?? migrated,
+  });
+  try {
+    await selectedComposer();
+    assert.equal(document.querySelector(".composer-migration-notice"), null);
+  } finally {
+    await unmountApp(reopened);
+  }
+});
+
+test("acknowledging migrated Steer does not change implicit automation preference", async () => {
+  const saved: import("../src/main/host-profile.js").ZenXSettingsUpdate[] = [];
+  const harness = await mountThreadApp({
+    initialProfile: {
+      composerSendMode: "soft",
+      composerSendModeExplicit: false,
+      composerSendModeMigration: {
+        version: 1,
+        previousMode: "queue",
+        acknowledged: false,
+      },
+    },
+    onSettingsSave: (update) => saved.push(update),
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(runningThread());
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  try {
+    await selectedComposer();
+    const notice = await waitFor(() =>
+      document.querySelector(".composer-migration-notice"),
+    );
+    const keep = [...notice.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Keep Steer"),
+    );
+    assert.ok(keep);
+    await act(async () => keep.click());
+    await waitFor(() => (saved.length === 1 ? true : undefined));
+    assert.equal(saved[0]?.composerSendMode, "soft");
+    assert.equal(saved[0]?.composerSendModeExplicit, false);
+    assert.equal(saved[0]?.composerSendModeMigration?.acknowledged, true);
+    await waitFor(() =>
+      document.querySelector(".composer-migration-notice") === null
+        ? true
+        : undefined,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("native queue admission failure belongs to its queued Item and latest attempt", async () => {
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  const harness = await mountThreadApp({
+    onNotification: (listener) => {
+      notify = listener;
+      return () => {
+        notify = undefined;
+      };
+    },
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(runningThread());
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  try {
+    await selectedComposer();
+    assert.ok(notify);
+    let watermark = 0;
+    const send = async (
+      event: import("../../../src/app-server.js").AppServerEvent,
+      threadId = "thread-1",
+    ) => {
+      await act(async () => {
+        notify?.("zen/thread/event", {
+          threadId,
+          processEpoch: "test-process-epoch",
+          watermark: ++watermark,
+          event,
+        });
+        await Promise.resolve();
+      });
+    };
+    const image = {
+      type: "attachment" as const,
+      sha256: "0".repeat(64),
+      mediaType: "image/png" as const,
+      width: 1,
+      height: 1,
+      byteLength: 68,
+    };
+    for (const [id, clientId, input] of [
+      ["queued-first", "first", [{ type: "text", text: "same" }]],
+      ["queued-second", "second", [{ type: "image", attachment: image }]],
+    ] as const) {
+      await send({
+        type: "item_completed",
+        item: {
+          id,
+          clientId,
+          input,
+          type: "user_message_queued",
+          threadId: "thread-1",
+          createdAt: new Date(20_000).toISOString(),
+        },
+      });
+    }
+    const firstAttempt = "admission-one";
+    const secondAttempt = "admission-two";
+    const begun = (
+      attemptId: string,
+    ): import("../../../src/app-server.js").AppServerEvent => ({
+      type: "queue_admission_started",
+      threadId: "thread-1",
+      queuedItemId: "queued-second",
+      clientId: "second",
+      attemptId,
+    });
+    const rejected = (
+      attemptId: string,
+    ): import("../../../src/app-server.js").AppServerEvent => ({
+      type: "queue_failed",
+      threadId: "thread-1",
+      queuedItemId: "queued-second",
+      clientId: "second",
+      attemptId,
+      code: "image_input_unsupported",
+      message: "Choose an image-capable model, then Continue queue.",
+    });
+    await send(begun(firstAttempt));
+    await send(rejected(firstAttempt));
+    assert.match(
+      document.querySelector(".queued-failure")?.textContent ?? "",
+      /image-capable model/u,
+    );
+    assert.equal(document.querySelectorAll(".queued-failure").length, 1);
+    await send(begun(secondAttempt));
+    assert.equal(document.querySelector(".queued-failure"), null);
+    await send(rejected(firstAttempt)); // stale first attempt cannot override the new one
+    assert.equal(document.querySelector(".queued-failure"), null);
+    await send(rejected(secondAttempt), "another-thread");
+    assert.equal(document.querySelector(".queued-failure"), null);
+    await send(rejected(secondAttempt));
+    assert.equal(document.querySelectorAll(".queued-failure").length, 1);
+    await send(rejected(secondAttempt)); // duplicate notification does not duplicate a card
+    assert.equal(document.querySelectorAll(".queued-failure").length, 1);
+    await send({
+      type: "item_completed",
+      item: {
+        id: "accepted-second",
+        type: "user_message",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        clientId: "second",
+        content: [{ type: "image", attachment: image }],
+        createdAt: new Date(21_000).toISOString(),
+      },
+    });
+    assert.equal(document.querySelector(".queued-failure"), null);
+    assert.match(
+      document.querySelector(".queued-messages")?.textContent ?? "",
+      /1 queued/u,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("running queue, soft steer and hard steer each own one pending admission", async () => {
   for (const [mode, method, label] of [
-    ["queue", "turn/queue", "Queue message"],
-    ["soft", "turn/steer", "Soft steer"],
+    ["batch", "zen/turn/send", "Next turn"],
+    ["queue", "turn/queue", "Each turn"],
+    ["soft", "turn/steer", "Steer now"],
     ["hard", "turn/replace", "Interrupt and send"],
   ] as const) {
     const response = deferred<unknown>();
@@ -2721,7 +2946,13 @@ async function mountApp(
     addWorkspace?(workspace: string): Promise<void>;
     getStatus?(): Promise<AppServerHostStatus>;
     initialPinnedThreadIds?: string[];
-    composerSendMode?: "queue" | "soft" | "hard";
+    composerSendMode?: "batch" | "queue" | "soft" | "hard";
+    initialProfile?: Partial<
+      import("../src/main/host-profile.js").ZenXHostProfile
+    >;
+    onSettingsSave?(
+      settings: import("../src/main/host-profile.js").ZenXSettingsUpdate,
+    ): void;
     onNotification?: Window["zenx"]["protocol"]["onNotification"];
     onStatus?(listener: (status: AppServerHostStatus) => void): () => void;
     onPinnedThreadIds?(threadIds: readonly string[]): void;
@@ -2765,6 +2996,7 @@ async function mountApp(
   let currentSettings = publicSettings(options.initialPinnedThreadIds ?? []);
   currentSettings.profile.composerSendMode =
     options.composerSendMode ?? "queue";
+  Object.assign(currentSettings.profile, options.initialProfile);
   const zenx = {
     panels: { onOpen: () => () => undefined },
     platform: "darwin",
@@ -2865,6 +3097,13 @@ async function mountApp(
     },
     settings: {
       get: async () => currentSettings,
+      save: async (
+        update: import("../src/main/host-profile.js").ZenXSettingsUpdate,
+      ) => {
+        options.onSettingsSave?.(update);
+        Object.assign(currentSettings.profile, update);
+        return currentSettings;
+      },
       setPinnedThreadIds: async (threadIds: readonly string[]) => {
         if (options.setPinnedThreadIds !== undefined)
           return await options.setPinnedThreadIds(threadIds);
@@ -2924,7 +3163,7 @@ function publicSettings(pinnedThreadIds: string[]) {
   return {
     profile: {
       version: 3 as const,
-      composerSendMode: "queue" as "queue" | "soft" | "hard",
+      composerSendMode: "queue" as "batch" | "queue" | "soft" | "hard",
       onboardingComplete: true,
       providerProfiles: [
         {
