@@ -226,7 +226,11 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   // generation closes. Catalog enablement is one logical capability, but
   // both runtime instances must release their own transient lease.
   #triggerRuntimeLeases = 0;
+  readonly #triggerRuntimeSdks: ZenXPluginHostSdkV1[] = [];
   readonly #roomRuntimeLeases: ZenXPluginHostSdkV1[] = [];
+  // Admission to storage is not proof that the underlying generation survived
+  // a failed stop. Only an explicit start can re-read durable state.
+  #serviceRunning = false;
   readonly #targets: ThreadTargetPort | undefined;
   readonly #appServer: ZenXTriggerAppServerPort;
   readonly #targetDefaults?: () => Promise<
@@ -260,11 +264,54 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
 
   async startPlugin(pluginId: string, sdk: ZenXPluginHostSdkV1): Promise<void> {
     await this.#serialize(async () => {
+      if (!this.#serviceRunning && this.#active.size > 0) {
+        const admitted = this.#active.has(pluginId);
+        if (!admitted) {
+          this.#active.add(pluginId);
+          if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID) {
+            this.#triggerRuntimeLeases = 1;
+            this.#triggerRuntimeSdks.push(sdk);
+          } else if (pluginId === ZENX_ROOMS_CAPABILITY_ID) {
+            this.#roomRuntimeLeases.push(sdk);
+          }
+        }
+        try {
+          await this.#service.start(
+            this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID),
+          );
+          this.#serviceRunning = true;
+        } catch (error) {
+          if (!admitted) {
+            this.#active.delete(pluginId);
+            if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID) {
+              this.#triggerRuntimeLeases = 0;
+              this.#triggerRuntimeSdks.pop();
+            } else if (pluginId === ZENX_ROOMS_CAPABILITY_ID) {
+              this.#roomRuntimeLeases.pop();
+            }
+          }
+          throw error;
+        }
+        if (admitted && pluginId === ZENX_TRIGGERS_CAPABILITY_ID) {
+          if (!this.#triggerRuntimeSdks.includes(sdk)) {
+            this.#triggerRuntimeLeases++;
+            this.#triggerRuntimeSdks.push(sdk);
+          }
+        } else if (
+          admitted &&
+          pluginId === ZENX_ROOMS_CAPABILITY_ID &&
+          !this.#roomRuntimeLeases.includes(sdk)
+        ) {
+          this.#roomRuntimeLeases.push(sdk);
+        }
+        return;
+      }
       if (
         pluginId === ZENX_TRIGGERS_CAPABILITY_ID &&
         this.#active.has(pluginId)
       ) {
         this.#triggerRuntimeLeases++;
+        this.#triggerRuntimeSdks.push(sdk);
         return;
       }
       if (
@@ -278,41 +325,54 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       const first = this.#active.size === 0;
       if (first) {
         this.#active.add(pluginId);
-        if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID)
+        if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID) {
           this.#triggerRuntimeLeases = 1;
+          this.#triggerRuntimeSdks.push(sdk);
+        }
         try {
           await this.#service.start(
             this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID),
           );
+          this.#serviceRunning = true;
         } catch (error) {
           this.#active.delete(pluginId);
-          if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID)
+          if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID) {
             this.#triggerRuntimeLeases = 0;
+            this.#triggerRuntimeSdks.pop();
+          }
           if (roomLease) this.#roomRuntimeLeases.pop();
           throw error;
         }
       } else {
         try {
           await this.#service.stop();
+          this.#serviceRunning = false;
         } catch (error) {
+          this.#serviceRunning = false;
           if (roomLease) this.#roomRuntimeLeases.pop();
           throw error;
         }
         this.#active.add(pluginId);
-        if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID)
+        if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID) {
           this.#triggerRuntimeLeases = 1;
+          this.#triggerRuntimeSdks.push(sdk);
+        }
         try {
           await this.#service.start(
             this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID),
           );
+          this.#serviceRunning = true;
         } catch (error) {
           this.#active.delete(pluginId);
-          if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID)
+          if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID) {
             this.#triggerRuntimeLeases = 0;
+            this.#triggerRuntimeSdks.pop();
+          }
           if (roomLease) this.#roomRuntimeLeases.pop();
           await this.#service.start(
             this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID),
           );
+          this.#serviceRunning = true;
           throw error;
         }
       }
@@ -341,17 +401,34 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
         this.#triggerRuntimeLeases > 1
       ) {
         this.#triggerRuntimeLeases--;
+        this.#triggerRuntimeSdks.shift();
         return;
       }
-      if (this.#active.size === 1) {
-        await this.#service.stop();
+      const last = this.#active.size === 1;
+      try {
+        if (last && this.#serviceRunning) await this.#service.stop();
+      } catch (error) {
+        // TriggerService.stop retires the generation even when its durable
+        // write fails. This invocation must not retain a ghost lease.
+        this.#serviceRunning = false;
         this.#active.delete(pluginId);
-      } else {
-        this.#active.delete(pluginId);
+        if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID) {
+          this.#triggerRuntimeLeases = 0;
+          this.#triggerRuntimeSdks.length = 0;
+        }
+        throw error;
       }
-      if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID)
+      if (last) this.#serviceRunning = false;
+      this.#active.delete(pluginId);
+      if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID) {
         this.#triggerRuntimeLeases = 0;
-      if (this.#active.size > 0 && pluginId === ZENX_TRIGGERS_CAPABILITY_ID)
+        this.#triggerRuntimeSdks.length = 0;
+      }
+      if (
+        this.#serviceRunning &&
+        this.#active.size > 0 &&
+        pluginId === ZENX_TRIGGERS_CAPABILITY_ID
+      )
         this.#service.suspendWakeups();
     });
   }

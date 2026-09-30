@@ -283,6 +283,7 @@
 - **ZenXRoomHostInvocationScope** — Host 在每次已验证的 Rooms runtime invoke 外侧创建仅限该次调用存活的异步来源作用域，交给旧或新 bundled runtime 的 Room service adapter 只据此允许人类特权读写，绝不把插件参数、版本或自报身份当授权。
 - **ZenXRoomPreparedCancellation** — Room storage 在同一串行 mutation 内只对未提交的精确 operation key 记有界、可查询的取消回执，阻止同 key 再提交，并仅在安全裁剪时旋转 epoch；它不撤销已保存消息或唤醒，也不是重试器。
 - **ZenXRoomGenerationLease** — 同一个 Host 的 Room plugin 在旧已启用 profile 升级换代时持有按 runtime SDK 身份区分的瞬时租约，旧代退出不能撤销新代的 Room storage 持久化资格；旧 1.0.x 无身份 close 按启动顺序释放旧代。
+- **ZenXAutomationServiceGenerationHealth** — Host 的可丢弃瞬时标志区分已接纳的 Room/Trigger 租约和底层仍可执行的 generation；stop 持久写失败后只有一次显式 start 能从实际磁盘重新建立能力，失败不被当作已保存事实或自动重试。
 - **ZenXWakeupProjection** — ZenX 把 Trigger 命中的 `clientUserMessageId` 与外部审计记录
   关联成系统级唤醒卡片，并把有界、带明确来源的 completed Turn / Room 上下文作为
   新 Turn 输入投影；它不是第二份权威 transcript，canonical `user_message` 仍是唯一输入事实。
