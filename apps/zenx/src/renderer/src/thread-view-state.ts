@@ -121,6 +121,7 @@ export function applyNativeThreadEvent(
     };
     if (
       event.item.type === "user_message_queued" ||
+      event.item.type === "user_message_queue_cancelled" ||
       event.item.type === "user_message"
     ) {
       thread = {

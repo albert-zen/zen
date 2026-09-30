@@ -24,6 +24,7 @@ export type ItemType =
   | "turn_aborted"
   | "turn_replacement_requested"
   | "user_message_queued"
+  | "user_message_queue_cancelled"
   | "user_message"
   | "agent_message"
   | "model_usage"
@@ -43,6 +44,7 @@ const CANONICAL_ITEM_TYPES = {
   turn_aborted: true,
   turn_replacement_requested: true,
   user_message_queued: true,
+  user_message_queue_cancelled: true,
   user_message: true,
   agent_message: true,
   model_usage: true,
@@ -353,6 +355,13 @@ export interface QueuedUserMessageItem extends ItemBase {
   deliveryMode?: "batch-next";
 }
 
+/** A completed cancellation fact; the original queued input stays in history. */
+export interface QueuedUserMessageCancelledItem extends ItemBase {
+  type: "user_message_queue_cancelled";
+  queuedItemId: string;
+  clientId: string;
+}
+
 export interface CodeStateItem extends ItemBase {
   type: "code_state";
   turnId: string;
@@ -364,6 +373,7 @@ export interface CodeStateItem extends ItemBase {
 export type CanonicalItem =
   | CodeStateItem
   | QueuedUserMessageItem
+  | QueuedUserMessageCancelledItem
   | ThreadMetadataItem
   | ThreadForkedItem
   | ThreadConfigurationChangedItem
@@ -699,6 +709,11 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
     case "user_message_queued":
       requireNonEmptyString(item.clientId, `${type}.clientId`);
       validateUserInput(item.input, `${type}.input`);
+      break;
+    case "user_message_queue_cancelled":
+      requireNoTurnId(item);
+      requireNonEmptyString(item.queuedItemId, `${type}.queuedItemId`);
+      requireNonEmptyString(item.clientId, `${type}.clientId`);
       break;
     case "user_message":
       requireTurnId(item, type);
