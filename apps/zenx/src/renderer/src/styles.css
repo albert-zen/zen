@@ -596,7 +596,7 @@ button:disabled {
   width: 100%;
   min-height: 38px;
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   padding: 0 10px;
@@ -5048,9 +5048,6 @@ button:disabled {
   }
   .app-shell.sidebar-collapsed {
     --titlebar-brand-track: min(232px, calc(100% - 138px));
-  }
-  .sidebar-header {
-    padding-inline: 9px;
   }
   .project-actions {
     opacity: 1;
