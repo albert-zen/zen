@@ -66,6 +66,8 @@ export interface ItemBase {
 interface ThreadMetadataItemBase extends ItemBase {
   type: "thread_metadata";
   cwd: string;
+  /** Immutable creation relation; ordinary copies do not inherit it. */
+  parentThreadId?: string;
   /** Only new Threads opt in; existing journals are never retroactively loaded. */
   workspaceInstructionPolicy?: "repo-root-on-first-message";
   sandbox: SandboxMode;
@@ -501,6 +503,14 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
     case "thread_metadata":
       requireNoTurnId(item);
       requireNonEmptyString(item.cwd, "thread_metadata.cwd");
+      if (item.parentThreadId !== undefined) {
+        requireNonEmptyString(
+          item.parentThreadId,
+          "thread_metadata.parentThreadId",
+        );
+        if (item.parentThreadId === item.threadId)
+          throw new Error("Thread cannot be its own parent");
+      }
       if (item.workspaceInstructionPolicy !== undefined) {
         requireEnum(
           item.workspaceInstructionPolicy,

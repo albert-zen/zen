@@ -1,7 +1,16 @@
 import type { AppServerEvent } from "../../app-server.js";
+import type {
+  CreateChildThreadInput,
+  ThreadSnapshot,
+} from "../../app-server.js";
 
 export const NATIVE_INITIALIZE_METHOD = "zen/initialize";
 export const NATIVE_THREAD_READ_METHOD = "zen/thread/read";
+export const NATIVE_THREAD_CREATE_CHILD_METHOD = "zen/thread/create-child";
+export type NativeCreateChildThreadParams = CreateChildThreadInput;
+export interface NativeCreateChildThreadResult {
+  thread: ThreadSnapshot;
+}
 export const NATIVE_QUEUE_CANCEL_METHOD = "zen/thread/queue/cancel";
 export const NATIVE_THREAD_RESUME_METHOD = "zen/thread/resume";
 export const NATIVE_THREAD_EVENT_METHOD = "zen/thread/event";
