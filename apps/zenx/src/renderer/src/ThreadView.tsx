@@ -1538,6 +1538,7 @@ export function ContextUsageIndicator({
             aria-label="Context details"
           >
             <div className="context-usage-heading">
+              <span>Context window used</span>
               <strong>{String(percent)}%</strong>
             </div>
             <div
