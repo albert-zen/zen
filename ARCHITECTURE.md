@@ -2,6 +2,12 @@
 
 ## 核心概念
 
+- **Fleet** — 用户配置的 SSH/HTTPS 设备目录将既有线程工具按可选 device 路由到远端同一工具实现；远端 Host 持有唯一会话权威，Fleet 不同步 journal、不新建调度器。
+- **Fleet Settings / Host** — 桌面设置保存设备定位与加密凭证，App Server 所在 Host 子进程持有原生 TLS gateway；授权摘要持久化且可撤销，进程重启不自动撤销配对，关闭进程停止服务。
+- **Fleet Relay** — 可选自托管 TLS relay 按预授权 Host 身份转发出站连接中的原生配对、请求与事件；relay 是可见消息与 grant 的受信任 TLS 终止端，不提供端到端加密、不拥有会话状态。
+- **Fleet Rooms** — Host 对已授权 workspace 内的助手 Room 投影有限消息与原生 Room 操作，客户端沿用 operation epoch 和幂等键，不复制 Room 状态机。
+- **Fleet Stream Watch** — HTTPS 原生订阅或 SSH bridge 的易失事件流恢复 canonical Thread 状态，只向既有 Trigger 交付有身份的终态，不建立第二份 journal。
+
 - **Android RemoteHostTransport** — Android 客户端用共享 ZAS 原生 wire、Host ID 与安全存储 grant 建立 TLS 连接，把公开快照/事件映射到可撤销的临时视图；epoch/watermark 恢复不改变 Host 的 canonical authority。
 - **ZenX Android 控制端** — Android 只保存本地连接偏好并显示选定 Host 的 ZAS 读模型；设备、workspace 或 Thread 切换按发起身份隔离易失输入与命令回执，草稿编辑/视图选择世代避免相同文字的新稿被旧回执清除，而同归属命令结算与旧恢复视图各自核验身份；断线/失权不保留公开页面投影但未知送达围栏仍归属原 Thread，请求准入与 Host canonical Turn 终态分别呈现，不保存 Agent、Turn、Provider key 或第二份 ItemList。
 
@@ -11,7 +17,7 @@
 
 - **ZenX Thread Target** — Host 从 App Server 当前列表与 workspace 身份投影解析完整 ID、唯一前缀或精确标题，歧义只返回易读候选；共享解析不保存索引或拥有会话语义。
 - **ZenX 自控原文与发送** — 原生 `zen/thread/read` 无订阅地读取完整 canonical snapshot；Host 用 Item/Turn 边界派生分页，并在所有模型可见预览与续读前递归投影可公开的 Item：标记 opaque 的结构只保留定位字段与公开 summary，public reasoning 与工具原文字符串不改写，journal 与可信原生读取/恢复仍完整。发送幂等键和 Turn fence 从可信工具调用身份及当前快照推导；发送偏好仍由 Host profile 持有，不引入命令账本或会话权威。
-- **Trigger Thread Watch** — 既有 Trigger 配置固定来源与目标 Thread，可监听一次或后续各 Turn 的终态；注册后的可选 canonical 快照与实时事件使用同一去重入口，一次性监听在事件接纳时停用，通知发送的失败或不确定性单独记录，不重试或补发离线事件。
+- **Trigger Thread Watch** — 既有 Trigger 配置固定来源 device/workspace/Thread 与目标 Thread，可监听一次或后续各 Turn 的终态；原生远端订阅由定义版本、生命周期和订阅身份围栏保护，canonical 快照与实时事件通过命名空间去重写入既有历史，一次性监听在事件接纳时停用；sourceError 仅为易失投影，不增加 journal 或补发无关历史事件。
 - **Host Skills** — Host 保存标准目录的完整导入副本与独立可见性覆盖；ZAS 的统一发送入口按预算将自动目录和显式引用解析为带来源的 canonical 文本输入，重试从已有 Item 复用快照，恢复与压缩不重新读取目录。默认手动模式不自动披露任何元数据，禁用模式拒绝加载。
 - **ZenX 界面控件** — Renderer 的共享 Select、Popover、Dialog 使用无样式可访问性 primitives 与既有主题 tokens 统一键盘、焦点、浮层避让及可取消动效，只管理易失展示状态。
 - **Plugin UI 主题快照** — Host renderer 向 trusted/isolated surface 提供版本化、只读的颜色、密度与 reduced-motion 变量，主题变化仅更新展示，不重载插件或放宽隔离。
@@ -48,6 +54,9 @@
 - **Canonical Item Decoder** — JSONL journal 只在读取边界用一个穷尽的 runtime decoder 接纳现行与明确 legacy Item shape，拒绝不能安全重放的结构，而写侧继续只使用同一组 canonical TypeScript 类型。
 - **Thread** — 一个 agent 上下文，权威状态是一条 append-only 的 Item list。
 - **Thread Fork** — Core 在最近一个完整 Turn 边界原子复制并重标识 canonical Item 前缀，再追加 `thread_forked` 来源事实；新 Thread 继续独立追加，且不继承源 Thread 的活动执行、排队输入或 Host 资源。
+- **Child Thread** — Core 在创建普通 Thread 时将不可变 `parentThreadId` 与初始历史原子保存，原生 AppServer 按同目录 fresh/fork 创建并投影关系；普通 Copy 不继承亲缘关系，父线程归档不联动子线程，不增加委派任务或调度状态。
+- **Subagents Plugin** — 默认内置且可停用的第一方 package 经同一 Plugin Catalog 注册子线程工具、顶部目录及右栏树，导航打开 Host 的普通对话视图；停用撤销工具与入口，Thread 历史及亲缘关系仍由 Core 持有。
+- **Thread Conversation Viewport** — Host Renderer 为每个打开的 Thread 从原生恢复快照与实时事件派生易失视图，消息提交显式绑定目标 Thread，主区与右栏复用同一 ThreadView 和按 Thread 隔离的草稿；切换布局不创建线程或复制会话权威。
 - **Turn** — 一次交换：从一条用户输入开始、到 agent 完成响应为止追加的那段连续 Item。
 - **AgentRuntime** — Zen 拥有的 provider-neutral agent loop：从 ItemList 编译上下文 → 调用模型 → 通过 Tool Environment 执行工具，并把 canonical `tool_call` / `tool_result` 在内的一切事实追加为 Item。
 - **AppServer** — 按 threadId 把请求路由到 Thread、驱动 AgentRuntime、向订阅者广播 item 事件的唯一服务入口。
@@ -1069,17 +1078,22 @@ ZenX 的 `/compact --no-reference` 仅将关闭原文定位符作为 `thread/com
 请求参数传给 Host；普通 `/compact` 与按钮沿默认开启路径运行，不在 UI
 内建立另一个压缩状态源或将 `/compact` 写成 user message。
 
-### Personal assistant Room
+### Always On Assistant preset
 
-An assistant Room is a single-member Room with a pinned reference to one existing
-roomMention Trigger; an explicit trusted UI action atomically creates both in the
-existing automation store. It introduces no runtime, Thread, scheduler or journal.
-Only human Room posts use the implicit recipient; Agent posts do not implicitly
-wake the assistant. Reading/opening the Room never starts a Turn. The owned Trigger
-uses the existing canonical App Server queue when available, retaining the existing
-wakeup receipt until a completed Turn contains its exact client input identity.
-Admission acknowledgment is not completion; early and duplicate completion cannot
-resurrect or duplicate a reply. Legacy ports without queue support retain explicit
-direct-start failure. Pausing replies stops future admission, not an input or Turn
-already admitted. Window close and explicit Quit keep their existing
-Host lifecycle. Models cannot invoke the trusted-only setup/pause commands.
+An assistant Room binds one existing Thread to an owned roomMention Trigger.
+Trusted setup creates both atomically in the existing automation store. It adds
+no Runtime, Thread authority, scheduler or journal. The reusable preset composes
+Rooms, Triggers and Fleet-enabled self-control; it has no personal Work dependency.
+Human Room posts wake the assistant; event/timer Triggers targeting its Thread
+use the same next-cycle delivery and preserve their explicit prompts and Room
+destination. New input starts idle work
+or steers the active Turn for the next model cycle. Definitive pre-admission
+thread_busy/turn_not_running races re-read and retry with the same client identity;
+unknown transport outcomes never trigger an automatic mutation retry. Multiple
+messages can belong to one Turn. Each wake receipt follows its canonical input
+and admission/completion status; it does not own an automatic final-answer post.
+The model explicitly communicates through Room tools, including intermediate
+progress or silence. Existing pause, window-close and Quit boundaries remain.
+Models cannot invoke trusted-only setup/pause commands.
+
+- **ZenX composer send controls** — the send button hover/focus panel presents existing send intents and updates the existing Host send preference; it owns only transient visibility and save feedback, never admission or execution semantics.

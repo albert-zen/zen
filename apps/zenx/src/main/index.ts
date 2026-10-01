@@ -1,3 +1,8 @@
+import { createFleetRoomsHandler } from "./fleet-rooms.js";
+import { deliverAssistantInput } from "./assistant-preset.js";
+import { FleetSettingsService } from "./fleet-settings.js";
+import { realpath } from "node:fs/promises";
+import { ZenXSubagentsCapabilityPackage } from "./capabilities/subagents-package.js";
 import { attachMainWindowDiagnostics } from "./main-window-diagnostics.js";
 import { SkillsService, type SkillMode } from "../../../cli/src/skills.js";
 import { createImZenXProfileLoader } from "./imzenx-profile-loader.js";
@@ -191,6 +196,7 @@ if (nativeHostCaller !== undefined) {
 
 let mainWindowDiagnostics: OperationalDiagnosticLog | undefined;
 let appServerManager: AppServerManager | undefined;
+let fleetSettingsService: FleetSettingsService | undefined;
 let settingsService: ZenXSettingsService | undefined;
 let capabilityService: ZenXCapabilityService | undefined;
 let chromeExtensionBridge: ChromeExtensionBridge | undefined;
@@ -357,7 +363,9 @@ async function bootstrapZenX(): Promise<void> {
     documents: app.getPath("documents"),
   });
   installApplicationMenu();
-  let automationService: ZenXAutomationControlPort | undefined;
+  let automationService:
+    | Awaited<ReturnType<typeof createBundledAutomationPluginService>>
+    | undefined;
   let triggersPackage: ZenXTriggersCapabilityPackage | undefined;
   const resourcesDirectory = app.isPackaged
     ? process.resourcesPath
@@ -381,6 +389,14 @@ async function bootstrapZenX(): Promise<void> {
   const operationalDiagnostics = (mainWindowDiagnostics ??=
     new OperationalDiagnosticLog(userDataDirectory));
   const observeAppServer = (manager: AppServerManager) => {
+    manager.setRemoteRoomsHandler(
+      createFleetRoomsHandler(manager, () => automationService),
+    );
+    manager.onStatus((status) => {
+      if (status.type === "ready")
+        void fleetSettingsService?.restore().catch(() => undefined);
+    });
+
     manager.onStatus((status) => {
       void operationalDiagnostics.observeAppServer(status);
     });
@@ -405,15 +421,62 @@ async function bootstrapZenX(): Promise<void> {
       browserEnvironment.ZENX_USER_BROWSER_CDP_ENDPOINT =
         chromeExtensionBridge.endpoint;
     }
+    fleetSettingsService = new FleetSettingsService({
+      directory: userDataDirectory,
+      encryption: safeStorage,
+      manager: () => {
+        if (!appServerManager) throw new Error("Host unavailable");
+        return appServerManager;
+      },
+      workspaces: async () => {
+        const profile = (await settingsService!.publicSettings()).profile;
+        const paths = [
+          ...new Set([
+            ...profile.workspaces,
+            ...(profile.workspace ? [profile.workspace] : []),
+          ]),
+        ];
+        return await Promise.all(
+          paths.map(async (cwd) => ({
+            cwd: await realpath(cwd),
+            label:
+              profile.projectNames?.[cwd] ??
+              cwd.split(/[\\/]/).filter(Boolean).at(-1) ??
+              cwd,
+          })),
+        );
+      },
+    });
+    ipcMain.removeHandler(ipcChannels.fleetControl);
+    ipcMain.handle(
+      ipcChannels.fleetControl,
+      async (_event, action: unknown, input: unknown, revision?: number) => {
+        const fleet = fleetSettingsService!;
+        if (action === "status") return await fleet.status();
+        if (action === "save") return await fleet.save(input, revision);
+        if (action === "pair") return await fleet.pair(input);
+        if (action === "remove" && typeof input === "string")
+          return await fleet.remove(input);
+        if (action === "test" && typeof input === "string")
+          return await fleet.test(input);
+        if (action === "invoke")
+          return await fleet.invoke(
+            input as Parameters<typeof fleet.invoke>[0],
+          );
+        if (action === "hostPair") return await fleet.hostPair();
+        if (action === "revoke" && typeof input === "string")
+          return await fleet.revoke(input);
+        throw new Error("Unsupported Fleet operation");
+      },
+    );
     const selfControlPackage = new ZenXSelfControlCapabilityPackage({
+      fleet: fleetSettingsService.router,
       appServer: selfControlPort,
-      // Desktop manual composer preference must not silently change
-      // automation/tool-result routing. Explicit guidance still steers.
+      // Agent messages supplement ongoing work by default.
       sendPreference: async () => {
         const profile = (await settingsService!.publicSettings()).profile;
-        // Do not apply a newly implicit desktop steer to automation. Older
-        // soft/hard choices were explicitly selected against a queue default.
-        if (!profile.composerSendModeExplicit) return "queue";
+        // Preserve an explicit user-selected send preference.
+        if (!profile.composerSendModeExplicit) return "soft";
         return profile.composerSendMode === "soft" ||
           profile.composerSendMode === "hard"
           ? profile.composerSendMode
@@ -431,6 +494,19 @@ async function bootstrapZenX(): Promise<void> {
               publicSettings,
             );
         },
+      },
+    });
+    const subagentsPackage = new ZenXSubagentsCapabilityPackage({
+      appServer: selfControlPort,
+      threads: selfControlPackage,
+      listSummaries: async () => {
+        if (appServerManager === undefined)
+          throw new Error("App Server is not attached");
+        const [active, archived] = await Promise.all([
+          appServerManager.listThreadSummaries(),
+          appServerManager.listThreadSummaries({ archived: true }),
+        ]);
+        return [...active, ...archived];
       },
     });
     const useSharedWorkspaceBrowser = useWorkspaceBrowserProvider(
@@ -479,6 +555,9 @@ async function bootstrapZenX(): Promise<void> {
         ),
         computer: createDelegatingFirstPartyProfileLoader(() =>
           capabilityService!.computerProfilePackage(),
+        ),
+        "zenx-subagents": createDelegatingFirstPartyProfileLoader(
+          () => subagentsPackage,
         ),
         "zenx-self-control": createDelegatingFirstPartyProfileLoader(
           () => selfControlPackage,
@@ -638,6 +717,25 @@ async function bootstrapZenX(): Promise<void> {
             threadId,
             includeTurns: true,
           }),
+        resolveRemoteThread: (device, workspace, target) =>
+          fleetSettingsService!.resolveRemoteThread(device, workspace, target),
+        readRemoteThread: (device, workspace, threadId, turnId) =>
+          fleetSettingsService!.readRemoteThread(
+            device,
+            workspace,
+            threadId,
+            turnId,
+          ),
+        subscribeRemoteThread: (device, workspace, threadId, options, signal) =>
+          fleetSettingsService!.subscribeRemoteThread(
+            device,
+            workspace,
+            threadId,
+            options,
+            signal,
+          ),
+        sendAssistant: (params, signal) =>
+          deliverAssistantInput(automationManager, params, signal),
         enqueue: async (params) => {
           await automationManager.request("turn/queue", params);
         },
@@ -645,6 +743,17 @@ async function bootstrapZenX(): Promise<void> {
       titles: titleCoordinator,
     });
     bootstrapFence.throwIfCancelled();
+    const roomVersions = new Map<string, string>();
+    automationService.onChange((snapshot) => {
+      for (const room of snapshot.rooms) {
+        if (!room.assistant) continue;
+        const version = `${room.messages.length}:${room.messages.at(-1)?.id ?? ""}`;
+        if (roomVersions.get(room.id) !== version) {
+          roomVersions.set(room.id, version);
+          appServerManager?.notifyRemoteRoom(room.id, room.assistant.threadId);
+        }
+      }
+    });
     triggersPackage = new ZenXTriggersCapabilityPackage(automationService);
     try {
       await capabilityService.initialize();
@@ -1839,6 +1948,9 @@ function installSettingsIpc(
 async function syncProjectProjection(
   settings: ZenXSettingsService,
 ): Promise<void> {
+  // Refresh the Host's authorization scope before projecting the new local
+  // Projects. A failed resolver/RPC must not preserve removed remote access.
+  if (appServerManager) await fleetSettingsService?.refreshWorkspaces();
   const profile = (await settings.publicSettings()).profile;
   await projectProjection.updateConfiguration(
     profile.workspaces,

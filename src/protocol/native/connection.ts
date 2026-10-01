@@ -14,6 +14,7 @@ import {
   NATIVE_THREAD_EVENT_METHOD,
   NATIVE_THREAD_RESUME_METHOD,
   NATIVE_THREAD_READ_METHOD,
+  NATIVE_THREAD_CREATE_CHILD_METHOD,
   NATIVE_QUEUE_CANCEL_METHOD,
 } from "./wire.js";
 
@@ -69,6 +70,52 @@ export class NativeConnection {
 
   async receive(message: JsonRpcMessage): Promise<void> {
     if (this.#closed || !isRequest(message)) return;
+    if (message.method === NATIVE_THREAD_CREATE_CHILD_METHOD) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        if (
+          !isRecord(params) ||
+          typeof params.parentThreadId !== "string" ||
+          params.parentThreadId.length === 0 ||
+          params.parentThreadId.length > 512 ||
+          (params.mode !== "fresh" && params.mode !== "fork")
+        )
+          throw new AppServerError(
+            "invalid_request",
+            "parentThreadId and fresh/fork mode are required",
+          );
+        if (this.#appServer === undefined)
+          throw new AppServerError(
+            "unavailable",
+            "Native child creation is unavailable",
+          );
+        const thread = await this.#appServer.createChildThread({
+          parentThreadId: params.parentThreadId,
+          mode: params.mode,
+        });
+        if (!this.#closed) this.#send({ id: message.id, result: { thread } });
+      } catch (error) {
+        if (!this.#closed)
+          this.#send({
+            id: message.id,
+            error: {
+              code: error instanceof AppServerError ? -32602 : -32603,
+              message: error instanceof Error ? error.message : String(error),
+              ...(error instanceof AppServerError
+                ? { data: { zenCode: error.code } }
+                : {}),
+            },
+          });
+      }
+      return;
+    }
     if (message.method === NATIVE_QUEUE_CANCEL_METHOD) {
       if (!this.#initialized && !this.#isInitialized()) {
         this.#send({

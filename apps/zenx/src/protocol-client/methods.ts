@@ -11,6 +11,7 @@ export const clientRequestMethods = [
   "thread/resume",
   "zen/thread/resume",
   "zen/thread/read",
+  "zen/thread/create-child",
   "zen/thread/queue/cancel",
   "thread/read",
   "thread/list",

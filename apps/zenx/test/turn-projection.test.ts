@@ -53,13 +53,13 @@ test("group summary does not claim unfinished tools have been used", () => {
   };
   assert.equal(
     traceSummary([reasoning("r", ""), pending]),
-    "Reasoning · Started shell",
+    "Started · Run command",
   );
   assert.equal(
     traceSummary([pending, done]),
-    "Started shell · Used browser inspect",
+    "Inspected page · Started · Run command",
   );
-  assert.equal(traceSummary([done]), "Used browser inspect");
+  assert.equal(traceSummary([done]), "Inspected page");
   const yielded = {
     ...done,
     contentType: "application/vnd.zen.tool-task+json",
@@ -67,7 +67,25 @@ test("group summary does not claim unfinished tools have been used", () => {
   };
   assert.equal(
     traceSummary([pending, yielded]),
-    "Started shell · Running browser inspect",
+    "Inspect page · running · Started · Run command",
+  );
+});
+
+test("thread send and rename summaries report successful actions without redundant completion or target-work claims", () => {
+  const sent = {
+    ...command("send", "zenx_threads_send"),
+    toolName: "zenx_threads_send",
+  };
+  const renamed = {
+    ...command("rename", "zenx_threads_rename"),
+    toolName: "zenx_threads_rename",
+  };
+  assert.equal(traceSummary([sent]), "Sent message");
+  assert.equal(traceSummary([renamed]), "Renamed thread");
+  assert.equal(traceSummary([sent, renamed]), "Renamed thread · Sent message");
+  assert.equal(
+    traceSummary([sent, { ...renamed, status: "failed" }]),
+    "Rename thread · failed · Sent message",
   );
 });
 
@@ -79,10 +97,10 @@ test("grouped task receipts preserve the same wait and terminal phases as their 
     structuredContent: { status: "running" },
   };
   const cases = [
-    [wait, "Reasoning · Waiting wait"],
+    [wait, "Waiting for task"],
     [
       { ...wait, structuredContent: { status: "timed_out" } },
-      "Reasoning · Timed out wait",
+      "Wait · timed out",
     ],
     [
       {
@@ -91,7 +109,7 @@ test("grouped task receipts preserve the same wait and terminal phases as their 
         contentType: undefined,
         structuredContent: undefined,
       },
-      "Reasoning · Declined wait",
+      "Wait · declined",
     ],
   ] as const;
   for (const [item, label] of cases) {
@@ -309,4 +327,16 @@ test("failed turns retain prior text and reasoning as history alongside the erro
     ["traceItem", "agent"],
   );
   assert.equal(projection.terminalFallback, "invalid tool call id");
+});
+
+test("collapsed trace names only the latest three tools without reasoning boilerplate", () => {
+  const items = ["one", "two", "three", "four"].map((value) => ({
+    ...command(value, `echo ${value}`),
+    toolName: "shell",
+    toolArguments: { command: `echo ${value}` },
+  }));
+  assert.equal(
+    traceSummary([reasoning("r", ""), ...items]),
+    "Ran · echo four · Ran · echo three · Ran · echo two",
+  );
 });

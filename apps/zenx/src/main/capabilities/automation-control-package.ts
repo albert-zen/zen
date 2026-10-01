@@ -62,6 +62,8 @@ export interface ZenXAutomationControlPort {
     preview: AutomationTargetPreview,
   ): Promise<{ threadId: string; effective: AutomationTargetPreview }>;
   result?(historyId: string): Promise<{
+    sourceDevice?: string;
+    sourceWorkspace?: string;
     threadId: string;
     turnId: string;
     status: string;
@@ -149,6 +151,18 @@ const triggerProperties = {
     type: "string",
     maxLength: MAX_ID_BYTES,
     description: "Source Thread: full ID, unique short ID, or exact title.",
+  },
+  sourceDevice: {
+    type: "string",
+    maxLength: MAX_ID_BYTES,
+    description:
+      "Optional Fleet source device for a Thread watch. Omit or use local for this Host; notification target stays local.",
+  },
+  sourceWorkspace: {
+    type: "string",
+    maxLength: MAX_ID_BYTES,
+    description:
+      "Optional remote source workspace ID or exact label; resolved and retained with the exact source Thread.",
   },
   once: {
     type: "boolean",
@@ -682,7 +696,7 @@ function automationPluginManifest(
     },
     mainDocument:
       plugin.displayName === "Triggers"
-        ? "Use Triggers to notify a Thread when another Turn ends. Full IDs, unique short IDs and exact titles select Threads. New thread watches default to one notification attempt; omit threadId to notify the calling Thread. includeLatest checks an already ended latest Turn. Use list for delivery state, result for the exact source Turn preview, and cancel to stop listening. queued means accepted input, not completed work. Failed/interrupted source Turns are explicitly labeled. Offline events are not replayed; failed or unknown sends are not retried."
+        ? "Use Triggers to notify a local Thread when another Turn ends. Full IDs, unique short IDs and exact titles select Threads. For a native Fleet source, set sourceDevice and optionally sourceWorkspace; setup retains the exact remote device/workspace/Thread locator and listens to canonical completions. Omit sourceDevice or use local for this Host. New thread watches default to one notification attempt; omit threadId to notify the calling local Thread. includeLatest checks an already ended latest Turn only on creation. Use list for delivery state and visible source connection errors, result for the exact local or remote source Turn preview, and cancel to stop listening. queued means accepted input, not completed work. Failed/interrupted source Turns are explicitly labeled. Read-only recovery follows already observed active Turns without replaying unrelated old completions; failed or unknown sends are not retried."
         : "Use Rooms to manage shared collaboration and explicit member routing.",
     description: plugin.description,
     provider: {
@@ -764,6 +778,9 @@ function readSafeTrigger(trigger: ZenXTrigger): unknown {
     prompt: trigger.prompt,
     createdAt: trigger.createdAt,
     active: trigger.active,
+    ...(trigger.sourceError === undefined
+      ? {}
+      : { sourceError: trigger.sourceError }),
     ...(trigger.program === undefined
       ? {}
       : { program: readSafeProgram(trigger.program) }),
@@ -785,6 +802,12 @@ function readSafeTrigger(trigger: ZenXTrigger): unknown {
         threadId: trigger.watch?.threadId,
         event: trigger.watch?.event,
         once: trigger.watch?.once ?? false,
+        ...(trigger.watch?.sourceDevice === undefined
+          ? {}
+          : { sourceDevice: trigger.watch.sourceDevice }),
+        ...(trigger.watch?.sourceWorkspace === undefined
+          ? {}
+          : { sourceWorkspace: trigger.watch.sourceWorkspace }),
       },
     };
   if (trigger.kind === "roomMention")
@@ -852,6 +875,12 @@ function readSafeHistory(entry: TriggerSnapshot["history"][number]): unknown {
     status: entry.status,
     turnId: entry.turnId,
     sourceThreadId: entry.sourceThreadId,
+    ...(entry.sourceDevice === undefined
+      ? {}
+      : { sourceDevice: entry.sourceDevice }),
+    ...(entry.sourceWorkspace === undefined
+      ? {}
+      : { sourceWorkspace: entry.sourceWorkspace }),
     sourceTurnId: entry.sourceTurnId,
     sourceRoomId: entry.sourceRoomId,
     sourceRoomMessageId: entry.sourceRoomMessageId,
@@ -953,6 +982,12 @@ function triggerInput(args: Record<string, unknown>): CreateTriggerInput {
       ...common,
       kind,
       watchedThreadId: string(args, "watchedThreadId", MAX_ID_BYTES),
+      ...(args.sourceDevice === undefined
+        ? {}
+        : { sourceDevice: string(args, "sourceDevice", MAX_ID_BYTES) }),
+      ...(args.sourceWorkspace === undefined
+        ? {}
+        : { sourceWorkspace: string(args, "sourceWorkspace", MAX_ID_BYTES) }),
       ...(args.once === undefined ? {} : { once: boolean(args, "once") }),
       ...(args.includeLatest === undefined
         ? {}

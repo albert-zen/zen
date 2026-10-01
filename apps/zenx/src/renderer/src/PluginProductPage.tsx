@@ -1,3 +1,4 @@
+import { registerSubagentsUi } from "./subagents-ui.js";
 import { registerImZenXUi } from "./imzenx-ui.js";
 import { useEffect, useState } from "react";
 
@@ -15,6 +16,7 @@ export const pluginUiRegistry = createPluginUiRegistry();
 registerBundledAutomationUi(pluginUiRegistry);
 registerBundledBrowserUi(pluginUiRegistry);
 registerImZenXUi(pluginUiRegistry);
+registerSubagentsUi(pluginUiRegistry);
 
 export function PluginProductPage({
   snapshot,

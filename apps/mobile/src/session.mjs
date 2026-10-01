@@ -19,6 +19,15 @@ export function createSession(transport, publish) {
     items: [],
     turns: [],
     thread: null,
+    rooms: [],
+    supportsRooms: false,
+    roomsError: null,
+    room: null,
+    roomMessages: [],
+    roomLoading: false,
+    roomReady: false,
+    models: [],
+    modelsError: null,
     status: "unpaired",
     error: null,
     command: null,
@@ -53,6 +62,15 @@ export function createSession(transport, publish) {
       items: [],
       turns: [],
       thread: null,
+      rooms: [],
+      supportsRooms: false,
+      roomsError: null,
+      room: null,
+      roomMessages: [],
+      roomLoading: false,
+      roomReady: false,
+      models: [],
+      modelsError: null,
       status: host ? "connecting" : "unpaired",
       command: null,
       lastRequest: null,
@@ -64,11 +82,20 @@ export function createSession(transport, publish) {
     try {
       const result = await transport.snapshot(h, w);
       if (!current(epoch, h, w) || !stillOwned()) return;
+      const createKey = key(h, w, null),
+        create = operations.get(createKey);
+      if (w && create?.status === "uncertain" && create.generation < generation)
+        operations.delete(createKey);
       emit({
         workspaces: result.workspaces,
         threads: result.threads,
         status: "connected",
         error: null,
+        rooms: result.rooms ?? [],
+        supportsRooms: result.supportsRooms === true,
+        roomsError: result.roomsError ?? null,
+        models: result.models ?? [],
+        modelsError: result.modelsError ?? null,
       });
       unsubscribe();
       unsubscribe = transport.subscribe(h, w, (event) => {
@@ -81,6 +108,10 @@ export function createSession(transport, publish) {
             items: [],
             turns: [],
             threads: [],
+            rooms: [],
+            roomMessages: [],
+            roomLoading: false,
+            roomReady: false,
             command: state.command === "uncertain" ? "uncertain" : null,
             lastRequest: null,
             error:
@@ -91,6 +122,8 @@ export function createSession(transport, publish) {
                   : "Disconnected. Reconnect and read Host state; unconfirmed commands may have arrived.",
           });
         }
+        if (event.type === "room" && event.roomId === state.room)
+          void readRoom();
         if (event.type === "snapshot")
           emit({
             threads: event.threads,
@@ -109,11 +142,52 @@ export function createSession(transport, publish) {
           items: [],
           turns: [],
           threads: [],
+          rooms: [],
+          roomMessages: [],
+          roomLoading: false,
+          roomReady: false,
           lastRequest: null,
           command: state.command === "uncertain" ? "uncertain" : null,
           error: String(e),
         });
       }
+    }
+  }
+  async function readRoom() {
+    const epoch = generation,
+      h = host,
+      w = workspace,
+      room = state.room,
+      identity = readIdentity;
+    if (
+      !h ||
+      !w ||
+      !room ||
+      state.status !== "connected" ||
+      !transport.readRoom ||
+      state.roomLoading
+    )
+      return;
+    const owned = () =>
+      current(epoch, h, w) && readIdentity === identity && state.room === room;
+    emit({ roomLoading: true });
+    try {
+      const view = await transport.readRoom(h, w, room);
+      if (!owned()) return;
+      const roomKey = key(h, w, ["room", room]);
+      const record = operations.get(roomKey);
+      if (record?.status === "uncertain" && record.generation < generation)
+        operations.delete(roomKey);
+      emit({
+        roomMessages: view.messages,
+        roomLoading: false,
+        roomReady: true,
+        command: visibleOperation(h, w, ["room", room]),
+        error: null,
+      });
+    } catch (error) {
+      if (owned())
+        emit({ roomLoading: false, roomReady: false, error: String(error) });
     }
   }
   return {
@@ -124,6 +198,25 @@ export function createSession(transport, publish) {
     selectHost(h) {
       const epoch = reset(h, null);
       if (h) void refresh(epoch, h, null);
+    },
+    async reconnect() {
+      const h = host,
+        w = workspace,
+        thread = state.thread,
+        room = state.room;
+      const epoch = reset(h, w);
+      if (!h) return;
+      await refresh(epoch, h, w);
+      if (!current(epoch, h, w) || state.status !== "connected") return;
+      if (thread) this.openThread(thread);
+      else if (room) this.openRoom(room);
+    },
+    preparePair() {
+      reset(host, null);
+      emit({ status: "pairing" });
+    },
+    pairFailed(error) {
+      emit({ status: "offline", error: String(error) });
     },
     selectWorkspace(w) {
       const epoch = reset(host, w);
@@ -136,6 +229,10 @@ export function createSession(transport, publish) {
         w = workspace;
       emit({
         thread: id,
+        room: null,
+        roomMessages: [],
+        roomLoading: false,
+        roomReady: false,
         items: [],
         turns: [],
         lastRequest: null,
@@ -163,6 +260,97 @@ export function createSession(transport, publish) {
           if (sameRead(epoch, h, w, id, identity)) emit({ error: String(e) });
         });
     },
+    openRoom(id) {
+      ++readIdentity;
+      transport.clearThread?.();
+      emit({
+        room: id,
+        thread: null,
+        items: [],
+        turns: [],
+        roomMessages: [],
+        roomLoading: false,
+        roomReady: false,
+        lastRequest: null,
+        command: visibleOperation(host, workspace, ["room", id]),
+        error: null,
+      });
+      void readRoom();
+    },
+    refreshRoom: readRoom,
+    async postRoom(text) {
+      const epoch = generation,
+        h = host,
+        w = workspace,
+        room = state.room;
+      if (
+        !h ||
+        !w ||
+        !room ||
+        !state.roomReady ||
+        state.status !== "connected" ||
+        !transport.postRoom
+      ) {
+        emit({
+          error: "Connect to the selected device and open a Room first.",
+        });
+        return;
+      }
+      const k = key(h, w, ["room", room]),
+        previous = operations.get(k);
+      if (previous?.status === "pending" || previous?.status === "uncertain")
+        return;
+      if (!previous && operations.size >= 32)
+        for (const [oldKey, old] of operations)
+          if (old.status !== "pending" && old.status !== "uncertain")
+            operations.delete(oldKey);
+      if (!previous && operations.size >= 32) {
+        emit({
+          error:
+            "Too many unresolved commands; reconnect and inspect Host state.",
+        });
+        return;
+      }
+      const op = ++operation;
+      const record = { op, status: "pending", generation: epoch };
+      operations.set(k, record);
+      emit({ command: "pending", lastRequest: null, error: null });
+      const owned = () =>
+        current(epoch, h, w) &&
+        state.room === room &&
+        operations.get(k)?.op === op;
+      try {
+        const result = await transport.postRoom(h, w, room, text);
+        record.clientId = result?.clientId ?? null;
+        if (!result?.messageId)
+          throw Error("Room post receipt missing; delivery unconfirmed.");
+        record.status = "accepted";
+        if (owned()) {
+          emit({
+            command: "accepted",
+            lastRequest: {
+              kind: "room",
+              messageId: result.messageId,
+              turnId: result.turnId ?? null,
+            },
+            error: null,
+          });
+          void readRoom();
+        }
+        return { accepted: true, ...result };
+      } catch (error) {
+        record.clientId = error?.clientId ?? null;
+        record.status = error?.confirmedRejection === true ? null : "uncertain";
+        if (owned())
+          emit({
+            command: record.status,
+            error:
+              record.status === "uncertain"
+                ? `Delivery unconfirmed: ${String(error)}. Reconnect and read the Room before posting again.`
+                : String(error),
+          });
+      }
+    },
     async command(kind, payload) {
       const t = kind === "create" ? null : (payload.threadId ?? null);
       if (t && t !== state.thread) {
@@ -173,7 +361,8 @@ export function createSession(transport, publish) {
         w = workspace,
         epoch = generation,
         identity = readIdentity,
-        displayedThread = state.thread;
+        displayedThread = state.thread,
+        displayedRoom = state.room;
       const k = key(h, w, t);
       const previous = operations.get(k);
       if (previous?.status === "pending" || previous?.status === "uncertain")
@@ -203,6 +392,7 @@ export function createSession(transport, publish) {
       const visibleCommand = () =>
         current(epoch, h, w) &&
         state.thread === displayedThread &&
+        state.room === displayedRoom &&
         operations.get(k)?.op === op;
       const sameView = () => visibleCommand() && readIdentity === identity;
       try {
@@ -214,15 +404,32 @@ export function createSession(transport, publish) {
             command: record.status,
             lastRequest:
               result.accepted &&
-              result.turnId &&
+              (result.turnId || result.queued) &&
               (kind === "send" || kind === "stop")
-                ? { kind, turnId: result.turnId ?? null }
+                ? {
+                    kind,
+                    turnId: result.turnId ?? null,
+                    ...(result.queued ? { queued: true } : {}),
+                  }
                 : null,
             error: result.accepted
               ? null
               : (result.error ?? "Host rejected command."),
           });
         // Admission is independent of optional workspace-summary refresh;
+        if (
+          kind === "create" &&
+          result.accepted &&
+          result.threadId &&
+          sameView() &&
+          !state.threads.some((thread) => thread.id === result.threadId)
+        )
+          emit({
+            threads: [
+              ...state.threads,
+              { id: result.threadId, title: result.threadId, status: "idle" },
+            ],
+          });
         // a slow snapshot must not hold the unchanged submitted draft hostage.
         if (result.accepted && sameView()) void refresh(epoch, h, w, sameView);
         return result;

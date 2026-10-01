@@ -44,7 +44,15 @@ export function AuxiliaryPanel({
   onTabsChange,
   onWidthChange,
   messageLinkRequest,
+  threadContext,
+  conversation,
 }: {
+  threadContext?: Readonly<Record<string, unknown>>;
+  conversation?: {
+    threadId: string;
+    title: string;
+    render(threadId: string): React.ReactNode;
+  };
   messageLinkRequest?: {
     id: number;
     kind: "file" | "browser";
@@ -130,6 +138,15 @@ export function AuxiliaryPanel({
     ([key]) => JSON.parse(key)[0] === threadId,
   );
   const candidates: ContentTab[] = [
+    ...(conversation
+      ? [
+          {
+            id: `thread:${conversation.threadId}`,
+            title: conversation.title,
+            icon: "users" as const,
+          },
+        ]
+      : []),
     ...files.map(([, draft]) => ({
       id: `file:${draft.base.path}`,
       title: draft.base.path.split("/").at(-1)!,
@@ -652,6 +669,29 @@ export function AuxiliaryPanel({
             aria-labelledby={`aux-tab-${tab.id}`}
             hidden={!visible}
           >
+            {conversation &&
+            tab.id === `thread:${conversation.threadId}` &&
+            open &&
+            visible ? (
+              <div className="auxiliary-conversation">
+                <header className="auxiliary-conversation-heading">
+                  <span>{conversation.title}</span>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label="Open conversation full screen"
+                    onClick={() =>
+                      navigate?.(
+                        `/threads/${encodeURIComponent(conversation.threadId)}`,
+                      )
+                    }
+                  >
+                    <Icon name="expand" />
+                  </button>
+                </header>
+                {conversation.render(conversation.threadId)}
+              </div>
+            ) : null}
             {tab.path ? (
               <WorkspaceFilesPanel
                 threadId={threadId}
@@ -692,7 +732,7 @@ export function AuxiliaryPanel({
                 snapshot={snapshot}
                 pluginId={panel.pluginId}
                 surfaceId={panel.surfaceId}
-                context={{ route: "agent", threadId }}
+                context={{ ...threadContext, route: "agent", threadId }}
                 theme={theme}
                 executeCommand={window.zenx.plugins.executeCommand}
                 readHandle={window.zenx.plugins.readHandle}

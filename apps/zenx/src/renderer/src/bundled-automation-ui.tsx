@@ -99,6 +99,8 @@ interface TriggerEditor {
   label: string;
   prompt: string;
   condition: string;
+  sourceDevice?: string;
+  sourceWorkspace?: string;
   runAt: string;
   interval: string;
   once: boolean;
@@ -138,6 +140,8 @@ export function editorFromTrigger(trigger: ZenXTrigger): TriggerEditor {
       (trigger.room
         ? `${trigger.room.roomId}|${trigger.room.mention}`
         : (trigger.signal?.name ?? "")),
+    sourceDevice: trigger.watch?.sourceDevice,
+    sourceWorkspace: trigger.watch?.sourceWorkspace,
     runAt: localDateTime(trigger.timer?.nextRunAt ?? Date.now() + 5 * 60_000),
     interval: trigger.timer?.intervalMinutes?.toString() ?? "",
     once: trigger.watch?.once ?? true,
@@ -173,15 +177,26 @@ export function triggerEditorInput(editor: TriggerEditor) {
     };
   }
   if (!editor.condition.trim()) throw new Error("Choose a trigger condition");
-  if (editor.kind === "thread")
+  if (editor.kind === "thread") {
+    const sourceDevice = editor.sourceDevice?.trim();
+    const remote = sourceDevice && sourceDevice !== "local";
+    const sourceWorkspace = editor.sourceWorkspace?.trim();
+    if (sourceWorkspace && !remote)
+      throw new Error(
+        "Choose a remote source device before a source workspace",
+      );
     return {
       ...common,
       watchedThreadId: editor.condition,
       once: editor.once,
+      ...(remote
+        ? { sourceDevice, ...(sourceWorkspace ? { sourceWorkspace } : {}) }
+        : {}),
       ...(editor.id === undefined
         ? { includeLatest: editor.includeLatest }
         : {}),
     };
+  }
   if (editor.kind === "roomMention") {
     const [roomId, mention] = editor.condition.split("|");
     return { ...common, roomId, mention };
@@ -202,9 +217,17 @@ function conditionLabel(
   if (trigger.timer)
     return `${trigger.timer.intervalMinutes === null ? "Once" : `Every ${trigger.timer.intervalMinutes} min`} · ${timeLabel(trigger.timer.nextRunAt)}`;
   if (trigger.watch)
-    return `After ${threadLabel(threads, trigger.watch.threadId)} ends · ${trigger.watch.once ? "one attempt" : "each turn"}`;
+    return `After ${trigger.watch.sourceDevice ? sourceIdentity(trigger.watch.sourceDevice, trigger.watch.sourceWorkspace, trigger.watch.threadId) : threadLabel(threads, trigger.watch.threadId)} ends · ${trigger.watch.once ? "one attempt" : "each turn"}`;
   if (trigger.room) return `#${trigger.room.roomId} · @${trigger.room.mention}`;
   return `Signal: ${trigger.signal?.name ?? "unknown"}`;
+}
+
+function sourceIdentity(
+  device: string,
+  workspace: string | undefined,
+  threadId: string,
+): string {
+  return `${device}${workspace ? ` · ${workspace}` : ""} · Thread ${threadId}`;
 }
 
 export function safeProgramFailure(entry: TriggerHistoryEntry): string | null {
@@ -563,7 +586,12 @@ function TriggerManager({
               <Select
                 value={editor.kind}
                 onValueChange={(value) =>
-                  change({ kind: value as TriggerKind, condition: "" })
+                  change({
+                    kind: value as TriggerKind,
+                    condition: "",
+                    sourceDevice: undefined,
+                    sourceWorkspace: undefined,
+                  })
                 }
               >
                 <option value="timer">Timer</option>
@@ -690,12 +718,64 @@ function TriggerManager({
               </>
             ) : editor.kind === "thread" ? (
               <>
-                <ThreadPicker
-                  label="Watch Thread"
-                  threads={threads}
-                  value={editor.condition}
-                  onChange={(value) => change({ condition: value })}
-                />
+                {editor.id && editor.sourceDevice ? (
+                  <p className="field wide">
+                    Remote source:{" "}
+                    {sourceIdentity(
+                      editor.sourceDevice,
+                      editor.sourceWorkspace,
+                      editor.condition,
+                    )}
+                    . This edit keeps the exact source identity.
+                  </p>
+                ) : (
+                  <>
+                    <Field
+                      label="Source device ID (blank = this Host)"
+                      value={editor.sourceDevice ?? ""}
+                      onChange={(sourceDevice) =>
+                        change({
+                          sourceDevice,
+                          sourceWorkspace: undefined,
+                          condition: "",
+                        })
+                      }
+                    />
+                    {editor.sourceDevice?.trim() &&
+                    editor.sourceDevice.trim() !== "local" ? (
+                      <Field
+                        label="Source workspace (optional)"
+                        value={editor.sourceWorkspace ?? ""}
+                        onChange={(sourceWorkspace) =>
+                          change({ sourceWorkspace })
+                        }
+                      />
+                    ) : null}
+                    {editor.sourceDevice?.trim() &&
+                    editor.sourceDevice.trim() !== "local" ? (
+                      <Field
+                        label="Remote Thread ID or exact title"
+                        value={editor.condition}
+                        onChange={(condition) => change({ condition })}
+                      />
+                    ) : (
+                      <ThreadPicker
+                        label="Watch Thread"
+                        threads={threads}
+                        value={editor.condition}
+                        onChange={(value) => change({ condition: value })}
+                      />
+                    )}
+                    {editor.sourceDevice?.trim() &&
+                    editor.sourceDevice.trim() !== "local" ? (
+                      <p className="field wide">
+                        Use a configured Fleet device ID. The Host resolves the
+                        remote source; notification delivery stays in the
+                        selected local target Thread.
+                      </p>
+                    ) : null}
+                  </>
+                )}
                 <label className="trigger-checkbox">
                   <input
                     type="checkbox"
@@ -785,6 +865,11 @@ function TriggerManager({
                 <span>{trigger.active ? "Enabled" : "Paused"}</span>
               </div>
               <p>{conditionLabel(trigger, threads)}</p>
+              {trigger.sourceError ? (
+                <p role="status">
+                  Source connection error: {trigger.sourceError}
+                </p>
+              ) : null}
               {trigger.timer ? (
                 <p>
                   Next run:{" "}
@@ -891,6 +976,17 @@ function TriggerManager({
               </strong>{" "}
               · {timeLabel(entry.startedAt)} · {deliveryLabel(entry)}
               <p>{entry.reason}</p>
+              {entry.sourceDevice && entry.sourceThreadId ? (
+                <p>
+                  Remote source:{" "}
+                  {sourceIdentity(
+                    entry.sourceDevice,
+                    entry.sourceWorkspace,
+                    entry.sourceThreadId,
+                  )}
+                  {entry.sourceTurnId ? ` · Turn ${entry.sourceTurnId}` : ""}
+                </p>
+              ) : null}
               {safeProgramFailure(entry) ? (
                 <p role="status">{safeProgramFailure(entry)}</p>
               ) : entry.error ? (
@@ -919,17 +1015,19 @@ function TriggerManager({
                     >
                       Source result
                     </button>
-                    <button
-                      type="button"
-                      className="quiet-button"
-                      onClick={() =>
-                        sdk.navigation.navigate(
-                          `/threads/${encodeURIComponent(entry.sourceThreadId!)}`,
-                        )
-                      }
-                    >
-                      Source Thread
-                    </button>
+                    {entry.sourceDevice === undefined ? (
+                      <button
+                        type="button"
+                        className="quiet-button"
+                        onClick={() =>
+                          sdk.navigation.navigate(
+                            `/threads/${encodeURIComponent(entry.sourceThreadId!)}`,
+                          )
+                        }
+                      >
+                        Source Thread
+                      </button>
+                    ) : null}
                   </>
                 ) : null}
                 <button
@@ -1293,9 +1391,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       ? "cancelled"
       : operation.messageId
         ? operation.acknowledged
-          ? "saved · acknowledged"
+          ? "saved · reviewed"
           : "saved"
-        : "prepared · result unknown";
+        : "delivery unconfirmed";
   const tail = room?.messages.at(-1)?.id ?? null;
   useEffect(() => {
     if (
@@ -1434,7 +1532,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       // Do not infer success from matching text, even when a new ID appeared.
       setRoomErrors((current) => ({
         ...current,
-        [roomId]: `Send result unknown for this operation; do not resend. ${describeError(reason)}`,
+        [roomId]: `Send result unknown; check delivery before sending again. ${describeError(reason)}`,
       }));
       try {
         const status = (await sdk.commands.execute("operation", {
@@ -1466,7 +1564,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       if (state.state === "prepared" && resume) {
         if (!state.text)
           throw new Error(
-            "Prepared operation text is not available; do not resend",
+            "Pending message text is unavailable; do not send again",
           );
         await sdk.commands.execute("post-message", {
           roomId,
@@ -1488,13 +1586,13 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
         setFeedback((current) => ({
           ...current,
           [roomId]:
-            "Prepared but not sent; no message has been confirmed. Retry only by explicitly choosing Send prepared operation.",
+            "Message has not been sent. Choose Send pending message to send it.",
         }));
       await refresh();
     } catch (reason) {
       setRoomErrors((current) => ({
         ...current,
-        [roomId]: `Result unknown; this operation stays unresolved. ${describeError(reason)}`,
+        [roomId]: `Delivery remains unconfirmed. ${describeError(reason)}`,
       }));
     }
   };
@@ -1525,7 +1623,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
         operationId: entry.id,
       })) as RoomDeliveryResult;
       if (result.state !== "cancelled")
-        throw new Error("Cancellation not confirmed; check exact operation");
+        throw new Error("Cancellation not confirmed; check delivery");
       if (pendingRef.current[roomId]?.id === entry.id)
         setRoomPending(roomId, null);
       if (
@@ -1566,7 +1664,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       }
       setRoomErrors((current) => ({
         ...current,
-        [roomId]: `Cancellation result unknown; check the exact operation. ${describeError(reason)}`,
+        [roomId]: `Cancellation result unknown; check delivery. ${describeError(reason)}`,
       }));
     }
   };
@@ -1593,13 +1691,13 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             onClick={(event) => {
               dialogInvoker.current = event.currentTarget;
               setAssistantMode(true);
-              setName("My assistant");
+              setName("Always On Assistant");
               setMemberName("Assistant");
               setThreadId("");
               setPanel("create");
             }}
           >
-            + Assistant
+            + Always On Assistant
           </button>
         </div>
         {data.rooms.map((entry) => (
@@ -1636,8 +1734,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 {room.assistant ? (
                   <p className="room-assistant-state" role="status">
                     {room.assistantRepliesEnabled
-                      ? "Automatic replies on"
-                      : "Automatic replies paused or unavailable"}
+                      ? "Assistant active"
+                      : "Assistant paused or unavailable"}
                   </p>
                 ) : null}
                 <span>
@@ -1676,8 +1774,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   }
                 >
                   {room.assistantRepliesEnabled
-                    ? "Pause replies"
-                    : "Enable replies"}
+                    ? "Pause assistant"
+                    : "Resume assistant"}
                 </button>
                 <small>
                   Pause affects future messages only; already admitted work
@@ -1709,7 +1807,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 !room.assistant &&
                 room.responders?.some((entry) => !entry.configured) ? (
                   <p className="room-setup-note">
-                    No automatic wakeup for:{" "}
+                    Automatic replies are not set up for:{" "}
                     {room.responders
                       .filter((entry) => !entry.configured)
                       .map((entry) => `@${entry.name}`)
@@ -1723,7 +1821,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                         )
                       }
                     >
-                      Configure Trigger…
+                      Set up automatic replies…
                     </button>
                   </p>
                 ) : null}
@@ -1733,17 +1831,17 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 {pending ? (
                   <div role="status" className="room-send-pending">
                     {pending.cancelled
-                      ? "Operation cancelled; no message was sent."
+                      ? "Send cancelled; no message was sent."
                       : pending.messageId
-                        ? "Message saved; check its exact delivery."
-                        : "Send unconfirmed. Check, cancel if still prepared, or explicitly send."}{" "}
+                        ? "Message saved; check its delivery status."
+                        : "Delivery unconfirmed. Check its status before sending again."}{" "}
                     <button
                       type="button"
                       onClick={() =>
                         void inspectPending(room.id, pending, false)
                       }
                     >
-                      Check exact operation
+                      Check delivery
                     </button>
                     {!pending.messageId && !pending.cancelled ? (
                       <>
@@ -1751,7 +1849,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                           type="button"
                           onClick={() => void cancelPrepared(room.id, pending)}
                         >
-                          Cancel if prepared
+                          Cancel unsent message
                         </button>
                         <button
                           type="button"
@@ -1759,7 +1857,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                             void inspectPending(room.id, pending, true)
                           }
                         >
-                          Send prepared operation (explicit)
+                          Send pending message
                         </button>
                       </>
                     ) : null}
@@ -1773,8 +1871,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       key={operation.id}
                       role="status"
                     >
-                      Unreviewed Room operation {operation.id.slice(0, 8)}:{" "}
-                      {operationStateLabel(operation)} ·{" "}
+                      Pending message: {operationStateLabel(operation)} ·{" "}
                       {Array.from(operation.text).slice(0, 70).join("")}{" "}
                       <button
                         type="button"
@@ -1791,7 +1888,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                           )
                         }
                       >
-                        Check exact operation
+                        Check delivery
                       </button>
                       {!operation.messageId && !operation.cancelled ? (
                         <>
@@ -1806,7 +1903,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                               })
                             }
                           >
-                            Cancel if prepared
+                            Cancel unsent message
                           </button>
                           <button
                             type="button"
@@ -1823,7 +1920,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                               )
                             }
                           >
-                            Send prepared operation (explicit)
+                            Send pending message
                           </button>
                         </>
                       ) : null}
@@ -1832,11 +1929,10 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 {olderRoomOperations.length > 0 ? (
                   <details className="room-status-history">
                     <summary>
-                      Older operations ({olderRoomOperations.length})
+                      Earlier sends ({olderRoomOperations.length})
                     </summary>
                     {olderRoomOperations.map((operation) => (
                       <p className="room-send-pending" key={operation.id}>
-                        {operation.id.slice(0, 8)} ·{" "}
                         {operationStateLabel(operation)} ·{" "}
                         {Array.from(operation.text).slice(0, 70).join("")}
                       </p>
@@ -1870,8 +1966,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               {room.messages.length === 0 ? (
                 <div className="rooms-chat-empty">
                   {room.assistant
-                    ? "Talk to your assistant here. No @mention needed. Opening this conversation does not start a task."
-                    : "Start the conversation. @mention a registered member to request an agent response."}
+                    ? "Talk to your assistant here. No @mention needed. Send updates while work is in progress."
+                    : "Start the conversation. @mention an agent to request a reply."}
                 </div>
               ) : null}
               {room.messages.map((message) => (
@@ -1904,12 +2000,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       {deliveries[message.id]!.mentions.map(
                         (mention) =>
                           `@${mention.name}: ${mention.deliveries.map((entry) => entry.status).join(", ")}`,
-                      ).join(" · ") || "No @ wake requested"}
+                      ).join(" · ") || "No agent mentioned"}
                     </small>
                   ) : message.kind === "human" &&
                     deliveries[message.id]?.state === "unknown" ? (
                     <small className="room-delivery">
-                      Saved message · wake result unavailable
+                      Message saved · agent response status unavailable
                     </small>
                   ) : null}
                   {message.kind === "human" ? (
@@ -2000,9 +2096,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               <small>
                 {room.assistant
                   ? room.assistantRepliesEnabled
-                    ? "Send requests an assistant reply using the existing conversation settings."
-                    : "Replies are paused or unavailable. Messages are saved only; enabling replies does not replay them."
-                  : "Mention an agent to wake it."}
+                    ? "Messages join ongoing work at the next model cycle. The assistant chooses when to post updates."
+                    : "Assistant paused or unavailable. Messages are saved only; resuming does not replay them."
+                  : "@mention an agent to request a reply."}
               </small>
             </div>
           </>
@@ -2059,10 +2155,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             </header>
             {panel === "create" && assistantMode ? (
               <p className="room-assistant-disclosure">
-                Choose an existing Thread. This creates a Room and enables
-                automatic replies to your future messages, using that Thread’s
-                current model and permissions. Setup itself makes no model call.
-                Rooms and Triggers must be enabled.
+                Choose an existing Thread for the Always On Assistant preset.
+                Messages join its ongoing work. It uses Rooms to communicate,
+                Triggers to continue after waits, and Fleet-enabled self-control
+                to work with configured devices. Enable Rooms, Triggers and
+                self-control first. Existing model and permissions are
+                preserved.
               </p>
             ) : null}
             <Field label="Room name" value={name} onChange={setName} />
@@ -2121,7 +2219,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   })
                 }
               >
-                {assistantMode ? "Create & enable replies" : "Create Room"}
+                {assistantMode ? "Create assistant" : "Create Room"}
               </button>
             ) : (
               <>

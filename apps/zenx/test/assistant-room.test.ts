@@ -19,6 +19,8 @@ import {
 } from "../../../packages/zenx-rooms-plugin/src/runtime.js";
 
 class ModelStub implements ZenXTriggerAppServerPort {
+  listener:
+    Parameters<ZenXTriggerAppServerPort["onNotification"]>[0] | undefined;
   requests: ClientRequestParams["turn/start"][] = [];
   failure = false;
   async request(
@@ -48,8 +50,32 @@ class ModelStub implements ZenXTriggerAppServerPort {
       },
     };
   }
-  onNotification(): () => void {
-    return () => {};
+  async sendAssistant(params: ClientRequestParams["turn/queue"]) {
+    const result = await this.request("turn/start", params);
+    this.listener?.("turn/completed", {
+      threadId: params.threadId,
+      turn: {
+        ...result.turn,
+        items: [
+          {
+            type: "userMessage",
+            id: randomUUID(),
+            clientId: params.clientUserMessageId ?? null,
+            content: [{ type: "text", text: "input", text_elements: [] }],
+          },
+          ...result.turn.items,
+        ],
+      },
+    });
+    return { turnId: result.turn.id };
+  }
+  onNotification(
+    listener: Parameters<ZenXTriggerAppServerPort["onNotification"]>[0],
+  ): () => void {
+    this.listener = listener;
+    return () => {
+      this.listener = undefined;
+    };
   }
 }
 async function fixture() {
@@ -91,9 +117,7 @@ test("assistant setup and reads make no model call; human send needs no mention 
     assert.equal(f.model.requests[0]?.model, undefined);
     const messages = f.service.snapshot().rooms[0]!.messages;
     assert.equal(messages.filter((x) => x.kind === "human").length, 1);
-    assert.equal(messages.filter((x) => x.kind === "agent").length, 1);
-    assert.equal(messages[1]?.originThreadId, "chief-thread");
-    assert.equal(messages[1]?.originTurnId, "turn-1");
+    assert.equal(messages.filter((x) => x.kind === "agent").length, 0);
     await f.service.postAgentRoomMessage(room.id, "@Chief do not self-wake");
     assert.equal(f.model.requests.length, 1);
   } finally {
@@ -288,291 +312,15 @@ test("failed assistant store commit publishes neither Room nor Trigger", async (
   }
 });
 
-class QueuedModel implements ZenXTriggerAppServerPort {
-  queued: ClientRequestParams["turn/queue"][] = [];
-  early = false;
-  rejectAdmission = false;
-  listener:
-    Parameters<ZenXTriggerAppServerPort["onNotification"]>[0] | undefined;
-  async request(): Promise<ClientRequestResults["turn/start"]> {
-    throw new Error("Assistant must use the canonical queue");
-  }
-  onNotification(
-    listener: Parameters<ZenXTriggerAppServerPort["onNotification"]>[0],
-  ) {
-    this.listener = listener;
-    return () => {
-      this.listener = undefined;
-    };
-  }
-  async enqueue(input: ClientRequestParams["turn/queue"]) {
-    this.queued.push(input);
-    if (this.early) this.complete(this.queued.length - 1);
-    if (this.rejectAdmission) throw new Error("mock admission response lost");
-  }
-  complete(
-    index: number,
-    clientId?: string,
-    status: "completed" | "interrupted" = "completed",
-  ) {
-    const input = this.queued[index]!;
-    this.listener?.("turn/completed", {
-      threadId: input.threadId,
-      turn: {
-        id: `queued-turn-${index}`,
-        itemsView: "full",
-        status,
-        error: null,
-        startedAt: 0,
-        completedAt: 1,
-        durationMs: 1,
-        items: [
-          {
-            type: "userMessage",
-            id: `queued-input-${index}`,
-            clientId: clientId ?? input.clientUserMessageId ?? null,
-            content: [
-              { type: "text", text: "queued input", text_elements: [] },
-            ],
-          },
-          {
-            type: "agentMessage",
-            id: `queued-answer-${index}`,
-            text: "Queued mock reply",
-            phase: "final_answer",
-            memoryCitation: null,
-          },
-        ],
-      },
-    });
-  }
-}
-async function queueFixture() {
-  const dir = await mkdtemp(path.join(tmpdir(), "zenx-assistant-queue-"));
-  const model = new QueuedModel();
-  const service = new ZenXTriggerService(
-    model,
-    new ZenXTriggerStore(path.join(dir, "state.json")),
-  );
-  await service.start();
-  const room = await service.createAssistantRoom(input);
-  return {
-    model,
-    service,
-    room,
-    close: async () => {
-      await service.stop();
-      await rm(dir, { recursive: true, force: true });
-    },
-  };
-}
-async function waitForReceipt(service: ZenXTriggerService, status: string) {
-  if (service.snapshot().history[0]?.status === status) return;
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      dispose();
-      reject(new Error("Receipt did not settle"));
-    }, 5000);
-    const dispose = service.onChange((snapshot) => {
-      if (snapshot.history[0]?.status === status) {
-        clearTimeout(timeout);
-        dispose();
-        resolve();
-      }
-    });
-  });
-}
-test("assistant queues busy input and only projects its exact completed Turn once", async () => {
-  const f = await queueFixture();
+test("assistant includes the complete current message beyond the bounded context preview", async () => {
+  const f = await fixture();
   try {
-    await f.service.postRoomMessage(f.room.id, "You", "new request");
-    assert.equal(f.model.queued.length, 1);
-    assert.equal(f.service.snapshot().history[0]?.delivery, "queued");
-    assert.equal(f.service.snapshot().rooms[0]?.messages.length, 1);
-    f.model.complete(0, "unrelated-client");
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    assert.equal(f.service.snapshot().rooms[0]?.messages.length, 1);
-    f.model.complete(0);
-    f.model.complete(0);
-    await waitForReceipt(f.service, "completed");
-    assert.equal(
-      f.service.snapshot().rooms[0]?.messages.filter((m) => m.kind === "agent")
-        .length,
-      1,
-    );
-    assert.equal(
-      f.service.snapshot().rooms[0]?.messages.at(-1)?.originTurnId,
-      "queued-turn-0",
-    );
-  } finally {
-    await f.close();
-  }
-});
-test("queued assistant completion may precede acknowledgment without being resurrected", async () => {
-  const f = await queueFixture();
-  try {
-    f.model.early = true;
-    await f.service.postRoomMessage(f.room.id, "You", "fast response");
+    const room = await f.service.createAssistantRoom(input);
+    const text = "x".repeat(7000) + "FINAL-CORRECTION";
+    await f.service.postRoomMessage(room.id, "You", text);
+    assert.ok(JSON.stringify(f.model.requests[0]?.input).includes(text));
     assert.equal(f.service.snapshot().history[0]?.status, "completed");
-    assert.equal(f.service.snapshot().rooms[0]?.messages.length, 2);
-  } finally {
-    await f.close();
-  }
-});
-test("pause does not misrepresent already queued input as cancelled; interrupted completion has no reply", async () => {
-  const f = await queueFixture();
-  try {
-    await f.service.postRoomMessage(f.room.id, "You", "queued first");
-    await f.service.cancel(f.room.assistant!.triggerId);
-    await f.service.postRoomMessage(f.room.id, "You", "paused second");
-    assert.equal(f.model.queued.length, 1);
-    f.model.complete(0, undefined, "interrupted");
-    await waitForReceipt(f.service, "failed");
-    assert.equal(
-      f.service.snapshot().rooms[0]?.messages.filter((m) => m.kind === "agent")
-        .length,
-      0,
-    );
-  } finally {
-    await f.close();
-  }
-});
-test("unknown queue admission and restart never silently requeue an assistant message", async () => {
-  const f = await queueFixture();
-  try {
-    f.model.rejectAdmission = true;
-    await f.service.postRoomMessage(f.room.id, "You", "unknown send");
-    assert.equal(f.service.snapshot().history[0]?.delivery, "unknown");
-    await f.service.stop();
-    await f.service.start();
-    assert.equal(f.model.queued.length, 1);
-    assert.equal(f.service.snapshot().rooms[0]?.messages.length, 1);
-  } finally {
-    await f.close();
-  }
-});
-
-test(
-  "real App Server accepts assistant input behind a busy Turn and returns its correlated reply",
-  { timeout: 20000 },
-  async () => {
-    const { AppServerManager } =
-      await import("../src/main/app-server-manager.js");
-    const { fileURLToPath } = await import("node:url");
-    const dir = await mkdtemp(path.join(tmpdir(), "zenx-assistant-real-"));
-    const manager = new AppServerManager({
-      entryPath: fileURLToPath(
-        new URL("../src/main/app-server-host.ts", import.meta.url),
-      ),
-      tokenFile: path.join(dir, "runtime/token"),
-      hostConfig: {
-        cwd: dir,
-        dataDirectory: path.join(dir, "data"),
-        model: "fake",
-        models: ["fake"],
-        approvalPolicy: "never",
-        provider: { type: "fake" },
-      },
-      execArgv: ["--import", "tsx"],
-      startupTimeoutMs: 10000,
-    });
-    let service: ZenXTriggerService | undefined;
-    try {
-      await manager.start();
-      const thread = (await manager.request("thread/start", {})).thread;
-      let observedBusy = false;
-      service = new ZenXTriggerService(
-        {
-          request: (method, params) => manager.request(method, params),
-          onNotification: (listener) => manager.onNotification(listener),
-          enqueue: async (params) => {
-            const before = await manager.request("thread/read", {
-              threadId: thread.id,
-              includeTurns: true,
-            });
-            observedBusy = before.thread.turns.at(-1)?.status === "inProgress";
-            await manager.request("turn/queue", params);
-          },
-        },
-        new ZenXTriggerStore(path.join(dir, "rooms.json")),
-      );
-      await service.start();
-      const room = await service.createAssistantRoom({
-        name: "Chief",
-        members: [{ name: "Chief", threadId: thread.id }],
-      });
-      const first = await manager.request("turn/start", {
-        threadId: thread.id,
-        input: [
-          {
-            type: "text",
-            text: `!shell ${JSON.stringify(process.execPath)} -e "setTimeout(()=>{},1200)"`,
-          },
-        ],
-      });
-      await service.postRoomMessage(room.id, "You", "Continue when ready");
-      assert.equal(observedBusy, true);
-      await waitForReceipt(service, "completed");
-      const result = await manager.request("thread/read", {
-        threadId: thread.id,
-        includeTurns: true,
-      });
-      assert.equal(result.thread.turns.length, 2);
-      assert.equal(result.thread.turns[0]?.id, first.turn.id);
-      assert.equal(result.thread.turns[0]?.status, "completed");
-      const replies = service
-        .snapshot()
-        .rooms[0]!.messages.filter((m) => m.kind === "agent");
-      assert.equal(replies.length, 1);
-      assert.equal(replies[0]?.originTurnId, result.thread.turns[1]?.id);
-    } finally {
-      await service?.stop();
-      await manager.stop();
-      await rm(dir, { recursive: true, force: true });
-    }
-  },
-);
-
-test("two queued assistant messages retain separate identities and reply receipts", async () => {
-  const f = await queueFixture();
-  try {
-    await f.service.postRoomMessage(f.room.id, "You", "first");
-    await f.service.postRoomMessage(f.room.id, "You", "second");
-    assert.equal(f.model.queued.length, 2);
-    assert.notEqual(
-      f.model.queued[0]?.clientUserMessageId,
-      f.model.queued[1]?.clientUserMessageId,
-    );
-    f.model.complete(1);
-    await waitForReceipt(f.service, "completed");
-    f.model.complete(0);
-    await new Promise<void>((resolve, reject) => {
-      const ready = () =>
-        f.service.snapshot().history.every((h) => h.status === "completed");
-      if (ready()) {
-        resolve();
-        return;
-      }
-      const timer = setTimeout(() => {
-        dispose();
-        reject(new Error("second receipt did not settle"));
-      }, 1000);
-      const dispose = f.service.onChange(() => {
-        if (ready()) {
-          clearTimeout(timer);
-          dispose();
-          resolve();
-        }
-      });
-    });
-    const replies = f.service
-      .snapshot()
-      .rooms[0]!.messages.filter((m) => m.kind === "agent");
-    assert.equal(replies.length, 2);
-    assert.deepEqual(
-      new Set(replies.map((m) => m.originTurnId)),
-      new Set(["queued-turn-0", "queued-turn-1"]),
-    );
+    assert.equal(f.service.snapshot().history[0]?.delivery, undefined);
   } finally {
     await f.close();
   }

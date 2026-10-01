@@ -1,4 +1,7 @@
+import { deliverAssistantInput } from "../assistant-preset.js";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { fleetTools, type FleetRouter } from "../fleet.js";
 import { readThreadHistory } from "../thread-history.js";
 import { createHash } from "node:crypto";
 import { matchesSkillInputSnapshot } from "../../../../../src/skill-input.js";
@@ -25,6 +28,7 @@ export const ZENX_SELF_CONTROL_LOCAL_DEVICE_PERMISSION =
 type SelfControlRequestMethod = Extract<
   ClientRequestMethod,
   | "zen/thread/read"
+  | "zen/thread/create-child"
   | "model/list"
   | "thread/settings/update"
   | "turn/queue"
@@ -141,7 +145,7 @@ const manifest: ZenXPluginManifestV2 = {
   schemaVersion: 2,
   id: ZENX_SELF_CONTROL_CAPABILITY_ID,
   name: "ZenX self-control",
-  version: "1.0.0",
+  version: "1.0.1",
   description:
     "List derived workspaces and control Zen Threads through typed App Server requests.",
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
@@ -370,7 +374,7 @@ const manifest: ZenXPluginManifestV2 = {
     {
       name: "zenx_threads_send",
       description:
-        "Send a message to a Thread. Omit messageType to follow the saved ZenX sending preference; use follow_up to queue next work, guidance to supplement current work, or replacement to interrupt and change the task. The application handles message IDs and concurrent Turn checks.",
+        "Send a message to a Thread. By default new messages supplement active work; use follow_up to queue next work, guidance to supplement current work, or replacement to interrupt and change the task. The application handles message IDs and concurrent Turn checks.",
       inputSchema: {
         type: "object",
         properties: {
@@ -443,11 +447,61 @@ const manifest: ZenXPluginManifestV2 = {
     },
   ],
 };
+manifest.tools.push(
+  {
+    name: "zenx_self_control_devices",
+    description:
+      "List configured Fleet devices. Omitted device or local means this machine; remote entries are configuration, not a live reachability check.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    permissions: [ZENX_SELF_CONTROL_WORKSPACE_PERMISSION],
+    interactionMode: "background_safe",
+    capabilities: ["zenx.threads.read"],
+    maxOutputBytes: 32 * 1024,
+  },
+  {
+    name: "zenx_self_control_threads_wait",
+    description:
+      "Wait up to 30 seconds for an explicit Turn to finish, then return its canonical status. Timed out means still pending, not completed. Can be run as a background tool task; use read for results.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...targetProperties(),
+        turnId: { type: "string" },
+        timeoutSeconds: { type: "integer", minimum: 1, maximum: 30 },
+      },
+      required: ["target", "turnId"],
+      additionalProperties: false,
+    },
+    permissions: [ZENX_SELF_CONTROL_WORKSPACE_PERMISSION],
+    interactionMode: "background_safe",
+    capabilities: ["zenx.threads.read"],
+    maxOutputBytes: 32 * 1024,
+  },
+);
+for (const tool of manifest.tools) {
+  if (!fleetTools.has(tool.name)) continue;
+  tool.inputSchema = {
+    ...tool.inputSchema,
+    properties: {
+      ...(tool.inputSchema.properties as Record<string, unknown>),
+      device: {
+        type: "string",
+        description:
+          "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine.",
+      },
+    },
+  };
+}
 const controlToolNames = new Set(manifest.tools.map((tool) => tool.name));
 
 export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
   readonly manifest = manifest;
   readonly #appServer: AppServerRequestPort;
+  readonly #fleet: FleetRouter | undefined;
   readonly #workflows: WorkflowConfigurationPort | undefined;
   readonly #sendPreference: () => Promise<"queue" | "soft" | "hard">;
   readonly #sending = new Map<
@@ -458,11 +512,13 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
   constructor(options: {
     appServer: AppServerRequestPort;
     workflows?: WorkflowConfigurationPort;
+    fleet?: FleetRouter;
     sendPreference?: () => Promise<"queue" | "soft" | "hard">;
   }) {
     this.#appServer = options.appServer;
+    this.#fleet = options.fleet;
     this.#workflows = options.workflows;
-    this.#sendPreference = options.sendPreference ?? (async () => "queue");
+    this.#sendPreference = options.sendPreference ?? (async () => "soft");
   }
 
   async invoke(name: string, invocation: ToolInvocation): Promise<unknown> {
@@ -470,6 +526,34 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       throw new Error(`Unsupported ZenX self-control tool: ${name}`);
     }
     invocation.signal.throwIfAborted();
+    if (name === "zenx_self_control_devices") {
+      assertOnly(invocation.arguments, []);
+      return {
+        devices: this.#fleet
+          ? await this.#fleet.devices()
+          : [
+              {
+                id: "local",
+                label: "This device",
+                transport: "local",
+                access: "control",
+                status: "local",
+              },
+            ],
+      };
+    }
+    if (invocation.arguments.device !== undefined) {
+      if (!fleetTools.has(name))
+        throw new Error("This tool does not support Fleet");
+      const device = requiredString(invocation.arguments.device, "device");
+      if (device !== "local") {
+        if (!this.#fleet)
+          throw new Error("Fleet is not configured on this Host");
+        return await this.#fleet.invoke(device, invocation);
+      }
+      const { device: _device, ...args } = invocation.arguments;
+      invocation = { ...invocation, arguments: args };
+    }
     if (name === "zenx_threads_send") {
       const key = messageIdentity(invocation);
       const args = JSON.stringify(invocation.arguments);
@@ -508,6 +592,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       [
         "zenx_threads_read",
         "zenx_threads_status",
+        "zenx_self_control_threads_wait",
         "zenx_threads_rename",
         "zenx_threads_archive",
         "zenx_threads_unarchive",
@@ -566,6 +651,40 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
         return await this.#createThread(args);
       case "zenx_threads_read":
         return await this.#readThread(args);
+      case "zenx_self_control_threads_wait": {
+        assertOnly(args, ["threadId", "turnId", "timeoutSeconds"]);
+        const threadId = requiredString(args.threadId, "threadId");
+        const turnId = requiredString(args.turnId, "turnId");
+        const seconds = args.timeoutSeconds ?? 30;
+        if (
+          !Number.isInteger(seconds) ||
+          (seconds as number) < 1 ||
+          (seconds as number) > 30
+        )
+          throw new Error("timeoutSeconds must be between 1 and 30");
+        const deadline = Date.now() + (seconds as number) * 1000;
+        for (;;) {
+          invocation.signal.throwIfAborted();
+          const { thread } = await this.#appServer.request("thread/read", {
+            threadId,
+            includeTurns: true,
+          });
+          const turn = thread.turns.find((turn) => turn.id === turnId);
+          if (!turn) throw new Error("Turn not found on target Thread");
+          if (turn.status !== "inProgress" || Date.now() >= deadline)
+            return {
+              source: SOURCE,
+              threadId,
+              turnId,
+              status: turn.status,
+              timedOut: turn.status === "inProgress",
+              error: turn.error?.message ?? null,
+            };
+          await delay(Math.min(500, deadline - Date.now()), undefined, {
+            signal: invocation.signal,
+          });
+        }
+      }
       case "zenx_threads_status":
         return await this.#threadStatus(args);
       case "zenx_threads_rename":
@@ -1026,6 +1145,18 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
             : await this.#sendPreference();
     invocation.signal.throwIfAborted();
     const input = [{ type: "text" as const, text }];
+    if (preference === "soft") {
+      const result = await deliverAssistantInput(
+        this.#appServer,
+        {
+          threadId,
+          input,
+          clientUserMessageId,
+        },
+        invocation.signal,
+      );
+      return { source: SOURCE, threadId, clientUserMessageId, ...result };
+    }
     if (active === undefined) {
       const result = await this.#appServer.request("turn/start", {
         threadId,
@@ -1056,22 +1187,6 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       };
     }
     const expectedTurnId = active.id;
-    if (preference === "soft") {
-      const result = await this.#appServer.request("turn/steer", {
-        threadId,
-        input,
-        clientUserMessageId,
-        expectedTurnId,
-      });
-      return {
-        source: SOURCE,
-        threadId,
-        mode: "steer",
-        clientUserMessageId,
-        expectedTurnId,
-        turnId: result.turnId,
-      };
-    }
     const result = await this.#appServer.request("turn/replace", {
       threadId,
       input,

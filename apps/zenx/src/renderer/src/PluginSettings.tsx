@@ -209,16 +209,6 @@ function MarketplaceSettings({
 
   return (
     <section className="marketplace-section" aria-label="Marketplace">
-      <header className="marketplace-intro">
-        <div>
-          <span className="marketplace-eyebrow">Plugin inventory</span>
-          <p>Find a plugin and control its lifecycle in one place.</p>
-        </div>
-        <span className="marketplace-count">
-          {String(inventory.length).padStart(2, "0")} on this device
-        </span>
-      </header>
-
       <div className="marketplace-rail">
         <label className="marketplace-search">
           <Icon name="search" />
@@ -341,8 +331,7 @@ function MarketplaceSettings({
 
       {catalog === null && inventory.length === 0 ? (
         <div className="page-card settings-card marketplace-state">
-          <strong>Loading plugin inventory…</strong>
-          <span>Reading built-in and external package metadata.</span>
+          <strong>Loading plugins…</strong>
         </div>
       ) : entries.length === 0 ? (
         <div className="page-card settings-card marketplace-state">
@@ -354,7 +343,7 @@ function MarketplaceSettings({
           </span>
         </div>
       ) : (
-        <div className="marketplace-list" aria-label="Plugin inventory">
+        <div className="marketplace-list" aria-label="Plugins">
           {entries.map((entry) => (
             <MarketplaceInventoryCard
               key={entry.key}
@@ -401,6 +390,10 @@ function MarketplaceInventoryCard({
       ? confirmation.action
       : null;
   const active = plugin?.lifecycle === "enabled";
+  const available =
+    entry.available &&
+    (plugin?.lifecycle === "uninstalled" || plugin?.available !== false);
+  const displayLifecycle = available ? entry.lifecycle : "unavailable";
   const firstPartyAccess =
     entry.source === "built-in" &&
     (pluginId === "computer" || pluginId === "browser")
@@ -486,7 +479,7 @@ function MarketplaceInventoryCard({
     <article
       className="page-card marketplace-card"
       data-lifecycle={entry.lifecycle}
-      data-available={entry.available}
+      data-available={available}
       data-source={entry.source}
     >
       <span className="plugin-icon marketplace-icon" aria-hidden="true">
@@ -496,14 +489,9 @@ function MarketplaceInventoryCard({
         <div className="plugin-title-line">
           <h3>{entry.name}</h3>
           <span className="plugin-source-badge">{source}</span>
-          <span className={`plugin-status status-${entry.lifecycle}`}>
-            {lifecycleLabel(entry.lifecycle)}
+          <span className={`plugin-status status-${displayLifecycle}`}>
+            {lifecycleLabel(displayLifecycle)}
           </span>
-          {!entry.available && entry.lifecycle !== "unavailable" ? (
-            <span className="plugin-status status-unavailable">
-              Unavailable
-            </span>
-          ) : null}
           {entry.updateAvailable ? (
             <span className="plugin-status status-update">
               Update available
@@ -511,17 +499,29 @@ function MarketplaceInventoryCard({
           ) : null}
         </div>
         <p>{entry.description}</p>
-        <small>
-          {entry.packageSpec ?? pluginId}
-          {plugin === undefined ? "" : ` · v${plugin.version}`}
-          {plugin === undefined
-            ? ""
-            : ` · ${String(plugin.contributionCount)} product contributions`}
-        </small>
+        <details>
+          <summary>Plugin details</summary>
+          <small>
+            {entry.packageSpec ?? pluginId}
+            {plugin === undefined ? "" : ` · v${plugin.version}`}
+          </small>
+        </details>
         {entry.unavailableReason === undefined ? null : (
           <div className="plugin-unavailable" role="note">
             <Icon name="warning" />
             <span>{entry.unavailableReason}</span>
+          </div>
+        )}
+        {available || plugin?.unavailableReason === undefined ? null : (
+          <div className="plugin-unavailable" role="note">
+            <Icon name="warning" />
+            <div>
+              <span>Could not load this plugin.</span>
+              <details>
+                <summary>Error details</summary>
+                <span>{plugin.unavailableReason}</span>
+              </details>
+            </div>
           </div>
         )}
       </div>
@@ -584,7 +584,7 @@ function MarketplaceInventoryCard({
             ref={firstPartyAccess === null ? undefined : activationButtonRef}
             className="primary-button"
             type="button"
-            disabled={busy !== null || !entry.available}
+            disabled={busy !== null || !available}
             aria-expanded={
               firstPartyAccess === null ? undefined : reviewingAccess
             }
@@ -613,7 +613,7 @@ function MarketplaceInventoryCard({
               }
               className="secondary-button"
               type="button"
-              disabled={busy !== null || (!entry.available && !active)}
+              disabled={busy !== null || (!available && !active)}
               aria-expanded={
                 firstPartyAccess === null || active
                   ? undefined
@@ -623,9 +623,7 @@ function MarketplaceInventoryCard({
                 firstPartyAccess === null || active ? undefined : accessPanelId
               }
               title={
-                !entry.available && !active
-                  ? entry.unavailableReason
-                  : undefined
+                !available && !active ? entry.unavailableReason : undefined
               }
               onClick={() =>
                 void (!active && firstPartyAccess !== null
@@ -752,7 +750,7 @@ function MarketplaceInventoryCard({
                 className="primary-button"
                 disabled={
                   busy !== null ||
-                  !entry.available ||
+                  !available ||
                   (plugin?.permissions ?? entry.permissions ?? []).length === 0
                 }
                 onClick={() => void activateFirstParty()}
@@ -773,8 +771,8 @@ function MarketplaceInventoryCard({
         >
           <p>
             {confirming === "uninstall"
-              ? "Uninstall removes this plugin's pages, commands, runtime, and Agent tools. Its data stays on this device."
-              : "Delete this plugin's saved data only. Other plugins and historical Threads are not changed."}
+              ? "Uninstall this plugin and its tools. Its data stays on this device."
+              : "Permanently delete this plugin's saved data. Your conversations and other plugins will be kept."}
           </p>
           <div>
             <button

@@ -271,6 +271,22 @@ contextBridge.exposeInMainWorld("zenx", {
         selection,
       ),
   },
+  fleet: {
+    status: () => ipcRenderer.invoke(ipcChannels.fleetControl, "status"),
+    save: (config: unknown, revision?: number) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "save", config, revision),
+    pair: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "pair", input),
+    remove: (id: string) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "remove", id),
+    test: (id: string) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "test", id),
+    invoke: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "invoke", input),
+    hostPair: () => ipcRenderer.invoke(ipcChannels.fleetControl, "hostPair"),
+    revoke: (id: string) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "revoke", id),
+  },
   settings: {
     onChanged: (listener: (settings: PublicHostSettings) => void) => {
       const receive = (

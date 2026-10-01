@@ -60,7 +60,7 @@ test("assistant view reads without starting work, pauses future replies explicit
       false,
     );
     const pause = [...document.querySelectorAll("button")].find(
-      (x) => x.textContent === "Pause replies",
+      (x) => x.textContent === "Pause assistant",
     );
     assert.ok(pause);
     await act(async () => pause.click());

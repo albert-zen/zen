@@ -237,7 +237,7 @@ test("resume commits canonical state before auxiliary reads and replays catch-up
     assert.ok(contextUsage);
     assert.equal(
       contextUsage.getAttribute("aria-label"),
-      "Open context details. Context 10% · 7 last provider input / 70 configured window\nThread cache unknown",
+      "Open context details. Context 10% · 7 / 70 tokens\nThread cache unknown",
     );
   } finally {
     await harness.unmount();

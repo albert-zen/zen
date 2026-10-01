@@ -7,7 +7,7 @@ import type {
   ComputerThreadListener,
 } from "./capabilities/computer-thread-observation.js";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   mkdir,
   readFile,
@@ -1158,6 +1158,26 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     );
   }
 
+  /** Compare replaceable App Resources with the admitted archive identity. */
+  async bundledPluginPackageCurrent(
+    pluginId: string,
+    tarballPath: string,
+  ): Promise<boolean> {
+    const installed = this.pluginSnapshot().plugins.find(
+      (plugin) => plugin.id === pluginId,
+    );
+    const source = installed?.profileSource;
+    if (!installed?.available || source?.mode !== "bundled") return false;
+    const trusted = await this.#trustedBundledSource(tarballPath);
+    if (trusted.packageSpec !== source.packageSpec) return false;
+    const digest = createHash("sha256")
+      .update(await readFile(trusted.packageSpec))
+      .digest("hex");
+    // Legacy file specs have no immutable identity and are refreshed once
+    // through the installer, which creates the existing archive snapshot.
+    return source.resolvedSpec === `file:.zenx-sources/bundled/${digest}.tgz`;
+  }
+
   async #trustedBundledSource(
     packageSpec: string,
   ): Promise<ZenXPluginPackageSource> {
@@ -1205,6 +1225,10 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       case "zenx-rooms":
         packageName = ZENX_ROOMS_PACKAGE_NAME;
         tarball = ZENX_ROOMS_TARBALL;
+        break;
+      case "zenx-subagents":
+        packageName = FIRST_PARTY_PLUGIN_PACKAGES.subagents.packageName;
+        tarball = FIRST_PARTY_PLUGIN_PACKAGES.subagents.tarball;
         break;
       case "zenx-self-control":
         packageName = FIRST_PARTY_PLUGIN_PACKAGES.selfControl.packageName;

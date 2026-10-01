@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   access,
+  copyFile,
   mkdir,
   mkdtemp,
   readFile,
@@ -38,6 +39,7 @@ import {
   marketplacePackageSource,
 } from "../src/main/marketplace-catalog.js";
 import { ZenXPluginDevControlServer } from "../src/main/plugin-dev-control.js";
+import { installZenXBundledPluginsAtStartup } from "../src/main/bundled-plugin-startup.js";
 
 const run = promisify(execFile);
 const pnpmCli = fileURLToPath(
@@ -49,6 +51,159 @@ const pluginSdkCli = fileURLToPath(
 const pluginSdkRoot = fileURLToPath(
   new URL("../../../packages/zenx-plugin-sdk", import.meta.url),
 );
+
+test("startup repairs unavailable bundled content at the same path and version through the profile installer", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-profile-drift-"),
+  );
+  const userData = path.join(directory, "user-data");
+  const resourcesDirectory = path.join(directory, "resources");
+  const pluginResources = path.join(resourcesDirectory, "plugins");
+  const fixture = {
+    id: "zenx-self-control",
+    packageName: "@zenx/self-control-plugin",
+    version: "1.0.0",
+  };
+  const packed = await createTarballFixture(pluginResources, {
+    ...fixture,
+    description: "before",
+  });
+  const tarball = path.join(
+    pluginResources,
+    "zenx-self-control-plugin-1.0.1.tgz",
+  );
+  await copyFile(packed, tarball);
+  let service = profileService(userData, {
+    pnpmCliPath: pnpmCli,
+    resourcesDirectory,
+  });
+  try {
+    await service.initialize();
+    await service.installBundledPluginPackage(tarball, {
+      pluginId: fixture.id,
+      packageName: fixture.packageName,
+    });
+    const before = await readCatalog(userData);
+    assert.equal(
+      await service.bundledPluginPackageCurrent(fixture.id, tarball),
+      true,
+    );
+    const overwritten = await createTarballFixture(pluginResources, {
+      ...fixture,
+      description: "after",
+    });
+    await copyFile(overwritten, tarball);
+    assert.equal(
+      await service.bundledPluginPackageCurrent(fixture.id, tarball),
+      false,
+    );
+    const manifestFile = path.join(
+      userData,
+      "plugin-profile",
+      "generations",
+      before.profileGeneration,
+      "node_modules",
+      fixture.packageName,
+      "zenx.plugin.json",
+    );
+    const manifest = JSON.parse(await readFile(manifestFile, "utf8"));
+    await writeFile(
+      manifestFile,
+      JSON.stringify({ ...manifest, description: "after" }),
+    );
+    await service.close();
+    service = profileService(userData, {
+      pnpmCliPath: pnpmCli,
+      resourcesDirectory,
+    });
+    await service.initialize();
+    assert.equal(service.pluginSnapshot().plugins[0]?.enabled, true);
+    assert.equal(service.pluginSnapshot().plugins[0]?.available, false);
+    assert.match(
+      service.pluginSnapshot().plugins[0]?.unavailableReason ?? "",
+      /does not match its Catalog descriptor/u,
+    );
+    const startup = {
+      pluginCatalogAvailable: () => service.pluginCatalogAvailable(),
+      pluginSnapshot: () => ({
+        plugins: [
+          ...service.pluginSnapshot().plugins,
+          { id: "zenx-rooms", lifecycle: "uninstalled" },
+          { id: "zenx-triggers", lifecycle: "uninstalled" },
+          { id: "zenx-subagents", lifecycle: "uninstalled" },
+        ],
+      }),
+      bundledPluginPackageCurrent: (
+        ...args: Parameters<
+          ZenXCapabilityService["bundledPluginPackageCurrent"]
+        >
+      ) => service.bundledPluginPackageCurrent(...args),
+      installBundledPluginPackage: (
+        ...args: Parameters<
+          ZenXCapabilityService["installBundledPluginPackage"]
+        >
+      ) => service.installBundledPluginPackage(...args),
+      browserProfilePackage: () => {
+        throw new Error("unavailable");
+      },
+      computerProfilePackage: () => {
+        throw new Error("unavailable");
+      },
+      recordBundledPluginStartupError: (_id: string, error: unknown) => {
+        throw error;
+      },
+    } as unknown as ZenXCapabilityService;
+    await installZenXBundledPluginsAtStartup(startup, resourcesDirectory);
+    assert.equal(service.pluginSnapshot().plugins[0]?.available, true);
+    assert.equal(
+      service.pluginSnapshot().plugins[0]?.unavailableReason,
+      undefined,
+    );
+    assert.equal(service.pluginSnapshot().plugins[0]?.description, "after");
+    const repaired = await readCatalog(userData);
+    assert.notEqual(repaired.profileGeneration, before.profileGeneration);
+    assert.deepEqual(repaired.disabled, before.disabled);
+    assert.deepEqual(repaired.uninstalled, before.uninstalled);
+    assert.equal(
+      await service.bundledPluginPackageCurrent(fixture.id, tarball),
+      true,
+    );
+    await installZenXBundledPluginsAtStartup(startup, resourcesDirectory);
+    assert.equal(
+      (await readCatalog(userData)).profileGeneration,
+      repaired.profileGeneration,
+    );
+    await service.setEnabled(fixture.id, false);
+    await copyFile(
+      await createTarballFixture(pluginResources, {
+        ...fixture,
+        description: "disabled update",
+      }),
+      tarball,
+    );
+    await installZenXBundledPluginsAtStartup(startup, resourcesDirectory);
+    assert.equal(service.pluginSnapshot().plugins[0]?.enabled, false);
+    assert.equal(
+      service.pluginSnapshot().plugins[0]?.description,
+      "disabled update",
+    );
+    assert.deepEqual(service.hostSnapshot().plugins, []);
+    await service.uninstall(fixture.id);
+    const uninstalled = await readCatalog(userData);
+    await copyFile(
+      await createTarballFixture(pluginResources, {
+        ...fixture,
+        description: "uninstalled update",
+      }),
+      tarball,
+    );
+    await installZenXBundledPluginsAtStartup(startup, resourcesDirectory);
+    assert.deepEqual(await readCatalog(userData), uninstalled);
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("plugin profile npm fixtures never invoke a Windows command shim directly", async () => {
   const source = await readFile(fileURLToPath(import.meta.url), "utf8");
@@ -2422,6 +2577,8 @@ async function waitForDevCommitFence(
 }
 
 async function readCatalog(userDataDirectory: string): Promise<{
+  disabled: string[];
+  uninstalled: string[];
   profileGeneration: string;
   packages: Record<string, { profilePackageName?: string }>;
 }> {
@@ -2431,6 +2588,8 @@ async function readCatalog(userDataDirectory: string): Promise<{
       "utf8",
     ),
   ) as {
+    disabled: string[];
+    uninstalled: string[];
     profileGeneration: string;
     packages: Record<string, { profilePackageName?: string }>;
   };

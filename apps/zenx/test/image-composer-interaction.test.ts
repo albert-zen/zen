@@ -223,13 +223,16 @@ test("Unknown image capability warns but keeps the try-send action available", a
 
 test("the Composer overlay publishes its live bottom-zone height", async () => {
   await withDom(async (_dom, root) => {
-    let notify: (() => void) | null = null;
+    const observers = new Map<Element, () => void>();
     class FakeResizeObserver {
-      constructor(callback: () => void) {
-        notify = callback;
+      constructor(private callback: () => void) {}
+      observe(element: Element): void {
+        observers.set(element, this.callback);
       }
-      observe(): void {}
-      disconnect(): void {}
+      disconnect(): void {
+        for (const [element, callback] of observers)
+          if (callback === this.callback) observers.delete(element);
+      }
     }
     Object.assign(globalThis, { ResizeObserver: FakeResizeObserver });
     try {
@@ -250,12 +253,26 @@ test("the Composer overlay publishes its live bottom-zone height", async () => {
       assert.equal(view.style.getPropertyValue("--bottom-zone-height"), "0px");
       required<HTMLElement>(".bottom-zone").getBoundingClientRect = () =>
         ({ height: 216 }) as DOMRect;
-      assert.ok(notify !== null);
-      await act(async () => notify?.());
+      const notify = observers.get(required<HTMLElement>(".bottom-zone"));
+      assert.ok(notify);
+      await act(async () => notify());
       assert.equal(
         view.style.getPropertyValue("--bottom-zone-height"),
         "216px",
       );
+      const textarea = required<HTMLTextAreaElement>("textarea");
+      let width = 160;
+      let height = 100;
+      textarea.getBoundingClientRect = () => ({ width }) as DOMRect;
+      Object.defineProperty(textarea, "scrollHeight", { get: () => height });
+      const resized = observers.get(textarea);
+      assert.ok(resized);
+      await act(async () => resized());
+      assert.equal(textarea.style.height, "100px");
+      width = 480;
+      height = 36;
+      await act(async () => resized());
+      assert.equal(textarea.style.height, "36px");
     } finally {
       Reflect.deleteProperty(globalThis, "ResizeObserver");
     }

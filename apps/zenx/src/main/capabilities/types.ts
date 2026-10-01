@@ -91,7 +91,14 @@ export interface ZenXPluginResultRendererContribution {
   surfaceId: string;
 }
 
+export interface ZenXPluginThreadHeaderContribution {
+  id: string;
+  surfaceId: string;
+  order?: number;
+}
+
 export interface ZenXPluginContributions {
+  threadHeaders?: ZenXPluginThreadHeaderContribution[];
   sidebar?: ZenXPluginSidebarContribution[];
   pages?: ZenXPluginPageContribution[];
   subroutes?: ZenXPluginSubrouteContribution[];
@@ -244,6 +251,8 @@ export interface ZenXPluginSummary {
   lifecycle: "installed" | "enabled" | "uninstalled";
   enabled: boolean;
   available: boolean;
+  /** Current load failure, separate from the user's saved enablement. */
+  unavailableReason?: string;
   contributionCount: number;
   /** Requested scopes from the installed manifest; these are not OS grants. */
   permissions?: ZenXCapabilityPermission[];
@@ -274,6 +283,9 @@ export interface ZenXPluginSnapshot {
   subroutes: ZenXPluginSubrouteProjection[];
   settings: ZenXPluginSurfaceProjection[];
   panels: ZenXPluginSurfaceProjection[];
+  threadHeaders?: Array<
+    ZenXPluginThreadHeaderContribution & ZenXPluginContributionProjection
+  >;
   commands: ZenXPluginCommandProjection[];
   menus: ZenXPluginMenuProjection[];
   resultRenderers?: ZenXPluginResultRendererProjection[];

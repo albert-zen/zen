@@ -59,8 +59,16 @@ export interface ZenXTrigger {
   prompt: string;
   createdAt: number;
   active: boolean;
+  /** Transient source-observation error; never part of a stored definition. */
+  sourceError?: string;
   timer?: { nextRunAt: number; intervalMinutes: number | null };
-  watch?: { threadId: string; event: "turn_completed"; once?: boolean };
+  watch?: {
+    threadId: string;
+    event: "turn_completed";
+    once?: boolean;
+    sourceDevice?: string;
+    sourceWorkspace?: string;
+  };
   room?: { roomId: string; mention: string };
   signal?: { name: string };
   program?: TriggerProgramConfig;
@@ -81,6 +89,8 @@ export interface TriggerHistoryEntry {
   turnId: string | null;
   error: string | null;
   sourceThreadId: string | null;
+  sourceDevice?: string;
+  sourceWorkspace?: string;
   sourceTurnId: string | null;
   sourceRoomId: string | null;
   sourceRoomMessageId: string | null;
@@ -172,6 +182,8 @@ export type CreateTriggerInput =
       label: string;
       prompt: string;
       watchedThreadId: string;
+      sourceDevice?: string;
+      sourceWorkspace?: string;
       once?: boolean;
       includeLatest?: boolean;
     } & TriggerProgramInput)

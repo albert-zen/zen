@@ -18,10 +18,15 @@ export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
     packageName: "@zenx/computer-plugin",
     tarball: "zenx-computer-plugin-macos-1.0.1.tgz",
   },
+  subagents: {
+    pluginId: "zenx-subagents",
+    packageName: "@zenx/subagents-plugin",
+    tarball: "zenx-subagents-plugin-1.0.0.tgz",
+  },
   selfControl: {
     pluginId: "zenx-self-control",
     packageName: "@zenx/self-control-plugin",
-    tarball: "zenx-self-control-plugin-1.0.0.tgz",
+    tarball: "zenx-self-control-plugin-1.0.1.tgz",
   },
   triggers: {
     pluginId: "zenx-triggers",
@@ -31,6 +36,13 @@ export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
 });
 
 export const FIRST_PARTY_MARKETPLACE_ENTRIES = Object.freeze([
+  {
+    pluginId: "zenx-subagents",
+    packageName: FIRST_PARTY_PLUGIN_PACKAGES.subagents.packageName,
+    name: "Subagents",
+    description: "Create and inspect native child Threads.",
+    icon: "users",
+  },
   {
     pluginId: "imzenx",
     packageName: FIRST_PARTY_PLUGIN_PACKAGES.imzenx.packageName,

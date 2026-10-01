@@ -17,6 +17,7 @@ const run = promisify(execFile);
 const repositoryRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 
 const expected = [
+  ["@zenx/subagents-plugin", "zenx-subagents-plugin-1.0.0.tgz"],
   ["@zenx/imzenx-plugin", "zenx-imzenx-plugin-1.0.0.tgz"],
   ["@zenx/browser-plugin", "zenx-browser-plugin-electron-1.0.3.tgz"],
   ["@zenx/browser-plugin", "zenx-browser-plugin-playwright-1.0.3.tgz"],
@@ -25,7 +26,7 @@ const expected = [
   ["@zenx/computer-plugin", "zenx-computer-plugin-peekaboo-1.0.0.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-win32-1.1.1.tgz"],
   ["@zenx/rooms-plugin", "zenx-rooms-plugin-1.0.3.tgz"],
-  ["@zenx/self-control-plugin", "zenx-self-control-plugin-1.0.0.tgz"],
+  ["@zenx/self-control-plugin", "zenx-self-control-plugin-1.0.1.tgz"],
   ["@zenx/triggers-plugin", "zenx-triggers-plugin-1.0.0.tgz"],
 ];
 

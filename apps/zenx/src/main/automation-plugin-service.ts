@@ -527,6 +527,12 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     });
   }
 
+  onChange(listener: (snapshot: TriggerSnapshot) => void): () => void {
+    return this.#service.onChange(listener);
+  }
+  roomsAvailable(): boolean {
+    return this.#serviceRunning && this.#active.has(ZENX_ROOMS_CAPABILITY_ID);
+  }
   snapshot(): TriggerSnapshot {
     return this.#service.snapshot();
   }
@@ -617,7 +623,9 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     return { threadId: result.thread.id, effective: current };
   }
 
-  async result(historyId: string) {
+  async result(
+    historyId: string,
+  ): ReturnType<NonNullable<ZenXAutomationControlPort["result"]>> {
     const entry = this.#service
       .snapshot()
       .history.find((item) => item.id === historyId);
@@ -625,6 +633,30 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       throw new Error(
         "Source result was not found in retained notification history",
       );
+    if (entry.sourceDevice !== undefined) {
+      if (!this.#appServer.readRemoteThread)
+        throw new Error("Reading remote Thread results is unavailable");
+      const read = await this.#appServer.readRemoteThread(
+        entry.sourceDevice,
+        entry.sourceWorkspace,
+        entry.sourceThreadId,
+        entry.sourceTurnId,
+      );
+      if (read.threadId !== entry.sourceThreadId)
+        throw new Error("Remote source Thread identity changed");
+      const turn = read.turns.find((item) => item.id === entry.sourceTurnId);
+      if (!turn) throw new Error("Remote source Turn is unavailable");
+      return {
+        sourceDevice: entry.sourceDevice,
+        ...(entry.sourceWorkspace === undefined
+          ? {}
+          : { sourceWorkspace: entry.sourceWorkspace }),
+        threadId: entry.sourceThreadId,
+        turnId: turn.id,
+        status: turn.status,
+        preview: turn.preview,
+      };
+    }
     if (this.#appServer.readThread === undefined)
       throw new Error("Reading Thread results is unavailable");
     const read = await this.#appServer.readThread(entry.sourceThreadId);
@@ -640,8 +672,8 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     };
   }
   async #resolveInput(input: CreateTriggerInput): Promise<CreateTriggerInput> {
-    if (this.#targets === undefined) return input;
     const resolve = async (target: string) => {
+      if (this.#targets === undefined) return target;
       const result = await resolveThreadTarget(this.#targets!, { target });
       if (result.status !== "resolved")
         throw new Error(
@@ -654,6 +686,32 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       return result.threadId;
     };
     const threadId = await resolve(input.threadId);
+    if (
+      input.kind === "thread" &&
+      input.sourceDevice !== undefined &&
+      input.sourceDevice.trim() !== "local"
+    ) {
+      if (
+        !this.#appServer.resolveRemoteThread ||
+        !this.#appServer.subscribeRemoteThread
+      )
+        throw new Error("Remote Thread observation is unavailable");
+      const sourceDevice = input.sourceDevice.trim();
+      const resolved = await this.#appServer.resolveRemoteThread(
+        sourceDevice,
+        input.sourceWorkspace,
+        input.watchedThreadId,
+      );
+      return {
+        ...input,
+        threadId,
+        sourceDevice,
+        watchedThreadId: resolved.threadId,
+        ...(resolved.workspace === undefined
+          ? {}
+          : { sourceWorkspace: resolved.workspace }),
+      };
+    }
     return input.kind === "thread"
       ? {
           ...input,
@@ -676,13 +734,29 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       (trigger.definitionRevision !== undefined || expectedRevision !== 0)
     )
       throw new Error("Trigger definition changed; refresh before enabling");
-    await this.#resolveInput({
+    const resolved = await this.#resolveInput({
       threadId: trigger.threadId,
       kind: "thread",
       label: trigger.label,
       prompt: trigger.prompt,
       watchedThreadId: trigger.watch?.threadId ?? trigger.threadId,
+      ...(trigger.watch?.sourceDevice === undefined
+        ? {}
+        : { sourceDevice: trigger.watch.sourceDevice }),
+      ...(trigger.watch?.sourceWorkspace === undefined
+        ? {}
+        : { sourceWorkspace: trigger.watch.sourceWorkspace }),
     });
+    if (
+      trigger.watch?.sourceDevice !== undefined &&
+      (resolved.kind !== "thread" ||
+        resolved.watchedThreadId !== trigger.watch.threadId ||
+        resolved.sourceDevice !== trigger.watch.sourceDevice ||
+        resolved.sourceWorkspace !== trigger.watch.sourceWorkspace)
+    )
+      throw new Error(
+        "Remote Trigger source identity changed; edit its definition before enabling",
+      );
     await this.#service.resume(triggerId, trigger);
   }
   async delete(triggerId: string): Promise<void> {

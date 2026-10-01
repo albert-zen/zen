@@ -382,7 +382,7 @@
       "capabilities": ["zenx.rooms.manage"],
       "maxOutputBytes": 65536,
       "name": "zenx_rooms_create_assistant",
-      "description": "Trusted UI only: create a single-member assistant Room and its automatic reply Trigger. Setup does not start a Turn; future human messages can start model execution.",
+      "description": "Trusted UI only: create a single-member Always On Assistant preset Room and its input Trigger. Setup does not start a Turn; future human messages can start model execution.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -546,7 +546,7 @@
       },
       {
         "id": "create-assistant",
-        "title": "Create an assistant conversation with automatic replies",
+        "title": "Create an Always On Assistant conversation",
         "tool": "zenx_rooms_create_assistant"
       },
       {
