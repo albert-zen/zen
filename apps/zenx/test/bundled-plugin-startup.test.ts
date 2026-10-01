@@ -170,3 +170,36 @@ test("startup refreshes changed bytes at the same bundled path and preserves ina
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("Subagents is installed on first startup and explicit uninstall is preserved", async () => {
+  const definitions = [
+    { id: "zenx-rooms", lifecycle: "uninstalled" },
+    { id: "zenx-self-control", lifecycle: "uninstalled" },
+    { id: "zenx-triggers", lifecycle: "uninstalled" },
+  ];
+  const calls: unknown[][] = [];
+  const capabilities = {
+    pluginCatalogAvailable: () => true,
+    pluginSnapshot: () => ({ plugins: definitions }),
+    installBundledPluginPackage: async (...args: unknown[]) => {
+      calls.push(args);
+    },
+    browserProfilePackage: () => {
+      throw new Error("unavailable");
+    },
+    computerProfilePackage: () => {
+      throw new Error("unavailable");
+    },
+    recordBundledPluginStartupError: (_id: string, error: unknown) => {
+      throw error;
+    },
+  } as unknown as ZenXCapabilityService;
+  await installZenXBundledPluginsAtStartup(capabilities, "/resources");
+  assert.deepEqual(calls[0]?.slice(0, 2), [
+    "/resources/plugins/zenx-subagents-plugin-1.0.0.tgz",
+    { pluginId: "zenx-subagents", packageName: "@zenx/subagents-plugin" },
+  ]);
+  definitions.push({ id: "zenx-subagents", lifecycle: "uninstalled" });
+  await installZenXBundledPluginsAtStartup(capabilities, "/resources");
+  assert.equal(calls.length, 1);
+});

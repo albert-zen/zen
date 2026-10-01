@@ -13,7 +13,7 @@ export const subagentsManifest = {
     type: "bundled",
     entry: "./dist/runtime.js",
   },
-  mainDocument: "",
+  mainDocument: "Subagents tools: create, list, send, read.",
   provider: {
     id: "zenx-app-server",
     platforms: ["*"],

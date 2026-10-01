@@ -374,3 +374,31 @@ test("plugin fresh/fork and reply reading cross the real native Core connection"
     await host.closeProviderTransport();
   }
 });
+
+test("first installation respects persisted disabled Subagents choice and removal preserves native relations", async () => {
+  const f = fixture();
+  const catalog = new ZenXPluginCatalog({
+    load: async () => ({
+      disabled: ["zenx-subagents"],
+      uninstalled: [],
+      packages: {},
+    }),
+    save: async () => {},
+  });
+  await catalog.initialize();
+  await catalog.install(
+    {
+      manifest: { ...subagentsManifest, mainDocument: "test fixture" },
+      invoke: (name, input) => f.service.invoke(name, input),
+    },
+    "bundled",
+  );
+  assert.equal(catalog.pluginSnapshot().plugins[0]?.enabled, false);
+  assert.deepEqual(catalog.hostSnapshot().definitions, []);
+  await catalog.setEnabled("zenx-subagents", true);
+  assert.equal(catalog.hostSnapshot().definitions.length, 4);
+  await catalog.uninstall("zenx-subagents");
+  assert.deepEqual(catalog.pluginSnapshot().threadHeaders, []);
+  assert.equal(f.child.parentThreadId, "trusted-parent");
+  await catalog.close();
+});
