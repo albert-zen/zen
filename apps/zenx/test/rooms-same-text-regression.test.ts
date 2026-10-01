@@ -97,7 +97,11 @@ test("R1 probe: a concurrent same-text message must NOT acknowledge a failed pos
   const click = async (label: string) =>
     act(async () => {
       const button = [...document.querySelectorAll("button")].find(
-        (entry) => entry.textContent?.trim() === label,
+        (entry) =>
+          entry.getAttribute("aria-label") === label ||
+          entry.textContent?.trim() === label ||
+          (entry.getAttribute("role") === "option" &&
+            entry.querySelector("strong")?.textContent === label),
       );
       assert.ok(button, `Missing button ${label}`);
       button.click();
@@ -126,17 +130,16 @@ test("R1 probe: a concurrent same-text message must NOT acknowledge a failed pos
       document.querySelector<HTMLTextAreaElement>("#room-chat-input")?.value,
       "草稿",
     );
+    await click("Mention a room member");
     await click("@Bot");
     assert.equal(
       document.querySelector<HTMLTextAreaElement>("#room-chat-input")?.value,
-      "草稿@Bot ",
+      "草稿 @Bot ",
     );
     let send: Promise<void> | undefined;
     await act(async () => {
       document
-        .querySelector<HTMLButtonElement>(
-          ".rooms-chat-compose .primary-button",
-        )!
+        .querySelector<HTMLButtonElement>(".rooms-chat-compose .action-orb")!
         .click();
       // React event starts async command without completing it.
       send = Promise.resolve();
@@ -144,10 +147,10 @@ test("R1 probe: a concurrent same-text message must NOT acknowledge a failed pos
     await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
     assert.equal(posts.length, 1);
     assert.equal(posts[0]?.roomId, "one");
-    assert.equal(posts[0]?.text, "草稿@Bot ");
+    assert.equal(posts[0]?.text, "草稿 @Bot ");
     assert.ok(
       document.querySelector<HTMLButtonElement>(
-        ".rooms-chat-compose .primary-button",
+        ".rooms-chat-compose .action-orb",
       )?.disabled,
     );
     await act(async () => {

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
 import { Icon } from "./icons.js";
+import { pluginRoutePath } from "./plugin-contributions.js";
 import {
   GenericPluginUiHost,
   createPluginUiRegistry,
@@ -31,8 +32,10 @@ export function PluginProductPage({
   registry?: PluginUiRegistry;
 }) {
   const target =
-    snapshot.pages.find((page) => page.route === route) ??
-    snapshot.subroutes.find((subroute) => subroute.route === route);
+    snapshot.pages.find((page) => page.route === pluginRoutePath(route)) ??
+    snapshot.subroutes.find(
+      (subroute) => subroute.route === pluginRoutePath(route),
+    );
   const theme = useAppearance();
   if (target?.surfaceId === undefined) return null;
   const panels = (snapshot.panels ?? []).filter(

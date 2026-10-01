@@ -1096,4 +1096,5 @@ The model explicitly communicates through Room tools, including intermediate
 progress or silence. Existing pause, window-close and Quit boundaries remain.
 Models cannot invoke trusted-only setup/pause commands.
 
+- **ZenX composer presentation** — Thread and Room share a shell, bounded autogrowing editor, send action and viewport-anchored suggestion view; each caller retains its own draft/admission, addressing, permissions and send-intent ownership. Room selection inserts literal member mentions, while Thread selection retains its existing typed reference metadata.
 - **ZenX composer send controls** — the send button hover/focus panel presents existing send intents and updates the existing Host send preference; it owns only transient visibility and save feedback, never admission or execution semantics.

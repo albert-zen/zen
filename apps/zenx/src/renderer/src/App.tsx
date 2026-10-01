@@ -100,7 +100,10 @@ import {
   validateModelCatalog,
   type SelectedThreadSettings,
 } from "./model-settings.js";
-import { loadedPluginContributions } from "./plugin-contributions.js";
+import {
+  loadedPluginContributions,
+  pluginRoutePath,
+} from "./plugin-contributions.js";
 import { PluginProductPage, pluginUiRegistry } from "./PluginProductPage.js";
 import { SettingsView, type SettingsTab } from "./SettingsView.js";
 import { Sidebar } from "./Sidebar.js";
@@ -1287,11 +1290,13 @@ export function App() {
   const genericPluginTarget =
     (pluginSnapshot?.pages ?? []).find(
       (candidate) =>
-        candidate.route === page && candidate.surfaceId !== undefined,
+        candidate.route === pluginRoutePath(page) &&
+        candidate.surfaceId !== undefined,
     ) ??
     (pluginSnapshot?.subroutes ?? []).find(
       (candidate) =>
-        candidate.route === page && candidate.surfaceId !== undefined,
+        candidate.route === pluginRoutePath(page) &&
+        candidate.surfaceId !== undefined,
     );
   const selectedSidebarPage =
     genericPluginTarget?.route ??
@@ -2049,7 +2054,7 @@ export function App() {
     const stillMounted = [
       ...(pluginSnapshot?.pages ?? []),
       ...(pluginSnapshot?.subroutes ?? []),
-    ].some((candidate) => candidate.route === page);
+    ].some((candidate) => candidate.route === pluginRoutePath(page));
     if (stillMounted) return;
     setPage("agent");
     window.requestAnimationFrame(() =>

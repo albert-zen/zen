@@ -48,6 +48,8 @@ import {
   type ComposerState,
 } from "./composer-state.js";
 import type { ZenXThreadAttachmentProjection } from "../../main/image-attachments.js";
+import { ComposerShell, ComposerEditor } from "./Composer.js";
+import { handleComposerSuggestionKey } from "./ComposerSuggestions.js";
 import { ComposerSendControl } from "./ComposerSendControl.js";
 import { ComposerModelMenu } from "./ComposerModelMenu.js";
 import { Icon } from "./icons.js";
@@ -319,48 +321,6 @@ export function ThreadView({
       observer.disconnect();
     };
   }, []);
-
-  useLayoutEffect(() => {
-    const textarea = composerTextareaRef.current;
-    if (textarea === null) return;
-
-    // Reset before measuring so deleting text shrinks the editor as well as
-    // adding text grows it. Keep the budget bounded so the transcript remains
-    // usable in short windows; the textarea itself scrolls beyond the cap.
-    const resize = () => {
-      textarea.style.height = "auto";
-      const contentHeight = textarea.scrollHeight;
-      const style = window.getComputedStyle(textarea);
-      const declaredMinHeight = Number.parseFloat(style.minHeight);
-      const minHeight = Number.isFinite(declaredMinHeight)
-        ? declaredMinHeight
-        : 36;
-      const declaredMaxHeight = Number.parseFloat(style.maxHeight);
-      const maxHeight = Number.isFinite(declaredMaxHeight)
-        ? declaredMaxHeight
-        : 136;
-      const height = Math.min(Math.max(contentHeight, minHeight), maxHeight);
-      textarea.style.height = `${height}px`;
-      textarea.style.overflowY = contentHeight > height ? "auto" : "hidden";
-    };
-    resize();
-    window.addEventListener("resize", resize);
-    let width = textarea.getBoundingClientRect().width;
-    const observer =
-      typeof ResizeObserver === "undefined"
-        ? null
-        : new ResizeObserver(() => {
-            const next = textarea.getBoundingClientRect().width;
-            if (next === width) return;
-            width = next;
-            resize();
-          });
-    observer?.observe(textarea);
-    return () => {
-      window.removeEventListener("resize", resize);
-      observer?.disconnect();
-    };
-  }, [composer.draft.text]);
 
   const submit = (intent: ComposerIntent) => {
     if (composerDisabled || !hasDraft || submitting || blockedByImageCapability)
@@ -676,8 +636,7 @@ export function ThreadView({
             {cancelNotice.message}
           </p>
         ) : null}
-        <form
-          className="composer"
+        <ComposerShell
           onSubmit={(event) => {
             event.preventDefault();
             primary();
@@ -745,7 +704,11 @@ export function ThreadView({
               ))}
             </div>
           )}
-          <WorkflowCommandMenu id={selectorId} selector={selector} />
+          <WorkflowCommandMenu
+            id={selectorId}
+            selector={selector}
+            textarea={composerTextareaRef}
+          />
           <label className="sr-only" htmlFor={composerId}>
             Message ZenX
           </label>
@@ -768,10 +731,9 @@ export function ThreadView({
               ))}
             </div>
           )}
-          <textarea
+          <ComposerEditor
             id={composerId}
             aria-label="Message"
-            data-autogrow="true"
             aria-controls={selector.open ? selectorId : undefined}
             aria-activedescendant={
               selector.open && selector.rows.length
@@ -805,35 +767,7 @@ export function ThreadView({
               );
             }}
             onKeyDown={(event) => {
-              if (!event.nativeEvent.isComposing && selector.open) {
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  selector.dismiss();
-                  return;
-                }
-                if (
-                  (event.key === "ArrowDown" || event.key === "ArrowUp") &&
-                  selector.rows.length
-                ) {
-                  event.preventDefault();
-                  selector.setActive(
-                    (selector.active +
-                      (event.key === "ArrowDown" ? 1 : -1) +
-                      selector.rows.length) %
-                      selector.rows.length,
-                  );
-                  return;
-                }
-                if (
-                  (event.key === "Enter" && !event.shiftKey) ||
-                  (event.key === "Tab" &&
-                    (selector.rows.length || selector.loading || selector.busy))
-                ) {
-                  event.preventDefault();
-                  if (!event.repeat) void selector.choose(selector.active);
-                  return;
-                }
-              }
+              if (handleComposerSuggestionKey(event, selector)) return;
               if (event.key !== "Enter" || event.shiftKey) return;
               if (event.nativeEvent.isComposing) return;
               event.preventDefault();
@@ -855,7 +789,7 @@ export function ThreadView({
                   ? "Message for the next turn…"
                   : "Steer the current run…"
             }
-            ref={composerTextareaRef}
+            textareaRef={composerTextareaRef}
             rows={1}
             value={skillDraft.text}
           />
@@ -955,7 +889,7 @@ export function ThreadView({
               {imageCapabilityNotice}
             </p>
           ) : null}
-        </form>
+        </ComposerShell>
       </div>
       {cancelConfirmation === null ? null : (
         <Dialog

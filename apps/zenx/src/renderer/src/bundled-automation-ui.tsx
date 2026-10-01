@@ -1,10 +1,23 @@
-import React, { useEffect, useRef, useState, type FormEvent } from "react";
+import React, {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import type { ThreadCandidate } from "../../main/thread-target.js";
 import type { AutomationTargetPreview } from "../../main/automation-plugin-service.js";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import { threadTitle } from "./thread-list.js";
 import { Select, Combobox } from "./ui/controls.js";
 import { Markdown } from "./Markdown.js";
+import { Icon } from "./icons.js";
+import { ComposerShell, ComposerEditor, ComposerAction } from "./Composer.js";
+import {
+  ComposerSuggestions,
+  handleComposerSuggestionKey,
+} from "./ComposerSuggestions.js";
+import { useRoomComposerSelector } from "./use-room-composer-selector.js";
 
 import type {
   TriggerKind,
@@ -21,6 +34,27 @@ import type {
 
 const TRIGGERS_UI_ENTRY = "zenx/bundled/triggers-ui";
 const ROOMS_UI_ENTRY = "zenx/bundled/rooms-ui";
+const TRIGGERS_ROUTE = "/plugins/zenx-triggers/triggers";
+const ROOMS_ROUTE = "/plugins/zenx-rooms/rooms";
+
+interface RoomReplySetupIntent {
+  roomId: string;
+  member: string;
+  threadId: string;
+}
+
+function routeQuery(route: unknown): URLSearchParams {
+  const query = typeof route === "string" ? route.split("?", 2)[1] : undefined;
+  return new URLSearchParams(query?.split("#", 1)[0]);
+}
+
+export function roomReplySetupRoute(
+  roomId: string,
+  member: string,
+  threadId: string,
+): string {
+  return `${TRIGGERS_ROUTE}?${new URLSearchParams({ setup: "room-reply", roomId, member, threadId })}`;
+}
 
 interface TriggerListResult {
   triggers: ZenXTrigger[];
@@ -128,6 +162,66 @@ function blankEditor(threadId = ""): TriggerEditor {
   };
 }
 
+/** Navigation carries a UI intent only; exact Host facts supply the binding. */
+export function roomReplySetupEditor(
+  intent: RoomReplySetupIntent,
+  rooms: readonly ZenXRoom[],
+  threads: readonly ThreadCandidate[],
+  triggers: readonly ZenXTrigger[],
+):
+  | { editor: TriggerEditor; roomName: string }
+  | { error: string }
+  | { notice: string } {
+  const room = rooms.find((entry) => entry.id === intent.roomId);
+  if (!room || room.assistant)
+    return {
+      error:
+        "This Room is no longer available for automatic-reply setup. Return to Rooms and choose a current member.",
+    };
+  const member = room.members.find(
+    (entry) =>
+      entry.name === intent.member && entry.threadId === intent.threadId,
+  );
+  if (!member)
+    return {
+      error:
+        "This Room member has changed or is no longer available. Return to the Room and choose a current member.",
+    };
+  const target = threads.find((entry) => entry.threadId === member.threadId);
+  if (!target)
+    return {
+      error: `The conversation for @${member.name} is unavailable. Choose an available member conversation in Room settings first.`,
+    };
+  if (target.archived)
+    return {
+      error: `The conversation for @${member.name} is archived. Unarchive it before setting up automatic replies.`,
+    };
+  const matching = triggers.filter(
+    (entry) =>
+      entry.kind === "roomMention" &&
+      entry.threadId === member.threadId &&
+      entry.room?.roomId === room.id &&
+      entry.room.mention.toLocaleLowerCase() ===
+        member.name.toLocaleLowerCase(),
+  );
+  const existing = matching.find((entry) => entry.active) ?? matching[0];
+  if (existing)
+    return {
+      notice: existing.active
+        ? `Automatic replies for @${member.name} already have a trigger: ${existing.label}. Check its definition below or return to the Room.`
+        : `The reply trigger for @${member.name}, ${existing.label}, is paused. Use Resume on its definition below to enable future replies.`,
+    };
+  return {
+    editor: {
+      ...blankEditor(member.threadId),
+      kind: "roomMention",
+      condition: `${room.id}|${member.name}`,
+      label: `Reply as @${member.name}`,
+    },
+    roomName: room.name,
+  };
+}
+
 export function editorFromTrigger(trigger: ZenXTrigger): TriggerEditor {
   return {
     id: trigger.id,
@@ -198,7 +292,11 @@ export function triggerEditorInput(editor: TriggerEditor) {
     };
   }
   if (editor.kind === "roomMention") {
-    const [roomId, mention] = editor.condition.split("|");
+    const separator = editor.condition.indexOf("|");
+    if (separator < 1 || separator === editor.condition.length - 1)
+      throw new Error("Choose a Room member");
+    const roomId = editor.condition.slice(0, separator);
+    const mention = editor.condition.slice(separator + 1);
     return { ...common, roomId, mention };
   }
   return { ...common, signalName: editor.condition.trim() };
@@ -250,6 +348,7 @@ function useTriggerData(sdk: PluginUiSdkV1) {
   const [threads, setThreads] = useState<ThreadCandidate[]>([]);
   const [workspaces, setWorkspaces] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const refresh = async () => {
     const [listed, discovered, configured] = await Promise.all([
       sdk.commands.execute("list"),
@@ -259,6 +358,7 @@ function useTriggerData(sdk: PluginUiSdkV1) {
     setData(listed as TriggerListResult);
     setThreads((discovered as { threads: ThreadCandidate[] }).threads);
     setWorkspaces((configured as { workspaces: string[] }).workspaces);
+    setLoaded(true);
   };
   useEffect(() => {
     void refresh().catch((reason: unknown) => setError(describeError(reason)));
@@ -272,22 +372,26 @@ function useTriggerData(sdk: PluginUiSdkV1) {
     );
     return () => clearInterval(timer);
   }, [sdk]);
-  return { data, threads, workspaces, error, setError, refresh };
+  return { data, threads, workspaces, error, setError, refresh, loaded };
 }
 
 function TriggerManager({
   sdk,
   scopedThreadId,
+  setupIntent,
 }: {
   sdk: PluginUiSdkV1;
   scopedThreadId?: string;
+  setupIntent?: RoomReplySetupIntent;
 }) {
-  const { data, threads, workspaces, error, setError, refresh } =
+  const { data, threads, workspaces, error, setError, refresh, loaded } =
     useTriggerData(sdk);
   const [editor, setEditor] = useState<TriggerEditor>(() =>
     blankEditor(scopedThreadId),
   );
   const [editing, setEditing] = useState(false);
+  const [setupNotice, setSetupNotice] = useState("");
+  const setupHandled = useRef(false);
   const [busy, setBusy] = useState(false);
   const [workspace, setWorkspace] = useState("");
   const [targetPreview, setTargetPreview] =
@@ -304,6 +408,34 @@ function TriggerManager({
   );
   const mounted = useRef(true);
   useEffect(() => {
+    if (!setupIntent || !loaded || setupHandled.current) return;
+    setupHandled.current = true;
+    const result = roomReplySetupEditor(
+      setupIntent,
+      data.rooms ?? [],
+      threads,
+      data.triggers,
+    );
+    if ("error" in result) setError(result.error);
+    else if ("notice" in result) setSetupNotice(result.notice);
+    else {
+      setEditor(result.editor);
+      setEditing(true);
+      setSetupNotice(
+        `Set up future @${setupIntent.member} replies in #${result.roomName}. Review the instructions and save to enable this trigger. Existing conversation permissions are unchanged; earlier messages are not replayed.`,
+      );
+    }
+  }, [setupIntent, loaded, data, threads]);
+  useEffect(() => {
+    if (editing && setupIntent && setupHandled.current)
+      createForm.current?.querySelector<HTMLInputElement>("input")?.focus();
+  }, [
+    editing,
+    setupIntent?.roomId,
+    setupIntent?.member,
+    setupIntent?.threadId,
+  ]);
+  useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
@@ -312,6 +444,18 @@ function TriggerManager({
       pendingTarget.current = null;
     };
   }, []);
+  const roomSetupActive =
+    setupIntent !== undefined &&
+    editor.id === undefined &&
+    editor.kind === "roomMention" &&
+    editor.threadId === setupIntent.threadId &&
+    editor.condition === `${setupIntent.roomId}|${setupIntent.member}`;
+  const setupRoom = (data.rooms ?? []).find(
+    (entry) => entry.id === setupIntent?.roomId,
+  );
+  const setupThread = threads.find(
+    (entry) => entry.threadId === setupIntent?.threadId,
+  );
   const visible =
     scopedThreadId === undefined
       ? data.triggers
@@ -341,6 +485,12 @@ function TriggerManager({
     flight.current = null; // This retires UI writes, not a Host request already admitted.
     pendingTarget.current = null;
     setBusy(false);
+  };
+  const backToRoom = () => {
+    invalidateDraft();
+    sdk.navigation.navigate(
+      `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: setupIntent!.roomId })}`,
+    );
   };
   const begin = () => {
     if (flight.current !== null) return null; // Synchronous, even before React renders disabled.
@@ -470,6 +620,28 @@ function TriggerManager({
     setError(null);
     try {
       const input = triggerEditorInput(editor);
+      if (
+        setupIntent &&
+        !editor.id &&
+        editor.kind === "roomMention" &&
+        editor.threadId === setupIntent.threadId &&
+        editor.condition === `${setupIntent.roomId}|${setupIntent.member}`
+      ) {
+        const [listed, discovered] = await Promise.all([
+          sdk.commands.execute("list"),
+          sdk.commands.execute("threads"),
+        ]);
+        if (!current(token)) return;
+        const facts = listed as TriggerListResult;
+        const result = roomReplySetupEditor(
+          setupIntent,
+          facts.rooms ?? [],
+          (discovered as { threads: ThreadCandidate[] }).threads,
+          facts.triggers,
+        );
+        if ("error" in result) throw new Error(result.error);
+        if ("notice" in result) throw new Error(result.notice);
+      }
       const result = (await sdk.commands.execute(
         editor.id ? "update" : "create",
         input,
@@ -494,6 +666,7 @@ function TriggerManager({
       setEditing(false);
       setEditor(blankEditor(scopedThreadId));
       setTargetNotice("");
+      setSetupNotice("");
     } catch (reason) {
       if (current(token))
         setError(
@@ -547,286 +720,343 @@ function TriggerManager({
           </button>
         ) : null}
       </header>
+      {setupIntent ? (
+        <button type="button" className="quiet-button" onClick={backToRoom}>
+          Back to Room
+        </button>
+      ) : null}
+      {setupNotice ? <p role="status">{setupNotice}</p> : null}
       {error ? <p role="alert">{error}</p> : null}
       {retiredNotices.map((notice, index) => (
         <p role="status" key={`${index}:${notice}`}>
           {notice}
         </p>
       ))}
-      <button
-        type="button"
-        className="primary-button"
-        onClick={() => {
-          invalidateDraft();
-          setError(null);
-          setTargetPreview(null);
-          setTargetNotice("");
-          setWorkspace("");
-          setEditor(blankEditor(scopedThreadId));
-          setEditing(true);
-        }}
-      >
-        New trigger
-      </button>
+      {!setupIntent ? (
+        <button
+          type="button"
+          className="primary-button"
+          onClick={() => {
+            invalidateDraft();
+            setError(null);
+            setSetupNotice("");
+            setTargetPreview(null);
+            setTargetNotice("");
+            setWorkspace("");
+            setEditor(blankEditor(scopedThreadId));
+            setEditing(true);
+          }}
+        >
+          New trigger
+        </button>
+      ) : null}
       {editing ? (
         <form
-          className="page-card trigger-editor"
+          className={`page-card trigger-editor${roomSetupActive ? " trigger-room-setup" : ""}`}
           ref={createForm}
           onSubmit={(event) => void save(event)}
         >
-          <h3>{editor.id ? "Edit trigger" : "New trigger"}</h3>
+          <h3>
+            {roomSetupActive
+              ? "Set up replies"
+              : editor.id
+                ? "Edit trigger"
+                : "New trigger"}
+          </h3>
+          {roomSetupActive ? (
+            <div
+              className="trigger-room-context"
+              role="group"
+              aria-label="Room reply context"
+            >
+              <strong>
+                Replies to @{setupIntent.member} in #
+                {setupRoom?.name ?? setupIntent.roomId}
+              </strong>
+              <p title={setupIntent.threadId}>
+                Runs in{" "}
+                {setupThread
+                  ? setupThread.name?.trim() || "Untitled conversation"
+                  : setupIntent.threadId}
+              </p>
+              <small>
+                Uses this conversation’s current model and permissions.
+              </small>
+            </div>
+          ) : null}
           <div className="form-grid">
             <Field
               label="Name"
               value={editor.label}
               onChange={(value) => change({ label: value })}
             />
-            <label className="field">
-              <span>Type</span>
-              <Select
-                value={editor.kind}
-                onValueChange={(value) =>
-                  change({
-                    kind: value as TriggerKind,
-                    condition: "",
-                    sourceDevice: undefined,
-                    sourceWorkspace: undefined,
-                  })
-                }
-              >
-                <option value="timer">Timer</option>
-                <option value="thread">Thread turn ended</option>
-                <option value="roomMention">Room mention</option>
-                <option value="signal">Signal</option>
-              </Select>
-            </label>
-            {scopedThreadId ? (
-              <p className="field">
-                Target: {threadLabel(threads, scopedThreadId)}
-              </p>
-            ) : (
-              <div className="trigger-target-picker">
-                <ThreadPicker
-                  label="Target Thread"
-                  threads={threads}
-                  value={editor.threadId}
-                  onChange={(value) => {
-                    if (value === editor.threadId) return;
-                    invalidateDraft();
-                    setTargetPreview(null);
-                    change({ threadId: value });
-                  }}
-                />
-                {!editor.id ? (
-                  <div className="trigger-dedicated">
-                    <label className="field">
-                      <span>Or create a dedicated Thread in a workspace</span>
-                      <Select
-                        value={workspace}
-                        onValueChange={(value) => {
-                          if (value === workspace) return;
-                          invalidateDraft();
-                          setWorkspace(value);
-                          setTargetPreview(null);
-                        }}
-                      >
-                        <option value="">Select a configured workspace</option>
-                        {workspaces.map((cwd) => (
-                          <option key={cwd} value={cwd}>
-                            {cwd}
-                          </option>
-                        ))}
-                      </Select>
-                    </label>
-                    <button
-                      type="button"
-                      className="quiet-button"
-                      disabled={busy || !workspace}
-                      onClick={() => void previewDedicatedTarget()}
-                    >
-                      Review Thread permissions
-                    </button>
-                    {targetPreview?.workspace === workspace ? (
-                      <div
-                        className="trigger-target-confirm"
-                        role="group"
-                        aria-label="Confirm dedicated Thread settings"
-                      >
-                        <p>Host defaults for this unattended Thread:</p>
-                        <p>Configured workspace: {targetPreview.workspace}</p>
-                        {targetPreview.resolvedWorkspace !==
-                        targetPreview.workspace ? (
-                          <p>
-                            Actual directory for this Thread:{" "}
-                            {targetPreview.resolvedWorkspace}
-                          </p>
-                        ) : null}
-                        <p>
-                          Model: {targetPreview.modelId} (profile{" "}
-                          {targetPreview.providerProfileId}); effort{" "}
-                          {targetPreview.reasoningEffort ?? "default"}
-                        </p>
-                        <p>
-                          File access:{" "}
-                          {targetPreview.sandbox === "danger-full-access"
-                            ? "Full Access — may change files outside this workspace without sandbox approval"
-                            : targetPreview.sandbox}
-                          . Approval:{" "}
-                          {targetPreview.approvalPolicy === "never"
-                            ? "Never — actions may proceed without asking you"
-                            : "On request"}
-                          .
-                        </p>
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void createTarget()}
-                        >
-                          Confirm settings and create dedicated Thread
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            invalidateDraft();
-                            setTargetPreview(null);
-                          }}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    ) : null}
-                    {targetNotice ? <p role="status">{targetNotice}</p> : null}
-                  </div>
-                ) : null}
-              </div>
-            )}
-            {editor.kind === "timer" ? (
+            {!roomSetupActive ? (
               <>
                 <label className="field">
-                  <span>Next run (local timezone)</span>
-                  <input
-                    type="datetime-local"
-                    value={editor.runAt}
-                    onChange={(event) => change({ runAt: event.target.value })}
-                  />
+                  <span>Type</span>
+                  <Select
+                    value={editor.kind}
+                    onValueChange={(value) =>
+                      change({
+                        kind: value as TriggerKind,
+                        condition: "",
+                        sourceDevice: undefined,
+                        sourceWorkspace: undefined,
+                      })
+                    }
+                  >
+                    <option value="timer">Timer</option>
+                    <option value="thread">Thread turn ended</option>
+                    <option value="roomMention">Room mention</option>
+                    <option value="signal">Signal</option>
+                  </Select>
                 </label>
-                <Field
-                  label="Repeat every N minutes (blank = once)"
-                  value={editor.interval}
-                  onChange={(value) => change({ interval: value })}
-                />
-              </>
-            ) : editor.kind === "thread" ? (
-              <>
-                {editor.id && editor.sourceDevice ? (
-                  <p className="field wide">
-                    Remote source:{" "}
-                    {sourceIdentity(
-                      editor.sourceDevice,
-                      editor.sourceWorkspace,
-                      editor.condition,
-                    )}
-                    . This edit keeps the exact source identity.
+                {scopedThreadId ? (
+                  <p className="field">
+                    Target: {threadLabel(threads, scopedThreadId)}
                   </p>
                 ) : (
-                  <>
-                    <Field
-                      label="Source device ID (blank = this Host)"
-                      value={editor.sourceDevice ?? ""}
-                      onChange={(sourceDevice) =>
-                        change({
-                          sourceDevice,
-                          sourceWorkspace: undefined,
-                          condition: "",
-                        })
-                      }
+                  <div className="trigger-target-picker">
+                    <ThreadPicker
+                      label="Target Thread"
+                      threads={threads}
+                      value={editor.threadId}
+                      onChange={(value) => {
+                        if (value === editor.threadId) return;
+                        invalidateDraft();
+                        setTargetPreview(null);
+                        change({ threadId: value });
+                      }}
                     />
-                    {editor.sourceDevice?.trim() &&
-                    editor.sourceDevice.trim() !== "local" ? (
-                      <Field
-                        label="Source workspace (optional)"
-                        value={editor.sourceWorkspace ?? ""}
-                        onChange={(sourceWorkspace) =>
-                          change({ sourceWorkspace })
+                    {!editor.id ? (
+                      <div className="trigger-dedicated">
+                        <label className="field">
+                          <span>
+                            Or create a dedicated Thread in a workspace
+                          </span>
+                          <Select
+                            value={workspace}
+                            onValueChange={(value) => {
+                              if (value === workspace) return;
+                              invalidateDraft();
+                              setWorkspace(value);
+                              setTargetPreview(null);
+                            }}
+                          >
+                            <option value="">
+                              Select a configured workspace
+                            </option>
+                            {workspaces.map((cwd) => (
+                              <option key={cwd} value={cwd}>
+                                {cwd}
+                              </option>
+                            ))}
+                          </Select>
+                        </label>
+                        <button
+                          type="button"
+                          className="quiet-button"
+                          disabled={busy || !workspace}
+                          onClick={() => void previewDedicatedTarget()}
+                        >
+                          Review Thread permissions
+                        </button>
+                        {targetPreview?.workspace === workspace ? (
+                          <div
+                            className="trigger-target-confirm"
+                            role="group"
+                            aria-label="Confirm dedicated Thread settings"
+                          >
+                            <p>Host defaults for this unattended Thread:</p>
+                            <p>
+                              Configured workspace: {targetPreview.workspace}
+                            </p>
+                            {targetPreview.resolvedWorkspace !==
+                            targetPreview.workspace ? (
+                              <p>
+                                Actual directory for this Thread:{" "}
+                                {targetPreview.resolvedWorkspace}
+                              </p>
+                            ) : null}
+                            <p>
+                              Model: {targetPreview.modelId} (profile{" "}
+                              {targetPreview.providerProfileId}); effort{" "}
+                              {targetPreview.reasoningEffort ?? "default"}
+                            </p>
+                            <p>
+                              File access:{" "}
+                              {targetPreview.sandbox === "danger-full-access"
+                                ? "Full Access — may change files outside this workspace without sandbox approval"
+                                : targetPreview.sandbox}
+                              . Approval:{" "}
+                              {targetPreview.approvalPolicy === "never"
+                                ? "Never — actions may proceed without asking you"
+                                : "On request"}
+                              .
+                            </p>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void createTarget()}
+                            >
+                              Confirm settings and create dedicated Thread
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                invalidateDraft();
+                                setTargetPreview(null);
+                              }}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : null}
+                        {targetNotice ? (
+                          <p role="status">{targetNotice}</p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+                {editor.kind === "timer" ? (
+                  <>
+                    <label className="field">
+                      <span>Next run (local timezone)</span>
+                      <input
+                        type="datetime-local"
+                        value={editor.runAt}
+                        onChange={(event) =>
+                          change({ runAt: event.target.value })
                         }
                       />
-                    ) : null}
-                    {editor.sourceDevice?.trim() &&
-                    editor.sourceDevice.trim() !== "local" ? (
-                      <Field
-                        label="Remote Thread ID or exact title"
-                        value={editor.condition}
-                        onChange={(condition) => change({ condition })}
-                      />
-                    ) : (
-                      <ThreadPicker
-                        label="Watch Thread"
-                        threads={threads}
-                        value={editor.condition}
-                        onChange={(value) => change({ condition: value })}
-                      />
-                    )}
-                    {editor.sourceDevice?.trim() &&
-                    editor.sourceDevice.trim() !== "local" ? (
+                    </label>
+                    <Field
+                      label="Repeat every N minutes (blank = once)"
+                      value={editor.interval}
+                      onChange={(value) => change({ interval: value })}
+                    />
+                  </>
+                ) : editor.kind === "thread" ? (
+                  <>
+                    {editor.id && editor.sourceDevice ? (
                       <p className="field wide">
-                        Use a configured Fleet device ID. The Host resolves the
-                        remote source; notification delivery stays in the
-                        selected local target Thread.
+                        Remote source:{" "}
+                        {sourceIdentity(
+                          editor.sourceDevice,
+                          editor.sourceWorkspace,
+                          editor.condition,
+                        )}
+                        . This edit keeps the exact source identity.
                       </p>
+                    ) : (
+                      <>
+                        <Field
+                          label="Source device ID (blank = this Host)"
+                          value={editor.sourceDevice ?? ""}
+                          onChange={(sourceDevice) =>
+                            change({
+                              sourceDevice,
+                              sourceWorkspace: undefined,
+                              condition: "",
+                            })
+                          }
+                        />
+                        {editor.sourceDevice?.trim() &&
+                        editor.sourceDevice.trim() !== "local" ? (
+                          <Field
+                            label="Source workspace (optional)"
+                            value={editor.sourceWorkspace ?? ""}
+                            onChange={(sourceWorkspace) =>
+                              change({ sourceWorkspace })
+                            }
+                          />
+                        ) : null}
+                        {editor.sourceDevice?.trim() &&
+                        editor.sourceDevice.trim() !== "local" ? (
+                          <Field
+                            label="Remote Thread ID or exact title"
+                            value={editor.condition}
+                            onChange={(condition) => change({ condition })}
+                          />
+                        ) : (
+                          <ThreadPicker
+                            label="Watch Thread"
+                            threads={threads}
+                            value={editor.condition}
+                            onChange={(value) => change({ condition: value })}
+                          />
+                        )}
+                        {editor.sourceDevice?.trim() &&
+                        editor.sourceDevice.trim() !== "local" ? (
+                          <p className="field wide">
+                            Use a configured Fleet device ID. The Host resolves
+                            the remote source; notification delivery stays in
+                            the selected local target Thread.
+                          </p>
+                        ) : null}
+                      </>
+                    )}
+                    <label className="trigger-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={editor.once}
+                        onChange={(event) =>
+                          change({ once: event.target.checked })
+                        }
+                      />
+                      Only one attempt
+                    </label>
+                    {!editor.id ? (
+                      <label className="trigger-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={editor.includeLatest}
+                          onChange={(event) =>
+                            change({ includeLatest: event.target.checked })
+                          }
+                        />
+                        Include latest completed turn
+                      </label>
                     ) : null}
                   </>
-                )}
-                <label className="trigger-checkbox">
-                  <input
-                    type="checkbox"
-                    checked={editor.once}
-                    onChange={(event) => change({ once: event.target.checked })}
-                  />
-                  Only one attempt
-                </label>
-                {!editor.id ? (
-                  <label className="trigger-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={editor.includeLatest}
-                      onChange={(event) =>
-                        change({ includeLatest: event.target.checked })
-                      }
-                    />
-                    Include latest completed turn
+                ) : editor.kind === "roomMention" ? (
+                  <label className="field">
+                    <span>Room member</span>
+                    <Select
+                      value={editor.condition}
+                      onValueChange={(value) => change({ condition: value })}
+                    >
+                      <option value="">Choose membership</option>
+                      {(data.rooms ?? []).flatMap((room) =>
+                        room.members.map((member) => (
+                          <option
+                            key={`${room.id}:${member.name}`}
+                            value={`${room.id}|${member.name}`}
+                          >
+                            #{room.name} · @{member.name}
+                          </option>
+                        )),
+                      )}
+                    </Select>
                   </label>
-                ) : null}
+                ) : (
+                  <Field
+                    label="Signal name"
+                    value={editor.condition}
+                    onChange={(value) => change({ condition: value })}
+                  />
+                )}
               </>
-            ) : editor.kind === "roomMention" ? (
-              <label className="field">
-                <span>Room member</span>
-                <Select
-                  value={editor.condition}
-                  onValueChange={(value) => change({ condition: value })}
-                >
-                  <option value="">Choose membership</option>
-                  {(data.rooms ?? []).flatMap((room) =>
-                    room.members.map((member) => (
-                      <option
-                        key={`${room.id}:${member.name}`}
-                        value={`${room.id}|${member.name}`}
-                      >
-                        #{room.name} · @{member.name}
-                      </option>
-                    )),
-                  )}
-                </Select>
-              </label>
-            ) : (
-              <Field
-                label="Signal name"
-                value={editor.condition}
-                onChange={(value) => change({ condition: value })}
-              />
-            )}
+            ) : null}
             <label className="field wide">
               <span>Instructions for target Thread</span>
               <textarea
+                placeholder={
+                  roomSetupActive
+                    ? "Describe how this agent should respond when mentioned…"
+                    : undefined
+                }
                 value={editor.prompt}
                 onChange={(event) => change({ prompt: event.target.value })}
               />
@@ -843,6 +1073,7 @@ function TriggerManager({
                 invalidateDraft();
                 setEditing(false);
                 setTargetPreview(null);
+                if (setupIntent) backToRoom();
               }}
             >
               Cancel
@@ -879,7 +1110,10 @@ function TriggerManager({
                 </p>
               ) : null}
               <p>Target: {threadLabel(threads, trigger.threadId)}</p>
-              <p className="trigger-instructions">{trigger.prompt}</p>
+              <details className="trigger-instruction-details">
+                <summary>Instructions</summary>
+                <p className="trigger-instructions">{trigger.prompt}</p>
+              </details>
               <p>
                 Last:{" "}
                 {last
@@ -1052,7 +1286,17 @@ function TriggerManager({
 }
 
 export function TriggersPage({ sdk }: PluginUiSurfaceProps) {
-  return <TriggerManager sdk={sdk} />;
+  const route = typeof sdk.context.route === "string" ? sdk.context.route : "";
+  const query = routeQuery(route);
+  const setupIntent =
+    query.get("setup") === "room-reply"
+      ? {
+          roomId: query.get("roomId") ?? "",
+          member: query.get("member") ?? "",
+          threadId: query.get("threadId") ?? "",
+        }
+      : undefined;
+  return <TriggerManager key={route} sdk={sdk} setupIntent={setupIntent} />;
 }
 
 function threadLabel(threads: readonly ThreadCandidate[], id: string): string {
@@ -1131,10 +1375,36 @@ export function TriggersPanel({ sdk }: PluginUiSurfaceProps) {
   return <TriggerManager key={threadId} sdk={sdk} scopedThreadId={threadId} />;
 }
 
+function memberConversationContext(
+  thread: NativeThreadSummary,
+  threads: readonly NativeThreadSummary[],
+): string {
+  const cwd =
+    "currentMetadata" in thread ? thread.currentMetadata.cwd : undefined;
+  const parts = cwd?.split(/[\\/]/u).filter(Boolean) ?? [];
+  const workspace = !cwd
+    ? "Unavailable workspace"
+    : parts.length > 2
+      ? `…/${parts.slice(-2).join("/")}`
+      : cwd;
+  let length = 12;
+  while (
+    length < thread.threadId.length &&
+    threads.some(
+      (other) =>
+        other.threadId !== thread.threadId &&
+        other.threadId.startsWith(thread.threadId.slice(0, length)),
+    )
+  )
+    length += 4;
+  return `${workspace} · ${thread.threadId.slice(0, length)}`;
+}
+
 export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
+  const initialRoomId = routeQuery(sdk.context?.route).get("roomId");
   const [assistantMode, setAssistantMode] = useState(false);
   const [data, setData] = useState<RoomListResult>({ rooms: [] });
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(initialRoomId);
   const [panel, setPanel] = useState<"create" | "manage" | null>(null);
   const [name, setName] = useState("");
   const [memberName, setMemberName] = useState("");
@@ -1145,7 +1415,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const actionBusy = useRef(false);
   const sending = useRef<Record<string, boolean>>({});
   const [sendingRooms, setSendingRooms] = useState<Record<string, boolean>>({});
-  const selectedRef = useRef<string | null>(null);
+  const selectedRef = useRef<string | null>(initialRoomId);
   const historyCache = useRef<
     Record<
       string,
@@ -1226,6 +1496,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     const target =
       next.rooms.find((entry) => entry.id === selectedRef.current) ??
       next.rooms[0];
+    if (!next.rooms.some((entry) => entry.id === selectedRef.current))
+      selectedRef.current = target?.id ?? null;
     if (target?.messageCount !== undefined) {
       const recent = (await sdk.commands.execute("messages", {
         roomId: target.id,
@@ -1382,6 +1654,19 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   };
   const room = data.rooms.find((entry) => entry.id === selected);
   const draft = room === undefined ? "" : (drafts[room.id] ?? "");
+  const changeRoomDraft = (text: string) => {
+    if (!room) return;
+    revisions.current[room.id] = (revisions.current[room.id] ?? 0) + 1;
+    setDrafts((current) => ({ ...current, [room.id]: text }));
+  };
+  const roomSelector = useRoomComposerSelector({
+    roomId: room?.id,
+    draft,
+    members: room?.assistant ? [] : (room?.members ?? []),
+    textarea: composer,
+    onChange: changeRoomDraft,
+  });
+  const roomSelectorId = useId();
   const pending = room === undefined ? null : (pendingByRoom[room.id] ?? null);
   const roomOperations = room?.operations ?? [];
   const visibleRoomOperations = roomOperations.slice(-3);
@@ -1684,7 +1969,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               setPanel("create");
             }}
           >
-            + New
+            <Icon name="plus" size={15} /> New
           </button>
           <button
             type="button"
@@ -1697,7 +1982,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               setPanel("create");
             }}
           >
-            + Always On Assistant
+            <Icon name="thread" size={15} /> Always On Assistant
           </button>
         </div>
         {data.rooms.map((entry) => (
@@ -1712,7 +1997,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               setError(null);
             }}
           >
-            <strong>#{entry.name}</strong>
+            <strong>{entry.assistant ? entry.name : `#${entry.name}`}</strong>
             <small>{entry.messages.at(-1)?.text ?? "No messages yet"}</small>
           </button>
         ))}
@@ -1724,7 +2009,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           </p>
         ) : room === undefined ? (
           <div className="rooms-chat-empty">
-            No room selected. Create a room to start a conversation.
+            <h3>A place to work together</h3>
+            <p>Create a room to bring your agents into one conversation.</p>
           </div>
         ) : (
           <>
@@ -1754,7 +2040,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   setPanel("manage");
                 }}
               >
-                Members & settings
+                <Icon name="users" size={16} /> Members & settings
               </button>
             </header>
             {room.assistant ? (
@@ -1813,16 +2099,30 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       .map((entry) => `@${entry.name}`)
                       .join(", ")}
                     .{" "}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        sdk.navigation.navigate(
-                          "/plugins/zenx-triggers/triggers",
-                        )
-                      }
-                    >
-                      Set up automatic replies…
-                    </button>
+                    {room.members
+                      .filter((member) =>
+                        room.responders?.some(
+                          (entry) =>
+                            entry.name === member.name && !entry.configured,
+                        ),
+                      )
+                      .map((member) => (
+                        <button
+                          key={member.threadId}
+                          type="button"
+                          onClick={() =>
+                            sdk.navigation.navigate(
+                              roomReplySetupRoute(
+                                room.id,
+                                member.name,
+                                member.threadId,
+                              ),
+                            )
+                          }
+                        >
+                          Set up @{member.name} replies…
+                        </button>
+                      ))}
                   </p>
                 ) : null}
                 {feedback[room.id] ? (
@@ -1965,13 +2265,24 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               ) : null}
               {room.messages.length === 0 ? (
                 <div className="rooms-chat-empty">
-                  {room.assistant
-                    ? "Talk to your assistant here. No @mention needed. Send updates while work is in progress."
-                    : "Start the conversation. @mention an agent to request a reply."}
+                  <h3>
+                    {room.assistant
+                      ? "What can I help with?"
+                      : "Start the conversation"}
+                  </h3>
+                  <p>
+                    {room.assistant
+                      ? "Talk to your assistant here. No @mention needed. Send updates while work is in progress."
+                      : "Type @ to choose an agent and ask for a reply."}
+                  </p>
                 </div>
               ) : null}
               {room.messages.map((message) => (
-                <article className="room-message" key={message.id}>
+                <article
+                  className="room-message"
+                  data-kind={message.kind}
+                  key={message.id}
+                >
                   <header>
                     <span
                       className={`room-role room-role-${message.kind}`}
@@ -1980,19 +2291,17 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       {roomRoleLabel(message.kind)}
                     </span>
                     <strong>{message.author}</strong>
-                    <time dateTime={new Date(message.createdAt).toISOString()}>
-                      {new Date(message.createdAt).toLocaleString()}
+                    <time
+                      dateTime={new Date(message.createdAt).toISOString()}
+                      title={new Date(message.createdAt).toLocaleString()}
+                    >
+                      {new Date(message.createdAt).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
                     </time>
                   </header>
                   <Markdown text={message.text} />
-                  {message.originThreadId ? (
-                    <small className="room-delivery">
-                      Source conversation: {message.originThreadId}
-                      {message.originTurnId
-                        ? ` · Turn ${message.originTurnId}`
-                        : ""}
-                    </small>
-                  ) : null}
                   {message.kind === "human" &&
                   deliveries[message.id]?.state === "saved" ? (
                     <small className="room-delivery">
@@ -2008,10 +2317,18 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       Message saved · agent response status unavailable
                     </small>
                   ) : null}
-                  {message.kind === "human" ? (
+                  {message.kind === "human" || message.originThreadId ? (
                     <details className="room-message-details">
                       <summary>Message details</summary>
                       <span>Message ID: {message.id}</span>
+                      {message.originThreadId ? (
+                        <span>
+                          Source conversation: {message.originThreadId}
+                        </span>
+                      ) : null}
+                      {message.originTurnId ? (
+                        <span>Turn: {message.originTurnId}</span>
+                      ) : null}
                       {deliveries[message.id]?.operationId ? (
                         <span>
                           Operation ID: {deliveries[message.id]!.operationId}
@@ -2023,83 +2340,98 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               ))}
             </div>
             <div className="rooms-chat-compose">
-              <div className="rooms-chat-mentions">
-                {(room.assistant ? [] : room.members).map((member) => (
-                  <button
-                    key={member.threadId}
-                    type="button"
-                    onClick={() => {
-                      const input = composer.current;
-                      const start = input?.selectionStart ?? draft.length;
-                      const end = input?.selectionEnd ?? draft.length;
-                      const token = `@${member.name} `;
-                      revisions.current[room.id] =
-                        (revisions.current[room.id] ?? 0) + 1;
-                      setDrafts((current) => ({
-                        ...current,
-                        [room.id]: `${(current[room.id] ?? "").slice(0, start)}${token}${(current[room.id] ?? "").slice(end)}`,
-                      }));
-                      requestAnimationFrame(() => {
-                        input?.focus();
-                        input?.setSelectionRange(
-                          start + token.length,
-                          start + token.length,
-                        );
-                      });
-                    }}
-                  >
-                    @{member.name}
-                  </button>
-                ))}
-              </div>
-              <label htmlFor="room-chat-input" className="sr-only">
-                Message
-              </label>
-              <textarea
-                ref={composer}
-                id="room-chat-input"
-                placeholder={`Message #${room.name} · Enter to send, Shift+Enter for newline`}
-                value={draft}
-                disabled={false}
-                onChange={(event) => {
-                  revisions.current[room.id] =
-                    (revisions.current[room.id] ?? 0) + 1;
-                  setDrafts((current) => ({
-                    ...current,
-                    [room.id]: event.target.value,
-                  }));
+              <ComposerShell
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void send();
                 }}
-                onKeyDown={(event) => {
-                  if (
-                    event.key === "Enter" &&
-                    !event.shiftKey &&
-                    !event.nativeEvent.isComposing
-                  ) {
-                    event.preventDefault();
-                    void send();
-                  }
-                }}
-              />
-              <button
-                type="button"
-                className="primary-button"
-                disabled={
-                  busy ||
-                  sendingRooms[room.id] ||
-                  pending !== null ||
-                  !draft.trim()
-                }
-                onClick={() => void send()}
               >
-                {sendingRooms[room.id] ? "Sending…" : "Send"}
-              </button>
-              <small>
-                {room.assistant
-                  ? room.assistantRepliesEnabled
-                    ? "Messages join ongoing work at the next model cycle. The assistant chooses when to post updates."
-                    : "Assistant paused or unavailable. Messages are saved only; resuming does not replay them."
-                  : "@mention an agent to request a reply."}
-              </small>
+                <ComposerSuggestions
+                  id={roomSelectorId}
+                  selector={roomSelector}
+                  textarea={composer}
+                  label="Room members"
+                  hint="Choose a room member to address."
+                />
+                <label htmlFor="room-chat-input" className="sr-only">
+                  Message
+                </label>
+                <ComposerEditor
+                  textareaRef={composer}
+                  id="room-chat-input"
+                  aria-label="Message"
+                  aria-controls={roomSelector.open ? roomSelectorId : undefined}
+                  aria-activedescendant={
+                    roomSelector.open && roomSelector.rows.length
+                      ? `${roomSelectorId}-${roomSelector.active}`
+                      : undefined
+                  }
+                  aria-describedby={
+                    roomSelector.open ? `${roomSelectorId}-hint` : undefined
+                  }
+                  placeholder={
+                    room.assistant
+                      ? `Message ${room.name}…`
+                      : `Message #${room.name}…`
+                  }
+                  value={draft}
+                  onSelect={(event) => roomSelector.select(event.currentTarget)}
+                  onBlur={() => roomSelector.dismiss()}
+                  onChange={(event) => {
+                    roomSelector.reopen();
+                    roomSelector.select(event.currentTarget ?? event.target);
+                    changeRoomDraft(event.target.value);
+                  }}
+                  onKeyDown={(event) => {
+                    if (handleComposerSuggestionKey(event, roomSelector))
+                      return;
+                    if (
+                      event.key !== "Enter" ||
+                      event.shiftKey ||
+                      event.nativeEvent.isComposing
+                    )
+                      return;
+                    event.preventDefault();
+                    if (!event.repeat) void send();
+                  }}
+                />
+                <div className="composer-rail">
+                  <div className="composer-tools">
+                    {!room.assistant && room.members.length > 0 ? (
+                      <button
+                        className="composer-tool icon-only room-mention-tool"
+                        type="button"
+                        aria-label="Mention a room member"
+                        title="Mention a room member"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => roomSelector.openMembers()}
+                      >
+                        @
+                      </button>
+                    ) : null}
+                    <small className="room-composer-note">
+                      {room.assistant
+                        ? room.assistantRepliesEnabled
+                          ? "Messages join ongoing work at the next model cycle."
+                          : "Replies paused. Messages are saved only; resuming does not replay them."
+                        : "@mention an agent to request a reply"}
+                    </small>
+                  </div>
+                  <div className="composer-actions">
+                    <ComposerAction
+                      label={sendingRooms[room.id] ? "Sending…" : "Send"}
+                      disabled={
+                        busy ||
+                        sendingRooms[room.id] ||
+                        pending !== null ||
+                        (room.operations?.length ?? 0) > 0 ||
+                        !draft.trim()
+                      }
+                      onClick={() => void send()}
+                    />
+                  </div>
+                </div>
+              </ComposerShell>
             </div>
           </>
         )}
@@ -2192,11 +2524,19 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     onValueChange={setThreadId}
                   >
                     {threads.map((thread) => (
-                      <option key={thread.threadId} value={thread.threadId}>
-                        {threadTitle(thread)} · {thread.threadId} ·{" "}
-                        {"currentMetadata" in thread
-                          ? thread.currentMetadata.cwd
-                          : "Unavailable workspace"}
+                      <option
+                        key={thread.threadId}
+                        value={thread.threadId}
+                        title={`${threadTitle(thread)} · ${thread.threadId} · ${"currentMetadata" in thread ? thread.currentMetadata.cwd : "Unavailable workspace"}`}
+                      >
+                        <span className="room-member-choice">
+                          <span className="room-member-choice-title">
+                            {threadTitle(thread)}
+                          </span>{" "}
+                          <small>
+                            {memberConversationContext(thread, threads)}
+                          </small>
+                        </span>
                       </option>
                     ))}
                   </Combobox>

@@ -111,9 +111,7 @@ test("Room A unknown does not block B; same text from another sender cannot conf
     await fill("@Bot 同文");
     await act(async () =>
       document
-        .querySelector<HTMLButtonElement>(
-          ".rooms-chat-compose .primary-button",
-        )!
+        .querySelector<HTMLButtonElement>(".rooms-chat-compose .action-orb")!
         .click(),
     );
     await act(async () => new Promise((r) => setTimeout(r, 25)));
@@ -134,9 +132,7 @@ test("Room A unknown does not block B; same text from another sender cannot conf
     await fill("另一房间可以发送");
     await act(async () =>
       document
-        .querySelector<HTMLButtonElement>(
-          ".rooms-chat-compose .primary-button",
-        )!
+        .querySelector<HTMLButtonElement>(".rooms-chat-compose .action-orb")!
         .click(),
     );
     await act(async () => new Promise((r) => setTimeout(r, 25)));
@@ -161,21 +157,21 @@ test("Room A unknown does not block B; same text from another sender cannot conf
       );
       assert.equal(
         document.querySelector<HTMLButtonElement>(
-          ".rooms-chat-compose .primary-button",
+          ".rooms-chat-compose .action-orb",
         )?.disabled,
         true,
       );
       await click("#Beta");
       assert.equal(
         document.querySelector<HTMLButtonElement>(
-          ".rooms-chat-compose .primary-button",
+          ".rooms-chat-compose .action-orb",
         )?.disabled,
         true,
       ); // empty draft, not blocked by A
       await fill("B 新消息");
       assert.equal(
         document.querySelector<HTMLButtonElement>(
-          ".rooms-chat-compose .primary-button",
+          ".rooms-chat-compose .action-orb",
         )?.disabled,
         false,
       );
@@ -257,9 +253,7 @@ test("new identical draft is never cleared by a late response to the previous op
     await fill("@Bot 相同正文");
     await act(async () =>
       document
-        .querySelector<HTMLButtonElement>(
-          ".rooms-chat-compose .primary-button",
-        )!
+        .querySelector<HTMLButtonElement>(".rooms-chat-compose .action-orb")!
         .click(),
     );
     for (let i = 0; i < 30 && !resolvePost; i++)

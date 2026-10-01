@@ -22,6 +22,8 @@ import type {
   Thread,
 } from "../src/protocol-client/index.js";
 import { App } from "../src/renderer/src/App.js";
+import { pluginUiRegistry } from "../src/renderer/src/PluginProductPage.js";
+import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
 import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
 const { act, createElement } = React;
@@ -637,7 +639,119 @@ type NotificationListener = <M extends ServerNotificationMethod>(
   params: ServerNotificationParams[M],
 ) => void;
 
+test("plugin query intent stays on its owned page and preserves the sidebar selection", async () => {
+  const route = "/plugins/route-harness/home";
+  const dispose = pluginUiRegistry.registerTrusted("route-harness-ui", {
+    overview: ({ sdk }) =>
+      createElement(
+        "div",
+        {},
+        createElement(
+          "p",
+          { "data-testid": "plugin-route" },
+          String(sdk.context.route),
+        ),
+        createElement(
+          "button",
+          {
+            onClick: () =>
+              sdk.navigation.navigate(`${route}?setup=room-reply&roomId=one`),
+          },
+          "Open setup intent",
+        ),
+      ),
+  });
+  const pluginSnapshot = {
+    plugins: [
+      {
+        id: "route-harness",
+        displayName: "Route harness",
+        enabled: true,
+        available: true,
+        lifecycle: "enabled",
+        contributionCount: 1,
+        version: "1",
+        source: "bundled",
+      },
+    ],
+    pages: [
+      {
+        key: "route-harness:home",
+        pluginId: "route-harness",
+        id: "home",
+        title: "Route harness",
+        route,
+        surfaceId: "overview",
+      },
+    ],
+    sidebar: [
+      {
+        key: "route-harness:home",
+        pluginId: "route-harness",
+        id: "home",
+        label: "Route harness",
+        icon: "plug",
+        pageId: "home",
+      },
+    ],
+    bundles: [
+      {
+        key: "route-harness:main",
+        pluginId: "route-harness",
+        id: "main",
+        apiVersion: 1,
+        kind: "trusted",
+        entry: "route-harness-ui",
+      },
+    ],
+    surfaces: [
+      {
+        key: "route-harness:overview",
+        pluginId: "route-harness",
+        id: "overview",
+        bundleId: "main",
+        exportName: "overview",
+      },
+    ],
+    subroutes: [],
+    settings: [],
+    panels: [],
+    commands: [],
+    menus: [],
+  } as ZenXPluginSnapshot;
+  const harness = await mountApp({
+    request: async () => {
+      throw Error("No Thread request expected");
+    },
+    pluginSnapshot,
+  });
+  try {
+    const entry = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.trim() === "Route harness",
+      ),
+    );
+    await act(async () => entry.click());
+    const setup = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.trim() === "Open setup intent",
+      ),
+    );
+    await act(async () => setup.click());
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
+    assert.equal(
+      document.querySelector('[data-testid="plugin-route"]')?.textContent,
+      `${route}?setup=room-reply&roomId=one`,
+    );
+    assert.equal(entry.getAttribute("aria-current"), "page");
+  } finally {
+    await harness.unmount();
+    dispose();
+  }
+});
+
 interface MountOptions {
+  pluginSnapshot?: ZenXPluginSnapshot;
   request(method: string, params?: unknown): Promise<unknown>;
   attachments?(threadId: string): Promise<ZenXThreadAttachmentProjection>;
   usage?(threadId: string): Promise<ModelUsageProjection>;
@@ -780,13 +894,14 @@ async function mountApp(options: MountOptions) {
       onChange: () => () => undefined,
     },
     plugins: {
-      get: async () => ({
-        plugins: [],
-        sidebar: [],
-        pages: [],
-        surfaces: [],
-        bundles: [],
-      }),
+      get: async () =>
+        options.pluginSnapshot ?? {
+          plugins: [],
+          sidebar: [],
+          pages: [],
+          surfaces: [],
+          bundles: [],
+        },
       onChange: () => () => undefined,
     },
   };

@@ -427,3 +427,17 @@ ThreadView
 - 共用 motion tokens 为反馈 100ms、进入 150ms、退出 100ms、布局 200ms；动画不控制业务提交。含 Electron 原生 Browser view 的右栏不单独平移 DOM 占位，以免与真实页面 bounds 脱节。菜单/对话框交由 primitive 的 presence 管理卸载，details 使用可反向的内在高度过渡；reduced motion 取消位移和动画，保留状态反馈。
 - 压缩完成行只从 canonical compaction 派生。默认展示发起者、摘要字符数与“完整输入占用未知”；字符不是 tokens。展开优先呈现可选取和复制的 Markdown 摘要，独立说明保留原始 Items 数量、时点与后续增长；真实 Core 消息投影在诊断 disclosure 中。历史消息条数、摘要字符数、摘要调用 tokenUsage 均不冒充完整模型输入；未记录的完整输入占用不展示为 0 或伪造节省比例。
 - `test/fixtures/controls-visual.html` 提供共享控件、禁用、长目录、对话框与长中文压缩摘要的开发展示面；不是产品导航入口。
+
+## Room 与 Thread 的共享输入体验
+
+- Room 复用 Thread 的输入容器、自适应文本区、发送按钮视觉与候选列表。Room 仍经插件 SDK 保存消息和消费投递回执；共享外观不提供 Thread 专属的中断、停止、权限或模型控制。
+- 普通 Room 输入 `@` 弹出可搜索的成员候选；上下方向键选择、Enter/Tab 确认、Escape 关闭，选择不会同时发送消息，中文输入法确认与长按 Enter 不触发重复提交。成员选择保留 literal `@name` 及前后文本，与 Host 的 mention 匹配规则一致。Always On Assistant 不要求 `@`，新消息仍在现有下一周期 steering 路径接入。
+- Thread 的文件、线程、工作流和 Room 的成员候选共享 viewport-anchored portal 呈现，避开 Composer 底部滚动容器的裁剪；候选保持编辑器焦点，窗口变化后重新定位，不复制数据或执行语义。
+- Room 的次级导航沿用平面行与中性选中态，正文与输入框沿同一阅读列对齐。用户消息使用右侧轻量气泡，Agent 消息保持自然排版和可辨认的作者；消息原文不做删改。时刻简写可通过 title 查看完整日期，来源 Thread/Turn 与消息 ID 在 Message details 中保留。
+- Room 的设置与未确定投递状态保持可见且可操作。自动化卡片的完整指令默认折叠，展开后可读；这些都是呈现调整，不改变 Trigger 配置、运行、恢复或授权。
+- Linux 与 Windows 的工作区入口避让原生最小化、最大化和关闭按钮，不能将打开面板的点击交给原生关闭区域。
+
+- Room 的自动回复设置按明确成员导航到现有 Room mention Trigger 编辑器；路由参数只表达临时 UI 意图，成员和目标从最新 Host Room / Thread 投影验证，显式 Save 才写入定义，不修改权限、不重放旧消息。Cancel / Back 返回原 Room，不把离开表单当作取消已提交的 Host 请求。Member conversation 选项以标题和短工作区 / 可区分短 ID 呈现，完整身份仍可搜索、查看并由无障碍名称读取。
+- Room 发起的自动回复设置以只读摘要显示精确 Room、成员与执行 Thread，只要求填写名称和回复指令并显式保存；不在这个固定目标流程显示类型切换或新建 Thread 控件。成员名中的 `|` 属于名字本身，不能被条件串的分隔符截断。通用自动化编辑器保留原有完整选择能力。
+
+本轮视觉和交互校准参考 [DeepSeek Harness 的输入候选组件](https://github.com/deepseek-ai/deepseek-harness/tree/639ed015397290b3745d163aafe02ffee4aa3f84/packages/client/ui-input-trigger)、[T3 Code 的 ComposerCommandMenu](https://github.com/pingdotgg/t3code/blob/5cc99e1c23980d7995a13c47f969b47cb68ed1be/apps/web/src/components/chat/ComposerCommandMenu.tsx) 与 [Linear 的 UI refresh](https://linear.app/changelog/2026-03-12-ui-refresh)。这些是参考材料，不替代本文的产品语义，也不引入它们的运行模型或样式框架。
