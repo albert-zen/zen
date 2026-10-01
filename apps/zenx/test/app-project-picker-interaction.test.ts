@@ -4470,11 +4470,11 @@ test("composer default save cannot roll back a newer settings notification", asy
     assert.equal(writes.length, 1);
     assert.equal(writes[0]?.baseRevision, 1);
     assert.equal(writes[0]?.composerSendModeExplicit, true);
-    const latest = publicSettings();
+    const latest = publicSettings([]);
     Object.assign(latest.profile, { revision: 3, composerSendMode: "hard" });
     await act(async () => notify?.(latest));
     assert.equal(select.value, "hard");
-    const old = publicSettings();
+    const old = publicSettings([]);
     Object.assign(old.profile, { revision: 2, composerSendMode: "queue" });
     await act(async () => reply.resolve(old));
     assert.equal(select.value, "hard");
