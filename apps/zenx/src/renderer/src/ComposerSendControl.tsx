@@ -25,6 +25,7 @@ export function ComposerSendControl({
   hasDraft,
   disabled,
   sendDisabled,
+  stopDisabled = disabled,
   primaryMode,
   primaryLabel,
   compact,
@@ -38,6 +39,7 @@ export function ComposerSendControl({
   hasDraft: boolean;
   disabled: boolean;
   sendDisabled: boolean;
+  stopDisabled?: boolean;
   primaryMode: string;
   primaryLabel: string;
   compact: boolean;
@@ -188,7 +190,7 @@ export function ComposerSendControl({
           {running ? (
             <button
               type="button"
-              disabled={disabled && primaryMode === "stop"}
+              disabled={stopDisabled}
               onClick={() => {
                 close();
                 onStop();

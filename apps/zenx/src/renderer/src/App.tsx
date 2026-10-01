@@ -437,6 +437,14 @@ export function App() {
   };
   const [composerSendModeMigration, setComposerSendModeMigration] =
     useState<ZenXHostProfile["composerSendModeMigration"]>(undefined);
+  const composerProfileRevisionRef = useRef(-1);
+  const applyComposerProfile = (profile: ZenXHostProfile) => {
+    const revision = profile.revision ?? 0;
+    if (revision < composerProfileRevisionRef.current) return;
+    composerProfileRevisionRef.current = revision;
+    applyComposerSendMode(profile.composerSendMode ?? "soft");
+    setComposerSendModeMigration(profile.composerSendModeMigration);
+  };
   const [workflowCommands, setWorkflowCommands] = useState<WorkflowCommand[]>(
     [],
   );
@@ -457,8 +465,7 @@ export function App() {
       .get()
       .then((value) => {
         if (active) {
-          applyComposerSendMode(value.profile.composerSendMode ?? "soft");
-          setComposerSendModeMigration(value.profile.composerSendModeMigration);
+          applyComposerProfile(value.profile);
           setWorkflowCommands(value.profile.workflowCommands ?? []);
         }
       })
@@ -471,8 +478,7 @@ export function App() {
     const onChanged = window.zenx.settings.onChanged;
     if (onChanged === undefined) return undefined;
     return onChanged((value) => {
-      applyComposerSendMode(value.profile.composerSendMode ?? "soft");
-      setComposerSendModeMigration(value.profile.composerSendModeMigration);
+      applyComposerProfile(value.profile);
       setWorkflowCommands(value.profile.workflowCommands ?? []);
     });
   }, []);
@@ -2176,8 +2182,7 @@ export function App() {
             },
           }),
     });
-    applyComposerSendMode(saved.profile.composerSendMode ?? "soft");
-    setComposerSendModeMigration(saved.profile.composerSendModeMigration);
+    applyComposerProfile(saved.profile);
   };
 
   const settleLegacySendChoice = async (restoreQueue: boolean) => {
@@ -2195,8 +2200,7 @@ export function App() {
         : (current.profile.composerSendModeExplicit ?? false),
       composerSendModeMigration: { ...migration, acknowledged: true },
     });
-    applyComposerSendMode(saved.profile.composerSendMode ?? "soft");
-    setComposerSendModeMigration(saved.profile.composerSendModeMigration);
+    applyComposerProfile(saved.profile);
   };
 
   const cancelQueued = async (

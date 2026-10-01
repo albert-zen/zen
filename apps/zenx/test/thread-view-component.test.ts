@@ -2962,3 +2962,44 @@ test("completed thread actions show the action without a second success badge", 
     );
   });
 });
+
+test("send panel Stop follows interrupt availability independently of send availability", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    for (const stopDisabled of [true, false]) {
+      let stops = 0;
+      await act(async () =>
+        root.render(
+          createElement(ComposerSendControl, {
+            mode: "soft",
+            running: true,
+            hasDraft: true,
+            disabled: true,
+            sendDisabled: true,
+            stopDisabled,
+            primaryMode: "steer",
+            primaryLabel: "Steer now",
+            compact: false,
+            onPrimary: () => assert.fail("must not send"),
+            onSend: () => assert.fail("must not send"),
+            onStop: () => stops++,
+          }),
+        ),
+      );
+      await act(async () =>
+        requiredElement<HTMLDivElement>(".composer-send-control").dispatchEvent(
+          new window.MouseEvent("pointerover", { bubbles: true }),
+        ),
+      );
+      const stop = [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          ".composer-send-options button",
+        ),
+      ].find((button) => button.textContent === "Stop")!;
+      assert.equal(stop.disabled, stopDisabled);
+      await act(async () => stop.click());
+      assert.equal(stops, stopDisabled ? 0 : 1);
+    }
+  });
+});

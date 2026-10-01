@@ -4434,3 +4434,55 @@ test("reference selector sends exact locators through App with and without nativ
     }
   }
 });
+
+test("composer default save cannot roll back a newer settings notification", async () => {
+  let notify: ((value: ReturnType<typeof publicSettings>) => void) | undefined;
+  const harness = await mountApp(oneProject(), {
+    initialProfile: { revision: 1, composerSendMode: "soft" },
+    onSettingsChanged: (listener) => {
+      notify = listener;
+      return () => undefined;
+    },
+  });
+  try {
+    await waitFor(() => document.querySelector(".composer-send-control"));
+    const reply = deferred<ReturnType<typeof publicSettings>>();
+    const writes: import("../src/main/host-profile.js").ZenXSettingsUpdate[] =
+      [];
+    window.zenx.settings.save = async (update) => {
+      writes.push(update);
+      return reply.promise;
+    };
+    await act(async () =>
+      document
+        .querySelector<HTMLElement>(".composer-send-control")!
+        .dispatchEvent(new window.MouseEvent("pointerover", { bubbles: true })),
+    );
+    const select = await waitFor(() =>
+      document.querySelector<HTMLSelectElement>(
+        '[aria-label="Default send mode"]',
+      ),
+    );
+    await act(async () => {
+      select.value = "queue";
+      select.dispatchEvent(new window.Event("change", { bubbles: true }));
+    });
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0]?.baseRevision, 1);
+    assert.equal(writes[0]?.composerSendModeExplicit, true);
+    const latest = publicSettings();
+    Object.assign(latest.profile, { revision: 3, composerSendMode: "hard" });
+    await act(async () => notify?.(latest));
+    assert.equal(select.value, "hard");
+    const old = publicSettings();
+    Object.assign(old.profile, { revision: 2, composerSendMode: "queue" });
+    await act(async () => reply.resolve(old));
+    assert.equal(select.value, "hard");
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("textarea")?.value,
+      "",
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});

@@ -903,6 +903,7 @@ export function ThreadView({
                 compact={compactRequested}
                 primaryMode={primaryMode}
                 primaryLabel={primaryLabel}
+                stopDisabled={composerDisabled || interrupting || submitting}
                 sendDisabled={
                   composerDisabled || submitting || blockedByImageCapability
                 }
