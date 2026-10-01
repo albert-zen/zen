@@ -146,7 +146,14 @@ export interface ZenXPluginUiSurface {
   exportName: string;
 }
 
+export interface ZenXPluginThreadHeaderContribution {
+  id: string;
+  surfaceId: string;
+  order?: number;
+}
+
 export interface ZenXPluginContributions {
+  threadHeaders?: ZenXPluginThreadHeaderContribution[];
   sidebar?: Array<{
     id: string;
     label: string;

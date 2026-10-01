@@ -155,6 +155,7 @@ export interface ClientRequestParams {
   "thread/resume": { threadId: string } & ThreadConfigurationParams;
   "zen/thread/resume": { threadId: string };
   "zen/thread/read": { threadId: string };
+  "zen/thread/create-child": { parentThreadId: string; mode: "fresh" | "fork" };
   "thread/read": { threadId: string; includeTurns?: boolean };
   "thread/list": {
     limit?: number;
@@ -238,6 +239,7 @@ export interface ClientRequestResults {
   "thread/resume": { thread: Thread } & ThreadSettingsSnapshot;
   "zen/thread/resume": NativeThreadRecoverySnapshot;
   "zen/thread/read": { thread: ThreadSnapshot };
+  "zen/thread/create-child": { thread: ThreadSnapshot };
   "thread/read": { thread: Thread };
   "thread/list": {
     data: Thread[];

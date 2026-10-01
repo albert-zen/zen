@@ -11,7 +11,8 @@
     "packages/zenx-rooms-plugin",
     "packages/zenx-self-control-plugin",
     "packages/zenx-triggers-plugin",
-    "packages/zenx-imzenx-plugin"
+    "packages/zenx-imzenx-plugin",
+    "packages/zenx-subagents-plugin"
   ],
   "bin": {
     "zen": "./dist/apps/cli/src/cli.js"

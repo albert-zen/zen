@@ -91,7 +91,14 @@ export interface ZenXPluginResultRendererContribution {
   surfaceId: string;
 }
 
+export interface ZenXPluginThreadHeaderContribution {
+  id: string;
+  surfaceId: string;
+  order?: number;
+}
+
 export interface ZenXPluginContributions {
+  threadHeaders?: ZenXPluginThreadHeaderContribution[];
   sidebar?: ZenXPluginSidebarContribution[];
   pages?: ZenXPluginPageContribution[];
   subroutes?: ZenXPluginSubrouteContribution[];
@@ -276,6 +283,9 @@ export interface ZenXPluginSnapshot {
   subroutes: ZenXPluginSubrouteProjection[];
   settings: ZenXPluginSurfaceProjection[];
   panels: ZenXPluginSurfaceProjection[];
+  threadHeaders?: Array<
+    ZenXPluginThreadHeaderContribution & ZenXPluginContributionProjection
+  >;
   commands: ZenXPluginCommandProjection[];
   menus: ZenXPluginMenuProjection[];
   resultRenderers?: ZenXPluginResultRendererProjection[];

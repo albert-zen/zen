@@ -25,6 +25,7 @@ export const ZENX_SELF_CONTROL_LOCAL_DEVICE_PERMISSION =
 type SelfControlRequestMethod = Extract<
   ClientRequestMethod,
   | "zen/thread/read"
+  | "zen/thread/create-child"
   | "model/list"
   | "thread/settings/update"
   | "turn/queue"
