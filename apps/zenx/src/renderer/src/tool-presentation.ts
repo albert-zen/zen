@@ -86,3 +86,45 @@ export function toolPresentation(name: string): {
     };
   return { category: name === "run_code" ? "Code" : "Tool", icon: "terminal" };
 }
+
+/** Concise labels for existing tool facts; never infer a task or agent from a process. */
+export function commandTitle(
+  item: Extract<ThreadItem, { type: "commandExecution" }>,
+): string {
+  const name = item.toolName ?? item.command.trim().split(/\s+/u)[0] ?? "tool";
+  const args = item.toolArguments;
+  const text =
+    name === "run_code" && typeof args?.description === "string"
+      ? args.description
+      : name === "shell" && typeof args?.command === "string"
+        ? args.command
+        : name === "zenx_plugin" && args?.operation === "discover"
+          ? "Discover plugins"
+          : name === "zenx_plugin" && args?.operation === "read"
+            ? "Read plugin"
+            : (toolPresentation(name).action ??
+              (item.toolName === undefined
+                ? item.command
+                : name.replace(/^zenx_/u, "").replaceAll("_", " ")));
+  const line = text.replace(/\s+/gu, " ").trim();
+  return line.length > 80 ? `${line.slice(0, 79)}…` : line;
+}
+
+export function commandSummary(
+  item: Extract<ThreadItem, { type: "commandExecution" }>,
+): string {
+  const status = commandStatus(item);
+  const title = commandTitle(item);
+  if (item.toolName === "wait" || item.command.trim() === "wait") {
+    if (status === "Waiting" || status === "Started") return "Waiting for task";
+    if (status === "Waited" || status === "Completed") return "Waited for task";
+    return `Wait · ${status.toLowerCase()}`;
+  }
+  if (item.toolName === "shell") {
+    if (status === "Started") return `Started · ${title}`;
+    if (status === "Running") return `Running · ${title}`;
+    if (status === "Ran command" || status === "Completed")
+      return `Ran · ${title}`;
+  }
+  return `${title} · ${status.toLowerCase()}`;
+}

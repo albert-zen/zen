@@ -117,6 +117,21 @@ test("idle composer exposes one disabled Send action when empty", () => {
   assert.doesNotMatch(html, /Steer now/u);
 });
 
+test("confirmed sends do not leave protocol receipts in the composer", () => {
+  for (const stage of ["queued", "delivered", "completed", "ended"] as const) {
+    const html = render(false, [], {
+      ...emptyComposerState(),
+      confirmedAdmission: { clientId: "sent-message", stage },
+    });
+    const form = html.match(/<form[\s\S]*?<\/form>/u)?.[0] ?? "";
+    assert.ok(form);
+    assert.doesNotMatch(
+      form,
+      /composer-note|containing this message|admitted to the queue|added to a Turn/u,
+    );
+  }
+});
+
 test("composer textarea opts into bounded content-driven growth", () => {
   const html = render(false, [], editComposer(emptyComposerState(), "draft"));
   assert.match(html, /<textarea[^>]*data-autogrow="true"/u);
@@ -518,9 +533,9 @@ test("composer textarea grows to its cap, scrolls, and shrinks after deletion", 
     assert.equal(textarea.style.height, "136px");
     assert.equal(textarea.style.overflowY, "auto");
 
-    contentHeight = 42;
+    contentHeight = 24;
     await act(async () => root.render(props("")));
-    assert.equal(textarea.style.height, "54px");
+    assert.equal(textarea.style.height, "36px");
     assert.equal(textarea.style.overflowY, "hidden");
   });
 });
@@ -1327,7 +1342,7 @@ test("assistant messages retain running reasoning and tool disclosure affordance
   assert.match(html, /Checking the relevant files\./u);
   assert.match(
     html,
-    /class="trace-toggle"[^>]*aria-expanded="false"[\s\S]*Reasoned and used rg[\s\S]*2 items/u,
+    /class="trace-toggle"[^>]*aria-expanded="false"[\s\S]*rg ThreadView · completed[\s\S]*2 items/u,
   );
 });
 
@@ -2373,7 +2388,7 @@ test("folded task group and expanded wait row use the same receipt phase", async
     );
     const group = requiredButton(".trace-toggle");
     assert.equal(group.getAttribute("aria-expanded"), "false");
-    assert.match(group.textContent ?? "", /Reasoning · Waiting wait/u);
+    assert.match(group.textContent ?? "", /Waiting for task/u);
     await act(async () => group.click());
     assert.equal(group.getAttribute("aria-expanded"), "true");
     assert.equal(
@@ -2388,7 +2403,7 @@ test("folded task group and expanded wait row use the same receipt phase", async
         { ...wait, structuredContent: { status: "timed_out" } },
       ]),
     );
-    assert.match(group.textContent ?? "", /Reasoning · Timed out wait/u);
+    assert.match(group.textContent ?? "", /Wait · timed out/u);
     assert.equal(
       requiredElement(".trace-items .tool-status").textContent,
       "Timed out",

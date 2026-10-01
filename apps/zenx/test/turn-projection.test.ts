@@ -53,13 +53,13 @@ test("group summary does not claim unfinished tools have been used", () => {
   };
   assert.equal(
     traceSummary([reasoning("r", ""), pending]),
-    "Reasoning · Started shell",
+    "Started · Run command",
   );
   assert.equal(
     traceSummary([pending, done]),
-    "Started shell · Used browser inspect",
+    "Started · Run command · Inspect page · completed",
   );
-  assert.equal(traceSummary([done]), "Used browser inspect");
+  assert.equal(traceSummary([done]), "Inspect page · completed");
   const yielded = {
     ...done,
     contentType: "application/vnd.zen.tool-task+json",
@@ -67,7 +67,7 @@ test("group summary does not claim unfinished tools have been used", () => {
   };
   assert.equal(
     traceSummary([pending, yielded]),
-    "Started shell · Running browser inspect",
+    "Started · Run command · Inspect page · running",
   );
 });
 
@@ -79,10 +79,10 @@ test("grouped task receipts preserve the same wait and terminal phases as their 
     structuredContent: { status: "running" },
   };
   const cases = [
-    [wait, "Reasoning · Waiting wait"],
+    [wait, "Waiting for task"],
     [
       { ...wait, structuredContent: { status: "timed_out" } },
-      "Reasoning · Timed out wait",
+      "Wait · timed out",
     ],
     [
       {
@@ -91,7 +91,7 @@ test("grouped task receipts preserve the same wait and terminal phases as their 
         contentType: undefined,
         structuredContent: undefined,
       },
-      "Reasoning · Declined wait",
+      "Wait · declined",
     ],
   ] as const;
   for (const [item, label] of cases) {
@@ -309,4 +309,16 @@ test("failed turns retain prior text and reasoning as history alongside the erro
     ["traceItem", "agent"],
   );
   assert.equal(projection.terminalFallback, "invalid tool call id");
+});
+
+test("collapsed trace names only the latest three tools without reasoning boilerplate", () => {
+  const items = ["one", "two", "three", "four"].map((value) => ({
+    ...command(value, `echo ${value}`),
+    toolName: "shell",
+    toolArguments: { command: `echo ${value}` },
+  }));
+  assert.equal(
+    traceSummary([reasoning("r", ""), ...items]),
+    "Ran · echo two · Ran · echo three · Ran · echo four",
+  );
 });
