@@ -22,5 +22,6 @@ test("shell and other built-in tools do not fall back to a generic Tool label", 
   });
   assert.equal(toolPresentation("zenx_shell").category, "Shell");
   assert.equal(toolPresentation("wait").category, "Wait");
+  assert.equal(toolPresentation("wait").icon, "clock");
   assert.equal(toolPresentation("view_image").category, "Image");
 });

@@ -737,7 +737,7 @@ test("live native result and journal replay agree on a waiting task group", () =
     const group = projectTurn(projected.turns[0]!).history[0];
     assert.equal(group?.kind, "traceGroup");
     if (group?.kind !== "traceGroup") continue;
-    assert.equal(group.summary, "Reasoning · Waiting wait");
+    assert.equal(group.summary, "Waiting for task");
     assert.equal(group.items[1]?.type, "commandExecution");
     if (group.items[1]?.type === "commandExecution")
       assert.equal(commandStatus(group.items[1]), "Waiting");

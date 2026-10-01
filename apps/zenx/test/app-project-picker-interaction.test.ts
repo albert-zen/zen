@@ -2305,9 +2305,10 @@ for (const path of [
       assert.equal(composer.value, "original");
       if (path !== "rpc")
         assert.match(
-          document.body.textContent ?? "",
-          /admitted to the queue; delivery is not confirmed/u,
+          document.querySelector(".queued-messages")?.textContent ?? "",
+          /1 queued/u,
         );
+      assert.equal(document.querySelector(".composer-error"), null);
     } finally {
       await unmountApp(harness);
     }
@@ -2430,10 +2431,10 @@ test("late canonical queue ID settles only the original unknown submission, not 
         document.querySelector<HTMLTextAreaElement>("#thread-composer")
           ?.value === "",
     );
-    assert.match(
-      document.body.textContent ?? "",
-      /admitted to the queue; delivery is not confirmed/u,
-    );
+    // The matching receipt clears the unknown-send error and original draft;
+    // it does not leave an implementation-level success note in the composer.
+    assert.equal(document.querySelector(".composer-error"), null);
+    assert.equal(document.querySelector(".composer-note"), null);
     await act(async () =>
       notify?.("zen/thread/event", {
         threadId: "thread-1",
@@ -2453,10 +2454,8 @@ test("late canonical queue ID settles only the original unknown submission, not 
         },
       }),
     );
-    assert.match(
-      document.body.textContent ?? "",
-      /added to a Turn; execution may still be running/u,
-    );
+    assert.ok(document.querySelector(".turn.inProgress"));
+    assert.equal(document.querySelector(".composer-note"), null);
     await act(async () =>
       notify?.("zen/thread/event", {
         threadId: "thread-1",
@@ -2470,10 +2469,8 @@ test("late canonical queue ID settles only the original unknown submission, not 
         },
       }),
     );
-    assert.match(
-      document.body.textContent ?? "",
-      /Turn containing this message completed/u,
-    );
+    assert.ok(document.querySelector(".turn.completed"));
+    assert.equal(document.querySelector(".composer-note"), null);
     await setTextareaValue(composer, "new draft after reconnect");
     await invokeFormSubmit(
       document.querySelector<HTMLFormElement>("form.composer")!,

@@ -76,7 +76,7 @@ export function toolPresentation(name: string): {
   if (key === "shell")
     return { category: "Shell", icon: "terminal", action: "Run command" };
   if (key === "wait")
-    return { category: "Wait", icon: "trigger", action: "Wait for task" };
+    return { category: "Wait", icon: "clock", action: "Wait for task" };
   const action = actions[key];
   if (action)
     return {

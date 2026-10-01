@@ -53,7 +53,7 @@ test("side panel open and close affordances use the same glyph and footprint", (
 
 test("composer scrollbar stays inset from the rounded shell, including when focused", () => {
   assert.match(rule(".composer"), /border-radius: 22px;/u);
-  assert.match(rule(".composer > textarea"), /margin: 22px 8px 0;/u);
+  assert.match(rule(".composer > textarea"), /margin: 14px 8px 0;/u);
   assert.match(rule(".composer > textarea"), /width: calc\(100% - 16px\);/u);
   assert.match(rule(".composer > textarea"), /outline: 0;/u);
   assert.match(css, /\.composer:focus-within\s*\{[^}]*box-shadow:/u);
@@ -74,10 +74,10 @@ test("composer icon controls retain a matching hit area in narrow layouts", () =
 });
 
 test("overflow track begins on straight edge while the total editor height remains bounded", () => {
-  assert.match(rule(".composer > textarea"), /min-height: 54px;/u);
+  assert.match(rule(".composer > textarea"), /min-height: 36px;/u);
   assert.match(
     rule(".composer > textarea"),
-    /max-height: max\(54px, min\(136px, calc\(35vh - 14px\)\)\);/u,
+    /max-height: max\(36px, min\(136px, calc\(35vh - 14px\)\)\);/u,
   );
   assert.match(thread, /const style = window\.getComputedStyle\(textarea\);/u);
   assert.match(thread, /Number\.parseFloat\(style\.minHeight\)/u);
