@@ -1,6 +1,10 @@
 import type { SkillEntry } from "../../../../cli/src/skills.js";
 import { parseSkillDraft, withSkillDraft } from "./skill-draft.js";
-import { commandStatus, toolPresentation } from "./tool-presentation.js";
+import {
+  commandStatus,
+  toolPresentation,
+  commandTitle,
+} from "./tool-presentation.js";
 import { isCompactCommand } from "./compact-command.js";
 import { createPortal } from "react-dom";
 import {
@@ -60,7 +64,6 @@ import { activeTurn } from "./thread-view-state.js";
 import type { PluginUiRegistry } from "./plugin-ui-host.js";
 import { ToolResultRenderer } from "./ToolResultRenderer.js";
 import {
-  commandLabel,
   groupReasoningWithoutDetailsRows,
   projectTurn,
   traceDisplayRows,
@@ -326,7 +329,7 @@ export function ThreadView({
       const declaredMinHeight = Number.parseFloat(style.minHeight);
       const minHeight = Number.isFinite(declaredMinHeight)
         ? declaredMinHeight
-        : 54;
+        : 36;
       const declaredMaxHeight = Number.parseFloat(style.maxHeight);
       const maxHeight = Number.isFinite(declaredMaxHeight)
         ? declaredMaxHeight
@@ -965,17 +968,6 @@ export function ThreadView({
               role="alert"
             >
               {composerError}
-            </p>
-          ) : null}
-          {composer.confirmedAdmission !== undefined ? (
-            <p className="composer-note" role="status">
-              {composer.confirmedAdmission.stage === "queued"
-                ? "Message was admitted to the queue; delivery is not confirmed."
-                : composer.confirmedAdmission.stage === "delivered"
-                  ? "Message added to a Turn; execution may still be running."
-                  : composer.confirmedAdmission.stage === "completed"
-                    ? "The Turn containing this message completed."
-                    : "The Turn containing this message ended without completion."}
             </p>
           ) : null}
           {composer.draft.images.length > 0 &&
@@ -1704,7 +1696,17 @@ function TraceSequence({
           aria-expanded={expanded}
           onClick={toggleExpanded}
         >
-          <Icon name="layers" size={15} />
+          <Icon
+            name={(() => {
+              const command = node.items.findLast(
+                (item) => item.type === "commandExecution",
+              );
+              return command?.type === "commandExecution"
+                ? toolPresentation(command.toolName ?? command.command).icon
+                : "reasoning";
+            })()}
+            size={15}
+          />
           <span>{node.summary}</span>
           <small className="sr-only">{node.items.length} items</small>
           <Icon name="chevron-down" size={13} />
@@ -2263,17 +2265,7 @@ function traceItemLabel(item: ThreadItem): string {
         ? "Reasoning"
         : "Reasoning details";
   }
-  return item.type === "commandExecution"
-    ? item.toolName === "run_code" &&
-      typeof item.toolArguments?.description === "string"
-      ? item.toolArguments.description
-      : (toolPresentation(item.toolName ?? item.command).action ??
-        (typeof item.toolArguments?.command === "string"
-          ? item.toolArguments.command
-          : item.toolName === undefined
-            ? item.command
-            : commandLabel(item.toolName)))
-    : "Item details";
+  return item.type === "commandExecution" ? commandTitle(item) : "Item details";
 }
 
 function completedTurnLabel(turn: Turn): string {

@@ -1,5 +1,5 @@
 import type { ThreadItem, Turn } from "../../protocol-client/index.js";
-import { commandStatus } from "./tool-presentation.js";
+import { commandSummary } from "./tool-presentation.js";
 
 export type TurnDisplayNode =
   | {
@@ -237,34 +237,15 @@ export function traceSummary(
     (item): item is Extract<ThreadItem, { type: "commandExecution" }> =>
       item.type === "commandExecution",
   );
-  const reasoning = items.length - commands.length;
-  if (commands.length === 0) return "Reasoned through the next step";
-  const stages = commands.map((item) => {
-    const status = commandStatus(item);
-    return ["Done", "Completed", "Ran command", "Waited"].includes(status)
-      ? "Used"
-      : status;
-  });
-  if (stages.some((value) => value !== "Used")) {
-    const groups = [...new Set(stages)];
-    return [
-      ...(reasoning > 0 ? ["Reasoning"] : []),
-      ...groups.map(
-        (value) =>
-          `${value} ${[
-            ...new Set(
-              commands
-                .filter((_, index) => stages[index] === value)
-                .map((item) => commandLabel(item.toolName ?? item.command)),
-            ),
-          ].join(", ")}`,
-      ),
-    ].join(" · ");
+  if (commands.length === 0) {
+    return items.some(
+      (item) => item.type === "reasoning" && item.status === "inProgress",
+    )
+      ? "Thinking"
+      : "Thoughts";
   }
-  const names = commands.map((item) => commandLabel(item.command));
-  const unique = [...new Set(names)];
-  const action = unique.length === 1 ? unique[0] : `${unique.length} tools`;
-  return reasoning > 0 ? `Reasoned and used ${action}` : `Used ${action}`;
+  // Keep the collapsed preview bounded; the full trace remains in its disclosure.
+  return commands.slice(-3).reverse().map(commandSummary).join(" · ");
 }
 
 export function commandLabel(command: string): string {

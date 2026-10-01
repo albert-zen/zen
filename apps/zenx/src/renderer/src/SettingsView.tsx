@@ -408,11 +408,7 @@ export function SettingsView({
                 <>
                   <header>
                     <h2>Plugins</h2>
-                    <p>
-                      Install, update, disable, or remove trusted packages.
-                      Uninstall keeps plugin data until you explicitly delete
-                      it.
-                    </p>
+                    <p>Manage the plugins available in ZenX.</p>
                   </header>
                   <Activity
                     mode={active && tab === "plugins" ? "visible" : "hidden"}
@@ -711,14 +707,11 @@ export function ArchivedThreadsPanel({
     <>
       <header>
         <h2>Archived threads</h2>
-        <p>
-          Archived conversations remain canonical Threads. Restore one to return
-          it to the active Sidebar.
-        </p>
+        <p>Restore an archived conversation to return it to the sidebar.</p>
       </header>
       {loading ? (
         <div className="settings-empty" role="status">
-          Loading archived Threads…
+          Loading archived conversations…
         </div>
       ) : error !== null ? (
         <div className="settings-empty settings-error" role="alert">
@@ -729,7 +722,7 @@ export function ArchivedThreadsPanel({
         </div>
       ) : threads.length === 0 ? (
         <div className="settings-empty">
-          No archived Threads. Conversations you archive will appear here.
+          No archived conversations. Conversations you archive will appear here.
         </div>
       ) : (
         <div className="archived-thread-list">
@@ -830,18 +823,12 @@ function AccountPanel({
     <>
       <header>
         <h2>Account</h2>
-        <p>
-          Credentials remain in the local ZenX vault and never enter the Thread
-          Item stream.
-        </p>
       </header>
       <div className="page-card settings-card">
         <div className="settings-card-head">
           <div>
             <h3>OpenAI subscription</h3>
-            <p>
-              Use an authenticated ChatGPT subscription for ZenX model access.
-            </p>
+            <p>Connect your ChatGPT subscription to use its models.</p>
           </div>
           <span
             className={
@@ -853,7 +840,7 @@ function AccountPanel({
             }
           >
             {!subscriptionConfigured
-              ? "No profile configured"
+              ? "Not configured"
               : settings.subscription.authenticated
                 ? "Signed in"
                 : "Not signed in"}
@@ -862,14 +849,16 @@ function AccountPanel({
         <div className="settings-row">
           <div>
             <strong>
-              {settings.subscription.accountId ?? "No account connected"}
+              {settings.subscription.authenticated
+                ? "Account connected"
+                : "Connect an account"}
             </strong>
             <span>
               {!subscriptionConfigured
-                ? "Add an OpenAI subscription profile from Models & providers to connect an account."
+                ? "Add an OpenAI subscription in Models & provider to get started."
                 : settings.subscription.authenticated
-                  ? "Authentication is stored in the operating system credential boundary."
-                  : "Sign in to use the configured subscription profile."}
+                  ? "Your sign-in details are stored securely on this device."
+                  : "Sign in to connect your subscription."}
             </span>
           </div>
           {!subscriptionConfigured ? null : settings.subscription
@@ -906,19 +895,6 @@ function AccountPanel({
         accountId={settings.subscription.accountId}
         authenticated={settings.subscription.authenticated}
       />
-      <div className="page-card settings-card">
-        <div className="settings-row">
-          <div>
-            <strong>Privacy boundary</strong>
-            <span>
-              Thread history stores only effective runtime settings.
-              Subscription identity and provider secrets remain outside
-              canonical Items.
-            </span>
-          </div>
-          <Icon name="lock" />
-        </div>
-      </div>
     </>
   );
 }
@@ -1940,16 +1916,15 @@ function ProviderEditor({
           </p>
         ) : (
           <p className="settings-note credential-note">
-            Local demo is deterministic and does not use a network credential.
+            Local demo works offline and does not need an API key.
           </p>
         )}
         <fieldset className="provider-model-editor">
           <legend>Model catalog</legend>
           <div className="model-catalog-head">
             <p>
-              Model IDs are Provider-scoped. OpenAI subscription metadata comes
-              from the official Codex catalog; compatible Providers use their
-              standard model endpoint.
+              Choose the models available from this provider, or add one
+              manually.
             </p>
             {(provider.type === "openai-compatible" ||
               provider.type === "openai-subscription") &&
@@ -2577,8 +2552,8 @@ function DeleteProviderPanel({
       <div>
         <strong>Delete {provider.displayName}?</strong>
         <p>
-          This removes its host profile and credential. Existing Threads keep
-          their recorded model selection.
+          Remove this provider and its saved credentials. Existing conversations
+          keep their model selection.
         </p>
       </div>
       {!hasReplacement ? (
@@ -3138,7 +3113,7 @@ function GeneralPanel({
       <section className="settings-card">
         <h3>Interaction</h3>{" "}
         <label className="field">
-          <span id="composer-send-label">Send during a running turn</span>
+          <span id="composer-send-label">Send while a reply is running</span>
           <Select
             aria-labelledby="composer-send-label"
             value={draft.composerSendMode ?? "soft"}
@@ -3159,19 +3134,16 @@ function GeneralPanel({
             }
             aria-describedby="composer-send-help"
           >
-            <option value="batch">Next turn together</option>
+            <option value="batch">Send queued messages together</option>
             <option value="queue">Run each queued message separately</option>
-            <option value="soft">Steer current turn now (default)</option>
-            <option value="hard">Hard steer (interrupt and send)</option>
+            <option value="soft">Guide the current reply (default)</option>
+            <option value="hard">Interrupt and send</option>
           </Select>
           <small id="composer-send-help" className="settings-note">
-            Enter and the send button use this choice. Cmd/Ctrl+Enter uses soft
-            steer when a queue mode is selected, and Next turn together when a
-            steer mode is selected. Existing queued messages keep their original
-            delivery choice. Older Queue profiles with no reliable record of a
-            manual choice now default to Steer; use the restore action in the
-            conversation to return to per-message Queue. Shift+Enter adds a new
-            line.
+            Enter and the send button use this choice. Cmd/Ctrl+Enter guides the
+            current reply when a queue option is selected, or queues messages
+            together otherwise. Shift+Enter adds a new line. This setting does
+            not change messages already queued.
           </small>
         </label>
       </section>
@@ -3262,10 +3234,9 @@ function GeneralPanel({
               <option value="code">Code only</option>
             </Select>
             <small id="tool-presentation-help" className="settings-note">
-              Both is the default. Code runs shell-equivalent erasable
-              TypeScript through the same tools and history. Direct is the
-              rollback path and does not delete providers or rewrite existing
-              Threads.
+              Choose how agents use tools: call them directly, write JavaScript
+              to combine them, or use both. Code has the same permissions as
+              shell commands.
             </small>
           </label>
           <label className="field">
@@ -3313,27 +3284,17 @@ function GeneralPanel({
               </small>
             )}
             <small id="max-tool-rounds-help" className="settings-note">
-              Leave blank for unlimited. A finite maximum stops a Turn that
-              keeps requesting tools after that many model rounds.
+              Leave blank for unlimited. Stop a reply after this many rounds of
+              tool use.
             </small>
           </label>
         </div>
 
+        <p className="settings-note">Manage projects from the sidebar.</p>
         <p className="settings-note">
-          Add, remove, and select Projects from the Projects sidebar. Folder
-          selection always uses the ZenX directory picker.
+          Defaults apply to new replies. Running replies keep their current
+          settings, and conversation-specific choices take priority.
         </p>
-        <div className="settings-row">
-          <div>
-            <strong>Zen App Server</strong>
-            <span>
-              Runtime defaults apply to new turns. Running turns keep their
-              admitted configuration. Existing Thread settings remain
-              authoritative.
-            </span>
-          </div>
-          <span className="status-good">Local</span>
-        </div>
         <div className="settings-row">
           <div>
             <strong>Local diagnostics</strong>

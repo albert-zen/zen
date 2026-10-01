@@ -87,6 +87,7 @@ export function createRunCodeModelTool(
     rawSource: { language: "javascript", argument: "code" },
     description: [
       "Run a fresh JavaScript async module with top-level await.",
+      "This runs code and tools in the current Thread, not another LLM Agent. A task_id is a tool execution receipt, not a subagent. Independent Agent work requires an available Thread creation and message-dispatch tool.",
       "Use pure JavaScript, not TypeScript syntax. No Node.js, filesystem, network, process, require, or package imports; use tools.* for external actions.",
       "In-memory helpers: atob/btoa, TextEncoder/TextDecoder, URL/URLSearchParams, crypto.randomUUID(). import.meta is unavailable.",
       "Only the tools declared below are available through tools.*. Select output with text/image/audio; the last expression is not returned automatically.",

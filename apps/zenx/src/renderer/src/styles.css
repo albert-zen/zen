@@ -2378,9 +2378,9 @@ a:focus-visible {
   /* Native scrollbar tracks span the scroll element, not its text padding.
      Begin the scrollport on the shell's straight vertical edge; reclaim the
      extra 14px from its height to preserve the overall composer budget. */
-  margin: 22px 8px 0;
-  min-height: 54px;
-  max-height: max(54px, min(136px, calc(35vh - 14px)));
+  margin: 14px 8px 0;
+  min-height: 36px;
+  max-height: max(36px, min(136px, calc(35vh - 14px)));
   display: block;
   resize: none;
   overflow-y: hidden;

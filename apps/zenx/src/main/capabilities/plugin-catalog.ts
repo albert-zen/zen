@@ -243,7 +243,16 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
       const manifest = validateManifest(capabilityPackage.manifest);
       const previous = this.#catalogPackages.get(manifest.id);
       const previousDescriptor = this.#packageDescriptors[manifest.id];
-      if (previous === undefined || previousDescriptor === undefined) {
+      const repairingUnavailableBundle =
+        previous === undefined &&
+        options.allowSameVersionBundledVariant === true &&
+        source === "bundled" &&
+        profile?.source.mode === "bundled" &&
+        previousDescriptor?.profileSource?.mode === "bundled";
+      if (
+        previousDescriptor === undefined ||
+        (previous === undefined && !repairingUnavailableBundle)
+      ) {
         throw new Error(`Plugin ${manifest.id} is not installed`);
       }
       if (previousDescriptor.source !== source) {
@@ -295,14 +304,14 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
       });
 
       try {
-        if (shouldEnable && profile === undefined) {
+        if (shouldEnable && profile === undefined && previous !== undefined) {
           await this.#stopPluginRuntimeWithRollback(manifest.id, previous);
         }
         enterCatalogCommit(options);
         await this.#configurationStore.save(nextConfiguration);
       } catch (error) {
         await runtimeStage?.rollback();
-        if (shouldEnable && profile === undefined) {
+        if (shouldEnable && profile === undefined && previous !== undefined) {
           await this.#restorePluginRuntime(previous);
         }
         throw error;
@@ -337,11 +346,17 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
           ...this.#packageDescriptors,
           [manifest.id]: previousDescriptor,
         };
-        this.#catalogPackages.set(manifest.id, previous);
+        if (previous !== undefined)
+          this.#catalogPackages.set(manifest.id, previous);
+        else this.#catalogPackages.delete(manifest.id);
         await this.#configurationStore.save(
           this.#configuration({ packages: this.#packageDescriptors }),
         );
-        if (shouldEnable && !this.#registered.has(manifest.id)) {
+        if (
+          shouldEnable &&
+          previous !== undefined &&
+          !this.#registered.has(manifest.id)
+        ) {
           await this.#restorePluginRuntime(previous);
           this.#activateRegistration(previous);
         }
@@ -761,6 +776,11 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
         : enabled
           ? "enabled"
           : "installed";
+      const unavailableReason = entry.available
+        ? undefined
+        : this.#discoveryErrors
+            .findLast((message) => message.startsWith(`${manifest.id}: `))
+            ?.slice(manifest.id.length + 2);
       return {
         id: manifest.id,
         displayName: manifest.name,
@@ -778,6 +798,7 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
         lifecycle,
         enabled,
         available: entry.available,
+        ...(unavailableReason === undefined ? {} : { unavailableReason }),
         contributionCount:
           (manifest.contributions?.sidebar?.length ?? 0) +
           (manifest.contributions?.pages?.length ?? 0) +

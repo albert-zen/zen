@@ -33,6 +33,7 @@ export async function installZenXBundledPluginsAtStartup(
         ZENX_ROOMS_TARBALL,
       );
       const action = await bundledPluginStartupAction(
+        capabilities,
         installedRooms,
         tarballPath,
       );
@@ -83,7 +84,11 @@ export async function installZenXBundledPluginsAtStartup(
                 )
               : definition.tarball;
         const tarballPath = path.join(resourcesDirectory, "plugins", tarball);
-        const action = await bundledPluginStartupAction(installed, tarballPath);
+        const action = await bundledPluginStartupAction(
+          capabilities,
+          installed,
+          tarballPath,
+        );
         if (action === "skip") return;
         await capabilities.installBundledPluginPackage(
           tarballPath,
@@ -101,6 +106,7 @@ export async function installZenXBundledPluginsAtStartup(
 type BundledPluginStartupAction = "skip" | "install" | "repair";
 
 async function bundledPluginStartupAction(
+  capabilities: ZenXCapabilityService,
   installed:
     | ReturnType<ZenXCapabilityService["pluginSnapshot"]>["plugins"][number]
     | undefined,
@@ -108,12 +114,20 @@ async function bundledPluginStartupAction(
 ): Promise<BundledPluginStartupAction> {
   // An explicit uninstall is user intent; startup must not resurrect it.
   if (installed?.lifecycle === "uninstalled") return "skip";
-  const source = installed?.profileSource;
+  if (installed === undefined) return "install";
+  const source = installed.profileSource;
   if (source === undefined) return "install";
   // A non-bundled source is a user-selected override and must be preserved.
   if (source.mode !== "bundled") return "skip";
   try {
-    if ((await realpath(tarballPath)) === source.packageSpec) return "skip";
+    if (
+      (await realpath(tarballPath)) === source.packageSpec &&
+      (await capabilities.bundledPluginPackageCurrent(
+        installed.id,
+        tarballPath,
+      ))
+    )
+      return "skip";
   } catch {
     // Let the normal install path report a missing App Resource package.
   }
