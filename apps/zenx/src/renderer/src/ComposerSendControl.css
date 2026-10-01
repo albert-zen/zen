@@ -1,0 +1,79 @@
+.composer-send-control {
+  display: flex;
+  border-radius: 50%;
+}
+.ui-popover.composer-send-popover {
+  width: 264px;
+  max-width: calc(100vw - 24px);
+  padding: 6px;
+  overflow: visible;
+}
+/* Keep the path between the button and panel inside the hover target. */
+.composer-send-popover::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  height: 10px;
+}
+.composer-send-popover[data-side="top"]::after {
+  top: 100%;
+}
+.composer-send-popover[data-side="bottom"]::after {
+  bottom: 100%;
+}
+.composer-send-options {
+  display: grid;
+  max-height: min(
+    240px,
+    calc(var(--radix-popover-content-available-height, 400px) - 110px)
+  );
+  overflow-y: auto;
+}
+.composer-send-options button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-primary);
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+}
+.composer-send-options button:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+.composer-send-options kbd {
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 11px;
+}
+.composer-send-default {
+  display: grid;
+  gap: 7px;
+  margin-top: 5px;
+  padding: 10px;
+  border-top: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+.composer-send-default select {
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-control);
+  border-radius: 6px;
+  background: var(--color-surface-control);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+.composer-send-error {
+  margin: 4px 10px 8px;
+  color: var(--color-status-danger);
+  font-size: 12px;
+}

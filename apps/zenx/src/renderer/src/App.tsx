@@ -437,6 +437,14 @@ export function App() {
   };
   const [composerSendModeMigration, setComposerSendModeMigration] =
     useState<ZenXHostProfile["composerSendModeMigration"]>(undefined);
+  const composerProfileRevisionRef = useRef(-1);
+  const applyComposerProfile = (profile: ZenXHostProfile) => {
+    const revision = profile.revision ?? 0;
+    if (revision < composerProfileRevisionRef.current) return;
+    composerProfileRevisionRef.current = revision;
+    applyComposerSendMode(profile.composerSendMode ?? "soft");
+    setComposerSendModeMigration(profile.composerSendModeMigration);
+  };
   const [workflowCommands, setWorkflowCommands] = useState<WorkflowCommand[]>(
     [],
   );
@@ -457,8 +465,7 @@ export function App() {
       .get()
       .then((value) => {
         if (active) {
-          applyComposerSendMode(value.profile.composerSendMode ?? "soft");
-          setComposerSendModeMigration(value.profile.composerSendModeMigration);
+          applyComposerProfile(value.profile);
           setWorkflowCommands(value.profile.workflowCommands ?? []);
         }
       })
@@ -471,8 +478,7 @@ export function App() {
     const onChanged = window.zenx.settings.onChanged;
     if (onChanged === undefined) return undefined;
     return onChanged((value) => {
-      applyComposerSendMode(value.profile.composerSendMode ?? "soft");
-      setComposerSendModeMigration(value.profile.composerSendModeMigration);
+      applyComposerProfile(value.profile);
       setWorkflowCommands(value.profile.workflowCommands ?? []);
     });
   }, []);
@@ -2158,6 +2164,27 @@ export function App() {
     }));
   };
 
+  const changeComposerSendMode = async (
+    mode: "batch" | "queue" | "soft" | "hard",
+  ) => {
+    const current = await window.zenx.settings.get();
+    const saved = await window.zenx.settings.save({
+      ...current.profile,
+      baseRevision: current.profile.revision ?? 0,
+      composerSendMode: mode,
+      composerSendModeExplicit: true,
+      ...(current.profile.composerSendModeMigration === undefined
+        ? {}
+        : {
+            composerSendModeMigration: {
+              ...current.profile.composerSendModeMigration,
+              acknowledged: true,
+            },
+          }),
+    });
+    applyComposerProfile(saved.profile);
+  };
+
   const settleLegacySendChoice = async (restoreQueue: boolean) => {
     const current = await window.zenx.settings.get();
     const migration = current.profile.composerSendModeMigration;
@@ -2173,8 +2200,7 @@ export function App() {
         : (current.profile.composerSendModeExplicit ?? false),
       composerSendModeMigration: { ...migration, acknowledged: true },
     });
-    applyComposerSendMode(saved.profile.composerSendMode ?? "soft");
-    setComposerSendModeMigration(saved.profile.composerSendModeMigration);
+    applyComposerProfile(saved.profile);
   };
 
   const cancelQueued = async (
@@ -2441,6 +2467,7 @@ export function App() {
               setBrowserPanels((current) => ({ ...current, [threadId]: true }));
             }}
             composerSendMode={composerSendMode}
+            onComposerSendModeChange={changeComposerSendMode}
             onCancelQueued={cancelQueued}
             composerSendModeMigration={composerSendModeMigration}
             queueFailure={queueFailure}
@@ -2868,6 +2895,7 @@ function PageTitleBar({
 function AgentSurface({
   onOpenMessageLink,
   composerSendMode,
+  onComposerSendModeChange,
   onCancelQueued,
   composerSendModeMigration,
   queueFailure,
@@ -2926,6 +2954,9 @@ function AgentSurface({
     target: { kind: "file" | "browser"; value: string },
   ): void;
   composerSendMode: "batch" | "queue" | "soft" | "hard";
+  onComposerSendModeChange(
+    mode: "batch" | "queue" | "soft" | "hard",
+  ): Promise<void>;
   onCancelQueued(
     threadId: string,
     targets: readonly QueuedCancellationTarget[],
@@ -3063,6 +3094,8 @@ function AgentSurface({
         <ThreadView
           approvals={[]}
           composer={newThreadDraft.composer}
+          composerSendMode={composerSendMode}
+          onComposerSendModeChange={onComposerSendModeChange}
           composerContext={
             <NewThreadProjectContext
               projects={configuredProjects}
@@ -3129,6 +3162,7 @@ function AgentSurface({
         <>
           <ThreadView
             composerSendMode={composerSendMode}
+            onComposerSendModeChange={onComposerSendModeChange}
             onOpenMessageLink={(target) => {
               onOpenMessageLink(threadDetail.id, target);
             }}

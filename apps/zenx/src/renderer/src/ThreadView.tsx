@@ -48,6 +48,7 @@ import {
   type ComposerState,
 } from "./composer-state.js";
 import type { ZenXThreadAttachmentProjection } from "../../main/image-attachments.js";
+import { ComposerSendControl } from "./ComposerSendControl.js";
 import { ComposerModelMenu } from "./ComposerModelMenu.js";
 import { Icon } from "./icons.js";
 import { PermissionSelect } from "./PermissionSelect.js";
@@ -81,6 +82,7 @@ import {
 
 interface ThreadViewProps {
   composerSendMode?: ComposerSendMode;
+  onComposerSendModeChange?(mode: ComposerSendMode): Promise<void>;
   queueFailure?: {
     queuedItemId: string;
     code: string;
@@ -140,6 +142,7 @@ interface ThreadViewProps {
 
 export function ThreadView({
   composerSendMode = "soft",
+  onComposerSendModeChange,
   queueFailure = null,
   onResumeQueue,
   onCancelQueued,
@@ -368,11 +371,6 @@ export function ThreadView({
   const sendIntent = defaultComposerIntent(
     runningTurn !== null,
     composerSendMode,
-  );
-  const alternateIntent = defaultComposerIntent(
-    runningTurn !== null,
-    composerSendMode,
-    true,
   );
   const primaryMode =
     runningTurn === null ? "send" : !hasDraft ? "stop" : sendIntent;
@@ -898,53 +896,17 @@ export function ThreadView({
               )}
             </div>
             <div className="composer-actions">
-              {runningTurn === null ? null : (
-                <span
-                  className="composer-current-mode"
-                  aria-label={`Send mode: ${intentLabel(sendIntent)}`}
-                >
-                  {intentLabel(sendIntent)}
-                </span>
-              )}
-              {runningTurn !== null && hasDraft
-                ? (["steer", "batch-next", "queue"] as const)
-                    .filter(
-                      (intent) =>
-                        intent !== sendIntent && intent !== alternateIntent,
-                    )
-                    .map((intent) => (
-                      <button
-                        key={intent}
-                        className="steer-button"
-                        type="button"
-                        disabled={
-                          composerDisabled ||
-                          submitting ||
-                          blockedByImageCapability
-                        }
-                        onClick={() => submit(intent)}
-                      >
-                        {intentLabel(intent)}
-                      </button>
-                    ))
-                : null}
-              {runningTurn !== null && hasDraft ? (
-                <button
-                  className="steer-button"
-                  type="button"
-                  disabled={
-                    composerDisabled || submitting || blockedByImageCapability
-                  }
-                  onClick={() => submit(alternateIntent)}
-                >
-                  {intentLabel(alternateIntent)}
-                </button>
-              ) : null}
-              <button
-                className={`action-orb ${primaryMode}`}
-                type="button"
-                aria-label={primaryLabel}
-                title={primaryLabel}
+              <ComposerSendControl
+                mode={composerSendMode}
+                running={runningTurn !== null}
+                hasDraft={hasDraft}
+                compact={compactRequested}
+                primaryMode={primaryMode}
+                primaryLabel={primaryLabel}
+                stopDisabled={composerDisabled || interrupting || submitting}
+                sendDisabled={
+                  composerDisabled || submitting || blockedByImageCapability
+                }
                 disabled={
                   composerDisabled ||
                   interrupting ||
@@ -952,13 +914,11 @@ export function ThreadView({
                   (primaryMode === "send" && !hasDraft) ||
                   blockedByImageCapability
                 }
-                onClick={primary}
-              >
-                <Icon
-                  name={primaryMode === "stop" ? "stop" : "send"}
-                  size={18}
-                />
-              </button>
+                onPrimary={primary}
+                onSend={submit}
+                onStop={() => void interrupt()}
+                onModeChange={onComposerSendModeChange}
+              />
             </div>
           </div>
           {composerError !== null ? (
@@ -1424,6 +1384,12 @@ export function ContextUsageIndicator({
     width: 286,
     placement: "above" as "above" | "below",
   });
+  const [hoverBridge, setHoverBridge] = useState({
+    left: 0,
+    top: 0,
+    width: 0,
+    height: 0,
+  });
   const rootRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1455,19 +1421,38 @@ export function ContextUsageIndicator({
       const estimatedHeight =
         popoverRef.current?.getBoundingClientRect().height ?? 190;
       const canPlaceAbove = anchor.top - 8 >= estimatedHeight;
-      setPopoverPosition({
-        left: Math.max(left, Math.min(anchor.right - width, right - width)),
-        top: canPlaceAbove
-          ? anchor.top - 8
-          : Math.max(
-              8,
-              Math.min(
-                window.innerHeight - estimatedHeight - 8,
-                anchor.bottom + 8,
-              ),
+      const panelLeft = Math.max(
+        left,
+        Math.min(anchor.right - width, right - width),
+      );
+      const panelTop = canPlaceAbove
+        ? anchor.top - 8
+        : Math.max(
+            8,
+            Math.min(
+              window.innerHeight - estimatedHeight - 8,
+              anchor.bottom + 8,
             ),
+          );
+      setPopoverPosition({
+        left: panelLeft,
+        top: panelTop,
         width,
         placement: canPlaceAbove ? "above" : "below",
+      });
+      // A real transparent hit area connects the full panel edge to the ring.
+      // It covers only the vertical gap, so neighboring composer controls keep
+      // their own pointer targets. A pseudo-element is clipped by panel overflow.
+      setHoverBridge({
+        left: Math.min(panelLeft, anchor.left),
+        top: canPlaceAbove ? panelTop : anchor.bottom,
+        width:
+          Math.max(panelLeft + width, anchor.right) -
+          Math.min(panelLeft, anchor.left),
+        height: Math.max(
+          0,
+          canPlaceAbove ? anchor.top - panelTop : panelTop - anchor.bottom,
+        ),
       });
     };
     place();
@@ -1488,8 +1473,11 @@ export function ContextUsageIndicator({
   const percent = Math.round(context.ratio * 100);
   const visualRatio = Math.max(0, Math.min(1, context.ratio));
   const visualPercent = Math.round(visualRatio * 100);
-  const label = contextUsageLabel(context);
-  const contextLabel = label ?? `Context ${String(percent)}%`;
+  const tokenUsage =
+    context.inputTokens === null
+      ? "Usage unknown"
+      : `${formatTokenCount(context.inputTokens)}${context.contextWindow === null ? "" : ` / ${formatTokenCount(context.contextWindow)}`} tokens`;
+  const contextLabel = `Context ${String(percent)}% · ${tokenUsage}`;
   const tooltip = `${contextLabel}\n${threadCacheUsageLabel(threadCacheHitRate)}`;
   const radius = 7;
   return (
@@ -1534,55 +1522,50 @@ export function ContextUsageIndicator({
         </svg>
       </button>
       {open ? (
-        <div
-          className="context-usage-popover"
-          ref={popoverRef}
-          style={popoverPosition}
-          data-placement={popoverPosition.placement}
-          id={popoverId}
-          role="dialog"
-          aria-label="Context details"
-        >
-          <div className="context-usage-heading">
-            <span>Configured window</span>
-            <strong>{String(percent)}%</strong>
-          </div>
+        <>
           <div
-            className="context-usage-meter"
-            role="progressbar"
-            aria-label={contextLabel}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={visualPercent}
-            aria-valuetext={contextLabel}
+            className="context-usage-hover-bridge"
+            aria-hidden="true"
+            style={{ position: "fixed", zIndex: 55, ...hoverBridge }}
+          />
+          <div
+            className="context-usage-popover"
+            ref={popoverRef}
+            style={popoverPosition}
+            data-placement={popoverPosition.placement}
+            id={popoverId}
+            role="dialog"
+            aria-label="Context details"
           >
-            <span style={{ width: `${String(visualPercent)}%` }} />
+            <div className="context-usage-heading">
+              <strong>{String(percent)}%</strong>
+            </div>
+            <div
+              className="context-usage-meter"
+              role="progressbar"
+              aria-label={contextLabel}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={visualPercent}
+              aria-valuetext={contextLabel}
+            >
+              <span style={{ width: `${String(visualPercent)}%` }} />
+            </div>
+            <p>{tokenUsage}</p>
+            <p>{threadCacheUsageLabel(threadCacheHitRate)}</p>
+            <button
+              className="context-usage-compact"
+              type="button"
+              disabled={compactDisabled || onCompact === undefined}
+              onClick={() => {
+                setOpen(false);
+                void onCompact?.();
+              }}
+            >
+              Compact context
+            </button>
           </div>
-          <p>
-            {context.inputTokens === null
-              ? "Usage unknown"
-              : `${formatTokenCount(context.inputTokens)} ${context.inputTokenSource === "estimated" ? "estimated next input" : "last provider input"}`}
-            {context.contextWindow === null
-              ? " tokens"
-              : ` / ${formatTokenCount(context.contextWindow)} configured window tokens`}
-          </p>
-          <p>{threadCacheUsageLabel(threadCacheHitRate)}</p>
-          <p className="context-usage-explanation">
-            Condense earlier context for the next reply. Your conversation stays
-            available.
-          </p>
-          <button
-            className="context-usage-compact"
-            type="button"
-            disabled={compactDisabled || onCompact === undefined}
-            onClick={() => {
-              setOpen(false);
-              void onCompact?.();
-            }}
-          >
-            Compact context
-          </button>
-        </div>
+        </>
       ) : null}
     </div>
   );
@@ -1776,10 +1759,7 @@ function TraceSequence({
                       >
                         <div className="trace-item-static">
                           <Icon name="reasoning" size={14} />
-                          <strong>Think</strong>
-                          <span>
-                            {row.ids.length} reasoning items · no public details
-                          </span>
+                          <span>Thinking</span>
                         </div>
                       </div>
                     );
@@ -1860,11 +1840,11 @@ function TraceItemHeader({
         }
         size={14}
       />
-      <strong>
-        {item.type === "reasoning"
-          ? "Think"
-          : toolPresentation(item.toolName ?? item.command).category}
-      </strong>
+      {item.type === "reasoning" ? null : (
+        <strong>
+          {toolPresentation(item.toolName ?? item.command).category}
+        </strong>
+      )}
       <span title={traceItemLabel(item)}>{traceItemLabel(item)}</span>
       <span className="trace-item-status">
         <StatusMark item={item} />
@@ -1893,11 +1873,9 @@ function StatusMark({ item }: { item: ThreadItem }) {
     return null;
   }
   if (item.type !== "commandExecution") return null;
-  return (
-    <small className={`tool-status ${item.status}`}>
-      {commandStatus(item)}
-    </small>
-  );
+  const status = commandStatus(item);
+  if (status === "Completed") return null;
+  return <small className={`tool-status ${item.status}`}>{status}</small>;
 }
 
 function TraceDetail({
@@ -2261,9 +2239,9 @@ function traceItemLabel(item: ThreadItem): string {
     const summary = item.summary.join("\n").trim();
     return summary.length > 0
       ? summary
-      : reasoningContentText(item).trim().length > 0
-        ? "Reasoning"
-        : "Reasoning details";
+      : item.status === "inProgress"
+        ? "Thinking"
+        : "Thought";
   }
   return item.type === "commandExecution" ? commandTitle(item) : "Item details";
 }
