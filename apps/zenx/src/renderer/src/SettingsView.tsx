@@ -3234,7 +3234,7 @@ function GeneralPanel({
               <option value="code">Code only</option>
             </Select>
             <small id="tool-presentation-help" className="settings-note">
-              Choose how agents use tools: call them directly, write TypeScript
+              Choose how agents use tools: call them directly, write JavaScript
               to combine them, or use both. Code has the same permissions as
               shell commands.
             </small>
