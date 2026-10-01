@@ -88,11 +88,11 @@ test("trusted Room UI displays exact prepared cancel after reload and releases c
     );
     assert.match(
       document.querySelector(".room-send-pending")?.textContent ?? "",
-      /Cancel if prepared/u,
+      /Cancel unsent message/u,
     );
     const button = [
       ...document.querySelectorAll<HTMLButtonElement>("button"),
-    ].find((b) => b.textContent?.trim() === "Cancel if prepared");
+    ].find((b) => b.textContent?.trim() === "Cancel unsent message");
     assert(button);
     await act(async () => button.click());
     await act(async () => new Promise((resolve) => setTimeout(resolve, 30)));

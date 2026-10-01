@@ -124,7 +124,7 @@ test("Room A unknown does not block B; same text from another sender cannot conf
     );
     assert.match(
       document.querySelector(".room-send-pending")!.textContent!,
-      /Send unconfirmed/u,
+      /Delivery unconfirmed/u,
     );
     assert.doesNotMatch(
       document.querySelector(".rooms-chat-status")!.textContent!,
@@ -157,7 +157,7 @@ test("Room A unknown does not block B; same text from another sender cannot conf
       );
       assert.match(
         document.querySelector(".room-send-pending")!.textContent!,
-        /Send unconfirmed/u,
+        /Delivery unconfirmed/u,
       );
       assert.equal(
         document.querySelector<HTMLButtonElement>(

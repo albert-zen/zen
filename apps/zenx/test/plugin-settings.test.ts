@@ -664,10 +664,7 @@ test("Marketplace exposes loading, search, detail, version install, and canonica
     root.render(React.createElement(PluginSettingsHarness));
     await Promise.resolve();
   });
-  assert.match(
-    dom.window.document.body.textContent ?? "",
-    /Loading plugin inventory/u,
-  );
+  assert.match(dom.window.document.body.textContent ?? "", /Loading plugins/u);
 
   await act(async () => {
     resolveCatalog({
@@ -1047,7 +1044,7 @@ test("real Plugin Settings DOM confirms uninstall and keeps delete-data separate
   await act(async () => button("Delete data").click());
   assert.match(
     dom.window.document.body.textContent ?? "",
-    /historical Threads are not changed/u,
+    /conversations and other plugins will be kept/u,
   );
   await act(async () => {
     button("Confirm delete data").click();
@@ -1070,6 +1067,122 @@ const emptyPluginSnapshot: ZenXPluginSnapshot = {
   menus: [],
   resultRenderers: [],
 };
+
+for (const source of ["built-in", "catalog", "source"] as const) {
+  test(`unavailable ${source} plugin overrides enabled status and can still be disabled`, async () => {
+    const dom = new JSDOM('<div id="root"></div>', {
+      url: "https://zenx.local",
+    });
+    Object.assign(globalThis, {
+      window: dom.window,
+      document: dom.window.document,
+      IS_REACT_ACT_ENVIRONMENT: true,
+    });
+    Object.defineProperty(globalThis, "navigator", {
+      value: dom.window.navigator,
+      configurable: true,
+    });
+    const snapshot = pluginSnapshot("enabled");
+    snapshot.plugins[0]!.available = false;
+    snapshot.plugins[0]!.unavailableReason =
+      "fixture: committed package does not match its descriptor";
+    snapshot.plugins[0]!.profileSource = {
+      mode: source === "built-in" ? "bundled" : "npm",
+      packageSpec: "@fixture/plugin@1.0.0",
+      resolvedSpec: "@fixture/plugin@1.0.0",
+      packageName: "@fixture/plugin",
+      packageVersion: "1.0.0",
+    };
+    const disabledCalls: Array<[string, boolean]> = [];
+    Object.defineProperty(dom.window, "zenx", {
+      configurable: true,
+      value: {
+        marketplace: {
+          get: async () => ({
+            builtIns:
+              source === "built-in"
+                ? [builtIn("fixture", "@fixture/plugin", "Fixture", true)]
+                : [],
+            entries:
+              source === "catalog"
+                ? [
+                    {
+                      packageSpec: "@fixture/plugin",
+                      name: "Fixture",
+                      description: "Fixture plugin",
+                      icon: "layers",
+                      recommendedVersion: "1.0.0",
+                      curated: true,
+                      versions: [
+                        {
+                          version: "1.0.0",
+                          packageSpec: "@fixture/plugin@1.0.0",
+                        },
+                      ],
+                    },
+                  ]
+                : [],
+          }),
+        },
+        plugins: {
+          get: async () => snapshot,
+          onChange: () => () => {},
+          setEnabled: async (id: string, enabled: boolean) => {
+            disabledCalls.push([id, enabled]);
+            return {
+              ...snapshot,
+              plugins: snapshot.plugins.map((plugin) => ({
+                ...plugin,
+                enabled: false,
+                lifecycle: "installed",
+              })),
+            };
+          },
+        },
+      },
+    });
+    const root = createRoot(dom.window.document.getElementById("root")!);
+    try {
+      await act(async () => {
+        root.render(React.createElement(PluginSettingsHarness));
+        await Promise.resolve();
+      });
+      const card = dom.window.document.querySelector(".marketplace-card")!;
+      assert.equal(card.getAttribute("data-available"), "false");
+      assert.equal(
+        card.querySelector(".plugin-status")?.textContent,
+        "Unavailable",
+      );
+      assert.equal(card.querySelector(".status-enabled"), null);
+      const errorDetails = [...card.querySelectorAll("details")].find(
+        (details) =>
+          details.querySelector("summary")?.textContent === "Error details",
+      )!;
+      assert.ok(errorDetails);
+      assert.equal(errorDetails.open, false);
+      errorDetails.open = true;
+      assert.match(
+        errorDetails.textContent!,
+        /committed package does not match its descriptor/u,
+      );
+      const disable = [...card.querySelectorAll("button")].find(
+        (button) => button.textContent === "Disable",
+      )!;
+      assert.equal(disable.disabled, false);
+      await act(async () => {
+        disable.click();
+        await Promise.resolve();
+      });
+      assert.deepEqual(disabledCalls, [["fixture", false]]);
+      const enable = [...card.querySelectorAll("button")].find(
+        (button) => button.textContent === "Enable",
+      )!;
+      assert.equal(enable.disabled, true);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+}
 
 function pluginSnapshot(
   lifecycle: "enabled" | "uninstalled",

@@ -82,11 +82,11 @@ test("actual Settings UI save persists Queue, Batch, Soft provenance across prof
       try {
         await waitFor(() =>
           labelControl<HTMLButtonElement>(
-            "Send during a running turn",
+            "Send while a reply is running",
             "button.ui-select",
           ),
         );
-        const control = await labeledSelect("Send during a running turn");
+        const control = await labeledSelect("Send while a reply is running");
         assert.ok(control);
         await changeControl(control, mode);
         await click(exactButtonRequired("Apply"));
@@ -149,7 +149,7 @@ test("Settings send mode choice forwards explicit provenance through save", asyn
     },
   });
   try {
-    const control = await labeledSelect("Send during a running turn");
+    const control = await labeledSelect("Send while a reply is running");
     assert.ok(control);
     await changeControl(control, "queue");
     await click(exactButtonRequired("Apply"));
@@ -1969,7 +1969,7 @@ test("General exposes and saves the Host-owned tool presentation mode", async ()
     );
     assert.match(
       document.getElementById("tool-presentation-help")?.textContent ?? "",
-      /Direct is the rollback path and does not delete providers or rewrite existing Threads/u,
+      /Code has the same permissions as shell commands/u,
     );
 
     await changeControl(presentation, "direct");
