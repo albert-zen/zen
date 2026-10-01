@@ -12,7 +12,9 @@ import type {
   NativeThreadRecoverySnapshot,
 } from "../../../../src/protocol/native/recovery.js";
 
-export type Thread = CodexThread & {
+export type Thread = Omit<CodexThread, "parentThreadId"> & {
+  /** Native-only creation relation; CAS continues to project null. */
+  parentThreadId: string | null;
   /** Native product projection input; absent on CAS-only compatibility data. */
   canonicalItems?: readonly CanonicalItem[];
 };
