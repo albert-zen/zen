@@ -402,3 +402,51 @@ test("first installation respects persisted disabled Subagents choice and remova
   assert.equal(f.child.parentThreadId, "trusted-parent");
   await catalog.close();
 });
+
+test("fork create exposes only a public summary on success and partial follow-up failure", async () => {
+  for (const title of [undefined, "new title"]) {
+    const f = fixture();
+    let next = 0;
+    f.port.request = async () => {
+      if (next++ === 0)
+        return {
+          thread: {
+            ...f.child,
+            items: [
+              {
+                type: "reasoning",
+                contentVisibility: "opaque",
+                text: "hidden reasoning",
+                content: { opaque: "opaque-secret" },
+              },
+              { type: "tool_result", output: "raw-result-secret" },
+            ],
+            turns: [
+              {
+                id: "t",
+                status: "completed",
+                items: [{ text: "nested-secret" }],
+              },
+            ],
+          },
+        } as never;
+      throw new Error("rename failed");
+    };
+    const result = (await f.service.invoke(
+      "zenx_subagents_create",
+      invocation("zenx_subagents_create", {
+        mode: "fork",
+        ...(title === undefined ? {} : { title }),
+      }),
+    )) as { thread: Record<string, unknown> };
+    const output = JSON.stringify(result);
+    assert.equal(result.thread.id, "child");
+    assert.equal(result.thread.parentThreadId, "trusted-parent");
+    assert.equal("items" in result.thread, false);
+    assert.equal("turns" in result.thread, false);
+    assert.doesNotMatch(
+      output,
+      /opaque-secret|hidden reasoning|raw-result-secret|nested-secret/,
+    );
+  }
+});

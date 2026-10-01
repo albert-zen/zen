@@ -102,6 +102,21 @@ export class ZenXSubagentsCapabilityPackage implements ZenXCapabilityPackage {
       "zen/thread/create-child",
       { parentThreadId, mode },
     );
+    const summary = {
+      id: thread.id,
+      parentThreadId: thread.parentThreadId,
+      cwd: thread.cwd,
+      providerProfileId: thread.providerProfileId,
+      modelId: thread.modelId,
+      reasoningEffort: thread.reasoningEffort,
+      sandbox: thread.sandbox,
+      approvalPolicy: thread.approvalPolicy,
+      name: thread.name,
+      archived: thread.archived,
+      status: thread.turns.some((turn) => turn.status === "inProgress")
+        ? "active"
+        : "idle",
+    };
     // The native creation is durable even if an optional follow-up operation fails.
     let named = title === undefined;
     try {
@@ -112,9 +127,10 @@ export class ZenXSubagentsCapabilityPackage implements ZenXCapabilityPackage {
           name: title,
         });
         named = true;
+        summary.name = title;
       }
       if (task === undefined)
-        return { threadId: thread.id, parentThreadId, thread };
+        return { threadId: thread.id, parentThreadId, thread: summary };
       invocation.signal.throwIfAborted();
       const delivery = await this.#threads.invoke("zenx_threads_send", {
         ...invocation,
@@ -125,12 +141,12 @@ export class ZenXSubagentsCapabilityPackage implements ZenXCapabilityPackage {
           messageType: "follow_up",
         },
       });
-      return { threadId: thread.id, parentThreadId, thread, delivery };
+      return { threadId: thread.id, parentThreadId, thread: summary, delivery };
     } catch (error) {
       return {
         threadId: thread.id,
         parentThreadId,
-        thread,
+        thread: summary,
         status: "created",
         followUpError: error instanceof Error ? error.message : String(error),
         named,
