@@ -245,7 +245,7 @@ export function traceSummary(
       : "Thoughts";
   }
   // Keep the collapsed preview bounded; the full trace remains in its disclosure.
-  return commands.slice(-3).map(commandSummary).join(" · ");
+  return commands.slice(-3).reverse().map(commandSummary).join(" · ");
 }
 
 export function commandLabel(command: string): string {

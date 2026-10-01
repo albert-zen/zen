@@ -57,7 +57,7 @@ test("group summary does not claim unfinished tools have been used", () => {
   );
   assert.equal(
     traceSummary([pending, done]),
-    "Started · Run command · Inspect page · completed",
+    "Inspect page · completed · Started · Run command",
   );
   assert.equal(traceSummary([done]), "Inspect page · completed");
   const yielded = {
@@ -67,7 +67,7 @@ test("group summary does not claim unfinished tools have been used", () => {
   };
   assert.equal(
     traceSummary([pending, yielded]),
-    "Started · Run command · Inspect page · running",
+    "Inspect page · running · Started · Run command",
   );
 });
 
@@ -319,6 +319,6 @@ test("collapsed trace names only the latest three tools without reasoning boiler
   }));
   assert.equal(
     traceSummary([reasoning("r", ""), ...items]),
-    "Ran · echo two · Ran · echo three · Ran · echo four",
+    "Ran · echo four · Ran · echo three · Ran · echo two",
   );
 });
