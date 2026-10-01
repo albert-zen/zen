@@ -116,6 +116,7 @@ export interface StartThreadInput {
 
 export interface ThreadSnapshot {
   id: string;
+  parentThreadId?: string;
   items: readonly CanonicalItem[];
   turns: DerivedTurn[];
   cwd: string;
@@ -169,6 +170,11 @@ export interface ForkThreadInput {
   sourceThreadId: string;
   through: { type: "latest-complete" };
   workspace: { type: "same-directory" };
+}
+
+export interface CreateChildThreadInput {
+  parentThreadId: string;
+  mode: "fresh" | "fork";
 }
 
 export interface SteerTurnOptions {
@@ -532,6 +538,48 @@ export class ZenAppServer {
   }
 
   async startThread(input: StartThreadInput = {}): Promise<ThreadSnapshot> {
+    return await this.#startThread(input);
+  }
+
+  async createChildThread(
+    input: CreateChildThreadInput,
+  ): Promise<ThreadSnapshot> {
+    if (input.mode !== "fresh" && input.mode !== "fork")
+      throw new AppServerError(
+        "invalid_request",
+        "Child mode must be fresh or fork",
+      );
+    const parent = await this.#requireThread(input.parentThreadId);
+    if (input.mode === "fork") {
+      return await this.#forkThread(
+        {
+          sourceThreadId: parent.id,
+          through: { type: "latest-complete" },
+          workspace: { type: "same-directory" },
+        },
+        parent.id,
+      );
+    }
+    const configuration = parent.effectiveConfiguration();
+    return await this.#startThread(
+      {
+        cwd: configuration.cwd,
+        selection: {
+          providerProfileId: configuration.providerProfileId,
+          modelId: configuration.modelId,
+          reasoningEffort: configuration.reasoningEffort,
+        },
+        sandbox: configuration.sandbox,
+        approvalPolicy: configuration.approvalPolicy,
+      },
+      parent.id,
+    );
+  }
+
+  async #startThread(
+    input: StartThreadInput,
+    parentThreadId?: string,
+  ): Promise<ThreadSnapshot> {
     const admission = this.beginHostOperation("turn", "thread/start");
     try {
       const threadId = this.#id();
@@ -546,6 +594,7 @@ export class ZenAppServer {
         type: "thread_metadata",
         workspaceInstructionPolicy: "repo-root-on-first-message",
         cwd: path.resolve(input.cwd ?? defaults.cwd),
+        ...(parentThreadId === undefined ? {} : { parentThreadId }),
         ...selection,
         sandbox: input.sandbox ?? defaults.sandbox,
         approvalPolicy:
@@ -572,6 +621,13 @@ export class ZenAppServer {
   }
 
   async forkThread(input: ForkThreadInput): Promise<ThreadSnapshot> {
+    return await this.#forkThread(input);
+  }
+
+  async #forkThread(
+    input: ForkThreadInput,
+    parentThreadId?: string,
+  ): Promise<ThreadSnapshot> {
     const admission = this.beginHostOperation("other", "thread/fork");
     try {
       if (input.through.type !== "latest-complete") {
@@ -603,6 +659,14 @@ export class ZenAppServer {
       const prefix = forkablePrefix(sourceItems, terminalIndex);
       const threadId = this.#id();
       const copiedItems = remapForkItems(prefix, threadId, this.#id);
+      if (parentThreadId !== undefined) {
+        const metadata = copiedItems.find(
+          (item) => item.type === "thread_metadata",
+        );
+        if (metadata === undefined)
+          throw new Error("Forked Thread has no metadata");
+        metadata.parentThreadId = parentThreadId;
+      }
       const forked: ThreadForkedItem = {
         id: this.#id(),
         threadId,
@@ -2755,11 +2819,15 @@ export class ZenAppServer {
     const activeTurnId = this.#activeTurns.get(thread.id)?.turnId;
     const configuration = thread.effectiveConfiguration();
     const items = thread.items;
+    const parentThreadId = items.find(
+      (item) => item.type === "thread_metadata",
+    )?.parentThreadId;
     const turns = thread.deriveTurns(
       activeTurnId === undefined ? {} : { activeTurnId },
     );
     return {
       id: thread.id,
+      ...(parentThreadId === undefined ? {} : { parentThreadId }),
       items,
       turns,
       cwd: configuration.cwd,
@@ -2914,6 +2982,9 @@ export class ZenAppServer {
     return {
       threadId: thread.id,
       currentMetadata: configuration,
+      ...(metadata.parentThreadId === undefined
+        ? {}
+        : { parentThreadId: metadata.parentThreadId }),
       archived: productMetadata.archived ?? false,
       ...(productMetadata.name === undefined
         ? {}
@@ -3268,6 +3339,7 @@ function remapForkItems(
   return items.map((item) => {
     const copied = structuredClone(item) as CanonicalItem;
     Object.assign(copied, { id: remap(item.id), threadId });
+    if (copied.type === "thread_metadata") delete copied.parentThreadId;
     if (copied.type === "user_message_queue_cancelled") {
       copied.queuedItemId = remap(copied.queuedItemId);
     }

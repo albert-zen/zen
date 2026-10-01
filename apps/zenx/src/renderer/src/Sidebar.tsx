@@ -603,7 +603,7 @@ export function PluginSpaces({
           key={contribution.key}
           onClick={() => onOpen(contribution.page.route)}
         >
-          <Icon name={contribution.icon} />
+          <Icon name={contribution.icon} size={14} />
           <span>{contribution.label}</span>
         </button>
       ))}

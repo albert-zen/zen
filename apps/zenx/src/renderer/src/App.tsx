@@ -123,6 +123,8 @@ import {
   projectNativeRecovery,
 } from "./thread-view-state.js";
 import { ThreadView } from "./ThreadView.js";
+import { ThreadConversationViewport } from "./thread-conversation-viewport.js";
+import { PluginThreadHeaders } from "./subagents-ui.js";
 import { cancellationResultsFromItems } from "./queue-cancel-state.js";
 import type { WorkflowCommand } from "./workflow-commands.js";
 import { ZenXBrand } from "./ZenXBrand.js";
@@ -552,6 +554,9 @@ export function App() {
   });
   const [projectListLoaded, setProjectListLoaded] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
+  const [conversationPanels, setConversationPanels] = useState<
+    Record<string, string>
+  >({});
   const [threadDetail, setThreadDetail] = useState<Thread | null>(null);
   const [threadLoading, setThreadLoading] = useState(false);
   const [threadError, setThreadError] = useState<string | null>(null);
@@ -1998,7 +2003,38 @@ export function App() {
 
   const openPage = (next: ProductPage) => {
     if (next.startsWith("/threads/")) {
-      void resumeThread(decodeURIComponent(next.slice("/threads/".length)));
+      const target = new URL(next, "https://zenx.local");
+      const threadId = decodeURIComponent(
+        target.pathname.slice("/threads/".length),
+      );
+      const owner = selectedThreadIdRef.current;
+      if (
+        target.searchParams.get("view") === "panel" &&
+        owner !== null &&
+        threadId !== owner
+      ) {
+        setConversationPanels((current) => ({ ...current, [owner]: threadId }));
+        setBrowserPanels((current) => ({ ...current, [owner]: true }));
+        setPanelTabs((current) => ({
+          ...current,
+          [owner]: `thread:${threadId}`,
+        }));
+        return;
+      }
+      if (target.searchParams.has("panel") && owner !== null) {
+        const panel = pluginSnapshot?.panels?.find(
+          (entry) => entry.key === target.searchParams.get("panel"),
+        );
+        if (panel !== undefined) {
+          setBrowserPanels((current) => ({ ...current, [owner]: true }));
+          setPanelTabs((current) => ({
+            ...current,
+            [owner]: `plugin:${panel.key}`,
+          }));
+        }
+        return;
+      }
+      void resumeThread(threadId);
       return;
     }
     discardRecoverableDraft();
@@ -2458,6 +2494,20 @@ export function App() {
           />
         ) : (
           <AgentSurface
+            threadHeader={
+              selectedThreadId !== null &&
+              newThreadDraft === null &&
+              pluginSnapshot !== null &&
+              (pluginSnapshot.threadHeaders?.length ?? 0) > 0 ? (
+                <PluginThreadHeaders
+                  registry={pluginUiRegistry}
+                  snapshot={pluginSnapshot}
+                  threadId={selectedThreadId}
+                  threads={[...threadSummaries, ...archivedThreadSummaries]}
+                  navigate={openPage}
+                />
+              ) : null
+            }
             onOpenMessageLink={(threadId, target) => {
               setMessageLinkRequest((previous) => ({
                 ...target,
@@ -2622,6 +2672,75 @@ export function App() {
         threadDetail !== null &&
         selectedThreadId === threadDetail.id ? (
           <AuxiliaryPanel
+            threadContext={{
+              threads: [...threadSummaries, ...archivedThreadSummaries],
+            }}
+            conversation={
+              conversationPanels[threadDetail.id]
+                ? {
+                    threadId: conversationPanels[threadDetail.id]!,
+                    title: (() => {
+                      const summary = [
+                        ...threadSummaries,
+                        ...archivedThreadSummaries,
+                      ].find(
+                        (entry) =>
+                          entry.threadId ===
+                          conversationPanels[threadDetail.id],
+                      );
+                      return summary ? threadTitle(summary) : "Conversation";
+                    })(),
+                    render: (id: string) => (
+                      <ThreadConversationViewport
+                        key={id}
+                        threadId={id}
+                        composer={composerStates[id] ?? emptyComposerState()}
+                        readComposer={() =>
+                          composerStatesRef.current[id] ?? emptyComposerState()
+                        }
+                        updateComposer={(change) => updateComposer(id, change)}
+                        deliver={(submission) =>
+                          deliverComposerSubmission(id, submission)
+                        }
+                        cancelQueued={(items) => cancelQueued(id, items)}
+                        onOpenMessageLink={(target) => {
+                          void resumeThread(id)
+                            .then(() => {
+                              if (selectedThreadIdRef.current !== id) return;
+                              setMessageLinkRequest((previous) => ({
+                                ...target,
+                                id: (previous?.id ?? 0) + 1,
+                                threadId: id,
+                              }));
+                              setBrowserPanels((current) => ({
+                                ...current,
+                                [id]: true,
+                              }));
+                            })
+                            .catch((error: unknown) =>
+                              setRequestError(describeError(error)),
+                            );
+                        }}
+                        models={models}
+                        providerProfiles={providerProfiles}
+                        serverStatus={serverStatus}
+                        approvals={approvals}
+                        respondToApproval={respondToApproval}
+                        pluginSnapshot={pluginSnapshot}
+                        composerSendMode={composerSendMode}
+                        onComposerSendModeChange={changeComposerSendMode}
+                        workflowCommands={workflowCommands}
+                        archived={
+                          archivingThreadIds.has(id) ||
+                          archivedThreadSummaries.some(
+                            (entry) => entry.threadId === id,
+                          )
+                        }
+                      />
+                    ),
+                  }
+                : undefined
+            }
             messageLinkRequest={
               messageLinkRequest?.threadId === threadDetail.id
                 ? messageLinkRequest
@@ -2893,6 +3012,7 @@ function PageTitleBar({
 }
 
 function AgentSurface({
+  threadHeader,
   onOpenMessageLink,
   composerSendMode,
   onComposerSendModeChange,
@@ -3017,6 +3137,7 @@ function AgentSurface({
   ): Promise<void>;
   selectedSettings: SelectedThreadSettings | null;
   selectedSummary: NativeThreadSummary | null;
+  threadHeader?: ReactNode;
   serverStatus: AppServerHostStatus;
   switchingModel: boolean;
   threadArchiving: boolean;
@@ -3040,8 +3161,9 @@ function AgentSurface({
       : null;
   return (
     <section
-      className={`agent-surface${newThreadDraft === null ? "" : " new-thread-draft-surface"}`}
+      className={`agent-surface${newThreadDraft === null ? "" : " new-thread-draft-surface"}${threadHeader ? " has-thread-header" : ""}`}
     >
+      {threadHeader}
       <AgentReadinessNotice
         pluginSnapshot={pluginSnapshot}
         onOpenBrowserSettings={onOpenBrowserSettings}

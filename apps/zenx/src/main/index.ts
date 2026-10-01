@@ -1,3 +1,4 @@
+import { ZenXSubagentsCapabilityPackage } from "./capabilities/subagents-package.js";
 import { attachMainWindowDiagnostics } from "./main-window-diagnostics.js";
 import { SkillsService, type SkillMode } from "../../../cli/src/skills.js";
 import { createImZenXProfileLoader } from "./imzenx-profile-loader.js";
@@ -433,6 +434,19 @@ async function bootstrapZenX(): Promise<void> {
         },
       },
     });
+    const subagentsPackage = new ZenXSubagentsCapabilityPackage({
+      appServer: selfControlPort,
+      threads: selfControlPackage,
+      listSummaries: async () => {
+        if (appServerManager === undefined)
+          throw new Error("App Server is not attached");
+        const [active, archived] = await Promise.all([
+          appServerManager.listThreadSummaries(),
+          appServerManager.listThreadSummaries({ archived: true }),
+        ]);
+        return [...active, ...archived];
+      },
+    });
     const useSharedWorkspaceBrowser = useWorkspaceBrowserProvider(
       process.env,
       savedBrowserMode,
@@ -479,6 +493,9 @@ async function bootstrapZenX(): Promise<void> {
         ),
         computer: createDelegatingFirstPartyProfileLoader(() =>
           capabilityService!.computerProfilePackage(),
+        ),
+        "zenx-subagents": createDelegatingFirstPartyProfileLoader(
+          () => subagentsPackage,
         ),
         "zenx-self-control": createDelegatingFirstPartyProfileLoader(
           () => selfControlPackage,

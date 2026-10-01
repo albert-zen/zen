@@ -14,6 +14,7 @@ const permissionDescriptions: Record<FilePermissionMode, string> = {
   "danger-full-access": "Run tools and edit files without approval",
 };
 export function PermissionSelect({
+  errorId = "composer-permission-error",
   value,
   disabled,
   switching,
@@ -21,6 +22,7 @@ export function PermissionSelect({
   legacyApproval = false,
   onChange,
 }: {
+  errorId?: string;
   value: FilePermissionMode;
   legacyApproval?: boolean;
   disabled: boolean;
@@ -65,7 +67,7 @@ export function PermissionSelect({
             aria-label="File permissions"
             aria-haspopup="menu"
             aria-expanded={open}
-            aria-describedby={error ? "composer-permission-error" : undefined}
+            aria-describedby={error ? errorId : undefined}
             disabled={unavailable}
             title={
               disabled
@@ -166,11 +168,7 @@ export function PermissionSelect({
           ) : null}
         </PopoverContent>
         {error ? (
-          <span
-            id="composer-permission-error"
-            role="alert"
-            className="permission-error"
-          >
+          <span id={errorId} role="alert" className="permission-error">
             {error}
           </span>
         ) : null}

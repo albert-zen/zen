@@ -130,6 +130,7 @@ test("startup repairs unavailable bundled content at the same path and version t
           ...service.pluginSnapshot().plugins,
           { id: "zenx-rooms", lifecycle: "uninstalled" },
           { id: "zenx-triggers", lifecycle: "uninstalled" },
+          { id: "zenx-subagents", lifecycle: "uninstalled" },
         ],
       }),
       bundledPluginPackageCurrent: (

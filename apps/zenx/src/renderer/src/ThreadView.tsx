@@ -81,6 +81,7 @@ import {
 } from "./context-compaction-projection.js";
 
 interface ThreadViewProps {
+  composerId?: string;
   composerSendMode?: ComposerSendMode;
   onComposerSendModeChange?(mode: ComposerSendMode): Promise<void>;
   queueFailure?: {
@@ -141,6 +142,7 @@ interface ThreadViewProps {
 }
 
 export function ThreadView({
+  composerId = "thread-composer",
   composerSendMode = "soft",
   onComposerSendModeChange,
   queueFailure = null,
@@ -343,7 +345,21 @@ export function ThreadView({
     };
     resize();
     window.addEventListener("resize", resize);
-    return () => window.removeEventListener("resize", resize);
+    let width = textarea.getBoundingClientRect().width;
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => {
+            const next = textarea.getBoundingClientRect().width;
+            if (next === width) return;
+            width = next;
+            resize();
+          });
+    observer?.observe(textarea);
+    return () => {
+      window.removeEventListener("resize", resize);
+      observer?.disconnect();
+    };
   }, [composer.draft.text]);
 
   const submit = (intent: ComposerIntent) => {
@@ -552,6 +568,7 @@ export function ThreadView({
         {composerContext}
         {pendingApprovals.map((approval) => (
           <ApprovalBar
+            composerId={composerId}
             approval={approval}
             key={approval.requestId}
             onRespond={onRespondToApproval}
@@ -729,7 +746,7 @@ export function ThreadView({
             </div>
           )}
           <WorkflowCommandMenu id={selectorId} selector={selector} />
-          <label className="sr-only" htmlFor="thread-composer">
+          <label className="sr-only" htmlFor={composerId}>
             Message ZenX
           </label>
           {composer.draft.images.length === 0 ? null : (
@@ -752,7 +769,7 @@ export function ThreadView({
             </div>
           )}
           <textarea
-            id="thread-composer"
+            id={composerId}
             aria-label="Message"
             data-autogrow="true"
             aria-controls={selector.open ? selectorId : undefined}
@@ -882,6 +899,7 @@ export function ThreadView({
               />
               {permissionLabel === null ? null : (
                 <PermissionSelect
+                  errorId={`${composerId}-permission-error`}
                   legacyApproval={permissionLabel === "Approval required"}
                   value={permissionMode}
                   disabled={
@@ -924,7 +942,7 @@ export function ThreadView({
           {composerError !== null ? (
             <p
               className="composer-error"
-              id={modelError === null ? undefined : "composer-model-error"}
+              id={modelError === null ? undefined : `${composerId}-model-error`}
               role="alert"
             >
               {composerError}
@@ -2170,9 +2188,11 @@ function WakeupCard({ entry }: { entry: TriggerHistoryEntry }) {
 }
 
 function ApprovalBar({
+  composerId,
   approval,
   onRespond,
 }: {
+  composerId: string;
   approval: ApprovalCardState;
   onRespond(requestId: string, decision: ApprovalDecision): Promise<void>;
 }) {
@@ -2181,7 +2201,7 @@ function ApprovalBar({
     setError(null);
     try {
       await onRespond(approval.requestId, decision);
-      document.getElementById("thread-composer")?.focus();
+      document.getElementById(composerId)?.focus();
     } catch (reason) {
       setError(describeError(reason));
     }

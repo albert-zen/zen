@@ -18,6 +18,7 @@ export interface CurrentMetadata {
 
 export interface ThreadSummary {
   threadId: string;
+  parentThreadId?: string;
   currentMetadata: CurrentMetadata;
   name?: string;
   archived: boolean;
@@ -33,6 +34,7 @@ export interface ThreadSummary {
 
 export interface UnavailableThreadSummary {
   threadId: string;
+  parentThreadId?: string;
   name?: string;
   archived: boolean;
   createdAt: null;
@@ -133,6 +135,10 @@ export function isNativeThreadSummary(
     !isRecord(value) ||
     typeof value.threadId !== "string" ||
     value.threadId.length === 0 ||
+    (value.parentThreadId !== undefined &&
+      (typeof value.parentThreadId !== "string" ||
+        value.parentThreadId.length === 0 ||
+        value.parentThreadId === value.threadId)) ||
     typeof value.archived !== "boolean" ||
     (value.name !== undefined && typeof value.name !== "string") ||
     typeof value.preview !== "string"

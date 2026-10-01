@@ -1045,6 +1045,7 @@ test("profile-managed Computer remains absent on Linux and unavailable Windows p
               reason: entry.unavailableReason,
             })),
             [
+              { id: "zenx-subagents", available: true, reason: undefined },
               { id: "imzenx", available: true, reason: undefined },
               { id: "browser", available: true, reason: undefined },
               {

@@ -13,7 +13,9 @@
   mapped overlap 时，预建内容相同的两套 schema、endpoint 或客户端；native-only
   additive surface 可以明确排除在 CAS claim 外，分叉应由重叠语义的真实非同形需求触发
 - 把多 agent 委派做成持久化领域模型（委派是模型和 runtime 的运行时能力，
-  不是 Zen 的数据模型）
+  不是 Zen 的数据模型）。2026-10-01 用户批准的普通 Thread 创建亲缘关系
+  只记录不可变来源与导航关系，不属于委派任务账本或调度状态；这项非目标
+  不应阻止该关系由同一 canonical 历史保存。
 - 把流式 delta 逐条持久化（delta 只用于实时显示，journal 只收完整的 Item）
 - 为插件发现或能力披露新增 `PluginCatalogSnapshotItem`、`ToolDisclosureItem`
   等 canonical Item（发现继续使用普通 tool call/result，从 ItemList 推导）

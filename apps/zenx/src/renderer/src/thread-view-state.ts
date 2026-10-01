@@ -526,7 +526,7 @@ function projectNativeThread(
     id: snapshot.id,
     sessionId: snapshot.id,
     forkedFromId: fork?.sourceThreadId ?? null,
-    parentThreadId: null,
+    parentThreadId: metadata.parentThreadId ?? null,
     preview: firstMessage === undefined ? "" : userMessagePreview(firstMessage),
     ephemeral: false,
     isPinned: false,

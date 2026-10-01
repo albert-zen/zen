@@ -805,6 +805,7 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
           (manifest.contributions?.subroutes?.length ?? 0) +
           (manifest.contributions?.settings?.length ?? 0) +
           (manifest.contributions?.panels?.length ?? 0) +
+          (manifest.contributions?.threadHeaders?.length ?? 0) +
           (manifest.contributions?.commands?.length ?? 0) +
           (manifest.contributions?.menus?.length ?? 0) +
           (manifest.contributions?.resultRenderers?.length ?? 0),
@@ -880,6 +881,9 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
       subroutes: project((manifest) => manifest.contributions?.subroutes),
       settings: project((manifest) => manifest.contributions?.settings),
       panels: project((manifest) => manifest.contributions?.panels),
+      threadHeaders: project(
+        (manifest) => manifest.contributions?.threadHeaders,
+      ),
       commands: project((manifest) => manifest.contributions?.commands),
       menus: project((manifest) => manifest.contributions?.menus),
       resultRenderers: project(
@@ -1335,10 +1339,10 @@ function validateManifest(
     sidebarIds.add(contribution.id);
   }
   const validateSurfaceContributions = (
-    kind: "settings" | "panel",
+    kind: "settings" | "panel" | "thread header",
     values: readonly {
       id: string;
-      title: string;
+      title?: string;
       surfaceId: string;
       order?: number;
     }[],
@@ -1348,7 +1352,7 @@ function validateManifest(
       if (
         !isContributionId(value.id) ||
         ids.has(value.id) ||
-        value.title.trim().length === 0 ||
+        (kind !== "thread header" && (value.title?.trim().length ?? 0) === 0) ||
         !surfaceIds.has(value.surfaceId) ||
         (value.order !== undefined && !Number.isSafeInteger(value.order))
       ) {
@@ -1364,6 +1368,10 @@ function validateManifest(
     manifest.contributions?.settings ?? [],
   );
   validateSurfaceContributions("panel", manifest.contributions?.panels ?? []);
+  validateSurfaceContributions(
+    "thread header",
+    manifest.contributions?.threadHeaders ?? [],
+  );
   const commandIds = new Set<string>();
   for (const command of manifest.contributions?.commands ?? []) {
     if (

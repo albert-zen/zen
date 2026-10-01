@@ -1226,6 +1226,10 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
         packageName = ZENX_ROOMS_PACKAGE_NAME;
         tarball = ZENX_ROOMS_TARBALL;
         break;
+      case "zenx-subagents":
+        packageName = FIRST_PARTY_PLUGIN_PACKAGES.subagents.packageName;
+        tarball = FIRST_PARTY_PLUGIN_PACKAGES.subagents.tarball;
+        break;
       case "zenx-self-control":
         packageName = FIRST_PARTY_PLUGIN_PACKAGES.selfControl.packageName;
         tarball = FIRST_PARTY_PLUGIN_PACKAGES.selfControl.tarball;

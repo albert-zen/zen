@@ -17,6 +17,7 @@ const run = promisify(execFile);
 const repositoryRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 
 const expected = [
+  ["@zenx/subagents-plugin", "zenx-subagents-plugin-1.0.0.tgz"],
   ["@zenx/imzenx-plugin", "zenx-imzenx-plugin-1.0.0.tgz"],
   ["@zenx/browser-plugin", "zenx-browser-plugin-electron-1.0.3.tgz"],
   ["@zenx/browser-plugin", "zenx-browser-plugin-playwright-1.0.3.tgz"],
