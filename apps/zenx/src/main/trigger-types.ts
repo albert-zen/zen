@@ -152,6 +152,8 @@ export interface RoomDeliveryView {
 }
 export interface ZenXRoom {
   assistant?: { threadId: string; triggerId: string };
+  /** Editable planning documents; never Thread/Trigger execution authority. */
+  assistantWorkspace?: AssistantWorkspace;
   id: string;
   name: string;
   operationEpoch?: string;
@@ -159,6 +161,42 @@ export interface ZenXRoom {
   messages: RoomMessage[];
   operations?: RoomSendOperation[];
   createdAt: number;
+}
+
+export type AssistantReference =
+  | {
+      kind: "thread";
+      device: string;
+      workspace: string;
+      threadId: string;
+      label: string;
+    }
+  | { kind: "trigger"; triggerId: string; label: string };
+export interface AssistantMatter {
+  id: string;
+  title: string;
+  plan: string;
+  statusNote: string;
+  notes: string;
+  references: AssistantReference[];
+}
+export interface AssistantMemory {
+  id: string;
+  title: string;
+  text: string;
+}
+export type AssistantMemoryNote = AssistantMemory;
+export interface AssistantWorkspace {
+  revision: number;
+  updatedAt: number;
+  matters: AssistantMatter[];
+  memory: AssistantMemory[];
+}
+export interface UpdateAssistantWorkspaceInput {
+  roomId: string;
+  expectedRevision: number;
+  matters: AssistantMatter[];
+  memory: AssistantMemory[];
 }
 
 export interface TriggerSnapshot {

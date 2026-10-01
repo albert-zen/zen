@@ -293,3 +293,19 @@
     padding-inline: 12px;
   }
 }
+
+.rooms-chat.rooms-chat-primary {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.rooms-chat-primary .rooms-chat-header > button {
+  display: inline-flex;
+  flex-direction: row;
+  white-space: nowrap;
+}
+
+/* The shared open-panel toggle rule switches this button to inline-grid. */
+.rooms-chat-primary #thread-browser-toggle {
+  grid-auto-flow: column;
+  align-items: center;
+}

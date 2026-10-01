@@ -8,6 +8,8 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -152,7 +154,7 @@ test("packaged Rooms installs offline through profile discovery and preserves it
         pluginId: ZENX_ROOMS_CAPABILITY_ID,
         packageName: ZENX_ROOMS_PACKAGE_NAME,
       }),
-      /already version 1\.0\.3/u,
+      /already version 1\.0\.4/u,
     );
     const unchangedCatalog = JSON.parse(
       await readFile(path.join(userData, "capability-grants.json"), "utf8"),
@@ -780,3 +782,149 @@ async function postTrustedHuman(
     { roomId, operationId, text },
   );
 }
+
+test("normal bundled profile upgrades 1.0.3 to Companion notebook tools without losing Room data", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-rooms-upgrade-"),
+  );
+  const userData = path.join(directory, "user-data");
+  const resources = path.join(directory, "resources");
+  const tarball = await copyPreparedRoomsPlugin(resources);
+  const oldDirectory = path.join(directory, "old-package");
+  await mkdir(oldDirectory, { recursive: true });
+  const run = promisify(execFile);
+  // A synthetic previous package advertises the 1.0.3 tool surface. It uses
+  // known local runtime bytes; this proves real profile admission/upgrade, not
+  // a direct source-runtime substitute or an ignored cached archive.
+  await run("tar", ["-xzf", tarball, "-C", oldDirectory]);
+  const oldPackage = path.join(oldDirectory, "package");
+  const oldManifestFile = path.join(oldPackage, "zenx.plugin.json");
+  const oldPackageFile = path.join(oldPackage, "package.json");
+  const oldManifest = JSON.parse(await readFile(oldManifestFile, "utf8"));
+  oldManifest.version = "1.0.3";
+  oldManifest.tools = oldManifest.tools.filter(
+    (tool: { name: string }) =>
+      !["zenx_rooms_workspace", "zenx_rooms_update_workspace"].includes(
+        tool.name,
+      ),
+  );
+  oldManifest.contributions.commands =
+    oldManifest.contributions.commands.filter(
+      (command: { id: string }) =>
+        !["workspace", "update-workspace"].includes(command.id),
+    );
+  const oldPackageJson = JSON.parse(await readFile(oldPackageFile, "utf8"));
+  oldPackageJson.version = "1.0.3";
+  await writeFile(oldManifestFile, JSON.stringify(oldManifest));
+  await writeFile(oldPackageFile, JSON.stringify(oldPackageJson));
+  const oldTarball = path.join(
+    resources,
+    "plugins",
+    "zenx-rooms-plugin-1.0.3.tgz",
+  );
+  await run("tar", ["-czf", oldTarball, "-C", oldDirectory, "package"]);
+  await new ZenXTriggerStore(
+    path.join(userData, "trigger-registry.json"),
+  ).write({
+    triggers: [],
+    history: [],
+    rooms: [
+      {
+        id: "companion-room",
+        name: "User chosen name",
+        members: [{ name: "Aster", threadId: "assistant-thread" }],
+        assistant: { threadId: "assistant-thread", triggerId: "owned-trigger" },
+        messages: [],
+        createdAt: 1,
+      },
+    ],
+  });
+  const domain = await createBundledAutomationPluginService({
+    userDataDirectory: userData,
+    appServer: {
+      request: async () => {
+        throw Error("Notebook tools must not call a model");
+      },
+      onNotification: () => () => {},
+    } as never,
+  });
+  const options = {
+    userDataDirectory: userData,
+    resourcesDirectory: resources,
+    pnpmCliPath: pnpmCli,
+    trustedProfileLoaders: {
+      [ZENX_ROOMS_CAPABILITY_ID]: createZenXRoomsProfileLoader(() => domain),
+    },
+    bundledProvidersOnly: true,
+  };
+  const capabilities = new ZenXCapabilityService(options);
+  try {
+    await capabilities.initialize();
+    await capabilities.installBundledPluginPackage(oldTarball, {
+      pluginId: ZENX_ROOMS_CAPABILITY_ID,
+      packageName: ZENX_ROOMS_PACKAGE_NAME,
+    });
+    assert.equal(
+      capabilities
+        .pluginSnapshot()
+        .plugins.find((plugin) => plugin.id === ZENX_ROOMS_CAPABILITY_ID)
+        ?.version,
+      "1.0.3",
+    );
+    await assert.rejects(
+      capabilities.executePluginCommand(ZENX_ROOMS_CAPABILITY_ID, "workspace", {
+        roomId: "companion-room",
+      }),
+    );
+    await installZenXBundledPluginsAtStartup(capabilities, resources);
+    assert.equal(
+      capabilities
+        .pluginSnapshot()
+        .plugins.find((plugin) => plugin.id === ZENX_ROOMS_CAPABILITY_ID)
+        ?.version,
+      "1.0.4",
+    );
+    const before = await capabilities.executePluginCommand(
+      ZENX_ROOMS_CAPABILITY_ID,
+      "workspace",
+      { roomId: "companion-room" },
+    );
+    assert.deepEqual(before, {
+      revision: 0,
+      updatedAt: 0,
+      matters: [],
+      memory: [],
+    });
+    const saved = (await capabilities.executePluginCommand(
+      ZENX_ROOMS_CAPABILITY_ID,
+      "update-workspace",
+      {
+        roomId: "companion-room",
+        expectedRevision: 0,
+        matters: [],
+        memory: [
+          {
+            id: "decision",
+            title: "User decision",
+            text: "Inspectable after package restart",
+          },
+        ],
+      },
+    )) as { revision: number };
+    assert.equal(saved.revision, 1);
+    assert.equal(domain.snapshot().rooms[0]?.name, "User chosen name");
+    assert.equal(domain.snapshot().rooms[0]?.members[0]?.name, "Aster");
+    await capabilities.setEnabled(ZENX_ROOMS_CAPABILITY_ID, false);
+    await capabilities.setEnabled(ZENX_ROOMS_CAPABILITY_ID, true);
+    const reloaded = (await capabilities.executePluginCommand(
+      ZENX_ROOMS_CAPABILITY_ID,
+      "workspace",
+      { roomId: "companion-room" },
+    )) as { revision: number; memory: Array<{ text: string }> };
+    assert.equal(reloaded.revision, 1);
+    assert.equal(reloaded.memory[0]?.text, "Inspectable after package restart");
+  } finally {
+    await capabilities.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

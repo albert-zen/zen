@@ -11,6 +11,8 @@ import type {
   UpdateTriggerInput,
   ZenXRoom,
   ZenXTrigger,
+  AssistantWorkspace,
+  UpdateAssistantWorkspaceInput,
 } from "../trigger-types.js";
 import {
   MAX_ID_BYTES,
@@ -70,6 +72,10 @@ export interface ZenXAutomationControlPort {
     preview: string;
   }>;
   snapshot(): TriggerSnapshot;
+  assistantWorkspace?(roomId: string): AssistantWorkspace;
+  updateAssistantWorkspace?(
+    input: UpdateAssistantWorkspaceInput,
+  ): Promise<AssistantWorkspace>;
   create(input: CreateTriggerInput): Promise<ZenXTrigger>;
   update(input: UpdateTriggerInput): Promise<ZenXTrigger>;
   cancel(triggerId: string): Promise<void>;

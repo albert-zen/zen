@@ -1,4 +1,5 @@
 import { ALWAYS_ON_ASSISTANT_PROMPT } from "./assistant-preset.js";
+import { canonicalAssistantWorkspace } from "./trigger-store.js";
 import { createHash, randomUUID } from "node:crypto";
 
 import type {
@@ -58,6 +59,8 @@ import type {
   UpdateTriggerInput,
   ZenXRoom,
   ZenXTrigger,
+  AssistantWorkspace,
+  UpdateAssistantWorkspaceInput,
 } from "./trigger-types.js";
 
 export interface ZenXTriggerAppServerPort {
@@ -624,7 +627,7 @@ export class ZenXTriggerService {
           threadId: member.threadId,
           roomId: id,
           mention: member.name,
-          label: "Always On Assistant",
+          label: "Companion",
           prompt: ALWAYS_ON_ASSISTANT_PROMPT,
         },
         randomUUID(),
@@ -657,6 +660,64 @@ export class ZenXTriggerService {
       if (room === undefined) throw new Error("Room was not found");
       room.name = required(name, "room name", MAX_ROOM_NAME_BYTES);
     });
+  }
+  assistantWorkspace(roomId: string): AssistantWorkspace {
+    const room = this.#snapshot.rooms.find(
+      (candidate) => candidate.id === required(roomId, "room", MAX_ID_BYTES),
+    );
+    if (!room?.assistant) throw Error("Companion assistant Room was not found");
+    return structuredClone(
+      room.assistantWorkspace ?? {
+        revision: 0,
+        updatedAt: 0,
+        matters: [],
+        memory: [],
+      },
+    );
+  }
+  async updateAssistantWorkspace(
+    input: UpdateAssistantWorkspaceInput,
+  ): Promise<AssistantWorkspace> {
+    if (
+      !input ||
+      Object.keys(input).some(
+        (key) =>
+          !["roomId", "expectedRevision", "matters", "memory"].includes(key),
+      ) ||
+      !Number.isSafeInteger(input.expectedRevision) ||
+      input.expectedRevision < 0
+    )
+      throw Error("Invalid Companion workspace update fields or revision");
+    const roomId = required(input.roomId, "room", MAX_ID_BYTES);
+    const expectedRevision = input.expectedRevision;
+    const draft = canonicalAssistantWorkspace({
+      revision: 0,
+      updatedAt: 0,
+      matters: input.matters,
+      memory: input.memory,
+    });
+    const generation = this.#runningGeneration();
+    const result = await this.#mutate(generation, async (snapshot) => {
+      const room = snapshot.rooms.find((entry) => entry.id === roomId);
+      if (!room?.assistant)
+        throw Error("Companion assistant Room was not found");
+      const currentRevision = room.assistantWorkspace?.revision ?? 0;
+      if (currentRevision !== expectedRevision)
+        throw Object.assign(
+          Error("Companion workspace changed; refresh before saving"),
+          { code: "workspace_conflict", currentRevision },
+        );
+      if (currentRevision === Number.MAX_SAFE_INTEGER)
+        throw Error("Companion workspace revision limit reached");
+      const workspace = canonicalAssistantWorkspace({
+        ...draft,
+        revision: currentRevision + 1,
+        updatedAt: this.#now(),
+      });
+      room.assistantWorkspace = workspace;
+      return workspace;
+    });
+    return structuredClone(result);
   }
 
   async deleteRoom(roomId: string): Promise<void> {
@@ -1523,9 +1584,7 @@ export class ZenXTriggerService {
       );
       if (assistantRooms.length > 0) {
         if (!this.#manager.sendAssistant)
-          throw new Error(
-            "Always On Assistant delivery is unavailable on this Host",
-          );
+          throw new Error("Companion delivery is unavailable on this Host");
         if (this.#history(active.historyId).delivery === undefined) {
           await this.#mutate(generation, async (snapshot) => {
             snapshot.history.find(
@@ -2668,7 +2727,7 @@ function assistantWakeupInput(
   const preset =
     trigger.prompt === ALWAYS_ON_ASSISTANT_PROMPT
       ? []
-      : ["Always On Assistant context:", ALWAYS_ON_ASSISTANT_PROMPT];
+      : ["Companion context:", ALWAYS_ON_ASSISTANT_PROMPT];
   if (sourceRoom) {
     const message = sourceRoom.messages.find(
       (item) => item.id === sourceMessageId,

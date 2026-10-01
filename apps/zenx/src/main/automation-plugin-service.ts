@@ -32,6 +32,8 @@ import type {
   RoomDeliveryView,
   TriggerSnapshot,
   UpdateTriggerInput,
+  AssistantWorkspace,
+  UpdateAssistantWorkspaceInput,
 } from "./trigger-types.js";
 
 export interface AutomationTargetPreview {
@@ -841,6 +843,21 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   async createRoom(input: CreateRoomInput) {
     return await this.#service.createRoom(input);
   }
+  assistantWorkspace(roomId: string): AssistantWorkspace {
+    if (!this.roomsAvailable())
+      throw Error("Rooms are disabled or unavailable");
+    return this.#service.assistantWorkspace(roomId);
+  }
+  async updateAssistantWorkspace(
+    input: UpdateAssistantWorkspaceInput,
+  ): Promise<AssistantWorkspace> {
+    const captured = structuredClone(input);
+    return await this.#serialize(async () => {
+      if (!this.roomsAvailable())
+        throw Error("Rooms are disabled or unavailable");
+      return await this.#service.updateAssistantWorkspace(captured);
+    });
+  }
   async renameRoom(roomId: string, name: string): Promise<void> {
     await this.#service.renameRoom(roomId, name);
   }
@@ -864,12 +881,12 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     await this.#service.postRoomMessage(roomId, author, text);
   }
 
-  async #serialize(operation: () => Promise<void>): Promise<void> {
+  async #serialize<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.#lifecycle.then(operation);
     this.#lifecycle = result.then(
       () => undefined,
       () => undefined,
     );
-    await result;
+    return await result;
   }
 }

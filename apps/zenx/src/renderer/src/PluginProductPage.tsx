@@ -24,12 +24,14 @@ export function PluginProductPage({
   route,
   navigate,
   registry = pluginUiRegistry,
+  context,
 }: {
   snapshot: ZenXPluginSnapshot;
   route: string;
   navigate(route: string): void;
   onOpenSidebar?(): void;
   registry?: PluginUiRegistry;
+  context?: Readonly<Record<string, unknown>>;
 }) {
   const target =
     snapshot.pages.find((page) => page.route === pluginRoutePath(route)) ??
@@ -85,7 +87,11 @@ export function PluginProductPage({
           snapshot={snapshot}
           pluginId={target.pluginId}
           surfaceId={target.surfaceId}
-          context={{ route, handleId: `${target.pluginId}:context` }}
+          context={{
+            ...context,
+            route,
+            handleId: `${target.pluginId}:context`,
+          }}
           theme={theme}
           navigate={navigate}
           executeCommand={window.zenx.plugins.executeCommand}

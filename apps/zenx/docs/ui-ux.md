@@ -441,3 +441,13 @@ ThreadView
 - Room 发起的自动回复设置以只读摘要显示精确 Room、成员与执行 Thread，只要求填写名称和回复指令并显式保存；不在这个固定目标流程显示类型切换或新建 Thread 控件。成员名中的 `|` 属于名字本身，不能被条件串的分隔符截断。通用自动化编辑器保留原有完整选择能力。
 
 本轮视觉和交互校准参考 [DeepSeek Harness 的输入候选组件](https://github.com/deepseek-ai/deepseek-harness/tree/639ed015397290b3745d163aafe02ffee4aa3f84/packages/client/ui-input-trigger)、[T3 Code 的 ComposerCommandMenu](https://github.com/pingdotgg/t3code/blob/5cc99e1c23980d7995a13c47f969b47cb68ed1be/apps/web/src/components/chat/ComposerCommandMenu.tsx) 与 [Linear 的 UI refresh](https://linear.app/changelog/2026-03-12-ui-refresh)。这些是参考材料，不替代本文的产品语义，也不引入它们的运行模型或样式框架。
+
+### Companion and Room conversation workspaces
+
+The primary left navigation exposes named Companions and Rooms directly, above the existing project/Thread organization. Opening one selects an IM-style conversation without a second conversation rail. Creation remains explicit, with a user-chosen assistant name; Companion is the reusable preset name.
+
+The existing right workspace shell is shared. Room-owned tabs expose Overview, Matters, Memory, Automations and Threads. Matters and memory are assistant-maintained notebook annotations, with exact references to execution Threads and Triggers. They do not act as a second scheduler or an execution ledger. A plan such as “waiting for review” is visibly distinct from a live Thread status. Remote references show their full device/workspace identity and do not silently open a local Thread with the same ID.
+
+Files, Browser, Computer and Thread plugin tabs require a real Room member Thread. A Companion can use its single bound Thread; shared Rooms ask the user to select a member, with the resource context visible above the tabs. Room navigation and tab selection stay separate from canonical execution identity. Existing file drafts remain owned by the shared workspace draft store.
+
+Overview shows the current recurring timer definitions, including cadence and paused state, rather than inventing a heartbeat default. The Automations tab shows the assistant's existing Triggers and their instructions, and opens the existing Trigger controls for configuration. Reading any of these views does not start a Turn or install a timer. Missing plugins and unavailable sources must be visible rather than treated as a successful empty state.

@@ -43,7 +43,47 @@ export interface Room {
   createdAt: number;
 }
 
+// Plugin service JSON contract. The Host validates and commits annotations.
+export type AssistantReference =
+  | {
+      kind: "thread";
+      device: string;
+      workspace: string;
+      threadId: string;
+      label: string;
+    }
+  | { kind: "trigger"; triggerId: string; label: string };
+export interface AssistantMatter {
+  id: string;
+  title: string;
+  plan: string;
+  statusNote: string;
+  notes: string;
+  references: AssistantReference[];
+}
+export interface AssistantMemory {
+  id: string;
+  title: string;
+  text: string;
+}
+export interface AssistantWorkspace {
+  revision: number;
+  updatedAt: number;
+  matters: AssistantMatter[];
+  memory: AssistantMemory[];
+}
+export interface UpdateAssistantWorkspaceInput {
+  roomId: string;
+  expectedRevision: number;
+  matters: AssistantMatter[];
+  memory: AssistantMemory[];
+}
+
 export interface ZenXRoomsTrustedService {
+  assistantWorkspace?(roomId: string): AssistantWorkspace;
+  updateAssistantWorkspace?(
+    input: UpdateAssistantWorkspaceInput,
+  ): Promise<AssistantWorkspace>;
   createAssistantRoom?(input: {
     name: string;
     members: RoomMember[];
@@ -133,6 +173,33 @@ export function createZenXTrustedPlugin(
           : null;
       const args = uiInput ?? invocation.arguments;
       switch (toolName) {
+        case "zenx_rooms_workspace":
+          fields(args, ["roomId"]);
+          if (!service.assistantWorkspace)
+            throw Error("Companion workspace service unavailable");
+          return service.assistantWorkspace(
+            string(args, "roomId", MAX_ID_BYTES),
+          );
+        case "zenx_rooms_update_workspace": {
+          fields(args, ["roomId", "expectedRevision", "matters", "memory"]);
+          if (!service.updateAssistantWorkspace)
+            throw Error("Companion workspace service unavailable");
+          if (
+            !Number.isSafeInteger(args["expectedRevision"]) ||
+            Number(args["expectedRevision"]) < 0 ||
+            !Array.isArray(args["matters"]) ||
+            !Array.isArray(args["memory"])
+          )
+            throw Error(
+              "Invalid Companion workspace update fields or revision",
+            );
+          return await service.updateAssistantWorkspace({
+            roomId: string(args, "roomId", MAX_ID_BYTES),
+            expectedRevision: Number(args["expectedRevision"]),
+            matters: args["matters"] as AssistantMatter[],
+            memory: args["memory"] as AssistantMemory[],
+          });
+        }
         case "zenx_rooms_list": {
           const state = service.snapshot();
           const cursor = Number(args["cursor"] ?? 0);
@@ -401,4 +468,8 @@ function record(value: unknown): Readonly<Record<string, unknown>> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Readonly<Record<string, unknown>>)
     : null;
+}
+function fields(args: Readonly<Record<string, unknown>>, allowed: string[]) {
+  if (Object.keys(args).some((key) => !allowed.includes(key)))
+    throw Error("Unknown Companion workspace input field");
 }

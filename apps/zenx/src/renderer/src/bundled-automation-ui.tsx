@@ -1,3 +1,5 @@
+import { useContext, useLayoutEffect } from "react";
+import { RoomDraftContext } from "./room-drafts.js";
 import React, {
   useEffect,
   useId,
@@ -1402,6 +1404,15 @@ function memberConversationContext(
 
 export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const initialRoomId = routeQuery(sdk.context?.route).get("roomId");
+  const primaryNavigation = sdk.context?.primaryNavigation === true;
+  const createIntent = routeQuery(sdk.context?.route).get("create");
+  const viewEpoch = useRef(0);
+  useLayoutEffect(() => {
+    viewEpoch.current += 1;
+    return () => {
+      viewEpoch.current += 1;
+    };
+  }, [sdk.context?.route]);
   const [assistantMode, setAssistantMode] = useState(false);
   const [data, setData] = useState<RoomListResult>({ rooms: [] });
   const [selected, setSelected] = useState<string | null>(initialRoomId);
@@ -1409,7 +1420,10 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const [name, setName] = useState("");
   const [memberName, setMemberName] = useState("");
   const [threadId, setThreadId] = useState("");
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [localDrafts, setLocalDrafts] = useState<Record<string, string>>({});
+  const sharedDrafts = useContext(RoomDraftContext);
+  const drafts = sharedDrafts?.drafts ?? localDrafts;
+  const setDrafts = sharedDrafts?.setDrafts ?? setLocalDrafts;
   const [threads, setThreads] = useState<NativeThreadSummary[]>([]);
   const [busy, setBusy] = useState(false);
   const actionBusy = useRef(false);
@@ -1432,7 +1446,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     Record<string, RoomPendingSend>
   >({});
   const pendingRef = useRef<Record<string, RoomPendingSend>>({});
-  const revisions = useRef<Record<string, number>>({});
+  const localRevisions = useRef<Record<string, number>>({});
+  const revisions = sharedDrafts?.revisions ?? localRevisions;
   const refreshSequence = useRef(0);
   const [feedback, setFeedback] = useState<Record<string, string>>({});
   const [deliveries, setDeliveries] = useState<
@@ -1444,6 +1459,20 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const dialogInvoker = useRef<HTMLElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    if (!primaryNavigation) return;
+    selectedRef.current = initialRoomId;
+    setSelected(initialRoomId);
+    setError(null);
+    setPanel(null);
+    if (createIntent === "room" || createIntent === "companion") {
+      setAssistantMode(createIntent === "companion");
+      setName(createIntent === "companion" ? "Companion" : "");
+      setMemberName(createIntent === "companion" ? "Assistant" : "");
+      setThreadId("");
+      setPanel("create");
+    }
+  }, [initialRoomId, primaryNavigation, createIntent]);
   const feed = useRef<HTMLDivElement>(null);
   const lastMessage = useRef<string | null>(null);
   const lastRoom = useRef<string | null>(null);
@@ -1532,7 +1561,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     if (sequence !== refreshSequence.current) return;
     setData({ ...next });
     setSelected((current) =>
-      current !== null && next.rooms.some((entry) => entry.id === current)
+      primaryNavigation ||
+      (current !== null && next.rooms.some((entry) => entry.id === current))
         ? current
         : (next.rooms[0]?.id ?? null),
     );
@@ -1650,6 +1680,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   }, [panel]);
   const closeDialog = () => {
     setPanel(null);
+    if (primaryNavigation && createIntent)
+      sdk.navigation.navigate(
+        selected
+          ? `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: selected })}`
+          : ROOMS_ROUTE,
+      );
     requestAnimationFrame(() => dialogInvoker.current?.focus());
   };
   const room = data.rooms.find((entry) => entry.id === selected);
@@ -1692,22 +1728,31 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   }, [selected, tail]);
   const run = async (command: string, input: unknown) => {
     if (actionBusy.current) return false;
+    const epoch = viewEpoch.current;
     actionBusy.current = true;
     setBusy(true);
     setError(null);
     try {
       const result = await sdk.commands.execute(command, input);
+      if (epoch !== viewEpoch.current) return false;
       await refresh();
+      if (epoch !== viewEpoch.current) return false;
       if (
         (command === "create" || command === "create-assistant") &&
         result &&
         typeof result === "object" &&
         "id" in result &&
         typeof result.id === "string"
-      )
+      ) {
         setSelected(result.id);
+        if (primaryNavigation)
+          sdk.navigation.navigate(
+            `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: result.id })}`,
+          );
+      }
       return true;
     } catch (reason) {
+      if (epoch !== viewEpoch.current) return false;
       setError(
         `Result unknown; refresh before repeating. ${describeError(reason)}`,
       );
@@ -1954,54 +1999,58 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     }
   };
   return (
-    <div className="rooms-chat">
-      <nav className="rooms-chat-list" aria-label="Rooms">
-        <div className="rooms-chat-list-head">
-          <strong>Rooms</strong>
-          <button
-            type="button"
-            onClick={(event) => {
-              dialogInvoker.current = event.currentTarget;
-              setAssistantMode(false);
-              setName("");
-              setMemberName("");
-              setThreadId("");
-              setPanel("create");
-            }}
-          >
-            <Icon name="plus" size={15} /> New
-          </button>
-          <button
-            type="button"
-            onClick={(event) => {
-              dialogInvoker.current = event.currentTarget;
-              setAssistantMode(true);
-              setName("Always On Assistant");
-              setMemberName("Assistant");
-              setThreadId("");
-              setPanel("create");
-            }}
-          >
-            <Icon name="thread" size={15} /> Always On Assistant
-          </button>
-        </div>
-        {data.rooms.map((entry) => (
-          <button
-            type="button"
-            key={entry.id}
-            aria-current={entry.id === selected ? "page" : undefined}
-            onClick={() => {
-              selectedRef.current = entry.id;
-              setSelected(entry.id);
-              setPanel(null);
-              setError(null);
-            }}
-          >
-            <strong>{entry.assistant ? entry.name : `#${entry.name}`}</strong>
-            <small>{entry.messages.at(-1)?.text ?? "No messages yet"}</small>
-          </button>
-        ))}
-      </nav>
+    <div
+      className={`rooms-chat${primaryNavigation ? " rooms-chat-primary" : ""}`}
+    >
+      {!primaryNavigation ? (
+        <nav className="rooms-chat-list" aria-label="Rooms">
+          <div className="rooms-chat-list-head">
+            <strong>Rooms</strong>
+            <button
+              type="button"
+              onClick={(event) => {
+                dialogInvoker.current = event.currentTarget;
+                setAssistantMode(false);
+                setName("");
+                setMemberName("");
+                setThreadId("");
+                setPanel("create");
+              }}
+            >
+              <Icon name="plus" size={15} /> New
+            </button>
+            <button
+              type="button"
+              onClick={(event) => {
+                dialogInvoker.current = event.currentTarget;
+                setAssistantMode(true);
+                setName("Companion");
+                setMemberName("Assistant");
+                setThreadId("");
+                setPanel("create");
+              }}
+            >
+              <Icon name="thread" size={15} /> Companion
+            </button>
+          </div>
+          {data.rooms.map((entry) => (
+            <button
+              type="button"
+              key={entry.id}
+              aria-current={entry.id === selected ? "page" : undefined}
+              onClick={() => {
+                selectedRef.current = entry.id;
+                setSelected(entry.id);
+                setPanel(null);
+                setError(null);
+              }}
+            >
+              <strong>{entry.assistant ? entry.name : `#${entry.name}`}</strong>
+              <small>{entry.messages.at(-1)?.text ?? "No messages yet"}</small>
+            </button>
+          ))}
+        </nav>
+      ) : null}
       <main className="rooms-chat-main">
         {loading ? (
           <p className="rooms-chat-empty" role="status">
@@ -2032,6 +2081,20 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     : "No agents yet"}
                 </span>
               </div>
+              {primaryNavigation ? (
+                <button
+                  id="thread-browser-toggle"
+                  type="button"
+                  aria-label="Open conversation workspace"
+                  onClick={() =>
+                    sdk.navigation.navigate(
+                      `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: room.id, panel: "open" })}`,
+                    )
+                  }
+                >
+                  <Icon name="layers" size={16} /> Workspace
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={(event) => {
@@ -2487,12 +2550,11 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             </header>
             {panel === "create" && assistantMode ? (
               <p className="room-assistant-disclosure">
-                Choose an existing Thread for the Always On Assistant preset.
-                Messages join its ongoing work. It uses Rooms to communicate,
-                Triggers to continue after waits, and Fleet-enabled self-control
-                to work with configured devices. Enable Rooms, Triggers and
-                self-control first. Existing model and permissions are
-                preserved.
+                Choose an existing Thread for the Companion preset. Messages
+                join its ongoing work. It uses Rooms to communicate, Triggers to
+                continue after waits, and Fleet-enabled self-control to work
+                with configured devices. Enable Rooms, Triggers and self-control
+                first. Existing model and permissions are preserved.
               </p>
             ) : null}
             <Field label="Room name" value={name} onChange={setName} />

@@ -5173,7 +5173,8 @@ button:disabled {
   .workspace:has(> .auxiliary-panel) {
     display: block;
   }
-  .workspace:has(> .auxiliary-panel) > .agent-surface {
+  .workspace:has(> .auxiliary-panel)
+    > :is(.agent-surface, .plugin-product-page) {
     width: 100%;
     height: 100%;
   }
@@ -6836,7 +6837,7 @@ button:disabled {
   position: relative;
   overflow: hidden;
 }
-.workspace:has(> .auxiliary-panel) > .agent-surface {
+.workspace:has(> .auxiliary-panel) > :is(.agent-surface, .plugin-product-page) {
   flex: none;
   min-width: 0;
   width: calc(100% - var(--workspace-panel-width, 0px));
@@ -6942,7 +6943,7 @@ button:disabled {
   display: none;
 }
 .workspace:has(> .auxiliary-panel[data-open="true"][data-expanded="true"])
-  > .agent-surface {
+  > :is(.agent-surface, .plugin-product-page) {
   visibility: hidden;
 }
 .workspace-files-panel {
@@ -7032,7 +7033,8 @@ button:disabled {
   color: var(--color-status-warning);
 }
 @media (max-width: 1099px) {
-  .workspace:has(> .auxiliary-panel[data-open="true"]) > .agent-surface {
+  .workspace:has(> .auxiliary-panel[data-open="true"])
+    > :is(.agent-surface, .plugin-product-page) {
     display: none;
   }
   .auxiliary-panel {
@@ -7707,7 +7709,8 @@ button:disabled {
   .workspace:has(> .auxiliary-panel[data-open="true"]) {
     grid-row: 1 / -1;
   }
-  .workspace:has(> .auxiliary-panel[data-open="true"]) > .agent-surface {
+  .workspace:has(> .auxiliary-panel[data-open="true"])
+    > :is(.agent-surface, .plugin-product-page) {
     padding-top: var(--titlebar-height);
   }
   .app-shell:has(.auxiliary-panel[data-open="true"][data-expanded="true"])
