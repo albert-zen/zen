@@ -2704,11 +2704,22 @@ export function App() {
                         }
                         cancelQueued={(items) => cancelQueued(id, items)}
                         onOpenMessageLink={(target) => {
-                          setMessageLinkRequest((previous) => ({
-                            ...target,
-                            id: (previous?.id ?? 0) + 1,
-                            threadId: threadDetail.id,
-                          }));
+                          void resumeThread(id)
+                            .then(() => {
+                              if (selectedThreadIdRef.current !== id) return;
+                              setMessageLinkRequest((previous) => ({
+                                ...target,
+                                id: (previous?.id ?? 0) + 1,
+                                threadId: id,
+                              }));
+                              setBrowserPanels((current) => ({
+                                ...current,
+                                [id]: true,
+                              }));
+                            })
+                            .catch((error: unknown) =>
+                              setRequestError(describeError(error)),
+                            );
                         }}
                         models={models}
                         providerProfiles={providerProfiles}

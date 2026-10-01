@@ -1,6 +1,9 @@
 .agent-surface.has-thread-header {
   grid-template-rows: auto minmax(0, 1fr);
 }
+.agent-surface.has-thread-header:has(> .agent-readiness-notice) {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
 .plugin-thread-headers:empty {
   display: none;
 }
@@ -173,6 +176,8 @@
 }
 .auxiliary-conversation {
   display: flex;
+  flex: 1;
+  min-width: 0;
   flex-direction: column;
   height: 100%;
   min-height: 0;
@@ -200,8 +205,14 @@
   display: grid;
   --conversation-gutter: 16px;
 }
-.thread-conversation-viewport .composer-controls {
+.thread-conversation-viewport .composer-tools {
   flex-wrap: wrap;
+}
+.thread-conversation-viewport .composer-rail {
+  align-items: flex-end;
+}
+.thread-conversation-viewport .composer-model-trigger {
+  max-width: 180px;
 }
 .conversation-viewport-status {
   padding: 20px;

@@ -345,7 +345,21 @@ export function ThreadView({
     };
     resize();
     window.addEventListener("resize", resize);
-    return () => window.removeEventListener("resize", resize);
+    let width = textarea.getBoundingClientRect().width;
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => {
+            const next = textarea.getBoundingClientRect().width;
+            if (next === width) return;
+            width = next;
+            resize();
+          });
+    observer?.observe(textarea);
+    return () => {
+      window.removeEventListener("resize", resize);
+      observer?.disconnect();
+    };
   }, [composer.draft.text]);
 
   const submit = (intent: ComposerIntent) => {
