@@ -1068,3 +1068,5 @@ queued 输入不可作为留存 Item；手动/自动生成仍须在同 Thread mu
 ZenX 的 `/compact --no-reference` 仅将关闭原文定位符作为 `thread/compact`
 请求参数传给 Host；普通 `/compact` 与按钮沿默认开启路径运行，不在 UI
 内建立另一个压缩状态源或将 `/compact` 写成 user message。
+
+- **ZenX composer send controls** — the send button hover/focus panel presents existing send intents and updates the existing Host send preference; it owns only transient visibility and save feedback, never admission or execution semantics.

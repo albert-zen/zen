@@ -65,7 +65,7 @@
   --color-accent-option-azure: #8ea9ff;
   --color-accent-option-iris: #b995ff;
   --color-accent-option-jade: #73d2ad;
-  --color-focus-ring: #8ea9ff;
+  --color-focus-ring: #b4b6bd;
   --color-status-success: #73d2ad;
   --color-status-warning: #e0b266;
   --color-status-danger: #ef877f;
@@ -178,7 +178,7 @@
   --color-accent-option-azure: #526fb9;
   --color-accent-option-iris: #7658ae;
   --color-accent-option-jade: #287a60;
-  --color-focus-ring: #526fb9;
+  --color-focus-ring: #4d5361;
   --color-status-success: #287a60;
   --color-status-warning: #96651d;
   --color-status-danger: #b74742;
@@ -316,7 +316,7 @@
   --color-accent: #c19cff;
   --color-accent-secondary: #8ea9ff;
   --color-accent-soft: rgb(193 156 255 / 14%);
-  --color-focus-ring: #c19cff;
+  --color-focus-ring: #b4b6bd;
   --color-border-accent: #8871aa;
 }
 
@@ -327,7 +327,7 @@
   --color-accent: #7953b8;
   --color-accent-secondary: #526fb9;
   --color-accent-soft: rgb(121 83 184 / 13%);
-  --color-focus-ring: #7953b8;
+  --color-focus-ring: #4d5361;
   --color-border-accent: #7953b8;
 }
 
@@ -338,7 +338,7 @@
   --color-accent: #72d6b0;
   --color-accent-secondary: #8ea9ff;
   --color-accent-soft: rgb(114 214 176 / 13%);
-  --color-focus-ring: #72d6b0;
+  --color-focus-ring: #b4b6bd;
   --color-border-accent: #568f7a;
 }
 
@@ -349,7 +349,7 @@
   --color-accent: #24775d;
   --color-accent-secondary: #526fb9;
   --color-accent-soft: rgb(36 119 93 / 13%);
-  --color-focus-ring: #24775d;
+  --color-focus-ring: #4d5361;
   --color-border-accent: #24775d;
 }
 

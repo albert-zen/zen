@@ -2,19 +2,6 @@
 
 First-party self-control package distributed with ZenX and installed through the ordinary plugin profile.
 
-Independent Agent delegation uses a real Thread with its own model context:
-discover model IDs with `zenx_models_list`, create a fresh idle Thread with
-`zenx_threads_create`, and dispatch its task with `zenx_threads_send`. Include
-the task's context and reporting instructions in the message. Check
-`zenx_threads_status` and collect `agent_messages` with `zenx_threads_read`.
-Creation does not fork this conversation, sending acknowledges dispatch rather
-than completion, and this package provides no automatic parent/child lifecycle
-or result return. Shell, `run_code`, and `task_id` are ordinary tool execution,
-not subagents. If this plugin is unavailable, report that limitation honestly.
-Claim delegation only after creation and sending return a real Thread ID
-distinct from the current Thread. Claim completion only after status/history
-confirms that Thread's Turn completed and its actual reply has been read.
-
 Besides Project and Thread controls, the package exposes the same user-scoped
 workflow configuration used by Settings. `zenx_self_control_workflows_get` reads custom
 Slash commands and the title prompt; `zenx_self_control_workflows_update` replaces them with

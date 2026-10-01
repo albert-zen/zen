@@ -400,7 +400,7 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
         ?.getAttribute("aria-label") ?? null;
     assert.equal(
       contextUsageText(),
-      "Open context details. Context 9% · 9 last provider input / 100 configured window\nThread cache unknown",
+      "Open context details. Context 9% · 9 / 100 tokens\nThread cache unknown",
     );
     await act(async () => {
       usageRequests[1]?.response.resolve(projectedUsage(4));
@@ -408,7 +408,7 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
     });
     assert.equal(
       contextUsageText(),
-      "Open context details. Context 9% · 9 last provider input / 100 configured window\nThread cache unknown",
+      "Open context details. Context 9% · 9 / 100 tokens\nThread cache unknown",
     );
 
     await act(async () => {
@@ -434,7 +434,7 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
     });
     assert.equal(
       contextUsageText(),
-      "Open context details. Context 2% · 2 last provider input / 100 configured window\nThread cache unknown",
+      "Open context details. Context 2% · 2 / 100 tokens\nThread cache unknown",
     );
     await act(async () => {
       usageRequests[3]?.response.resolve(projectedUsage(12));
@@ -442,7 +442,7 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
     });
     assert.equal(
       contextUsageText(),
-      "Open context details. Context 2% · 2 last provider input / 100 configured window\nThread cache unknown",
+      "Open context details. Context 2% · 2 / 100 tokens\nThread cache unknown",
     );
   } finally {
     await act(async () => root.unmount());

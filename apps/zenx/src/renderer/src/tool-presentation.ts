@@ -64,6 +64,79 @@ const actions: Record<string, string> = {
   computer_foreground_scroll: "Scroll screen",
 };
 
+const completedActions: Record<string, string> = {
+  browser_list_tabs: "Listed tabs",
+  browser_open: "Opened page",
+  browser_navigate: "Navigated",
+  browser_inspect: "Inspected page",
+  browser_click: "Clicked element",
+  browser_type: "Filled field",
+  browser_select: "Selected option",
+  browser_scroll: "Scrolled page",
+  browser_close: "Closed tab",
+  browser_close_session: "Closed session",
+  computer_list_windows: "Listed windows",
+  computer_inspect: "Inspected window",
+  computer_press: "Pressed element",
+  computer_set_value: "Filled field",
+  computer_screenshot: "Captured window",
+  computer_foreground_click: "Clicked screen",
+  computer_foreground_key_press: "Pressed keys",
+  computer_foreground_scroll: "Scrolled screen",
+  view_image: "Viewed images",
+};
+
+const threadActions: Record<
+  string,
+  { action: string; completed: string; icon: IconName }
+> = {
+  threads_send: {
+    action: "Send message",
+    completed: "Sent message",
+    icon: "send",
+  },
+  threads_create: {
+    action: "Create thread",
+    completed: "Created thread",
+    icon: "plus",
+  },
+  threads_rename: {
+    action: "Rename thread",
+    completed: "Renamed thread",
+    icon: "compose",
+  },
+  threads_read: {
+    action: "Read thread",
+    completed: "Read thread",
+    icon: "thread",
+  },
+  threads_list: {
+    action: "List threads",
+    completed: "Listed threads",
+    icon: "thread",
+  },
+  threads_status: {
+    action: "Check thread status",
+    completed: "Checked thread status",
+    icon: "thread",
+  },
+  threads_configure: {
+    action: "Configure thread",
+    completed: "Configured thread",
+    icon: "settings",
+  },
+  threads_archive: {
+    action: "Archive thread",
+    completed: "Archived thread",
+    icon: "archive",
+  },
+  threads_unarchive: {
+    action: "Restore thread",
+    completed: "Restored thread",
+    icon: "restore",
+  },
+};
+
 export function toolPresentation(name: string): {
   category: string;
   icon: IconName;
@@ -77,6 +150,15 @@ export function toolPresentation(name: string): {
     return { category: "Shell", icon: "terminal", action: "Run command" };
   if (key === "wait")
     return { category: "Wait", icon: "clock", action: "Wait for task" };
+  const threadAction = Object.hasOwn(threadActions, key)
+    ? threadActions[key]
+    : undefined;
+  if (threadAction)
+    return {
+      category: "Thread",
+      icon: threadAction.icon,
+      action: threadAction.action,
+    };
   const action = actions[key];
   if (action)
     return {
@@ -93,19 +175,32 @@ export function commandTitle(
 ): string {
   const name = item.toolName ?? item.command.trim().split(/\s+/u)[0] ?? "tool";
   const args = item.toolArguments;
+  const completed = commandStatus(item) === "Completed";
+  const key = name.replace(/^zenx_/u, "");
+  const completedAction =
+    completed && item.toolName !== undefined
+      ? Object.hasOwn(threadActions, key)
+        ? threadActions[key]?.completed
+        : Object.hasOwn(completedActions, key)
+          ? completedActions[key]
+          : undefined
+      : undefined;
   const text =
     name === "run_code" && typeof args?.description === "string"
       ? args.description
       : name === "shell" && typeof args?.command === "string"
         ? args.command
         : name === "zenx_plugin" && args?.operation === "discover"
-          ? "Discover plugins"
+          ? completed
+            ? "Discovered plugins"
+            : "Discover plugins"
           : name === "zenx_plugin" && args?.operation === "read"
             ? "Read plugin"
-            : (toolPresentation(name).action ??
+            : (completedAction ??
               (item.toolName === undefined
                 ? item.command
-                : name.replace(/^zenx_/u, "").replaceAll("_", " ")));
+                : (toolPresentation(name).action ??
+                  name.replace(/^zenx_/u, "").replaceAll("_", " "))));
   const line = text.replace(/\s+/gu, " ").trim();
   return line.length > 80 ? `${line.slice(0, 79)}…` : line;
 }
@@ -126,5 +221,6 @@ export function commandSummary(
     if (status === "Ran command" || status === "Completed")
       return `Ran · ${title}`;
   }
+  if (status === "Completed") return title;
   return `${title} · ${status.toLowerCase()}`;
 }

@@ -56,7 +56,11 @@ test("composer scrollbar stays inset from the rounded shell, including when focu
   assert.match(rule(".composer > textarea"), /margin: 14px 8px 0;/u);
   assert.match(rule(".composer > textarea"), /width: calc\(100% - 16px\);/u);
   assert.match(rule(".composer > textarea"), /outline: 0;/u);
-  assert.match(css, /\.composer:focus-within\s*\{[^}]*box-shadow:/u);
+  assert.doesNotMatch(css, /\.composer:focus-within\s*\{[^}]*box-shadow:/u);
+  assert.match(
+    rule(".composer:has(> textarea:focus)"),
+    /border-color: var\(--color-focus-ring\);/u,
+  );
 });
 
 test("composer icon controls retain a matching hit area in narrow layouts", () => {
@@ -65,9 +69,9 @@ test("composer icon controls retain a matching hit area in narrow layouts", () =
     rule(".composer .context-usage-indicator"),
     /flex-basis: 36px;/u,
   );
-  assert.match(
-    rule(".context-usage-trigger:focus-visible"),
-    /color-focus-ring/u,
+  assert.doesNotMatch(
+    css,
+    /\.context-usage-trigger:focus-visible\s*\{[^}]*box-shadow:/u,
   );
   assert.match(rule(".context-usage-trigger"), /width: 36px;/u);
   assert.match(thread, /<button\s+className="context-usage-trigger"/u);

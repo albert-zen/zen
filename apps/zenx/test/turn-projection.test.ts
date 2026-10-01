@@ -57,9 +57,9 @@ test("group summary does not claim unfinished tools have been used", () => {
   );
   assert.equal(
     traceSummary([pending, done]),
-    "Inspect page · completed · Started · Run command",
+    "Inspected page · Started · Run command",
   );
-  assert.equal(traceSummary([done]), "Inspect page · completed");
+  assert.equal(traceSummary([done]), "Inspected page");
   const yielded = {
     ...done,
     contentType: "application/vnd.zen.tool-task+json",
@@ -68,6 +68,24 @@ test("group summary does not claim unfinished tools have been used", () => {
   assert.equal(
     traceSummary([pending, yielded]),
     "Inspect page · running · Started · Run command",
+  );
+});
+
+test("thread send and rename summaries report successful actions without redundant completion or target-work claims", () => {
+  const sent = {
+    ...command("send", "zenx_threads_send"),
+    toolName: "zenx_threads_send",
+  };
+  const renamed = {
+    ...command("rename", "zenx_threads_rename"),
+    toolName: "zenx_threads_rename",
+  };
+  assert.equal(traceSummary([sent]), "Sent message");
+  assert.equal(traceSummary([renamed]), "Renamed thread");
+  assert.equal(traceSummary([sent, renamed]), "Renamed thread · Sent message");
+  assert.equal(
+    traceSummary([sent, { ...renamed, status: "failed" }]),
+    "Rename thread · failed · Sent message",
   );
 });
 

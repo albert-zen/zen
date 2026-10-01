@@ -271,7 +271,7 @@ test("light and dark semantic text, actions, boundaries, and focus meet contrast
     styles,
     /\.primary-button\s*\{[^}]*color:\s*var\(--color-text-on-accent\)/u,
   );
-  assert.match(styles, /outline:\s*2px solid var\(--color-focus-ring\)/u);
+  assert.match(styles, /outline:\s*1px solid var\(--color-focus-ring\)/u);
   assert.doesNotMatch(
     styles,
     /button:focus-visible,[^{]*\{[^}]*filter:\s*brightness/u,

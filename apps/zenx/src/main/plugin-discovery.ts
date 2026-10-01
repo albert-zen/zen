@@ -23,7 +23,7 @@ export class PluginDiscoveryToolRuntime implements ToolRuntime {
   readonly specification: ModelTool = {
     name: this.name,
     description:
-      "Discover available ZenX plugins or read one plugin's main document and tool index. For independent Agent delegation, discover and read zenx-self-control when available, then use its Thread create/send/status/read tools. Shell, run_code and tool task_id execute tools in the current Thread; they are not subagents. If the required plugin is unavailable, report that limitation honestly. Claim delegation only after create/send succeed with a distinct Thread ID; claim completion only after confirming its Turn completed and reading its actual reply.",
+      "Discover available ZenX plugins or read one plugin's main document and tool index.",
     inputSchema: {
       oneOf: [
         {
