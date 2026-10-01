@@ -147,7 +147,7 @@ const manifest: ZenXPluginManifestV2 = {
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
   runtime: { type: "bundled", entry: "zenx/self-control" },
   mainDocument:
-    "Use ZenX self-control to inspect projects and manage Threads through the canonical App Server.",
+    "Use ZenX self-control to inspect projects and manage Threads through the canonical App Server. Delegate independent Agent work by creating a Thread, sending its task, checking status and reading its agent_messages. A newly created Thread starts idle with fresh context; include the necessary instructions in the dispatched task. Tool execution tasks are not subagents, and send acknowledges dispatch rather than completion. Claim delegation only after create/send return a real Thread ID distinct from the current Thread; claim completion only after confirming its Turn completed and reading its actual reply.",
   provider: {
     id: "zenx-app-server",
     platforms: ["*"],

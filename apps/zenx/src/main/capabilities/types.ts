@@ -244,6 +244,8 @@ export interface ZenXPluginSummary {
   lifecycle: "installed" | "enabled" | "uninstalled";
   enabled: boolean;
   available: boolean;
+  /** Current load failure, separate from the user's saved enablement. */
+  unavailableReason?: string;
   contributionCount: number;
   /** Requested scopes from the installed manifest; these are not OS grants. */
   permissions?: ZenXCapabilityPermission[];
