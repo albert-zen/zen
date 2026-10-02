@@ -85,11 +85,13 @@ export class NativeConnection {
           typeof params.parentThreadId !== "string" ||
           params.parentThreadId.length === 0 ||
           params.parentThreadId.length > 512 ||
-          (params.mode !== "fresh" && params.mode !== "fork")
+          (params.mode !== "fresh" &&
+            params.mode !== "fork" &&
+            params.mode !== "side-chat")
         )
           throw new AppServerError(
             "invalid_request",
-            "parentThreadId and fresh/fork mode are required",
+            "parentThreadId and fresh/fork/side-chat mode are required",
           );
         if (this.#appServer === undefined)
           throw new AppServerError(

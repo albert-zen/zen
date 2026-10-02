@@ -68,7 +68,7 @@ test("Settings footer hugs its single navigation row", async () => {
   );
 });
 
-test("side panel keeps one fixed toggle and an interruptible width transition", async () => {
+test("side panel keeps stable corner controls and an interruptible width transition", async () => {
   const styles = await readFile(
     new URL("../src/renderer/src/styles.css", import.meta.url),
     "utf8",
@@ -85,9 +85,9 @@ test("side panel keeps one fixed toggle and an interruptible width transition", 
     styles,
     /\.auxiliary-panel\[data-open="false"\]\s*\{[^}]*flex-basis:\s*0;[^}]*width:\s*0;[^}]*min-width:\s*0;/su,
   );
-  assert.match(
+  assert.doesNotMatch(
     styles,
-    /\.app-shell:has\(\.auxiliary-panel\[data-open="true"\]\) #thread-browser-toggle\s*\{[^}]*display:\s*inline-grid;/su,
+    /\.auxiliary-heading \.auxiliary-close-button\s*\{[^}]*display:\s*none;/su,
   );
   assert.match(
     styles,
@@ -266,7 +266,7 @@ test("Linux workspace heading and narrow toggle stay clear of native window cont
   );
   assert.match(
     styles,
-    /:root\[data-platform="linux"\] \.auxiliary-heading,\s*:root\[data-platform="win32"\] \.auxiliary-heading\s*\{[^}]*padding-right:\s*calc\(var\(--windows-control-region\) \+ 6px\);/su,
+    /:root:is\(\[data-platform="linux"\], \[data-platform="win32"\]\) \.auxiliary-heading\s*\{[^}]*padding-right:\s*8px;/su,
   );
   const lastToggle = styles.lastIndexOf(
     ':root[data-platform="linux"] .thread-panel-toggle',

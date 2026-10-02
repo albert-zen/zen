@@ -6,6 +6,10 @@ import {
   type AttachmentRef,
 } from "./attachment-ref.js";
 
+/** Observation receipt for a copied tool call, never an executed child operation. */
+export const SIDE_CHAT_TOOL_SNAPSHOT_CONTENT_TYPE =
+  "zen.side-chat-tool-snapshot.v1";
+
 /** Original UTF-8 text budget for the fixed repository instruction snapshot. */
 export const MAX_WORKSPACE_INSTRUCTION_BYTES = 128 * 1024;
 
@@ -17,6 +21,7 @@ export interface WorkspaceInstructionFile {
 export type ItemType =
   | "thread_metadata"
   | "thread_forked"
+  | "thread_instruction"
   | "thread_configuration_changed"
   | "context_compaction"
   | "turn_started"
@@ -37,6 +42,7 @@ export type ItemType =
 const CANONICAL_ITEM_TYPES = {
   thread_metadata: true,
   thread_forked: true,
+  thread_instruction: true,
   thread_configuration_changed: true,
   context_compaction: true,
   turn_started: true,
@@ -93,8 +99,17 @@ export interface ThreadForkedItem extends ItemBase {
   type: "thread_forked";
   sourceThreadId: string;
   sourceBoundaryItemId: string;
-  sourceTurnId: string;
+  /** Absent only on full-context snapshots without a source Turn. */
+  sourceTurnId?: string;
   workspace: "same-directory";
+  /** A full canonical snapshot, with inherited execution made inert. */
+  context?: "full";
+}
+
+/** Host-authored model instruction that does not create or schedule a Turn. */
+export interface ThreadInstructionItem extends ItemBase {
+  type: "thread_instruction";
+  text: string;
 }
 
 export interface CanonicalProviderSelection {
@@ -380,6 +395,7 @@ export type CanonicalItem =
   | QueuedUserMessageCancelledItem
   | ThreadMetadataItem
   | ThreadForkedItem
+  | ThreadInstructionItem
   | ThreadConfigurationChangedItem
   | ContextCompactionItem
   | TurnStartedItem
@@ -551,12 +567,24 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         item.sourceBoundaryItemId,
         "thread_forked.sourceBoundaryItemId",
       );
-      requireNonEmptyString(item.sourceTurnId, "thread_forked.sourceTurnId");
+      if (item.context !== undefined)
+        requireEnum(item.context, ["full"], "thread_forked.context");
+      if (item.context === "full")
+        requireOptionalNonEmptyString(
+          item.sourceTurnId,
+          "thread_forked.sourceTurnId",
+        );
+      else
+        requireNonEmptyString(item.sourceTurnId, "thread_forked.sourceTurnId");
       requireEnum(
         item.workspace,
         ["same-directory"],
         "thread_forked.workspace",
       );
+      break;
+    case "thread_instruction":
+      requireNoTurnId(item);
+      requireNonEmptyString(item.text, "thread_instruction.text");
       break;
     case "thread_configuration_changed":
       requireNoTurnId(item);

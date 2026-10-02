@@ -653,6 +653,7 @@ export function AuxiliaryPanel({
                   type="button"
                   className="workspace-tab-close"
                   aria-label={`Close tab ${tab.title}`}
+                  title={`Close tab ${tab.title}`}
                   disabled={
                     tab.path && threadId !== undefined
                       ? entries.get(fileDraftKey(threadId, tab.path))
@@ -670,6 +671,7 @@ export function AuxiliaryPanel({
             type="button"
             className="icon-button workspace-add-tab"
             aria-label="New workspace tab"
+            title="New workspace tab"
             aria-pressed={showChooser}
             onClick={() => {
               selectionEpoch.current += 1;
@@ -830,6 +832,7 @@ export function AuxiliaryPanel({
                     type="button"
                     className="icon-button"
                     aria-label="Open conversation full screen"
+                    title="Open conversation full screen"
                     onClick={() =>
                       navigate?.(
                         `/threads/${encodeURIComponent(conversation.threadId)}`,
@@ -885,6 +888,7 @@ export function AuxiliaryPanel({
                 surfaceId={panel.surfaceId}
                 context={{
                   ...threadContext,
+                  active: open === true && visible,
                   route: roomContext ? "room" : "agent",
                   threadId,
                   ...(roomContext ? { roomId: roomContext.roomId } : {}),

@@ -2,7 +2,14 @@ import { SkillsSettingsPanel } from "./SkillsSettingsPanel.js";
 import { Select, Combobox } from "./ui/controls.js";
 import { SubscriptionUsageCard } from "./SubscriptionUsageCard.js";
 import { RtkSettingsCard } from "./RtkSettingsCard.js";
-import { Activity, useEffect, useId, useRef, useState } from "react";
+import {
+  Activity,
+  useEffect,
+  useLayoutEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import { normalizeContextCompactionConfig } from "../../../../../src/context-compaction.js";
 import { ContextCompactionPanel } from "./ContextCompactionPanel.js";
 import { WorkflowSettingsPanel } from "./WorkflowSettingsPanel.js";
@@ -119,6 +126,10 @@ export function SettingsView({
   );
   if (active && tab === "plugins" && !pluginsVisited) setPluginsVisited(true);
   const navRef = useRef<HTMLElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [tab]);
   const draftSnapshot = useRef({ settings, draft });
   draftSnapshot.current = { settings, draft };
 
@@ -315,7 +326,7 @@ export function SettingsView({
           </div>
         </header>
       ) : null}
-      <div className="page-scroll">
+      <div ref={scrollRef} className="page-scroll">
         <div className="settings-layout">
           <nav
             ref={navRef}

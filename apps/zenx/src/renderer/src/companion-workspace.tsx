@@ -489,7 +489,21 @@ export function CompanionWorkspace({
       title={room.name}
       open
       onOpenChange={(open) => {
-        if (!open) onClose();
+        if (open) return;
+        const opener = document.getElementById("thread-browser-toggle");
+        const owner = room.id;
+        onClose();
+        requestAnimationFrame(() => {
+          // The Room route unmounts this panel instead of rendering open=false.
+          // Restore only its original opener, never a newer route or focus.
+          if (
+            opener?.isConnected &&
+            opener.dataset.roomId === owner &&
+            document.activeElement === document.body &&
+            !document.querySelector('.auxiliary-panel[data-open="true"]')
+          )
+            opener.focus();
+        });
       }}
       snapshot={snapshot}
       selectedTab={selected}

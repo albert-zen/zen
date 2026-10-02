@@ -3305,9 +3305,9 @@ button:disabled {
   background: var(--surface-2);
 }
 .settings-nav button[aria-selected="true"] {
-  color: var(--text-accent);
-  background: var(--accent-soft);
-  border-color: var(--border-accent);
+  color: var(--text);
+  background: var(--color-surface-hover);
+  border-color: var(--border-control);
   font-weight: 600;
 }
 .settings-nav button:last-child {
@@ -3419,6 +3419,12 @@ button:disabled {
   border-color: var(--color-focus-ring);
 }
 .settings-panel input[type="checkbox"] {
+  appearance: auto;
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  flex: 0 0 16px;
+  margin: 2px 0;
   accent-color: var(--accent);
 }
 .settings-panel .plugin-switch:disabled {
@@ -3841,7 +3847,11 @@ button:disabled {
   height: 1px;
   opacity: 0;
 }
-.provider-tabs button[aria-selected="true"],
+.provider-tabs button[aria-selected="true"] {
+  border-color: var(--border-control);
+  color: var(--text);
+  background: var(--color-surface-hover);
+}
 .appearance-options input:checked + span {
   border-color: var(--border-accent);
   color: var(--text);
@@ -6900,9 +6910,6 @@ button:disabled {
   height: 28px;
   flex-shrink: 0;
 }
-.auxiliary-heading .auxiliary-close-button {
-  display: none;
-}
 .auxiliary-content {
   flex: 1;
   min-height: 0;
@@ -7699,31 +7706,34 @@ button:disabled {
   min-width: 0;
 }
 
-/* The workspace shares the native title row with the conversation. Measuring
-   its rendered width also covers resize, expanded mode and a collapsed sidebar. */
+/* macOS keeps the integrated title-row workspace. Windows and Linux use
+   a dedicated OS row and a separate conversation/workspace row below. */
 @media (min-width: 721px) {
-  .app-shell:has(.auxiliary-panel[data-open="true"]) > .window-titlebar {
+  :root[data-platform="darwin"]
+    .app-shell:has(.auxiliary-panel[data-open="true"])
+    > .window-titlebar {
     width: calc(100% - var(--workspace-panel-width, 0px));
     padding-right: 0;
   }
-  .workspace:has(> .auxiliary-panel[data-open="true"]) {
+  :root[data-platform="darwin"]
+    .workspace:has(> .auxiliary-panel[data-open="true"]) {
     grid-row: 1 / -1;
   }
-  .workspace:has(> .auxiliary-panel[data-open="true"])
+  :root[data-platform="darwin"]
+    .workspace:has(> .auxiliary-panel[data-open="true"])
     > :is(.agent-surface, .plugin-product-page) {
     padding-top: var(--titlebar-height);
   }
-  .app-shell:has(.auxiliary-panel[data-open="true"][data-expanded="true"])
+  :root[data-platform="darwin"]
+    .app-shell:has(.auxiliary-panel[data-open="true"][data-expanded="true"])
     .thread-heading {
     visibility: hidden;
   }
-  :root[data-platform="linux"] .auxiliary-heading,
-  :root[data-platform="win32"] .auxiliary-heading {
-    padding-right: calc(var(--windows-control-region) + 6px);
-  }
 }
 @media (min-width: 721px) and (max-width: 1099px) {
-  .app-shell:has(.auxiliary-panel[data-open="true"]) .thread-heading {
+  :root[data-platform="darwin"]
+    .app-shell:has(.auxiliary-panel[data-open="true"])
+    .thread-heading {
     visibility: hidden;
   }
 }
@@ -8278,7 +8288,8 @@ button:disabled {
   min-height: 64px;
 }
 .workspace-content-tab[data-active="true"] {
-  box-shadow: inset 0 -2px var(--color-accent);
+  box-shadow: none;
+  background: var(--color-surface-hover);
 }
 [data-plugin-surface] :where(button:not([class])) {
   min-height: var(--control-height);
@@ -8302,6 +8313,21 @@ button:disabled {
   display: grid;
   gap: 6px;
 }
+[data-plugin-surface] label:has(> input[type="checkbox"]) {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+[data-plugin-surface] input[type="checkbox"] {
+  appearance: auto;
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  flex: 0 0 16px;
+  margin: 2px 0;
+  accent-color: var(--color-accent);
+}
+
 [data-plugin-surface] :where(button:disabled) {
   opacity: 0.5;
 }
@@ -8740,6 +8766,7 @@ button:disabled {
   font-size: var(--font-size-caption);
 }
 .thread-panel-toggle {
+  -webkit-app-region: no-drag;
   position: fixed;
   z-index: 80;
   top: 4px;
@@ -8747,9 +8774,6 @@ button:disabled {
   width: 36px;
   height: 36px;
   border-radius: 8px;
-}
-.app-shell:has(.auxiliary-panel[data-open="true"]) #thread-browser-toggle {
-  display: inline-grid;
 }
 :root[data-platform="linux"] .thread-panel-toggle,
 :root[data-platform="win32"] .thread-panel-toggle {
@@ -9205,4 +9229,110 @@ button:disabled {
 .ui-select-option:has(.room-member-choice) > span:first-child {
   min-width: 0;
   flex: 1;
+}
+
+/* Non-mac native chrome owns row one. Conversation titles and auxiliary tabs
+   share row two; the primary sidebar retains its original vertical position. */
+:root:is([data-platform="linux"], [data-platform="win32"]) .app-shell {
+  grid-template-rows:
+    var(--native-titlebar-height) var(--native-titlebar-height)
+    minmax(0, 1fr);
+}
+:root:is([data-platform="linux"], [data-platform="win32"]) .window-titlebar {
+  grid-row: 1 / 3;
+  grid-template-rows: var(--native-titlebar-height) var(
+      --native-titlebar-height
+    );
+  width: 100%;
+  padding-right: 0;
+  background: transparent;
+  pointer-events: none;
+}
+:root:is([data-platform="linux"], [data-platform="win32"])
+  .window-titlebar-product {
+  grid-column: 1;
+  grid-row: 1;
+  pointer-events: auto;
+}
+:root:is([data-platform="linux"], [data-platform="win32"])
+  .window-titlebar-native-actions {
+  pointer-events: auto;
+}
+:root:is([data-platform="linux"], [data-platform="win32"])
+  .window-titlebar-session {
+  grid-row: 2;
+  width: calc(100% - var(--workspace-panel-width, 0px));
+  pointer-events: auto;
+}
+:root:is([data-platform="linux"], [data-platform="win32"]) .sidebar {
+  grid-row: 2 / -1;
+}
+:root:is([data-platform="linux"], [data-platform="win32"]) .workspace {
+  grid-row: 2 / -1;
+}
+:root:is([data-platform="linux"], [data-platform="win32"])
+  .workspace
+  > :is(.agent-surface, .product-page, .plugin-product-page) {
+  padding-top: var(--native-titlebar-height);
+}
+:root:is([data-platform="linux"], [data-platform="win32"]) .auxiliary-heading {
+  padding-right: 8px;
+}
+:root:is([data-platform="linux"], [data-platform="win32"])
+  .thread-panel-toggle {
+  top: calc(var(--native-titlebar-height) + 4px);
+  right: 8px;
+  visibility: visible;
+}
+:root:is([data-platform="linux"], [data-platform="win32"])
+  .app-shell:has(.auxiliary-panel[data-expanded="true"][data-open="true"])
+  .window-titlebar-session {
+  visibility: hidden;
+}
+@media (max-width: 720px) {
+  :root:is([data-platform="linux"], [data-platform="win32"])
+    .window-titlebar-session {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+  :root:is([data-platform="linux"], [data-platform="win32"])
+    .app-shell:has(.auxiliary-panel[data-open="true"])
+    .window-titlebar-session {
+    visibility: hidden;
+  }
+  :root:is([data-platform="linux"], [data-platform="win32"]) .sidebar {
+    top: var(--native-titlebar-height);
+  }
+}
+
+/* Drawers must not put their Close action beneath OS caption controls. */
+:root:is([data-platform="linux"], [data-platform="win32"]) .rooms-chat-overlay {
+  top: var(--native-titlebar-height, 44px);
+}
+:root:is([data-platform="linux"], [data-platform="win32"]) .ui-dialog {
+  top: calc(50% + 22px);
+  max-height: calc(100vh - 76px);
+}
+
+.thread-title-path {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.thread-title-path > .thread-title-line {
+  flex: 1;
+}
+
+.room-background-details {
+  flex-basis: 100%;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+}
+.room-background-details summary {
+  cursor: pointer;
+}
+.room-background-details p {
+  margin: 6px 0 0;
+  line-height: 1.5;
 }

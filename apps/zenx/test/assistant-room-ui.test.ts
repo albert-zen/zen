@@ -51,7 +51,7 @@ test("assistant view reads without starting work, pauses future replies explicit
     assert.match(document.body.textContent ?? "", /No @mention needed/);
     assert.match(
       document.body.textContent ?? "",
-      /may consume its model quota/,
+      /Messages use the linked conversation’s model quota/,
     );
     assert.equal(
       [...document.querySelectorAll("button")].some(

@@ -38,7 +38,7 @@ export const subagentsManifest = {
     {
       name: "zenx_subagents_create",
       description:
-        "Create a native child Thread, optionally name it and submit an explicit task. The delivery result reports acceptance, not completion.",
+        "Create a native child Thread. side-chat snapshots the full parent context and waits for the user without starting a Turn. fresh/fork may optionally submit an explicit task; delivery reports acceptance, not completion.",
       inputSchema: {
         type: "object",
         properties: {
@@ -47,7 +47,7 @@ export const subagentsManifest = {
           },
           mode: {
             type: "string",
-            enum: ["fresh", "fork"],
+            enum: ["fresh", "fork", "side-chat"],
           },
           title: {
             type: "string",
@@ -178,11 +178,6 @@ export const subagentsManifest = {
     ],
     surfaces: [
       {
-        id: "subagents-header",
-        bundleId: "main",
-        exportName: "subagents-header",
-      },
-      {
         id: "subagents-panel",
         bundleId: "main",
         exportName: "subagents-panel",
@@ -195,13 +190,6 @@ export const subagentsManifest = {
         id: "subagents",
         title: "Subagents",
         surfaceId: "subagents-panel",
-      },
-    ],
-    threadHeaders: [
-      {
-        id: "subagents",
-        surfaceId: "subagents-header",
-        order: 10,
       },
     ],
     commands: [

@@ -15,6 +15,7 @@ import {
 } from "../src/renderer/src/plugin-ui-host.js";
 import {
   PluginThreadHeaders,
+  ThreadBreadcrumbAncestors,
   registerSubagentsUi,
 } from "../src/renderer/src/subagents-ui.js";
 
@@ -108,9 +109,10 @@ async function fixture(
   const navigate = (route: string) => routes.push(route);
   const render = async (
     parent: string,
-    surface: "header" | "panel" = "header",
+    surface: "header" | "panel" | "breadcrumb" = "panel",
     threads: readonly NativeThreadSummary[] = [],
     snapshot: ZenXPluginSnapshot = catalog.pluginSnapshot(),
+    active?: boolean,
   ) => {
     await act(async () => {
       root.render(
@@ -122,17 +124,27 @@ async function fixture(
               navigate,
               registry,
             })
-          : React.createElement(GenericPluginUiHost, {
-              registry,
-              snapshot,
-              pluginId: "zenx-subagents",
-              surfaceId: "subagents-panel",
-              context: { threadId: parent, threads },
-              theme: "light",
-              navigate,
-              executeCommand,
-              readHandle,
-            }),
+          : surface === "breadcrumb"
+            ? React.createElement(ThreadBreadcrumbAncestors, {
+                threadId: parent,
+                threads,
+                navigate,
+              })
+            : React.createElement(GenericPluginUiHost, {
+                registry,
+                snapshot,
+                pluginId: "zenx-subagents",
+                surfaceId: "subagents-panel",
+                context: {
+                  threadId: parent,
+                  threads,
+                  ...(active === undefined ? {} : { active }),
+                },
+                theme: "light",
+                navigate,
+                executeCommand,
+                readHandle,
+              }),
       );
     });
   };
@@ -164,37 +176,33 @@ async function fixture(
   };
 }
 
-test("fresh and fork UI creation submit the explicit parent and no automatic task", async () => {
-  for (const [mode, label] of [
-    ["fresh", "Start fresh"],
-    ["fork", "Fork context"],
-  ] as const) {
-    const creation = deferred<unknown>();
-    const f = await fixture(async (call) =>
-      call.commandId === "create" ? creation.promise : { threads: [] },
-    );
-    try {
-      await f.render("selected-parent");
-      await f.click(f.button("New subagent"));
-      await f.click(f.button(label));
-      const creates = f.calls.filter((call) => call.commandId === "create");
-      assert.deepEqual(creates, [
+test("Side chat creation always forks full context without starting a task", async () => {
+  const creation = deferred<unknown>();
+  const f = await fixture(async (call) =>
+    call.commandId === "create" ? creation.promise : { threads: [] },
+  );
+  try {
+    await f.render("selected-parent", "panel");
+    await f.click(f.button("New side chat"));
+    assert.deepEqual(
+      f.calls.filter((call) => call.commandId === "create"),
+      [
         {
           pluginId: "zenx-subagents",
           commandId: "create",
-          input: { parentThreadId: "selected-parent", mode },
+          input: { parentThreadId: "selected-parent", mode: "side-chat" },
         },
-      ]);
-      assert.equal(
-        f.calls.some((call) => call.commandId === "send"),
-        false,
-      );
-      assert.deepEqual(f.routes, []);
-      await act(async () => creation.resolve({ threadId: `child-${mode}` }));
-      assert.deepEqual(f.routes, [`/threads/child-${mode}?view=panel`]);
-    } finally {
-      await f.close();
-    }
+      ],
+    );
+    assert.equal(
+      f.calls.some((call) => call.commandId === "send"),
+      false,
+    );
+    assert.deepEqual(f.routes, []);
+    await act(async () => creation.resolve({ threadId: "side-chat" }));
+    assert.deepEqual(f.routes, ["/threads/side-chat?view=panel"]);
+  } finally {
+    await f.close();
   }
 });
 
@@ -205,8 +213,7 @@ test("two creation clicks before a render dispatch only one command", async () =
   );
   try {
     await f.render("parent", "panel");
-    await f.click(f.button("New subagent"));
-    const fresh = f.button("Start fresh");
+    const fresh = f.button("New side chat");
     await act(async () => {
       fresh.click();
       fresh.click();
@@ -215,8 +222,7 @@ test("two creation clicks before a render dispatch only one command", async () =
       f.calls.filter((call) => call.commandId === "create").length,
       1,
     );
-    assert.equal(f.button("Start fresh").disabled, true);
-    assert.equal(f.button("Fork context").disabled, true);
+    assert.equal(f.button("New side chat").disabled, true);
     await act(async () => creation.resolve({ thread: { id: "created" } }));
     assert.deepEqual(f.routes, ["/threads/created?view=panel"]);
   } finally {
@@ -259,31 +265,30 @@ test("a late list reply cannot repopulate the panel after its parent changes", a
   }
 });
 
-test("a late create reply from the old header parent does not navigate or refresh the new parent", async () => {
+test("a late create reply from the old panel parent does not navigate or refresh the new parent", async () => {
   const creation = deferred<unknown>();
   const f = await fixture(async (call) =>
     call.commandId === "create" ? creation.promise : { threads: [] },
   );
   try {
     await f.render("parent-a");
-    await f.click(f.button("New subagent"));
-    await f.click(f.button("Fork context"));
+    await f.click(f.button("New side chat"));
     await f.render("parent-b");
     const callsBeforeReply = f.calls.length;
     await act(async () => creation.resolve({ threadId: "child-of-parent-a" }));
     assert.deepEqual(f.routes, []);
     assert.equal(f.calls.length, callsBeforeReply);
-    assert.equal(f.button("New subagent").disabled, false);
+    assert.equal(f.button("New side chat").disabled, false);
     assert.deepEqual(
       f.calls.filter((call) => call.commandId === "create")[0]?.input,
-      { parentThreadId: "parent-a", mode: "fork" },
+      { parentThreadId: "parent-a", mode: "side-chat" },
     );
   } finally {
     await f.close();
   }
 });
 
-test("disabling the plugin withdraws the header and ignores its pending creation", async () => {
+test("disabling the plugin withdraws the panel and ignores its pending creation", async () => {
   const creation = deferred<unknown>();
   const f = await fixture(async (call) =>
     call.commandId === "create" ? creation.promise : { threads: [] },
@@ -291,19 +296,22 @@ test("disabling the plugin withdraws the header and ignores its pending creation
   try {
     await f.render("parent");
     assert.ok(
-      f.dom.window.document.querySelector("nav[aria-label='Subagents']"),
+      f.dom.window.document.querySelector(
+        "section[aria-label='Subagent conversations']",
+      ),
     );
-    await f.click(f.button("New subagent"));
-    await f.click(f.button("Start fresh"));
+    await f.click(f.button("New side chat"));
     await f.catalog.setEnabled("zenx-subagents", false);
     assert.deepEqual(f.catalog.pluginSnapshot().threadHeaders, []);
     await f.render("parent");
     assert.equal(
-      f.dom.window.document.querySelector("nav[aria-label='Subagents']"),
+      f.dom.window.document.querySelector(
+        "section[aria-label='Subagent conversations']",
+      ),
       null,
     );
     assert.equal(
-      f.dom.window.document.querySelector("[aria-label='New subagent']"),
+      f.dom.window.document.querySelector("[aria-label='New side chat']"),
       null,
     );
     await act(async () => creation.resolve({ threadId: "already-created" }));
@@ -371,38 +379,84 @@ test("the panel renders direct and nested descendants and explicitly reveals arc
   }
 });
 
-test("the header navigates to the parent, directory and unarchived direct children", async () => {
+test("the plugin provides only the Subagents panel, with no under-title directory strip", async () => {
   const f = await fixture();
   try {
-    await f.render("parent", "header", [
-      summary("parent", "ancestor"),
-      summary("direct", "parent"),
-      summary("nested", "direct"),
-      summary("archived", "parent", { archived: true }),
-    ]);
-    assert.equal(
-      f.dom.window.document.querySelector(".subagent-count")?.textContent,
-      "1",
-    );
+    assert.deepEqual(f.catalog.pluginSnapshot().threadHeaders, []);
     assert.deepEqual(
-      [
-        ...f.dom.window.document.querySelectorAll(".subagent-shortcuts button"),
-      ].map((button) => button.textContent?.trim()),
-      ["direct"],
+      subagentsManifest.ui.surfaces.map((surface) => surface.id),
+      ["subagents-panel"],
     );
-    await f.click(f.button("Parent"));
-    await f.click(
-      f.dom.window.document.querySelector<HTMLButtonElement>(
-        ".subagents-directory",
-      )!,
-    );
-    await f.click(f.button("direct"));
-    assert.deepEqual(f.routes, [
-      "/threads/ancestor",
-      "/threads/parent?panel=zenx-subagents%3Asubagents",
-      "/threads/direct?view=panel",
-    ]);
+    await f.render("parent", "header", [summary("direct", "parent")]);
+    assert.equal(f.dom.window.document.body.textContent, "");
+    assert.deepEqual(f.calls, []);
   } finally {
     await f.close();
+  }
+});
+
+test("topbar ancestors navigate full-screen without duplicating the current editable title", async () => {
+  const f = await fixture();
+  try {
+    const threads = [
+      summary("root", undefined, { name: "Main conversation" }),
+      summary("parent", "root", { name: "Planning side chat" }),
+      summary("current", "parent", { name: "Current title" }),
+    ];
+    await f.render("current", "breadcrumb", threads);
+    assert.equal(
+      f.dom.window.document.querySelector("nav")?.getAttribute("aria-label"),
+      "Parent conversations",
+    );
+    assert.doesNotMatch(
+      f.dom.window.document.body.textContent!,
+      /Current title/,
+    );
+    await f.click(f.button("Main conversation"));
+    await f.click(f.button("Planning side chat"));
+    assert.deepEqual(f.routes, ["/threads/root", "/threads/parent"]);
+    await f.render("root", "breadcrumb", threads);
+    assert.equal(f.dom.window.document.body.textContent, "");
+  } finally {
+    await f.close();
+  }
+});
+
+test("breadcrumb handles an unavailable parent and malformed cycles without looping", async () => {
+  const f = await fixture();
+  try {
+    await f.render("child", "breadcrumb", [summary("child", "missing")]);
+    await f.click(f.button("Parent conversation"));
+    assert.deepEqual(f.routes, ["/threads/missing"]);
+    await f.render("child", "breadcrumb", [
+      summary("child", "parent"),
+      summary("parent", "child"),
+    ]);
+    assert.equal(f.dom.window.document.querySelectorAll("button").length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a pending Side chat creation cannot navigate after its panel hides, even if it reopens", async () => {
+  for (const reopen of [false, true]) {
+    const creation = deferred<unknown>();
+    const f = await fixture(async (call) =>
+      call.commandId === "create" ? creation.promise : { threads: [] },
+    );
+    try {
+      await f.render("parent", "panel", [], undefined, true);
+      await f.click(f.button("New side chat"));
+      await f.render("parent", "panel", [], undefined, false);
+      if (reopen) await f.render("parent", "panel", [], undefined, true);
+      const calls = f.calls.length;
+      await act(async () =>
+        creation.resolve({ threadId: "created-after-hide" }),
+      );
+      assert.deepEqual(f.routes, []);
+      assert.equal(f.calls.length, calls);
+    } finally {
+      await f.close();
+    }
   }
 });

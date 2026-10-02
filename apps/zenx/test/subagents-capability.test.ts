@@ -76,8 +76,8 @@ function fixture() {
   };
 }
 
-test("fresh and fork use the trusted caller by default and create no implicit Turn", async () => {
-  for (const mode of ["fresh", "fork"]) {
+test("fresh, fork, and Side chat use the trusted caller by default and create no implicit Turn", async () => {
+  for (const mode of ["fresh", "fork", "side-chat"]) {
     const f = fixture();
     const value = await f.service.invoke(
       "zenx_subagents_create",
@@ -115,6 +115,20 @@ test("trusted product create unwraps explicit input; a model cannot use that env
     ),
     /Unexpected argument: input/,
   );
+});
+test("Side chat rejects a creation task before any native mutation", async () => {
+  const f = fixture();
+  await assert.rejects(
+    f.service.invoke(
+      "zenx_subagents_create",
+      invocation("zenx_subagents_create", {
+        mode: "side-chat",
+        task: "begin inherited work",
+      }),
+    ),
+    /waits for an explicit user request/,
+  );
+  assert.deepEqual(f.requests, []);
 });
 test("explicit task uses existing send semantics and reports acceptance without claiming completion", async () => {
   const f = fixture();
@@ -248,10 +262,7 @@ test("thread header schema requires existing surface and disabling Subagents rem
     },
     "bundled",
   );
-  assert.equal(
-    catalog.pluginSnapshot().threadHeaders?.[0]?.pluginId,
-    "zenx-subagents",
-  );
+  assert.deepEqual(catalog.pluginSnapshot().threadHeaders, []);
   assert.equal(catalog.pluginSnapshot().panels[0]?.id, "subagents");
   assert.equal(catalog.hostSnapshot().definitions.length, 4);
   await catalog.setEnabled("zenx-subagents", false);

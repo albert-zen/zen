@@ -133,7 +133,10 @@ test("thread exposes one working side panel instead of the legacy workspace draw
         "#thread-browser-toggle:not(:disabled)",
       ),
     );
-    assert.equal(document.querySelectorAll(".top-actions button").length, 1);
+    assert.equal(
+      document.querySelectorAll(".app-shell > #thread-browser-toggle").length,
+      1,
+    );
     assert.equal(
       document.querySelector('[aria-label="Open workspace panel"]'),
       null,
@@ -148,6 +151,19 @@ test("thread exposes one working side panel instead of the legacy workspace draw
       "true",
     );
     assert.equal(document.querySelector(".workspace-drawer"), null);
+    assert.equal(
+      document.querySelector(".app-shell > #thread-browser-toggle"),
+      null,
+    );
+    const close = document.querySelector<HTMLButtonElement>(
+      ".auxiliary-close-button",
+    )!;
+    await act(async () => close.click());
+    assert.equal(
+      document.querySelector(".auxiliary-panel")?.getAttribute("data-open"),
+      "false",
+    );
+    assert.ok(document.querySelector(".app-shell > #thread-browser-toggle"));
   } finally {
     await harness.unmount();
   }

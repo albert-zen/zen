@@ -2065,7 +2065,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           <>
             <header className="rooms-chat-header">
               <div>
-                <h2>{room.assistant ? room.name : `#${room.name}`}</h2>
+                {!primaryNavigation ? (
+                  <h2>{room.assistant ? room.name : `#${room.name}`}</h2>
+                ) : null}
                 {room.assistant ? (
                   <p className="room-assistant-state" role="status">
                     {room.assistantRepliesEnabled
@@ -2084,6 +2086,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               {primaryNavigation ? (
                 <button
                   id="thread-browser-toggle"
+                  data-room-id={room.id}
                   type="button"
                   aria-label="Open conversation workspace"
                   onClick={() =>
@@ -2108,10 +2111,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             </header>
             {room.assistant ? (
               <div className="room-assistant-controls">
-                <span>
-                  Uses an existing conversation. Sending may consume its model
-                  quota. Close the window to keep running; Quit stops ZenX.
-                </span>
+                <span>Messages use the linked conversation’s model quota.</span>
                 <button
                   type="button"
                   disabled={busy}
@@ -2126,10 +2126,14 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     ? "Pause assistant"
                     : "Resume assistant"}
                 </button>
-                <small>
-                  Pause affects future messages only; already admitted work
-                  continues in its source conversation.
-                </small>
+                <details className="room-background-details">
+                  <summary>Background behavior</summary>
+                  <p>
+                    Close the window to keep running; Quit stops ZenX. Pause
+                    affects future messages only; already admitted work
+                    continues in its source conversation.
+                  </p>
+                </details>
               </div>
             ) : null}
             {error ||

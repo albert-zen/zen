@@ -7,108 +7,62 @@
 .plugin-thread-headers:empty {
   display: none;
 }
-.subagents-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  padding: 4px 24px;
-  border-bottom: 1px solid var(--color-border-subtle);
-  font-size: var(--font-size-caption);
-  color: var(--text-2);
+.subagent-create {
+  position: relative;
 }
-.subagents-header button {
+.subagent-create-button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   min-height: 28px;
-  padding: 3px 6px;
-  border: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-control);
   border-radius: 6px;
-  background: transparent;
-  color: inherit;
+  background: var(--color-surface-control);
+  color: var(--text-1);
   font: inherit;
 }
-.subagents-header button:hover,
+.subagent-create-button:hover,
 .subagent-tree-row:hover {
   background: var(--color-surface-hover);
   color: var(--text-1);
 }
-.subagents-header > .icon-button {
-  margin-left: auto;
-  flex-shrink: 0;
+.subagent-create-button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
-.subagents-directory,
-.subagent-parent {
-  flex-shrink: 0;
+.subagent-create-error {
+  max-width: 240px;
+  color: var(--color-status-danger);
+  margin: 8px 0;
 }
-.subagent-count {
-  font-variant-numeric: tabular-nums;
-}
-.subagent-shortcuts {
+.thread-breadcrumb-ancestors {
   display: flex;
-  flex: 1;
-  gap: 4px;
+  align-items: center;
+  gap: 7px;
   min-width: 0;
   overflow: hidden;
+  color: var(--text-3);
 }
-.subagent-shortcuts button {
-  min-width: 0;
-  max-width: 150px;
-}
-.subagent-shortcuts button > span:last-child {
-  text-overflow: ellipsis;
+.thread-breadcrumb-ancestors button {
+  flex: 0 1 auto;
+  min-width: 24px;
+  max-width: 180px;
+  padding: 3px 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
   white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
 }
-.subagent-state {
-  display: inline-block;
-  width: 5px;
-  height: 5px;
-  flex: 0 0 5px;
-  border-radius: 50%;
-  background: var(--text-3);
-}
-.subagent-state[data-state="active"] {
-  background: var(--text-accent);
-}
-.subagent-state[data-state="systemError"] {
-  background: var(--color-status-danger);
-}
-.subagent-inline-error {
-  font-size: var(--font-size-caption);
-}
-.subagent-create-menu {
-  padding: 5px;
-  min-width: 176px;
-  background: var(--color-surface-elevated);
+.thread-breadcrumb-ancestors button:hover {
   color: var(--text-1);
-  border: 1px solid var(--color-border-control);
-  border-radius: 10px;
-  box-shadow: 0 8px 24px var(--shadow-color-low);
-  z-index: 90;
 }
-.subagent-create-menu > button {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  font: inherit;
-  font-size: var(--font-size-caption);
-  color: inherit;
-  text-align: left;
-}
-.subagent-create-menu > button:hover {
-  background: var(--color-surface-hover);
-}
-.subagent-create-menu p {
-  max-width: 250px;
-  padding: 6px;
-  font-size: var(--font-size-caption);
+.thread-breadcrumb-ancestors > span {
+  flex-shrink: 0;
 }
 .subagents-panel {
   padding: 12px;
@@ -167,7 +121,7 @@
   padding: 12px 4px;
   color: var(--text-2);
 }
-.subagent-archived-toggle {
+[data-plugin-surface] .subagent-archived-toggle {
   display: flex;
   gap: 6px;
   align-items: center;
@@ -222,11 +176,20 @@
 .conversation-viewport-status > button {
   margin-left: 8px;
 }
-@media (max-width: 820px) {
-  .subagents-header {
-    padding-inline: 12px;
-  }
-  .subagent-shortcuts {
-    display: none;
-  }
+
+[data-plugin-surface] .subagent-archived-toggle input[type="checkbox"] {
+  appearance: auto;
+  -webkit-appearance: auto;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--text-accent);
+  cursor: pointer;
+}
+[data-plugin-surface] .subagent-archived-toggle:has(input:focus-visible) {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 4px;
+  border-radius: 3px;
 }

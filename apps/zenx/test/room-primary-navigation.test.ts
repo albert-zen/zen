@@ -53,11 +53,11 @@ test("primary Room navigation switches conversations without a duplicate rail or
       document.querySelector('nav[aria-label="Rooms"]') === null,
       true,
     );
-    assert.equal(document.querySelector("h2")?.textContent, "#Room a");
+    assert.equal(document.querySelector(".rooms-chat-header h2"), null);
     await act(async () =>
       root.render(React.createElement(RoomsPage, { sdk: sdk("b") })),
     );
-    assert.equal(document.querySelector("h2")?.textContent, "#Room b");
+    assert.equal(document.querySelector(".rooms-chat-header h2"), null);
     const panel = document.querySelector<HTMLButtonElement>(
       'button[aria-label="Open conversation workspace"]',
     );

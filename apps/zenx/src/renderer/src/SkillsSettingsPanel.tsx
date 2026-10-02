@@ -40,7 +40,7 @@ export function SkillsSettingsPanel() {
     <>
       <header>
         <h2>Skills</h2>
-        <p>
+        <p className="settings-note">
           Import instructions and their resources. Manual Skills stay out of
           model context until you choose them from the slash menu.
         </p>

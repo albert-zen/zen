@@ -53,9 +53,11 @@
   工具调用、工具结果与失败，都是 Item。
 - **Canonical Item Decoder** — JSONL journal 只在读取边界用一个穷尽的 runtime decoder 接纳现行与明确 legacy Item shape，拒绝不能安全重放的结构，而写侧继续只使用同一组 canonical TypeScript 类型。
 - **Thread** — 一个 agent 上下文，权威状态是一条 append-only 的 Item list。
-- **Thread Fork** — Core 在最近一个完整 Turn 边界原子复制并重标识 canonical Item 前缀，再追加 `thread_forked` 来源事实；新 Thread 继续独立追加，且不继承源 Thread 的活动执行、排队输入或 Host 资源。
-- **Child Thread** — Core 在创建普通 Thread 时将不可变 `parentThreadId` 与初始历史原子保存，原生 AppServer 按同目录 fresh/fork 创建并投影关系；普通 Copy 不继承亲缘关系，父线程归档不联动子线程，不增加委派任务或调度状态。
-- **Subagents Plugin** — 默认内置且可停用的第一方 package 经同一 Plugin Catalog 注册子线程工具、顶部目录及右栏树，导航打开 Host 的普通对话视图；停用撤销工具与入口，Thread 历史及亲缘关系仍由 Core 持有。
+- **Thread Fork** — 普通 fork / Copy 由 Core 在最近一个完整 Turn 边界原子复制并重标识 canonical Item 前缀，再追加 `thread_forked` 来源事实；新 Thread 继续独立追加，且不继承源 Thread 的活动执行、排队输入或 Host 资源。
+- **Child Thread** — Core 在创建普通 Thread 时将不可变 `parentThreadId` 与初始历史原子保存，原生 AppServer 按同目录 fresh/fork/side-chat 创建并投影关系；普通 Copy 不继承亲缘关系，父线程归档不联动子线程，不增加委派任务或调度状态。
+- **Side chat snapshot** — Side chat creation snapshots the parent’s full canonical ItemList into an ordinary child Thread, appends canonical snapshot-only tool/Turn/queue closures and one standalone `thread_instruction`, and never starts execution or changes the parent. Snapshot-only tool receipts explicitly report `executed:false`; sampling places these observations at their original call-batch closure before compaction selection, without rewriting the stored source history. `thread_instruction` is a persisted model-visible instruction without a Turn; it projects through the existing user-role instruction channel and survives compaction.
+- **Thread Instruction** — `thread_instruction` is a canonical standalone instruction with no Turn ID; native journal validation, context projection and compaction preserve it, while legacy CAS projection does not invent a Turn for it.
+- **Subagents Plugin** — 默认内置且可停用的第一方 package 经同一 Plugin Catalog 注册子线程工具及右栏树，导航打开 Host 的普通对话视图；停用撤销工具与入口，Thread 历史及亲缘关系仍由 Core 持有。
 - **Thread Conversation Viewport** — Host Renderer 为每个打开的 Thread 从原生恢复快照与实时事件派生易失视图，消息提交显式绑定目标 Thread，主区与右栏复用同一 ThreadView 和按 Thread 隔离的草稿；切换布局不创建线程或复制会话权威。
 - **Turn** — 一次交换：从一条用户输入开始、到 agent 完成响应为止追加的那段连续 Item。
 - **AgentRuntime** — Zen 拥有的 provider-neutral agent loop：从 ItemList 编译上下文 → 调用模型 → 通过 Tool Environment 执行工具，并把 canonical `tool_call` / `tool_result` 在内的一切事实追加为 Item。

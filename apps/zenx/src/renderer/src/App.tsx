@@ -137,7 +137,10 @@ import {
 } from "./thread-view-state.js";
 import { ThreadView } from "./ThreadView.js";
 import { ThreadConversationViewport } from "./thread-conversation-viewport.js";
-import { PluginThreadHeaders } from "./subagents-ui.js";
+import {
+  PluginThreadHeaders,
+  ThreadBreadcrumbAncestors,
+} from "./subagents-ui.js";
 import { cancellationResultsFromItems } from "./queue-cancel-state.js";
 import type { WorkflowCommand } from "./workflow-commands.js";
 import { ZenXBrand } from "./ZenXBrand.js";
@@ -2399,15 +2402,8 @@ export function App() {
         selectedSummary !== null ? (
           <ConversationTitleBar
             onOpenSidebar={openSidebar}
-            browserEnabled={true}
-            browserOpen={browserPanels[selectedSummary.threadId] === true}
-            onToggleBrowser={() =>
-              setBrowserPanels((current) => ({
-                ...current,
-                [selectedSummary.threadId]:
-                  current[selectedSummary.threadId] !== true,
-              }))
-            }
+            threads={[...threadSummaries, ...archivedThreadSummaries]}
+            onNavigate={openPage}
             onRename={renameSelectedThread}
             onOpenSource={(threadId) => void resumeThread(threadId)}
             onRetryTitle={retrySelectedTitle}
@@ -2438,6 +2434,44 @@ export function App() {
           />
         ) : null}
       </WindowTitleBar>
+      {page === "agent" &&
+      newThreadDraft === null &&
+      selectedSummary !== null &&
+      browserPanels[selectedSummary.threadId] !== true ? (
+        <button
+          id="thread-browser-toggle"
+          className="icon-button thread-panel-toggle"
+          type="button"
+          aria-label={
+            browserPanels[selectedSummary.threadId]
+              ? "Close side panel"
+              : "Open side panel"
+          }
+          title={
+            browserPanels[selectedSummary.threadId]
+              ? "Close side panel"
+              : "Open side panel"
+          }
+          aria-controls="thread-workspace-panel"
+          aria-expanded={browserPanels[selectedSummary.threadId] === true}
+          disabled={threadDetail === null}
+          onClick={() => {
+            setBrowserPanels((current) => ({
+              ...current,
+              [selectedSummary.threadId]: true,
+            }));
+            requestAnimationFrame(() =>
+              document
+                .querySelector<HTMLButtonElement>(
+                  '#thread-workspace-panel[data-open="true"] .auxiliary-close-button',
+                )
+                ?.focus(),
+            );
+          }}
+        >
+          <Icon name="panel-right" />
+        </button>
+      ) : null}
       <Sidebar
         roomConversations={roomsAdmitted ? roomConversations : undefined}
         selectedRoomId={selectedRoomId}
@@ -3015,9 +3049,8 @@ function WindowTitleBar({
 }
 
 function ConversationTitleBar({
-  browserEnabled,
-  browserOpen,
-  onToggleBrowser,
+  threads,
+  onNavigate,
   onOpenSidebar,
   onRename,
   onOpenSource,
@@ -3027,9 +3060,8 @@ function ConversationTitleBar({
   threadDetail,
   titleProjection,
 }: {
-  browserEnabled: boolean;
-  browserOpen: boolean;
-  onToggleBrowser(): void;
+  threads: readonly NativeThreadSummary[];
+  onNavigate(route: string): void;
   onOpenSidebar(): void;
   onRename(title: string): Promise<void>;
   onOpenSource(threadId: string): void;
@@ -3051,13 +3083,20 @@ function ConversationTitleBar({
           <Icon name="tree" />
         </button>
         <div className="thread-heading">
-          <ThreadTitleEditor
-            editable={!selectedSummary.archived}
-            onRename={onRename}
-            onRetry={onRetryTitle}
-            projection={titleProjection}
-            title={threadTitle(selectedSummary)}
-          />
+          <div className="thread-title-path">
+            <ThreadBreadcrumbAncestors
+              threadId={selectedSummary.threadId}
+              threads={threads}
+              navigate={onNavigate}
+            />
+            <ThreadTitleEditor
+              editable={!selectedSummary.archived}
+              onRename={onRename}
+              onRetry={onRetryTitle}
+              projection={titleProjection}
+              title={threadTitle(selectedSummary)}
+            />
+          </div>
           <span>
             {selectedSummary.status === "systemError"
               ? "Unavailable journal"
@@ -3080,23 +3119,6 @@ function ConversationTitleBar({
             )}
           </span>
         </div>
-      </div>
-      <div className="top-actions">
-        {browserEnabled ? (
-          <button
-            id="thread-browser-toggle"
-            className="icon-button thread-panel-toggle"
-            type="button"
-            aria-label={browserOpen ? "Close side panel" : "Open side panel"}
-            title={browserOpen ? "Close side panel" : "Open side panel"}
-            aria-controls="thread-workspace-panel"
-            aria-expanded={browserOpen}
-            disabled={threadDetail === null}
-            onClick={onToggleBrowser}
-          >
-            <Icon name="panel-right" />
-          </button>
-        ) : null}
       </div>
     </div>
   );
