@@ -9245,7 +9245,11 @@ button:disabled {
     );
   width: 100%;
   padding-right: 0;
-  background: transparent;
+  background: linear-gradient(
+    to bottom,
+    var(--color-surface-sidebar) 0 var(--native-titlebar-height),
+    transparent var(--native-titlebar-height) 100%
+  );
   pointer-events: none;
 }
 :root:is([data-platform="linux"], [data-platform="win32"])

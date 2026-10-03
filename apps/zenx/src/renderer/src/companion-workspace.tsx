@@ -216,7 +216,22 @@ export function CompanionWorkspace({
       </p>
       <dl>
         <dt>Working thread</dt>
-        <dd>{room.assistant?.threadId ?? "Shared room"}</dd>
+        <dd>
+          {room.assistant ? (
+            <button
+              type="button"
+              onClick={() =>
+                navigate(
+                  `/threads/${encodeURIComponent(room.assistant!.threadId)}`,
+                )
+              }
+            >
+              Open working Thread
+            </button>
+          ) : (
+            "Shared room"
+          )}
+        </dd>
         <dt>Heartbeat / recurring checks</dt>
         <dd>
           {!triggersEnabled
@@ -244,8 +259,14 @@ export function CompanionWorkspace({
         </dd>
       </dl>
       <p className="companion-note">
-        Reading this workspace does not start agent work. Scheduled checks can
-        consume model quota.
+        Direct Thread messages stay in the Thread. The assistant posts here only
+        through its Room messaging tool. This binding keeps both conversations
+        connected without copying every message between them.
+      </p>
+      <p className="companion-note">
+        Creating a Companion enables message wakeups only. Configure recurring
+        checks in Automations when needed; they can consume model quota. Reading
+        this workspace does not start agent work.
       </p>
     </>
   );

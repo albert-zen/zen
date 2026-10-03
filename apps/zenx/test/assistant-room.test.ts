@@ -1,3 +1,4 @@
+import { ALWAYS_ON_ASSISTANT_PROMPT } from "../src/main/assistant-preset.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -321,6 +322,52 @@ test("assistant includes the complete current message beyond the bounded context
     assert.ok(JSON.stringify(f.model.requests[0]?.input).includes(text));
     assert.equal(f.service.snapshot().history[0]?.status, "completed");
     assert.equal(f.service.snapshot().history[0]?.delivery, undefined);
+  } finally {
+    await f.close();
+  }
+});
+
+// Prompt contracts are explicit product guidance, not proof of model compliance.
+test("Companion preset separates direct conversation and closes follow-up lifecycle", () => {
+  assert.match(
+    ALWAYS_ON_ASSISTANT_PROMPT,
+    /Direct messages in the working Thread/,
+  );
+  assert.match(
+    ALWAYS_ON_ASSISTANT_PROMPT,
+    /Do not reuse a Reply Room ID from an earlier turn/,
+  );
+  assert.match(
+    ALWAYS_ON_ASSISTANT_PROMPT,
+    /stopping condition in the registered wakeup prompt itself/,
+  );
+  assert.match(
+    ALWAYS_ON_ASSISTANT_PROMPT,
+    /direct-origin work retain the working Thread destination/,
+  );
+  assert.match(ALWAYS_ON_ASSISTANT_PROMPT, /cancel or disable/);
+  assert.match(
+    ALWAYS_ON_ASSISTANT_PROMPT,
+    /No heartbeat is installed by this preset/,
+  );
+});
+
+test("direct working Thread completion stays out of the Companion Room", async () => {
+  const f = await fixture();
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    await f.model.sendAssistant({
+      threadId: input.members[0]!.threadId,
+      clientUserMessageId: randomUUID(),
+      input: [{ type: "text", text: "Talk to me here only" }],
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(f.service.snapshot().rooms[0]!.messages, []);
+    await f.service.postAgentRoomMessage(room.id, "Explicit IM reply");
+    assert.deepEqual(
+      f.service.snapshot().rooms[0]!.messages.map((m) => m.text),
+      ["Explicit IM reply"],
+    );
   } finally {
     await f.close();
   }

@@ -223,7 +223,7 @@ export function RoomConversationNavigation({
       label: "Companions",
       kind: "companion",
       rooms: rooms.filter((room) => room.assistant !== undefined),
-      icon: "thread" as const,
+      icon: "conversation" as const,
     },
     {
       label: "Rooms",

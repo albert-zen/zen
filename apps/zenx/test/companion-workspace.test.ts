@@ -98,6 +98,16 @@ test("Companion exposes explicit notes, exact local references and truthful unco
     );
     assert.match(
       document.body.textContent ?? "",
+      /Direct Thread messages stay in the Thread/,
+    );
+    const openThread = [...document.querySelectorAll("button")].find(
+      (button) => button.textContent === "Open working Thread",
+    );
+    assert.ok(openThread);
+    await act(async () => openThread.click());
+    assert.deepEqual(routes, ["/threads/assistant"]);
+    assert.match(
+      document.body.textContent ?? "",
       /1 matters · 1 notes · revision 2/,
     );
     await act(async () =>
