@@ -1,3 +1,6 @@
+import { createClaudeCodeAdapter } from "./claude-code.mjs";
+import { createOpenCodeAdapter } from "./opencode.mjs";
+import { createDeepSeekHarnessAdapter } from "./deepseek-harness.mjs";
 /**
  * Experimental request boundary, not a second runtime or a transport launcher.
  * The caller supplies an already initialized, authenticated, engine-specific
@@ -48,7 +51,12 @@ const dialects = {
   },
 };
 
-export function createHarnessAdapter(engine, transport) {
+export function createHarnessAdapter(engine, transport, options = {}) {
+  if (engine === "claude-code")
+    return createClaudeCodeAdapter(transport, options);
+  if (engine === "opencode") return createOpenCodeAdapter(transport, options);
+  if (engine === "deepseek-harness")
+    return createDeepSeekHarnessAdapter(transport, options);
   const dialect = Object.hasOwn(dialects, engine)
     ? dialects[engine]
     : undefined;
@@ -66,6 +74,10 @@ export function createHarnessAdapter(engine, transport) {
     // These are capabilities of this slice, not promises about every backend.
     capabilities: Object.freeze({
       textInput: true,
+      createSession: true,
+      read: true,
+      interrupt: true,
+      interruptScope: "turn",
       steer: true,
       fork: false,
       resume: false,
