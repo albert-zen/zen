@@ -1073,3 +1073,7 @@ ZenX 的 `/compact --no-reference` 仅将关闭原文定位符作为 `thread/com
 内建立另一个压缩状态源或将 `/compact` 写成 user message。
 
 - **ZenX composer send controls** — the send button hover/focus panel presents existing send intents and updates the existing Host send preference; it owns only transient visibility and save feedback, never admission or execution semantics.
+
+## Experimental harness boundary
+
+`experiments/harness-adapters` is a non-integrated request-mapping probe: each external harness retains its own execution/history authority, while a transport-scoped session reference and honest capability/acceptance contract explore shared client behavior without creating a Zen runtime, transcript, scheduler, or permission authority.
