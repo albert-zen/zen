@@ -5,7 +5,7 @@ import type { ZenXAutomationControlPort } from "./capabilities/automation-contro
 import type { ZenXTrustedProfilePluginLoader } from "./plugin-profile.js";
 
 export const ZENX_ROOMS_PACKAGE_NAME = "@zenx/rooms-plugin";
-export const ZENX_ROOMS_TARBALL = "zenx-rooms-plugin-1.0.4.tgz";
+export const ZENX_ROOMS_TARBALL = "zenx-rooms-plugin-1.0.5.tgz";
 
 export function createZenXRoomsProfileLoader(
   service: () => ZenXAutomationControlPort,
@@ -29,6 +29,7 @@ export function createZenXRoomsProfileLoader(
     // It never sees the Host's source marker, only this restricted port.
     const scope = new AsyncLocalStorage<{
       trustedUi: boolean;
+      threadId: string | undefined;
       active: boolean;
     }>();
     const call = () => {
@@ -109,14 +110,43 @@ export function createZenXRoomsProfileLoader(
         call();
         return domain.removeRoomMember(id, threadId);
       },
-      postAgentRoomMessage: (id: string, text: string) => {
+      postAgentRoomMessage: (
+        id: string,
+        text: string,
+        replyToMessageId?: string,
+      ) => {
         if (call().trustedUi)
           throw new Error("Trusted Room UI cannot use the Agent post path");
-        return domain.postAgentRoomMessage(id, text);
+        return domain.postAgentRoomMessage(
+          id,
+          text,
+          replyToMessageId,
+          call().threadId,
+        );
       },
-      prepareRoomMessage: (id: string, key: string, text: string) => {
+      reactRoomMessage: (
+        id: string,
+        messageId: string,
+        emoji: string | null,
+      ) => {
+        const invocation = call();
+        if (!invocation.trustedUi && !invocation.threadId)
+          throw new Error("Agent reaction requires a calling Thread");
+        return domain.setRoomReaction(
+          id,
+          messageId,
+          invocation.trustedUi ? null : invocation.threadId!,
+          emoji,
+        );
+      },
+      prepareRoomMessage: (
+        id: string,
+        key: string,
+        text: string,
+        replyToMessageId?: string,
+      ) => {
         requireUi();
-        return domain.prepareRoomMessage(id, key, text);
+        return domain.prepareRoomMessage(id, key, text, replyToMessageId);
       },
       postPreparedRoomMessage: (id: string, key: string, text: string) => {
         requireUi();
@@ -153,6 +183,7 @@ export function createZenXRoomsProfileLoader(
       invoke: async (toolName, invocation) => {
         const context = {
           trustedUi: invocation.trustedPluginUi === true,
+          threadId: invocation.threadId,
           active: true,
         };
         try {

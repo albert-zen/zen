@@ -175,6 +175,8 @@ const ROOM_KEYS = [
 ] as const;
 const MEMBER_KEYS = ["name", "threadId"] as const;
 const MESSAGE_KEYS = [
+  "replyTo",
+  "reactions",
   "id",
   "roomId",
   "author",
@@ -479,6 +481,12 @@ function canonicalRoom(room: ZenXRoom): ZenXRoom {
       threadId: member.threadId,
     })),
     messages: room.messages.map((message) => ({
+      ...(message.replyTo === undefined
+        ? {}
+        : { replyTo: structuredClone(message.replyTo) }),
+      ...(message.reactions === undefined
+        ? {}
+        : { reactions: structuredClone(message.reactions) }),
       id: message.id,
       roomId: message.roomId,
       author: message.author,
@@ -495,6 +503,9 @@ function canonicalRoom(room: ZenXRoom): ZenXRoom {
       ? {}
       : {
           operations: room.operations.map((operation) => ({
+            ...(operation.replyTo === undefined
+              ? {}
+              : { replyTo: structuredClone(operation.replyTo) }),
             id: operation.id,
             text: operation.text,
             messageId: operation.messageId,
@@ -1020,6 +1031,7 @@ function isRoomOperation(
   return (
     operation !== null &&
     exactKeys(operation, [
+      "replyTo",
       "id",
       "text",
       "messageId",
@@ -1028,6 +1040,7 @@ function isRoomOperation(
       ...(operation["cancelled"] === undefined ? [] : ["cancelled"]),
       "mentions",
     ]) &&
+    (operation["replyTo"] === undefined || isRoomQuote(operation["replyTo"])) &&
     string(operation["id"], MAX_ID_BYTES) &&
     string(operation["text"], MAX_MESSAGE_TEXT_BYTES) &&
     nullableString(operation["messageId"], MAX_ID_BYTES) &&
@@ -1075,6 +1088,9 @@ function isRoomMessage(value: unknown): value is RoomMessage {
   return (
     message !== null &&
     exactKeys(message, MESSAGE_KEYS) &&
+    (message["replyTo"] === undefined || isRoomQuote(message["replyTo"])) &&
+    (message["reactions"] === undefined ||
+      isRoomReactions(message["reactions"])) &&
     string(message["id"], MAX_ID_BYTES) &&
     string(message["roomId"], MAX_ID_BYTES) &&
     string(message["author"], MAX_MESSAGE_AUTHOR_BYTES) &&
@@ -1169,4 +1185,36 @@ function programStatus(
     value === "oversized_output" ||
     value === "uncertain"
   );
+}
+
+function isRoomQuote(value: unknown): boolean {
+  const quote = record(value);
+  return (
+    quote !== null &&
+    exactKeys(quote, ["messageId", "author", "text"]) &&
+    string(quote["messageId"], MAX_ID_BYTES) &&
+    string(quote["author"], MAX_MESSAGE_AUTHOR_BYTES) &&
+    string(quote["text"], 1000)
+  );
+}
+function isRoomReactions(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length > MAX_ROOM_MEMBERS + 1)
+    return false;
+  const actors = new Set<string>();
+  return value.every((entry) => {
+    const reaction = record(entry);
+    if (
+      !reaction ||
+      !exactKeys(reaction, ["actorId", "label", "emoji"]) ||
+      !string(reaction["actorId"], MAX_ID_BYTES + 7) ||
+      !string(reaction["label"], MAX_MESSAGE_AUTHOR_BYTES) ||
+      !["👍", "❤️", "🎉", "👀", "✅", "🤔"].includes(
+        reaction["emoji"] as string,
+      ) ||
+      actors.has(reaction["actorId"])
+    )
+      return false;
+    actors.add(reaction["actorId"]);
+    return true;
+  });
 }

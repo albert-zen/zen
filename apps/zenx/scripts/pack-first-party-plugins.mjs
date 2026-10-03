@@ -24,7 +24,7 @@ const pluginSdkCli = path.join(
   "dist",
   "cli.js",
 );
-export const ZENX_ROOMS_TARBALL = "zenx-rooms-plugin-1.0.4.tgz";
+export const ZENX_ROOMS_TARBALL = "zenx-rooms-plugin-1.0.5.tgz";
 export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
     "@zenx/subagents-plugin",

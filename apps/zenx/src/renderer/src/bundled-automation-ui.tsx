@@ -86,6 +86,12 @@ interface RoomListResult {
   >;
 }
 interface RoomDeliveryResult {
+  receipt?: "delivered" | "unknown";
+  readers?: Array<{
+    threadId: string;
+    name: string;
+    state: "read" | "unconfirmed" | "unavailable";
+  }>;
   operationId?: string;
   text?: string;
   state: "prepared" | "saved" | "cancelled" | "unknown";
@@ -1421,7 +1427,19 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const [memberName, setMemberName] = useState("");
   const [threadId, setThreadId] = useState("");
   const [localDrafts, setLocalDrafts] = useState<Record<string, string>>({});
+  const [localReplies, setLocalReplies] = useState<
+    Record<string, ZenXRoom["messages"][number]["replyTo"]>
+  >({});
   const sharedDrafts = useContext(RoomDraftContext);
+  const replies = sharedDrafts?.replies ?? localReplies;
+  const setReplies = sharedDrafts?.setReplies ?? setLocalReplies;
+  const localIntentRevisions = useRef<
+    Record<
+      string,
+      { roomId: string; revision: number | null; settled: boolean }
+    >
+  >({});
+  const intentRevisions = sharedDrafts?.intentRevisions ?? localIntentRevisions;
   const drafts = sharedDrafts?.drafts ?? localDrafts;
   const setDrafts = sharedDrafts?.setDrafts ?? setLocalDrafts;
   const [threads, setThreads] = useState<NativeThreadSummary[]>([]);
@@ -1492,14 +1510,15 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     if (result.state !== "saved" || !result.messageId) return;
     setRoomErrors((current) => ({ ...current, [roomId]: "" }));
     refreshSequence.current += 1;
-    if (
-      entry.revision !== null &&
-      revisions.current[roomId] === entry.revision
-    ) {
+    const revision =
+      entry.revision ?? intentRevisions.current[entry.id]?.revision;
+    if (revision != null && revisions.current[roomId] === revision) {
       setDrafts((current) => ({ ...current, [roomId]: "" }));
+      setReplies((current) => ({ ...current, [roomId]: undefined }));
     }
     if (pendingRef.current[roomId]?.id === entry.id)
       setRoomPending(roomId, null);
+    delete intentRevisions.current[entry.id];
     // Confirmed receipts live on the message, not in the persistent chat rail.
     setFeedback((current) => ({ ...current, [roomId]: "" }));
     await sdk.commands
@@ -1509,6 +1528,17 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           `Saved, but acknowledgment is unknown: ${describeError(reason)}`,
         ),
       );
+  };
+  const finishCancelled = (roomId: string, entry: RoomPendingSend) => {
+    if (pendingRef.current[roomId]?.id === entry.id)
+      setRoomPending(roomId, null);
+    const revision =
+      entry.revision ?? intentRevisions.current[entry.id]?.revision;
+    if (revision != null && revisions.current[roomId] === revision) {
+      setDrafts((current) => ({ ...current, [roomId]: "" }));
+      setReplies((current) => ({ ...current, [roomId]: undefined }));
+    }
+    delete intentRevisions.current[entry.id];
   };
   const refresh = async () => {
     const sequence = ++refreshSequence.current;
@@ -1528,35 +1558,42 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     if (!next.rooms.some((entry) => entry.id === selectedRef.current))
       selectedRef.current = target?.id ?? null;
     if (target?.messageCount !== undefined) {
-      const recent = (await sdk.commands.execute("messages", {
-        roomId: target.id,
-        cursor: 0,
-      })) as { messages: ZenXRoom["messages"]; nextCursor: number | null };
-      if (
-        sequence !== refreshSequence.current ||
-        (selectedRef.current !== null && selectedRef.current !== target.id)
-      )
-        return;
       const cached = historyCache.current[target.id];
-      const tailIds = new Set(recent.messages.map((message) => message.id));
-      const messages = [
-        ...(cached?.messages.filter((message) => !tailIds.has(message.id)) ??
-          []),
-        ...recent.messages,
-      ].slice(-target.messageCount);
-      const loaded = Math.max(
-        recent.messages.length,
-        (cached?.nextCursor ?? 0) +
-          Math.max(0, target.messageCount - (cached?.count ?? 0)),
+      const desired = Math.min(
+        target.messageCount,
+        Math.max(
+          4,
+          (cached?.messages.length ?? 0) +
+            Math.max(
+              0,
+              target.messageCount - (cached?.count ?? target.messageCount),
+            ),
+        ),
       );
-      const nextCursor = loaded < target.messageCount ? loaded : null;
+      let cursor: number | null = 0;
+      let messages: ZenXRoom["messages"] = [];
+      do {
+        const page = (await sdk.commands.execute("messages", {
+          roomId: target.id,
+          cursor,
+        })) as { messages: ZenXRoom["messages"]; nextCursor: number | null };
+        if (
+          sequence !== refreshSequence.current ||
+          (selectedRef.current !== null && selectedRef.current !== target.id)
+        )
+          return;
+        messages = [...page.messages, ...messages];
+        if (page.nextCursor !== null && page.nextCursor <= cursor)
+          throw new Error("Room history cursor did not advance");
+        cursor = page.nextCursor;
+      } while (cursor !== null && messages.length < desired);
       historyCache.current[target.id] = {
         messages,
         count: target.messageCount,
-        nextCursor,
+        nextCursor: cursor,
       };
       target.messages = messages;
-      target.nextCursor = nextCursor;
+      target.nextCursor = cursor;
     }
     if (sequence !== refreshSequence.current) return;
     setData({ ...next });
@@ -1590,7 +1627,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             revision:
               merged[room.id]?.id === operation.id
                 ? merged[room.id]!.revision
-                : null,
+                : (intentRevisions.current[operation.id]?.revision ?? null),
             messageId: operation.messageId,
             cancelled: operation.cancelled,
           };
@@ -1622,12 +1659,23 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
         merged[active.id] = {
           id: collected[0].id,
           text: collected[0].text,
-          revision: null,
+          revision: intentRevisions.current[collected[0].id]?.revision ?? null,
           messageId: collected[0].messageId,
           cancelled: collected[0].cancelled,
         };
       pendingRef.current = merged;
       setPendingByRoom(merged);
+    }
+    for (const listed of next.rooms) {
+      if (
+        listed.pendingCount === 0 &&
+        !sending.current[listed.id] &&
+        !pendingRef.current[listed.id]
+      ) {
+        for (const [key, intent] of Object.entries(intentRevisions.current))
+          if (intent.roomId === listed.id && intent.settled)
+            delete intentRevisions.current[key];
+      }
     }
     if (active) {
       const latest = active.messages
@@ -1817,6 +1865,51 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       setLoadingOlder(false);
     }
   };
+  const reacting = useRef(new Set<string>());
+  const reactToMessage = async (
+    roomId: string,
+    messageId: string,
+    emoji: string | null,
+  ) => {
+    const key = `${roomId}:${messageId}`;
+    if (reacting.current.has(key)) return;
+    reacting.current.add(key);
+    try {
+      const result = (await sdk.commands.execute("react", {
+        roomId,
+        messageId,
+        emoji,
+      })) as { message: ZenXRoom["messages"][number] };
+      if (result.message?.id !== messageId || result.message.roomId !== roomId)
+        throw new Error("Reaction receipt identity mismatch");
+      const cached = historyCache.current[roomId];
+      if (cached)
+        cached.messages = cached.messages.map((message) =>
+          message.id === messageId ? result.message : message,
+        );
+      setData((current) => ({
+        ...current,
+        rooms: current.rooms.map((entry) =>
+          entry.id === roomId
+            ? {
+                ...entry,
+                messages: entry.messages.map((message) =>
+                  message.id === messageId ? result.message : message,
+                ),
+              }
+            : entry,
+        ),
+      }));
+      await refresh();
+    } catch (reason) {
+      setRoomErrors((current) => ({
+        ...current,
+        [roomId]: `Reaction result unconfirmed; refresh before retrying. ${describeError(reason)}`,
+      }));
+    } finally {
+      reacting.current.delete(key);
+    }
+  };
   const send = async () => {
     if (
       !room ||
@@ -1835,16 +1928,26 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       revision: revisions.current[roomId] ?? 0,
       messageId: null,
     };
+    intentRevisions.current[entry.id] = {
+      roomId,
+      revision: entry.revision,
+      settled: false,
+    };
     sending.current[roomId] = true;
     setSendingRooms((current) => ({ ...current, [roomId]: true }));
     setRoomPending(roomId, entry);
     setRoomErrors((current) => ({ ...current, [roomId]: "" }));
+    let postAttempted = false;
     try {
       await sdk.commands.execute("prepare-message", {
         roomId,
         operationId: entry.id,
         text,
+        ...(replies[roomId]
+          ? { replyToMessageId: replies[roomId]!.messageId }
+          : {}),
       });
+      postAttempted = true;
       const committed = (await sdk.commands.execute("post-message", {
         roomId,
         operationId: entry.id,
@@ -1859,6 +1962,25 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       await finishSaved(roomId, entry, status);
       await refresh();
     } catch (reason) {
+      if (!postAttempted) {
+        // prepare cannot post. Preserve the draft and release only this local
+        // send; refresh still exposes a Host preparation whose reply was lost.
+        if (pendingRef.current[roomId]?.id === entry.id)
+          setRoomPending(roomId, null);
+        setRoomErrors((current) => ({
+          ...current,
+          [roomId]: `Message was not posted; preparation failed. ${describeError(reason)}`,
+        }));
+        try {
+          await refresh();
+        } catch (refreshError) {
+          setRoomErrors((current) => ({
+            ...current,
+            [roomId]: `Message was not posted; could not check prepared operations. ${describeError(refreshError)}`,
+          }));
+        }
+        return;
+      }
       // Do not infer success from matching text, even when a new ID appeared.
       setRoomErrors((current) => ({
         ...current,
@@ -1876,6 +1998,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       }
       void refresh().catch(() => {});
     } finally {
+      if (intentRevisions.current[entry.id])
+        intentRevisions.current[entry.id]!.settled = true;
       sending.current[roomId] = false;
       setSendingRooms((current) => ({ ...current, [roomId]: false }));
     }
@@ -1909,8 +2033,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       if (state.state === "saved" && state.messageId)
         await finishSaved(roomId, entry, state);
       else if (state.state === "cancelled") {
-        if (pendingRef.current[roomId]?.id === entry.id)
-          setRoomPending(roomId, null);
+        finishCancelled(roomId, entry);
         setFeedback((current) => ({ ...current, [roomId]: "" }));
       } else
         setFeedback((current) => ({
@@ -1954,17 +2077,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       })) as RoomDeliveryResult;
       if (result.state !== "cancelled")
         throw new Error("Cancellation not confirmed; check delivery");
-      if (pendingRef.current[roomId]?.id === entry.id)
-        setRoomPending(roomId, null);
-      if (
-        entry.revision !== null &&
-        revisions.current[roomId] === entry.revision
-      )
-        setDrafts((current) =>
-          current[roomId] === entry.text
-            ? { ...current, [roomId]: "" }
-            : current,
-        );
+      finishCancelled(roomId, entry);
       setFeedback((current) => ({ ...current, [roomId]: "" }));
       await refresh();
     } catch (reason) {
@@ -1975,8 +2088,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           operationId: entry.id,
         })) as RoomDeliveryResult;
         if (exact.state === "cancelled") {
-          if (pendingRef.current[roomId]?.id === entry.id)
-            setRoomPending(roomId, null);
+          finishCancelled(roomId, entry);
           await refresh();
           return;
         }
@@ -2351,12 +2463,14 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   key={message.id}
                 >
                   <header>
-                    <span
-                      className={`room-role room-role-${message.kind}`}
-                      aria-label={`Message role: ${roomRoleLabel(message.kind)}`}
-                    >
-                      {roomRoleLabel(message.kind)}
-                    </span>
+                    {message.author === roomRoleLabel(message.kind) ? null : (
+                      <span
+                        className={`room-role room-role-${message.kind}`}
+                        aria-label={`Message role: ${roomRoleLabel(message.kind)}`}
+                      >
+                        {roomRoleLabel(message.kind)}
+                      </span>
+                    )}
                     <strong>{message.author}</strong>
                     <time
                       dateTime={new Date(message.createdAt).toISOString()}
@@ -2368,20 +2482,105 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       })}
                     </time>
                   </header>
+                  {message.replyTo ? (
+                    <div
+                      className="room-message-quote"
+                      aria-label={`Reply to ${message.replyTo.author}`}
+                    >
+                      <strong>{message.replyTo.author}</strong>
+                      <p>{message.replyTo.text}</p>
+                    </div>
+                  ) : null}
                   <Markdown text={message.text} />
+                  <div className="room-message-actions">
+                    <button
+                      type="button"
+                      disabled={Boolean(pending) || sendingRooms[room.id]}
+                      onClick={() => {
+                        revisions.current[room.id] =
+                          (revisions.current[room.id] ?? 0) + 1;
+                        setReplies((current) => ({
+                          ...current,
+                          [room.id]: {
+                            messageId: message.id,
+                            author: message.author,
+                            text: message.text,
+                          },
+                        }));
+                        composer.current?.focus();
+                      }}
+                    >
+                      Reply
+                    </button>
+                    <details>
+                      <summary>React</summary>
+                      <div
+                        className="room-reaction-options"
+                        aria-label="Choose reaction"
+                      >
+                        {["👍", "❤️", "🎉", "👀", "✅", "🤔"].map((emoji) => (
+                          <button
+                            key={emoji}
+                            type="button"
+                            aria-label={`React ${emoji}`}
+                            aria-pressed={
+                              message.reactions?.some(
+                                (reaction) =>
+                                  reaction.actorId === "user" &&
+                                  reaction.emoji === emoji,
+                              ) ?? false
+                            }
+                            onClick={() =>
+                              void reactToMessage(
+                                room.id,
+                                message.id,
+                                message.reactions?.some(
+                                  (reaction) =>
+                                    reaction.actorId === "user" &&
+                                    reaction.emoji === emoji,
+                                )
+                                  ? null
+                                  : emoji,
+                              )
+                            }
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                      </div>
+                    </details>
+                    {message.reactions?.map((reaction) => (
+                      <span
+                        key={reaction.actorId}
+                        title={`${reaction.label}: ${reaction.emoji}`}
+                        aria-label={`${reaction.label} reacted ${reaction.emoji}`}
+                      >
+                        {reaction.emoji}
+                      </span>
+                    ))}
+                  </div>
                   {message.kind === "human" &&
-                  deliveries[message.id]?.state === "saved" ? (
-                    <small className="room-delivery">
-                      Saved ·{" "}
-                      {deliveries[message.id]!.mentions.map(
-                        (mention) =>
-                          `@${mention.name}: ${mention.deliveries.map((entry) => entry.status).join(", ")}`,
-                      ).join(" · ") || "No agent mentioned"}
+                  (deliveries[message.id]?.receipt === "delivered" ||
+                    deliveries[message.id]?.state === "saved") ? (
+                    <small
+                      className="room-delivery"
+                      title="Delivered: saved in this Room. Read: admitted to the Agent Thread context, including ordered steering; not a claim about model comprehension."
+                    >
+                      Delivered to Room ·{" "}
+                      {deliveries[message.id]?.readers
+                        ?.map(
+                          (reader) =>
+                            `@${reader.name}: ${reader.state === "read" ? "Read" : reader.state === "unavailable" ? "Read status unavailable" : "Read not confirmed"}`,
+                        )
+                        .join(" · ")}
+                      {deliveries[message.id]?.readers?.length
+                        ? ""
+                        : "Read not confirmed"}
                     </small>
                   ) : message.kind === "human" &&
                     deliveries[message.id]?.state === "unknown" ? (
                     <small className="room-delivery">
-                      Message saved · agent response status unavailable
+                      Delivered to Room · agent read/response status unavailable
                     </small>
                   ) : null}
                   {message.kind === "human" || message.originThreadId ? (
@@ -2420,6 +2619,29 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   label="Room members"
                   hint="Choose a room member to address."
                 />
+                {replies[room.id] ? (
+                  <div className="room-reply-draft">
+                    <span>
+                      Replying to {replies[room.id]!.author}:{" "}
+                      {replies[room.id]!.text.slice(0, 160)}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label="Cancel reply"
+                      disabled={Boolean(pending) || sendingRooms[room.id]}
+                      onClick={() => {
+                        revisions.current[room.id] =
+                          (revisions.current[room.id] ?? 0) + 1;
+                        setReplies((current) => ({
+                          ...current,
+                          [room.id]: undefined,
+                        }));
+                      }}
+                    >
+                      Cancel reply
+                    </button>
+                  </div>
+                ) : null}
                 <label htmlFor="room-chat-input" className="sr-only">
                   Message
                 </label>
