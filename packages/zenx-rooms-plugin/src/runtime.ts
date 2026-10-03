@@ -13,6 +13,8 @@ export interface RoomMember {
 }
 
 export interface RoomMessage {
+  replyTo?: { messageId: string; author: string; text: string };
+  reactions?: Array<{ actorId: string; label: string; emoji: string }>;
   id: string;
   roomId: string;
   author: string;
@@ -94,12 +96,17 @@ export interface ZenXRoomsTrustedService {
   deleteRoom(roomId: string): Promise<void>;
   addRoomMember(roomId: string, member: RoomMember): Promise<void>;
   removeRoomMember(roomId: string, threadId: string): Promise<void>;
-  postAgentRoomMessage(roomId: string, text: string): Promise<void>;
+  postAgentRoomMessage(
+    roomId: string,
+    text: string,
+    replyToMessageId?: string,
+  ): Promise<void>;
   postRoomMessage?(roomId: string, author: string, text: string): Promise<void>;
   prepareRoomMessage?(
     roomId: string,
     operationId: string,
     text: string,
+    replyToMessageId?: string,
   ): Promise<RoomOperation>;
   postPreparedRoomMessage?(
     roomId: string,
@@ -112,6 +119,11 @@ export interface ZenXRoomsTrustedService {
   ): Promise<unknown>;
   roomOperation?(roomId: string, operationId: string): unknown;
   roomDelivery?(roomId: string, messageId: string): unknown;
+  reactRoomMessage?(
+    roomId: string,
+    messageId: string,
+    emoji: string | null,
+  ): Promise<RoomMessage>;
   wakeupsEnabled?(): boolean;
   acknowledgeRoomOperation?(roomId: string, operationId: string): Promise<void>;
   snapshot(): {
@@ -210,10 +222,18 @@ export function createZenXTrustedPlugin(
             rooms: state.rooms.slice(cursor, cursor + 1).map((room) => ({
               ...readSafeRoom(room),
               messageCount: room.messages.length,
-              messages: room.messages.slice(-1).map((message) => ({
-                ...message,
-                text: Array.from(message.text).slice(0, 120).join(""),
-              })),
+              messages: room.messages
+                .slice(-1)
+                .map(
+                  ({
+                    replyTo: _replyTo,
+                    reactions: _reactions,
+                    ...message
+                  }) => ({
+                    ...message,
+                    text: Array.from(message.text).slice(0, 120).join(""),
+                  }),
+                ),
               ...(uiInput === null
                 ? {}
                 : {
@@ -262,7 +282,16 @@ export function createZenXTrustedPlugin(
             .rooms.find((entry) => entry.id === roomId);
           if (!room) throw new Error("Room was not found");
           const end = Math.max(0, room.messages.length - cursor);
-          const start = Math.max(0, end - 4);
+          let start = end;
+          while (start > 0 && end - start < 4) {
+            const bytes = new TextEncoder().encode(
+              JSON.stringify(room.messages.slice(start - 1, end)),
+            ).byteLength;
+            // Usually keep pages under 60 KiB. One reaction-heavy message may
+            // exceed that target, but never split or truncate its body.
+            if (start < end && bytes > 60 * 1024) break;
+            start -= 1;
+          }
           return {
             roomId,
             messages: room.messages.slice(start, end),
@@ -303,7 +332,19 @@ export function createZenXTrustedPlugin(
             string(args, "roomId", MAX_ID_BYTES),
             string(args, "operationId", MAX_ID_BYTES),
             string(args, "text", MAX_MESSAGE_TEXT_BYTES),
+            args["replyToMessageId"] === undefined
+              ? undefined
+              : string(args, "replyToMessageId", MAX_ID_BYTES),
           );
+        case "zenx_rooms_react":
+          if (!service.reactRoomMessage)
+            throw new Error("Room reactions unavailable");
+          const updatedMessage = await service.reactRoomMessage(
+            string(args, "roomId", MAX_ID_BYTES),
+            string(args, "messageId", MAX_ID_BYTES),
+            args["emoji"] === null ? null : string(args, "emoji", 32),
+          );
+          return { updated: true, message: updatedMessage };
         case "zenx_rooms_cancel_prepared":
           if (uiInput === null || !service.cancelPreparedRoomOperation)
             throw new Error("Trusted Room UI required");
@@ -394,7 +435,13 @@ export function createZenXTrustedPlugin(
               messageId: operation.messageId,
             };
           }
-          await service.postAgentRoomMessage(roomId, text);
+          await service.postAgentRoomMessage(
+            roomId,
+            text,
+            args["replyToMessageId"] === undefined
+              ? undefined
+              : string(args, "replyToMessageId", MAX_ID_BYTES),
+          );
           return { posted: true };
         }
         default:
@@ -436,6 +483,10 @@ function readSafeRoom(room: Room) {
       threadId: member.threadId,
     })),
     messages: room.messages.slice(-50).map((message) => ({
+      ...(message.replyTo === undefined ? {} : { replyTo: message.replyTo }),
+      ...(message.reactions === undefined
+        ? {}
+        : { reactions: message.reactions }),
       id: message.id,
       roomId: message.roomId,
       author: message.author,

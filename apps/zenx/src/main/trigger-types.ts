@@ -105,7 +105,19 @@ export interface RoomMember {
   name: string;
   threadId: string;
 }
+export interface RoomQuote {
+  messageId: string;
+  author: string;
+  text: string;
+}
+export interface RoomReaction {
+  actorId: string;
+  label: string;
+  emoji: string;
+}
 export interface RoomMessage {
+  replyTo?: RoomQuote;
+  reactions?: RoomReaction[];
   id: string;
   roomId: string;
   author: string;
@@ -116,6 +128,7 @@ export interface RoomMessage {
   originTurnId: string | null;
 }
 export interface RoomSendOperation {
+  replyTo?: RoomQuote;
   id: string;
   text: string;
   messageId: string | null;

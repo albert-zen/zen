@@ -309,3 +309,51 @@
   grid-auto-flow: column;
   align-items: center;
 }
+
+.room-message-quote,
+.room-reply-draft {
+  background: var(--surface-hover);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.room-message-quote p {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+}
+.room-reply-draft {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.room-reply-draft span {
+  min-width: 0;
+  flex: 1;
+}
+.room-message-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+.room-message-actions button,
+.room-reply-draft button {
+  border: 0;
+  background: var(--surface-hover);
+  color: inherit;
+  border-radius: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.room-reaction-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 0;
+}
+.room-reaction-options button[aria-pressed="true"] {
+  background: var(--surface-active);
+}

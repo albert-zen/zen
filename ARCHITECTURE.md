@@ -1103,3 +1103,9 @@ Models cannot invoke trusted-only setup/pause commands.
 
 - **Conversation workspace presentation** — the main navigation selects either a canonical Thread or a Room conversation; a Room owns its transient right-panel tab selection, while Files, Browser, Computer and Thread-oriented plugin panels receive only an explicitly selected real member Thread, never a Room ID. A room with no selected execution context exposes only Room-scoped tabs.
 - **Companion workspace annotations** — an assistant Room may own a bounded, revision-checked notebook of matters, memory and exact Thread/Trigger references in the existing Room store; these are editable planning documents, not execution status, scheduling or a second journal. Actual execution remains authoritative in canonical Threads and Triggers; notebook snapshots enter the model context only through explicit normal tool reads/results, and editing notes never rewrites historical Items.
+
+### Room message interactions
+
+Room delivered receipts derive from committed Room messages; read receipts derive from exact bound-Thread `userMessage.clientId` admission, including the existing ordered steer anchor, never from queued input or provider acknowledgments. The UI explains read as harness-context admission. Reads do not schedule work and no direct Thread messages are mirrored into Room history. Missing or expired observation stays unconfirmed.
+
+Room quotes are immutable bounded snapshots of a same-Room message captured with the prepared send operation; operation identity binds both text and quote target. Reactions are Room-domain annotations with one chosen emoji per Host-derived actor; setting the same reaction is idempotent, and reactions never wake an Agent. Both use the existing serialized Room storage, with optional fields for older profiles.

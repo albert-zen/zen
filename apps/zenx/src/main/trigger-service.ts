@@ -139,6 +139,7 @@ interface WakeupEvent {
   sourceTurnId?: string;
   sourceRoomId?: string;
   sourceRoomMessageId?: string;
+  sourceRoomMessageText?: string;
   scheduledAt?: number;
 }
 
@@ -197,6 +198,10 @@ interface RemoteWatch {
 
 export class ZenXTriggerService {
   readonly #manager: ZenXTriggerAppServerPort;
+  readonly #receiptReads = new Map<
+    string,
+    Promise<ClientRequestResults["thread/read"]>
+  >();
   readonly #store: ZenXTriggerStorePort;
   readonly #titles: ZenXTriggerTitlePort | undefined;
   readonly #programs: TriggerProgramRunner;
@@ -790,6 +795,7 @@ export class ZenXTriggerService {
     roomId: string,
     operationId: string,
     text: string,
+    replyToMessageId?: string,
   ): Promise<RoomSendOperation> {
     const generation = this.#runningGeneration();
     const id = required(operationId, "operation ID", MAX_ID_BYTES);
@@ -802,7 +808,10 @@ export class ZenXTriggerService {
       if (existing) {
         if (existing.cancelled === true)
           throw new Error("Room operation was cancelled; no message was sent");
-        if (existing.text !== normalizedText)
+        if (
+          existing.text !== normalizedText ||
+          existing.replyTo?.messageId !== replyToMessageId
+        )
           throw new Error("Operation is bound to a different message");
         return structuredClone(existing);
       }
@@ -831,7 +840,12 @@ export class ZenXTriggerService {
         throw new Error(
           "Unresolved Room operation limit reached; review pending sends",
         );
+      const replyTo =
+        replyToMessageId === undefined
+          ? undefined
+          : roomQuote(room, replyToMessageId);
       const value: RoomSendOperation = {
+        ...(replyTo === undefined ? {} : { replyTo }),
         id,
         text: normalizedText,
         messageId: null,
@@ -991,6 +1005,120 @@ export class ZenXTriggerService {
       : { roomId, messageId, state: "unknown", mentions: [] };
   }
 
+  #readReceiptThread(
+    threadId: string,
+  ): Promise<ClientRequestResults["thread/read"]> {
+    const active = this.#receiptReads.get(threadId);
+    if (active) return active;
+    const read = Promise.resolve().then(() =>
+      this.#manager.readThread!(threadId),
+    );
+    this.#receiptReads.set(threadId, read);
+    void read
+      .finally(() => {
+        if (this.#receiptReads.get(threadId) === read)
+          this.#receiptReads.delete(threadId);
+      })
+      .catch(() => {});
+    return read;
+  }
+
+  /** Room storage and canonical Thread input admission are distinct receipts. */
+  async roomMessageReceipt(roomId: string, messageId: string) {
+    const room = this.#snapshot.rooms.find((entry) => entry.id === roomId);
+    if (!room) throw new Error("Room was not found");
+    const delivery = this.roomDelivery(roomId, messageId);
+    const retained = room.messages.some((entry) => entry.id === messageId);
+    if (!retained && delivery.state !== "saved")
+      return { ...delivery, receipt: "unknown" as const, readers: [] };
+    const histories = this.#snapshot.history.filter(
+      (entry) =>
+        entry.sourceRoomId === roomId &&
+        entry.sourceRoomMessageId === messageId,
+    );
+    const recipients = new Map<string, string>();
+    for (const mention of delivery.mentions)
+      recipients.set(mention.threadId, mention.name);
+    for (const history of histories)
+      if (!recipients.has(history.threadId))
+        recipients.set(
+          history.threadId,
+          room.members.find((member) => member.threadId === history.threadId)
+            ?.name ?? history.threadId,
+        );
+    const readers = await Promise.all(
+      [...recipients].map(async ([threadId, name]) => {
+        try {
+          const clientIds = new Set(
+            histories
+              .filter((entry) => entry.threadId === threadId)
+              .map((entry) => entry.clientUserMessageId),
+          );
+          if (clientIds.size === 0 || !this.#manager.readThread)
+            return { threadId, name, state: "unconfirmed" as const };
+          const result = await this.#readReceiptThread(threadId);
+          if (result.thread.id !== threadId)
+            throw new Error("Receipt Thread identity mismatch");
+          const admitted = result.thread.turns.some((turn) =>
+            turn.items.some(
+              (item) =>
+                item.type === "userMessage" &&
+                item.clientId !== null &&
+                clientIds.has(item.clientId),
+            ),
+          );
+          return {
+            threadId,
+            name,
+            state: admitted ? ("read" as const) : ("unconfirmed" as const),
+          };
+        } catch {
+          return { threadId, name, state: "unavailable" as const };
+        }
+      }),
+    );
+    return { ...delivery, receipt: "delivered" as const, readers };
+  }
+
+  async setRoomReaction(
+    roomId: string,
+    messageId: string,
+    actorThreadId: string | null,
+    emoji: string | null,
+  ): Promise<RoomMessage> {
+    if (
+      emoji !== null &&
+      !(ROOM_REACTION_EMOJI as readonly string[]).includes(emoji)
+    )
+      throw new Error("Unsupported Room reaction");
+    const generation = this.#runningGeneration();
+    return await this.#mutate(generation, async (snapshot) => {
+      const room = snapshot.rooms.find((entry) => entry.id === roomId);
+      if (!room) throw new Error("Room was not found");
+      const member =
+        actorThreadId === null
+          ? undefined
+          : room.members.find((entry) => entry.threadId === actorThreadId);
+      if (actorThreadId !== null && !member)
+        throw new Error("Only a Room member can react as an Agent");
+      const message = room.messages.find((entry) => entry.id === messageId);
+      if (!message) throw new Error("Room message is no longer retained");
+      const actorId =
+        actorThreadId === null ? "user" : `thread:${actorThreadId}`;
+      const reactions = (message.reactions ?? []).filter(
+        (entry) => entry.actorId !== actorId,
+      );
+      if (emoji !== null) {
+        if (reactions.length >= MAX_ROOM_MEMBERS + 1)
+          throw new Error("Room reaction limit reached");
+        reactions.push({ actorId, label: member?.name ?? "You", emoji });
+      }
+      if (reactions.length === 0) delete message.reactions;
+      else message.reactions = reactions;
+      return structuredClone(message);
+    });
+  }
+
   async acknowledgeRoomOperation(
     roomId: string,
     operationId: string,
@@ -1014,8 +1142,22 @@ export class ZenXTriggerService {
     await this.#postRoomMessage(roomId, author, text, "human", null, null);
   }
 
-  async postAgentRoomMessage(roomId: string, text: string): Promise<void> {
-    await this.#postRoomMessage(roomId, "Agent", text, "agent", null, null);
+  async postAgentRoomMessage(
+    roomId: string,
+    text: string,
+    replyToMessageId?: string,
+    callingThreadId?: string,
+  ): Promise<void> {
+    await this.#postRoomMessage(
+      roomId,
+      "Agent",
+      text,
+      "agent",
+      callingThreadId ?? null,
+      null,
+      undefined,
+      replyToMessageId,
+    );
   }
 
   async #postRoomMessage(
@@ -1026,6 +1168,7 @@ export class ZenXTriggerService {
     originThreadId: string | null,
     originTurnId: string | null,
     operationId?: string,
+    replyToMessageId?: string,
   ): Promise<RoomSendOperation | undefined> {
     const generation = this.#runningGeneration();
     const normalizedRoomId = required(roomId, "room", MAX_ID_BYTES);
@@ -1060,13 +1203,20 @@ export class ZenXTriggerService {
         return { wakeups: [], operation: structuredClone(operation) };
       const value = message(
         room.id,
-        normalizedAuthor,
+        kind === "agent" && originThreadId !== null
+          ? (room.members.find((member) => member.threadId === originThreadId)
+              ?.name ?? normalizedAuthor)
+          : normalizedAuthor,
         normalizedText,
         kind,
         originThreadId,
         originTurnId,
         this.#now(),
       );
+      if (operation?.replyTo)
+        value.replyTo = structuredClone(operation.replyTo);
+      else if (replyToMessageId !== undefined)
+        value.replyTo = roomQuote(room, replyToMessageId);
       room.messages.push(value);
       const wakeups: CommittedWakeup[] = [];
       const mentions = room.members.filter((member) =>
@@ -1099,6 +1249,14 @@ export class ZenXTriggerService {
             occurrenceKey: `room:${room.id}:${value.id}`,
             sourceRoomId: room.id,
             sourceRoomMessageId: value.id,
+            sourceRoomMessageText: [
+              value.replyTo
+                ? `Reply to ${value.replyTo.author} (${value.replyTo.messageId}): ${value.replyTo.text}`
+                : null,
+              value.text,
+            ]
+              .filter((part) => part !== null)
+              .join("\n\n"),
             projection: projectRoomContext(room),
           });
           if (commit !== undefined && !("rejected" in commit))
@@ -1605,7 +1763,7 @@ export class ZenXTriggerService {
                   wakeup.projection,
                   assistantRooms,
                   assistantRoom,
-                  wakeup.sourceRoomMessageId,
+                  wakeup.sourceRoomMessageText,
                 ),
               },
             ],
@@ -1643,6 +1801,7 @@ export class ZenXTriggerService {
                 trigger,
                 this.#history(active.historyId),
                 wakeup.projection,
+                wakeup.sourceRoomMessageText,
               ),
             },
           ],
@@ -1668,6 +1827,7 @@ export class ZenXTriggerService {
               trigger,
               this.#history(active.historyId),
               wakeup.projection,
+              wakeup.sourceRoomMessageText,
             ),
           },
         ],
@@ -2675,6 +2835,7 @@ function wakeupInput(
   trigger: ZenXTrigger,
   history: TriggerHistoryEntry,
   projection?: string,
+  completeRoomMessage?: string,
 ): string {
   const source = [
     history.sourceDevice === undefined
@@ -2705,6 +2866,9 @@ function wakeupInput(
     "",
     "Injected prompt:",
     trigger.prompt,
+    ...(completeRoomMessage === undefined
+      ? []
+      : ["", "Current user message (complete):", completeRoomMessage]),
     ...(projection === undefined
       ? []
       : [
@@ -2721,24 +2885,21 @@ function assistantWakeupInput(
   projection: string | undefined,
   rooms: ZenXRoom[],
   sourceRoom: ZenXRoom | undefined,
-  sourceMessageId: string | undefined,
+  sourceMessageText: string | undefined,
 ): string {
-  const input = wakeupInput(trigger, history, projection);
+  const input = wakeupInput(trigger, history, projection, sourceMessageText);
   const preset =
     trigger.prompt === ALWAYS_ON_ASSISTANT_PROMPT
       ? []
       : ["Companion context:", ALWAYS_ON_ASSISTANT_PROMPT];
   if (sourceRoom) {
-    const message = sourceRoom.messages.find(
-      (item) => item.id === sourceMessageId,
-    );
     return [
       input,
       "",
       ...preset,
       `Reply Room ID: ${sourceRoom.id}`,
-      ...(message
-        ? ["Current user message (complete):", message.text]
+      ...(sourceMessageText !== undefined
+        ? []
         : [
             "The source Room message is no longer retained; recover its context before acting.",
           ]),
@@ -2800,7 +2961,7 @@ export function projectRoomContext(room: ZenXRoom): string {
       entry.originThreadId === null
         ? ""
         : ` [source Thread ${entry.originThreadId}, Turn ${entry.originTurnId ?? "unknown"}]`;
-    return `${entry.author} (${entry.kind})${origin}: ${bounded(entry.text, 700)}`;
+    return `${entry.author} (${entry.kind})${origin}${entry.replyTo ? ` [reply to ${entry.replyTo.author}: ${entry.replyTo.text}]` : ""}: ${bounded(entry.text, 700)}`;
   });
   return bounded(
     [`Room #${room.name} (${room.id})`, "Recent Room context:", ...recent].join(
@@ -2855,4 +3016,22 @@ function prefixByBytes(value: string, limit: number): string {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export const ROOM_REACTION_EMOJI = [
+  "👍",
+  "❤️",
+  "🎉",
+  "👀",
+  "✅",
+  "🤔",
+] as const satisfies readonly string[];
+function roomQuote(room: ZenXRoom, messageId: string) {
+  const source = room.messages.find((entry) => entry.id === messageId);
+  if (!source) throw new Error("Reply target is not retained in this Room");
+  return {
+    messageId: source.id,
+    author: source.author,
+    text: bounded(source.text, 1000),
+  };
 }
