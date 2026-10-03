@@ -1,6 +1,6 @@
 # ZenX UI/UX decisions
 
-更新日期：2026-10-02
+更新日期：2026-10-03
 
 New thread 打开临时本地编辑页；选择或添加 Project 不创建 Thread，第一条有效 Send 才配置所选 Project、创建真实 Thread，并在 Sidebar、usage 等辅助元数据独立刷新时立即启动 Turn。全局入口使用最近 Project，Project 内入口使用该精确 Project；失败以明确、可恢复且不遮盖会话的通知呈现。
 
@@ -442,13 +442,13 @@ ThreadView
 
 本轮视觉和交互校准参考 [DeepSeek Harness 的输入候选组件](https://github.com/deepseek-ai/deepseek-harness/tree/639ed015397290b3745d163aafe02ffee4aa3f84/packages/client/ui-input-trigger)、[T3 Code 的 ComposerCommandMenu](https://github.com/pingdotgg/t3code/blob/5cc99e1c23980d7995a13c47f969b47cb68ed1be/apps/web/src/components/chat/ComposerCommandMenu.tsx) 与 [Linear 的 UI refresh](https://linear.app/changelog/2026-03-12-ui-refresh)。这些是参考材料，不替代本文的产品语义，也不引入它们的运行模型或样式框架。
 
-### Companion and Room conversation workspaces
+### PAW and Room conversation workspaces
 
-The primary left navigation exposes named Companions and Rooms directly, above the existing project/Thread organization. Opening one selects an IM-style conversation without a second conversation rail. Creation remains explicit, with a user-chosen assistant name; Companion is the reusable preset name.
+The primary left navigation exposes named PAW assistants and Rooms directly, above the existing project/Thread organization. Opening one selects an IM-style conversation without a second conversation rail. Creation remains explicit, with a user-chosen assistant name; PAW (P-A-W) is the reusable preset name. Product labels and new preset defaults use PAW; existing user-chosen Room/member names, saved annotations, protocol identifiers and routes stay unchanged.
 
 The existing right workspace shell is shared. Room-owned tabs expose Overview, Matters, Memory, Automations and Threads. Matters and memory are assistant-maintained notebook annotations, with exact references to execution Threads and Triggers. They do not act as a second scheduler or an execution ledger. A plan such as “waiting for review” is visibly distinct from a live Thread status. Remote references show their full device/workspace identity and do not silently open a local Thread with the same ID.
 
-Files, Browser, Computer and Thread plugin tabs require a real Room member Thread. A Companion can use its single bound Thread; shared Rooms ask the user to select a member, with the resource context visible above the tabs. Room navigation and tab selection stay separate from canonical execution identity. Existing file drafts remain owned by the shared workspace draft store.
+Files, Browser, Computer and Thread plugin tabs require a real Room member Thread. A PAW can use its single bound Thread; shared Rooms ask the user to select a member, with the resource context visible above the tabs. Room navigation and tab selection stay separate from canonical execution identity. Existing file drafts remain owned by the shared workspace draft store.
 
 Overview shows the current recurring timer definitions, including cadence and paused state, rather than inventing a heartbeat default. The Automations tab shows the assistant's existing Triggers and their instructions, and opens the existing Trigger controls for configuration. Reading any of these views does not start a Turn or install a timer. Missing plugins and unavailable sources must be visible rather than treated as a successful empty state.
 
@@ -469,4 +469,4 @@ Overview shows the current recurring timer definitions, including cadence and pa
 - 验收至少检查浅色/深色、桌面/窄屏、长文本、空状态/错误状态、键盘与焦点、打开/关闭/切换后的草稿和上下文归属。修复前后截图绑定实际构建版本；未实际查看的页面必须明确列为未验。
 - 产品改动在 PR 分支交付，不直接修改主线；独立 Review 和实际操作证据共同支持结论，不能相互替代。
 
-Companion 导航使用与共享图标相同描边风格的对话气泡，表达一对一交流；普通 Rooms 保留多人图标。它不使用代表 Thread trace 的三行图标，也不通过图标暗示额外自主性。
+PAW 导航使用与共享图标相同描边风格的对话气泡，表达一对一交流；普通 Rooms 保留多人图标。它不使用代表 Thread trace 的三行图标，也不通过图标暗示额外自主性。

@@ -632,7 +632,7 @@ export class ZenXTriggerService {
           threadId: member.threadId,
           roomId: id,
           mention: member.name,
-          label: "Companion",
+          label: "PAW",
           prompt: ALWAYS_ON_ASSISTANT_PROMPT,
         },
         randomUUID(),
@@ -670,7 +670,7 @@ export class ZenXTriggerService {
     const room = this.#snapshot.rooms.find(
       (candidate) => candidate.id === required(roomId, "room", MAX_ID_BYTES),
     );
-    if (!room?.assistant) throw Error("Companion assistant Room was not found");
+    if (!room?.assistant) throw Error("PAW assistant Room was not found");
     return structuredClone(
       room.assistantWorkspace ?? {
         revision: 0,
@@ -692,7 +692,7 @@ export class ZenXTriggerService {
       !Number.isSafeInteger(input.expectedRevision) ||
       input.expectedRevision < 0
     )
-      throw Error("Invalid Companion workspace update fields or revision");
+      throw Error("Invalid PAW workspace update fields or revision");
     const roomId = required(input.roomId, "room", MAX_ID_BYTES);
     const expectedRevision = input.expectedRevision;
     const draft = canonicalAssistantWorkspace({
@@ -704,16 +704,15 @@ export class ZenXTriggerService {
     const generation = this.#runningGeneration();
     const result = await this.#mutate(generation, async (snapshot) => {
       const room = snapshot.rooms.find((entry) => entry.id === roomId);
-      if (!room?.assistant)
-        throw Error("Companion assistant Room was not found");
+      if (!room?.assistant) throw Error("PAW assistant Room was not found");
       const currentRevision = room.assistantWorkspace?.revision ?? 0;
       if (currentRevision !== expectedRevision)
         throw Object.assign(
-          Error("Companion workspace changed; refresh before saving"),
+          Error("PAW workspace changed; refresh before saving"),
           { code: "workspace_conflict", currentRevision },
         );
       if (currentRevision === Number.MAX_SAFE_INTEGER)
-        throw Error("Companion workspace revision limit reached");
+        throw Error("PAW workspace revision limit reached");
       const workspace = canonicalAssistantWorkspace({
         ...draft,
         revision: currentRevision + 1,
@@ -1742,7 +1741,7 @@ export class ZenXTriggerService {
       );
       if (assistantRooms.length > 0) {
         if (!this.#manager.sendAssistant)
-          throw new Error("Companion delivery is unavailable on this Host");
+          throw new Error("PAW delivery is unavailable on this Host");
         if (this.#history(active.historyId).delivery === undefined) {
           await this.#mutate(generation, async (snapshot) => {
             snapshot.history.find(
@@ -2891,7 +2890,7 @@ function assistantWakeupInput(
   const preset =
     trigger.prompt === ALWAYS_ON_ASSISTANT_PROMPT
       ? []
-      : ["Companion context:", ALWAYS_ON_ASSISTANT_PROMPT];
+      : ["PAW context:", ALWAYS_ON_ASSISTANT_PROMPT];
   if (sourceRoom) {
     return [
       input,

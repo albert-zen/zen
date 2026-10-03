@@ -880,7 +880,7 @@ export function canonicalAssistantWorkspace(
   value: unknown,
 ): AssistantWorkspace {
   if (!isAssistantWorkspace(value))
-    throw Error("Invalid Companion workspace fields, identifiers or limits");
+    throw Error("Invalid PAW workspace fields, identifiers or limits");
   return structuredClone(value);
 }
 

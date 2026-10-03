@@ -6,7 +6,7 @@ export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
   imzenx: {
     pluginId: "imzenx",
     packageName: "@zenx/imzenx-plugin",
-    tarball: "zenx-imzenx-plugin-1.0.0.tgz",
+    tarball: "zenx-imzenx-plugin-1.0.1.tgz",
   },
   browser: {
     pluginId: "browser",

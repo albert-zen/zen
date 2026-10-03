@@ -4,7 +4,7 @@ First-party Rooms package distributed with ZenX. It is installed into the same
 profile and Catalog as third-party packages, while its trusted runtime receives
 only the existing Host-owned automation service.
 
-Companion notebooks are optional bounded annotation metadata on an assistant Room.
+PAW notebooks are optional bounded annotation metadata on an assistant Room.
 Use zenx_rooms_workspace (UI command workspace) to read them explicitly, and
 zenx_rooms_update_workspace (update-workspace) to replace matters/memory with the
 last read expectedRevision. A stale edit fails; refresh and merge deliberately.

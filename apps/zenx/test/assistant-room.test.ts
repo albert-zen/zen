@@ -328,7 +328,9 @@ test("assistant includes the complete current message beyond the bounded context
 });
 
 // Prompt contracts are explicit product guidance, not proof of model compliance.
-test("Companion preset separates direct conversation and closes follow-up lifecycle", () => {
+test("PAW preset separates direct conversation and closes follow-up lifecycle", () => {
+  assert.match(ALWAYS_ON_ASSISTANT_PROMPT, /PAW is a preset label/);
+  assert.match(ALWAYS_ON_ASSISTANT_PROMPT, /Use their chosen name/);
   assert.match(
     ALWAYS_ON_ASSISTANT_PROMPT,
     /Direct messages in the working Thread/,
@@ -352,7 +354,7 @@ test("Companion preset separates direct conversation and closes follow-up lifecy
   );
 });
 
-test("direct working Thread completion stays out of the Companion Room", async () => {
+test("direct working Thread completion stays out of the PAW Room", async () => {
   const f = await fixture();
   try {
     const room = await f.service.createAssistantRoom(input);

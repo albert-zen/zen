@@ -11,7 +11,7 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "Use Rooms for shared communication. Companion workspace/read/update tools maintain bounded editable planning annotations with revision CAS; inspect real Thread/Trigger status separately. No mutable notes are injected into context without explicit reads.",
+  "mainDocument": "Use Rooms for shared communication. PAW workspace/read/update tools maintain bounded editable planning annotations with revision CAS; inspect real Thread/Trigger status separately. No mutable notes are injected into context without explicit reads.",
   "storageVersion": 1,
   "provider": {
     "id": "zenx-automation-service",
@@ -447,7 +447,7 @@
     },
     {
       "name": "zenx_rooms_workspace",
-      "description": "Explicitly read a Companion Room planning notebook. Editable matters, memory and exact references are annotations, not live execution status.",
+      "description": "Explicitly read a PAW Room planning notebook. Editable matters, memory and exact references are annotations, not live execution status.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -467,7 +467,7 @@
     },
     {
       "name": "zenx_rooms_update_workspace",
-      "description": "Replace Companion planning annotations only if expectedRevision matches. Host validates bounded UTF-8, uniqueness, exact references and total 40 KiB. Re-read and deliberately merge after conflict. Does not execute resources or create Triggers.",
+      "description": "Replace PAW planning annotations only if expectedRevision matches. Host validates bounded UTF-8, uniqueness, exact references and total 40 KiB. Re-read and deliberately merge after conflict. Does not execute resources or create Triggers.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -764,12 +764,12 @@
       },
       {
         "id": "workspace",
-        "title": "Read Companion planning notebook",
+        "title": "Read PAW planning notebook",
         "tool": "zenx_rooms_workspace"
       },
       {
         "id": "update-workspace",
-        "title": "Save Companion planning notebook with revision check",
+        "title": "Save PAW planning notebook with revision check",
         "tool": "zenx_rooms_update_workspace"
       },
       {

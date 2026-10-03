@@ -33,7 +33,7 @@ const room = {
   messagePreview: null,
 };
 
-test("Sidebar opens grouped Companions and Rooms without duplicating plugin navigation or creating Threads", async () => {
+test("Sidebar opens grouped PAW conversations and Rooms without duplicating plugin navigation or creating Threads", async () => {
   await withDom(async (root) => {
     const opened: string[] = [];
     let threadActions = 0;
@@ -60,14 +60,14 @@ test("Sidebar opens grouped Companions and Rooms without duplicating plugin navi
         ),
       ),
     );
-    assert.ok(document.querySelector('[aria-label="Companions"]'));
+    assert.ok(document.querySelector('[aria-label="PAW"]'));
     assert.ok(document.querySelector('[aria-label="Rooms"]'));
     assert.equal(
       document.querySelectorAll('.plugin-space-link[title="Rooms"]').length,
       0,
     );
     assert.ok(document.querySelector('.plugin-space-link[title="Triggers"]'));
-    const selected = button("Open companion Daily companion");
+    const selected = button("Open PAW Daily companion");
     assert.equal(selected.getAttribute("aria-current"), "page");
     assert.equal(selected.type, "button");
     assert.equal(
@@ -76,7 +76,7 @@ test("Sidebar opens grouped Companions and Rooms without duplicating plugin navi
     );
     await act(async () => selected.click());
     await act(async () => button("Open room Design team").click());
-    await act(async () => button("New companion").click());
+    await act(async () => button("New PAW").click());
     await act(async () => button("New room").click());
     assert.deepEqual(opened, [
       roomConversationRoute(companion.id),
@@ -121,7 +121,7 @@ test("conversation error remains visible and selecting a Thread clears Room sele
       ),
     );
     assert.equal(
-      button("Open companion Daily companion").getAttribute("aria-current"),
+      button("Open PAW Daily companion").getAttribute("aria-current"),
       null,
     );
     assert.match(

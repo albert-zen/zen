@@ -1,5 +1,12 @@
 import { Select } from "./ui/controls.js";
-import { useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { Icon } from "./icons.js";
 import type {
   PluginUiRegistry,
@@ -14,6 +21,15 @@ interface Configuration {
   permissionMode: string;
   allowUnrestrictedFullAccess: boolean;
 }
+export interface ImZenXDraft {
+  config: Configuration;
+  revision: number;
+  dirty: boolean;
+  settingsOpen: boolean;
+}
+export const ImZenXDraftContext = createContext<RefObject<
+  Record<string, ImZenXDraft>
+> | null>(null);
 interface Status {
   state: string;
   error?: string;
@@ -46,22 +62,56 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
   useEffect(() => {
     sdkRef.current = sdk;
   }, [sdk]);
-  const [config, setConfig] = useState(empty);
+  const drafts = useContext(ImZenXDraftContext);
+  const draft = drafts?.current[sdk.pluginId];
+  const [config, setConfigState] = useState(draft?.config ?? empty);
+  const revision = useRef(draft?.revision ?? 0);
+  const setConfig = (value: Configuration) => {
+    revision.current++;
+    setConfigState(value);
+    if (drafts)
+      drafts.current[sdk.pluginId] = {
+        config: value,
+        revision: revision.current,
+        dirty: true,
+        settingsOpen: true,
+      };
+  };
   const [status, setStatus] = useState<Status | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(
+    draft?.settingsOpen ?? false,
+  );
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
+    const loadedRevision = revision.current;
     void sdkRef.current.commands
       .execute("status")
       .then((value) => {
         if (!active) return;
         const result = value as Status;
         setStatus(result);
-        setConfig({ ...empty, ...result.configuration });
-        setSettingsOpen(!result.configuration);
+        if (
+          revision.current === loadedRevision &&
+          !drafts?.current[sdk.pluginId]?.dirty
+        ) {
+          const loaded = { ...empty, ...result.configuration };
+          setConfigState(loaded);
+          if (drafts)
+            drafts.current[sdk.pluginId] = {
+              config: loaded,
+              revision: loadedRevision,
+              dirty: false,
+              settingsOpen:
+                drafts.current[sdk.pluginId]?.settingsOpen ??
+                !result.configuration,
+            };
+        }
+        setSettingsOpen(
+          drafts?.current[sdk.pluginId]?.settingsOpen ?? !result.configuration,
+        );
       })
       .catch((reason: unknown) => {
         if (active) setError(String(reason));
@@ -95,6 +145,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
     setBusy(true);
     setError(null);
     setNotice(null);
+    const savedRevision = revision.current;
     try {
       setStatus(
         (await sdk.commands.execute(
@@ -102,7 +153,12 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
           command === "configure" ? config : undefined,
         )) as Status,
       );
-      if (command === "configure") setNotice("配置已保存");
+      if (command === "configure") {
+        setNotice("配置已保存");
+        const current = drafts?.current[sdk.pluginId];
+        if (current && current.revision === savedRevision)
+          current.dirty = false;
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
       try {
@@ -122,7 +178,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
         </span>
         <div>
           <h2>IM 连接</h2>
-          <p>在 IM 和桌面之间，继续同一个会话。</p>
+          <p>在 IM 中联系 PAW，或继续桌面工作会话。</p>
         </div>
       </header>
       <section className="imzenx-connection" aria-label="连接概览">
@@ -149,7 +205,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
           </p>
         ) : null}
         <div className="imzenx-connection-bottom">
-          <span>消息与回复双端同步 · 订阅自动保留</span>
+          <span>PAW 聊天与工作会话分开 · 选择自动保留</span>
           <div className="imzenx-actions">
             <button
               className="imzenx-text-button"
@@ -170,10 +226,30 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
           </div>
         </div>
       </section>
+      <section
+        className="imzenx-connection imzenx-routing"
+        aria-label="选择对话方式"
+      >
+        <h3>选择对话方式</h3>
+        <p className="imzenx-hint">
+          在 IM 中发送 /paws 查看这个工作目录下的 PAW，再用 /paw
+          选择。你发的消息进入 PAW 聊天室，只接收它主动发到聊天室的回复。
+        </p>
+        <p className="imzenx-hint">
+          /threads 和 /pick
+          继续直接工作会话；这个模式会同步该线程的模型回复。/new 清除选择。PAW
+          模式目前支持文字，平台原生已读、引用和表情取决于后续渠道适配。
+        </p>
+      </section>
       <details
         className="imzenx-settings"
         open={settingsOpen}
-        onToggle={(event) => setSettingsOpen(event.currentTarget.open)}
+        onToggle={(event) => {
+          const open = event.currentTarget.open;
+          setSettingsOpen(open);
+          const current = drafts?.current[sdk.pluginId];
+          if (current) current.settingsOpen = open;
+        }}
       >
         <summary>
           <Icon name="settings" size={18} />
@@ -199,7 +275,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
                 [
                   ["pythonExecutable", "Python 可执行文件"],
                   ["channelsConfigFile", "频道配置文件"],
-                  ["cwd", "新会话工作目录"],
+                  ["cwd", "工作目录与 PAW 可见范围"],
                 ] as const
               ).map(([key, label]) => (
                 <label className="field" key={key}>
@@ -284,11 +360,25 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
         <div className="imzenx-quickstart">
           <Icon name="compose" size={18} />
           <p>
-            直接发消息，即可新建会话。
-            <span>已有会话？先查看列表，再选择。</span>
+            先选择 PAW 聊天室或工作会话。
+            <span>没有选择时，直接发消息会新建工作会话。</span>
           </p>
         </div>
         <dl className="imzenx-commands">
+          <div>
+            <dt>
+              <code>/paws</code>
+            </dt>
+            <dd>查看工作目录下的 PAW</dd>
+          </div>
+          <div>
+            <dt>
+              <code>
+                /paw <span>列表序号或 ID</span>
+              </code>
+            </dt>
+            <dd>选择 PAW 聊天室；不带参数查看当前选择</dd>
+          </div>
           <div>
             <dt>
               <code>/threads</code>

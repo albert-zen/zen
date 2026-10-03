@@ -179,3 +179,59 @@ test("a closed pending activation cannot revive and re-enable reloads cleared st
   await runtime.close();
   assert.equal(listeners.size, 0);
 });
+
+test(
+  "the actual child pipe routes PAW requests after readiness within configured workspace",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "imzenx-paw-runtime-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const executable = path.join(root, "python-fixture");
+    const responseFile = path.join(root, "response.json");
+    await writeFile(
+      executable,
+      `#!${process.execPath}\nimport fs from 'node:fs';import readline from 'node:readline';let first=true;const lines=readline.createInterface({input:process.stdin});lines.on('line',line=>{if(first){first=false;process.stdout.write('{"type":"ready"}\\n');setImmediate(()=>process.stdout.write('{"type":"paw-request","id":"p1","operation":"list","params":{}}\\n'));}else fs.writeFileSync(${JSON.stringify(responseFile)},line);});lines.once('close',()=>process.exit(0));`,
+      { mode: 0o700 },
+    );
+    const requests = [];
+    const runtime = new ImZenXRuntime({
+      dataDirectory: root,
+      isServerReady: () => true,
+      onServerStatus: () => () => {},
+      readConnection: async () => ({
+        url: "ws://127.0.0.1:4500",
+        authentication: { tokenFile: path.join(root, "token") },
+      }),
+      pawRequest: async (...args) => {
+        requests.push(args);
+        return { rooms: [{ id: "r", name: "PAW" }] };
+      },
+    });
+    t.after(() => runtime.close());
+    const { sdk } = createFixturePluginHost({ pluginId: "imzenx" });
+    await runtime.start(sdk);
+    runtime.activate(Promise.resolve());
+    await waitFor(() => runtime.status().state === "unconfigured");
+    await invoke(runtime, "imzenx_configure", {
+      pythonExecutable: executable,
+      channelsConfigFile: path.join(root, "channels.json"),
+      cwd: root,
+    });
+    await waitFor(() => requests.length === 1);
+    let response;
+    for (let i = 0; i < 100; i++) {
+      try {
+        response = JSON.parse(await readFile(responseFile, "utf8"));
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    }
+    assert.deepEqual(requests, [[root, "list", {}]]);
+    assert.deepEqual(response, {
+      type: "paw-response",
+      id: "p1",
+      result: { rooms: [{ id: "r", name: "PAW" }] },
+    });
+  },
+);

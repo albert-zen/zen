@@ -5971,6 +5971,19 @@ button:disabled {
   background: var(--surface-2);
   overflow: hidden;
 }
+.imzenx-routing {
+  margin-top: 16px;
+  padding: 20px 24px;
+  display: grid;
+  gap: 10px;
+}
+.imzenx-routing h3,
+.imzenx-routing p {
+  margin: 0;
+}
+.imzenx-routing h3 {
+  font-size: 14px;
+}
 .imzenx-connection-top {
   display: flex;
   align-items: center;
