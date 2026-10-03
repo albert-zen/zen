@@ -40,7 +40,7 @@ export const REMOTE_PAIR_BODY_MS = 5_000;
 const REMOTE_PENDING_EVENTS_BYTES = 512 * 1024;
 const REMOTE_MAX_OUTBOUND_BUFFER = 2 * 1024 * 1024;
 
-function originAuthority(value: string): { host: string; port: number } {
+export function originAuthority(value: string): { host: string; port: number } {
   // Require the full single direct endpoint with an explicit canonical port.
   // No IPv6, IDNA, URL path, userinfo, proxy authority or ambiguous IP aliases.
   const match = /^https:\/\/([a-zA-Z0-9.-]+):([1-9][0-9]{0,4})$/u.exec(value);
@@ -166,13 +166,19 @@ export async function serveRemoteHost(
               !isRecord(data) ||
               typeof data.hostId !== "string" ||
               typeof data.deviceId !== "string" ||
-              typeof data.code !== "string"
+              typeof data.code !== "string" ||
+              (data.access !== undefined &&
+                data.access !== "read" &&
+                data.access !== "control")
             )
               throw new RemoteHostError("invalid_request");
             const result = await options.access.pair({
               hostId: data.hostId,
               deviceId: data.deviceId,
               code: data.code,
+              ...(data.access === "read" || data.access === "control"
+                ? { access: data.access }
+                : {}),
             });
             response.writeHead(200);
             response.end(JSON.stringify(result));
@@ -342,6 +348,7 @@ function attach(
   access: RemoteHostAccess,
 ): void {
   let initialized = false;
+  const roomSubscriptions = new Map<string, () => void>();
   let dispose = () => {};
   let subscriptionGeneration = 0;
   let recovery: RecoverySession | undefined;
@@ -384,6 +391,8 @@ function attach(
   };
   socket.once("close", () => {
     dispose();
+    for (const release of roomSubscriptions.values()) release();
+    roomSubscriptions.clear();
     recovery = undefined;
   });
   socket.on("message", (raw, isBinary) => {
@@ -436,6 +445,53 @@ function attach(
             );
             initialized = true;
             break;
+          case "zen/remote/models":
+            result = { models: access.models(deviceId, token) };
+            break;
+          case "zen/remote/rooms":
+          case "zen/remote/rooms/read":
+          case "zen/remote/rooms/post": {
+            const workspaceId = str("workspaceId");
+            const operation =
+              request.method === "zen/remote/rooms"
+                ? "list"
+                : request.method === "zen/remote/rooms/read"
+                  ? "read"
+                  : "post";
+            const authorized = new Set(
+              (await access.workspaces(deviceId, token)).map(
+                (workspace) => workspace.id,
+              ),
+            );
+            if (!authorized.has(workspaceId))
+              throw new RemoteHostError("wrong_workspace");
+            // Retire obsolete scope and reserve finite subscription capacity
+            // before a Room post can be admitted, including concurrent requests.
+            for (const [id, dispose] of roomSubscriptions) {
+              if (!authorized.has(id)) {
+                dispose();
+                roomSubscriptions.delete(id);
+              }
+            }
+            if (!roomSubscriptions.has(workspaceId)) {
+              if (roomSubscriptions.size >= 32)
+                throw new RemoteHostError("invalid_request");
+              roomSubscriptions.set(
+                workspaceId,
+                access.onRoomChange(deviceId, token, workspaceId, (params) =>
+                  send({ method: "zen/remote/room/event", params }),
+                ),
+              );
+            }
+            result = await access.roomRequest(deviceId, token, operation, {
+              workspaceId,
+              ...(operation === "list" ? {} : { roomId: str("roomId") }),
+              ...(operation === "post"
+                ? { text: str("text"), clientId: str("clientId") }
+                : {}),
+            });
+            break;
+          }
           case "zen/remote/workspaces":
             result = { workspaces: await access.workspaces(deviceId, token) };
             break;
@@ -449,7 +505,10 @@ function attach(
             };
             break;
           case "zen/remote/create":
-            result = await access.create(deviceId, token, str("workspaceId"));
+            result = await access.create(deviceId, token, str("workspaceId"), {
+              ...(p.model === undefined ? {} : { model: str("model") }),
+              ...(p.effort === undefined ? {} : { effort: str("effort") }),
+            });
             break;
           case "zen/remote/resume": {
             const workspaceId = str("workspaceId"),
@@ -626,6 +685,12 @@ function attach(
               threadId: str("threadId"),
               clientId: str("clientId"),
               text: str("text"),
+              ...(p.messageType === undefined
+                ? {}
+                : {
+                    messageType: str("messageType") as
+                      "guidance" | "follow_up" | "replacement",
+                  }),
             });
             break;
           case "zen/remote/interrupt":
@@ -643,7 +708,7 @@ function attach(
         send({ id, result });
       } catch (error) {
         const code =
-          error instanceof RemoteHostError ? error.code : "invalid_request";
+          error instanceof RemoteHostError ? error.code : "operation_unknown";
         send({ id, error: { code: -32000, message: code, data: { code } } });
       } finally {
         activeRequests -= 1;

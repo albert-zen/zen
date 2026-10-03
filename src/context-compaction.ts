@@ -486,6 +486,7 @@ export function contextCompactionTokenBudget(
 function projectsIntoModelContext(item: CanonicalItem): boolean {
   return (
     item.type === "user_message" ||
+    item.type === "thread_instruction" ||
     item.type === "agent_message" ||
     item.type === "tool_call" ||
     item.type === "tool_result" ||

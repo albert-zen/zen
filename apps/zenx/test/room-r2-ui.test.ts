@@ -82,7 +82,7 @@ test("trusted Room UI displays exact prepared cancel after reload and releases c
     assert(composer);
     assert.equal(
       document.querySelector<HTMLButtonElement>(
-        ".rooms-chat-compose .primary-button",
+        ".rooms-chat-compose .action-orb",
       )?.disabled,
       true,
     );
@@ -100,7 +100,7 @@ test("trusted Room UI displays exact prepared cancel after reload and releases c
     assert.equal(service.snapshot().rooms[0]?.messages.length, 0);
     assert.equal(
       document.querySelector<HTMLButtonElement>(
-        ".rooms-chat-compose .primary-button",
+        ".rooms-chat-compose .action-orb",
       )?.disabled,
       true,
       "empty draft alone disables Send",

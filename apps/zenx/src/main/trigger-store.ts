@@ -11,6 +11,7 @@ import type {
   TriggerSnapshot,
   ZenXRoom,
   ZenXTrigger,
+  AssistantWorkspace,
 } from "./trigger-types.js";
 import {
   MAX_ERROR_BYTES,
@@ -42,6 +43,15 @@ import {
   MAX_TRIGGER_PROMPT_BYTES,
   utf8Bytes,
   withinBytes,
+  MAX_ASSISTANT_MATTERS,
+  MAX_ASSISTANT_MEMORY,
+  MAX_ASSISTANT_REFERENCES,
+  MAX_ASSISTANT_TITLE_BYTES,
+  MAX_ASSISTANT_PLAN_BYTES,
+  MAX_ASSISTANT_STATUS_NOTE_BYTES,
+  MAX_ASSISTANT_NOTE_BYTES,
+  MAX_ASSISTANT_WORKSPACE_BYTES,
+  MAX_ASSISTANT_RESOURCE_WORKSPACE_BYTES,
 } from "./trigger-limits.js";
 
 interface StoredState extends TriggerSnapshot {
@@ -92,7 +102,13 @@ const TRIGGER_BASE_KEYS = [
   "active",
 ] as const;
 const TIMER_KEYS = ["nextRunAt", "intervalMinutes"] as const;
-const WATCH_KEYS = ["threadId", "event", "once"] as const;
+const WATCH_KEYS = [
+  "threadId",
+  "event",
+  "once",
+  "sourceDevice",
+  "sourceWorkspace",
+] as const;
 const ROOM_TRIGGER_KEYS = ["roomId", "mention"] as const;
 const SIGNAL_KEYS = ["name"] as const;
 const PROGRAM_KEYS = ["predicate", "action", "match"] as const;
@@ -128,6 +144,8 @@ const HISTORY_SOURCE_KEYS = [
 const HISTORY_V2_KEYS = [...HISTORY_BASE_KEYS, ...HISTORY_SOURCE_KEYS] as const;
 const HISTORY_V3_KEYS = [
   "delivery",
+  "sourceDevice",
+  "sourceWorkspace",
   ...HISTORY_BASE_KEYS,
   ...HISTORY_SOURCE_KEYS,
   "replyRoomId",
@@ -145,6 +163,8 @@ const OUTCOME_KEYS = [
   "error",
 ] as const;
 const ROOM_KEYS = [
+  "assistant",
+  "assistantWorkspace",
   "id",
   "name",
   "members",
@@ -312,6 +332,12 @@ function canonicalTrigger(
         ...(trigger.watch!.once === undefined
           ? {}
           : { once: trigger.watch!.once }),
+        ...(trigger.watch!.sourceDevice === undefined
+          ? {}
+          : { sourceDevice: trigger.watch!.sourceDevice }),
+        ...(trigger.watch!.sourceWorkspace === undefined
+          ? {}
+          : { sourceWorkspace: trigger.watch!.sourceWorkspace }),
       },
       ...program,
     };
@@ -368,6 +394,12 @@ function canonicalHistory(entry: TriggerHistoryEntry): TriggerHistoryEntry {
     ...(entry.delivery === undefined ? {} : { delivery: entry.delivery }),
     ...canonicalBaseHistory(entry),
     sourceThreadId: entry.sourceThreadId,
+    ...(entry.sourceDevice === undefined
+      ? {}
+      : { sourceDevice: entry.sourceDevice }),
+    ...(entry.sourceWorkspace === undefined
+      ? {}
+      : { sourceWorkspace: entry.sourceWorkspace }),
     sourceTurnId: entry.sourceTurnId,
     sourceRoomId: entry.sourceRoomId,
     sourceRoomMessageId: entry.sourceRoomMessageId,
@@ -434,6 +466,12 @@ function canonicalProgramOutcome(
 
 function canonicalRoom(room: ZenXRoom): ZenXRoom {
   return {
+    ...(room.assistant === undefined
+      ? {}
+      : { assistant: { ...room.assistant } }),
+    ...(room.assistantWorkspace === undefined
+      ? {}
+      : { assistantWorkspace: structuredClone(room.assistantWorkspace) }),
     id: room.id,
     name: room.name,
     members: room.members.map((member) => ({
@@ -584,6 +622,14 @@ function isTrigger(
       exactKeys(watch, WATCH_KEYS) &&
       string(watch["threadId"], MAX_ID_BYTES) &&
       watch["event"] === "turn_completed" &&
+      (watch["sourceDevice"] === undefined ||
+        (version === "v3" &&
+          string(watch["sourceDevice"], MAX_ID_BYTES) &&
+          watch["sourceDevice"] !== "local")) &&
+      (watch["sourceWorkspace"] === undefined ||
+        (version === "v3" &&
+          string(watch["sourceDevice"], MAX_ID_BYTES) &&
+          string(watch["sourceWorkspace"], MAX_ID_BYTES))) &&
       (watch["once"] === undefined || typeof watch["once"] === "boolean")
     );
   }
@@ -614,6 +660,19 @@ function isHistory(value: unknown): value is TriggerHistoryEntry {
         String(entry["delivery"]),
       )) &&
     isHistoryBase(entry) &&
+    nullableString(entry["sourceThreadId"], MAX_ID_BYTES) &&
+    nullableString(entry["sourceTurnId"], MAX_ID_BYTES) &&
+    nullableString(entry["sourceRoomId"], MAX_ID_BYTES) &&
+    nullableString(entry["sourceRoomMessageId"], MAX_ID_BYTES) &&
+    (entry["sourceDevice"] === undefined ||
+      (entry["kind"] === "thread" &&
+        string(entry["sourceDevice"], MAX_ID_BYTES) &&
+        entry["sourceDevice"] !== "local" &&
+        string(entry["sourceThreadId"], MAX_ID_BYTES) &&
+        string(entry["sourceTurnId"], MAX_ID_BYTES))) &&
+    (entry["sourceWorkspace"] === undefined ||
+      (string(entry["sourceDevice"], MAX_ID_BYTES) &&
+        string(entry["sourceWorkspace"], MAX_ID_BYTES))) &&
     entry !== null &&
     nullableString(entry["replyRoomId"], MAX_ID_BYTES) &&
     nullableString(entry["replyAuthor"], MAX_MEMBER_NAME_BYTES) &&
@@ -777,6 +836,24 @@ function isRoom(value: unknown): value is ZenXRoom {
     !finiteNumber(room["createdAt"])
   )
     return false;
+  if (room["assistant"] !== undefined) {
+    const assistant = record(room["assistant"]);
+    if (
+      !assistant ||
+      !exactKeys(assistant, ["threadId", "triggerId"]) ||
+      !string(assistant["threadId"], MAX_ID_BYTES) ||
+      !string(assistant["triggerId"], MAX_ID_BYTES) ||
+      room["members"].length !== 1 ||
+      room["members"][0]?.threadId !== assistant["threadId"]
+    )
+      return false;
+  }
+  if (
+    room["assistantWorkspace"] !== undefined &&
+    (room["assistant"] === undefined ||
+      !isAssistantWorkspace(room["assistantWorkspace"]))
+  )
+    return false;
   const names = new Set<string>();
   const threads = new Set<string>();
   for (const member of room["members"]) {
@@ -786,6 +863,154 @@ function isRoom(value: unknown): value is ZenXRoom {
     threads.add(member.threadId);
   }
   return room["messages"].every((message) => message.roomId === room["id"]);
+}
+
+export function canonicalAssistantWorkspace(
+  value: unknown,
+): AssistantWorkspace {
+  if (!isAssistantWorkspace(value))
+    throw Error("Invalid Companion workspace fields, identifiers or limits");
+  return structuredClone(value);
+}
+
+function annotationKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+): boolean {
+  return (
+    Object.keys(value).length === allowed.length && exactKeys(value, allowed)
+  );
+}
+function annotationArrayOf<T>(
+  value: unknown,
+  predicate: (entry: unknown) => entry is T,
+  maximum: number,
+): value is T[] {
+  if (
+    !Array.isArray(value) ||
+    value.length > maximum ||
+    Object.keys(value).length !== value.length
+  )
+    return false;
+  for (let index = 0; index < value.length; index++)
+    if (!Object.hasOwn(value, index) || !predicate(value[index])) return false;
+  return true;
+}
+function isAssistantWorkspace(value: unknown): value is AssistantWorkspace {
+  const workspace = record(value);
+  if (
+    !workspace ||
+    !annotationKeys(workspace, [
+      "revision",
+      "updatedAt",
+      "matters",
+      "memory",
+    ]) ||
+    !Number.isSafeInteger(workspace["revision"]) ||
+    (workspace["revision"] as number) < 0 ||
+    !Number.isSafeInteger(workspace["updatedAt"]) ||
+    (workspace["updatedAt"] as number) < 0 ||
+    !annotationArrayOf(
+      workspace["matters"],
+      isAssistantMatter,
+      MAX_ASSISTANT_MATTERS,
+    ) ||
+    !annotationArrayOf(
+      workspace["memory"],
+      isAssistantMemory,
+      MAX_ASSISTANT_MEMORY,
+    )
+  )
+    return false;
+  const unique = (items: { id: string }[]) =>
+    new Set(items.map((item) => item.id)).size === items.length;
+  return (
+    unique(workspace["matters"]) &&
+    unique(workspace["memory"]) &&
+    withinBytes(JSON.stringify(workspace), MAX_ASSISTANT_WORKSPACE_BYTES)
+  );
+}
+function annotationIdentifier(
+  value: unknown,
+  maximum: number,
+): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    withinBytes(value, maximum)
+  );
+}
+function annotationText(value: unknown, maximum: number): value is string {
+  return typeof value === "string" && withinBytes(value, maximum);
+}
+function isAssistantMatter(
+  value: unknown,
+): value is AssistantWorkspace["matters"][number] {
+  const matter = record(value);
+  return (
+    !!matter &&
+    annotationKeys(matter, [
+      "id",
+      "title",
+      "plan",
+      "statusNote",
+      "notes",
+      "references",
+    ]) &&
+    annotationIdentifier(matter["id"], MAX_ID_BYTES) &&
+    annotationIdentifier(matter["title"], MAX_ASSISTANT_TITLE_BYTES) &&
+    annotationText(matter["plan"], MAX_ASSISTANT_PLAN_BYTES) &&
+    annotationText(matter["statusNote"], MAX_ASSISTANT_STATUS_NOTE_BYTES) &&
+    annotationText(matter["notes"], MAX_ASSISTANT_NOTE_BYTES) &&
+    annotationArrayOf(
+      matter["references"],
+      isAssistantReference,
+      MAX_ASSISTANT_REFERENCES,
+    )
+  );
+}
+function isAssistantMemory(
+  value: unknown,
+): value is AssistantWorkspace["memory"][number] {
+  const memory = record(value);
+  return (
+    !!memory &&
+    annotationKeys(memory, ["id", "title", "text"]) &&
+    annotationIdentifier(memory["id"], MAX_ID_BYTES) &&
+    annotationIdentifier(memory["title"], MAX_ASSISTANT_TITLE_BYTES) &&
+    annotationText(memory["text"], MAX_ASSISTANT_NOTE_BYTES)
+  );
+}
+function isAssistantReference(
+  value: unknown,
+): value is AssistantWorkspace["matters"][number]["references"][number] {
+  const reference = record(value);
+  if (
+    !reference ||
+    !annotationText(reference["label"], MAX_ASSISTANT_TITLE_BYTES)
+  )
+    return false;
+  if (reference["kind"] === "thread")
+    return (
+      annotationKeys(reference, [
+        "kind",
+        "device",
+        "workspace",
+        "threadId",
+        "label",
+      ]) &&
+      annotationIdentifier(reference["device"], MAX_ID_BYTES) &&
+      annotationIdentifier(
+        reference["workspace"],
+        MAX_ASSISTANT_RESOURCE_WORKSPACE_BYTES,
+      ) &&
+      annotationIdentifier(reference["threadId"], MAX_ID_BYTES)
+    );
+  return (
+    reference["kind"] === "trigger" &&
+    annotationKeys(reference, ["kind", "triggerId", "label"]) &&
+    annotationIdentifier(reference["triggerId"], MAX_ID_BYTES)
+  );
 }
 
 function isRoomOperation(

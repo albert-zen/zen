@@ -70,7 +70,7 @@ test("startup repairs unavailable bundled content at the same path and version t
   });
   const tarball = path.join(
     pluginResources,
-    "zenx-self-control-plugin-1.0.0.tgz",
+    "zenx-self-control-plugin-1.0.1.tgz",
   );
   await copyFile(packed, tarball);
   let service = profileService(userData, {

@@ -1,6 +1,6 @@
 # ZenX UI/UX decisions
 
-更新日期：2026-09-20
+更新日期：2026-10-02
 
 New thread 打开临时本地编辑页；选择或添加 Project 不创建 Thread，第一条有效 Send 才配置所选 Project、创建真实 Thread，并在 Sidebar、usage 等辅助元数据独立刷新时立即启动 Turn。全局入口使用最近 Project，Project 内入口使用该精确 Project；失败以明确、可恢复且不遮盖会话的通知呈现。
 
@@ -116,7 +116,7 @@ New thread 可保留独立 row；它相对 插件入口 / Projects 的精确视�
 ### 3.4 原生应用菜单与按需面板
 
 - Packaged Windows/Linux 不安装 Electron 默认 application menu；macOS 只保留系统合规的 application、edit 和 window roles。原生菜单不得引入第二套产品导航。
-- 桌面窗口使用与产品壳连续的 integrated title bar，并把产品行、会话行与原生窗口控件分成明确的命中区域：macOS 顶行左侧为 traffic lights 留出空间并紧接 Sidebar 展开 / 收起入口，右侧直接承载 Thread 标题、cwd 与 Thread actions；ZenX mark / wordmark 与 Inbox 共同位于其下方的 Sidebar 产品行，因此左侧原生控件不会把右侧会话行整体下压。Windows 在顶行左侧显示 ZenX 品牌与 Inbox，并把 Sidebar 展开 / 收起保持为独立的顶行按钮，中间承载会话行，右侧为 minimize / maximize-restore / close 保留原生命中区；紧凑宽度可以把会话行移到原生控件下方的第二行，但不得重叠。展开时左侧顶行与整列 Sidebar 使用同一 Sidebar surface，右侧会话标题栏与 Workspace 使用同一 main surface；唯一的 1px 语义竖分割线从窗口顶部贯穿到底，右侧标题栏底线必须精确从该竖线开始，不使用圆角或 card 式壳层过渡。系统窗口控制仍由 Electron/OS 持有，产品按钮与 Thread 标题控件均是 no-drag，剩余表面才是 drag region。Sidebar 收起后 Chat 使用完整内容宽度，标题栏保留可恢复 Sidebar 的明确入口；该偏好只属于本机产品壳，不进入 Thread 或 canonical Items。
+- 桌面窗口使用与产品壳连续的 integrated title bar，并把产品行、会话行与原生窗口控件分成明确的命中区域：macOS 顶行左侧为 traffic lights 留出空间并紧接 Sidebar 展开 / 收起入口，右侧直接承载 Thread 标题、cwd 与 Thread actions；ZenX mark / wordmark 与 Inbox 共同位于其下方的 Sidebar 产品行，因此左侧原生控件不会把右侧会话行整体下压。Windows / Linux 在顶行左侧显示 ZenX 品牌与 Inbox，并保留独立的 Sidebar 展开 / 收起按钮；右侧顶行只留给原生 minimize / maximize-restore / close 和拖动区域。所有宽度下，会话标题、主操作区与右栏 Tab 都从第二行开始，左侧 Sidebar 保持原有起点，不随主区再下移。展开时左侧顶行与整列 Sidebar 使用同一 Sidebar surface，右侧会话标题栏与 Workspace 使用同一 main surface；唯一的 1px 语义竖分割线从窗口顶部贯穿到底，右侧标题栏底线必须精确从该竖线开始，不使用圆角或 card 式壳层过渡。系统窗口控制仍由 Electron/OS 持有，产品按钮与 Thread 标题控件均是 no-drag，剩余表面才是 drag region。Sidebar 收起后 Chat 使用完整内容宽度，标题栏保留可恢复 Sidebar 的明确入口；该偏好只属于本机产品壳，不进入 Thread 或 canonical Items。
 - 不提供常驻右侧 Activity rail。Tool details 留在聊天流内；Workspace/Artifact 使用按需面板。
 - Thread header 只保留一个按需工作区 icon entry；上下文与 cache telemetry 位于 Composer。不显示 Search 或 Archive 控件，也不使用常驻 “Workspace” 文本按钮、空 overflow 或装饰性状态控件。归档能力继续位于 Thread 管理菜单与 Settings。
 - 右侧工作区只有一个并排容器和一个顶部入口，不再叠加旧 Workspace 模态抽屉。顶层只显示实际内容 Tab（文件名、浏览器页面、Computer 或插件注册的视图），加号选择新内容类型；不再先按 Browser / Files 分类再选择二级内容。插件贡献进入加号选择器，打开后按自身 surface 展示；Trigger 与 Room 不硬编码为核心 tabs。关闭和展开始终避开原生标题栏控件。Markdown 使用连续可编辑的实时预览：光标进入或触及格式节点时局部露出源码，离开后恢复渲染，自动保存，不提供常规 Edit / Preview / Save 按钮；失败与磁盘冲突在文件内处理，不覆盖未保存输入。
@@ -427,3 +427,46 @@ ThreadView
 - 共用 motion tokens 为反馈 100ms、进入 150ms、退出 100ms、布局 200ms；动画不控制业务提交。含 Electron 原生 Browser view 的右栏不单独平移 DOM 占位，以免与真实页面 bounds 脱节。菜单/对话框交由 primitive 的 presence 管理卸载，details 使用可反向的内在高度过渡；reduced motion 取消位移和动画，保留状态反馈。
 - 压缩完成行只从 canonical compaction 派生。默认展示发起者、摘要字符数与“完整输入占用未知”；字符不是 tokens。展开优先呈现可选取和复制的 Markdown 摘要，独立说明保留原始 Items 数量、时点与后续增长；真实 Core 消息投影在诊断 disclosure 中。历史消息条数、摘要字符数、摘要调用 tokenUsage 均不冒充完整模型输入；未记录的完整输入占用不展示为 0 或伪造节省比例。
 - `test/fixtures/controls-visual.html` 提供共享控件、禁用、长目录、对话框与长中文压缩摘要的开发展示面；不是产品导航入口。
+
+## Room 与 Thread 的共享输入体验
+
+- Room 复用 Thread 的输入容器、自适应文本区、发送按钮视觉与候选列表。Room 仍经插件 SDK 保存消息和消费投递回执；共享外观不提供 Thread 专属的中断、停止、权限或模型控制。
+- 普通 Room 输入 `@` 弹出可搜索的成员候选；上下方向键选择、Enter/Tab 确认、Escape 关闭，选择不会同时发送消息，中文输入法确认与长按 Enter 不触发重复提交。成员选择保留 literal `@name` 及前后文本，与 Host 的 mention 匹配规则一致。Always On Assistant 不要求 `@`，新消息仍在现有下一周期 steering 路径接入。
+- Thread 的文件、线程、工作流和 Room 的成员候选共享 viewport-anchored portal 呈现，避开 Composer 底部滚动容器的裁剪；候选保持编辑器焦点，窗口变化后重新定位，不复制数据或执行语义。
+- Room 的次级导航沿用平面行与中性选中态，正文与输入框沿同一阅读列对齐。用户消息使用右侧轻量气泡，Agent 消息保持自然排版和可辨认的作者；消息原文不做删改。时刻简写可通过 title 查看完整日期，来源 Thread/Turn 与消息 ID 在 Message details 中保留。
+- Room 的设置与未确定投递状态保持可见且可操作。自动化卡片的完整指令默认折叠，展开后可读；这些都是呈现调整，不改变 Trigger 配置、运行、恢复或授权。
+- Linux 与 Windows 的工作区入口避让原生最小化、最大化和关闭按钮，不能将打开面板的点击交给原生关闭区域。
+
+- Room 的自动回复设置按明确成员导航到现有 Room mention Trigger 编辑器；路由参数只表达临时 UI 意图，成员和目标从最新 Host Room / Thread 投影验证，显式 Save 才写入定义，不修改权限、不重放旧消息。Cancel / Back 返回原 Room，不把离开表单当作取消已提交的 Host 请求。Member conversation 选项以标题和短工作区 / 可区分短 ID 呈现，完整身份仍可搜索、查看并由无障碍名称读取。
+- Room 发起的自动回复设置以只读摘要显示精确 Room、成员与执行 Thread，只要求填写名称和回复指令并显式保存；不在这个固定目标流程显示类型切换或新建 Thread 控件。成员名中的 `|` 属于名字本身，不能被条件串的分隔符截断。通用自动化编辑器保留原有完整选择能力。
+
+本轮视觉和交互校准参考 [DeepSeek Harness 的输入候选组件](https://github.com/deepseek-ai/deepseek-harness/tree/639ed015397290b3745d163aafe02ffee4aa3f84/packages/client/ui-input-trigger)、[T3 Code 的 ComposerCommandMenu](https://github.com/pingdotgg/t3code/blob/5cc99e1c23980d7995a13c47f969b47cb68ed1be/apps/web/src/components/chat/ComposerCommandMenu.tsx) 与 [Linear 的 UI refresh](https://linear.app/changelog/2026-03-12-ui-refresh)。这些是参考材料，不替代本文的产品语义，也不引入它们的运行模型或样式框架。
+
+### Companion and Room conversation workspaces
+
+The primary left navigation exposes named Companions and Rooms directly, above the existing project/Thread organization. Opening one selects an IM-style conversation without a second conversation rail. Creation remains explicit, with a user-chosen assistant name; Companion is the reusable preset name.
+
+The existing right workspace shell is shared. Room-owned tabs expose Overview, Matters, Memory, Automations and Threads. Matters and memory are assistant-maintained notebook annotations, with exact references to execution Threads and Triggers. They do not act as a second scheduler or an execution ledger. A plan such as “waiting for review” is visibly distinct from a live Thread status. Remote references show their full device/workspace identity and do not silently open a local Thread with the same ID.
+
+Files, Browser, Computer and Thread plugin tabs require a real Room member Thread. A Companion can use its single bound Thread; shared Rooms ask the user to select a member, with the resource context visible above the tabs. Room navigation and tab selection stay separate from canonical execution identity. Existing file drafts remain owned by the shared workspace draft store.
+
+Overview shows the current recurring timer definitions, including cadence and paused state, rather than inventing a heartbeat default. The Automations tab shows the assistant's existing Triggers and their instructions, and opens the existing Trigger controls for configuration. Reading any of these views does not start a Turn or install a timer. Missing plugins and unavailable sources must be visible rather than treated as a successful empty state.
+
+## 2026-10-02：持续适用的 UI 修改与验收原则
+
+本节记录已确认的产品方向，之后所有 UI 改动均须对照；它与本文前面的权威规则共同生效，不另建平行规范。
+
+- 从完整用户流程审视界面。先枚举页面、设置分区、插件页面、弹窗和关键状态，再实际逐页打开；不得把类型检查、单页截图或通过的组件测试表述为全产品体验验收。
+- 复用已有成熟组件与交互。Room、Thread、side chat 共享正常 Composer、浮层式 @ 提示和右侧工作区；不为插件复制一套低完成度输入框、选择器或导航。
+- 设计参考应能说明具体借鉴了什么：信息层级、密度、颜色、侧栏、输入框、Tab 或消息布局。没有源码、公开设计材料或实际产品观察的依据时，不声称某设计来自 DeepSeek Harness、T3 Code 或其他产品。
+- 所有 Tab 的选中态使用表面深浅与文字对比，不用强调色底线。保留键盘焦点环、可访问名称与选中语义；选中与焦点是两件事。
+- Windows / Linux 的原生窗口操作独占最上方一行。除左侧 Sidebar 外，主页面标题与右侧工作区操作全部位于其下方，宽窄屏都不得与系统窗口按钮重叠。原生操作行统一使用 Sidebar 顶部的 surface token，与下方主标题/内容形成可见的深浅分区；浅色、深色和配色主题同步生效。
+- 图标按钮必须有准确的 tooltip 与可访问名称。关闭 Tab、关闭右栏、展开右栏、全屏打开子会话是不同动作；新建 Tab 的加号只打开内容类型选择器，不隐式创建线程。每个操作的作用对象与用途必须从所在侧栏或全屏布局中清楚可见；不是禁止叉号或加号，而是不能让它们脱离被遮挡的 Tab 名称，像无归属的顶栏按钮。
+- 会话滚动、消息列和 Composer 必须在各自分栏的边界内；长标题、多个子线程、错误提示与窄屏不能挤出隐式 Grid 列或让输入框漂浮到另一会话上。Checkbox 等基础控件遵循共享样式与标签布局。
+- Subagents 的常规入口为右侧工作区加号菜单中的 Subagents Tab。Tab 内显示当前会话的子线程，选择后在右栏阅读/对话；不在主标题下重复铺设 Subagents 行或快捷标签。
+- Subagents Tab 提供 New side chat：以父会话完整上下文快照创建 fork 子线程，在上下文末尾追加明确的 side-chat 身份与等待用户请求的指令。创建本身不运行模型，不继承可执行待办队列，也不改变父会话执行。主动深入交互时可以全屏打开子线程。
+- 全屏子线程在现有 top bar 中使用可返回祖先的路径式面包屑标识位置；不另占标题栏下方一行。普通根会话不显示空面包屑。
+- 验收至少检查浅色/深色、桌面/窄屏、长文本、空状态/错误状态、键盘与焦点、打开/关闭/切换后的草稿和上下文归属。修复前后截图绑定实际构建版本；未实际查看的页面必须明确列为未验。
+- 产品改动在 PR 分支交付，不直接修改主线；独立 Review 和实际操作证据共同支持结论，不能相互替代。
+
+Companion 导航使用与共享图标相同描边风格的对话气泡，表达一对一交流；普通 Rooms 保留多人图标。它不使用代表 Thread trace 的三行图标，也不通过图标暗示额外自主性。

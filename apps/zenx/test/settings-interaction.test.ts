@@ -1704,6 +1704,7 @@ test("every Settings tab remains keyboard reachable after narrow-screen reflow",
         "Context compaction",
         "Skills",
         "Workflows",
+        "Fleet",
         "Archived threads",
       ],
     );
@@ -3450,6 +3451,27 @@ test("settings retain unsaved edits across hidden Activity and saves do not over
       document.querySelector(".settings-apply-bar")?.textContent ?? "",
       /Unsaved/,
     );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("changing Settings tabs starts the new panel at its heading", async () => {
+  const harness = await mountSettings("general");
+  try {
+    await waitFor(() =>
+      document.querySelector(".settings-view > .page-scroll"),
+    );
+    const panel = document.querySelector<HTMLElement>(
+      ".settings-view > .page-scroll",
+    )!;
+    panel.scrollTop = 430;
+    await click(
+      document.querySelector<HTMLButtonElement>(
+        '[role="tab"][data-tab="compaction"]',
+      )!,
+    );
+    assert.equal(panel.scrollTop, 0);
   } finally {
     await unmount(harness);
   }

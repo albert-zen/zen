@@ -2,7 +2,14 @@ import { SkillsSettingsPanel } from "./SkillsSettingsPanel.js";
 import { Select, Combobox } from "./ui/controls.js";
 import { SubscriptionUsageCard } from "./SubscriptionUsageCard.js";
 import { RtkSettingsCard } from "./RtkSettingsCard.js";
-import { Activity, useEffect, useId, useRef, useState } from "react";
+import {
+  Activity,
+  useEffect,
+  useLayoutEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import { normalizeContextCompactionConfig } from "../../../../../src/context-compaction.js";
 import { ContextCompactionPanel } from "./ContextCompactionPanel.js";
 import { WorkflowSettingsPanel } from "./WorkflowSettingsPanel.js";
@@ -46,6 +53,7 @@ import { ProviderLogo, providerLogoKindForIdentity } from "./ProviderLogo.js";
 import { threadModelIdentity, threadTitle } from "./thread-list.js";
 import { PluginSettingsSurfaces } from "./PluginProductPage.js";
 import { ChromeConnectionSettings } from "./ChromeConnectionSettings.js";
+import { FleetSettings } from "./FleetSettings.js";
 
 export type SettingsTab =
   | "account"
@@ -56,6 +64,7 @@ export type SettingsTab =
   | "compaction"
   | "skills"
   | "workflows"
+  | "fleet"
   | "archived";
 
 // Match the Host profile limit before allowing either model-add path.
@@ -117,6 +126,10 @@ export function SettingsView({
   );
   if (active && tab === "plugins" && !pluginsVisited) setPluginsVisited(true);
   const navRef = useRef<HTMLElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [tab]);
   const draftSnapshot = useRef({ settings, draft });
   draftSnapshot.current = { settings, draft };
 
@@ -285,6 +298,7 @@ export function SettingsView({
     { id: "compaction", label: "Context compaction", icon: "compress" },
     { id: "skills", label: "Skills", icon: "book" },
     { id: "workflows", label: "Workflows", icon: "compose" },
+    { id: "fleet", label: "Fleet", icon: "computer" },
     { id: "archived", label: "Archived threads", icon: "archive" },
   ];
   return (
@@ -312,7 +326,7 @@ export function SettingsView({
           </div>
         </header>
       ) : null}
-      <div className="page-scroll">
+      <div ref={scrollRef} className="page-scroll">
         <div className="settings-layout">
           <nav
             ref={navRef}
@@ -434,6 +448,7 @@ export function SettingsView({
               </div>
             ) : null}
             {active && tab === "appearance" ? <AppearancePanel /> : null}
+            {active && tab === "fleet" ? <FleetSettings /> : null}
             <Activity mode={active && tab === "general" ? "visible" : "hidden"}>
               <>
                 <GeneralPanel draft={draft} setDraft={setDraft} />

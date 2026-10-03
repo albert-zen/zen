@@ -48,6 +48,7 @@ import type {
 } from "./item.js";
 import {
   contentFromUserMessage,
+  SIDE_CHAT_TOOL_SNAPSHOT_CONTENT_TYPE,
   normalizeUserInput,
   previewFromUserMessage,
   sameUserInput,
@@ -174,7 +175,7 @@ export interface ForkThreadInput {
 
 export interface CreateChildThreadInput {
   parentThreadId: string;
-  mode: "fresh" | "fork";
+  mode: "fresh" | "fork" | "side-chat";
 }
 
 export interface SteerTurnOptions {
@@ -544,13 +545,17 @@ export class ZenAppServer {
   async createChildThread(
     input: CreateChildThreadInput,
   ): Promise<ThreadSnapshot> {
-    if (input.mode !== "fresh" && input.mode !== "fork")
+    if (
+      input.mode !== "fresh" &&
+      input.mode !== "fork" &&
+      input.mode !== "side-chat"
+    )
       throw new AppServerError(
         "invalid_request",
-        "Child mode must be fresh or fork",
+        "Child mode must be fresh, fork, or side-chat",
       );
     const parent = await this.#requireThread(input.parentThreadId);
-    if (input.mode === "fork") {
+    if (input.mode === "fork" || input.mode === "side-chat") {
       return await this.#forkThread(
         {
           sourceThreadId: parent.id,
@@ -558,6 +563,7 @@ export class ZenAppServer {
           workspace: { type: "same-directory" },
         },
         parent.id,
+        input.mode === "side-chat",
       );
     }
     const configuration = parent.effectiveConfiguration();
@@ -627,6 +633,7 @@ export class ZenAppServer {
   async #forkThread(
     input: ForkThreadInput,
     parentThreadId?: string,
+    fullContext = false,
   ): Promise<ThreadSnapshot> {
     const admission = this.beginHostOperation("other", "thread/fork");
     try {
@@ -645,18 +652,22 @@ export class ZenAppServer {
       const source = await this.#requireThread(input.sourceThreadId);
       const sourceItems = source.items;
       const terminalIndex = findLatestClosedTurnIndex(sourceItems);
-      if (terminalIndex < 0) {
+      if (terminalIndex < 0 && !fullContext) {
         throw new AppServerError(
           "fork_boundary_unavailable",
           "Copy is available after the Thread has a complete Turn",
         );
       }
-      const terminal = sourceItems[terminalIndex]!;
+      const terminal = fullContext
+        ? sourceItems.at(-1)!
+        : sourceItems[terminalIndex]!;
       const sourceTurnId = terminal.turnId;
-      if (sourceTurnId === undefined) {
+      if (sourceTurnId === undefined && !fullContext) {
         throw new Error("Closed Turn boundary is missing a Turn id");
       }
-      const prefix = forkablePrefix(sourceItems, terminalIndex);
+      const prefix = fullContext
+        ? sourceItems
+        : forkablePrefix(sourceItems, terminalIndex);
       const threadId = this.#id();
       const copiedItems = remapForkItems(prefix, threadId, this.#id);
       if (parentThreadId !== undefined) {
@@ -674,10 +685,21 @@ export class ZenAppServer {
         type: "thread_forked",
         sourceThreadId: source.id,
         sourceBoundaryItemId: terminal.id,
-        sourceTurnId,
+        ...(sourceTurnId === undefined ? {} : { sourceTurnId }),
         workspace: "same-directory",
+        ...(fullContext ? { context: "full" as const } : {}),
       };
       const thread = new Thread(threadId, [...copiedItems, forked]);
+      if (fullContext) {
+        appendSideChatSnapshotClosures(thread, this.#id, this.#now);
+        thread.append({
+          id: this.#id(),
+          threadId,
+          createdAt: this.#now(),
+          type: "thread_instruction",
+          text: `This conversation is a side chat (Thread ${threadId}) forked from parent Thread ${source.id}. You are not the main thread. The inherited conversation is context, not a request to continue the parent's work. Wait for an explicit user request in this side chat. Do not begin work independently or execute inherited pending work.`,
+        });
+      }
       if (this.#journal.create === undefined) {
         throw new AppServerError(
           "fork_unsupported",
@@ -695,7 +717,7 @@ export class ZenAppServer {
       try {
         const sourceMetadata = await this.#threadMetadata.read(source.id);
         if (sourceMetadata.name !== undefined) {
-          const suffix = " · Copy";
+          const suffix = fullContext ? " · Side chat" : " · Copy";
           await this.#threadMetadata.setName(
             threadId,
             `${sourceMetadata.name.slice(0, 200 - suffix.length)}${suffix}`,
@@ -2641,16 +2663,43 @@ export class ZenAppServer {
       options.thread.effectiveConfiguration().cwd,
     );
     options.signal.throwIfAborted();
+    const item: ContextCompactionItem = {
+      id: this.#id(),
+      threadId: options.thread.id,
+      createdAt: this.#now(),
+      type: "context_compaction",
+      provenance: "provider_generated",
+      initiator: options.initiator,
+      workspaceInstructions,
+      coveredThroughItemId: options.boundary.item.id,
+      summary: summary.text,
+      retainedItemIds: [],
+      includeOriginalReference:
+        options.includeOriginalReference ??
+        options.contextCompaction.includeOriginalReference,
+      providerProfileId: options.selection.selection.providerProfileId,
+      modelId: options.selection.selection.modelId,
+      reasoningEffort: options.selection.selection.reasoningEffort,
+      algorithmVersion: CONTEXT_COMPACTION_ALGORITHM_VERSION,
+      tokenUsage: summary.tokenUsage,
+    };
     let boundedBoundary: ReturnType<typeof boundedCompactionBoundary>;
     try {
       boundedBoundary = boundedCompactionBoundary(options.thread.items, {
-        retainedTokenBudget: targetTokenBudget - summaryTokens,
+        // Standalone instructions and the uncompacted suffix stay visible;
+        // budget the actual proposed projection, not retained Items alone.
+        retainedTokenBudget: targetTokenBudget,
         estimateRetainedTokens: (retainedItems) =>
           estimateModelMessageInputTokens(
             compileModelMessages(
-              retainedItems,
+              [
+                ...options.thread.items,
+                {
+                  ...item,
+                  retainedItemIds: retainedItems.map((retained) => retained.id),
+                },
+              ],
               options.selection.selection,
-              workspaceInstructions,
             ),
           ),
         retention: options.contextCompaction.retention,
@@ -2670,26 +2719,19 @@ export class ZenAppServer {
         "Context compaction boundary changed during generation",
       );
     }
-    const item: ContextCompactionItem = {
-      id: this.#id(),
-      threadId: options.thread.id,
-      createdAt: this.#now(),
-      type: "context_compaction",
-      provenance: "provider_generated",
-      initiator: options.initiator,
-      workspaceInstructions,
-      coveredThroughItemId: options.boundary.item.id,
-      summary: summary.text,
-      retainedItemIds: boundedBoundary.retainedItemIds,
-      includeOriginalReference:
-        options.includeOriginalReference ??
-        options.contextCompaction.includeOriginalReference,
-      providerProfileId: options.selection.selection.providerProfileId,
-      modelId: options.selection.selection.modelId,
-      reasoningEffort: options.selection.selection.reasoningEffort,
-      algorithmVersion: CONTEXT_COMPACTION_ALGORITHM_VERSION,
-      tokenUsage: summary.tokenUsage,
-    };
+    item.retainedItemIds = boundedBoundary.retainedItemIds;
+    const projectedTokens = estimateModelMessageInputTokens(
+      compileModelMessages(
+        [...options.thread.items, item],
+        options.selection.selection,
+      ),
+    );
+    if (projectedTokens > targetTokenBudget) {
+      throw new AppServerError(
+        "compaction_budget_exceeded",
+        `Context compaction projection exceeds the ${String(targetTokenBudget)} token target`,
+      );
+    }
     try {
       await this.#commit(options.thread, item);
       this.#emit({ type: "item_completed", item });
@@ -2711,10 +2753,16 @@ export class ZenAppServer {
   #pendingReplacement(
     thread: Thread,
   ): TurnReplacementRequestedItem | undefined {
-    const intents = thread.items.filter(
-      (item): item is TurnReplacementRequestedItem =>
-        item.type === "turn_replacement_requested",
+    const items = thread.items;
+    const forkIndex = items.findLastIndex(
+      (item) => item.type === "thread_forked",
     );
+    const intents = items
+      .slice(forkIndex + 1)
+      .filter(
+        (item): item is TurnReplacementRequestedItem =>
+          item.type === "turn_replacement_requested",
+      );
     for (const intent of intents.reverse()) {
       const successorInput = thread.items.some(
         (item) =>
@@ -3001,7 +3049,9 @@ export class ZenAppServer {
         ? {}
         : {
             forkedFromThreadId: fork.sourceThreadId,
-            forkedFromTurnId: fork.sourceTurnId,
+            ...(fork.sourceTurnId === undefined
+              ? {}
+              : { forkedFromTurnId: fork.sourceTurnId }),
           }),
       preview: firstUserMessagePreview(items),
       status: thread
@@ -3312,6 +3362,69 @@ function forkablePrefix(
     end += 1;
   }
   return items.slice(0, end);
+}
+
+/** Close only the child's copied execution projection; never operate on the parent. */
+function appendSideChatSnapshotClosures(
+  thread: Thread,
+  idFactory: () => string,
+  now: () => string,
+): void {
+  const snapshot = thread.items;
+  const resultKeys = new Set(
+    snapshot.flatMap((item) =>
+      item.type === "tool_result" ? [`${item.turnId}\0${item.callId}`] : [],
+    ),
+  );
+  for (const item of snapshot) {
+    if (
+      item.type !== "tool_call" ||
+      resultKeys.has(`${item.turnId}\0${item.callId}`)
+    )
+      continue;
+    thread.append({
+      id: idFactory(),
+      threadId: thread.id,
+      turnId: item.turnId,
+      createdAt: now(),
+      type: "tool_result",
+      callId: item.callId,
+      contentType: SIDE_CHAT_TOOL_SNAPSHOT_CONTENT_TYPE,
+      structuredContent: { status: "snapshot", executed: false },
+      output:
+        "Parent tool call snapshot: no result was available when this side chat was created. This call was not executed in the side chat; the parent may still be running.",
+      exitCode: 1,
+    });
+  }
+  const closedTurns = new Set(
+    snapshot.flatMap((item) =>
+      item.type === "turn_completed" || item.type === "turn_aborted"
+        ? [item.turnId]
+        : [],
+    ),
+  );
+  for (const item of snapshot) {
+    if (item.type !== "turn_started" || closedTurns.has(item.turnId)) continue;
+    thread.append({
+      id: idFactory(),
+      threadId: thread.id,
+      turnId: item.turnId,
+      createdAt: now(),
+      type: "turn_aborted",
+      reason:
+        "Copied parent Turn is historical context. No execution was transferred to this side chat; the parent is unaffected.",
+    });
+  }
+  for (const queued of pendingQueuedMessages(snapshot)) {
+    thread.append({
+      id: idFactory(),
+      threadId: thread.id,
+      createdAt: now(),
+      type: "user_message_queue_cancelled",
+      queuedItemId: queued.id,
+      clientId: queued.clientId,
+    });
+  }
 }
 
 function remapForkItems(

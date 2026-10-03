@@ -154,3 +154,50 @@
 .trigger-dedicated .quiet-button {
   justify-self: start;
 }
+
+.trigger-manager .trigger-instruction-details {
+  margin: 12px 0;
+  font-size: var(--font-size-label);
+  color: var(--color-text-secondary);
+}
+.trigger-instruction-details summary {
+  cursor: pointer;
+  width: fit-content;
+  padding: 3px 0;
+}
+.trigger-instruction-details[open] .trigger-instructions {
+  margin-top: 8px;
+  line-height: 1.65;
+}
+
+.trigger-editor .form-grid {
+  align-items: start;
+}
+.trigger-editor .field > .ui-select-trigger {
+  align-self: start;
+}
+.trigger-manager .trigger-room-setup {
+  max-width: 640px;
+}
+.trigger-room-setup .form-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+.trigger-room-context {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  margin-bottom: 20px;
+  line-height: 1.6;
+}
+.trigger-room-context strong {
+  font-weight: 500;
+}
+.trigger-room-context p {
+  margin: 4px 0;
+  color: var(--color-text-secondary);
+}
+.trigger-room-context small {
+  color: var(--color-text-muted);
+}
+.trigger-room-setup textarea {
+  min-height: 110px;
+}

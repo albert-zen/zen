@@ -121,13 +121,17 @@ test("Android client transport pairs over trusted TLS, shares Host authority wit
         (await mobile.snapshot("isolated-test", "w")).threads,
         [],
       );
-      assert.deepEqual(
-        await mobile.command("isolated-test", "w", "create", {}),
-        { accepted: true },
-      );
+      const created = await mobile.command("isolated-test", "w", "create", {});
+      assert.equal(created.accepted, true);
+      assert.ok(created.threadId);
       const threads = (await mobile.snapshot("isolated-test", "w")).threads;
       assert.equal(threads.length, 1);
       const id = threads[0]!.id;
+      assert.equal(
+        created.threadId,
+        id,
+        "create receipt identifies the canonical listed Thread",
+      );
       await mobile.read("isolated-test", "w", id);
       const sent = await mobile.command("isolated-test", "w", "send", {
         threadId: id,

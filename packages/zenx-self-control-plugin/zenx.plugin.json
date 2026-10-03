@@ -1,6 +1,6 @@
 {
   "id": "zenx-self-control",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "List derived workspaces and control Zen Threads through typed App Server requests.",
   "provider": {
     "id": "zenx-app-server",
@@ -32,7 +32,12 @@
       "description": "Discover the current model IDs, supported reasoning efforts and defaults from the App Server model catalog.",
       "inputSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine."
+          }
+        },
         "additionalProperties": false
       },
       "permissions": ["zenx-self-control.workspace-read"],
@@ -82,6 +87,10 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 100
+          },
+          "device": {
+            "type": "string",
+            "description": "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine."
           }
         },
         "additionalProperties": false
@@ -117,6 +126,10 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 100
+          },
+          "device": {
+            "type": "string",
+            "description": "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine."
           }
         },
         "additionalProperties": false
@@ -152,6 +165,10 @@
           "sandbox": {
             "type": "string",
             "enum": ["danger-full-access"]
+          },
+          "device": {
+            "type": "string",
+            "description": "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine."
           }
         },
         "anyOf": [
@@ -208,6 +225,10 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 25
+          },
+          "device": {
+            "type": "string",
+            "description": "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine."
           }
         },
         "required": ["target"],
@@ -231,6 +252,10 @@
           "workspace": {
             "type": "string",
             "description": "Optional workspace path to disambiguate the target."
+          },
+          "device": {
+            "type": "string",
+            "description": "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine."
           }
         },
         "required": ["target"],
@@ -324,7 +349,7 @@
     },
     {
       "name": "zenx_threads_send",
-      "description": "Send a message to a Thread. Omit messageType to follow the saved ZenX sending preference; use follow_up to queue next work, guidance to supplement current work, or replacement to interrupt and change the task. The application handles message IDs and concurrent Turn checks.",
+      "description": "Send a message to a Thread. By default new messages supplement active work; use follow_up to queue next work, guidance to supplement current work, or replacement to interrupt and change the task. The application handles message IDs and concurrent Turn checks.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -343,6 +368,10 @@
           },
           "text": {
             "type": "string"
+          },
+          "device": {
+            "type": "string",
+            "description": "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine."
           }
         },
         "required": ["target", "text"],
@@ -413,6 +442,54 @@
       "interactionMode": "background_safe",
       "capabilities": ["zenx.threads.control"],
       "maxOutputBytes": 524288
+    },
+    {
+      "name": "zenx_self_control_devices",
+      "description": "List configured Fleet devices. Omitted device or local means this machine; remote entries are configuration, not a live reachability check.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-self-control.workspace-read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.threads.read"],
+      "maxOutputBytes": 32768
+    },
+    {
+      "name": "zenx_self_control_threads_wait",
+      "description": "Wait up to 30 seconds for an explicit Turn to finish, then return its canonical status. Timed out means still pending, not completed. Can be run as a background tool task; use read for results.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "Full Thread ID, unique ID prefix, or exact title. Ambiguous targets return candidates without writing."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Optional workspace path to disambiguate the target."
+          },
+          "turnId": {
+            "type": "string"
+          },
+          "timeoutSeconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+          },
+          "device": {
+            "type": "string",
+            "description": "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine."
+          }
+        },
+        "required": ["target", "turnId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-self-control.workspace-read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.threads.read"],
+      "maxOutputBytes": 32768
     }
   ],
   "schemaVersion": 2,

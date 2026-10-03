@@ -57,6 +57,8 @@ const SELF_CONTROL_TOOL_NAMES = [
   "zenx_threads_send",
   "zenx_self_control_workflows_get",
   "zenx_self_control_workflows_update",
+  "zenx_self_control_devices",
+  "zenx_self_control_threads_wait",
 ];
 
 test("self-control reads and updates the same workflow configuration port", async () => {

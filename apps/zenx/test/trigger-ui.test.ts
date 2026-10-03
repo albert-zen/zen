@@ -84,6 +84,75 @@ test("thread editor does not replay includeLatest on update", () => {
   });
 });
 
+test("remote thread editor preserves its exact device/workspace locator and never stores transient source errors", () => {
+  const editor = editorFromTrigger({
+    id: "remote-watch",
+    threadId: "local-target",
+    kind: "thread",
+    label: "Watch remote work",
+    prompt: "Read the result",
+    createdAt: 1,
+    active: true,
+    sourceError: "Device disconnected",
+    watch: {
+      threadId: "same-id",
+      sourceDevice: "desktop",
+      sourceWorkspace: "remote-workspace",
+      event: "turn_completed",
+      once: true,
+    },
+  });
+  const input = triggerEditorInput({
+    ...editor,
+    label: "Updated name",
+    prompt: "Updated instructions",
+    includeLatest: true,
+  });
+  assert.deepEqual(input, {
+    id: "remote-watch",
+    threadId: "local-target",
+    kind: "thread",
+    label: "Updated name",
+    prompt: "Updated instructions",
+    watchedThreadId: "same-id",
+    sourceDevice: "desktop",
+    sourceWorkspace: "remote-workspace",
+    once: true,
+  });
+  assert.equal("sourceError" in editor, false);
+  assert.equal("sourceError" in input, false);
+  assert.equal("includeLatest" in input, false);
+});
+
+test("thread editor normalizes remote selectors and rejects a workspace without a remote device", () => {
+  const editor = editorFromTrigger({
+    id: "watch",
+    threadId: "target",
+    kind: "thread",
+    label: "Watch",
+    prompt: "Read",
+    createdAt: 1,
+    active: true,
+    watch: { threadId: "source", event: "turn_completed", once: true },
+  });
+  const remote = triggerEditorInput({
+    ...editor,
+    sourceDevice: " desktop ",
+    sourceWorkspace: " remote-workspace ",
+  });
+  assert("sourceDevice" in remote);
+  assert.equal(remote.sourceDevice, "desktop");
+  assert.equal(remote.sourceWorkspace, "remote-workspace");
+  const local = triggerEditorInput({ ...editor, sourceDevice: "local" });
+  assert.equal("sourceDevice" in local, false);
+  assert.equal("sourceWorkspace" in local, false);
+  assert.throws(
+    () =>
+      triggerEditorInput({ ...editor, sourceWorkspace: "orphan-workspace" }),
+    /remote source device/u,
+  );
+});
+
 test("thread panel displays empty-state creation scoped to Thread; global page has independent entry", () => {
   const sdk = { context: { threadId: "target" } } as unknown as PluginUiSdkV1;
   const rail = renderToStaticMarkup(createElement(TriggersPanel, { sdk }));

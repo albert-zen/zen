@@ -23,7 +23,7 @@ test("Rooms disambiguate same-title conversations and submit the exact searched 
             threadId,
             name: "Same title",
             preview: "",
-            currentMetadata: { cwd: `/work/${index}` },
+            currentMetadata: { cwd: `/a/long/deep/work/${index}` },
           })),
       },
     },
@@ -70,9 +70,25 @@ test("Rooms disambiguate same-title conversations and submit the exact searched 
       assert.ok(labels.every((label) => label?.includes("/work/")));
       await fill(
         document.querySelector<HTMLInputElement>('[role="combobox"]')!,
+        `/a/long/deep/work/${ids.indexOf(id)}`,
+      );
+      assert.equal(
+        document.querySelectorAll('[role="option"]').length,
+        1,
+        "full workspace remains searchable",
+      );
+      await fill(
+        document.querySelector<HTMLInputElement>('[role="combobox"]')!,
         id,
       );
       assert.equal(document.querySelectorAll('[role="option"]').length, 1);
+      const option = document.querySelector<HTMLElement>('[role="option"]')!;
+      assert.ok(option.title.includes(id));
+      assert.ok(option.getAttribute("aria-label")?.includes(id));
+      assert.ok(
+        !option.textContent?.includes(id),
+        "full identity stays in details instead of filling each row",
+      );
       await act(async () =>
         document.querySelector<HTMLElement>('[role="option"]')!.click(),
       );
@@ -81,7 +97,7 @@ test("Rooms disambiguate same-title conversations and submit the exact searched 
     };
     await act(async () =>
       [...document.querySelectorAll("button")]
-        .find((button) => button.textContent === "+ New")!
+        .find((button) => button.textContent?.trim() === "New")!
         .click(),
     );
     await choose(ids[1]!);
@@ -101,7 +117,7 @@ test("Rooms disambiguate same-title conversations and submit the exact searched 
     );
     await act(async () =>
       [...document.querySelectorAll("button")]
-        .find((button) => button.textContent === "Members & settings")!
+        .find((button) => button.textContent?.trim() === "Members & settings")!
         .click(),
     );
     await choose(ids[0]!);

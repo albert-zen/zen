@@ -59,6 +59,19 @@ export type ZenXSingleProviderHostConfig = ZenXHostConfig &
 
 export type HostCommand =
   | {
+      type: "fleet/control";
+      requestId: string;
+      action: string;
+      input?: unknown;
+    }
+  | {
+      type: "fleet/room-result";
+      requestId: string;
+      result?: unknown;
+      error?: string;
+    }
+  | { type: "fleet/room-event"; roomId: string; threadId: string }
+  | {
       type: "start";
       config: ZenXHostConfig;
       bearerToken: string;
@@ -125,6 +138,25 @@ export interface CapabilityResultCommand {
 }
 
 export type HostEvent =
+  | {
+      type: "fleet/result";
+      requestId: string;
+      result?: unknown;
+      error?: string;
+    }
+  | {
+      type: "fleet/room-request";
+      requestId: string;
+      operation: "list" | "read" | "post";
+      params: {
+        workspaceId: string;
+        workspaceCwd: string;
+        deviceId: string;
+        roomId?: string;
+        text?: string;
+        clientId?: string;
+      };
+    }
   | { type: "ready"; url: string; processEpoch: string }
   | { type: "error"; message: string }
   | {
@@ -250,6 +282,20 @@ export function isHostCommand(value: unknown): value is HostCommand {
   if (typeof value !== "object" || value === null || !("type" in value)) {
     return false;
   }
+  const fleet = value as Record<string, unknown>;
+  if (fleet.type === "fleet/control")
+    return (
+      typeof fleet.requestId === "string" && typeof fleet.action === "string"
+    );
+  if (fleet.type === "fleet/room-result")
+    return (
+      typeof fleet.requestId === "string" &&
+      (fleet.error === undefined || typeof fleet.error === "string")
+    );
+  if (fleet.type === "fleet/room-event")
+    return (
+      typeof fleet.roomId === "string" && typeof fleet.threadId === "string"
+    );
   const command = value as {
     type?: unknown;
     requestId?: unknown;
@@ -337,6 +383,28 @@ export function isHostEvent(value: unknown): value is HostEvent {
 function isHostEventUnsafe(value: unknown): value is HostEvent {
   if (typeof value !== "object" || value === null || !("type" in value)) {
     return false;
+  }
+  const fleet = value as Record<string, unknown>;
+  if (fleet.type === "fleet/result")
+    return (
+      typeof fleet.requestId === "string" &&
+      (fleet.error === undefined || typeof fleet.error === "string")
+    );
+  if (fleet.type === "fleet/room-request") {
+    const params = fleet.params as Record<string, unknown> | undefined;
+    return (
+      typeof fleet.requestId === "string" &&
+      ["list", "read", "post"].includes(fleet.operation as string) &&
+      !!params &&
+      typeof params === "object" &&
+      !Array.isArray(params) &&
+      typeof params.workspaceId === "string" &&
+      typeof params.workspaceCwd === "string" &&
+      typeof params.deviceId === "string" &&
+      (params.roomId === undefined || typeof params.roomId === "string") &&
+      (params.text === undefined || typeof params.text === "string") &&
+      (params.clientId === undefined || typeof params.clientId === "string")
+    );
   }
   const event = value as {
     type?: unknown;

@@ -3,6 +3,7 @@ import { deduplicateMediaContent } from "./media-content.js";
 import { TOOL_TASK_CONTENT_TYPE } from "./tool-task-content.js";
 import {
   contentFromUserMessage,
+  SIDE_CHAT_TOOL_SNAPSHOT_CONTENT_TYPE,
   textFromUserInput,
   type CanonicalProviderSelection,
   type CanonicalItem,
@@ -165,6 +166,9 @@ function compileConversationMessages(
   items: readonly CanonicalItem[],
   targetSelection?: CanonicalProviderSelection,
 ): ModelMessage[] {
+  // Place copied observations against the full journal before compaction
+  // removes source calls, so their receipts cannot surface as orphan results.
+  items = orderSnapshotToolResults(items);
   const turnSelections = new Map<string, CanonicalProviderSelection>();
   for (const item of items) {
     if (item.type === "turn_started" && item.selection !== undefined) {
@@ -188,13 +192,20 @@ function compileConversationMessages(
     );
   }
   const byId = new Map(items.map((item) => [item.id, item]));
-  const retained = compaction.retainedItemIds.map((id) => {
-    const item = byId.get(id);
-    if (item === undefined) {
+  const retainedIds = new Set(compaction.retainedItemIds);
+  for (const id of retainedIds) {
+    if (!byId.has(id)) {
       throw new Error(`Retained context Item does not exist: ${id}`);
     }
-    return item;
-  });
+  }
+  // Retention chooses membership, while sampling order belongs to the full
+  // normalized journal (including snapshot tool receipts and steer anchors).
+  const retained = items.filter((item) => retainedIds.has(item.id));
+  const instructions = items
+    .slice(0, boundaryIndex + 1)
+    .filter(
+      (item) => item.type === "thread_instruction" && !retainedIds.has(item.id),
+    );
   const afterBoundary = isAgenticContextCompaction(compaction)
     ? itemsAfterLatestAgenticCompaction(items)
     : items.slice(boundaryIndex + 1);
@@ -218,6 +229,11 @@ function compileConversationMessages(
       role: "user",
       text: compactionSummaryText(compaction),
     },
+    ...compileCanonicalModelMessages(
+      instructions,
+      targetSelection,
+      turnSelections,
+    ),
     ...(policy !== undefined &&
     (policy !== "danger-full-access" ||
       policyItem?.type === "thread_configuration_changed")
@@ -244,6 +260,9 @@ function compileCanonicalModelMessages(
       continue;
     }
     switch (item.type) {
+      case "thread_instruction":
+        messages.push({ role: "user", text: item.text });
+        break;
       case "user_message":
         if (item.content === undefined) {
           messages.push({ role: "user", text: item.text });
@@ -367,6 +386,61 @@ function compileCanonicalModelMessages(
     }
   }
   return messages;
+}
+
+/** Historical snapshot receipts must close their original batch before newer input. */
+function orderSnapshotToolResults(
+  items: readonly CanonicalItem[],
+): readonly CanonicalItem[] {
+  type SnapshotResult = Extract<CanonicalItem, { type: "tool_result" }>;
+  const receipts = items.filter(
+    (item): item is SnapshotResult =>
+      item.type === "tool_result" &&
+      item.contentType === SIDE_CHAT_TOOL_SNAPSHOT_CONTENT_TYPE,
+  );
+  if (!receipts.length) return items;
+  const receiptIds = new Set(receipts.map((item) => item.id));
+  const base = items.filter((item) => !receiptIds.has(item.id));
+  const groups = new Map<
+    string,
+    { anchor: number; receipts: SnapshotResult[] }
+  >();
+  const key = (item: { turnId: string; callId: string }) =>
+    `${item.turnId}\0${item.callId}`;
+  for (let index = 0; index < base.length; index += 1) {
+    if (base[index]?.type !== "tool_call") continue;
+    const group = { anchor: index, receipts: [] as SnapshotResult[] };
+    while (base[index]?.type === "tool_call") {
+      const call = base[index]!;
+      if (call.type === "tool_call") groups.set(key(call), group);
+      group.anchor = index;
+      index += 1;
+    }
+    index -= 1;
+  }
+  for (const [index, item] of base.entries()) {
+    if (item.type !== "tool_result") continue;
+    const group = groups.get(key(item));
+    if (group) group.anchor = Math.max(group.anchor, index);
+  }
+  const unmatched = new Set<string>();
+  for (const receipt of receipts) {
+    const group = groups.get(key(receipt));
+    if (group) group.receipts.push(receipt);
+    else unmatched.add(receipt.id);
+  }
+  // Retained projections should always include tool closure, but keep unknown
+  // receipts rather than silently discard an existing canonical observation.
+  if (unmatched.size) return items;
+  const insertion = new Map<number, SnapshotResult[]>();
+  for (const group of new Set(groups.values())) {
+    if (!group.receipts.length) continue;
+    insertion.set(group.anchor, [
+      ...(insertion.get(group.anchor) ?? []),
+      ...group.receipts,
+    ]);
+  }
+  return base.flatMap((item, index) => [item, ...(insertion.get(index) ?? [])]);
 }
 
 function withoutNestedToolLifecycle(

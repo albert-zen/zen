@@ -32,6 +32,8 @@ import type {
   RoomDeliveryView,
   TriggerSnapshot,
   UpdateTriggerInput,
+  AssistantWorkspace,
+  UpdateAssistantWorkspaceInput,
 } from "./trigger-types.js";
 
 export interface AutomationTargetPreview {
@@ -527,6 +529,12 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     });
   }
 
+  onChange(listener: (snapshot: TriggerSnapshot) => void): () => void {
+    return this.#service.onChange(listener);
+  }
+  roomsAvailable(): boolean {
+    return this.#serviceRunning && this.#active.has(ZENX_ROOMS_CAPABILITY_ID);
+  }
   snapshot(): TriggerSnapshot {
     return this.#service.snapshot();
   }
@@ -617,7 +625,9 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     return { threadId: result.thread.id, effective: current };
   }
 
-  async result(historyId: string) {
+  async result(
+    historyId: string,
+  ): ReturnType<NonNullable<ZenXAutomationControlPort["result"]>> {
     const entry = this.#service
       .snapshot()
       .history.find((item) => item.id === historyId);
@@ -625,6 +635,30 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       throw new Error(
         "Source result was not found in retained notification history",
       );
+    if (entry.sourceDevice !== undefined) {
+      if (!this.#appServer.readRemoteThread)
+        throw new Error("Reading remote Thread results is unavailable");
+      const read = await this.#appServer.readRemoteThread(
+        entry.sourceDevice,
+        entry.sourceWorkspace,
+        entry.sourceThreadId,
+        entry.sourceTurnId,
+      );
+      if (read.threadId !== entry.sourceThreadId)
+        throw new Error("Remote source Thread identity changed");
+      const turn = read.turns.find((item) => item.id === entry.sourceTurnId);
+      if (!turn) throw new Error("Remote source Turn is unavailable");
+      return {
+        sourceDevice: entry.sourceDevice,
+        ...(entry.sourceWorkspace === undefined
+          ? {}
+          : { sourceWorkspace: entry.sourceWorkspace }),
+        threadId: entry.sourceThreadId,
+        turnId: turn.id,
+        status: turn.status,
+        preview: turn.preview,
+      };
+    }
     if (this.#appServer.readThread === undefined)
       throw new Error("Reading Thread results is unavailable");
     const read = await this.#appServer.readThread(entry.sourceThreadId);
@@ -640,8 +674,8 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     };
   }
   async #resolveInput(input: CreateTriggerInput): Promise<CreateTriggerInput> {
-    if (this.#targets === undefined) return input;
     const resolve = async (target: string) => {
+      if (this.#targets === undefined) return target;
       const result = await resolveThreadTarget(this.#targets!, { target });
       if (result.status !== "resolved")
         throw new Error(
@@ -654,6 +688,32 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       return result.threadId;
     };
     const threadId = await resolve(input.threadId);
+    if (
+      input.kind === "thread" &&
+      input.sourceDevice !== undefined &&
+      input.sourceDevice.trim() !== "local"
+    ) {
+      if (
+        !this.#appServer.resolveRemoteThread ||
+        !this.#appServer.subscribeRemoteThread
+      )
+        throw new Error("Remote Thread observation is unavailable");
+      const sourceDevice = input.sourceDevice.trim();
+      const resolved = await this.#appServer.resolveRemoteThread(
+        sourceDevice,
+        input.sourceWorkspace,
+        input.watchedThreadId,
+      );
+      return {
+        ...input,
+        threadId,
+        sourceDevice,
+        watchedThreadId: resolved.threadId,
+        ...(resolved.workspace === undefined
+          ? {}
+          : { sourceWorkspace: resolved.workspace }),
+      };
+    }
     return input.kind === "thread"
       ? {
           ...input,
@@ -676,13 +736,29 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       (trigger.definitionRevision !== undefined || expectedRevision !== 0)
     )
       throw new Error("Trigger definition changed; refresh before enabling");
-    await this.#resolveInput({
+    const resolved = await this.#resolveInput({
       threadId: trigger.threadId,
       kind: "thread",
       label: trigger.label,
       prompt: trigger.prompt,
       watchedThreadId: trigger.watch?.threadId ?? trigger.threadId,
+      ...(trigger.watch?.sourceDevice === undefined
+        ? {}
+        : { sourceDevice: trigger.watch.sourceDevice }),
+      ...(trigger.watch?.sourceWorkspace === undefined
+        ? {}
+        : { sourceWorkspace: trigger.watch.sourceWorkspace }),
     });
+    if (
+      trigger.watch?.sourceDevice !== undefined &&
+      (resolved.kind !== "thread" ||
+        resolved.watchedThreadId !== trigger.watch.threadId ||
+        resolved.sourceDevice !== trigger.watch.sourceDevice ||
+        resolved.sourceWorkspace !== trigger.watch.sourceWorkspace)
+    )
+      throw new Error(
+        "Remote Trigger source identity changed; edit its definition before enabling",
+      );
     await this.#service.resume(triggerId, trigger);
   }
   async delete(triggerId: string): Promise<void> {
@@ -730,8 +806,57 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   ): Promise<void> {
     await this.#service.acknowledgeRoomOperation(roomId, operationId);
   }
+  async createAssistantRoom(input: CreateRoomInput) {
+    if (
+      !this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID) ||
+      !this.#active.has(ZENX_ROOMS_CAPABILITY_ID)
+    )
+      throw new Error("Enable Rooms and Triggers before creating an assistant");
+    if (input.members.length !== 1 || this.#targets === undefined)
+      throw new Error("Select one available existing Thread");
+    const member = input.members[0]!;
+    const target = await resolveThreadTarget(this.#targets, {
+      target: member.threadId,
+    });
+    if (target.status !== "resolved" || target.candidate.archived)
+      throw new Error("Assistant Thread is unavailable or archived");
+    if (
+      !this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID) ||
+      !this.#active.has(ZENX_ROOMS_CAPABILITY_ID)
+    )
+      throw new Error("Rooms or Triggers stopped during setup");
+    return await this.#service.createAssistantRoom({
+      name: input.name,
+      members: [{ name: member.name, threadId: target.threadId }],
+    });
+  }
+  async setAssistantReplies(roomId: string, enabled: boolean) {
+    if (!this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID))
+      throw new Error("Triggers are disabled");
+    const room = this.#service
+      .snapshot()
+      .rooms.find((entry) => entry.id === roomId);
+    if (!room?.assistant) throw new Error("Assistant Room was not found");
+    if (enabled) await this.resume(room.assistant.triggerId);
+    else await this.cancel(room.assistant.triggerId);
+  }
   async createRoom(input: CreateRoomInput) {
     return await this.#service.createRoom(input);
+  }
+  assistantWorkspace(roomId: string): AssistantWorkspace {
+    if (!this.roomsAvailable())
+      throw Error("Rooms are disabled or unavailable");
+    return this.#service.assistantWorkspace(roomId);
+  }
+  async updateAssistantWorkspace(
+    input: UpdateAssistantWorkspaceInput,
+  ): Promise<AssistantWorkspace> {
+    const captured = structuredClone(input);
+    return await this.#serialize(async () => {
+      if (!this.roomsAvailable())
+        throw Error("Rooms are disabled or unavailable");
+      return await this.#service.updateAssistantWorkspace(captured);
+    });
   }
   async renameRoom(roomId: string, name: string): Promise<void> {
     await this.#service.renameRoom(roomId, name);
@@ -756,12 +881,12 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     await this.#service.postRoomMessage(roomId, author, text);
   }
 
-  async #serialize(operation: () => Promise<void>): Promise<void> {
+  async #serialize<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.#lifecycle.then(operation);
     this.#lifecycle = result.then(
       () => undefined,
       () => undefined,
     );
-    await result;
+    return await result;
   }
 }

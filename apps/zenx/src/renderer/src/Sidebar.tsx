@@ -40,6 +40,11 @@ import {
 import { startSidebarDrag } from "./sidebar-drag.js";
 
 import { useSidebarExpansion } from "./sidebar-expansion.js";
+import {
+  ROOM_ROUTE,
+  RoomConversationNavigation,
+  type RoomConversationState,
+} from "./room-conversations.js";
 
 const THREAD_DENSITY_STORAGE_KEY = "zenx.sidebar.thread-density";
 type ThreadDensity = "compact" | "detailed";
@@ -79,6 +84,8 @@ interface SidebarProps {
   onSelectThread(threadId: string): void;
   pendingApprovalThreadIds: ReadonlySet<string>;
   pluginContributions: readonly LoadedPluginContribution[];
+  roomConversations?: RoomConversationState;
+  selectedRoomId?: string | null;
   selectedPage: string;
   selectedThreadId: string | null;
   serverStatus: AppServerHostStatus;
@@ -115,6 +122,8 @@ export function Sidebar({
   onSelectThread,
   pendingApprovalThreadIds,
   pluginContributions,
+  roomConversations,
+  selectedRoomId,
   selectedPage,
   selectedThreadId,
   serverStatus,
@@ -342,7 +351,11 @@ export function Sidebar({
         id="primary-sidebar"
         className={`sidebar${open ? " open" : ""}`}
         data-thread-density={threadDensity}
-        aria-label="Projects and threads"
+        aria-label={
+          roomConversations === undefined
+            ? "Projects and threads"
+            : "Conversations, projects and threads"
+        }
         aria-hidden={collapsed && !open ? true : undefined}
         inert={collapsed && !open}
       >
@@ -390,8 +403,22 @@ export function Sidebar({
           className="sidebar-scroll"
           aria-labelledby="sidebar-thread-list-heading"
         >
+          {roomConversations === undefined ? null : (
+            <RoomConversationNavigation
+              {...roomConversations}
+              selectedRoomId={selectedRoomId}
+              selectedPage={selectedPage}
+              onOpen={onOpenContribution}
+            />
+          )}
           <PluginSpaces
-            contributions={pluginContributions}
+            contributions={
+              roomConversations === undefined
+                ? pluginContributions
+                : pluginContributions.filter(
+                    (contribution) => contribution.page.route !== ROOM_ROUTE,
+                  )
+            }
             onOpen={onOpenContribution}
             selectedPage={selectedPage}
           />

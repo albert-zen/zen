@@ -26,4 +26,9 @@ export const combinedTransport = {
       ? fixtureTransport.command(id, workspace, kind, payload)
       : transport.command(id, workspace, kind, payload),
   disconnect: () => transport.disconnect(),
+  clearThread: () => transport.clearThread(),
+  readRoom: (id: string, workspace: string, room: string) =>
+    transport.readRoom(id, workspace, room),
+  postRoom: (id: string, workspace: string, room: string, text: string) =>
+    transport.postRoom(id, workspace, room, text),
 };
