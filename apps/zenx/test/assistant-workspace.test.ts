@@ -80,7 +80,7 @@ async function fixture() {
   };
 }
 
-test("Companion annotations explicitly read/update and survive restart without executing work", async () => {
+test("PAW annotations explicitly read/update and survive restart without executing work", async () => {
   const f = await fixture();
   try {
     assert.deepEqual(f.service.assistantWorkspace(f.room.id), {
@@ -112,6 +112,30 @@ test("Companion annotations explicitly read/update and survive restart without e
     assert.equal(
       f.service.assistantWorkspace(f.room.id).memory[0]!.text,
       draft().memory[0]!.text,
+    );
+    assert.equal(f.modelCalls(), 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("PAW defaults preserve saved Companion names, labels and custom prompts", async () => {
+  const f = await fixture();
+  try {
+    assert.equal(f.service.snapshot().triggers[0]?.label, "PAW");
+    await f.service.stop();
+    const saved = await f.store.read();
+    saved.triggers[0]!.label = "Companion";
+    saved.triggers[0]!.prompt = "My custom Companion instructions";
+    await f.store.write(saved);
+    await f.service.start();
+    const loaded = f.service.snapshot();
+    assert.equal(loaded.rooms[0]?.name, "Companion");
+    assert.equal(loaded.rooms[0]?.members[0]?.name, "Companion");
+    assert.equal(loaded.triggers[0]?.label, "Companion");
+    assert.equal(
+      loaded.triggers[0]?.prompt,
+      "My custom Companion instructions",
     );
     assert.equal(f.modelCalls(), 0);
   } finally {
@@ -263,7 +287,7 @@ test("strict annotation limits reject missing attribution, duplicate IDs, execut
     });
     assert.throws(
       () => f.service.assistantWorkspace(ordinary.id),
-      /assistant|Companion/i,
+      /assistant|PAW/i,
     );
     await assert.rejects(
       f.service.updateAssistantWorkspace({
@@ -271,7 +295,7 @@ test("strict annotation limits reject missing attribution, duplicate IDs, execut
         expectedRevision: 0,
         ...draft(),
       }),
-      /assistant|Companion/i,
+      /assistant|PAW/i,
     );
     assert.equal(f.modelCalls(), 0);
   } finally {

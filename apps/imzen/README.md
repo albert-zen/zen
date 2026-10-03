@@ -14,7 +14,8 @@ Conversation bindings, Zen App Server translation, Thread projection,
 interactive-request routing, delivery planning, and the in-memory bridge
 repositories. IMZen owns only deployment configuration, product commands and
 presets, approval/error presentation, generic-file manifest mapping, and the
-composition root.
+composition root. The IMZenX plugin additionally owns PAW Room addressing and
+projection checkpoints, while the Host remains the Room semantic authority.
 
 Conversation-to-Thread bindings remain in memory. Restarting IMZen therefore
 starts a new Zen Thread on the next ordinary message unless the user explicitly
@@ -126,9 +127,8 @@ The pin is the complete SDK `main` commit after the focused rollout tracked by
 [SDK issue #49](https://github.com/albert-zen/im-agent-sdk/issues/49). IMZen
 composes immutable repository and extension groups. It configures only I1
 inbound content transformation, I2 classified failure presentation, and request
-presentation; A1/O1/O2 remain absent because this consumer has no product-owned
-artifact materializer, destination presentation policy, or logical delivery
-observer.
+presentation in standalone IMZen. A1/O2 remain absent; IMZenX uses O1 only
+to fence Thread projections while a formal PAW Room is selected.
 
 One upstream limitation remains explicit: the accepted App Server adapter API
 keeps per-call native Thread profiles on the concrete
@@ -185,3 +185,52 @@ for snapshot-plus-live socket observation because ZAS `thread/read` alone does
 not subscribe. This does not activate or change the desktop's selected Thread;
 SDK routes remain the authority for IM recipients. No core ZAS sorting or
 Thread semantics are added for SDK compatibility.
+
+### PAW Rooms in IMZenX
+
+The plugin child also composes a PAW controller over the same SDK Gateway:
+
+- `/paws` lists PAWs in the Host's configured workspace. Each conversation's
+  numbered list remains stable until refreshed.
+- `/paw <number|id>` selects its authoritative Room. Existing Room history is
+  the selection baseline; new explicit agent Room posts arrive in this IM
+  conversation. `/paw` reports the current route and any paused-route error.
+- Ordinary text in PAW mode posts a human message to that Room through the
+  Host's existing Room admission service. It never starts an SDK Thread Turn.
+  Attachments are rejected with a clear reply, without posting partial text.
+- `/new`, `/pick`, and their legacy aliases return to normal Thread mode.
+  A failed `/pick` keeps the current PAW selection.
+
+PAW selection clears the SDK Thread binding before saving its Room address.
+The product's SDK outbound-presentation seam suppresses Thread projections
+while that Room is selected, including private working-Thread outputs.
+Formal Room messages are the only PAW outbound source; human and system posts
+are checkpointed without echoing. A route change fences an outstanding Room
+read before delivery. Canonical quotes, reactions and native IM receipts are
+not translated in this first text-only adapter.
+
+The child requests `list`, `read` and `post` on its existing stdin/stdout pipe.
+The Host resolves all operations in its configured workspace; no Room runtime
+or transcript is copied to Python. Lines and responses are bounded to 1 MiB,
+with at most 16 outstanding requests and a 30-second response timeout. The
+child reads bound Rooms every two seconds and exits when the parent closes
+stdin, cancelling the poll and stopping the SDK Gateway. A bounded daemon
+reader with one-slot backpressure handles inherited stdin on all supported
+platforms without requiring a Windows overlapped pipe handle. Protocol JSON
+uses ASCII escapes so text round-trips independently of the process locale.
+
+`<gateway-state-basename>.paw.sqlite3` stores only external-conversation Room
+addresses, operation epochs, inbound admission facts and last canonical Room
+message IDs. SDK delivery submissions remain in the configured gateway SQLite
+file. Stable external-message IDs and Room operation epochs derive inbound
+client IDs; unknown admission is reported and never automatically reposted.
+Stable Room-message IDs use public SDK `deliver_proactively`, preserving
+accepted and unknown delivery outcomes across restart without a local outbox.
+
+The Host's bounded last-50 Room read must contain the saved checkpoint. Missing
+history, a changed Room epoch, or a failed/unknown delivery pauses only that
+route and reports the reason in `/paw`, while other PAWs and Thread mode remain
+available. The adapter attempts one SDK-idempotent pause notice; if the channel
+cannot deliver it, `/paw` still exposes the failure. Reselecting with `/paw`
+explicitly chooses a fresh baseline. There is no durable recovery daemon or
+automatic retry of an ambiguous mutation.

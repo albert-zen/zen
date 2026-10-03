@@ -1,3 +1,4 @@
+import { ImZenXDraftContext, type ImZenXDraft } from "./imzenx-ui.js";
 import { RoomDraftContext } from "./room-drafts.js";
 import {
   ROOM_ROUTE,
@@ -532,6 +533,7 @@ export function App() {
       { roomId: string; revision: number | null; settled: boolean }
     >
   >({});
+  const imzenxDrafts = useRef<Record<string, ImZenXDraft>>({});
   const [roomDrafts, setRoomDrafts] = useState<Record<string, string>>({});
   const roomDraftRevisions = useRef<Record<string, number>>({});
   const [roomWorkspaceStates, setRoomWorkspaceStates] = useState<
@@ -2435,7 +2437,7 @@ export function App() {
             subtitle={
               selectedRoom
                 ? selectedRoom.assistant
-                  ? "Companion"
+                  ? "PAW"
                   : "Shared conversation"
                 : `Provided by ${genericPluginTarget.pluginId}`
             }
@@ -2657,16 +2659,18 @@ export function App() {
           />
           {page === "settings" ? null : genericPluginTarget !== undefined &&
             pluginSnapshot !== null ? (
-            <PluginProductPage
-              context={
-                genericPluginTarget.pluginId === "zenx-rooms"
-                  ? { primaryNavigation: true }
-                  : undefined
-              }
-              snapshot={pluginSnapshot}
-              route={page}
-              navigate={openPage}
-            />
+            <ImZenXDraftContext.Provider value={imzenxDrafts}>
+              <PluginProductPage
+                context={
+                  genericPluginTarget.pluginId === "zenx-rooms"
+                    ? { primaryNavigation: true }
+                    : undefined
+                }
+                snapshot={pluginSnapshot}
+                route={page}
+                navigate={openPage}
+              />
+            </ImZenXDraftContext.Provider>
           ) : (
             <AgentSurface
               threadHeader={
@@ -2821,7 +2825,10 @@ export function App() {
               onModelChange={(model) => void changeModel(model)}
               onPermissionChange={(mode) => void changePermission(mode)}
               onNewThreadPermissionChange={(permissionMode) =>
-                updateNewThreadDraft((draft) => ({ ...draft, permissionMode }))
+                updateNewThreadDraft((draft) => ({
+                  ...draft,
+                  permissionMode,
+                }))
               }
               permissionError={permissionError}
               switchingPermission={switchingPermission}

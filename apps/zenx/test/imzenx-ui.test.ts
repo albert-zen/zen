@@ -27,6 +27,14 @@ test("background parent updates preserve the open IM settings and do not reload 
   });
   const { PluginProductPage } =
     await import("../src/renderer/src/PluginProductPage.js");
+  const { ImZenXDraftContext } =
+    await import("../src/renderer/src/imzenx-ui.js");
+  const drafts = {
+    current: {} as Record<
+      string,
+      import("../src/renderer/src/imzenx-ui.js").ImZenXDraft
+    >,
+  };
   const snapshot: ZenXPluginSnapshot = {
     plugins: [],
     sidebar: [],
@@ -90,10 +98,26 @@ test("background parent updates preserve the open IM settings and do not reload 
     route: "/plugins/imzenx/connection",
     navigate: () => {},
   };
+  const view = () =>
+    React.createElement(
+      ImZenXDraftContext.Provider,
+      { value: drafts },
+      React.createElement(PluginProductPage, props),
+    );
   try {
     await act(async () => {
-      root.render(React.createElement(PluginProductPage, props));
+      root.render(view());
     });
+    assert.match(dom.window.document.body.textContent ?? "", /PAW/);
+    assert.match(dom.window.document.body.textContent ?? "", /\/paws/);
+    assert.match(
+      dom.window.document.body.textContent ?? "",
+      /只接收它主动发到聊天室的回复/,
+    );
+    assert.match(
+      dom.window.document.body.textContent ?? "",
+      /工作目录与 PAW 可见范围/,
+    );
     const settings =
       dom.window.document.querySelector<HTMLDetailsElement>(
         ".imzenx-settings",
@@ -104,7 +128,7 @@ test("background parent updates preserve the open IM settings and do not reload 
     });
     assert.equal(settings.open, true);
     await act(async () => {
-      root.render(React.createElement(PluginProductPage, props));
+      root.render(view());
     });
     assert.equal(
       settings.open,
@@ -116,6 +140,27 @@ test("background parent updates preserve the open IM settings and do not reload 
       1,
       "unrelated renders must not reinitialize the form draft",
     );
+    const input = dom.window.document.querySelector<HTMLInputElement>(
+      'input[value="/work"]',
+    )!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        dom.window.HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "/draft-work");
+      input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    });
+    assert.equal(drafts.current.imzenx?.config.cwd, "/draft-work");
+    await act(async () => root.render(null));
+    await act(async () => root.render(view()));
+    assert.equal(
+      dom.window.document.querySelector<HTMLInputElement>(
+        'input[value="/draft-work"]',
+      )?.value,
+      "/draft-work",
+      "route remount retains unsaved configuration rather than replacing it with Host values",
+    );
+    assert.equal(drafts.current.imzenx?.dirty, true);
   } finally {
     await act(async () => root.unmount());
     dom.window.close();

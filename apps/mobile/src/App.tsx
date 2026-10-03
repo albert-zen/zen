@@ -341,7 +341,7 @@ export default function App() {
             false,
             pane !== "threads",
           )}
-          {button("Rooms", () => setPane("rooms"), false, pane !== "rooms")}
+          {button("PAW", () => setPane("rooms"), false, pane !== "rooms")}
         </View>
         <View style={styles.target}>
           <Text style={styles.name}>Target: {target}</Text>
@@ -705,18 +705,20 @@ export default function App() {
         )}
         {pane === "rooms" && s.workspace && (
           <>
-            <Text style={styles.heading}>Rooms on {selectedHost?.name}</Text>
+            <Text style={styles.heading}>
+              PAW conversations on {selectedHost?.name}
+            </Text>
             {!s.supportsRooms && (
               <Text style={styles.meta}>
                 This device does not expose Rooms to this connection. Continue
-                in Threads or enable an assistant Room on the Host.
+                in Threads or enable a PAW conversation on the Host.
               </Text>
             )}
             {s.roomsError && <Text style={styles.error}>{s.roomsError}</Text>}
             {s.supportsRooms && !s.rooms.length && !s.roomsError && (
               <Text style={styles.meta}>
-                No assistant Rooms in this grant's workspace. Set up an
-                assistant Room on the Host.
+                No PAW conversations in this grant's workspace. Set up a PAW
+                conversation on the Host.
               </Text>
             )}
             {s.rooms.map((room) => (
@@ -725,11 +727,9 @@ export default function App() {
                 style={[styles.card, s.room === room.id && styles.selectedCard]}
               >
                 <Text style={styles.name}>{room.name}</Text>
-                <Text style={styles.meta}>
-                  Assistant thread: {room.threadId}
-                </Text>
+                <Text style={styles.meta}>PAW thread: {room.threadId}</Text>
                 {button(
-                  "Open Room",
+                  "Open PAW",
                   () => actions.openRoom(room.id),
                   !connected,
                   true,
@@ -742,8 +742,8 @@ export default function App() {
                   {selectedRoom?.name ?? "Room"}
                 </Text>
                 <Text style={styles.meta}>
-                  Human messages wake or steer the assistant. Replies appear
-                  when it deliberately posts to this Room.
+                  Human messages wake or steer your PAW. Replies appear when it
+                  deliberately posts to this Room.
                 </Text>
                 {s.roomLoading && (
                   <Text style={styles.meta}>Reading Room…</Text>
@@ -760,7 +760,7 @@ export default function App() {
                   </View>
                 ))}
                 {button(
-                  "Refresh Room",
+                  "Refresh PAW",
                   () => {
                     void session.refreshRoom();
                   },
@@ -774,10 +774,10 @@ export default function App() {
                   placeholderTextColor={colors.muted}
                   value={draft}
                   onChangeText={actions.editDraft}
-                  accessibilityLabel="Room message"
+                  accessibilityLabel="PAW message"
                 />
                 {button(
-                  "Post to this Room",
+                  "Post to this PAW",
                   () => {
                     void actions.postRoom();
                   },
@@ -790,7 +790,7 @@ export default function App() {
         {s.lastRequest && pane !== "fleet" && (
           <Text style={styles.meta}>
             {s.lastRequest.kind === "room"
-              ? `Room message ${s.lastRequest.messageId} saved. Assistant work may be admitted asynchronously.`
+              ? `Room message ${s.lastRequest.messageId} saved. PAW work may be admitted asynchronously.`
               : s.lastRequest.queued
                 ? "Input accepted for the next model cycle. Follow the Host's canonical Turn events."
                 : `${s.lastRequest.kind === "stop" ? "Stop request" : "Message"} accepted for Turn ${s.lastRequest.turnId}. Admission is not completion.`}

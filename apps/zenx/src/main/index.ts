@@ -1,3 +1,4 @@
+import { createImZenXPawHandler } from "./imzenx-paw.js";
 import { createFleetRoomsHandler } from "./fleet-rooms.js";
 import { deliverAssistantInput } from "./assistant-preset.js";
 import { FleetSettingsService } from "./fleet-settings.js";
@@ -540,6 +541,14 @@ async function bootstrapZenX(): Promise<void> {
       trustedProfileLoaders: {
         imzenx: createImZenXProfileLoader({
           dataDirectory: join(userDataDirectory, "plugin-data", "imzenx"),
+          pawRequest: (cwd, operation, params) => {
+            if (!appServerManager)
+              throw new Error("ZAS manager is not attached");
+            return createImZenXPawHandler(
+              appServerManager,
+              () => automationService,
+            )(cwd, operation, params);
+          },
           isServerReady: () => appServerManager?.status.type === "ready",
           onServerStatus: (listener) => {
             if (appServerManager === undefined)

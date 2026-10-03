@@ -1485,7 +1485,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     setPanel(null);
     if (createIntent === "room" || createIntent === "companion") {
       setAssistantMode(createIntent === "companion");
-      setName(createIntent === "companion" ? "Companion" : "");
+      setName(createIntent === "companion" ? "PAW" : "");
       setMemberName(createIntent === "companion" ? "Assistant" : "");
       setThreadId("");
       setPanel("create");
@@ -2136,13 +2136,13 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               onClick={(event) => {
                 dialogInvoker.current = event.currentTarget;
                 setAssistantMode(true);
-                setName("Companion");
+                setName("PAW");
                 setMemberName("Assistant");
                 setThreadId("");
                 setPanel("create");
               }}
             >
-              <Icon name="thread" size={15} /> Companion
+              <Icon name="thread" size={15} /> PAW
             </button>
           </div>
           {data.rooms.map((entry) => (
@@ -2183,8 +2183,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 {room.assistant ? (
                   <p className="room-assistant-state" role="status">
                     {room.assistantRepliesEnabled
-                      ? "Assistant active"
-                      : "Assistant paused or unavailable"}
+                      ? "PAW active"
+                      : "PAW paused or unavailable"}
                   </p>
                 ) : null}
                 <span>
@@ -2234,9 +2234,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     })
                   }
                 >
-                  {room.assistantRepliesEnabled
-                    ? "Pause assistant"
-                    : "Resume assistant"}
+                  {room.assistantRepliesEnabled ? "Pause PAW" : "Resume PAW"}
                 </button>
                 <details className="room-background-details">
                   <summary>Background behavior</summary>
@@ -2451,7 +2449,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   </h3>
                   <p>
                     {room.assistant
-                      ? "Talk to your assistant here. No @mention needed. Send updates while work is in progress."
+                      ? "Talk to your PAW here. No @mention needed. Send updates while work is in progress."
                       : "Type @ to choose an agent and ask for a reply."}
                   </p>
                 </div>
@@ -2759,14 +2757,20 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             }}
             role="dialog"
             aria-modal="true"
-            aria-label={panel === "create" ? "Create Room" : "Room settings"}
+            aria-label={
+              panel === "create"
+                ? assistantMode
+                  ? "Create PAW"
+                  : "Create Room"
+                : "Room settings"
+            }
             className="rooms-chat-dialog"
           >
             <header>
               <h2>
                 {panel === "create"
                   ? assistantMode
-                    ? "New assistant conversation"
+                    ? "New PAW conversation"
                     : "New Room"
                   : `#${room?.name} settings`}
               </h2>
@@ -2776,10 +2780,10 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             </header>
             {panel === "create" && assistantMode ? (
               <p className="room-assistant-disclosure">
-                Choose an existing Thread for the Companion preset. Messages
-                join its ongoing work. It uses Rooms to communicate, Triggers to
-                continue after waits, and Fleet-enabled self-control to work
-                with configured devices. Enable Rooms, Triggers and self-control
+                Choose an existing Thread for the PAW preset. Messages join its
+                ongoing work. It uses Rooms to communicate, Triggers to continue
+                after waits, and Fleet-enabled self-control to work with
+                configured devices. Enable Rooms, Triggers and self-control
                 first. Existing model and permissions are preserved.
               </p>
             ) : null}
@@ -2847,7 +2851,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   })
                 }
               >
-                {assistantMode ? "Create assistant" : "Create Room"}
+                {assistantMode ? "Create PAW" : "Create Room"}
               </button>
             ) : (
               <>

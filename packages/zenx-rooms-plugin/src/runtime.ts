@@ -188,23 +188,21 @@ export function createZenXTrustedPlugin(
         case "zenx_rooms_workspace":
           fields(args, ["roomId"]);
           if (!service.assistantWorkspace)
-            throw Error("Companion workspace service unavailable");
+            throw Error("PAW workspace service unavailable");
           return service.assistantWorkspace(
             string(args, "roomId", MAX_ID_BYTES),
           );
         case "zenx_rooms_update_workspace": {
           fields(args, ["roomId", "expectedRevision", "matters", "memory"]);
           if (!service.updateAssistantWorkspace)
-            throw Error("Companion workspace service unavailable");
+            throw Error("PAW workspace service unavailable");
           if (
             !Number.isSafeInteger(args["expectedRevision"]) ||
             Number(args["expectedRevision"]) < 0 ||
             !Array.isArray(args["matters"]) ||
             !Array.isArray(args["memory"])
           )
-            throw Error(
-              "Invalid Companion workspace update fields or revision",
-            );
+            throw Error("Invalid PAW workspace update fields or revision");
           return await service.updateAssistantWorkspace({
             roomId: string(args, "roomId", MAX_ID_BYTES),
             expectedRevision: Number(args["expectedRevision"]),
@@ -522,5 +520,5 @@ function record(value: unknown): Readonly<Record<string, unknown>> | null {
 }
 function fields(args: Readonly<Record<string, unknown>>, allowed: string[]) {
   if (Object.keys(args).some((key) => !allowed.includes(key)))
-    throw Error("Unknown Companion workspace input field");
+    throw Error("Unknown PAW workspace input field");
 }
