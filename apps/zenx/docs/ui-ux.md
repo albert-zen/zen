@@ -444,7 +444,7 @@ ThreadView
 
 ### PAW and Room conversation workspaces
 
-The primary left navigation exposes named PAW assistants and Rooms directly, above the existing project/Thread organization. Opening one selects an IM-style conversation without a second conversation rail. Creation remains explicit, with a user-chosen assistant name; PAW (P-A-W) is the reusable preset name. Product labels and new preset defaults use PAW; existing user-chosen Room/member names, saved annotations, protocol identifiers and routes stay unchanged.
+The primary left navigation exposes named PAW assistants and Rooms directly, below plugin entries and as peer sections alongside the existing project/Thread organization. Opening one selects an IM-style conversation without a second conversation rail. Creation remains explicit, with a user-chosen assistant name; PAW (P-A-W) is the reusable preset name. Product labels and new preset defaults use PAW; existing user-chosen Room/member names, saved annotations, protocol identifiers and routes stay unchanged.
 
 The existing right workspace shell is shared. Room-owned tabs expose Overview, Matters, Memory, Automations and Threads. Matters and memory are assistant-maintained notebook annotations, with exact references to execution Threads and Triggers. They do not act as a second scheduler or an execution ledger. A plan such as “waiting for review” is visibly distinct from a live Thread status. Remote references show their full device/workspace identity and do not silently open a local Thread with the same ID.
 
@@ -470,3 +470,9 @@ Overview shows the current recurring timer definitions, including cadence and pa
 - 产品改动在 PR 分支交付，不直接修改主线；独立 Review 和实际操作证据共同支持结论，不能相互替代。
 
 PAW 导航使用与共享图标相同描边风格的对话气泡，表达一对一交流；普通 Rooms 保留多人图标。它不使用代表 Thread trace 的三行图标，也不通过图标暗示额外自主性。
+
+### 2026-10-04: PAW conversation clarity
+
+Normal PAW chat keeps only compact, named rename/workspace/settings controls. Do not put model-cycle, quota or background implementation descriptions under its input. Paused delivery and failures remain explicit; Pause/Resume lives in conversation settings. Rename edits the display name only and preserves the Room identity and bound working Thread; Cancel/Escape leaves the name unchanged. PAW/Rooms appear after plugin entries and at the same section hierarchy as Projects, using neutral selected surfaces and spacing instead of extra truncated separators.
+
+Native scrollbars retain their geometry and scrolling behavior. Their track is transparent against each surface; the thumb uses the theme's muted text color while scrolling, keyboard/focus interaction or edge/drag activity is occurring, and becomes transparent at rest. Forced-colors uses native colors. Do not hide overflow to simulate autohide, and do not count Linux/mock evidence as native Windows/macOS validation.

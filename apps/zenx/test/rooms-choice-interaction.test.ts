@@ -117,7 +117,10 @@ test("Rooms disambiguate same-title conversations and submit the exact searched 
     );
     await act(async () =>
       [...document.querySelectorAll("button")]
-        .find((button) => button.textContent?.trim() === "Members & settings")!
+        .find(
+          (button) =>
+            button.getAttribute("aria-label") === "Conversation settings",
+        )!
         .click(),
     );
     await choose(ids[0]!);

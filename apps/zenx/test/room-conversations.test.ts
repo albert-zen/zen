@@ -67,6 +67,23 @@ test("Sidebar opens grouped PAW conversations and Rooms without duplicating plug
       0,
     );
     assert.ok(document.querySelector('.plugin-space-link[title="Triggers"]'));
+    const navigationOrder = Array.from(
+      document.querySelector(".sidebar-scroll")!.children,
+    ).map((element) => element.className);
+    assert.ok(
+      navigationOrder.indexOf("plugin-spaces") <
+        navigationOrder.indexOf("room-conversations"),
+      "plugin spaces precede conversation sections",
+    );
+    assert.ok(
+      navigationOrder.indexOf("room-conversations") <
+        navigationOrder.indexOf("sidebar-view-head"),
+      "conversation sections are peers before Projects, not inside plugin spaces",
+    );
+    assert.equal(
+      document.querySelector(".plugin-spaces .room-conversations"),
+      null,
+    );
     const selected = button("Open PAW Daily companion");
     assert.equal(selected.getAttribute("aria-current"), "page");
     assert.equal(selected.type, "button");

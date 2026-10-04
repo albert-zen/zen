@@ -1422,7 +1422,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const [assistantMode, setAssistantMode] = useState(false);
   const [data, setData] = useState<RoomListResult>({ rooms: [] });
   const [selected, setSelected] = useState<string | null>(initialRoomId);
-  const [panel, setPanel] = useState<"create" | "manage" | null>(null);
+  const [panel, setPanel] = useState<"create" | "manage" | "rename" | null>(
+    null,
+  );
   const [name, setName] = useState("");
   const [memberName, setMemberName] = useState("");
   const [threadId, setThreadId] = useState("");
@@ -1473,6 +1475,10 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   >({});
   const composer = useRef<HTMLTextAreaElement>(null);
   const dialogClose = useRef<HTMLButtonElement>(null);
+  const dialogEpoch = useRef(0);
+  useLayoutEffect(() => {
+    dialogEpoch.current += 1;
+  }, [panel]);
   const dialog = useRef<HTMLElement>(null);
   const dialogInvoker = useRef<HTMLElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1724,7 +1730,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     return () => clearInterval(timer);
   }, [sdk]);
   useEffect(() => {
-    if (panel !== null) dialogClose.current?.focus();
+    if (panel === "rename") dialog.current?.querySelector("input")?.focus();
+    else if (panel !== null) dialogClose.current?.focus();
   }, [panel]);
   const closeDialog = () => {
     setPanel(null);
@@ -2180,72 +2187,53 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 {!primaryNavigation ? (
                   <h2>{room.assistant ? room.name : `#${room.name}`}</h2>
                 ) : null}
-                {room.assistant ? (
+                {room.assistant && !room.assistantRepliesEnabled ? (
                   <p className="room-assistant-state" role="status">
-                    {room.assistantRepliesEnabled
-                      ? "PAW active"
-                      : "PAW paused or unavailable"}
+                    Replies paused
                   </p>
                 ) : null}
-                <span>
-                  {room.members.length
-                    ? room.members
-                        .map((member) => `@${member.name}`)
-                        .join(" · ")
-                    : "No agents yet"}
-                </span>
               </div>
+              <button
+                type="button"
+                aria-label="Rename conversation"
+                title="Rename conversation"
+                onClick={(event) => {
+                  dialogInvoker.current = event.currentTarget;
+                  setName(room.name);
+                  setPanel("rename");
+                }}
+              >
+                <Icon name="compose" size={16} />
+              </button>
               {primaryNavigation ? (
                 <button
                   id="thread-browser-toggle"
                   data-room-id={room.id}
                   type="button"
                   aria-label="Open conversation workspace"
+                  title="Open conversation workspace"
                   onClick={() =>
                     sdk.navigation.navigate(
                       `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: room.id, panel: "open" })}`,
                     )
                   }
                 >
-                  <Icon name="layers" size={16} /> Workspace
+                  <Icon name="panel-right" size={16} />
                 </button>
               ) : null}
               <button
                 type="button"
+                aria-label="Conversation settings"
+                title="Conversation settings"
                 onClick={(event) => {
                   dialogInvoker.current = event.currentTarget;
                   setName(room.name);
                   setPanel("manage");
                 }}
               >
-                <Icon name="users" size={16} /> Members & settings
+                <Icon name="settings" size={16} />
               </button>
             </header>
-            {room.assistant ? (
-              <div className="room-assistant-controls">
-                <span>Messages use the linked conversation’s model quota.</span>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() =>
-                    void run("assistant-replies", {
-                      roomId: room.id,
-                      enabled: !room.assistantRepliesEnabled,
-                    })
-                  }
-                >
-                  {room.assistantRepliesEnabled ? "Pause PAW" : "Resume PAW"}
-                </button>
-                <details className="room-background-details">
-                  <summary>Background behavior</summary>
-                  <p>
-                    Close the window to keep running; Quit stops ZenX. Pause
-                    affects future messages only; already admitted work
-                    continues in its source conversation.
-                  </p>
-                </details>
-              </div>
-            ) : null}
             {error ||
             roomErrors[room.id] ||
             feedback[room.id] ||
@@ -2696,13 +2684,13 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                         @
                       </button>
                     ) : null}
-                    <small className="room-composer-note">
-                      {room.assistant
-                        ? room.assistantRepliesEnabled
-                          ? "Messages join ongoing work at the next model cycle."
-                          : "Replies paused. Messages are saved only; resuming does not replay them."
-                        : "@mention an agent to request a reply"}
-                    </small>
+                    {!room.assistant || !room.assistantRepliesEnabled ? (
+                      <small className="room-composer-note">
+                        {room.assistant
+                          ? "Replies paused. Messages are saved only; resuming does not replay them."
+                          : "@mention an agent to request a reply"}
+                      </small>
+                    ) : null}
                   </div>
                   <div className="composer-actions">
                     <ComposerAction
@@ -2762,7 +2750,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 ? assistantMode
                   ? "Create PAW"
                   : "Create Room"
-                : "Room settings"
+                : panel === "rename"
+                  ? "Rename conversation"
+                  : "Conversation settings"
             }
             className="rooms-chat-dialog"
           >
@@ -2772,10 +2762,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   ? assistantMode
                     ? "New PAW conversation"
                     : "New Room"
-                  : `#${room?.name} settings`}
+                  : panel === "rename"
+                    ? "Rename conversation"
+                    : `${room?.name} settings`}
               </h2>
               <button ref={dialogClose} type="button" onClick={closeDialog}>
-                Close
+                {panel === "rename" ? "Cancel" : "Close"}
               </button>
             </header>
             {panel === "create" && assistantMode ? (
@@ -2787,21 +2779,26 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 first. Existing model and permissions are preserved.
               </p>
             ) : null}
-            <Field label="Room name" value={name} onChange={setName} />
-            {panel === "manage" ? (
+            <Field
+              label={room?.assistant || assistantMode ? "Name" : "Room name"}
+              value={name}
+              onChange={setName}
+            />
+            {panel !== "create" ? (
               <button
                 type="button"
                 disabled={busy || !name.trim() || name === room?.name}
-                onClick={() =>
+                onClick={() => {
+                  const epoch = dialogEpoch.current;
                   void run("rename", { roomId: room?.id, name }).then((ok) => {
-                    if (ok) setPanel(null);
-                  })
-                }
+                    if (ok && epoch === dialogEpoch.current) closeDialog();
+                  });
+                }}
               >
-                Rename
+                {panel === "rename" ? "Save name" : "Rename"}
               </button>
             ) : null}
-            {panel === "create" || !room?.assistant ? (
+            {panel === "create" || (panel === "manage" && !room?.assistant) ? (
               <>
                 <Field
                   label="Member name"
@@ -2853,8 +2850,22 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               >
                 {assistantMode ? "Create PAW" : "Create Room"}
               </button>
-            ) : (
+            ) : panel === "manage" ? (
               <>
+                {room?.assistant ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      void run("assistant-replies", {
+                        roomId: room.id,
+                        enabled: !room.assistantRepliesEnabled,
+                      })
+                    }
+                  >
+                    {room.assistantRepliesEnabled ? "Pause PAW" : "Resume PAW"}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   disabled={
@@ -2924,7 +2935,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   Delete Room…
                 </button>
               </>
-            )}
+            ) : null}
             {error ? <p role="alert">{error}</p> : null}
           </section>
         </div>
