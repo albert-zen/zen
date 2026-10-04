@@ -82,3 +82,30 @@ test("startup respects the app mode before first paint, using system only when s
     dom.window.close();
   }
 });
+
+test("startup follows saved language before mounting the renderer and keeps raw failures inert", async () => {
+  const dom = new JSDOM(startupScreenHtml(), {
+    url: "https://zenx.test/startup.html?language=en&error=%3Cb%3Efailure%3C%2Fb%3E",
+    runScripts: "dangerously",
+    beforeParse(window) {
+      window.localStorage.setItem("zenx.language", "zh-CN");
+      Object.defineProperty(window, "matchMedia", {
+        value: () => ({ matches: false }),
+      });
+    },
+  });
+  await new Promise<void>((resolve) =>
+    dom.window.addEventListener("load", () => resolve(), { once: true }),
+  );
+  assert.equal(dom.window.document.documentElement.lang, "zh-CN");
+  assert.equal(
+    dom.window.document.querySelector("h1")?.textContent,
+    "ZenX 无法启动",
+  );
+  assert.equal(
+    dom.window.document.querySelector("main p")?.textContent,
+    "<b>failure</b>",
+  );
+  assert.equal(dom.window.document.querySelector("main b"), null);
+  dom.window.close();
+});

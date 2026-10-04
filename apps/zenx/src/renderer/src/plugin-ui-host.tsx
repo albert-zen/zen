@@ -1,3 +1,5 @@
+import { i18n } from "./i18n.js";
+import { useTranslation } from "react-i18next";
 import {
   usePluginTheme,
   pluginBaseStyles,
@@ -78,6 +80,7 @@ export function GenericPluginUiHost({
   navigate?(route: string): void;
   className?: string;
 }) {
+  useTranslation("panels");
   const surface = (snapshot.surfaces ?? []).find(
     (candidate) =>
       candidate.pluginId === pluginId && candidate.id === surfaceId,
@@ -117,10 +120,14 @@ export function GenericPluginUiHost({
   );
 
   if (surface === undefined || bundle === undefined) {
-    return <p role="status">Plugin surface is no longer available.</p>;
+    return (
+      <p role="status">{i18n.t("panels:pluginSurfaceIsNoLongerAvailable")}</p>
+    );
   }
   if (bundle.apiVersion !== 1) {
-    return <p role="status">Plugin UI API version is not supported.</p>;
+    return (
+      <p role="status">{i18n.t("panels:pluginUiApiVersionIsNotSupported")}</p>
+    );
   }
   if (bundle.kind === "isolated") {
     return (
@@ -135,7 +142,7 @@ export function GenericPluginUiHost({
   const module = registry.resolveTrusted(bundle.entry);
   const Surface = module?.[surface.exportName];
   if (Surface === undefined) {
-    return <p role="status">Plugin UI module is unavailable.</p>;
+    return <p role="status">{i18n.t("panels:pluginUiModuleIsUnavailable")}</p>;
   }
   return (
     <section
@@ -173,6 +180,7 @@ function IsolatedPluginSurface({
   sdk: PluginUiSdkV1;
   className?: string;
 }) {
+  useTranslation("panels");
   const frame = useRef<HTMLIFrameElement>(null);
   const channel = useMemo(
     () => `zenx-ui-${crypto.getRandomValues(new Uint32Array(4)).join("-")}`,

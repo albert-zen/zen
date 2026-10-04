@@ -87,6 +87,8 @@ import {
   MutableAppServerRequestPort,
   ZenXSelfControlCapabilityPackage,
 } from "./capabilities/self-control-package.js";
+import { nativeText, setNativeLanguage } from "./native-locale.js";
+import { resolveLanguage } from "../locale.js";
 import { installApplicationMenu } from "./application-menu.js";
 import { ZenXDirectoryBrowser } from "./directory-browser.js";
 import {
@@ -252,11 +254,12 @@ function loadAppRenderer(window: BrowserWindow): void {
 function loadStartupPage(window: BrowserWindow): void {
   const query: Record<string, string> =
     bootstrapFailure === undefined ? {} : { error: bootstrapFailure };
+  query.language = resolveLanguage("system", app.getPreferredSystemLanguages());
   const rendererUrl = process.env["ELECTRON_RENDERER_URL"];
   if (rendererUrl) {
     const url = new URL("/startup.html", rendererUrl);
-    if (bootstrapFailure !== undefined)
-      url.searchParams.set("error", bootstrapFailure);
+    for (const [key, value] of Object.entries(query))
+      url.searchParams.set(key, value);
     void window.loadURL(url.href);
   } else {
     void window.loadFile(join(__dirname, "../renderer/startup.html"), {
@@ -305,12 +308,11 @@ function createWindow(): BrowserWindow {
     }
     const response = dialog.showMessageBoxSync(window, {
       type: "warning",
-      buttons: ["Keep editing", "Leave window"],
+      buttons: [nativeText("keepEditing"), nativeText("leaveWindow")],
       defaultId: 0,
       cancelId: 0,
-      message: "Leave with unsaved file edits?",
-      detail:
-        "Unsaved drafts will be lost. A save already in progress may still finish.",
+      message: nativeText("leaveUnsaved"),
+      detail: nativeText("unsavedDetail"),
     });
     if (response === 1) event.preventDefault();
   });
@@ -363,7 +365,18 @@ async function bootstrapZenX(): Promise<void> {
     home: app.getPath("home"),
     documents: app.getPath("documents"),
   });
+  setNativeLanguage(
+    resolveLanguage("system", app.getPreferredSystemLanguages()),
+  );
   installApplicationMenu();
+  ipcMain.handle(ipcChannels.localeSystemLanguages, () =>
+    app.getPreferredSystemLanguages(),
+  );
+  ipcMain.handle(ipcChannels.localeSetLanguage, (_event, language: unknown) => {
+    if (language !== "en" && language !== "zh-CN")
+      throw new Error("Unsupported interface language");
+    if (setNativeLanguage(language)) installApplicationMenu();
+  });
   let automationService:
     | Awaited<ReturnType<typeof createBundledAutomationPluginService>>
     | undefined;
@@ -999,12 +1012,11 @@ app.on("before-quit", (event) => {
     dirtyFileWindows.size > 0 &&
     dialog.showMessageBoxSync({
       type: "warning",
-      buttons: ["Keep editing", "Quit"],
+      buttons: [nativeText("keepEditing"), nativeText("quit")],
       defaultId: 0,
       cancelId: 0,
-      message: "Quit with unsaved file edits?",
-      detail:
-        "Unsaved drafts will be lost. A save already in progress may still finish.",
+      message: nativeText("quitUnsaved"),
+      detail: nativeText("unsavedDetail"),
     }) !== 1
   ) {
     event.preventDefault();
@@ -1196,10 +1208,13 @@ function installProtocolIpc(
   ipcMain.handle(ipcChannels.imageAttachmentsPick, async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender);
     const options = {
-      title: "Choose images",
+      title: nativeText("chooseImages"),
       properties: ["openFile", "multiSelections"],
       filters: [
-        { name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp"] },
+        {
+          name: nativeText("images"),
+          extensions: ["png", "jpg", "jpeg", "gif", "webp"],
+        },
       ],
     } satisfies Electron.OpenDialogOptions;
     const result =
@@ -2033,9 +2048,9 @@ function installCapabilityIpc(
   ipcMain.handle(ipcChannels.pluginsSelectTarball, async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender);
     const options = {
-      title: "Install ZenX plugin tarball",
+      title: nativeText("installPlugin"),
       properties: ["openFile"],
-      filters: [{ name: "npm package tarball", extensions: ["tgz"] }],
+      filters: [{ name: nativeText("pluginTarball"), extensions: ["tgz"] }],
     } satisfies Electron.OpenDialogOptions;
     const result =
       owner === null

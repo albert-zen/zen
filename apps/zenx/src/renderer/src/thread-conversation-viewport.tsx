@@ -1,3 +1,4 @@
+import { i18n } from "./i18n.js";
 import React, { useEffect, useRef, useState } from "react";
 import type { NativeProjectedThreadEvent } from "../../../../../src/protocol/native/recovery.js";
 import type { EffectiveThreadConfiguration } from "../../../../../src/thread.js";
@@ -287,7 +288,7 @@ export function ThreadConversationViewport({
         !hasValidReasoningSelection(models, settings))
     ) {
       setError(
-        "Choose an available model and reasoning effort before sending.",
+        i18n.t("shell:chooseAnAvailableModelAndReasoningEffortBeforeSending"),
       );
       return;
     }
@@ -316,14 +317,14 @@ export function ThreadConversationViewport({
     return (
       <div className="conversation-viewport-status" role="status">
         {serverStatus.type === "ready"
-          ? "Loading conversation…"
-          : "Reconnecting…"}
+          ? i18n.t("shell:loadingConversationDots")
+          : i18n.t("shell:reconnecting")}
       </div>
     );
   if (thread === null || settings === null)
     return (
       <div className="conversation-viewport-status" role="alert">
-        {error ?? "Conversation unavailable"}
+        {error ?? i18n.t("shell:conversationUnavailable")}
         <button type="button" onClick={reload}>
           Retry
         </button>

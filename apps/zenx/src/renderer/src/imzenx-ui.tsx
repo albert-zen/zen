@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import { Select } from "./ui/controls.js";
 import {
   createContext,
@@ -43,14 +45,14 @@ const empty: Configuration = {
   permissionMode: "full-access",
   allowUnrestrictedFullAccess: false,
 };
-const states: Record<string, string> = {
-  unconfigured: "尚未配置",
-  "waiting-for-activation": "等待插件启动",
-  "waiting-for-zas": "等待 ZenX Agent 服务",
-  starting: "正在连接",
-  connected: "已连接",
-  failed: "连接失败",
-  stopped: "已停止",
+const stateKeys: Record<string, string> = {
+  unconfigured: "notConfigured",
+  "waiting-for-activation": "waitingForPluginActivation",
+  "waiting-for-zas": "waitingForZenxAgentService",
+  starting: "connecting",
+  connected: "connected",
+  failed: "connectionFailed",
+  stopped: "stopped",
 };
 export function registerImZenXUi(registry: PluginUiRegistry): () => void {
   return registry.registerTrusted("zenx/bundled/imzenx-ui", {
@@ -58,6 +60,7 @@ export function registerImZenXUi(registry: PluginUiRegistry): () => void {
   });
 }
 export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
+  useTranslation("panels");
   const sdkRef = useRef(sdk);
   useEffect(() => {
     sdkRef.current = sdk;
@@ -78,7 +81,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
       };
   };
   const [status, setStatus] = useState<Status | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(
     draft?.settingsOpen ?? false,
   );
@@ -144,7 +147,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
   const run = async (command: string) => {
     setBusy(true);
     setError(null);
-    setNotice(null);
+    setNotice(false);
     const savedRevision = revision.current;
     try {
       setStatus(
@@ -154,7 +157,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
         )) as Status,
       );
       if (command === "configure") {
-        setNotice("配置已保存");
+        setNotice(true);
         const current = drafts?.current[sdk.pluginId];
         if (current && current.revision === savedRevision)
           current.dirty = false;
@@ -177,17 +180,20 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
           <Icon name="imzenx" size={24} />
         </span>
         <div>
-          <h2>IM 连接</h2>
-          <p>在 IM 中联系 PAW，或继续桌面工作会话。</p>
+          <h2>{i18n.t("panels:imConnection")}</h2>
+          <p>{i18n.t("panels:contactPawInImOrContinueA")}</p>
         </div>
       </header>
-      <section className="imzenx-connection" aria-label="连接概览">
+      <section
+        className="imzenx-connection"
+        aria-label={i18n.t("panels:connectionOverview")}
+      >
         <div className="imzenx-connection-top">
           <div className="imzenx-endpoint">
             <Icon name="terminal" size={20} />
             <div>
-              <h3>本机 ZenX Agent</h3>
-              <p>使用当前 ZenX 的会话服务</p>
+              <h3>{i18n.t("panels:localZenxAgent")}</h3>
+              <p>{i18n.t("panels:usesTheCurrentZenxConversationService")}</p>
             </div>
           </div>
           <span
@@ -196,7 +202,11 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
             role="status"
           >
             <span aria-hidden="true" />
-            {status ? (states[status.state] ?? status.state) : "正在读取…"}
+            {status
+              ? stateKeys[status.state]
+                ? i18n.t(`panels:${stateKeys[status.state]}`)
+                : status.state
+              : i18n.t("panels:loading")}
           </span>
         </div>
         {error || status?.error ? (
@@ -205,7 +215,9 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
           </p>
         ) : null}
         <div className="imzenx-connection-bottom">
-          <span>PAW 聊天与工作会话分开 · 选择自动保留</span>
+          <span>
+            {i18n.t("panels:pawChatsAndWorkConversationsStaySeparate")}
+          </span>
           <div className="imzenx-actions">
             <button
               className="imzenx-text-button"
@@ -213,7 +225,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
               disabled={busy}
               onClick={() => void run("status")}
             >
-              刷新状态
+              {i18n.t("panels:refreshStatus")}
             </button>
             <button
               className="secondary-button"
@@ -221,25 +233,18 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
               disabled={busy || !status?.configuration}
               onClick={() => void run("connect")}
             >
-              {busy ? "处理中…" : "重新连接"}
+              {busy ? i18n.t("panels:processing") : i18n.t("panels:reconnect")}
             </button>
           </div>
         </div>
       </section>
       <section
         className="imzenx-connection imzenx-routing"
-        aria-label="选择对话方式"
+        aria-label={i18n.t("panels:chooseAConversationMode")}
       >
-        <h3>选择对话方式</h3>
-        <p className="imzenx-hint">
-          在 IM 中发送 /paws 查看这个工作目录下的 PAW，再用 /paw
-          选择。你发的消息进入 PAW 聊天室，只接收它主动发到聊天室的回复。
-        </p>
-        <p className="imzenx-hint">
-          /threads 和 /pick
-          继续直接工作会话；这个模式会同步该线程的模型回复。/new 清除选择。PAW
-          模式目前支持文字，平台原生已读、引用和表情取决于后续渠道适配。
-        </p>
+        <h3>{i18n.t("panels:chooseAConversationMode")}</h3>
+        <p className="imzenx-hint">{i18n.t("panels:imPawInstructions")}</p>
+        <p className="imzenx-hint">{i18n.t("panels:imThreadInstructions")}</p>
       </section>
       <details
         className="imzenx-settings"
@@ -254,11 +259,11 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
         <summary>
           <Icon name="settings" size={18} />
           <span>
-            连接设置
+            {i18n.t("panels:connectionSettings")}
             <small>
               {status?.configuration
-                ? "已配置，可随时修改"
-                : "设置运行环境与频道"}
+                ? i18n.t("panels:configuredYouCanChangeItAnytime")
+                : i18n.t("panels:setUpTheRuntimeAndChannels")}
             </small>
           </span>
           <Icon name="chevron-down" className="imzenx-disclosure" />
@@ -273,9 +278,12 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
             <div className="imzenx-form-grid">
               {(
                 [
-                  ["pythonExecutable", "Python 可执行文件"],
-                  ["channelsConfigFile", "频道配置文件"],
-                  ["cwd", "工作目录与 PAW 可见范围"],
+                  ["pythonExecutable", i18n.t("panels:pythonExecutable")],
+                  [
+                    "channelsConfigFile",
+                    i18n.t("panels:channelConfigurationFile"),
+                  ],
+                  ["cwd", i18n.t("panels:workingDirectoryAndPawVisibility")],
                 ] as const
               ).map(([key, label]) => (
                 <label className="field" key={key}>
@@ -291,13 +299,13 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
               ))}
             </div>
             <p className="imzenx-hint">
-              使用绝对路径。频道沿用 IMZen 配置，凭证保存在本机私有文件中。
+              {i18n.t("panels:useAbsolutePathsChannelsUseTheImzen")}
             </p>
             <details>
-              <summary>高级设置</summary>
+              <summary>{i18n.t("panels:advancedSettings")}</summary>
               <div className="imzenx-form-grid">
                 <label className="field">
-                  <span>图片共享目录（可选）</span>
+                  <span>{i18n.t("panels:sharedImageDirectoryOptional")}</span>
                   <input
                     value={config.sharedFilesystemRoot}
                     onChange={(event) =>
@@ -309,7 +317,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
                   />
                 </label>
                 <label className="field">
-                  <span>新会话执行权限</span>
+                  <span>{i18n.t("panels:newConversationPermissions")}</span>
                   <Select
                     value={config.permissionMode}
                     onValueChange={(value) =>
@@ -319,8 +327,12 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
                       })
                     }
                   >
-                    <option value="full-access">Full access</option>
-                    <option value="approval-required">执行前审批</option>
+                    <option value="full-access">
+                      {i18n.t("panels:fullAccess")}
+                    </option>
+                    <option value="approval-required">
+                      {i18n.t("panels:requireApprovalBeforeExecution")}
+                    </option>
                   </Select>
                 </label>
                 <label>
@@ -334,19 +346,23 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
                       })
                     }
                   />
-                  允许未配置用户／会话白名单的频道使用 Full access
+                  {i18n.t(
+                    "panels:allowChannelsWithoutAUserConversationAllowlist",
+                  )}
                 </label>
               </div>
             </details>
             {notice ? (
               <p className="imzenx-notice" role="status">
-                {notice}
+                {i18n.t("panels:configurationSaved")}
               </p>
             ) : null}
             <div className="imzenx-save">
-              <span>保存后将重新连接频道</span>
+              <span>{i18n.t("panels:savingReconnectsTheChannels")}</span>
               <button className="primary-button" type="submit">
-                {busy ? "保存中…" : "保存并连接"}
+                {busy
+                  ? i18n.t("panels:saving")
+                  : i18n.t("panels:saveAndConnect")}
               </button>
             </div>
           </fieldset>
@@ -354,14 +370,16 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
       </details>
       <section className="imzenx-guide" aria-labelledby="imzenx-guide-title">
         <div className="imzenx-section-heading">
-          <h3 id="imzenx-guide-title">从 IM 开始</h3>
-          <span>在机器人聊天中发送</span>
+          <h3 id="imzenx-guide-title">{i18n.t("panels:getStartedInIm")}</h3>
+          <span>{i18n.t("panels:sendInTheBotChat")}</span>
         </div>
         <div className="imzenx-quickstart">
           <Icon name="compose" size={18} />
           <p>
-            先选择 PAW 聊天室或工作会话。
-            <span>没有选择时，直接发消息会新建工作会话。</span>
+            {i18n.t("panels:firstChooseAPawRoomOrWork")}
+            <span>
+              {i18n.t("panels:withoutASelectionSendingAMessageCreates")}
+            </span>
           </p>
         </div>
         <dl className="imzenx-commands">
@@ -369,41 +387,43 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
             <dt>
               <code>/paws</code>
             </dt>
-            <dd>查看工作目录下的 PAW</dd>
+            <dd>{i18n.t("panels:listPawsInTheWorkingDirectory")}</dd>
           </div>
           <div>
             <dt>
               <code>
-                /paw <span>列表序号或 ID</span>
+                /paw <span>{i18n.t("panels:listNumberOrId")}</span>
               </code>
             </dt>
-            <dd>选择 PAW 聊天室；不带参数查看当前选择</dd>
+            <dd>{i18n.t("panels:chooseAPawRoomOmitTheArgument")}</dd>
           </div>
           <div>
             <dt>
               <code>/threads</code>
             </dt>
-            <dd>查看会话列表</dd>
+            <dd>{i18n.t("panels:listConversations")}</dd>
           </div>
           <div>
             <dt>
               <code>
-                /pick <span>列表序号</span>
+                /pick <span>{i18n.t("panels:listNumber")}</span>
               </code>
             </dt>
-            <dd>选择会话并接收回复</dd>
+            <dd>{i18n.t("panels:chooseAConversationAndReceiveReplies")}</dd>
           </div>
           <div>
             <dt>
               <code>/new</code>
             </dt>
-            <dd>清除选择，下条消息新建会话</dd>
+            <dd>{i18n.t("panels:clearTheSelectionTheNextMessageCreates")}</dd>
           </div>
         </dl>
       </section>
       <footer className="imzenx-footer">
         <Icon name="imzenx" />
-        <span>关闭窗口仍保持连接；退出 ZenX 或停用插件后断开。</span>
+        <span>
+          {i18n.t("panels:closingTheWindowKeepsTheConnectionQuitting")}
+        </span>
       </footer>
     </div>
   );

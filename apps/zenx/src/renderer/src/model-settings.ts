@@ -6,6 +6,7 @@ import type {
   Thread,
 } from "../../protocol-client/index.js";
 import type { ZenXProviderProfile } from "../../main/host-profile.js";
+import { i18n } from "./i18n.js";
 import {
   decodeModelKey,
   encodeModelKey,
@@ -75,7 +76,7 @@ export function applySettingsMirror(
 export function validateModelCatalog(models: readonly ModelSummary[]): void {
   const defaults = models.filter((model) => model.isDefault);
   if (defaults.length !== 1 || defaults[0]?.hidden === true) {
-    throw new Error("App Server must expose exactly one visible default model");
+    throw new Error(i18n.t("selector:appServerDefaultModelError"));
   }
 }
 
@@ -98,7 +99,7 @@ export function modelOptions(
         upgradeInfo: null,
         availabilityNux: null,
         displayName: selectedModel,
-        description: "Configured by the App Server",
+        description: i18n.t("selector:configuredByAppServer"),
         hidden: true,
         supportsPersonality: false,
         additionalSpeedTiers: [],
@@ -182,12 +183,12 @@ export function imageCapabilityMessage(
   > | null,
   publishedModels?: readonly ModelSummary[],
 ): string | null {
-  if (settings === null) return "Choose a model before sending images.";
+  if (settings === null) return i18n.t("selector:chooseModelBeforeImages");
   let identity: ReturnType<typeof decodeModelKey>;
   try {
     identity = decodeModelKey(settings.model);
   } catch {
-    return "Choose a model with known image input support before sending images.";
+    return i18n.t("selector:chooseImageModel");
   }
   const profile = providerProfiles.find(
     (entry) => entry.providerProfileId === identity.providerProfileId,
@@ -205,7 +206,7 @@ export function imageCapabilityMessage(
   if (modalities == null) return null;
   return modalities.includes("image")
     ? null
-    : `“${label}” does not support image input. Remove the images or choose a model with image support.`;
+    : i18n.t("selector:imageUnsupported", { model: label });
 }
 
 export function imageCapabilityNotice(
@@ -236,7 +237,7 @@ export function imageCapabilityNotice(
   if (modalities != null) return null;
   const label =
     published?.displayName ?? model?.displayName ?? identity.modelId;
-  return `Image input capability for “${label}” is unknown. You can try sending now, test it in Models & providers, or set it manually.`;
+  return i18n.t("selector:imageCapabilityUnknown", { model: label });
 }
 
 export function modelChangeRequest(

@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import { useEffect, useRef, useState } from "react";
 import { Popover, PopoverAnchor, PopoverContent } from "./ui/controls.js";
 import { ComposerAction } from "./Composer.js";
@@ -8,16 +10,22 @@ import {
   type ComposerSendMode,
 } from "./composer-state.js";
 
-const choices: readonly {
+function sendChoices(): readonly {
   mode: ComposerSendMode;
   intent: ComposerIntent;
   label: string;
-}[] = [
-  { mode: "soft", intent: "steer", label: "Steer now" },
-  { mode: "batch", intent: "batch-next", label: "Next turn" },
-  { mode: "queue", intent: "queue", label: "Each turn" },
-  { mode: "hard", intent: "replace", label: "Interrupt and send" },
-];
+}[] {
+  return [
+    { mode: "soft", intent: "steer", label: i18n.t("shell:steerNow") },
+    { mode: "batch", intent: "batch-next", label: i18n.t("shell:nextTurn") },
+    { mode: "queue", intent: "queue", label: i18n.t("shell:eachTurn") },
+    {
+      mode: "hard",
+      intent: "replace",
+      label: i18n.t("shell:interruptAndSend"),
+    },
+  ];
+}
 
 /** Presentation only: sending and saving preferences keep their existing owners. */
 export function ComposerSendControl({
@@ -49,6 +57,7 @@ export function ComposerSendControl({
   onStop(): void;
   onModeChange?(mode: ComposerSendMode): Promise<void>;
 }) {
+  useTranslation("shell");
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -95,10 +104,10 @@ export function ComposerSendControl({
       ? "⌘"
       : "Ctrl+";
   const options = compact
-    ? [{ intent: sendIntent, label: "Compact context" }]
+    ? [{ intent: sendIntent, label: i18n.t("shell:compactContext") }]
     : running
-      ? choices
-      : [{ intent: "start" as const, label: "Send" }];
+      ? sendChoices()
+      : [{ intent: "start" as const, label: i18n.t("shell:send") }];
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverAnchor asChild>
@@ -110,7 +119,7 @@ export function ComposerSendControl({
           onFocus={show}
           onBlur={leave}
           tabIndex={disabled ? 0 : undefined}
-          aria-label={disabled ? "Send options" : undefined}
+          aria-label={disabled ? i18n.t("shell:sendOptions") : undefined}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.preventDefault();
@@ -150,7 +159,7 @@ export function ComposerSendControl({
         align="end"
         side="top"
         sideOffset={8}
-        aria-label="Send options"
+        aria-label={i18n.t("shell:sendOptions")}
         onPointerEnter={cancelClose}
         onPointerLeave={leave}
         onFocus={cancelClose}
@@ -194,16 +203,16 @@ export function ComposerSendControl({
                 onStop();
               }}
             >
-              <span>Stop</span>
+              <span>{i18n.t("shell:stop")}</span>
               <Icon name="stop" size={13} />
             </button>
           ) : null}
         </div>
         {onModeChange ? (
           <label className="composer-send-default">
-            <span>Default while running</span>
+            <span>{i18n.t("shell:defaultWhileRunning")}</span>
             <select
-              aria-label="Default send mode"
+              aria-label={i18n.t("shell:defaultSendMode")}
               value={mode}
               disabled={saving}
               onChange={(event) => {
@@ -216,13 +225,13 @@ export function ComposerSendControl({
                     setError(
                       reason instanceof Error
                         ? reason.message
-                        : "Could not save send preference",
+                        : i18n.t("shell:couldNotSaveSendPreference"),
                     ),
                   )
                   .finally(() => setSaving(false));
               }}
             >
-              {choices.map((choice) => (
+              {sendChoices().map((choice) => (
                 <option key={choice.mode} value={choice.mode}>
                   {choice.label}
                 </option>

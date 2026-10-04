@@ -26,7 +26,7 @@ test("integrated title bar aligns the product controls and conversation row arou
   assert.match(app, /aria-expanded=\{!sidebarCollapsed\}/u);
   assert.match(
     app,
-    /sidebarCollapsed \? "Expand sidebar" : "Collapse sidebar"/u,
+    /sidebarCollapsed\s*\? i18n\.t\("shell:expandSidebar"\)\s*: i18n\.t\("shell:collapseSidebar"\)/u,
   );
   assert.match(sidebar, /id="primary-sidebar"/u);
   assert.doesNotMatch(sidebar, /className="sidebar-platform-brand"/u);

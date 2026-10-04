@@ -70,6 +70,12 @@ import type { ZenXComputerReadinessSnapshot } from "../main/computer-readiness.j
 
 contextBridge.exposeInMainWorld("zenx", {
   platform: process.platform,
+  locale: {
+    getSystemLanguages: (): Promise<string[]> =>
+      ipcRenderer.invoke(ipcChannels.localeSystemLanguages),
+    setLanguage: (language: string): Promise<void> =>
+      ipcRenderer.invoke(ipcChannels.localeSetLanguage, language),
+  },
   skills: {
     list: () => ipcRenderer.invoke(ipcChannels.skillsList),
     importDirectory: (directory: string) =>

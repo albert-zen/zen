@@ -1,3 +1,4 @@
+import { i18n } from "./i18n.js";
 import type { ComposerState } from "./composer-state.js";
 
 export function isCompactCommand(text: string): boolean {
@@ -34,13 +35,13 @@ export async function handleCompactCommand(options: {
   const error = !["/compact", "/compact --no-reference"].includes(
     state.draft.text.trim(),
   )
-    ? "Use /compact or /compact --no-reference, without other arguments."
+    ? i18n.t("common:compactArguments")
     : state.draft.images.length > 0
-      ? "Remove attachments before compacting context."
+      ? i18n.t("common:compactAttachments")
       : options.threadId === null
-        ? "There is no conversation to compact yet."
+        ? i18n.t("common:compactNoConversation")
         : options.active
-          ? "Wait for the current reply to finish before compacting context."
+          ? i18n.t("common:compactWait")
           : null;
   if (error !== null) {
     options.update((current) => ({
@@ -68,9 +69,9 @@ export async function requestContextCompaction(
     return;
   const error =
     options.threadId === null
-      ? "There is no conversation to compact yet."
+      ? i18n.t("common:compactNoConversation")
       : options.active
-        ? "Wait for the current reply to finish before compacting context."
+        ? i18n.t("common:compactWait")
         : null;
   if (error !== null) {
     options.update((current) => ({
@@ -81,7 +82,7 @@ export async function requestContextCompaction(
   }
   const pending = {
     status: "pending" as const,
-    message: "Compacting context…",
+    message: i18n.t("common:compacting"),
   };
   options.update((current) => ({
     ...current,
@@ -105,7 +106,10 @@ export async function requestContextCompaction(
               options.clearCommandDraft && current.draft === state.draft
                 ? { text: "", images: [] }
                 : current.draft,
-            compaction: { status: "succeeded", message: "Context compacted." },
+            compaction: {
+              status: "succeeded",
+              message: i18n.t("common:compacted"),
+            },
           },
     );
   } catch (reason) {
@@ -135,22 +139,20 @@ function compactError(reason: unknown): { message: string; detail: string } {
         : null;
   const detail =
     code === "thread_busy" || code === "compaction_not_available"
-      ? `Request rejected by the service (code: ${code}). Original exception text is withheld to protect private data.`
-      : "The desktop request returned an error; whether compaction took effect is unknown. Check the conversation before trying again. Original exception text is withheld to protect private data.";
+      ? i18n.t("common:compactRejected", { code })
+      : i18n.t("common:compactUnknown");
   if (code === "thread_busy")
     return {
-      message:
-        "Wait for the current reply to finish before compacting context.",
+      message: i18n.t("common:compactWait"),
       detail,
     };
   if (code === "compaction_not_available")
     return {
-      message: "There is no new completed conversation to compact.",
+      message: i18n.t("common:compactNoNew"),
       detail,
     };
   return {
-    message:
-      "Could not confirm this compaction request. Check the conversation before trying again.",
+    message: i18n.t("common:compactUnconfirmed"),
     detail,
   };
 }

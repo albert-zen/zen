@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import React, {
   useEffect,
   useLayoutEffect,
@@ -102,6 +104,7 @@ export function AuxiliaryPanel({
   threadContext,
   conversation,
 }: AuxiliaryPanelProps) {
+  useTranslation("panels");
   const roomContext =
     conversationContext?.kind === "room" ? conversationContext : undefined;
   // Room identity owns presentation only. Execution APIs always use a real Thread.
@@ -208,18 +211,24 @@ export function AuxiliaryPanel({
       : []
     ).map((tab) => ({
       id: `browser:${tab.id}`,
-      title: tab.title || "New tab",
+      title: tab.title || i18n.t("panels:newTab"),
       icon: "browser" as const,
       browser: tab,
     })),
     ...(computer
-      ? [{ id: "computer", title: "Computer", icon: "computer" as const }]
+      ? [
+          {
+            id: "computer",
+            title: i18n.t("panels:computer"),
+            icon: "computer" as const,
+          },
+        ]
       : []),
     ...(browser
       ? [
           {
             id: "attached",
-            title: "Attached browser",
+            title: i18n.t("panels:attachedBrowser"),
             icon: "browser" as const,
           },
         ]
@@ -399,7 +408,7 @@ export function AuxiliaryPanel({
       return;
     }
     if (!window.zenx.workspaceBrowser) {
-      setError("Interactive browsing is available in the ZenX desktop app.");
+      setError("__zenx_interactive_browsing_unavailable__");
       return;
     }
     if (threadId === undefined) return;
@@ -502,7 +511,7 @@ export function AuxiliaryPanel({
       if (draft && (isFileDirty(draft) || draft.saving)) {
         if (draft.conflict || draft.error) {
           select(tab.id);
-          setError("Resolve this file's save issue before closing it.");
+          setError("__zenx_file_save_blocked__");
           return;
         }
         drafts.closeAfterSave(key, (text, revision) =>
@@ -558,7 +567,7 @@ export function AuxiliaryPanel({
       <div
         className="browser-panel-resizer"
         role="separator"
-        aria-label="Side panel width"
+        aria-label={i18n.t("panels:sidePanelWidth")}
         aria-orientation="vertical"
         aria-valuemin={360}
         aria-valuemax={780}
@@ -598,7 +607,11 @@ export function AuxiliaryPanel({
       />
       <header className="auxiliary-heading">
         <div className="workspace-tab-rail">
-          <div ref={tabRail} role="tablist" aria-label="Workspace tabs">
+          <div
+            ref={tabRail}
+            role="tablist"
+            aria-label={i18n.t("panels:workspaceTabs")}
+          >
             {tabs.map((tab, index) => (
               <span
                 className="workspace-content-tab"
@@ -643,7 +656,7 @@ export function AuxiliaryPanel({
                   ) ? (
                     <span
                       className="workspace-tab-dirty"
-                      aria-label="Unsaved changes"
+                      aria-label={i18n.t("panels:unsavedChanges")}
                     >
                       •
                     </span>
@@ -670,8 +683,8 @@ export function AuxiliaryPanel({
           <button
             type="button"
             className="icon-button workspace-add-tab"
-            aria-label="New workspace tab"
-            title="New workspace tab"
+            aria-label={i18n.t("panels:newWorkspaceTab")}
+            title={i18n.t("panels:newWorkspaceTab")}
             aria-pressed={showChooser}
             onClick={() => {
               selectionEpoch.current += 1;
@@ -686,8 +699,16 @@ export function AuxiliaryPanel({
         <button
           type="button"
           className="icon-button"
-          aria-label={expanded ? "Restore side panel" : "Expand side panel"}
-          title={expanded ? "Restore side panel" : "Expand side panel"}
+          aria-label={
+            expanded
+              ? i18n.t("panels:restoreSidePanel")
+              : i18n.t("panels:expandSidePanel")
+          }
+          title={
+            expanded
+              ? i18n.t("panels:restoreSidePanel")
+              : i18n.t("panels:expandSidePanel")
+          }
           aria-pressed={expanded}
           onClick={() => setExpanded((value) => !value)}
         >
@@ -696,8 +717,8 @@ export function AuxiliaryPanel({
         <button
           type="button"
           className="icon-button auxiliary-close-button"
-          aria-label="Close side panel"
-          title="Close side panel"
+          aria-label={i18n.t("panels:closeSidePanel")}
+          title={i18n.t("panels:closeSidePanel")}
           onClick={close}
         >
           <Icon name="panel-right" />
@@ -708,7 +729,11 @@ export function AuxiliaryPanel({
       ) : null}
       {error ? (
         <p className="workspace-panel-error" role="alert">
-          {error}
+          {error === "__zenx_interactive_browsing_unavailable__"
+            ? i18n.t("panels:interactiveBrowsingIsAvailableInTheZenx")
+            : error === "__zenx_file_save_blocked__"
+              ? i18n.t("panels:resolveThisFileSSaveIssueBefore")
+              : error}
         </p>
       ) : null}
       {showChooser ? (
@@ -725,19 +750,26 @@ export function AuxiliaryPanel({
               />
             ) : null
           ) : (
-            <div className="workspace-tab-types" aria-label="New tab type">
+            <div
+              className="workspace-tab-types"
+              aria-label={i18n.t("panels:newTabType")}
+            >
               <header>
                 <h3>
                   {roomContext
-                    ? "Open beside this Room"
-                    : "Open beside this conversation"}
+                    ? i18n.t("panels:openBesideThisRoom")
+                    : i18n.t("panels:openBesideThisConversation")}
                 </h3>
                 <p>
                   {roomContext
                     ? roomContext.resourceThread
-                      ? `Conversation resources use ${roomContext.resourceThread.title}.`
-                      : "Choose a Room member to enable conversation resources."
-                    : "Files, pages and observations share this workspace."}
+                      ? i18n.t("panels:conversationResourcesUse", {
+                          name: roomContext.resourceThread.title,
+                        })
+                      : i18n.t("panels:chooseARoomMemberToEnableConversation")
+                    : i18n.t(
+                        "panels:filesPagesAndObservationsShareThisWorkspace",
+                      )}
                 </p>
               </header>
               {customTabs.map((tab) => (
@@ -757,8 +789,8 @@ export function AuxiliaryPanel({
                   <button type="button" onClick={() => void add("file")}>
                     <Icon name="file" />
                     <span>
-                      <strong>File</strong>
-                      <small>Read or edit a file in this project</small>
+                      <strong>{i18n.t("panels:file")}</strong>
+                      <small>{i18n.t("panels:readOrEditAFileInThis")}</small>
                     </span>
                   </button>
                   <button
@@ -768,16 +800,20 @@ export function AuxiliaryPanel({
                   >
                     <Icon name="browser" />
                     <span>
-                      <strong>Browser</strong>
-                      <small>Browse a shared page with the agent</small>
+                      <strong>{i18n.t("panels:browser")}</strong>
+                      <small>
+                        {i18n.t("panels:browseASharedPageWithTheAgent")}
+                      </small>
                     </span>
                   </button>
                   {computer ? (
                     <button type="button" onClick={() => void add("computer")}>
                       <Icon name="computer" />
                       <span>
-                        <strong>Computer</strong>
-                        <small>Observe the agent’s desktop activity</small>
+                        <strong>{i18n.t("panels:computer")}</strong>
+                        <small>
+                          {i18n.t("panels:observeTheAgentSDesktopActivity")}
+                        </small>
                       </span>
                     </button>
                   ) : null}
@@ -785,8 +821,10 @@ export function AuxiliaryPanel({
                     <button type="button" onClick={() => void add("attached")}>
                       <Icon name="browser" />
                       <span>
-                        <strong>Attached browser</strong>
-                        <small>Inspect connected browser activity</small>
+                        <strong>{i18n.t("panels:attachedBrowser")}</strong>
+                        <small>
+                          {i18n.t("panels:inspectConnectedBrowserActivity")}
+                        </small>
                       </span>
                     </button>
                   ) : null}
@@ -831,8 +869,8 @@ export function AuxiliaryPanel({
                   <button
                     type="button"
                     className="icon-button"
-                    aria-label="Open conversation full screen"
-                    title="Open conversation full screen"
+                    aria-label={i18n.t("panels:openConversationFullScreen")}
+                    title={i18n.t("panels:openConversationFullScreen")}
                     onClick={() =>
                       navigate?.(
                         `/threads/${encodeURIComponent(conversation.threadId)}`,

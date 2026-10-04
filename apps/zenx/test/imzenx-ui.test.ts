@@ -112,11 +112,11 @@ test("background parent updates preserve the open IM settings and do not reload 
     assert.match(dom.window.document.body.textContent ?? "", /\/paws/);
     assert.match(
       dom.window.document.body.textContent ?? "",
-      /只接收它主动发到聊天室的回复/,
+      /receive only replies it posts to that room/,
     );
     assert.match(
       dom.window.document.body.textContent ?? "",
-      /工作目录与 PAW 可见范围/,
+      /Working directory and PAW visibility/,
     );
     const settings =
       dom.window.document.querySelector<HTMLDetailsElement>(

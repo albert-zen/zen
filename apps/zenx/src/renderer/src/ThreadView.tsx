@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import type { SkillEntry } from "../../../../cli/src/skills.js";
 import { parseSkillDraft, withSkillDraft } from "./skill-draft.js";
 import {
@@ -160,7 +162,7 @@ export function ThreadView({
   imageCapabilityError = null,
   imageCapabilityNotice = null,
   models = [],
-  permissionLabel = "Full access",
+  permissionLabel = i18n.t("shell:fullAccess"),
   permissionMode = "danger-full-access",
   permissionError,
   switchingPermission,
@@ -182,7 +184,7 @@ export function ThreadView({
   onPickImages = async () => undefined,
   onRemoveImage = () => undefined,
   onReadAttachment = async () => {
-    throw new Error("Image payload reader is unavailable");
+    throw new Error(i18n.t("shell:imageReaderUnavailable"));
   },
   onInterrupt,
   onCompact,
@@ -193,6 +195,7 @@ export function ThreadView({
   onSubmit,
   onOpenMessageLink,
 }: ThreadViewProps) {
+  useTranslation("shell");
   const [interrupting, setInterrupting] = useState(false);
   const [interruptError, setInterruptError] = useState<string | null>(null);
   const [queueResumeError, setQueueResumeError] = useState<{
@@ -352,18 +355,18 @@ export function ThreadView({
     runningTurn === null ? "send" : !hasDraft ? "stop" : sendIntent;
   const intentLabel = (intent: ComposerIntent) =>
     intent === "batch-next"
-      ? "Next turn"
+      ? i18n.t("shell:nextTurn")
       : intent === "queue"
-        ? "Each turn"
+        ? i18n.t("shell:eachTurn")
         : intent === "steer"
-          ? "Steer now"
+          ? i18n.t("shell:steerNow")
           : intent === "replace"
-            ? "Interrupt and send"
-            : "Send";
+            ? i18n.t("shell:interruptAndSend")
+            : i18n.t("shell:send");
   const primaryLabel = compactRequested
-    ? "Compact context"
+    ? i18n.t("shell:compactContext")
     : primaryMode === "stop"
-      ? "Stop"
+      ? i18n.t("shell:stop")
       : intentLabel(sendIntent);
   const primary = () => {
     if (primaryMode === "stop") void interrupt();
@@ -386,7 +389,7 @@ export function ThreadView({
       if (started > 0 || missing > 0)
         setCancelNotice({
           threadId,
-          message: `${started} message(s) already starting or delivered and cannot be canceled; ${missing} no longer match this Thread. Only still-pending entries were canceled. Use Stop separately if you need to interrupt the active Turn.`,
+          message: i18n.t("shell:queueCancelPartial", { started, missing }),
         });
     } catch (error) {
       setCancelNotice({ threadId, message: describeError(error) });
@@ -469,11 +472,8 @@ export function ThreadView({
               {transcriptRows.length === 0
                 ? (emptyContent ?? (
                     <div className="thread-empty">
-                      <h2>Start a new thread</h2>
-                      <p>
-                        Describe the outcome you want. ZenX will use this
-                        Thread’s workspace, model, and permission policy.
-                      </p>
+                      <h2>{i18n.t("shell:startANewThread")}</h2>
+                      <p>{i18n.t("shell:describeOutcome")}</p>
                     </div>
                   ))
                 : transcriptRows.map((row) =>
@@ -520,7 +520,7 @@ export function ThreadView({
           }}
         >
           <Icon name="arrow-down" size={14} />
-          Back to live
+          {i18n.t("shell:backToLive")}
         </button>
       )}
 
@@ -537,21 +537,26 @@ export function ThreadView({
         {(thread?.queuedMessages?.length ?? 0) > 0 ? (
           <div
             className={`queued-messages${onCancelQueued === undefined ? "" : " cancellable"}`}
-            aria-label="Message queue"
+            aria-label={i18n.t("shell:messageQueue")}
           >
             <strong role="status" aria-live="polite" aria-atomic="true">
-              {thread!.queuedMessages!.length} queued
+              {i18n.t("shell:queuedCount", {
+                count: thread!.queuedMessages!.length,
+              })}
             </strong>
             <ol>
               {thread!.queuedMessages!.map((message, index) => (
                 <li key={message.id}>
-                  {message.text || `${message.imageCount} image(s)`}
+                  {message.text ||
+                    i18n.t("shell:imageCount", { count: message.imageCount })}
                   {onCancelQueued === undefined ? null : (
                     <button
                       className="queued-cancel-button"
                       type="button"
-                      aria-label={`Cancel queued message ${index + 1}`}
-                      title="Cancel this pending message only"
+                      aria-label={i18n.t("shell:cancelQueuedMessage", {
+                        number: index + 1,
+                      })}
+                      title={i18n.t("shell:cancelThisPendingMessageOnly")}
                       disabled={cancelingQueue || composerDisabled}
                       onClick={() =>
                         void cancelQueued([
@@ -562,12 +567,14 @@ export function ThreadView({
                         ])
                       }
                     >
-                      Cancel
+                      {i18n.t("shell:cancel")}
                     </button>
                   )}
                   {queueFailure?.queuedItemId === message.id ? (
                     <p className="queued-failure" role="alert">
-                      Not delivered ({queueFailure.code}):{" "}
+                      {i18n.t("shell:notDelivered", {
+                        code: queueFailure.code,
+                      })}{" "}
                       {queueFailure.message}
                     </p>
                   ) : null}
@@ -585,7 +592,9 @@ export function ThreadView({
                 }
                 title={
                   thread!.queuedMessages!.length > 128
-                    ? "Too many messages for one cancellation; cancel individual messages"
+                    ? i18n.t(
+                        "shell:tooManyMessagesForOneCancellationCancelIndividualMessages",
+                      )
                     : undefined
                 }
                 onClick={() =>
@@ -597,12 +606,17 @@ export function ThreadView({
                     })),
                     previews: thread!.queuedMessages!.map(
                       (message) =>
-                        message.text || `${message.imageCount} image(s)`,
+                        message.text ||
+                        i18n.t("shell:imageCount", {
+                          count: message.imageCount,
+                        }),
                     ),
                   })
                 }
               >
-                Cancel these {thread!.queuedMessages!.length} queued messages…
+                {i18n.t("shell:cancelTheseQueuedMessages", {
+                  count: thread!.queuedMessages!.length,
+                })}
               </button>
             ) : null}
             {runningTurn === null && onResumeQueue !== undefined ? (
@@ -620,7 +634,7 @@ export function ThreadView({
                     )
                 }
               >
-                Continue queue
+                {i18n.t("shell:continueQueue")}
               </button>
             ) : null}
           </div>
@@ -648,13 +662,16 @@ export function ThreadView({
             </p>
           )}
           {skillDraft.skills.length > 0 && (
-            <div className="composer-images" aria-label="Skills to send">
+            <div
+              className="composer-images"
+              aria-label={i18n.t("shell:skillsToSend")}
+            >
               {skillDraft.skills.map((skill) => (
                 <button
                   type="button"
                   className="quiet-button"
                   key={skill.id}
-                  aria-label={`Remove Skill ${skill.name}`}
+                  aria-label={i18n.t("shell:removeSkill", { name: skill.name })}
                   onClick={() =>
                     onDraftChange(
                       withSkillDraft(
@@ -675,7 +692,7 @@ export function ThreadView({
           {skillDraft.references.length > 0 && (
             <div
               className="composer-skills composer-references"
-              aria-label="References to send"
+              aria-label={i18n.t("shell:referencesToSend")}
             >
               {skillDraft.references.map((reference, index) => (
                 <span
@@ -687,7 +704,9 @@ export function ThreadView({
                   <span>{reference.name}</span>
                   <button
                     type="button"
-                    aria-label={`Remove reference ${reference.name}`}
+                    aria-label={i18n.t("shell:removeReference", {
+                      name: reference.name,
+                    })}
                     onClick={() =>
                       onDraftChange(
                         withSkillDraft(
@@ -713,7 +732,10 @@ export function ThreadView({
             Message ZenX
           </label>
           {composer.draft.images.length === 0 ? null : (
-            <div className="composer-images" aria-label="Images to send">
+            <div
+              className="composer-images"
+              aria-label={i18n.t("shell:imagesToSend")}
+            >
               {composer.draft.images.map((image) => (
                 <DraftImage
                   image={image}
@@ -733,7 +755,7 @@ export function ThreadView({
           )}
           <ComposerEditor
             id={composerId}
-            aria-label="Message"
+            aria-label={i18n.t("shell:message")}
             aria-controls={selector.open ? selectorId : undefined}
             aria-activedescendant={
               selector.open && selector.rows.length
@@ -783,11 +805,11 @@ export function ThreadView({
             placeholder={
               runningTurn === null
                 ? watching
-                  ? "Send a message to wake this thread…"
-                  : "Ask ZenX anything…"
+                  ? i18n.t("shell:sendAMessageToWakeThisThread")
+                  : i18n.t("shell:askZenxAnything")
                 : composerSendMode === "queue" || composerSendMode === "batch"
-                  ? "Message for the next turn…"
-                  : "Steer the current run…"
+                  ? i18n.t("shell:messageForTheNextTurn")
+                  : i18n.t("shell:steerTheCurrentRun")
             }
             textareaRef={composerTextareaRef}
             rows={1}
@@ -798,8 +820,8 @@ export function ThreadView({
               <button
                 className="composer-tool icon-only"
                 type="button"
-                aria-label="Add images"
-                title="Add images"
+                aria-label={i18n.t("shell:addImages")}
+                title={i18n.t("shell:addImages")}
                 disabled={composerDisabled || submitting}
                 onClick={() => {
                   setAttachmentError(null);
@@ -834,7 +856,9 @@ export function ThreadView({
               {permissionLabel === null ? null : (
                 <PermissionSelect
                   errorId={`${composerId}-permission-error`}
-                  legacyApproval={permissionLabel === "Approval required"}
+                  legacyApproval={
+                    permissionLabel === i18n.t("shell:approvalRequired")
+                  }
                   value={permissionMode}
                   disabled={
                     runningTurn !== null ||
@@ -897,15 +921,17 @@ export function ThreadView({
           onOpenChange={(open) => {
             if (!open) setCancelConfirmation(null);
           }}
-          title={`Cancel ${cancelConfirmation.targets.length} queued messages?`}
+          title={i18n.t("shell:cancelQueuedMessagesQuestion", {
+            count: cancelConfirmation.targets.length,
+          })}
         >
           <div className="queued-cancel-confirmation">
-            <h2>Cancel {cancelConfirmation.targets.length} queued messages?</h2>
-            <p>
-              Only these pending messages are requested. Messages queued later
-              are not included. A message already starting or delivered cannot
-              be recalled or stopped by this action.
-            </p>
+            <h2>
+              {i18n.t("shell:cancelQueuedMessagesQuestion", {
+                count: cancelConfirmation.targets.length,
+              })}
+            </h2>
+            <p>{i18n.t("shell:cancelQueuedMessagesDetail")}</p>
             <ol>
               {cancelConfirmation.previews.map((preview, index) => (
                 <li key={cancelConfirmation.targets[index]?.queuedItemId}>
@@ -915,7 +941,7 @@ export function ThreadView({
             </ol>
             <div className="queued-cancel-confirmation-actions">
               <button type="button" onClick={() => setCancelConfirmation(null)}>
-                Keep messages
+                {i18n.t("shell:keepMessages")}
               </button>
               <button
                 type="button"
@@ -926,7 +952,8 @@ export function ThreadView({
                   void cancelQueued(targets);
                 }}
               >
-                Confirm cancel {cancelConfirmation.targets.length}
+                {i18n.t("shell:confirmCancel")}
+                {cancelConfirmation.targets.length}
               </button>
             </div>
           </div>
@@ -995,6 +1022,7 @@ function ContextCompactionProgress({
   state: NonNullable<ComposerState["compaction"]>;
   onDismiss?(): void;
 }) {
+  useTranslation("shell");
   const failed = state.status === "failed";
   return (
     <div
@@ -1012,7 +1040,9 @@ function ContextCompactionProgress({
           <div className="context-compaction-error-actions">
             {state.detail ? (
               <details className="context-compaction-error-detail">
-                <summary tabIndex={0}>Technical details</summary>
+                <summary tabIndex={0}>
+                  {i18n.t("shell:technicalDetails")}
+                </summary>
                 <p>{state.detail}</p>
               </details>
             ) : null}
@@ -1020,7 +1050,7 @@ function ContextCompactionProgress({
               <button
                 type="button"
                 onClick={onDismiss}
-                aria-label="Dismiss compaction error"
+                aria-label={i18n.t("shell:dismissCompactionError")}
               >
                 Dismiss
               </button>
@@ -1043,7 +1073,7 @@ export function ContextCompactionEvent({
   return (
     <section
       className="context-compaction-event"
-      aria-label="Context compacted"
+      aria-label={i18n.t("shell:contextCompacted")}
     >
       <button
         className="context-compaction-toggle"
@@ -1055,11 +1085,14 @@ export function ContextCompactionEvent({
           <Icon name="compress" size={14} />
         </span>
         <span>
-          <strong>Context compacted</strong>
+          <strong>{i18n.t("shell:contextCompacted")}</strong>
           <small>
             {compactionInitiatorLabel(item)} ·{" "}
-            {Array.from(item.summary).length.toLocaleString()} summary
-            characters · Full input size unknown
+            {i18n.t("shell:summaryCharacters", {
+              count: new Intl.NumberFormat(i18n.resolvedLanguage).format(
+                Array.from(item.summary).length,
+              ),
+            })}
           </small>
         </span>
         <Icon name="chevron-down" size={13} />
@@ -1067,21 +1100,21 @@ export function ContextCompactionEvent({
       {expanded ? (
         <div className="context-compaction-detail">
           <div className="compaction-summary-heading">
-            <h3>Saved summary</h3>
+            <h3>{i18n.t("shell:savedSummary")}</h3>
             <button
               type="button"
               className="quiet-button"
               onClick={() => {
                 void navigator.clipboard.writeText(item.summary).then(
-                  () => setCopyState("Summary copied"),
+                  () => setCopyState(i18n.t("shell:summaryCopied")),
                   () =>
                     setCopyState(
-                      "Could not copy. Select the summary text to copy it.",
+                      i18n.t("shell:couldNotCopySelectTheSummaryTextToCopyIt"),
                     ),
                 );
               }}
             >
-              Copy summary
+              {i18n.t("shell:copySummary")}
             </button>
           </div>
           <span role="status">{copyState}</span>
@@ -1089,18 +1122,16 @@ export function ContextCompactionEvent({
             <Markdown text={item.summary} />
           </div>
           <p>
-            {item.retainedItemIds.length} original items retained alongside the
-            summary. This snapshot is from the time of compaction; later
-            conversation adds to it.
+            {i18n.t("shell:retainedItemsDetail", {
+              count: item.retainedItemIds.length,
+            })}
           </p>
           <details className="compaction-projection">
-            <summary>Retained context and diagnostics</summary>
+            <summary>{i18n.t("shell:retainedContextAndDiagnostics")}</summary>
             <p>
-              {effectiveMessages.length} projected history messages, not tokens.
-              This includes the summary and retained conversation. Rules, tool
-              definitions and other request inputs may be added separately. Full
-              model input size was not recorded. The summary generation usage is
-              not the post-compaction context size.
+              {i18n.t("shell:projectedHistoryDetail", {
+                count: effectiveMessages.length,
+              })}
             </p>
             <ol>
               {effectiveMessages.map((message, index) => (
@@ -1118,9 +1149,11 @@ export function ContextCompactionEvent({
 }
 
 function modelMessageRole(message: ModelMessage): string {
-  if (message.role === "tool") return "Tool";
-  if (message.role === "reasoning") return "Reasoning";
-  return message.role === "assistant" ? "Assistant" : "User";
+  if (message.role === "tool") return i18n.t("shell:tool");
+  if (message.role === "reasoning") return i18n.t("shell:reasoning");
+  return message.role === "assistant"
+    ? i18n.t("shell:assistant")
+    : i18n.t("shell:user");
 }
 
 function formatModelMessage(message: ModelMessage): string {
@@ -1149,12 +1182,16 @@ function RunningTurnLabel({ startedAt }: { startedAt: number | null }) {
   }, []);
   const duration = startedAt === null ? null : now - startedAt * 1_000;
   return (
-    <div className="turn-running-label" role="status" aria-label="Working">
+    <div
+      className="turn-running-label"
+      role="status"
+      aria-label={i18n.t("shell:working")}
+    >
       <span className="mini-spinner" aria-hidden="true" />
       <span aria-hidden="true">
         {duration === null
-          ? "Working"
-          : `Working for ${formatDuration(duration)}`}
+          ? i18n.t("shell:working")
+          : i18n.t("shell:workingFor", { duration: formatDuration(duration) })}
       </span>
     </div>
   );
@@ -1185,7 +1222,11 @@ function TurnBlock({
   pluginUiRegistry: PluginUiRegistry | null;
   usage?: ModelUsageAggregate;
 }) {
-  const projection = useMemo(() => projectTurn(turn), [turn]);
+  const { i18n: activeI18n } = useTranslation("shell");
+  const projection = useMemo(
+    () => projectTurn(turn),
+    [turn, activeI18n.resolvedLanguage],
+  );
   const [expandedOverride, setExpanded] = useState<boolean | null>(null);
   const expanded =
     expandedOverride ??
@@ -1211,7 +1252,10 @@ function TurnBlock({
     );
   };
   return (
-    <section className={`turn ${turn.status}`} aria-label={`Turn ${index + 1}`}>
+    <section
+      className={`turn ${turn.status}`}
+      aria-label={i18n.t("shell:turnNumber", { number: index + 1 })}
+    >
       {projection.userItems.map(renderUserItem)}
       {complete ? (
         <button
@@ -1281,9 +1325,13 @@ function TurnBlock({
 export function usageLabel(usage: ModelUsageAggregate, prefix: string): string {
   const cache =
     usage.cacheHitRate === undefined
-      ? `${prefix} unknown`
+      ? i18n.t("shell:usageUnknownForPrefix", { prefix })
       : `${prefix} ${String(Math.round(usage.cacheHitRate * 100))}%`;
-  return `${cache} · ${formatTokenCount(usage.inputTokens)} in · ${formatTokenCount(usage.outputTokens)} out`;
+  return i18n.t("shell:usageWithCache", {
+    cache,
+    input: formatTokenCount(usage.inputTokens),
+    output: formatTokenCount(usage.outputTokens),
+  });
 }
 
 export function contextUsageLabel(
@@ -1296,25 +1344,34 @@ export function contextUsageLabel(
     const window = context.contextWindow;
     return window === null
       ? null
-      : `Context unknown · ${formatTokenCount(window)} configured window`;
+      : i18n.t("shell:contextUnknownWindow", {
+          window: formatTokenCount(window),
+        });
   }
   const input = formatTokenCount(context.inputTokens);
   const source =
     context.inputTokenSource === "estimated"
-      ? "estimated next input"
-      : "last provider input";
+      ? i18n.t("shell:estimatedNextInput")
+      : i18n.t("shell:lastProviderInput");
   if (context.contextWindow === null || context.ratio === null) {
-    return `Context unknown · ${input} ${source}`;
+    return i18n.t("shell:contextUnknownInput", { input, source });
   }
-  return `Context ${String(Math.round(context.ratio * 100))}% · ${input} ${source} / ${formatTokenCount(context.contextWindow)} configured window`;
+  return i18n.t("shell:contextUsageFull", {
+    percent: Math.round(context.ratio * 100),
+    input,
+    source,
+    window: formatTokenCount(context.contextWindow),
+  });
 }
 
 export function threadCacheUsageLabel(
   cacheHitRate: number | undefined,
 ): string {
   return cacheHitRate === undefined
-    ? "Thread cache unknown"
-    : `Thread cache ${String(Math.round(cacheHitRate * 100))}%`;
+    ? i18n.t("shell:threadCacheUnknown")
+    : i18n.t("shell:threadCachePercent", {
+        percent: Math.round(cacheHitRate * 100),
+      });
 }
 
 export function ContextUsageIndicator({
@@ -1427,9 +1484,14 @@ export function ContextUsageIndicator({
   const visualPercent = Math.round(visualRatio * 100);
   const tokenUsage =
     context.inputTokens === null
-      ? "Usage unknown"
-      : `${formatTokenCount(context.inputTokens)}${context.contextWindow === null ? "" : ` / ${formatTokenCount(context.contextWindow)}`} tokens`;
-  const contextLabel = `Context ${String(percent)}% · ${tokenUsage}`;
+      ? i18n.t("shell:usageUnknown")
+      : i18n.t("shell:tokenCount", {
+          count: `${formatTokenCount(context.inputTokens)}${context.contextWindow === null ? "" : ` / ${formatTokenCount(context.contextWindow)}`}`,
+        });
+  const contextLabel = i18n.t("shell:contextPercentUsage", {
+    percent,
+    usage: tokenUsage,
+  });
   const tooltip = `${contextLabel}\n${threadCacheUsageLabel(threadCacheHitRate)}`;
   const radius = 7;
   return (
@@ -1457,7 +1519,7 @@ export function ContextUsageIndicator({
         aria-controls={popoverId}
         aria-expanded={open}
         aria-haspopup="dialog"
-        aria-label={`Open context details. ${tooltip}`}
+        aria-label={i18n.t("shell:openContextDetails", { details: tooltip })}
         onClick={() => setOpen(true)}
         onFocus={() => setOpen(true)}
       >
@@ -1487,10 +1549,10 @@ export function ContextUsageIndicator({
             data-placement={popoverPosition.placement}
             id={popoverId}
             role="dialog"
-            aria-label="Context details"
+            aria-label={i18n.t("shell:contextDetails")}
           >
             <div className="context-usage-heading">
-              <span>Context window used</span>
+              <span>{i18n.t("shell:contextWindowUsed")}</span>
               <strong>{String(percent)}%</strong>
             </div>
             <div
@@ -1515,7 +1577,7 @@ export function ContextUsageIndicator({
                 void onCompact?.();
               }}
             >
-              Compact context
+              {i18n.t("shell:compactContext")}
             </button>
           </div>
         </>
@@ -1526,7 +1588,7 @@ export function ContextUsageIndicator({
 
 function formatTokenCount(value: number): string {
   if (value < 1_000) return String(value);
-  return new Intl.NumberFormat("en", {
+  return new Intl.NumberFormat(i18n.resolvedLanguage, {
     notation: "compact",
     maximumFractionDigits: 1,
   }).format(value);
@@ -1644,7 +1706,9 @@ function TraceSequence({
             size={15}
           />
           <span>{node.summary}</span>
-          <small className="sr-only">{node.items.length} items</small>
+          <small className="sr-only">
+            {i18n.t("shell:executionItems", { count: node.items.length })}
+          </small>
           <Icon name="chevron-down" size={13} />
         </button>
       ) : singletonExpandable ? (
@@ -1679,7 +1743,7 @@ function TraceSequence({
             <div
               className="trace-items"
               role="region"
-              aria-label="Execution details"
+              aria-label={i18n.t("shell:executionDetails")}
               tabIndex={0}
             >
               {groupReasoningWithoutDetailsRows(traceDisplayRows(node.items))
@@ -1712,7 +1776,7 @@ function TraceSequence({
                       >
                         <div className="trace-item-static">
                           <Icon name="reasoning" size={14} />
-                          <span>Thinking</span>
+                          <span>{i18n.t("shell:thinking")}</span>
                         </div>
                       </div>
                     );
@@ -1725,7 +1789,10 @@ function TraceSequence({
                       className={`trace-item${nested ? " trace-item-nested" : ""}`}
                       aria-label={
                         nested
-                          ? `Nested tool invoked by ${parentToolName ?? "parent code"}`
+                          ? i18n.t("shell:nestedToolInvokedBy", {
+                              tool:
+                                parentToolName ?? i18n.t("shell:parentCode"),
+                            })
                           : undefined
                       }
                       key={item.id}
@@ -1820,14 +1887,20 @@ function traceItemExpandable(
 function StatusMark({ item }: { item: ThreadItem }) {
   if (item.type === "reasoning") {
     if (item.status === "inProgress")
-      return <span className="mini-spinner" aria-label="Thinking" />;
+      return (
+        <span className="mini-spinner" aria-label={i18n.t("shell:thinking")} />
+      );
     if (item.status === "interrupted")
-      return <small className="tool-status interrupted">Interrupted</small>;
+      return (
+        <small className="tool-status interrupted">
+          {i18n.t("shell:interrupted")}
+        </small>
+      );
     return null;
   }
   if (item.type !== "commandExecution") return null;
   const status = commandStatus(item);
-  if (status === "Completed") return null;
+  if (status === i18n.t("shell:completed")) return null;
   return <small className={`tool-status ${item.status}`}>{status}</small>;
 }
 
@@ -1856,7 +1929,7 @@ function TraceDetail({
         <div
           className="trace-output"
           role="region"
-          aria-label="Tool output"
+          aria-label={i18n.t("shell:toolOutput")}
           tabIndex={0}
         >
           <ToolResultRenderer
@@ -1901,7 +1974,8 @@ function ToolInput({ command }: { command: string }) {
     <>
       <Heading className="trace-input-summary">
         <span className="trace-input-heading">
-          Input {overflows ? <Icon name="chevron-down" size={13} /> : null}
+          {i18n.t("shell:input")}
+          {overflows ? <Icon name="chevron-down" size={13} /> : null}
         </span>
         <span
           className="trace-input-preview"
@@ -1958,12 +2032,15 @@ function UserMessage({
   return (
     <article className="user-row">
       {attachments.length === 0 ? null : (
-        <div className="message-images" aria-label="Attached images">
+        <div
+          className="message-images"
+          aria-label={i18n.t("shell:attachedImages")}
+        >
           {attachments.map((attachment, index) => (
             <AttachmentImage
               attachment={attachment}
               key={`${attachment.sha256}-${String(index)}`}
-              name={`Attached image ${String(index + 1)}`}
+              name={i18n.t("shell:attachedImageName", { number: index + 1 })}
               onOpen={onOpenImage}
               onReadAttachment={onReadAttachment}
             />
@@ -1977,7 +2054,8 @@ function UserMessage({
       )}
       <MessageActions
         className="user-message-actions"
-        copyLabel="Copy user message"
+        copyLabel={i18n.t("shell:copyUserMessage")}
+        copiedLabel={i18n.t("shell:copiedUserMessage")}
         text={text}
         turn={turn}
       />
@@ -2007,8 +2085,8 @@ function DraftImage({
       <button
         className="remove-draft-image"
         type="button"
-        aria-label={`Remove ${image.name}`}
-        title={`Remove ${image.name}`}
+        aria-label={i18n.t("shell:removeImageName", { name: image.name })}
+        title={i18n.t("shell:removeImageName", { name: image.name })}
         onClick={onRemove}
       >
         <Icon name="x" size={12} />
@@ -2045,7 +2123,8 @@ function AgentMessage({
       {showActions ? (
         <MessageActions
           className="assistant-message-actions"
-          copyLabel="Copy assistant message"
+          copyLabel={i18n.t("shell:copyAssistantMessage")}
+          copiedLabel={i18n.t("shell:copiedAssistantMessage")}
           text={item.text}
           turn={turn}
           usage={usage}
@@ -2058,12 +2137,14 @@ function AgentMessage({
 function MessageActions({
   className,
   copyLabel,
+  copiedLabel,
   text,
   turn,
   usage,
 }: {
   className: string;
   copyLabel: string;
+  copiedLabel: string;
   text: string;
   turn: Turn;
   usage?: ModelUsageAggregate;
@@ -2089,15 +2170,18 @@ function MessageActions({
         </time>
       )}
       {usage === undefined ? null : (
-        <span className="message-cache" title="Turn cache telemetry">
-          {usageLabel(usage, "Cache")}
+        <span
+          className="message-cache"
+          title={i18n.t("shell:turnCacheTelemetry")}
+        >
+          {usageLabel(usage, i18n.t("shell:cache"))}
         </span>
       )}
       <button
         className="message-copy"
         type="button"
-        aria-label={copied ? copyLabel.replace(/^Copy/u, "Copied") : copyLabel}
-        title={copied ? "Copied" : "Copy"}
+        aria-label={copied ? copiedLabel : copyLabel}
+        title={copied ? i18n.t("shell:copied") : i18n.t("shell:copy")}
         onClick={() => void copy()}
       >
         <Icon name={copied ? "check" : "copy"} size={14} />
@@ -2111,7 +2195,7 @@ function WakeupCard({ entry }: { entry: TriggerHistoryEntry }) {
     <article className={`wakeup-card ${entry.status}`}>
       <header>
         <Icon name="trigger" size={14} />
-        <strong>Trigger wakeup</strong>
+        <strong>{i18n.t("shell:triggerWakeup")}</strong>
         <span>{entry.kind}</span>
       </header>
       <p>{entry.reason}</p>
@@ -2148,41 +2232,46 @@ function ApprovalBar({
       ? approval.params.toolArguments.code
       : approval.params.command;
   return (
-    <section className="approval-bar" aria-label={`${toolName} approval`}>
+    <section
+      className="approval-bar"
+      aria-label={i18n.t("shell:toolApproval", { tool: toolName })}
+    >
       <span className="approval-icon" aria-hidden="true">
         <Icon name="warning" size={15} />
       </span>
       <div>
         <strong>
           {once
-            ? `Allow ${toolName} with full file access once?`
+            ? i18n.t("shell:allowToolOnce", { tool: toolName })
             : runCode
-              ? "Allow the shell-equivalent run_code capability?"
-              : `Allow the ${toolName} capability?`}
+              ? i18n.t("shell:allowRunCodeCapability")
+              : i18n.t("shell:allowToolCapability", { tool: toolName })}
         </strong>
         <p>
           {once
-            ? "This call runs outside the file sandbox. Approval applies only to this call and its nested operations."
-            : `Approval is remembered for the stable ${toolName} capability, not granted per command or code segment.`}
+            ? i18n.t(
+                "shell:thisCallRunsOutsideTheFileSandboxApprovalAppliesOnlyToThisCallAndItsNestedOperations",
+              )
+            : i18n.t("shell:approvalRemembered", { tool: toolName })}
         </p>
         <pre className="approval-command">
           <code>{code}</code>
         </pre>
         <code className="approval-cwd">
-          Working directory: {approval.params.cwd}
+          {i18n.t("shell:workingDirectory")} {approval.params.cwd}
         </code>
         {error ? <small role="alert">{error}</small> : null}
       </div>
       <div className="approval-actions">
         <button type="button" onClick={() => void respond("decline")}>
-          Deny
+          {i18n.t("shell:deny")}
         </button>
         <button
           className="allow"
           type="button"
           onClick={() => void respond("accept")}
         >
-          {once ? "Allow once" : "Allow capability"}
+          {once ? i18n.t("shell:allowOnce") : i18n.t("shell:allowCapability")}
         </button>
       </div>
     </section>
@@ -2195,28 +2284,33 @@ function traceItemLabel(item: ThreadItem): string {
     return summary.length > 0
       ? summary
       : item.status === "inProgress"
-        ? "Thinking"
-        : "Thought";
+        ? i18n.t("shell:thinking")
+        : i18n.t("shell:thought");
   }
-  return item.type === "commandExecution" ? commandTitle(item) : "Item details";
+  return item.type === "commandExecution"
+    ? commandTitle(item)
+    : i18n.t("shell:itemDetails");
 }
 
 function completedTurnLabel(turn: Turn): string {
   const duration = turn.durationMs;
   const result =
     turn.status === "completed"
-      ? "Worked"
+      ? i18n.t("shell:worked")
       : turn.status === "interrupted"
-        ? "Interrupted"
-        : "Failed";
+        ? i18n.t("shell:interrupted")
+        : i18n.t("shell:failed");
   if (duration === null) return result;
-  return `${result} for ${formatDuration(duration)}`;
+  return i18n.t("shell:statusForDuration", {
+    status: result,
+    duration: formatDuration(duration),
+  });
 }
 
 function formatCompletedAt(seconds: number): string {
   const completed = new Date(seconds * 1_000);
   const now = new Date();
-  const time = new Intl.DateTimeFormat(undefined, {
+  const time = new Intl.DateTimeFormat(i18n.resolvedLanguage, {
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
@@ -2229,7 +2323,7 @@ function formatCompletedAt(seconds: number): string {
     return time;
   }
   const date = new Intl.DateTimeFormat(
-    undefined,
+    i18n.resolvedLanguage,
     completed.getFullYear() === now.getFullYear()
       ? { month: "short", day: "numeric" }
       : { year: "numeric", month: "short", day: "numeric" },
@@ -2239,10 +2333,15 @@ function formatCompletedAt(seconds: number): string {
 
 function formatDuration(milliseconds: number): string {
   const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
-  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 60) return i18n.t("shell:secondsDuration", { count: seconds });
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${seconds % 60}s`;
+  if (minutes < 60)
+    return i18n.t("shell:minutesDuration", { minutes, seconds: seconds % 60 });
+  return i18n.t("shell:hoursDuration", {
+    hours: Math.floor(minutes / 60),
+    minutes: minutes % 60,
+    seconds: seconds % 60,
+  });
 }
 
 function describeError(error: unknown): string {

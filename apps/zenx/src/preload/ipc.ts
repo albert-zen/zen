@@ -1,4 +1,6 @@
 export const ipcChannels = {
+  localeSystemLanguages: "zenx:locale:system-languages",
+  localeSetLanguage: "zenx:locale:set-language",
   skillsList: "zenx:skills:list",
   skillsImport: "zenx:skills:import",
   skillsMode: "zenx:skills:mode",

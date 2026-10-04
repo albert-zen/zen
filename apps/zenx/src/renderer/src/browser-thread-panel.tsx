@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import { Select } from "./ui/controls.js";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
@@ -22,15 +24,30 @@ export function BrowserThreadPanel({
   providerRevision: unknown;
   embedded?: boolean;
 }) {
+  useTranslation("panels");
   const [targets, setTargets] = useState<BrowserThreadTarget[]>([]);
   const [targetId, setTargetId] = useState<string | undefined>(() =>
     selections.get(threadId),
   );
   const [selectedId, setSelectedId] = useState<string>();
-  const [status, setStatus] = useState({
+  const [status, setStatus] = useState<{
+    status: string;
+    message: string;
+    capturedAt?: string;
+  }>({
     status: "idle",
-    message: "Ask the Agent to open or inspect a tab for this thread.",
+    message: "",
   });
+  const statusMessage =
+    status.capturedAt !== undefined
+      ? i18n.t("panels:lastSnapshot", {
+          time: new Date(status.capturedAt).toLocaleTimeString(
+            i18n.resolvedLanguage,
+          ),
+        })
+      : status.status === "idle"
+        ? i18n.t("panels:askTheAgentToOpenOrInspect")
+        : status.message;
   const [hasFrame, setHasFrame] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [visible, setVisible] = useState(
@@ -82,7 +99,8 @@ export function BrowserThreadPanel({
         }
         setStatus({
           status: "snapshot",
-          message: `Last snapshot · ${new Date(event.capturedAt).toLocaleTimeString()} · Not live`,
+          message: "",
+          capturedAt: event.capturedAt,
         });
       } else if (live && open && visible && event.frame.sequence > sequence) {
         sequence = event.frame.sequence;
@@ -146,7 +164,7 @@ export function BrowserThreadPanel({
       <div
         className="browser-panel-resizer"
         role="separator"
-        aria-label="Browser panel width"
+        aria-label={i18n.t("panels:browserPanelWidth")}
         aria-orientation="vertical"
         aria-valuemin={360}
         aria-valuemax={780}
@@ -186,7 +204,7 @@ export function BrowserThreadPanel({
       />
       <header className="browser-panel-heading">
         <div>
-          <strong>Browser</strong>
+          <strong>{i18n.t("panels:browser")}</strong>
           <small>{title}</small>
         </div>
         <div>
@@ -195,9 +213,15 @@ export function BrowserThreadPanel({
             type="button"
             className="icon-button"
             aria-label={
-              expanded ? "Restore browser panel" : "Expand browser view"
+              expanded
+                ? i18n.t("panels:restoreBrowserPanel")
+                : i18n.t("panels:expandBrowserView")
             }
-            title={expanded ? "Restore browser panel" : "Expand browser view"}
+            title={
+              expanded
+                ? i18n.t("panels:restoreBrowserPanel")
+                : i18n.t("panels:expandBrowserView")
+            }
             aria-pressed={expanded}
             onClick={() => setExpanded((value) => !value)}
           >
@@ -206,7 +230,7 @@ export function BrowserThreadPanel({
           <button
             type="button"
             className="icon-button"
-            aria-label="Close browser panel"
+            aria-label={i18n.t("panels:closeBrowserPanel")}
             onClick={close}
           >
             <Icon name="x" />
@@ -214,18 +238,21 @@ export function BrowserThreadPanel({
         </div>
       </header>
       <div className="browser-panel-target">
-        <label htmlFor="thread-browser-target">Page</label>
+        <label htmlFor="thread-browser-target">{i18n.t("panels:page")}</label>
         <Select
           id="thread-browser-target"
           value={targetId ?? ""}
           onValueChange={(value) => choose(value)}
         >
           <option value="">
-            Follow Agent{selected ? ` · ${selected.title}` : ""}
+            {i18n.t("panels:followAgent")}
+            {selected ? ` · ${selected.title}` : ""}
           </option>
           {targetId !== undefined &&
           !targets.some((target) => target.id === targetId) ? (
-            <option value={targetId}>Selected page unavailable</option>
+            <option value={targetId}>
+              {i18n.t("panels:selectedPageUnavailable")}
+            </option>
           ) : null}
           {targets.map((target) => (
             <option key={target.id} value={target.id}>
@@ -239,7 +266,7 @@ export function BrowserThreadPanel({
             className="browser-follow-button"
             onClick={() => choose("")}
           >
-            Follow Agent
+            {i18n.t("panels:followAgent")}
           </button>
         ) : null}
         {selected ? <span title={selected.url}>{selected.url}</span> : null}
@@ -247,23 +274,25 @@ export function BrowserThreadPanel({
       <div className="browser-live-page">
         <header
           className="browser-live-toolbar"
-          aria-label="Browser observation"
+          aria-label={i18n.t("panels:browserObservation")}
         >
           <div className="browser-live-mode">
             <Icon name="layers" />
             <span>
-              <strong>Observer only</strong>
+              <strong>{i18n.t("panels:observerOnly")}</strong>
               <small>
-                {selected?.mode === "live" ? "Live page" : "Agent snapshots"}
+                {selected?.mode === "live"
+                  ? i18n.t("panels:livePage")
+                  : i18n.t("panels:agentSnapshots")}
               </small>
             </span>
           </div>
           <div className="browser-live-privacy-note">
             <span>
-              Private page content may be visible ·{" "}
+              {i18n.t("panels:privatePageContentMayBeVisible")}{" "}
               {selected?.mode === "live"
-                ? "Live frames stay on this device and are not recorded."
-                : "Agent screenshots are temporary local artifacts."}
+                ? i18n.t("panels:liveFramesStayOnThisDeviceAnd")
+                : i18n.t("panels:agentScreenshotsAreTemporaryLocalArtifacts")}
             </span>
           </div>
           <div
@@ -278,14 +307,14 @@ export function BrowserThreadPanel({
                 {status.status === "live"
                   ? "Live"
                   : status.status === "snapshot"
-                    ? "Snapshot"
+                    ? i18n.t("panels:snapshot")
                     : status.status === "connecting"
-                      ? "Connecting"
+                      ? i18n.t("panels:connecting")
                       : status.status === "failed"
-                        ? "Connection failed"
-                        : "Browser observation"}
+                        ? i18n.t("panels:connectionFailed")
+                        : i18n.t("panels:browserObservation")}
               </strong>
-              <small>{status.message}</small>
+              <small>{statusMessage}</small>
             </span>
           </div>
         </header>
@@ -295,8 +324,8 @@ export function BrowserThreadPanel({
             className="browser-live-frame"
             alt={
               selected?.mode === "live"
-                ? "Live browser view for this thread"
-                : "Latest browser screenshot for this thread"
+                ? i18n.t("panels:liveBrowserViewForThisThread")
+                : i18n.t("panels:latestBrowserScreenshotForThisThread")
             }
             width={1600}
             height={1000}
@@ -307,10 +336,14 @@ export function BrowserThreadPanel({
               <span>
                 <strong>
                   {selected
-                    ? "Waiting for a browser image"
-                    : "No page for this thread"}
+                    ? i18n.t("panels:waitingForABrowserImage")
+                    : i18n.t("panels:noPageForThisThread")}
                 </strong>
-                <small>{status.message}</small>
+                <small>
+                  {status.status === "idle"
+                    ? i18n.t("panels:askTheAgentToOpenOrInspect")
+                    : status.message}
+                </small>
               </span>
             </div>
           )}

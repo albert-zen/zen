@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { AttachmentRef } from "../../../../../src/attachment.js";
@@ -16,16 +18,17 @@ export const ThreadImagesContext = createContext<{
 } | null>(null);
 
 export function ToolImages({ itemId }: { itemId: string }) {
+  useTranslation("panels");
   const context = useContext(ThreadImagesContext);
   const attachments = context?.attachments[itemId] ?? [];
   if (context === null || attachments.length === 0) return null;
   return (
-    <div className="message-images" aria-label="Tool images">
+    <div className="message-images" aria-label={i18n.t("panels:toolImages")}>
       {attachments.map((attachment, index) => (
         <AttachmentImage
           key={`${attachment.sha256}-${index}`}
           attachment={attachment}
-          name={`Tool image ${index + 1}`}
+          name={i18n.t("panels:toolImageNumber", { count: index + 1 })}
           onReadAttachment={context.read}
           onOpen={context.open}
         />
@@ -49,18 +52,21 @@ export function AttachmentImage({
   ): void;
   onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
 }) {
+  useTranslation("panels");
   const { url, error } = useAttachmentUrl(attachment, onReadAttachment);
   return (
     <button
       className="image-thumbnail"
       type="button"
-      aria-label={`Preview ${name}`}
+      aria-label={i18n.t("panels:previewImage", { name })}
       disabled={url === null}
       onClick={(event) => onOpen(attachment, name, event.currentTarget)}
     >
       {url === null ? (
         <span className="image-placeholder" role={error ? "alert" : undefined}>
-          {error ? "Image unavailable" : "Loading image"}
+          {error
+            ? i18n.t("panels:imageUnavailable")
+            : i18n.t("panels:loadingImage")}
         </span>
       ) : (
         <img alt={name} src={url} />
@@ -82,6 +88,7 @@ export function ImagePreview({
   onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
   trigger: HTMLButtonElement;
 }) {
+  useTranslation("panels");
   const { url, error } = useAttachmentUrl(attachment, onReadAttachment);
   return (
     <ImageUrlPreview
@@ -107,6 +114,7 @@ export function ImageUrlPreview({
   onClose(): void;
   trigger: HTMLElement;
 }) {
+  useTranslation("panels");
   const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     closeRef.current?.focus();
@@ -139,14 +147,16 @@ export function ImageUrlPreview({
         ref={closeRef}
         className="icon-button image-preview-close"
         type="button"
-        aria-label="Close image preview"
+        aria-label={i18n.t("panels:closeImagePreview")}
         onClick={onClose}
       >
         <Icon name="x" />
       </button>
       <div className="image-preview-content">
         {url === null ? (
-          <p role={error ? "alert" : "status"}>{error ?? "Loading image…"}</p>
+          <p role={error ? "alert" : "status"}>
+            {error ?? i18n.t("panels:loadingImage2")}
+          </p>
         ) : (
           <img alt={name} src={url} />
         )}

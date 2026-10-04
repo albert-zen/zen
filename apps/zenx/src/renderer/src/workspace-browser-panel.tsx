@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import { Icon } from "./icons.js";
 import React, { useEffect, useRef, useState } from "react";
 import type {
@@ -14,6 +16,7 @@ export function WorkspaceBrowserPanel({
   tab: WorkspaceBrowserTab;
   open: boolean;
 }) {
+  useTranslation("panels");
   const [address, setAddress] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -113,7 +116,7 @@ export function WorkspaceBrowserPanel({
   return (
     <section
       className="workspace-browser-panel"
-      aria-label="Browser workspace"
+      aria-label={i18n.t("panels:browserWorkspace")}
       onKeyDown={(event) => {
         if (
           (event.ctrlKey || event.metaKey) &&
@@ -141,7 +144,7 @@ export function WorkspaceBrowserPanel({
         >
           <button
             type="button"
-            aria-label="Back"
+            aria-label={i18n.t("panels:back")}
             disabled={!active.canGoBack || busy}
             onClick={() => void command("back")}
           >
@@ -149,7 +152,7 @@ export function WorkspaceBrowserPanel({
           </button>
           <button
             type="button"
-            aria-label="Forward"
+            aria-label={i18n.t("panels:forward")}
             disabled={!active.canGoForward || busy}
             onClick={() => void command("forward")}
           >
@@ -157,7 +160,7 @@ export function WorkspaceBrowserPanel({
           </button>
           <button
             type="button"
-            aria-label="Reload page"
+            aria-label={i18n.t("panels:reloadPage")}
             disabled={busy}
             onClick={() => void command("reload")}
           >
@@ -166,12 +169,17 @@ export function WorkspaceBrowserPanel({
           <div className="workspace-browser-location">
             <input
               ref={addressInput}
-              aria-label="Browser address"
-              placeholder="Enter a URL"
+              aria-label={i18n.t("panels:browserAddress")}
+              placeholder={i18n.t("panels:enterAUrl")}
               value={address}
               onChange={(event) => setAddress(event.target.value)}
             />
-            <button type="submit" aria-label="Go" title="Go" disabled={busy}>
+            <button
+              type="submit"
+              aria-label={i18n.t("panels:go")}
+              title={i18n.t("panels:go")}
+              disabled={busy}
+            >
               <Icon name="arrow-right" />
             </button>
           </div>
@@ -184,7 +192,7 @@ export function WorkspaceBrowserPanel({
         <div
           className="workspace-browser-viewport"
           ref={area}
-          aria-label="Interactive web page"
+          aria-label={i18n.t("panels:interactiveWebPage")}
         />
       </>
     </section>

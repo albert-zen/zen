@@ -1,3 +1,4 @@
+import { i18n } from "./i18n.js";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { Thread } from "../../protocol-client/index.js";
 import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
@@ -105,7 +106,7 @@ export function deriveInboxSections(
   return [
     {
       key: "needs",
-      label: "Needs you",
+      label: i18n.t("shell:needsYou"),
       threads: sorted.filter(
         (thread) =>
           thread.status === "systemError" ||
@@ -114,7 +115,7 @@ export function deriveInboxSections(
     },
     {
       key: "active",
-      label: "In progress",
+      label: i18n.t("shell:inProgress"),
       threads: sorted.filter(
         (thread) =>
           thread.status === "active" &&
@@ -123,7 +124,7 @@ export function deriveInboxSections(
     },
     {
       key: "watching",
-      label: "Watching",
+      label: i18n.t("shell:watching"),
       threads: sorted.filter(
         (thread) =>
           thread.status === "idle" &&
@@ -133,7 +134,7 @@ export function deriveInboxSections(
     },
     {
       key: "settled",
-      label: "Completed",
+      label: i18n.t("shell:completed"),
       threads: sorted.filter(
         (thread) =>
           thread.status === "idle" &&
@@ -193,7 +194,7 @@ export function deriveProjectGroups(
   if (unavailable.length > 0)
     orderedGroups.push({
       key: "__unavailable__",
-      label: "Unavailable journals",
+      label: i18n.t("shell:unavailableJournals"),
       workspace: null,
       configured: false,
       isDefault: false,
@@ -293,18 +294,23 @@ export function threadTitle(thread: NativeThreadSummary): string {
   if (named.length > 0) return named;
   if (preview.length > 0) return preview;
   return thread.status === "systemError"
-    ? `Unavailable thread · ${thread.threadId.slice(0, 8)}`
-    : "Untitled thread";
+    ? i18n.t("shell:unavailableThreadNamed", {
+        id: thread.threadId.slice(0, 8),
+      })
+    : i18n.t("shell:untitledThread");
 }
 
 export function threadPreview(thread: NativeThreadSummary): string {
   const preview = thread.preview.trim();
   const wakeup = wakeupLabel(preview) ?? wakeupLabel(thread.name ?? "");
-  return wakeup === null ? preview : `${wakeup} · system-level wakeup`;
+  return wakeup === null
+    ? preview
+    : i18n.t("shell:systemWakeupPreview", { wakeup });
 }
 
 export function threadProject(thread: NativeThreadSummary): string {
-  if (thread.status === "systemError") return "Unavailable journal";
+  if (thread.status === "systemError")
+    return i18n.t("shell:unavailableJournal");
   return projectLabel(thread.currentMetadata.cwd);
 }
 
@@ -316,7 +322,7 @@ export function threadModelIdentity(
   const provider = thread.currentMetadata.provider.toLocaleLowerCase();
   if (model.length === 0) return null;
   if (model.toLocaleLowerCase() === "fake") {
-    return { label: "Local demo", providerKind: "local" };
+    return { label: i18n.t("shell:localDemo"), providerKind: "local" };
   }
   const normalized = model
     .replace(/^gpt-/iu, "GPT-")
@@ -330,11 +336,11 @@ function wakeupLabel(value: string): string | null {
   if (!value.trimStart().startsWith("[ZenX trigger wakeup]")) return null;
   const sourceThread = /Source Thread:\s*([^\s]+)/u.exec(value)?.[1];
   if (sourceThread !== undefined)
-    return `Relay from ${sourceThread.slice(0, 8)}`;
+    return i18n.t("shell:relayFrom", { id: sourceThread.slice(0, 8) });
   const sourceRoom = /Source Room:\s*([^\s]+)/u.exec(value)?.[1];
   if (sourceRoom !== undefined)
-    return `Room wakeup · ${sourceRoom.slice(0, 8)}`;
-  return "Trigger wakeup";
+    return i18n.t("shell:roomWakeupNamed", { id: sourceRoom.slice(0, 8) });
+  return i18n.t("shell:triggerWakeup");
 }
 
 function sortByRecency(

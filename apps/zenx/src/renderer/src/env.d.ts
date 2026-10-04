@@ -64,6 +64,12 @@ declare global {
   interface Window {
     zenx: {
       platform: NodeJS.Platform;
+      locale: {
+        getSystemLanguages(): Promise<string[]>;
+        setLanguage(
+          language: import("../../locale.js").SupportedLanguage,
+        ): Promise<void>;
+      };
       skills: {
         list(): Promise<import("../../../../cli/src/skills.js").SkillsSnapshot>;
         importDirectory(
