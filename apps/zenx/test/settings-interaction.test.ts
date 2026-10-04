@@ -385,7 +385,7 @@ test("A save completed after leaving its section does not show a stale toast", a
     await changeControl(control, control.options[1]!.value);
     await click(exactButtonRequired("Apply"));
     await click(exactButtonRequired("General"));
-    await click(exactButtonRequired("Models & provider"));
+    await click(exactButtonRequired("Zen · Models & providers"));
     await act(async () => finish(settings));
     assert.equal(document.querySelector(".settings-toast"), null);
   } finally {
@@ -1696,8 +1696,9 @@ test("every Settings tab remains keyboard reachable after narrow-screen reflow",
     assert.deepEqual(
       tabs.map((tab) => tab.textContent?.trim()),
       [
-        "Account",
-        "Models & provider",
+        "Agent Providers",
+        "Zen · Models & providers",
+        "Zen · Account",
         "Plugins",
         "Appearance",
         "General",
@@ -1734,7 +1735,10 @@ test("every Settings tab remains keyboard reachable after narrow-screen reflow",
       );
       await Promise.resolve();
     });
-    assert.equal(document.activeElement?.textContent?.trim(), "Account");
+    assert.equal(
+      document.activeElement?.textContent?.trim(),
+      "Agent Providers",
+    );
     assert.equal(tabs[0]?.getAttribute("aria-selected"), "true");
   } finally {
     await unmount(harness);
@@ -3283,7 +3287,7 @@ for (const completeAfterNavigation of [false, true]) {
       await click(exactButtonRequired("Install from source…"));
       await click(exactButtonRequired("Choose tarball…"));
       if (completeAfterNavigation) {
-        await click(exactButtonRequired("Models & provider"));
+        await click(exactButtonRequired("Zen · Models & providers"));
         await click(exactButtonRequired("Apply"));
         await act(async () => finish(result));
         assert.match(

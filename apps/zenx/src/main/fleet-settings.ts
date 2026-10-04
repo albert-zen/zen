@@ -82,6 +82,10 @@ export class FleetSettingsService {
   #relayKey(endpoint: string): string {
     return `relay:${createHash("sha256").update(endpoint).digest("hex")}`;
   }
+  /** Shared local Host identity; reading it does not enable Fleet hosting. */
+  async hostIdentity(): Promise<string> {
+    return this.#identity();
+  }
   async #identity(): Promise<string> {
     if (this.#hostId) return this.#hostId;
     const file = path.join(this.options.directory, "fleet-host-id");

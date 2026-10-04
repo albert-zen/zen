@@ -1,3 +1,4 @@
+import { AgentProviderSettings } from "./AgentProviderSettings.js";
 import { SkillsSettingsPanel } from "./SkillsSettingsPanel.js";
 import { Select, Combobox } from "./ui/controls.js";
 import { SubscriptionUsageCard } from "./SubscriptionUsageCard.js";
@@ -56,6 +57,7 @@ import { ChromeConnectionSettings } from "./ChromeConnectionSettings.js";
 import { FleetSettings } from "./FleetSettings.js";
 
 export type SettingsTab =
+  | "agent-providers"
   | "account"
   | "models"
   | "plugins"
@@ -83,6 +85,7 @@ export function SettingsView({
   pluginSnapshot = null,
   active = true,
   browserSettingsFocusRequest = 0,
+  onAgentProvidersChanged,
 }: {
   archivedError: string | null;
   archivedLoading: boolean;
@@ -96,6 +99,7 @@ export function SettingsView({
   pluginSnapshot?: ZenXPluginSnapshot | null;
   active?: boolean;
   browserSettingsFocusRequest?: number;
+  onAgentProvidersChanged?(): void;
 }) {
   const [settings, setSettings] = useState<PublicHostSettings | null>(null);
   const [draft, setDraft] = useState<ZenXHostProfile | null>(null);
@@ -290,8 +294,9 @@ export function SettingsView({
     label: string;
     icon: IconName;
   }> = [
-    { id: "account", label: "Account", icon: "users" },
-    { id: "models", label: "Models & provider", icon: "chip" },
+    { id: "agent-providers", label: "Agent Providers", icon: "chip" },
+    { id: "models", label: "Zen · Models & providers", icon: "chip" },
+    { id: "account", label: "Zen · Account", icon: "users" },
     { id: "plugins", label: "Plugins", icon: "trigger" },
     { id: "appearance", label: "Appearance", icon: "moon" },
     { id: "general", label: "General", icon: "settings" },
@@ -368,6 +373,11 @@ export function SettingsView({
             {tabs.map((item) => (
               <button
                 data-tab={item.id}
+                className={
+                  item.id === "models" || item.id === "account"
+                    ? "zen-settings-child"
+                    : undefined
+                }
                 key={item.id}
                 type="button"
                 role="tab"
@@ -389,6 +399,16 @@ export function SettingsView({
             aria-labelledby={`settings-tab-${tab}`}
             tabIndex={0}
           >
+            <div
+              hidden={tab !== "agent-providers"}
+              inert={tab !== "agent-providers"}
+            >
+              <AgentProviderSettings
+                active={active && tab === "agent-providers"}
+                onOpenZen={onTabChange}
+                onChanged={onAgentProvidersChanged}
+              />
+            </div>
             <Activity mode={active && tab === "account" ? "visible" : "hidden"}>
               <AccountPanel
                 settings={settings}

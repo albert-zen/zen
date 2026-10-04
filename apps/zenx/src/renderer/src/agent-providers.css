@@ -1,0 +1,124 @@
+.agent-provider-settings {
+  display: grid;
+  gap: 20px;
+}
+.agent-provider-card {
+  display: grid;
+  gap: 14px;
+}
+.agent-provider-card h3 {
+  margin: 0;
+}
+.agent-provider-card label {
+  display: grid;
+  gap: 6px;
+}
+.agent-provider-card input {
+  width: 100%;
+  min-width: 0;
+}
+.agent-provider-zen-links,
+.agent-provider-add {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.agent-provider-save {
+  display: flex;
+  justify-content: flex-end;
+}
+.settings-view .settings-nav button.zen-settings-child {
+  padding-left: 28px;
+  font-size: 12px;
+}
+.agent-session-navigation {
+  margin: 14px 0 8px;
+}
+.agent-session-navigation h2 {
+  margin: 0;
+  padding: 8px 12px;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 600;
+}
+.agent-session-row {
+  display: grid;
+  align-items: center;
+  width: 100%;
+  gap: 3px;
+  text-align: left;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+}
+.agent-session-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-session-row small {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.agent-session-row:hover,
+.agent-session-row[aria-current="page"] {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.agent-approval {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+.agent-approval pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow: auto;
+  font-size: 12px;
+}
+.agent-approval > div {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.agent-session-retry {
+  position: absolute;
+  top: 12px;
+  right: 24px;
+}
+.agent-provider-warning {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.agent-provider-select {
+  max-width: 190px;
+}
+
+/* Provider, model and permissions keep their hit targets; narrower rails wrap. */
+.composer .composer-tools {
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.composer .composer-tools > .ui-select {
+  width: auto;
+  flex: 0 0 auto;
+  max-width: min(220px, 100%);
+}
+.composer .composer-tools > .agent-provider-select {
+  max-width: 190px;
+}
+.composer .composer-tools > .composer-model-menu,
+.composer .composer-tools > .permission-picker,
+.composer .composer-actions {
+  flex: 0 0 auto;
+}

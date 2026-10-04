@@ -1,3 +1,8 @@
+import { OpenCodeAgentProviderAdapter } from "./agent-providers/opencode-adapter.js";
+import { ZenAgentAdapter } from "./agent-providers/zen-adapter.js";
+import { AgentProviderService } from "./agent-providers/service.js";
+import { CodexAgentAdapter } from "./agent-providers/codex-adapter.js";
+import { registerAgentProviderIpc } from "./agent-providers/ipc.js";
 import { createImZenXPawHandler } from "./imzenx-paw.js";
 import { createFleetRoomsHandler } from "./fleet-rooms.js";
 import { deliverAssistantInput } from "./assistant-preset.js";
@@ -198,6 +203,7 @@ if (nativeHostCaller !== undefined) {
 let mainWindowDiagnostics: OperationalDiagnosticLog | undefined;
 let appServerManager: AppServerManager | undefined;
 let fleetSettingsService: FleetSettingsService | undefined;
+let agentProviderService: AgentProviderService | undefined;
 let settingsService: ZenXSettingsService | undefined;
 let capabilityService: ZenXCapabilityService | undefined;
 let chromeExtensionBridge: ChromeExtensionBridge | undefined;
@@ -1032,6 +1038,11 @@ app.on("second-instance", () => {
 async function stopZenXHost(): Promise<void> {
   const errors: Error[] = [];
   try {
+    await agentProviderService?.dispose();
+  } catch (error) {
+    errors.push(normalizeTitleOwnershipFailure(error));
+  }
+  try {
     await pluginDevControl?.close();
     pluginDevControl = undefined;
   } catch (error) {
@@ -1129,6 +1140,23 @@ function installProtocolIpc(
   projects: ZenXProjectProjection,
   attachments: FileAttachmentStore,
 ): void {
+  agentProviderService = new AgentProviderService(
+    app.getPath("userData"),
+    (instance) => {
+      if (instance.kind === "codex")
+        return new CodexAgentAdapter({ binaryPath: instance.executable });
+      if (instance.kind === "opencode")
+        return new OpenCodeAgentProviderAdapter({
+          executable: instance.executable,
+        });
+      throw new Error(
+        `${instance.name}: this Agent Provider adapter is not installed`,
+      );
+    },
+    () => new ZenAgentAdapter(manager).models(),
+    () => fleetSettingsService!.hostIdentity(),
+  );
+  registerAgentProviderIpc(agentProviderService);
   for (const [channel, read] of [
     [ipcChannels.workspaceFilesList, listWorkspaceFiles],
     [ipcChannels.workspaceFilesRead, readWorkspaceFile],

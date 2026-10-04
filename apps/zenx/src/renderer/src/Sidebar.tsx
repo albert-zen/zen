@@ -51,6 +51,7 @@ type ThreadDensity = "compact" | "detailed";
 const SidebarSettingsContext = createContext<PublicHostSettings | null>(null);
 
 interface SidebarProps {
+  agentSessions?: ReactNode;
   collapsed?: boolean;
   mode: SidebarMode;
   open: boolean;
@@ -99,6 +100,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({
+  agentSessions,
   collapsed = false,
   mode,
   open,
@@ -423,6 +425,7 @@ export function Sidebar({
             />
           )}
 
+          {agentSessions}
           <div className="sidebar-view-head">
             {mode === "projects" ? (
               <button

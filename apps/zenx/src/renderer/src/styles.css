@@ -1,5 +1,6 @@
 @import "./subagents.css";
 @import "./ComposerSendControl.css";
+@import "./agent-providers.css";
 
 :root {
   --shadow-low: 0 10px 30px var(--color-elevation-low);
@@ -480,6 +481,8 @@ button:disabled {
   transform: translateX(-12px);
 }
 .sidebar-header {
+  /* Exclude the overlapping native drag rectangle from sidebar actions. */
+  -webkit-app-region: no-drag;
   flex: 0 0 auto;
   padding: 4px 8px 0;
 }
@@ -1335,12 +1338,6 @@ button:disabled {
 .agent-surface.new-thread-draft-surface {
   position: relative;
   grid-template-rows: minmax(0, 1fr);
-}
-.new-thread-draft-mobile {
-  position: absolute;
-  z-index: 8;
-  top: 8px;
-  left: 8px;
 }
 .workspace-header,
 .page-header {

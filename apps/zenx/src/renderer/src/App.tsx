@@ -1,3 +1,11 @@
+import {
+  AgentProviderSelector,
+  agentProviderLabel,
+  AgentSessionNavigation,
+  ExternalAgentSession,
+  useAgentProviders,
+} from "./agent-providers-ui.js";
+import type { AgentSessionSnapshot } from "../../main/agent-providers/types.js";
 import { ImZenXDraftContext, type ImZenXDraft } from "./imzenx-ui.js";
 import { RoomDraftContext } from "./room-drafts.js";
 import {
@@ -151,6 +159,8 @@ const MODEL_CATALOG_LOADING = "Models are still loading. Try again.";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "zenx.sidebar-collapsed";
 
 interface NewThreadDraft {
+  providerInstanceId?: string;
+  agentModel?: string;
   permissionMode?: FilePermissionMode;
   id: string;
   workspace: string | null;
@@ -381,6 +391,15 @@ function updateThreadProjectionCache(
 }
 
 export function App() {
+  const agentProviders = useAgentProviders();
+  const [selectedAgentSessionId, setSelectedAgentSessionId] = useState<
+    string | null
+  >(null);
+  const selectedAgentSessionIdRef = useRef(selectedAgentSessionId);
+  selectedAgentSessionIdRef.current = selectedAgentSessionId;
+  const selectedAgentSession = agentProviders.sessions.find(
+    (session) => session.id === selectedAgentSessionId,
+  );
   const selectionEpoch = useRef(0);
   const pendingResumeProjectionRef = useRef<{
     epoch: number;
@@ -402,6 +421,7 @@ export function App() {
   const newThreadPendingRef = useRef(false);
   const newThreadDraftRef = useRef<NewThreadDraft | null>(null);
   const newThreadPendingDraftRef = useRef<NewThreadDraft | null>(null);
+  const externalPendingDraftsRef = useRef(new Map<string, NewThreadDraft>());
   const newThreadPromotionsRef = useRef(new Map<string, string>());
   const newThreadImageLeasesRef = useRef(new Map<string, number>());
   const projectPickerOperationEpoch = useRef(0);
@@ -501,7 +521,8 @@ export function App() {
       setWorkflowCommands(value.profile.workflowCommands ?? []);
     });
   }, []);
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
+  const [settingsTab, setSettingsTab] =
+    useState<SettingsTab>("agent-providers");
   const [browserSettingsFocusRequest, setBrowserSettingsFocusRequest] =
     useState(0);
   const fileDrafts = useWorkspaceFileDrafts();
@@ -686,6 +707,15 @@ export function App() {
       newThreadPendingDraftRef.current?.id === newThreadDraftRef.current.id
     )
       newThreadPendingDraftRef.current = newThreadDraftRef.current;
+    if (
+      draft === null &&
+      newThreadDraftRef.current !== null &&
+      externalPendingDraftsRef.current.has(newThreadDraftRef.current.id)
+    )
+      externalPendingDraftsRef.current.set(
+        newThreadDraftRef.current.id,
+        newThreadDraftRef.current,
+      );
     newThreadDraftRef.current = draft;
     setNewThreadDraft(draft);
   };
@@ -844,6 +874,7 @@ export function App() {
   };
 
   const resumeThread = async (threadId: string, preserveNavigation = false) => {
+    setSelectedAgentSessionId(null);
     discardRecoverableDraft();
     const epoch = ++selectionEpoch.current;
     const cached = threadProjectionCacheRef.current.get(threadId);
@@ -1353,6 +1384,7 @@ export function App() {
   );
 
   const showNewThreadDraft = (workspace: string | null) => {
+    setSelectedAgentSessionId(null);
     discardRecoverableDraft();
     invalidateThreadSelection();
     threadUsageLoadEpoch.current += 1;
@@ -1390,6 +1422,7 @@ export function App() {
       serverStatus.type !== "ready" ||
       page !== "agent" ||
       selectedThreadIdRef.current !== null ||
+      selectedAgentSessionId !== null ||
       newThreadDraftRef.current !== null
     )
       return;
@@ -1404,6 +1437,7 @@ export function App() {
     lastUsedWorkspace,
     page,
     projectListLoaded,
+    selectedAgentSessionId,
     serverStatus.type,
   ]);
 
@@ -1437,6 +1471,12 @@ export function App() {
     draftId: string,
     update: (state: ComposerState) => ComposerState,
   ) => {
+    const externalPending = externalPendingDraftsRef.current.get(draftId);
+    if (externalPending !== undefined)
+      externalPendingDraftsRef.current.set(draftId, {
+        ...externalPending,
+        composer: update(externalPending.composer),
+      });
     if (newThreadPendingDraftRef.current?.id === draftId)
       newThreadPendingDraftRef.current = {
         ...newThreadPendingDraftRef.current,
@@ -1451,6 +1491,59 @@ export function App() {
     }
     const threadId = newThreadPromotionsRef.current.get(draftId);
     if (threadId !== undefined) updateComposer(threadId, update);
+  };
+
+  const openAgentSession = (sessionId: string) => {
+    discardRecoverableDraft();
+    invalidateThreadSelection();
+    threadUsageLoadEpoch.current += 1;
+    confirmNewThreadDraft(null);
+    selectedThreadIdRef.current = null;
+    setSelectedThreadId(null);
+    setThreadDetail(null);
+    setThreadLoading(false);
+    setThreadError(null);
+    setSelectedAgentSessionId(sessionId);
+    setPage("agent");
+    setSidebarOpen(false);
+  };
+
+  const promoteAgentDraft = (
+    draft: NewThreadDraft,
+    snapshot: AgentSessionSnapshot,
+  ) => {
+    const composerKey = `agent:${snapshot.binding.id}`;
+    const pending = externalPendingDraftsRef.current.get(draft.id) ?? draft;
+    updateComposer(composerKey, () => pending.composer);
+    newThreadPromotionsRef.current.set(draft.id, composerKey);
+    agentProviders.rememberSession(snapshot.binding);
+    agentProviders.rememberSnapshot(snapshot);
+    void window.zenx.settings
+      .markWorkspaceUsed(snapshot.binding.cwd)
+      .then(async () => await loadProjects())
+      .catch((error: unknown) => {
+        if (selectedAgentSessionIdRef.current === snapshot.binding.id)
+          setRequestError(describeError(error));
+      });
+    void agentProviders.refresh();
+    if (
+      newThreadDraftRef.current?.id === draft.id &&
+      newThreadDraftRef.current.providerInstanceId === draft.providerInstanceId
+    ) {
+      openAgentSession(snapshot.binding.id);
+    }
+  };
+
+  const changeAgentProvider = (id: string) => {
+    updateNewThreadDraft((draft) => ({
+      ...draft,
+      providerInstanceId: id,
+      agentModel: undefined,
+      composer: {
+        ...advanceComposerDraftRevision(draft.composer),
+        submission: null,
+      },
+    }));
   };
 
   const acquireNewThreadImageLease = (draftId: string) => {
@@ -2408,9 +2501,28 @@ export function App() {
         }
         onToggleSidebar={toggleSidebarCollapsed}
       >
-        {page === "agent" &&
-        newThreadDraft === null &&
-        selectedSummary !== null ? (
+        {page === "agent" && selectedAgentSessionId !== null ? (
+          <PageTitleBar
+            onOpenSidebar={openSidebar}
+            title={
+              (agentProviders.labels[selectedAgentSessionId] ||
+                agentProviders.instances.find(
+                  (instance) =>
+                    instance.id === selectedAgentSession?.providerInstanceId,
+                )?.name) ??
+              "Agent session"
+            }
+            subtitle={`${(() => {
+              const instance = agentProviders.instances.find(
+                (instance) =>
+                  instance.id === selectedAgentSession?.providerInstanceId,
+              );
+              return instance ? agentProviderLabel(instance) : "Agent";
+            })()} · ${selectedAgentSession?.cwd ?? "Loading session"}`}
+          />
+        ) : page === "agent" &&
+          newThreadDraft === null &&
+          selectedSummary !== null ? (
           <ConversationTitleBar
             onOpenSidebar={openSidebar}
             threads={[...threadSummaries, ...archivedThreadSummaries]}
@@ -2428,7 +2540,7 @@ export function App() {
         ) : page === "settings" ? (
           <PageTitleBar
             onOpenSidebar={openSidebar}
-            subtitle="Account, appearance, models, plugins, and local host"
+            subtitle="Agent Providers, appearance, plugins, and local host"
             title="Settings"
           />
         ) : genericPluginTarget !== undefined ? (
@@ -2443,6 +2555,21 @@ export function App() {
             }
             title={selectedRoom?.name ?? genericPluginTarget.title}
           />
+        ) : page === "agent" ? (
+          <div className="workspace-header">
+            <div className="workspace-heading-row">
+              <button
+                className="icon-button mobile-menu"
+                type="button"
+                aria-label="Open sidebar"
+                aria-controls="primary-sidebar"
+                aria-expanded={sidebarOpen}
+                onClick={openSidebar}
+              >
+                <Icon name="tree" />
+              </button>
+            </div>
+          </div>
         ) : null}
       </WindowTitleBar>
       {page === "agent" &&
@@ -2484,6 +2611,17 @@ export function App() {
         </button>
       ) : null}
       <Sidebar
+        agentSessions={
+          <AgentSessionNavigation
+            sessions={agentProviders.sessions}
+            labels={agentProviders.labels}
+            instances={agentProviders.instances}
+            selectedId={page === "agent" ? selectedAgentSessionId : null}
+            onOpen={openAgentSession}
+            error={agentProviders.error}
+            onRetry={() => void agentProviders.refresh()}
+          />
+        }
         roomConversations={roomsAdmitted ? roomConversations : undefined}
         selectedRoomId={selectedRoomId}
         collapsed={sidebarCollapsed}
@@ -2609,6 +2747,7 @@ export function App() {
                 setThreadUsage(undefined);
                 setSelectedSettings(null);
                 setThreadError(null);
+                setSelectedAgentSessionId(null);
                 confirmNewThreadDraft(draftRecoveryNotice.draft);
                 discardRecoverableDraft();
               }}
@@ -2645,6 +2784,7 @@ export function App() {
         <main className="workspace">
           <SettingsView
             active={page === "settings"}
+            onAgentProvidersChanged={() => void agentProviders.refresh()}
             archivedError={threadListErrors.archived}
             archivedLoading={!threadListLoaded.archived}
             archivedThreads={archivedSummaries}
@@ -2671,6 +2811,142 @@ export function App() {
                 navigate={openPage}
               />
             </ImZenXDraftContext.Provider>
+          ) : selectedAgentSessionId !== null ? (
+            <ExternalAgentSession
+              key={`session:${selectedAgentSessionId}`}
+              instance={agentProviders.instances.find(
+                (instance) =>
+                  instance.id === selectedAgentSession?.providerInstanceId,
+              )}
+              sessionId={selectedAgentSessionId}
+              workspace={selectedAgentSession?.cwd ?? null}
+              composer={
+                composerStates[`agent:${selectedAgentSessionId}`] ??
+                emptyComposerState()
+              }
+              onComposerChange={(update) =>
+                updateComposer(`agent:${selectedAgentSessionId}`, update)
+              }
+              onCreated={() => undefined}
+              onSnapshot={agentProviders.rememberSnapshot}
+            />
+          ) : newThreadDraft !== null &&
+            (newThreadDraft.providerInstanceId ?? "zen") !== "zen" ? (
+            <ExternalAgentSession
+              key={`draft:${newThreadDraft.id}:${newThreadDraft.providerInstanceId}`}
+              instance={agentProviders.instances.find(
+                (instance) => instance.id === newThreadDraft.providerInstanceId,
+              )}
+              sessionId={null}
+              workspace={
+                configuredProjects.some(
+                  (project) => project.workspace === newThreadDraft.workspace,
+                )
+                  ? newThreadDraft.workspace
+                  : null
+              }
+              projectError={
+                newThreadDraft.workspace !== null &&
+                !configuredProjects.some(
+                  (project) => project.workspace === newThreadDraft.workspace,
+                )
+                  ? "This Project is no longer available. Choose another Project."
+                  : null
+              }
+              permissionMode={
+                newThreadDraft.permissionMode ?? "workspace-write"
+              }
+              composer={newThreadDraft.composer}
+              onComposerChange={(update) =>
+                updateNewThreadComposer(newThreadDraft.id, update)
+              }
+              draftModel={newThreadDraft.agentModel}
+              onDraftModelChange={(agentModel) =>
+                updateNewThreadDraft((draft) => ({
+                  ...draft,
+                  agentModel,
+                  composer: advanceComposerDraftRevision(draft.composer),
+                }))
+              }
+              onOperationChange={(pending, selectedModel) => {
+                if (pending) {
+                  const current =
+                    newThreadDraftRef.current?.id === newThreadDraft.id
+                      ? newThreadDraftRef.current
+                      : newThreadDraft;
+                  const selected = {
+                    ...current,
+                    agentModel: selectedModel ?? current.agentModel,
+                  };
+                  if (newThreadDraftRef.current?.id === current.id)
+                    confirmNewThreadDraft(selected);
+                  externalPendingDraftsRef.current.set(
+                    newThreadDraft.id,
+                    selected,
+                  );
+                } else if (
+                  externalPendingDraftsRef.current.has(newThreadDraft.id)
+                ) {
+                  const failed = externalPendingDraftsRef.current.get(
+                    newThreadDraft.id,
+                  )!;
+                  if (
+                    newThreadDraftRef.current?.id !== failed.id &&
+                    failed.composer.submission?.status === "failed" &&
+                    !newThreadPromotionsRef.current.has(failed.id)
+                  )
+                    setDraftRecoveryNotice({
+                      draft: failed,
+                      message:
+                        failed.composer.submission.error ??
+                        "Could not create agent session",
+                    });
+                  externalPendingDraftsRef.current.delete(newThreadDraft.id);
+                }
+              }}
+              onCreated={(snapshot) =>
+                promoteAgentDraft(newThreadDraft, snapshot)
+              }
+              onPermissionChange={(permissionMode) =>
+                updateNewThreadDraft((draft) => ({ ...draft, permissionMode }))
+              }
+              providerControl={
+                <AgentProviderSelector
+                  instances={agentProviders.instances}
+                  value={newThreadDraft.providerInstanceId!}
+                  onChange={changeAgentProvider}
+                  disabled={
+                    newThreadDraft.composer.submission?.status === "pending"
+                  }
+                />
+              }
+              emptyContent={
+                <div className="thread-empty new-thread-draft-empty">
+                  <div
+                    className="new-thread-draft-heading"
+                    role="heading"
+                    aria-level={2}
+                  >
+                    What should we build in{" "}
+                    <NewThreadProjectSelector
+                      disabled={
+                        newThreadDraft.composer.submission?.status === "pending"
+                      }
+                      onAddProject={() => openProjectPicker("new-thread")}
+                      onChange={(workspace) =>
+                        updateNewThreadDraft((draft) => ({
+                          ...draft,
+                          workspace,
+                        }))
+                      }
+                      projects={configuredProjects}
+                      selectedWorkspace={newThreadDraft.workspace}
+                    />
+                    ?
+                  </div>
+                </div>
+              }
+            />
           ) : (
             <AgentSurface
               threadHeader={
@@ -2715,6 +2991,18 @@ export function App() {
               composerStates={composerStates}
               configuredProjects={configuredProjects}
               newThreadDraft={newThreadDraft}
+              agentProviderControl={
+                newThreadDraft === null ? null : (
+                  <AgentProviderSelector
+                    instances={agentProviders.instances}
+                    value={newThreadDraft.providerInstanceId ?? "zen"}
+                    onChange={changeAgentProvider}
+                    disabled={
+                      newThreadDraft.composer.submission?.status === "pending"
+                    }
+                  />
+                )
+              }
               threadAttachments={threadAttachments}
               threadUsage={threadUsage}
               models={models}
@@ -2833,7 +3121,6 @@ export function App() {
               permissionError={permissionError}
               switchingPermission={switchingPermission}
               onReasoningChange={(effort) => void changeReasoning(effort)}
-              onOpenSidebar={openSidebar}
               onRespondToApproval={respondToApproval}
               onCompact={compactFromContext}
               onDismissCompaction={(threadId) =>
@@ -3173,6 +3460,7 @@ function PageTitleBar({
 }
 
 function AgentSurface({
+  agentProviderControl,
   threadHeader,
   onOpenMessageLink,
   composerSendMode,
@@ -3215,7 +3503,6 @@ function AgentSurface({
   permissionError,
   switchingPermission,
   onReasoningChange,
-  onOpenSidebar,
   onRespondToApproval,
   onCompact,
   onDismissCompaction,
@@ -3230,6 +3517,7 @@ function AgentSurface({
   threadError,
   threadLoading,
 }: {
+  agentProviderControl?: ReactNode;
   onOpenMessageLink(
     threadId: string,
     target: { kind: "file" | "browser"; value: string },
@@ -3281,7 +3569,6 @@ function AgentSurface({
   switchingPermission: boolean;
   onModelChange(model: string): void;
   onReasoningChange(effort: string): void;
-  onOpenSidebar(): void;
   onRespondToApproval(
     requestId: string,
     decision: ApprovalDecision,
@@ -3329,17 +3616,6 @@ function AgentSurface({
         pluginSnapshot={pluginSnapshot}
         onOpenBrowserSettings={onOpenBrowserSettings}
       />
-      {newThreadDraft !== null || selectedSummary === null ? (
-        <button
-          className="icon-button mobile-menu new-thread-draft-mobile"
-          type="button"
-          aria-label="Open sidebar"
-          onClick={onOpenSidebar}
-        >
-          <Icon name="tree" />
-        </button>
-      ) : null}
-
       {serverStatus.type === "error" ? (
         <EmptyState
           error
@@ -3377,6 +3653,7 @@ function AgentSurface({
         <ThreadView
           approvals={[]}
           composer={newThreadDraft.composer}
+          composerTools={agentProviderControl}
           composerSendMode={composerSendMode}
           onComposerSendModeChange={onComposerSendModeChange}
           composerContext={

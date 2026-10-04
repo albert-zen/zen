@@ -44,3 +44,10 @@ test("the global opener is absent while the panel owns its Close button", async 
     /\.auxiliary-close-button\s*\{[^}]*display: none;/su,
   );
 });
+
+test("sidebar New thread excludes the overlapping native titlebar drag region", () => {
+  assert.match(
+    styles,
+    /\.sidebar-header\s*\{[^}]*-webkit-app-region:\s*no-drag;/su,
+  );
+});

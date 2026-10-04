@@ -1,3 +1,4 @@
+import type { AgentProvidersApi } from "../../main/agent-providers/types.js";
 import type { SubscriptionUsage } from "../../main/subscription-usage.js";
 import type { AppServerHostStatus } from "../../main/app-server-manager.js";
 import type {
@@ -63,6 +64,7 @@ import type {
 declare global {
   interface Window {
     zenx: {
+      agentProviders: AgentProvidersApi;
       platform: NodeJS.Platform;
       skills: {
         list(): Promise<import("../../../../cli/src/skills.js").SkillsSnapshot>;

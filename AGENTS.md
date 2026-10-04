@@ -6,14 +6,19 @@ LESSONS.md（非目标与教训）、PRODUCTS.md（接入端与里程碑）。
 
 ## 不变量
 
-1. Thread 的所有会话语义与执行结果必须可从 append-only ItemList 推导。
+1. Zen 原生 Thread 的所有会话语义与执行结果必须可从 append-only ItemList 推导。
    凭证、Provider、workspace 配置在 Zen Core 外部，不得保存或覆盖会话状态。
    引入不可推导的会话状态前，必须先修改 ARCHITECTURE.md 并说明理由。
+   外部 Agent Provider session 保持自身原生历史权威；产品只保存 locator 与易失显示投影，
+   不能伪造 Zen canonical Items 或声称能完整重放外部上下文。
 2. 每个新抽象必须先在 ARCHITECTURE.md 获得一句话解释，否则不合入。
 3. ZAS 拥有自己的原生协议与语义；Codex App Server（CAS）adapter 只映射其中
    可表达的部分，固定在 codex-cli 0.146.0，CAS 专属类型与映射只允许存在于
    `src/protocol/codex/`。当前共用 endpoint/shape 不构成绑定；ZAS 可以独立演进，
    外部客户端兼容不能反向定义或裁剪 ZAS、Core 与产品语义。
+   用户批准的 Agent Provider 实验中，驱动真实外部 harness 的出站 adapter 与上述
+   入站 CAS facade 不同；出站 wire 类型/映射只放在 `apps/zenx/src/main/agent-providers/`
+   对应引擎模块，按其独立验证版本记录，不扩张 ZAS 的 CAS 兼容承诺。
 4. Project 不是运行时对象；接入端（CLI/桌面/Web/IM）不得拥有自己的
    Agent/Thread/Turn/调度语义。
 5. 流式 delta 不写 journal；journal 每行一个完整的 canonical Item。

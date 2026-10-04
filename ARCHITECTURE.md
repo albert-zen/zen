@@ -1,5 +1,13 @@
 # ARCHITECTURE
 
+## Agent Provider ownership (experimental product integration)
+
+ZenX can select an **Agent Provider instance**, a Host-local configured engine such as Zen or Codex, before selecting that instance's model. Model-service providers remain configuration beneath Zen; they are not agent engines. **Agent Provider adapters** own native process/protocol lifecycle, approvals and transient display projections. They do not implement another agent loop or silently translate unsupported capabilities.
+
+The existing append-only ItemList invariant applies to Zen-native Threads. External engine sessions retain their native history as the only execution authority. **Agent session bindings** persist only the stable Host ID, provider instance ID, native session ID and workspace locator; they contain no transcript, Turn state, queue or receipt ledger. External display projections must not claim full native context or replayability. Existing Zen history/profile is not rewritten. Provider identity is fixed for each binding; changing provider means creating another native session, not resuming foreign history. PAW/Room/Fleet continue to target their existing explicit Zen-native Threads until those surfaces explicitly support an external provider capability.
+
+The desktop Host lifecycle owns external engine processes alongside the existing Zen connection; closing a window does not close an engine, explicit application Quit does. Background catalog inspection never logs in or starts a model Turn. External credentials stay in the native engine's own configuration. UI is a consumer of these Host adapters, never a session authority.
+
 ## 核心概念
 
 - **Fleet** — 用户配置的 SSH/HTTPS 设备目录将既有线程工具按可选 device 路由到远端同一工具实现；远端 Host 持有唯一会话权威，Fleet 不同步 journal、不新建调度器。
