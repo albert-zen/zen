@@ -20,3 +20,10 @@ not execute, create, cancel or watch anything. Actual execution is read from
 canonical Threads and existing Triggers, independently of annotations. Notes
 enter model context only as explicit normal tool results; changing a notebook
 never changes historical Items or silently injects mutable context.
+
+## Message interactions
+
+- **Delivered** means the message was durably saved in the Room. **Read** means its exact routed input was admitted to that recipient's Thread context, including ordered steering. Queued input alone does not count. This is a harness receipt, not an external model acknowledgment or a claim of comprehension. Missing history or unavailable Threads remain unconfirmed.
+- Reply selects a same-Room message. Its bounded quote is captured with the send operation so retry/restart cannot silently select another target. Agents can pass `replyToMessageId` to the post tool.
+- React sets one of six emoji for the current actor; select it again to remove it. Agent attribution comes from the calling Thread, never tool arguments. Reactions do not start Turns.
+- Direct Thread messages and Room messages remain separate. Only an explicit Room post appears in the Room.

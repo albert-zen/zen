@@ -771,8 +771,14 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     roomId: string,
     operationId: string,
     text: string,
+    replyToMessageId?: string,
   ): Promise<RoomSendOperation> {
-    return await this.#service.prepareRoomMessage(roomId, operationId, text);
+    return await this.#service.prepareRoomMessage(
+      roomId,
+      operationId,
+      text,
+      replyToMessageId,
+    );
   }
   async postPreparedRoomMessage(
     roomId: string,
@@ -798,7 +804,20 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     return this.#service.roomOperation(roomId, operationId);
   }
   roomDelivery(roomId: string, messageId: string) {
-    return this.#service.roomDelivery(roomId, messageId);
+    return this.#service.roomMessageReceipt(roomId, messageId);
+  }
+  async setRoomReaction(
+    roomId: string,
+    messageId: string,
+    actorThreadId: string | null,
+    emoji: string | null,
+  ) {
+    return await this.#service.setRoomReaction(
+      roomId,
+      messageId,
+      actorThreadId,
+      emoji,
+    );
   }
   async acknowledgeRoomOperation(
     roomId: string,
@@ -870,8 +889,18 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   async removeRoomMember(roomId: string, threadId: string): Promise<void> {
     await this.#service.removeRoomMember(roomId, threadId);
   }
-  async postAgentRoomMessage(roomId: string, text: string): Promise<void> {
-    await this.#service.postAgentRoomMessage(roomId, text);
+  async postAgentRoomMessage(
+    roomId: string,
+    text: string,
+    replyToMessageId?: string,
+    callingThreadId?: string,
+  ): Promise<void> {
+    await this.#service.postAgentRoomMessage(
+      roomId,
+      text,
+      replyToMessageId,
+      callingThreadId,
+    );
   }
   async postRoomMessage(
     roomId: string,

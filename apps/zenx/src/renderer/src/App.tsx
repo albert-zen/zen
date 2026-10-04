@@ -523,6 +523,15 @@ export function App() {
     [],
   );
   const [workspacePanelWidth, setWorkspacePanelWidth] = useState(0);
+  const [roomReplies, setRoomReplies] = useState<
+    Record<string, import("../../main/trigger-types.js").RoomQuote | undefined>
+  >({});
+  const roomIntentRevisions = useRef<
+    Record<
+      string,
+      { roomId: string; revision: number | null; settled: boolean }
+    >
+  >({});
   const [roomDrafts, setRoomDrafts] = useState<Record<string, string>>({});
   const roomDraftRevisions = useRef<Record<string, number>>({});
   const [roomWorkspaceStates, setRoomWorkspaceStates] = useState<
@@ -2624,6 +2633,9 @@ export function App() {
       <RoomDraftContext.Provider
         value={{
           drafts: roomDrafts,
+          intentRevisions: roomIntentRevisions,
+          replies: roomReplies,
+          setReplies: setRoomReplies,
           setDrafts: setRoomDrafts,
           revisions: roomDraftRevisions,
         }}

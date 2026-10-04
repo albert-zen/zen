@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "zenx-rooms",
   "name": "Rooms",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Manage shared ZenX Room collaboration.",
   "compatibility": {
     "zenx": ">=0.1.0 <0.2.0"
@@ -201,6 +201,10 @@
           "operationId": {
             "type": "string",
             "maxLength": 512
+          },
+          "replyToMessageId": {
+            "type": "string",
+            "maxLength": 512
           }
         },
         "required": ["roomId", "text"],
@@ -228,6 +232,10 @@
           "text": {
             "type": "string",
             "maxLength": 8000
+          },
+          "replyToMessageId": {
+            "type": "string",
+            "maxLength": 512
           }
         },
         "required": ["roomId", "operationId", "text"],
@@ -374,7 +382,7 @@
       "permissions": ["zenx-rooms.read"],
       "interactionMode": "background_safe",
       "capabilities": ["zenx.rooms.manage"],
-      "maxOutputBytes": 65536
+      "maxOutputBytes": 524288
     },
     {
       "permissions": ["zenx-rooms.write"],
@@ -610,6 +618,32 @@
       "interactionMode": "background_safe",
       "capabilities": ["zenx.rooms.manage"],
       "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_rooms_react",
+      "description": "Set or remove your own reaction on a retained Room message. Does not start a Turn.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "messageId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "emoji": {
+            "enum": ["👍", "❤️", "🎉", "👀", "✅", "🤔", null]
+          }
+        },
+        "required": ["roomId", "messageId", "emoji"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 524288
     }
   ],
   "ui": {
@@ -737,6 +771,11 @@
         "id": "update-workspace",
         "title": "Save Companion planning notebook with revision check",
         "tool": "zenx_rooms_update_workspace"
+      },
+      {
+        "id": "react",
+        "title": "Set a Room message reaction",
+        "tool": "zenx_rooms_react"
       }
     ]
   }
