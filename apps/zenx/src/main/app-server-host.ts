@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { FleetHostService } from "./fleet-host.js";
 import {
   createHostedAppServer,
   type HostedZenAppServer,
@@ -24,6 +26,18 @@ import {
 } from "../../../../src/model-usage.js";
 import { ToolOutputSpool } from "../../../../src/tool-output-spool.js";
 
+let fleetHost: FleetHostService | undefined;
+const roomListeners = new Set<
+  (event: { roomId: string; threadId: string }) => void
+>();
+const roomRequests = new Map<
+  string,
+  {
+    resolve: (value: unknown) => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }
+>();
 let server: CodexWebSocketServer | undefined;
 let appServer: HostedZenAppServer | undefined;
 let tools: ZenXHostToolBundle | undefined;
@@ -60,6 +74,58 @@ process.once("SIGINT", () => void shutdown());
 process.once("SIGTERM", () => void shutdown());
 
 async function handleCommand(command: HostCommand): Promise<void> {
+  if (command.type === "fleet/room-event") {
+    for (const listener of roomListeners) listener(command);
+    return;
+  }
+  if (command.type === "fleet/room-result") {
+    const request = roomRequests.get(command.requestId);
+    if (request) {
+      roomRequests.delete(command.requestId);
+      clearTimeout(request.timer);
+      if (command.error) request.reject(new Error(command.error));
+      else request.resolve(command.result);
+    }
+    return;
+  }
+  if (command.type === "fleet/control") {
+    try {
+      if (!appServer) throw new Error("Host unavailable");
+      fleetHost ??= new FleetHostService(appServer, {
+        request: (operation, params) =>
+          new Promise((resolve, reject) => {
+            if (roomRequests.size >= 32) {
+              reject(new Error("Too many Room requests"));
+              return;
+            }
+            const requestId = randomUUID();
+            const timer = setTimeout(() => {
+              roomRequests.delete(requestId);
+              reject(new Error("Room result unknown"));
+            }, 15000);
+            roomRequests.set(requestId, { resolve, reject, timer });
+            send({ type: "fleet/room-request", requestId, operation, params });
+          }),
+        subscribe: (listener) => {
+          roomListeners.add(listener);
+          return () => roomListeners.delete(listener);
+        },
+      });
+      send({
+        type: "fleet/result",
+        requestId: command.requestId,
+        result: await fleetHost.control(command.action, command.input),
+      });
+    } catch (error) {
+      send({
+        type: "fleet/result",
+        requestId: command.requestId,
+        error: error instanceof Error ? error.message : "Fleet control failed",
+      });
+    }
+    return;
+  }
+
   if (command.type === "capability/result") {
     tools?.handleResult(command);
     return;
@@ -417,6 +483,13 @@ function codeRuntimeWorkerEntry(): URL {
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
+  await fleetHost?.close();
+  fleetHost = undefined;
+  for (const request of roomRequests.values()) {
+    clearTimeout(request.timer);
+    request.reject(new Error("Host stopped"));
+  }
+  roomRequests.clear();
   await server?.close();
   server = undefined;
   await closeToolComposition?.();

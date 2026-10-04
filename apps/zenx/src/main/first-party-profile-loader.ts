@@ -26,7 +26,7 @@ export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
   selfControl: {
     pluginId: "zenx-self-control",
     packageName: "@zenx/self-control-plugin",
-    tarball: "zenx-self-control-plugin-1.0.0.tgz",
+    tarball: "zenx-self-control-plugin-1.0.1.tgz",
   },
   triggers: {
     pluginId: "zenx-triggers",

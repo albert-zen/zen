@@ -68,7 +68,7 @@ test("Settings footer hugs its single navigation row", async () => {
   );
 });
 
-test("side panel keeps one fixed toggle and an interruptible width transition", async () => {
+test("side panel keeps stable corner controls and an interruptible width transition", async () => {
   const styles = await readFile(
     new URL("../src/renderer/src/styles.css", import.meta.url),
     "utf8",
@@ -85,9 +85,9 @@ test("side panel keeps one fixed toggle and an interruptible width transition", 
     styles,
     /\.auxiliary-panel\[data-open="false"\]\s*\{[^}]*flex-basis:\s*0;[^}]*width:\s*0;[^}]*min-width:\s*0;/su,
   );
-  assert.match(
+  assert.doesNotMatch(
     styles,
-    /\.app-shell:has\(\.auxiliary-panel\[data-open="true"\]\) #thread-browser-toggle\s*\{[^}]*display:\s*inline-grid;/su,
+    /\.auxiliary-heading \.auxiliary-close-button\s*\{[^}]*display:\s*none;/su,
   );
   assert.match(
     styles,
@@ -241,5 +241,39 @@ test("200% text zoom keeps Settings copy and Appearance controls reflowable", as
   assert.match(
     zoomed,
     /\.settings-nav,\s*\.appearance-options,\s*\.appearance-preset-options,\s*\.appearance-accent-options\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/su,
+  );
+});
+
+test("Linux overlay controls reserve space for the workspace toggle", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /:root\[data-platform="linux"\] \.window-titlebar,\s*:root\[data-platform="win32"\] \.window-titlebar\s*\{[^}]*padding-right:\s*var\(--windows-control-region\);/su,
+  );
+  assert.match(
+    styles,
+    /:root\[data-platform="linux"\] \.thread-panel-toggle,\s*:root\[data-platform="win32"\] \.thread-panel-toggle\s*\{[^}]*right:\s*calc\(var\(--windows-control-region\) \+ 4px\);/su,
+  );
+});
+
+test("Linux workspace heading and narrow toggle stay clear of native window controls", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /:root:is\(\[data-platform="linux"\], \[data-platform="win32"\]\) \.auxiliary-heading\s*\{[^}]*padding-right:\s*8px;/su,
+  );
+  const lastToggle = styles.lastIndexOf(
+    ':root[data-platform="linux"] .thread-panel-toggle',
+  );
+  assert.ok(lastToggle > styles.indexOf("/* Rooms:"));
+  assert.match(
+    styles.slice(lastToggle),
+    /top:\s*calc\(var\(--native-titlebar-height\) \+ 4px\);\s*right:\s*8px;/u,
   );
 });

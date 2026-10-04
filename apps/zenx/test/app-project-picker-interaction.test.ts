@@ -2735,12 +2735,12 @@ test("conversation header omits usage while Composer owns context indicator and 
       null,
     );
     const workspaceAction = document.querySelector(
-      '.workspace-header [aria-label="Open side panel"]',
+      '.app-shell > [aria-label="Open side panel"]',
     );
     assert.ok(workspaceAction);
     assert.equal(
       document
-        .querySelector('.workspace-header [aria-label="Open side panel"]')
+        .querySelector('.app-shell > [aria-label="Open side panel"]')
         ?.getAttribute("disabled"),
       null,
     );

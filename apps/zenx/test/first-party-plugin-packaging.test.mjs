@@ -25,8 +25,8 @@ const expected = [
   ["@zenx/computer-plugin", "zenx-computer-plugin-macos-1.0.1.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-peekaboo-1.0.0.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-win32-1.1.1.tgz"],
-  ["@zenx/rooms-plugin", "zenx-rooms-plugin-1.0.3.tgz"],
-  ["@zenx/self-control-plugin", "zenx-self-control-plugin-1.0.0.tgz"],
+  ["@zenx/rooms-plugin", "zenx-rooms-plugin-1.0.4.tgz"],
+  ["@zenx/self-control-plugin", "zenx-self-control-plugin-1.0.1.tgz"],
   ["@zenx/triggers-plugin", "zenx-triggers-plugin-1.0.0.tgz"],
 ];
 
@@ -196,7 +196,7 @@ test("direct packaging establishes the plugin SDK clean-output prerequisite", as
 
     const tarball = await packZenXRoomsPlugin({ outputDirectory: output });
 
-    assert.equal(path.basename(tarball), "zenx-rooms-plugin-1.0.3.tgz");
+    assert.equal(path.basename(tarball), "zenx-rooms-plugin-1.0.4.tgz");
   } finally {
     await rm(fixture, { recursive: true, force: true });
   }

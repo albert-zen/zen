@@ -1,4 +1,10 @@
-# Remote Host v0 — isolated development slice
+# Remote Host v0 — isolated CLI development slice
+
+> This document describes the original isolated CLI entry point and its legacy
+> permission mode. The desktop Fleet integration adds explicit read/control
+> grants, persistent pairing, Rooms, remote watches and an optional relay; see
+> [Fleet and Always On Assistant](fleet-assistant.md). The CLI isolation limits
+> below do not describe every newer Fleet entry point.
 
 **Not ZenX's daily Host, not Android end-to-end, not a public deployment.** This native ZAS gateway is opt-in only for a separate CLI Host with `--remote-host-config`, explicit non-default `--data-dir`, and deterministic `fake` provider. No Electron listener, local descriptor or token file is exported. No real provider/tool approval or production mobile pairing UI exists in this slice.
 

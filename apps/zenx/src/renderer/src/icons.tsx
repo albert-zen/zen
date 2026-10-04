@@ -46,6 +46,7 @@ export type IconName =
   | "settings"
   | "search"
   | "thread"
+  | "conversation"
   | "trigger"
   | "tree"
   | "stop"
@@ -255,6 +256,12 @@ const paths: Record<IconName, ReactNode> = {
     <>
       <circle cx="7.2" cy="7.2" r="4.6" />
       <path d="m10.8 10.8 3.4 3.4" />
+    </>
+  ),
+  conversation: (
+    <>
+      <path d="M13.8 7.5a5.8 5.8 0 0 1-5.8 5.8 6 6 0 0 1-2.4-.5L2 14l1.1-3.5a5.8 5.8 0 1 1 10.7-3Z" />
+      <path d="M5.2 6.2h5.6M5.2 8.8h3.6" />
     </>
   ),
   thread: (

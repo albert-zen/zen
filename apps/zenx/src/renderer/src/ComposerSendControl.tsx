@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Popover, PopoverAnchor, PopoverContent } from "./ui/controls.js";
+import { ComposerAction } from "./Composer.js";
 import { Icon } from "./icons.js";
 import {
   defaultComposerIntent,
@@ -130,10 +131,9 @@ export function ComposerSendControl({
             }
           }}
         >
-          <button
-            className={`action-orb ${primaryMode}`}
-            type="button"
-            aria-label={primaryLabel}
+          <ComposerAction
+            mode={primaryMode}
+            label={primaryLabel}
             aria-haspopup="dialog"
             aria-expanded={open}
             disabled={disabled}
@@ -141,9 +141,7 @@ export function ComposerSendControl({
               close();
               onPrimary();
             }}
-          >
-            <Icon name={primaryMode === "stop" ? "stop" : "send"} size={18} />
-          </button>
+          />
         </div>
       </PopoverAnchor>
       <PopoverContent

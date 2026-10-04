@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
 import {
@@ -7,7 +7,6 @@ import {
   type PluginUiSurfaceProps,
 } from "./plugin-ui-host.js";
 import { Icon } from "./icons.js";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/controls.js";
 import { threadTitle } from "./thread-list.js";
 import { useAppearance } from "./PluginProductPage.js";
 
@@ -15,7 +14,6 @@ type RelatedThread = NativeThreadSummary & { parentThreadId?: string };
 
 export function registerSubagentsUi(registry: PluginUiRegistry): void {
   registry.registerTrusted("zenx/bundled/subagents-ui", {
-    "subagents-header": SubagentsHeader,
     "subagents-panel": SubagentsPanel,
   });
 }
@@ -120,7 +118,7 @@ function useRelatedThreads(sdk: PluginUiSurfaceProps["sdk"]) {
   };
 }
 
-function CreateSubagent({
+function CreateSideChat({
   sdk,
   parent,
   onCreated,
@@ -129,159 +127,117 @@ function CreateSubagent({
   parent: string;
   onCreated(): void;
 }) {
-  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inflight = useRef(false);
+  const active = sdk.context.active !== false;
+  const epoch = useRef(0);
+  useLayoutEffect(() => {
+    epoch.current += 1;
+    return () => {
+      epoch.current += 1;
+    };
+  }, [parent, active]);
   const mounted = useRef(true);
-  useEffect(() => {
+  useLayoutEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
     };
   }, []);
-  const create = async (mode: "fresh" | "fork") => {
-    if (inflight.current) return;
+  const create = async () => {
+    if (inflight.current || !active) return;
     inflight.current = true;
+    const source = parent;
+    const requestEpoch = epoch.current;
     setBusy(true);
     setError(null);
     try {
       const result = (await sdk.commands.execute("create", {
-        parentThreadId: parent,
-        mode,
+        parentThreadId: source,
+        mode: "side-chat",
       })) as { thread?: { id?: string }; threadId?: string };
       const id = result.thread?.id ?? result.threadId;
       if (!id) throw new Error("The new conversation could not be identified.");
-      if (mounted.current) {
-        setOpen(false);
+      if (mounted.current && epoch.current === requestEpoch) {
         onCreated();
         sdk.navigation.navigate(
           `/threads/${encodeURIComponent(id)}?view=panel`,
         );
       }
     } catch (cause) {
-      if (mounted.current) setError(message(cause));
+      if (mounted.current && epoch.current === requestEpoch)
+        setError(message(cause));
     } finally {
       inflight.current = false;
       if (mounted.current) setBusy(false);
     }
   };
   return (
-    <Popover
-      open={open}
-      onOpenChange={(value) => {
-        if (!busy) setOpen(value);
-      }}
-    >
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label="New subagent"
-          disabled={!parent || busy}
-        >
-          <Icon name="plus" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        className="subagent-create-menu"
-        side="bottom"
-        align="end"
-        sideOffset={6}
+    <div className="subagent-create">
+      <button
+        type="button"
+        className="subagent-create-button"
+        aria-label="New side chat"
+        title="Fork this conversation into a side chat"
+        disabled={!parent || busy || !active}
+        onClick={() => void create()}
       >
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void create("fresh")}
-        >
-          <Icon name="plus" />
-          Start fresh
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void create("fork")}
-        >
-          <Icon name="copy" />
-          Fork context
-        </button>
-        {error ? <p role="alert">{error}</p> : null}
-      </PopoverContent>
-    </Popover>
+        <Icon name="plus" />
+        <span>{busy ? "Creating…" : "Side chat"}</span>
+      </button>
+      {error ? (
+        <p className="subagent-create-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
-function SubagentsHeader({ sdk }: PluginUiSurfaceProps) {
-  const { parent, all, error, refresh } = useRelatedThreads(sdk);
-  const current = all.find((entry) => entry.threadId === parent);
-  const parentId = current?.parentThreadId;
-  const children = all.filter(
-    (entry) => entry.parentThreadId === parent && !entry.archived,
-  );
-  const panelKey =
-    typeof sdk.context.panelKey === "string" ? sdk.context.panelKey : "";
+/** Ancestors share the topbar line with App's existing current-title editor. */
+export function ThreadBreadcrumbAncestors({
+  threadId,
+  threads,
+  navigate,
+}: {
+  threadId: string;
+  threads: readonly NativeThreadSummary[];
+  navigate(route: string): void;
+}) {
+  const byId = new Map(threads.map((thread) => [thread.threadId, thread]));
+  const ancestors: Array<{ threadId: string; title: string }> = [];
+  const visited = new Set([threadId]);
+  let parentId = byId.get(threadId)?.parentThreadId;
+  while (parentId && !visited.has(parentId)) {
+    visited.add(parentId);
+    const parent = byId.get(parentId);
+    ancestors.unshift({
+      threadId: parentId,
+      title: parent ? threadTitle(parent) : "Parent conversation",
+    });
+    parentId = parent?.parentThreadId;
+  }
+  if (!ancestors.length) return null;
   return (
-    <nav className="subagents-header" aria-label="Subagents">
-      {parentId ? (
-        <button
-          type="button"
-          className="subagent-parent"
-          onClick={() =>
-            sdk.navigation.navigate(`/threads/${encodeURIComponent(parentId)}`)
-          }
-        >
-          <Icon name="arrow-left" />
-          Parent
-        </button>
-      ) : null}
-      <button
-        type="button"
-        className="subagents-directory"
-        onClick={() =>
-          sdk.navigation.navigate(
-            `/threads/${encodeURIComponent(parent)}?panel=${encodeURIComponent(panelKey)}`,
-          )
-        }
-      >
-        <Icon name="users" />
-        <span>Subagents</span>
-        {children.length ? (
-          <span className="subagent-count">{children.length}</span>
-        ) : null}
-      </button>
-      <div className="subagent-shortcuts">
-        {children.slice(0, 4).map((child) => (
+    <nav
+      className="thread-breadcrumb-ancestors"
+      aria-label="Parent conversations"
+    >
+      {ancestors.map((ancestor) => (
+        <React.Fragment key={ancestor.threadId}>
           <button
             type="button"
-            key={child.threadId}
+            title={ancestor.title}
             onClick={() =>
-              sdk.navigation.navigate(
-                `/threads/${encodeURIComponent(child.threadId)}?view=panel`,
-              )
+              navigate(`/threads/${encodeURIComponent(ancestor.threadId)}`)
             }
-            title={threadTitle(child)}
           >
-            <span
-              className="subagent-state"
-              data-state={child.status}
-              aria-label={
-                child.status === "active"
-                  ? "Working"
-                  : child.status === "systemError"
-                    ? "Unavailable"
-                    : "Idle"
-              }
-            />
-            <span>{threadTitle(child)}</span>
+            {ancestor.title}
           </button>
-        ))}
-      </div>
-      {error ? (
-        <span className="subagent-inline-error" role="status" title={error}>
-          Unavailable
-        </span>
-      ) : null}
-      <CreateSubagent sdk={sdk} parent={parent} onCreated={refresh} />
+          <span aria-hidden="true">/</span>
+        </React.Fragment>
+      ))}
     </nav>
   );
 }
@@ -338,7 +294,12 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
     <section className="subagents-panel" aria-label="Subagent conversations">
       <header>
         <strong>Subagents</strong>
-        <CreateSubagent sdk={sdk} parent={parent} onCreated={refresh} />
+        <CreateSideChat
+          key={parent}
+          sdk={sdk}
+          parent={parent}
+          onCreated={refresh}
+        />
       </header>
       {error ? (
         <p role="alert">

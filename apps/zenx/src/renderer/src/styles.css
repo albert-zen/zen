@@ -451,6 +451,7 @@ button:disabled {
 :root[data-platform="darwin"] .window-titlebar-session {
   grid-column: 2;
 }
+:root[data-platform="linux"] .window-titlebar,
 :root[data-platform="win32"] .window-titlebar {
   padding-right: var(--windows-control-region);
 }
@@ -3304,9 +3305,9 @@ button:disabled {
   background: var(--surface-2);
 }
 .settings-nav button[aria-selected="true"] {
-  color: var(--text-accent);
-  background: var(--accent-soft);
-  border-color: var(--border-accent);
+  color: var(--text);
+  background: var(--color-surface-hover);
+  border-color: var(--border-control);
   font-weight: 600;
 }
 .settings-nav button:last-child {
@@ -3418,6 +3419,12 @@ button:disabled {
   border-color: var(--color-focus-ring);
 }
 .settings-panel input[type="checkbox"] {
+  appearance: auto;
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  flex: 0 0 16px;
+  margin: 2px 0;
   accent-color: var(--accent);
 }
 .settings-panel .plugin-switch:disabled {
@@ -3840,7 +3847,11 @@ button:disabled {
   height: 1px;
   opacity: 0;
 }
-.provider-tabs button[aria-selected="true"],
+.provider-tabs button[aria-selected="true"] {
+  border-color: var(--border-control);
+  color: var(--text);
+  background: var(--color-surface-hover);
+}
 .appearance-options input:checked + span {
   border-color: var(--border-accent);
   color: var(--text);
@@ -5172,7 +5183,8 @@ button:disabled {
   .workspace:has(> .auxiliary-panel) {
     display: block;
   }
-  .workspace:has(> .auxiliary-panel) > .agent-surface {
+  .workspace:has(> .auxiliary-panel)
+    > :is(.agent-surface, .plugin-product-page) {
     width: 100%;
     height: 100%;
   }
@@ -5224,11 +5236,13 @@ button:disabled {
     opacity: 1;
     pointer-events: auto;
   }
+  :root[data-platform="linux"] .app-shell,
   :root[data-platform="win32"] .app-shell {
     --titlebar-height: calc(
       var(--native-titlebar-height) + var(--native-titlebar-height)
     );
   }
+  :root[data-platform="linux"] .window-titlebar,
   :root[data-platform="win32"] .window-titlebar {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: var(--native-titlebar-height) var(
@@ -5236,15 +5250,18 @@ button:disabled {
       );
     padding-right: 0;
   }
+  :root[data-platform="linux"] .window-titlebar-product,
   :root[data-platform="win32"] .window-titlebar-product {
     width: calc(100% - var(--windows-control-region));
     grid-column: 1;
     grid-row: 1;
   }
+  :root[data-platform="linux"] .window-titlebar-session,
   :root[data-platform="win32"] .window-titlebar-session {
     grid-column: 1;
     grid-row: 2;
   }
+  :root[data-platform="linux"] .thread-panel-toggle,
   :root[data-platform="win32"] .thread-panel-toggle {
     top: calc(var(--native-titlebar-height) + 4px);
     right: 8px;
@@ -6513,8 +6530,8 @@ button:disabled {
   overflow: hidden;
   border: 1px solid var(--color-border-subtle);
   border-radius: 12px;
-  background: var(--surface-raised);
-  box-shadow: 0 8px 24px var(--shadow-color);
+  background: var(--color-surface-elevated);
+  box-shadow: 0 8px 24px var(--color-shadow);
   color: var(--color-text-primary);
 }
 .selector-heading {
@@ -6570,7 +6587,8 @@ button:disabled {
 }
 .selector-icon {
   display: inline-flex;
-  align-self: center;
+  align-self: flex-start;
+  padding-top: 2px;
   color: var(--color-text-secondary);
 }
 .selector-copy {
@@ -6587,17 +6605,16 @@ button:disabled {
   min-width: 0;
 }
 .selector-copy strong {
-  flex: 0 1 auto;
+  flex: 1;
   min-width: 0;
-  max-width: 60%;
   font-size: 13px;
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.selector-summary > span {
-  flex: 1;
+.selector-description {
+  display: block;
   min-width: 0;
   font-size: 12px;
   color: var(--color-text-secondary);
@@ -6605,7 +6622,9 @@ button:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.selector-copy small {
+.selector-summary > small {
+  flex: 0 1 auto;
+  max-width: 45%;
   font-size: 11px;
   color: var(--color-text-secondary);
   overflow: hidden;
@@ -6828,7 +6847,7 @@ button:disabled {
   position: relative;
   overflow: hidden;
 }
-.workspace:has(> .auxiliary-panel) > .agent-surface {
+.workspace:has(> .auxiliary-panel) > :is(.agent-surface, .plugin-product-page) {
   flex: none;
   min-width: 0;
   width: calc(100% - var(--workspace-panel-width, 0px));
@@ -6891,9 +6910,6 @@ button:disabled {
   height: 28px;
   flex-shrink: 0;
 }
-.auxiliary-heading .auxiliary-close-button {
-  display: none;
-}
 .auxiliary-content {
   flex: 1;
   min-height: 0;
@@ -6934,7 +6950,7 @@ button:disabled {
   display: none;
 }
 .workspace:has(> .auxiliary-panel[data-open="true"][data-expanded="true"])
-  > .agent-surface {
+  > :is(.agent-surface, .plugin-product-page) {
   visibility: hidden;
 }
 .workspace-files-panel {
@@ -7024,7 +7040,8 @@ button:disabled {
   color: var(--color-status-warning);
 }
 @media (max-width: 1099px) {
-  .workspace:has(> .auxiliary-panel[data-open="true"]) > .agent-surface {
+  .workspace:has(> .auxiliary-panel[data-open="true"])
+    > :is(.agent-surface, .plugin-product-page) {
     display: none;
   }
   .auxiliary-panel {
@@ -7689,29 +7706,34 @@ button:disabled {
   min-width: 0;
 }
 
-/* The workspace shares the native title row with the conversation. Measuring
-   its rendered width also covers resize, expanded mode and a collapsed sidebar. */
+/* macOS keeps the integrated title-row workspace. Windows and Linux use
+   a dedicated OS row and a separate conversation/workspace row below. */
 @media (min-width: 721px) {
-  .app-shell:has(.auxiliary-panel[data-open="true"]) > .window-titlebar {
+  :root[data-platform="darwin"]
+    .app-shell:has(.auxiliary-panel[data-open="true"])
+    > .window-titlebar {
     width: calc(100% - var(--workspace-panel-width, 0px));
     padding-right: 0;
   }
-  .workspace:has(> .auxiliary-panel[data-open="true"]) {
+  :root[data-platform="darwin"]
+    .workspace:has(> .auxiliary-panel[data-open="true"]) {
     grid-row: 1 / -1;
   }
-  .workspace:has(> .auxiliary-panel[data-open="true"]) > .agent-surface {
+  :root[data-platform="darwin"]
+    .workspace:has(> .auxiliary-panel[data-open="true"])
+    > :is(.agent-surface, .plugin-product-page) {
     padding-top: var(--titlebar-height);
   }
-  .app-shell:has(.auxiliary-panel[data-open="true"][data-expanded="true"])
+  :root[data-platform="darwin"]
+    .app-shell:has(.auxiliary-panel[data-open="true"][data-expanded="true"])
     .thread-heading {
     visibility: hidden;
   }
-  :root[data-platform="win32"] .auxiliary-heading {
-    padding-right: calc(var(--windows-control-region) + 6px);
-  }
 }
 @media (min-width: 721px) and (max-width: 1099px) {
-  .app-shell:has(.auxiliary-panel[data-open="true"]) .thread-heading {
+  :root[data-platform="darwin"]
+    .app-shell:has(.auxiliary-panel[data-open="true"])
+    .thread-heading {
     visibility: hidden;
   }
 }
@@ -8266,7 +8288,8 @@ button:disabled {
   min-height: 64px;
 }
 .workspace-content-tab[data-active="true"] {
-  box-shadow: inset 0 -2px var(--color-accent);
+  box-shadow: none;
+  background: var(--color-surface-hover);
 }
 [data-plugin-surface] :where(button:not([class])) {
   min-height: var(--control-height);
@@ -8290,6 +8313,21 @@ button:disabled {
   display: grid;
   gap: 6px;
 }
+[data-plugin-surface] label:has(> input[type="checkbox"]) {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+[data-plugin-surface] input[type="checkbox"] {
+  appearance: auto;
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  flex: 0 0 16px;
+  margin: 2px 0;
+  accent-color: var(--color-accent);
+}
+
 [data-plugin-surface] :where(button:disabled) {
   opacity: 0.5;
 }
@@ -8728,6 +8766,7 @@ button:disabled {
   font-size: var(--font-size-caption);
 }
 .thread-panel-toggle {
+  -webkit-app-region: no-drag;
   position: fixed;
   z-index: 80;
   top: 4px;
@@ -8736,9 +8775,7 @@ button:disabled {
   height: 36px;
   border-radius: 8px;
 }
-.app-shell:has(.auxiliary-panel[data-open="true"]) #thread-browser-toggle {
-  display: inline-grid;
-}
+:root[data-platform="linux"] .thread-panel-toggle,
 :root[data-platform="win32"] .thread-panel-toggle {
   right: calc(var(--windows-control-region) + 4px);
 }
@@ -8941,46 +8978,22 @@ button:disabled {
 }
 .rooms-chat-compose {
   flex: none;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  padding: 10px max(14px, calc((100% - 780px) / 2));
-  border-top: 1px solid var(--border-soft);
-  background: var(--surface-code);
-}
-.rooms-chat-compose textarea {
-  grid-column: 1;
   min-width: 0;
-  min-height: 48px;
-  max-height: 120px;
-  resize: none;
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-inset);
-  color: var(--text-1);
-  font: inherit;
+  padding: 10px
+    max(14px, calc((100% - var(--room-conversation-width, 760px)) / 2)) 18px;
+  background: var(--color-surface-main);
 }
-.rooms-chat-compose > button {
-  align-self: end;
+.rooms-chat-compose .composer {
+  max-width: var(--room-conversation-width, 760px);
 }
-.rooms-chat-compose > small,
-.rooms-chat-compose > .form-error,
-.rooms-chat-compose > [role="status"],
-.rooms-chat-mentions {
-  grid-column: 1 / -1;
+.room-composer-note {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+  line-height: 1.4;
 }
-.rooms-chat-compose > small {
-  color: var(--text-3);
-}
-.rooms-chat-mentions {
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-}
-.rooms-chat-mentions button {
-  flex: none;
-  font-size: 12px;
+.room-mention-tool {
+  font-size: 18px;
+  font-weight: 500;
 }
 .rooms-chat-overlay {
   position: fixed;
@@ -9152,4 +9165,178 @@ button:disabled {
   .rooms-chat-compose > small {
     display: none;
   }
+}
+
+.room-assistant-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  align-items: center;
+}
+.room-assistant-controls > span {
+  flex: 1;
+  min-width: 200px;
+}
+.room-assistant-controls > small {
+  flex-basis: 100%;
+  color: var(--text-3);
+}
+.room-assistant-state {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+.room-assistant-disclosure {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.rooms-chat-list-head {
+  flex-wrap: wrap;
+}
+.rooms-chat-list-head > strong {
+  flex-basis: 100%;
+}
+
+/* Linux also uses Electron's native right-side overlay buttons. On narrow
+   screens both non-mac platforms move conversation controls to row two. */
+@media (max-width: 720px) {
+  :root[data-platform="linux"] .thread-panel-toggle,
+  :root[data-platform="win32"] .thread-panel-toggle {
+    top: calc(var(--native-titlebar-height) + 4px);
+    right: 8px;
+  }
+}
+
+.room-member-choice {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.room-member-choice-title,
+.room-member-choice small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.room-member-choice small {
+  color: var(--text-3);
+  font-size: var(--font-size-caption);
+}
+
+.ui-select-option:has(.room-member-choice) > span:first-child {
+  min-width: 0;
+  flex: 1;
+}
+
+/* Non-mac native chrome owns row one. Conversation titles and auxiliary tabs
+   share row two; the primary sidebar retains its original vertical position. */
+:root:is([data-platform="linux"], [data-platform="win32"]) .app-shell {
+  grid-template-rows:
+    var(--native-titlebar-height) var(--native-titlebar-height)
+    minmax(0, 1fr);
+}
+:root:is([data-platform="linux"], [data-platform="win32"]) .window-titlebar {
+  grid-row: 1 / 3;
+  grid-template-rows: var(--native-titlebar-height) var(
+      --native-titlebar-height
+    );
+  width: 100%;
+  padding-right: 0;
+  background: linear-gradient(
+    to bottom,
+    var(--color-surface-sidebar) 0 var(--native-titlebar-height),
+    transparent var(--native-titlebar-height) 100%
+  );
+  pointer-events: none;
+}
+:root:is([data-platform="linux"], [data-platform="win32"])
+  .window-titlebar-product {
+  grid-column: 1;
+  grid-row: 1;
+  pointer-events: auto;
+}
+:root:is([data-platform="linux"], [data-platform="win32"])
+  .window-titlebar-native-actions {
+  pointer-events: auto;
+}
+:root:is([data-platform="linux"], [data-platform="win32"])
+  .window-titlebar-session {
+  grid-row: 2;
+  width: calc(100% - var(--workspace-panel-width, 0px));
+  pointer-events: auto;
+}
+:root:is([data-platform="linux"], [data-platform="win32"]) .sidebar {
+  grid-row: 2 / -1;
+}
+:root:is([data-platform="linux"], [data-platform="win32"]) .workspace {
+  grid-row: 2 / -1;
+}
+:root:is([data-platform="linux"], [data-platform="win32"])
+  .workspace
+  > :is(.agent-surface, .product-page, .plugin-product-page) {
+  padding-top: var(--native-titlebar-height);
+}
+:root:is([data-platform="linux"], [data-platform="win32"]) .auxiliary-heading {
+  padding-right: 8px;
+}
+:root:is([data-platform="linux"], [data-platform="win32"])
+  .thread-panel-toggle {
+  top: calc(var(--native-titlebar-height) + 4px);
+  right: 8px;
+  visibility: visible;
+}
+:root:is([data-platform="linux"], [data-platform="win32"])
+  .app-shell:has(.auxiliary-panel[data-expanded="true"][data-open="true"])
+  .window-titlebar-session {
+  visibility: hidden;
+}
+@media (max-width: 720px) {
+  :root:is([data-platform="linux"], [data-platform="win32"])
+    .window-titlebar-session {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+  :root:is([data-platform="linux"], [data-platform="win32"])
+    .app-shell:has(.auxiliary-panel[data-open="true"])
+    .window-titlebar-session {
+    visibility: hidden;
+  }
+  :root:is([data-platform="linux"], [data-platform="win32"]) .sidebar {
+    top: var(--native-titlebar-height);
+  }
+}
+
+/* Drawers must not put their Close action beneath OS caption controls. */
+:root:is([data-platform="linux"], [data-platform="win32"]) .rooms-chat-overlay {
+  top: var(--native-titlebar-height, 44px);
+}
+:root:is([data-platform="linux"], [data-platform="win32"]) .ui-dialog {
+  top: calc(50% + 22px);
+  max-height: calc(100vh - 76px);
+}
+
+.thread-title-path {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.thread-title-path > .thread-title-line {
+  flex: 1;
+}
+
+.room-background-details {
+  flex-basis: 100%;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+}
+.room-background-details summary {
+  cursor: pointer;
+}
+.room-background-details p {
+  margin: 6px 0 0;
+  line-height: 1.5;
 }

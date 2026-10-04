@@ -324,6 +324,7 @@ export function projectCompletedItem(
     case "model_usage":
     case "thread_configuration_changed":
     case "thread_forked":
+    case "thread_instruction":
     case "thread_metadata":
     case "tool_result":
     case "turn_aborted":

@@ -26,3 +26,8 @@ export function loadedPluginContributions(
         left.key.localeCompare(right.key),
     );
 }
+
+/** UI query/hash intent does not change the registered plugin pathname. */
+export function pluginRoutePath(route: string): string {
+  return route.split(/[?#]/u, 1)[0]!;
+}
