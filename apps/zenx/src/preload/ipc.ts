@@ -1,4 +1,6 @@
 export const ipcChannels = {
+  agentProvidersRequest: "zenx:agent-providers:request",
+  agentProvidersEvent: "zenx:agent-providers:event",
   skillsList: "zenx:skills:list",
   skillsImport: "zenx:skills:import",
   skillsMode: "zenx:skills:mode",

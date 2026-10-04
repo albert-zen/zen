@@ -65,6 +65,7 @@ const actions: Record<string, string> = {
 };
 
 const completedActions: Record<string, string> = {
+  compact_context: "Context compacted",
   browser_list_tabs: "Listed tabs",
   browser_open: "Opened page",
   browser_navigate: "Navigated",
@@ -146,6 +147,8 @@ export function toolPresentation(name: string): {
   if (/^view_image(?:\s|$)/u.test(key)) {
     return { category: "Image", icon: "image", action: "View images" };
   }
+  if (key === "compact_context")
+    return { category: "Context", icon: "compress", action: "Compact context" };
   if (key === "shell")
     return { category: "Shell", icon: "terminal", action: "Run command" };
   if (key === "wait")

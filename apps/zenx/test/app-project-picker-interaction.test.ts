@@ -1,4 +1,13 @@
 import "./dom-primitives.js";
+import { ZenXProjectProjection } from "../src/main/project-projection.js";
+import { agentSessionNavigationId } from "../src/main/conversation-navigation.js";
+import { chooseValue } from "./choice-interaction.js";
+import { getConversationPresentationStore } from "../src/renderer/src/conversation-presentation.js";
+import type {
+  AgentProviderEvent,
+  AgentProvidersApi,
+  AgentSessionSnapshot,
+} from "../src/main/agent-providers/types.js";
 /// <reference path="../src/renderer/src/env.d.ts" />
 
 import assert from "node:assert/strict";
@@ -7,12 +16,17 @@ import { JSDOM } from "jsdom";
 import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
 
+import type { ContextCompactionItem } from "../../../src/item.js";
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import type { ModelUsageProjection } from "../../../src/model-usage.js";
 import type { AppServerHostStatus } from "../src/main/app-server-manager.js";
 import type { ZenXImageDraft } from "../src/main/image-attachments.js";
 import type { ZenXProjectProjectionSnapshot } from "../src/main/project-projection.js";
-import type { ModelSummary, Thread } from "../src/protocol-client/index.js";
+import type {
+  ModelSummary,
+  ServerNotificationParams,
+  Thread,
+} from "../src/protocol-client/index.js";
 import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
 const { act, createElement } = React;
@@ -51,6 +65,55 @@ function projectSwitcher(): HTMLButtonElement | undefined {
     undefined
   );
 }
+
+test("empty and provider drafts restore the narrow Sidebar from the controls row", async () => {
+  const harness = await mountApp(
+    { ...oneProject(), lastUsedWorkspace: null },
+    { agentProviders: externalAgentApi() },
+  );
+  try {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 598,
+    });
+    document.documentElement.dataset.platform = "linux";
+    const openMenu = async () => {
+      const menu = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          '.window-titlebar-session [aria-label="Open sidebar"]',
+        ),
+      );
+      assert.equal(menu.getAttribute("aria-controls"), "primary-sidebar");
+      assert.equal(menu.getAttribute("aria-expanded"), "false");
+      assert.equal(
+        document.querySelector('.agent-surface [aria-label="Open sidebar"]'),
+        null,
+      );
+      await act(async () => menu.click());
+      assert.equal(menu.getAttribute("aria-expanded"), "true");
+      assert.match(
+        document.getElementById("primary-sidebar")!.className,
+        /open/u,
+      );
+    };
+    await openMenu();
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")!.click(),
+    );
+    await waitFor(() => document.querySelector("#thread-composer"));
+    await openMenu();
+    await act(async () =>
+      document.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    await chooseAgentProvider("codex-work");
+    await waitFor(() => document.querySelector("#agent-composer-codex-work"));
+    await openMenu();
+  } finally {
+    await unmountApp(harness);
+  }
+});
 
 test("desktop title bar collapses and restores the Sidebar", async () => {
   const harness = await mountApp({
@@ -2364,7 +2427,7 @@ test("late canonical queue ID settles only the original unknown submission, not 
     },
   );
   try {
-    const composer = await selectedComposer();
+    let composer = await selectedComposer();
     await setTextareaValue(composer, "identical text");
     await invokeFormSubmit(
       document.querySelector<HTMLFormElement>("form.composer")!,
@@ -2431,6 +2494,8 @@ test("late canonical queue ID settles only the original unknown submission, not 
         document.querySelector<HTMLTextAreaElement>("#thread-composer")
           ?.value === "",
     );
+    composer = document.querySelector<HTMLTextAreaElement>("#thread-composer")!;
+    assert.ok(composer, "The returned Thread has its current composer");
     // The matching receipt clears the unknown-send error and original draft;
     // it does not leave an implementation-level success note in the composer.
     assert.equal(document.querySelector(".composer-error"), null);
@@ -3340,6 +3405,7 @@ test("current permissions follow notifications even when the Thread list fails",
 async function mountApp(
   projects: ZenXProjectProjectionSnapshot,
   options: {
+    agentProviders?: AgentProvidersApi;
     addWorkspace?(workspace: string): Promise<void>;
     getStatus?(): Promise<AppServerHostStatus>;
     initialPinnedThreadIds?: string[];
@@ -3398,6 +3464,7 @@ async function mountApp(
     options.composerSendMode ?? "queue";
   Object.assign(currentSettings.profile, options.initialProfile);
   const zenx = {
+    agentProviders: options.agentProviders,
     panels: { onOpen: () => () => undefined },
     platform: "darwin",
     protocol: {
@@ -3481,10 +3548,31 @@ async function mountApp(
           : await options.modelUsage(),
     },
     projects: {
-      get: async () =>
-        options.projectsGet === undefined
-          ? projects
-          : await options.projectsGet(),
+      get: async () => {
+        if (options.projectsGet !== undefined)
+          return await options.projectsGet();
+        if (options.agentProviders === undefined) return projects;
+        const sessions = await options.agentProviders.sessions();
+        if (sessions.length === 0) return projects;
+        const projection = new ZenXProjectProjection(
+          "freebsd",
+          async (value) => value,
+        );
+        await projection.updateConfiguration(
+          projects.projects.map((project) => project.workspace),
+          null,
+          projects.lastUsedWorkspace,
+        );
+        return await projection.project([
+          ...projects.projects.flatMap((project) =>
+            project.threadIds.map((id) => ({ id, cwd: project.workspace })),
+          ),
+          ...sessions.map((session) => ({
+            id: agentSessionNavigationId(session.id),
+            cwd: session.cwd,
+          })),
+        ]);
+      },
       startThread: async (
         workspace: string,
         selection?: { model?: string; effort?: string },
@@ -3895,6 +3983,41 @@ function exactButton(label: string): HTMLButtonElement | undefined {
   );
 }
 
+async function chooseAgentProvider(id: string): Promise<void> {
+  const trigger = await waitFor(() =>
+    document.querySelector<HTMLButtonElement>(".composer-model-trigger"),
+  );
+  await act(async () => trigger.click());
+  const entry = await waitFor(() =>
+    [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(
+      (button) => button.textContent?.startsWith("Agent Provider"),
+    ),
+  );
+  await act(async () => entry.click());
+  const option = await waitFor(() =>
+    [
+      ...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+    ].find((button) => button.dataset.agentProviderId === id),
+  );
+  await act(async () => option.click());
+}
+
+async function chooseComposerModel(id: string): Promise<void> {
+  const trigger = document.querySelector<HTMLButtonElement>(
+    ".composer-model-trigger",
+  )!;
+  await act(async () => trigger.click());
+  const entry = [
+    ...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+  ].find((button) => button.textContent?.startsWith("Model"))!;
+  await act(async () => entry.click());
+  const option = [
+    ...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+  ].find((button) => button.dataset.modelId === id)!;
+  assert.ok(option);
+  await act(async () => option.click());
+}
+
 function exactMenuButton(label: string): HTMLButtonElement | undefined {
   return [
     ...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
@@ -4091,6 +4214,301 @@ test("/compact preserves later edits and refreshes the canonical compaction item
       false,
     );
     assert.equal(document.querySelector(".settings-toast"), null);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+function nativeCompactionItem(coveredThroughItemId = "thread-1-metadata") {
+  return {
+    id: "automatic-compact",
+    type: "context_compaction" as const,
+    threadId: "thread-1",
+    createdAt: "2026-10-04T10:00:00Z",
+    provenance: "provider_generated" as const,
+    initiator: "human" as const,
+    coveredThroughItemId,
+    summary: "Saved native compacted summary",
+    retainedItemIds: [],
+    providerProfileId: "fake",
+    modelId: "fake",
+    reasoningEffort: "medium",
+    tokenUsage: { inputTokens: 15, outputTokens: 4 },
+    algorithmVersion: "zen.context-compaction.v2",
+  };
+}
+
+test("native compaction event hydrates its authoritative prefix without clearing a later draft", async () => {
+  let listener:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  const hydration = deferred<ReturnType<typeof nativeRecoveryForThread>>();
+  let reads = 0;
+  const initial = nativeRecoveryForThread(liveThread());
+  const item = nativeCompactionItem();
+  const complete = {
+    ...initial,
+    watermark: 1,
+    thread: { ...initial.thread, items: [...initial.thread.items, item] },
+  };
+  const harness = await mountThreadApp({
+    onNotification: (value) => {
+      listener = value;
+      return () => {
+        listener = undefined;
+      };
+    },
+    request: async (method) => {
+      if (method === "zen/thread/resume")
+        return ++reads === 1 ? initial : hydration.promise;
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "Keep my draft while history refreshes");
+    await act(async () => {
+      listener?.("zen/thread/event", {
+        processEpoch: initial.processEpoch,
+        threadId: "thread-1",
+        watermark: 1,
+        event: { type: "item_completed", item },
+      });
+      await Promise.resolve();
+    });
+    assert.equal(
+      reads,
+      2,
+      "a recorded compaction triggers an authoritative native recovery",
+    );
+    await setTextareaValue(composer, "A newer draft during recovery");
+    await act(async () => hydration.resolve(complete));
+    await waitFor(() => document.body.textContent?.includes("Human initiated"));
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "A newer draft during recovery",
+    );
+    assert.equal(
+      document.querySelector(".agent-surface .page-loading") === null,
+      true,
+    );
+    await act(async () =>
+      listener?.("zen/thread/event", {
+        processEpoch: initial.processEpoch,
+        threadId: "thread-1",
+        watermark: 1,
+        event: { type: "item_completed", item },
+      }),
+    );
+    assert.equal(
+      reads,
+      2,
+      "a duplicate saved event cannot trigger a new recovery",
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("new CAS first-send projection hydrates native compaction and fences newer navigation", async () => {
+  let listener:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  const hydration = deferred<ReturnType<typeof nativeRecoveryForThread>>();
+  let reads = 0;
+  const item = nativeCompactionItem("turn-1-completed");
+  const recovered = nativeRecoveryForThread({
+    ...runningThread(),
+    status: { type: "idle" },
+    turns: runningThread().turns.map((turn) => ({
+      ...turn,
+      status: "completed",
+      completedAt: 20,
+    })),
+  });
+  const complete = {
+    ...recovered,
+    watermark: 1,
+    thread: { ...recovered.thread, items: [...recovered.thread.items, item] },
+  };
+  const harness = await mountApp(oneProject(), {
+    onNotification: (value) => {
+      listener = value;
+      return () => {
+        listener = undefined;
+      };
+    },
+    startProjectThread: async (workspace) =>
+      started({ ...liveThread(), canonicalItems: undefined }, workspace),
+    request: async (method) => {
+      if (method === "turn/start") return {};
+      if (method === "zen/thread/resume") {
+        reads++;
+        return hydration.promise;
+      }
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(composer, "Create this conversation");
+    await invokePrimarySubmit(exactButtonByAria("Send"));
+    await waitFor(() =>
+      document.querySelector(".new-thread-draft-heading") === null
+        ? true
+        : undefined,
+    );
+    await setTextareaValue(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!,
+      "Keep the created conversation draft",
+    );
+    await act(async () => {
+      listener?.("zen/thread/event", {
+        processEpoch: complete.processEpoch,
+        threadId: "thread-1",
+        watermark: 1,
+        event: { type: "item_completed", item },
+      });
+      await Promise.resolve();
+    });
+    assert.equal(
+      reads,
+      1,
+      "unknown native epoch must recover rather than discard a saved compaction",
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
+    );
+    await act(async () => hydration.resolve(complete));
+    assert.equal(
+      document.querySelector<HTMLElement>(".settings-view")!.hidden,
+      false,
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")!.click(),
+    );
+    await waitFor(() => document.querySelector(".new-thread-draft-heading"));
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "",
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("compaction hydration failure preserves its saved summary, draft, and a recoverable error", async () => {
+  let listener:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  let reads = 0;
+  const initial = nativeRecoveryForThread(liveThread());
+  const item = nativeCompactionItem("unobserved-native-boundary");
+  const harness = await mountThreadApp({
+    onNotification: (value) => {
+      listener = value;
+      return () => {
+        listener = undefined;
+      };
+    },
+    request: async (method) => {
+      if (method === "zen/thread/resume") {
+        if (++reads === 1) return initial;
+        throw new Error("Native recovery unavailable");
+      }
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "My unsent draft");
+    await act(async () =>
+      listener?.("zen/thread/event", {
+        processEpoch: initial.processEpoch,
+        threadId: "thread-1",
+        watermark: 1,
+        event: { type: "item_completed", item },
+      }),
+    );
+    await waitFor(() =>
+      document.body.textContent?.includes(
+        "Compacted context details could not be refreshed",
+      ),
+    );
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "My unsent draft",
+    );
+    assert.equal(
+      document.querySelector(".agent-surface .page-loading") === null,
+      true,
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".context-compaction-toggle")!
+        .click(),
+    );
+    assert.match(document.body.textContent!, /Saved native compacted summary/);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("compaction event and RPC success share one freshness-fenced native recovery", async () => {
+  let listener:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  const hydration = deferred<ReturnType<typeof nativeRecoveryForThread>>();
+  const initial = nativeRecoveryForThread(liveThread());
+  const item = nativeCompactionItem();
+  const complete = {
+    ...initial,
+    watermark: 1,
+    thread: { ...initial.thread, items: [...initial.thread.items, item] },
+  };
+  let reads = 0;
+  const harness = await mountThreadApp({
+    onNotification: (value) => {
+      listener = value;
+      return () => {
+        listener = undefined;
+      };
+    },
+    request: async (method) => {
+      if (method === "zen/thread/resume")
+        return ++reads === 1 ? initial : hydration.promise;
+      if (method === "thread/compact") {
+        listener?.("zen/thread/event", {
+          processEpoch: initial.processEpoch,
+          threadId: "thread-1",
+          watermark: 1,
+          event: { type: "item_completed", item },
+        });
+        return { compactionItemId: item.id };
+      }
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "/compact");
+    await invokePrimarySubmit(exactButtonByAria("Compact context"));
+    await waitFor(() => (reads === 2 ? true : undefined));
+    assert.equal(reads, 2);
+    await act(async () => hydration.resolve(complete));
+    await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value ===
+      ""
+        ? true
+        : undefined,
+    );
+    assert.equal(
+      reads,
+      2,
+      "the response reuses the event recovery rather than starting another read",
+    );
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "",
+    );
   } finally {
     await unmountApp(harness);
   }
@@ -4485,4 +4903,2135 @@ test("composer default save cannot roll back a newer settings notification", asy
   } finally {
     await unmountApp(harness);
   }
+});
+
+function externalAgentApi(
+  overrides: Partial<AgentProvidersApi> = {},
+): AgentProvidersApi {
+  let bindings: AgentSessionSnapshot["binding"][] = [];
+  return {
+    list: async () => [
+      { id: "zen", kind: "zen", name: "Zen" },
+      { id: "codex-work", kind: "codex", name: "Codex work" },
+    ],
+    save: async (instance) => instance,
+    capabilities: async () => ({
+      models: true,
+      interrupt: true,
+      resume: true,
+      changeModel: true,
+      approvals: true,
+      permissionModes: ["workspace-write", "danger-full-access"],
+    }),
+    models: async () => [
+      { ...wireModel("codex-model", true), id: "codex-model" },
+    ],
+    sessions: async () => bindings,
+    approvals: async () => [],
+    create: async () => {
+      const value = externalAgentSnapshot();
+      bindings = [...bindings, value.binding];
+      return value;
+    },
+    read: async () => externalAgentSnapshot(),
+    send: async () => undefined,
+    interrupt: async () => undefined,
+    respondApproval: async () => undefined,
+    onEvent: () => () => undefined,
+    ...overrides,
+  };
+}
+function externalAgentSnapshot(): AgentSessionSnapshot {
+  return {
+    binding: {
+      id: "external-binding",
+      hostId: "local-host",
+      providerInstanceId: "codex-work",
+      nativeSessionId: "native-codex",
+      cwd: "/work/zen",
+    },
+    model: "codex-model",
+    thread: {
+      ...liveThread(),
+      id: "native-codex",
+      sessionId: "native-codex",
+      modelProvider: "codex",
+      name: "Native Codex conversation",
+      preview: "Native Codex conversation",
+      canonicalItems: undefined,
+    },
+  };
+}
+
+test("App selects an Agent Provider, promotes its first Send, and reopens the native session", async () => {
+  let creates = 0;
+  let catalogs = 0;
+  let usedWorkspace = "";
+  const sends: unknown[] = [];
+  const native = externalAgentSnapshot();
+  const service = externalAgentApi({
+    models: async () => {
+      catalogs++;
+      return [{ ...wireModel("codex-model", true), id: "codex-model" }];
+    },
+    create: async (request) => {
+      creates++;
+      assert.equal(request.cwd, "/work/zen");
+      assert.equal(request.providerInstanceId, "codex-work");
+      return native;
+    },
+    sessions: async () => (creates ? [native.binding] : []),
+    send: async (id, request) => {
+      sends.push({ id, ...request });
+    },
+  });
+  const harness = await mountApp(oneProject(), {
+    agentProviders: service,
+    markWorkspaceUsed: async (workspace) => {
+      usedWorkspace = workspace;
+      return publicSettings([]);
+    },
+  });
+  try {
+    const zenComposer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(zenComposer, "Use the real engine");
+    assert.equal(catalogs, 0);
+    await chooseAgentProvider("codex-work");
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#agent-composer-codex-work"),
+    );
+    assert.equal(composer.value, "Use the real engine");
+    const send = await waitFor(() => {
+      const button = document.querySelector<HTMLButtonElement>(
+        '[aria-label="Send"]',
+      );
+      return button && !button.disabled ? button : undefined;
+    });
+    await act(async () => send.click());
+    await waitFor(() =>
+      document.querySelector("#agent-composer-external-binding"),
+    );
+    assert.equal(creates, 1);
+    assert.equal(usedWorkspace, "/work/zen");
+    assert.deepEqual(sends, [
+      {
+        id: "external-binding",
+        text: "Use the real engine",
+        model: "codex-model",
+      },
+    ]);
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>(
+        "#agent-composer-external-binding",
+      )!.value,
+      "",
+    );
+    assert.equal(document.querySelector('[aria-label="Add images"]'), null);
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          ".native-session-row-shell > .thread-row",
+        )!
+        .click(),
+    );
+    await waitFor(() =>
+      document.querySelector("#agent-composer-external-binding"),
+    );
+    assert.match(
+      document.querySelector(".native-session-row-shell > .thread-row")!
+        .textContent!,
+      /Native Codex conversation/,
+    );
+    assert.doesNotMatch(
+      document.querySelector(".native-session-row-shell > .thread-row")!
+        .textContent!,
+      /Codex work/,
+    );
+    assert.match(
+      document
+        .querySelector(".native-session-row-shell > .thread-row")!
+        .getAttribute("title")!,
+      /Codex work.*Working directory: \/work\/zen/,
+    );
+    assert.equal(document.querySelector(".agent-session-navigation"), null);
+    assert.equal(document.querySelectorAll(".project-group").length, 1);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("App finishes a late native create without stealing newer Settings navigation", async () => {
+  const creation = deferred<AgentSessionSnapshot>();
+  let sends = 0;
+  let created = false;
+  const service = externalAgentApi({
+    create: () => creation.promise,
+    sessions: async () => (created ? [externalAgentSnapshot().binding] : []),
+    send: async () => {
+      sends++;
+    },
+  });
+  const harness = await mountApp(oneProject(), { agentProviders: service });
+  try {
+    await waitFor(() => document.querySelector(".composer-model-trigger"));
+    await chooseAgentProvider("codex-work");
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#agent-composer-codex-work"),
+    );
+    await setTextareaValue(composer, "Continue in Codex");
+    const send = await waitFor(() => {
+      const value = document.querySelector<HTMLButtonElement>(
+        '[aria-label="Send"]',
+      );
+      return value && !value.disabled ? value : undefined;
+    });
+    await act(async () => send.click());
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
+    );
+    await act(async () => {
+      created = true;
+      creation.resolve(externalAgentSnapshot());
+    });
+    await waitFor(() => (sends === 1 ? true : undefined));
+    assert.equal(
+      document.querySelector<HTMLElement>(".settings-view")!.hidden,
+      false,
+    );
+    assert.equal(
+      document.querySelector("#agent-composer-external-binding"),
+      null,
+    );
+    assert.ok(
+      document.querySelector(".native-session-row-shell > .thread-row"),
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("Restore failed native draft replaces a newer selected external session", async () => {
+  const creation = deferred<AgentSessionSnapshot>();
+  const service = externalAgentApi({
+    create: () => creation.promise,
+    sessions: async () => [externalAgentSnapshot().binding],
+  });
+  const harness = await mountApp(oneProject(), { agentProviders: service });
+  try {
+    await waitFor(() => document.querySelector(".composer-model-trigger"));
+    await chooseAgentProvider("codex-work");
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#agent-composer-codex-work"),
+    );
+    await setTextareaValue(composer, "Recover this request");
+    const send = await waitFor(() => {
+      const value = document.querySelector<HTMLButtonElement>(
+        '[aria-label="Send"]',
+      );
+      return value && !value.disabled ? value : undefined;
+    });
+    await act(async () => send.click());
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          ".native-session-row-shell > .thread-row",
+        )!
+        .click(),
+    );
+    await waitFor(() =>
+      document.querySelector("#agent-composer-external-binding"),
+    );
+    await act(async () => creation.reject(new Error("Native create failed")));
+    const restore = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (value) => value.textContent?.trim() === "Restore draft",
+      ),
+    );
+    await act(async () => restore.click());
+    const recovered = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#agent-composer-codex-work"),
+    );
+    assert.equal(recovered.value, "Recover this request");
+    assert.equal(
+      document.querySelector("#agent-composer-external-binding"),
+      null,
+    );
+    assert.match(document.body.textContent!, /Native create failed/);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("concurrent external drafts do not retain delivered text", async () => {
+  const first = deferred<AgentSessionSnapshot>();
+  const second = deferred<AgentSessionSnapshot>();
+  let creates = 0;
+  const sent: string[] = [];
+  const native = {
+    ...externalAgentSnapshot(),
+    binding: { ...externalAgentSnapshot().binding, id: "external-first" },
+  };
+  const service = externalAgentApi({
+    create: () => (++creates === 1 ? first.promise : second.promise),
+    sessions: async () => [native.binding],
+    read: async () => native,
+    send: async (id) => {
+      sent.push(id);
+    },
+  });
+  const harness = await mountApp(oneProject(), { agentProviders: service });
+  try {
+    await waitFor(() => document.querySelector(".composer-model-trigger"));
+    await chooseAgentProvider("codex-work");
+    await setTextareaValue(
+      await waitFor(() =>
+        document.querySelector<HTMLTextAreaElement>(
+          "#agent-composer-codex-work",
+        ),
+      ),
+      "First message",
+    );
+    await act(async () =>
+      (
+        await waitFor(() => {
+          const b = document.querySelector<HTMLButtonElement>(
+            '[aria-label="Send"]',
+          );
+          return b && !b.disabled ? b : undefined;
+        })
+      ).click(),
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")!.click(),
+    );
+    await waitFor(() => document.querySelector("#thread-composer"));
+    await chooseAgentProvider("codex-work");
+    await setTextareaValue(
+      await waitFor(() =>
+        document.querySelector<HTMLTextAreaElement>(
+          "#agent-composer-codex-work",
+        ),
+      ),
+      "Second message",
+    );
+    await act(async () =>
+      (
+        await waitFor(() => {
+          const b = document.querySelector<HTMLButtonElement>(
+            '[aria-label="Send"]',
+          );
+          return b && !b.disabled ? b : undefined;
+        })
+      ).click(),
+    );
+    assert.equal(creates, 2);
+    await act(async () => first.resolve(native));
+    await waitFor(() => sent.length === 1);
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          ".native-session-row-shell > .thread-row",
+        )!
+        .click(),
+    );
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        "#agent-composer-external-first",
+      ),
+    );
+    assert.equal(composer.value, "");
+  } finally {
+    await act(async () =>
+      second.resolve({
+        ...native,
+        binding: { ...native.binding, id: "external-second" },
+      }),
+    );
+    await unmountApp(harness);
+  }
+});
+
+test("interrupted external create restores explicit model selection", async () => {
+  const creation = deferred<AgentSessionSnapshot>();
+  const service = externalAgentApi({
+    models: async () => [
+      { ...wireModel("codex-model", true), id: "codex-model" },
+      { ...wireModel("other-model", false), id: "other-model" },
+    ],
+    create: () => creation.promise,
+  });
+  const harness = await mountApp(oneProject(), { agentProviders: service });
+  try {
+    await waitFor(() => document.querySelector(".composer-model-trigger"));
+    await chooseAgentProvider("codex-work");
+    await waitFor(() =>
+      document
+        .querySelector(".composer-model-trigger")
+        ?.textContent?.includes("codex-model"),
+    );
+    await chooseComposerModel("other-model");
+    await setTextareaValue(
+      await waitFor(() =>
+        document.querySelector<HTMLTextAreaElement>(
+          "#agent-composer-codex-work",
+        ),
+      ),
+      "Keep requested model",
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click(),
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
+    );
+    await act(async () => creation.reject(new Error("Native create failed")));
+    const restore = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (b) => b.textContent?.trim() === "Restore draft",
+      ),
+    );
+    await act(async () => restore.click());
+    await waitFor(() => document.querySelector("#agent-composer-codex-work"));
+    assert.ok(
+      document
+        .querySelector(".composer-model-trigger")!
+        .textContent!.includes("other-model"),
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("fresh external-only profile can configure Codex and send from global New thread", async () => {
+  let configured:
+    | import("../src/main/agent-providers/types.js").AgentProviderInstance
+    | null = null;
+  let creates = 0;
+  let sends = 0;
+  let zenCreates = 0;
+  const native = externalAgentSnapshot();
+  const service = externalAgentApi({
+    list: async () => [
+      { id: "zen", kind: "zen", name: "Zen" },
+      ...(configured === null ? [] : [configured]),
+    ],
+    save: async (instance) => {
+      configured = instance;
+      return instance;
+    },
+    create: async (request) => {
+      creates++;
+      assert.equal(request.providerInstanceId, configured!.id);
+      return {
+        ...native,
+        binding: { ...native.binding, providerInstanceId: configured!.id },
+      };
+    },
+    sessions: async () =>
+      creates
+        ? [{ ...native.binding, providerInstanceId: configured!.id }]
+        : [],
+    send: async () => {
+      sends++;
+    },
+  });
+  const project = { ...oneProject(), lastUsedWorkspace: null };
+  const harness = await mountApp(project, {
+    agentProviders: service,
+    initialProfile: { onboardingComplete: false, providerProfiles: [] },
+    models: [],
+    startProjectThread: async () => {
+      zenCreates++;
+      throw new Error("Zen is not configured");
+    },
+  });
+  try {
+    await waitFor(() =>
+      document.querySelector<HTMLElement>(".settings-view")?.hidden === false
+        ? true
+        : undefined,
+    );
+    await act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((value) => value.textContent?.trim() === "Add instance")!
+        .click(),
+    );
+    await waitFor(() =>
+      document.querySelector('[aria-label="codex instance name"]'),
+    );
+    await act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((value) => value.textContent?.trim() === "Save")!
+        .click(),
+    );
+    await waitFor(() => configured ?? undefined);
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")!.click(),
+    );
+    await waitFor(() => document.querySelector("#thread-composer"));
+    assert.equal(
+      document.querySelector<HTMLElement>(".settings-view")!.hidden,
+      true,
+    );
+    const projectChoice = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        ".new-thread-project-menu button",
+      ),
+    );
+    await act(async () => projectChoice.click());
+    await chooseAgentProvider(configured!.id);
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        `#agent-composer-${configured!.id}`,
+      ),
+    );
+    await setTextareaValue(composer, "Run without a Zen account");
+    const send = await waitFor(() => {
+      const value = document.querySelector<HTMLButtonElement>(
+        '[aria-label="Send"]',
+      );
+      return value && !value.disabled ? value : undefined;
+    });
+    await act(async () => send.click());
+    await waitFor(() => (sends === 1 ? true : undefined));
+    assert.equal(creates, 1);
+    assert.equal(zenCreates, 0);
+    assert.ok(document.querySelector("#agent-composer-external-binding"));
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("mixed Project rows preserve separate Zen and native drafts with honest row actions", async () => {
+  const native = externalAgentSnapshot();
+  const harness = await mountThreadApp({
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(liveThread());
+      throw new Error(`Unexpected ${method}`);
+    },
+    agentProviders: externalAgentApi({
+      sessions: async () => [native.binding],
+      read: async () => native,
+    }),
+  });
+  try {
+    const zenRow = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '.thread-row-shell[data-thread-id="thread-1"] > .thread-row',
+      ),
+    );
+    const nativeRow = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        ".native-session-row-shell > .thread-row",
+      ),
+    );
+    assert.equal(document.querySelectorAll(".project-group").length, 1);
+    assert.equal(
+      document.querySelector(".agent-session-navigation") === null,
+      true,
+    );
+    assert.equal(
+      nativeRow.parentElement!.querySelector(".thread-menu-trigger") === null,
+      true,
+    );
+    await act(async () => zenRow.click());
+    await setTextareaValue(
+      await waitFor(() =>
+        document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+      ),
+      "Zen draft",
+    );
+    await act(async () => nativeRow.click());
+    const nativeComposer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        "#agent-composer-external-binding",
+      ),
+    );
+    await setTextareaValue(nativeComposer, "Native draft");
+    assert.match(
+      nativeRow.getAttribute("aria-label")!,
+      /Host: local-host.*Native session: native-codex/,
+    );
+    assert.equal(nativeRow.getAttribute("aria-current"), "page");
+    assert.equal(zenRow.getAttribute("aria-current"), null);
+    await act(async () => zenRow.click());
+    assert.equal(
+      (
+        await waitFor(() =>
+          document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+        )
+      ).value,
+      "Zen draft",
+    );
+    await act(async () => nativeRow.click());
+    assert.equal(
+      (
+        await waitFor(() =>
+          document.querySelector<HTMLTextAreaElement>(
+            "#agent-composer-external-binding",
+          ),
+        )
+      ).value,
+      "Native draft",
+    );
+    assert.equal(nativeRow.getAttribute("aria-current"), "page");
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("R1 counterexample: Retry agent conversations refreshes its missing Project locators", async () => {
+  let healthy = false;
+  let projectReads = 0;
+  let agentReads = 0;
+  const native = externalAgentSnapshot();
+  const project = oneProject();
+  const harness = await mountApp(project, {
+    projectsGet: async () => {
+      projectReads++;
+      return healthy
+        ? {
+            ...project,
+            projects: project.projects.map((p) => ({
+              ...p,
+              threadIds: [`agent:${native.binding.id}`],
+            })),
+          }
+        : { ...project, sourceErrors: { agent: "Native source unavailable" } };
+    },
+    agentProviders: externalAgentApi({
+      sessions: async () => {
+        agentReads++;
+        return [native.binding];
+      },
+      read: async () => native,
+    }),
+  });
+  try {
+    const retry = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (b) => b.textContent?.trim() === "Retry agent conversations",
+      ),
+    );
+    await waitFor(() => projectReads >= 2);
+    const before = projectReads;
+    const beforeAgent = agentReads;
+    healthy = true;
+    await act(async () => retry.click());
+    await waitFor(() => agentReads > beforeAgent);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.ok(
+      projectReads > before,
+      "Retry refreshes the shared Project projection",
+    );
+    assert.ok(
+      document.querySelector(".native-session-row-shell"),
+      "A successful retry must restore the known native Project conversation",
+    );
+    assert.equal(
+      document.body.textContent?.includes("Native source unavailable"),
+      false,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("R1 counterexample: failed compaction hydration keeps buffered terminal events visible", async () => {
+  let listener:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  const hydration = deferred<ReturnType<typeof nativeRecoveryForThread>>();
+  const initial = nativeRecoveryForThread(r1CompactionRunningThread());
+  const item = {
+    ...nativeCompactionItem("turn-0-completed"),
+    initiator: "automatic" as const,
+  };
+  let reads = 0;
+  const harness = await mountThreadApp({
+    onNotification: (value) => {
+      listener = value;
+      return () => {
+        listener = undefined;
+      };
+    },
+    request: async (method) => {
+      if (method === "zen/thread/resume")
+        return ++reads === 1 ? initial : hydration.promise;
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "My draft");
+    await act(async () =>
+      listener?.("zen/thread/event", {
+        processEpoch: initial.processEpoch,
+        threadId: "thread-1",
+        watermark: 1,
+        event: { type: "item_completed", item },
+      }),
+    );
+    await waitFor(() => reads === 2);
+    await act(async () =>
+      listener?.("zen/thread/event", {
+        processEpoch: initial.processEpoch,
+        threadId: "thread-1",
+        watermark: 2,
+        event: {
+          type: "turn_completed",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          status: "completed",
+        },
+      }),
+    );
+    await act(async () => hydration.reject(new Error("Recovery unavailable")));
+    await waitFor(() =>
+      document.body.textContent?.includes(
+        "Compacted context details could not be refreshed",
+      ),
+    );
+    assert.equal(
+      document.querySelector(".turn.inProgress") === null,
+      true,
+      "The received terminal event must settle the live Turn even when native details read fails",
+    );
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "My draft",
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("R1 counterexample: second compaction during recovery gets its newer authoritative prefix", async () => {
+  let listener:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  const hydration = deferred<ReturnType<typeof nativeRecoveryForThread>>();
+  const initial = nativeRecoveryForThread(r1CompactionRunningThread());
+  const first = {
+    ...nativeCompactionItem("turn-0-completed"),
+    initiator: "automatic" as const,
+  };
+  const second = {
+    ...nativeCompactionItem("turn-1-completed"),
+    id: "compact-2",
+    initiator: "automatic" as const,
+    summary: "Second saved summary",
+  };
+  const firstSnapshot = {
+    ...initial,
+    watermark: 1,
+    thread: { ...initial.thread, items: [...initial.thread.items, first] },
+  };
+  const latest = laterCompactionSnapshot(first, second);
+  let reads = 0;
+  const harness = await mountThreadApp({
+    onNotification: (value) => {
+      listener = value;
+      return () => {
+        listener = undefined;
+      };
+    },
+    request: async (method) => {
+      if (method === "zen/thread/resume") {
+        reads++;
+        return reads === 1 ? initial : reads === 2 ? hydration.promise : latest;
+      }
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    await selectedComposer();
+    const event = (
+      watermark: number,
+      event: ServerNotificationParams["zen/thread/event"]["event"],
+    ) =>
+      listener?.("zen/thread/event", {
+        processEpoch: initial.processEpoch,
+        threadId: "thread-1",
+        watermark,
+        event,
+      });
+    await act(async () => event(1, { type: "item_completed", item: first }));
+    await waitFor(() => reads === 2);
+    await act(async () => {
+      event(2, {
+        type: "turn_completed",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        status: "completed",
+      });
+      event(3, {
+        type: "turn_started",
+        threadId: "thread-1",
+        turnId: "turn-2",
+      });
+      event(4, { type: "item_completed", item: second });
+    });
+    await act(async () => hydration.resolve(firstSnapshot));
+    const compactions = [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        ".context-compaction-toggle",
+      ),
+    ];
+    assert.equal(compactions.length, 2);
+    await act(async () => compactions[1]!.click());
+    const diagnostics = [
+      ...document.querySelectorAll<HTMLDetailsElement>(
+        ".compaction-projection",
+      ),
+    ].at(-1)!;
+    await act(async () => {
+      diagnostics.open = true;
+      diagnostics.dispatchEvent(new window.Event("toggle"));
+    });
+    assert.equal(
+      reads,
+      3,
+      "A distinct newer compaction receives exactly one trailing native prefix read",
+    );
+    assert.match(diagnostics.textContent!, /projected history messages/);
+    assert.doesNotMatch(
+      diagnostics.textContent!,
+      /snapshot is unavailable|boundary does not exist/,
+    );
+    assert.equal(document.querySelectorAll(".turn.inProgress").length, 1);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+function r1CompactionRunningThread(): Thread {
+  const active = runningThread();
+  return {
+    ...active,
+    turns: [
+      {
+        ...active.turns[0]!,
+        id: "turn-0",
+        status: "completed",
+        startedAt: 1,
+        completedAt: 2,
+        durationMs: 1000,
+      },
+      ...active.turns,
+    ],
+  };
+}
+
+test("R1 counterexample: Retry Zen conversations refreshes its missing Project locators", async () => {
+  let healthy = false;
+  let projectReads = 0;
+  let zenReads = 0;
+  const project = oneProject();
+  const harness = await mountApp(project, {
+    projectsGet: async () => {
+      projectReads++;
+      return healthy
+        ? {
+            ...project,
+            projects: project.projects.map((p) => ({
+              ...p,
+              threadIds: ["thread-1"],
+            })),
+          }
+        : { ...project, sourceErrors: { zen: "Zen source unavailable" } };
+    },
+    threads: async (archived) => {
+      if (!archived) zenReads++;
+      return archived ? [] : [summary(false)];
+    },
+  });
+  try {
+    const retry = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (b) => b.textContent?.trim() === "Try again",
+      ),
+    );
+    const before = projectReads;
+    const beforeZen = zenReads;
+    healthy = true;
+    await act(async () => retry.click());
+    await waitFor(() => zenReads > beforeZen);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.ok(
+      projectReads > before,
+      "Retry refreshes the shared Project projection",
+    );
+    assert.equal(
+      document.body.textContent?.includes("Zen source unavailable"),
+      false,
+    );
+    assert.ok(
+      document.querySelector('.thread-row-shell[data-thread-id="thread-1"]'),
+      "A successful retry must restore the known Zen Project conversation",
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+function laterCompactionSnapshot(
+  first: ContextCompactionItem,
+  second: ContextCompactionItem,
+) {
+  const active = r1CompactionRunningThread();
+  const current = active.turns[1]!;
+  const snapshot = nativeRecoveryForThread(
+    {
+      ...active,
+      turns: [
+        active.turns[0]!,
+        { ...current, status: "completed", completedAt: 20 },
+        { ...current, id: "turn-2", startedAt: 30 },
+      ],
+    },
+    { watermark: 4 },
+  );
+  const items = [...snapshot.thread.items];
+  items.splice(
+    items.findIndex((item) => item.id === "turn-1-completed"),
+    0,
+    first,
+  );
+  return {
+    ...snapshot,
+    thread: { ...snapshot.thread, items: [...items, second] },
+  };
+}
+
+for (const outcome of ["unchanged", "newer-navigation"] as const) {
+  test(`distinct compaction trailing read preserves ${outcome} without a retry loop`, async () => {
+    let listener:
+      Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+    const hydration = deferred<ReturnType<typeof nativeRecoveryForThread>>();
+    const trailing = deferred<ReturnType<typeof nativeRecoveryForThread>>();
+    const initial = nativeRecoveryForThread(r1CompactionRunningThread());
+    const first = {
+      ...nativeCompactionItem("turn-0-completed"),
+      initiator: "automatic" as const,
+    };
+    const second = {
+      ...nativeCompactionItem("turn-1-completed"),
+      id: "compact-2",
+      initiator: "automatic" as const,
+      summary: "Second saved summary",
+    };
+    const firstSnapshot = {
+      ...initial,
+      watermark: 1,
+      thread: { ...initial.thread, items: [...initial.thread.items, first] },
+    };
+    let reads = 0;
+    const harness = await mountThreadApp({
+      onNotification: (value) => {
+        listener = value;
+        return () => {
+          listener = undefined;
+        };
+      },
+      request: async (method) => {
+        if (method === "zen/thread/resume")
+          return ++reads === 1
+            ? initial
+            : reads === 2
+              ? hydration.promise
+              : trailing.promise;
+        throw new Error(`Unexpected ${method}`);
+      },
+    });
+    try {
+      await selectedComposer();
+      const event = (
+        watermark: number,
+        event: ServerNotificationParams["zen/thread/event"]["event"],
+      ) =>
+        listener?.("zen/thread/event", {
+          processEpoch: initial.processEpoch,
+          threadId: "thread-1",
+          watermark,
+          event,
+        });
+      await act(async () => event(1, { type: "item_completed", item: first }));
+      await waitFor(() => reads === 2);
+      await act(async () => {
+        event(2, {
+          type: "turn_completed",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          status: "completed",
+        });
+        event(3, {
+          type: "turn_started",
+          threadId: "thread-1",
+          turnId: "turn-2",
+        });
+        event(4, { type: "item_completed", item: second });
+      });
+      await act(async () => hydration.resolve(firstSnapshot));
+      await waitFor(() => reads === 3);
+      if (outcome === "newer-navigation") {
+        await act(async () =>
+          document
+            .querySelector<HTMLButtonElement>(".new-thread-action")!
+            .click(),
+        );
+        const draft = await waitFor(() =>
+          document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+        );
+        await setTextareaValue(draft, "Keep this newer draft");
+        await act(async () =>
+          trailing.resolve(laterCompactionSnapshot(first, second)),
+        );
+        assert.equal(
+          document.querySelector(".new-thread-draft-heading") !== null,
+          true,
+        );
+        assert.equal(
+          document.querySelector<HTMLTextAreaElement>("#thread-composer")!
+            .value,
+          "Keep this newer draft",
+        );
+        assert.equal(
+          document.querySelector(".context-compaction-event") === null,
+          true,
+        );
+      } else {
+        await act(async () => trailing.resolve(firstSnapshot));
+        await waitFor(() =>
+          document.body.textContent?.includes(
+            "Compacted context details are still incomplete",
+          ),
+        );
+        assert.equal(
+          document.querySelectorAll(".context-compaction-toggle").length,
+          2,
+          "A stale trailing snapshot cannot remove a newer saved summary",
+        );
+        assert.equal(
+          document
+            .querySelector('.turn[aria-label="Turn 2"]')!
+            .classList.contains("inProgress"),
+          false,
+          "A stale trailing snapshot cannot reopen a terminal Turn",
+        );
+        assert.equal(document.querySelectorAll(".turn.inProgress").length, 1);
+        await act(async () =>
+          event(4, { type: "item_completed", item: second }),
+        );
+      }
+      assert.equal(
+        reads,
+        3,
+        "An unchanged response or canceled selection cannot retry itself",
+      );
+    } finally {
+      await unmountApp(harness);
+    }
+  });
+}
+
+test("failed compaction read cannot republish an older view over a newer draft", async () => {
+  let listener:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  const hydration = deferred<ReturnType<typeof nativeRecoveryForThread>>();
+  const initial = nativeRecoveryForThread(r1CompactionRunningThread());
+  let reads = 0;
+  const harness = await mountThreadApp({
+    onNotification: (value) => {
+      listener = value;
+      return () => {
+        listener = undefined;
+      };
+    },
+    request: async (method) => {
+      if (method === "zen/thread/resume")
+        return ++reads === 1 ? initial : hydration.promise;
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    await selectedComposer();
+    await act(async () =>
+      listener?.("zen/thread/event", {
+        processEpoch: initial.processEpoch,
+        threadId: "thread-1",
+        watermark: 1,
+        event: {
+          type: "item_completed",
+          item: {
+            ...nativeCompactionItem("turn-0-completed"),
+            initiator: "automatic",
+          },
+        },
+      }),
+    );
+    await waitFor(() => reads === 2);
+    await act(async () =>
+      listener?.("zen/thread/event", {
+        processEpoch: initial.processEpoch,
+        threadId: "thread-1",
+        watermark: 2,
+        event: {
+          type: "turn_completed",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          status: "completed",
+        },
+      }),
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")!.click(),
+    );
+    const draft = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(draft, "The current draft");
+    await act(async () => hydration.reject(new Error("Old recovery failed")));
+    assert.equal(
+      document.querySelector(".new-thread-draft-heading") !== null,
+      true,
+    );
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "The current draft",
+    );
+    assert.equal(
+      document.body.textContent?.includes(
+        "Compacted context details could not be refreshed",
+      ),
+      false,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("R2 probe: buffered compaction during initial recovery gets an authoritative prefix", async () => {
+  let listener:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  const read = deferred<ReturnType<typeof nativeRecoveryForThread>>();
+  const initial = nativeRecoveryForThread(r1CompactionRunningThread());
+  const item = {
+    ...nativeCompactionItem("turn-1-completed"),
+    initiator: "automatic" as const,
+  };
+  const complete = nativeRecoveryForThread(
+    {
+      ...r1CompactionRunningThread(),
+      turns: r1CompactionRunningThread().turns.map((t) => ({
+        ...t,
+        status: "completed" as const,
+        completedAt: 20,
+      })),
+    },
+    { watermark: 2 },
+  );
+  complete.thread.items = [...complete.thread.items, item];
+  let reads = 0;
+  const harness = await mountThreadApp({
+    onNotification: (value) => {
+      listener = value;
+      return () => {
+        listener = undefined;
+      };
+    },
+    request: async (method) => {
+      if (method === "zen/thread/resume")
+        return ++reads === 1 ? read.promise : complete;
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    const row = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".thread-row"),
+    );
+    await act(async () => row.click());
+    await waitFor(() => reads === 1);
+    await act(async () => {
+      listener?.("zen/thread/event", {
+        processEpoch: initial.processEpoch,
+        threadId: "thread-1",
+        watermark: 1,
+        event: {
+          type: "turn_completed",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          status: "completed",
+        },
+      });
+      listener?.("zen/thread/event", {
+        processEpoch: initial.processEpoch,
+        threadId: "thread-1",
+        watermark: 2,
+        event: { type: "item_completed", item },
+      });
+      read.resolve(initial);
+    });
+    const toggle = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".context-compaction-toggle"),
+    );
+    await act(async () => toggle.click());
+    const diagnostics = await waitFor(() =>
+      document.querySelector<HTMLDetailsElement>(".compaction-projection"),
+    );
+    await act(async () => {
+      diagnostics.open = true;
+      diagnostics.dispatchEvent(new window.Event("toggle"));
+    });
+    assert.equal(
+      reads,
+      2,
+      "The newer buffered compaction must get one authoritative prefix read after initial resume",
+    );
+    assert.doesNotMatch(
+      diagnostics.textContent!,
+      /boundary does not exist|snapshot is unavailable/,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+for (const outcome of ["failure", "stale-success"] as const) {
+  test(`R2 probe: first-send native compaction read ${outcome} preserves the saved summary`, async () => {
+    let listener:
+      Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+    let reads = 0;
+    const snapshot = nativeRecoveryForThread(r1CompactionRunningThread(), {
+      processEpoch: "new-host",
+    });
+    const item = {
+      ...nativeCompactionItem("turn-1-completed"),
+      initiator: "automatic" as const,
+    };
+    const harness = await mountApp(oneProject(), {
+      onNotification: (value) => {
+        listener = value;
+        return () => {
+          listener = undefined;
+        };
+      },
+      startProjectThread: async (workspace) =>
+        started({ ...liveThread(), canonicalItems: undefined }, workspace),
+      request: async (method) => {
+        if (method === "turn/start") return {};
+        if (method === "zen/thread/resume") {
+          reads++;
+          if (outcome === "failure")
+            throw new Error("Native recovery unavailable");
+          return snapshot;
+        }
+        throw new Error(`Unexpected ${method}`);
+      },
+    });
+    try {
+      const composer = await waitFor(() =>
+        document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+      );
+      await setTextareaValue(composer, "Create this conversation");
+      await invokePrimarySubmit(exactButtonByAria("Send"));
+      await waitFor(
+        () => document.querySelector(".new-thread-draft-heading") === null,
+      );
+      await setTextareaValue(
+        document.querySelector<HTMLTextAreaElement>("#thread-composer")!,
+        "Keep my draft",
+      );
+      await act(async () =>
+        listener?.("zen/thread/event", {
+          processEpoch: "new-host",
+          threadId: "thread-1",
+          watermark: 1,
+          event: {
+            type: "item_completed",
+            item: { ...item, threadId: "foreign-thread" },
+          },
+        }),
+      );
+      assert.equal(
+        reads,
+        0,
+        "Mismatched Item identity cannot initiate recovery",
+      );
+      assert.equal(document.querySelector(".context-compaction-toggle"), null);
+      await act(async () => {
+        listener?.("zen/thread/event", {
+          processEpoch: "new-host",
+          threadId: "thread-1",
+          watermark: 1,
+          event: {
+            type: "turn_started",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          },
+        });
+        listener?.("zen/thread/event", {
+          processEpoch: "new-host",
+          threadId: "thread-1",
+          watermark: 2,
+          event: {
+            type: "turn_completed",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            status: "completed",
+          },
+        });
+        listener?.("zen/thread/event", {
+          processEpoch: "new-host",
+          threadId: "thread-1",
+          watermark: 3,
+          event: { type: "item_completed", item },
+        });
+      });
+      await waitFor(() =>
+        document.body.textContent?.includes(
+          outcome === "failure"
+            ? "Compacted context details could not be refreshed"
+            : "Compacted context details are still incomplete",
+        ),
+      );
+      assert.ok(
+        document.querySelector(".context-compaction-toggle"),
+        "The already recorded saved summary must remain inspectable when authoritative read fails",
+      );
+      assert.equal(
+        document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+        "Keep my draft",
+      );
+      const toggle = document.querySelector<HTMLButtonElement>(
+        ".context-compaction-toggle",
+      )!;
+      await act(async () => toggle.click());
+      assert.equal(
+        document.querySelector(".compaction-summary")!.textContent,
+        item.summary,
+      );
+      const diagnostics = document.querySelector<HTMLDetailsElement>(
+        ".compaction-projection",
+      )!;
+      await act(async () => {
+        diagnostics.open = true;
+        diagnostics.dispatchEvent(new window.Event("toggle"));
+      });
+      assert.match(diagnostics.textContent!, /snapshot is unavailable/);
+      await act(async () => {
+        getConversationPresentationStore().setDetail("debug");
+      });
+      const raw = [
+        ...document.querySelectorAll<HTMLDetailsElement>(".trace-debug-raw"),
+      ].find(
+        (details) =>
+          details.querySelector("summary")?.textContent ===
+          "Available canonical items",
+      )!;
+      await act(async () => {
+        raw.open = true;
+        raw.dispatchEvent(new window.Event("toggle"));
+      });
+      assert.deepEqual(
+        JSON.parse(raw.querySelector("pre")!.textContent!),
+        outcome === "failure" ? [item] : [...snapshot.thread.items, item],
+        "Only exact observed/native Items are disclosed; no missing lifecycle IDs are invented",
+      );
+      await act(async () => {
+        listener?.("zen/thread/event", {
+          processEpoch: "new-host",
+          threadId: "thread-1",
+          watermark: 3,
+          event: { type: "item_completed", item },
+        });
+        if (outcome === "stale-success")
+          listener?.("zen/thread/event", {
+            processEpoch: "older-host",
+            threadId: "thread-1",
+            watermark: 4,
+            event: {
+              type: "item_completed",
+              item: { ...item, id: "stale-compact" },
+            },
+          });
+      });
+      assert.equal(
+        reads,
+        1,
+        "Duplicate facts and known stale epochs cannot repeat the read",
+      );
+      assert.equal(
+        document.querySelectorAll(".context-compaction-toggle").length,
+        1,
+      );
+    } finally {
+      await unmountApp(harness);
+    }
+  });
+}
+
+test("R2 probe: recovery event tail compaction gets an authoritative prefix", async () => {
+  const initial = nativeRecoveryForThread(r1CompactionRunningThread(), {
+    watermark: 2,
+  });
+  const item = {
+    ...nativeCompactionItem("turn-1-completed"),
+    initiator: "automatic" as const,
+  };
+  initial.events = [
+    {
+      processEpoch: initial.processEpoch,
+      threadId: "thread-1",
+      watermark: 1,
+      event: {
+        type: "turn_completed",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        status: "completed",
+      },
+    },
+    {
+      processEpoch: initial.processEpoch,
+      threadId: "thread-1",
+      watermark: 2,
+      event: { type: "item_completed", item },
+    },
+  ];
+  const complete = nativeRecoveryForThread(
+    {
+      ...r1CompactionRunningThread(),
+      turns: r1CompactionRunningThread().turns.map((t) => ({
+        ...t,
+        status: "completed" as const,
+        completedAt: 20,
+      })),
+    },
+    { watermark: 2 },
+  );
+  complete.thread.items = [...complete.thread.items, item];
+  let reads = 0;
+  const harness = await mountThreadApp({
+    request: async (method) => {
+      if (method === "zen/thread/resume")
+        return ++reads === 1 ? initial : complete;
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    await selectedComposer();
+    const toggle = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".context-compaction-toggle"),
+    );
+    await act(async () => toggle.click());
+    const diagnostics = await waitFor(() =>
+      document.querySelector<HTMLDetailsElement>(".compaction-projection"),
+    );
+    await act(async () => {
+      diagnostics.open = true;
+      diagnostics.dispatchEvent(new window.Event("toggle"));
+    });
+    assert.equal(
+      reads,
+      2,
+      "An overlapping recovery event tail must trigger authoritative prefix hydration",
+    );
+    assert.doesNotMatch(
+      diagnostics.textContent!,
+      /boundary does not exist|snapshot is unavailable/,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("initial recovery compaction with an unchanged prefix stops after one details read", async () => {
+  const snapshot = nativeRecoveryForThread(r1CompactionRunningThread(), {
+    watermark: 2,
+  });
+  const item = {
+    ...nativeCompactionItem("turn-1-completed"),
+    initiator: "automatic" as const,
+  };
+  snapshot.events = [
+    {
+      processEpoch: snapshot.processEpoch,
+      threadId: "thread-1",
+      watermark: 1,
+      event: {
+        type: "turn_completed",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        status: "completed",
+      },
+    },
+    {
+      processEpoch: snapshot.processEpoch,
+      threadId: "thread-1",
+      watermark: 2,
+      event: { type: "item_completed", item },
+    },
+  ];
+  let reads = 0;
+  const harness = await mountThreadApp({
+    request: async (method) => {
+      if (method === "zen/thread/resume") {
+        reads++;
+        return snapshot;
+      }
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    await selectedComposer();
+    await waitFor(() =>
+      document.body.textContent?.includes(
+        "Compacted context details are still incomplete",
+      ),
+    );
+    assert.equal(
+      reads,
+      2,
+      "The same incomplete post-replay target cannot retry itself",
+    );
+    assert.equal(document.querySelectorAll(".turn.inProgress").length, 0);
+    const toggle = document.querySelector<HTMLButtonElement>(
+      ".context-compaction-toggle",
+    )!;
+    await act(async () => toggle.click());
+    assert.equal(
+      document.querySelector(".compaction-summary")!.textContent,
+      item.summary,
+    );
+    const diagnostics = document.querySelector<HTMLDetailsElement>(
+      ".compaction-projection",
+    )!;
+    await act(async () => {
+      diagnostics.open = true;
+      diagnostics.dispatchEvent(new window.Event("toggle"));
+    });
+    assert.match(diagnostics.textContent!, /snapshot is unavailable/);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+for (const [engine, terminal] of [
+  ["Zen", false],
+  ["external", false],
+  ["Zen", true],
+  ["external", true],
+] as const) {
+  test(`R3 counterexample: real App Settings navigation preserves ${engine}${terminal ? " completed-Turn" : ""} disclosures when changing Conversation detail`, async () => {
+    const tool = {
+      id: "retained-tool",
+      type: "commandExecution" as const,
+      command: "echo retained",
+      cwd: "/work/zen",
+      status: "completed" as const,
+      aggregatedOutput: "retained output",
+      exitCode: 0,
+      processId: null,
+      pluginId: null,
+      scriptPath: null,
+      source: "agent" as const,
+      durationMs: null,
+      commandActions: [] as [],
+      toolName: "shell",
+    };
+    const thread: Thread = {
+      ...liveThread(),
+      turns: [
+        {
+          id: "retained-turn",
+          status: terminal ? "completed" : "inProgress",
+          itemsView: "full",
+          error: null,
+          startedAt: 1,
+          completedAt: terminal ? 2 : null,
+          durationMs: null,
+          items: [tool, { ...tool, id: "second-tool" }],
+        },
+      ],
+    };
+    const native = externalAgentSnapshot();
+    native.thread = { ...native.thread, turns: thread.turns };
+    let saves = 0;
+    const harness = await mountThreadApp({
+      onSettingsSave: () => {
+        saves++;
+      },
+      plugins: {
+        get: async () => ({
+          plugins: [],
+          sidebar: [],
+          pages: [],
+          bundles: [],
+          surfaces: [],
+          resultRenderers: [],
+          threadHeaders: [],
+          panels: [],
+          settings: [],
+          commands: [],
+          subroutes: [],
+          menus: [],
+        }),
+      },
+      request: async (method) => {
+        if (method === "zen/thread/resume")
+          return nativeRecoveryForThread(thread);
+        throw new Error(`Unexpected ${method}`);
+      },
+      agentProviders: externalAgentApi({
+        sessions: async () => [native.binding],
+        read: async () => native,
+      }),
+    });
+    try {
+      const selector =
+        engine === "Zen"
+          ? '.thread-row-shell[data-thread-id="thread-1"] > .thread-row'
+          : ".native-session-row-shell > .thread-row";
+      const row = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(selector),
+      );
+      await act(async () => row.click());
+      const composerId =
+        engine === "Zen"
+          ? "#thread-composer"
+          : "#agent-composer-external-binding";
+      await setTextareaValue(
+        await waitFor(() =>
+          document.querySelector<HTMLTextAreaElement>(composerId),
+        ),
+        `${engine} draft`,
+      );
+      if (terminal)
+        await act(async () =>
+          document.querySelector<HTMLButtonElement>(".turn-toggle")!.click(),
+        );
+      const group = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(".trace-toggle"),
+      );
+      await act(async () => group.click());
+      const disclosure = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          ".trace-items .trace-item-toggle",
+        ),
+      );
+      await act(async () => disclosure.click());
+      const before = document.querySelector(".trace-tool-detail");
+      assert.ok(before);
+      const scroll = document.querySelector<HTMLElement>(
+        ".thread-view .messages",
+      )!;
+      Object.defineProperties(scroll, {
+        scrollHeight: { configurable: true, value: 1000 },
+        clientHeight: { configurable: true, value: 100 },
+      });
+      await act(async () => {
+        scroll.scrollTop = 123;
+        scroll.dispatchEvent(new window.Event("scroll", { bubbles: true }));
+      });
+      await act(async () =>
+        document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
+      );
+      assert.equal(
+        document.querySelector<HTMLElement>(".agent-surface")!.style.display,
+        "none",
+      );
+      const general = await waitFor(() =>
+        [
+          ...document.querySelectorAll<HTMLButtonElement>(
+            '.settings-nav [role="tab"]',
+          ),
+        ].find((button) => button.textContent?.trim() === "General"),
+      );
+      await act(async () => general.click());
+      const detail = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          '[aria-labelledby="conversation-detail-label"]',
+        ),
+      );
+      await act(async () => {
+        detail.focus();
+        detail.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            key: "ArrowDown",
+            bubbles: true,
+          }),
+        );
+      });
+      const cancelOption = await waitFor(() =>
+        document.querySelector<HTMLElement>(
+          '[role="option"][data-value="debug"]',
+        ),
+      );
+      await act(async () => {
+        cancelOption.focus();
+        cancelOption.dispatchEvent(
+          new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        );
+      });
+      await waitFor(() => document.activeElement === detail);
+      assert.equal(
+        getConversationPresentationStore().getSnapshot(),
+        "normal",
+        "Escape must leave preference unchanged",
+      );
+      await chooseValue(detail, "debug");
+      await waitFor(() => document.activeElement === detail);
+      assert.equal(saves, 0, "Conversation detail must not write Host config");
+      assert.equal(getConversationPresentationStore().getSnapshot(), "debug");
+      assert.equal(document.querySelector('[role="listbox"]'), null);
+      await act(async () =>
+        document.querySelector<HTMLButtonElement>(selector)!.click(),
+      );
+      const afterComposer = await waitFor(() =>
+        document.querySelector<HTMLTextAreaElement>(composerId),
+      );
+      assert.equal(
+        afterComposer.value,
+        `${engine} draft`,
+        "Real Settings navigation must preserve the draft",
+      );
+      const after = document.querySelector(".trace-tool-detail");
+      assert.equal(
+        after,
+        before,
+        "The selected tool disclosure DOM stays retained",
+      );
+      assert.equal(document.querySelector(".thread-view .messages"), scroll);
+      assert.equal(
+        scroll.scrollTop,
+        123,
+        "A reader away from live keeps their scroll position",
+      );
+      assert.ok(
+        after,
+        "A user-opened tool body must remain open after the only real Conversation detail Settings path",
+      );
+      assert.equal(
+        document
+          .querySelector(".trace-items .trace-item-toggle")
+          ?.getAttribute("aria-expanded"),
+        "true",
+      );
+      if (terminal)
+        await act(async () =>
+          document.querySelector<HTMLButtonElement>(".turn-toggle")!.click(),
+        );
+      await act(async () =>
+        document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
+      );
+      await chooseValue(
+        document.querySelector<HTMLButtonElement>(
+          '[aria-labelledby="conversation-detail-label"]',
+        )!,
+        "normal",
+      );
+      await act(async () =>
+        document.querySelector<HTMLButtonElement>(selector)!.click(),
+      );
+      if (terminal)
+        await act(async () =>
+          document.querySelector<HTMLButtonElement>(".turn-toggle")!.click(),
+        );
+      assert.equal(document.querySelector(".trace-tool-detail"), before);
+      assert.equal(scroll.scrollTop, 123);
+      const otherSelector =
+        engine === "Zen"
+          ? ".native-session-row-shell > .thread-row"
+          : '.thread-row-shell[data-thread-id="thread-1"] > .thread-row';
+      await act(async () =>
+        document.querySelector<HTMLButtonElement>(otherSelector)!.click(),
+      );
+      await waitFor(() =>
+        document.querySelector(
+          engine === "Zen"
+            ? "#agent-composer-external-binding"
+            : "#thread-composer",
+        ),
+      );
+      assert.equal(
+        document.querySelector(".trace-tool-detail"),
+        null,
+        "A different conversation does not inherit selected disclosure state",
+      );
+    } finally {
+      await unmountApp(harness);
+    }
+  });
+}
+
+for (const operation of ["send", "stop", "approval"] as const) {
+  test(`Settings pauses native reads while the requested ${operation} settles its original conversation`, async () => {
+    const pending = deferred<void>();
+    const listeners = new Set<(event: AgentProviderEvent) => void>();
+    let reads = 0;
+    let requests = 0;
+    let resolvedApproval = false;
+    let native = externalAgentSnapshot();
+    if (operation === "stop")
+      native = {
+        ...native,
+        thread: { ...runningThread(), id: native.thread.id },
+      };
+    const approval = {
+      type: "approval" as const,
+      sessionId: native.binding.id,
+      requestId: "pending-approval",
+      title: "Requested native approval",
+      detail: "echo approved",
+    };
+    const service = externalAgentApi({
+      sessions: async () => [native.binding],
+      read: async () => {
+        reads++;
+        return native;
+      },
+      approvals: async () =>
+        operation === "approval" && !resolvedApproval ? [approval] : [],
+      onEvent: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      send: async () => {
+        requests++;
+        await pending.promise;
+      },
+      interrupt: async () => {
+        requests++;
+        await pending.promise;
+      },
+      respondApproval: async () => {
+        requests++;
+        await pending.promise;
+      },
+    });
+    const harness = await mountThreadApp({
+      agentProviders: service,
+      request: async (method) => {
+        if (method === "zen/thread/resume")
+          return nativeRecoveryForThread(liveThread());
+        throw new Error(`Unexpected ${method}`);
+      },
+    });
+    try {
+      const row = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          ".native-session-row-shell > .thread-row",
+        ),
+      );
+      await act(async () => row.click());
+      const composer = await waitFor(() =>
+        document.querySelector<HTMLTextAreaElement>(
+          "#agent-composer-external-binding",
+        ),
+      );
+      await setTextareaValue(composer, "Original native draft");
+      if (operation === "send") {
+        await waitFor(() => !exactButtonByAria("Send").disabled);
+        await invokePrimarySubmit(exactButtonByAria("Send"));
+      } else {
+        const action =
+          operation === "stop"
+            ? exactButtonByAria("Stop")
+            : [
+                ...document.querySelectorAll<HTMLButtonElement>(
+                  ".agent-approval button",
+                ),
+              ].find((button) => button.textContent === "Approve")!;
+        assert.ok(action);
+        await act(async () => action.click());
+      }
+      await waitFor(() => requests === 1);
+      await setTextareaValue(composer, "Later native draft");
+      const visibleListeners = listeners.size;
+      const before = reads;
+      await act(async () =>
+        document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
+      );
+      assert.equal(
+        listeners.size,
+        visibleListeners - 2,
+        "Both native conversation subscriptions pause in Settings",
+      );
+      assert.equal(
+        composer.closest<HTMLElement>(".agent-surface")!.style.display,
+        "none",
+      );
+      native = {
+        ...native,
+        thread: { ...native.thread, status: { type: "idle" }, turns: [] },
+      };
+      resolvedApproval = true;
+      await act(async () => {
+        pending.resolve();
+        for (const listener of listeners)
+          listener({ type: "changed", sessionId: native.binding.id });
+      });
+      assert.equal(
+        reads,
+        before,
+        "Hidden completion cannot start a conversation read",
+      );
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(
+            '.thread-row-shell[data-thread-id="thread-1"] > .thread-row',
+          )!
+          .click(),
+      );
+      await setTextareaValue(
+        await waitFor(() =>
+          document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+        ),
+        "New Zen draft",
+      );
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(
+            ".native-session-row-shell > .thread-row",
+          )!
+          .click(),
+      );
+      const returned = await waitFor(() =>
+        document.querySelector<HTMLTextAreaElement>(
+          "#agent-composer-external-binding",
+        ),
+      );
+      await waitFor(() => reads > before);
+      assert.equal(
+        returned.value,
+        "Later native draft",
+        "Settlement retains later edits on the original native composer",
+      );
+      assert.equal(document.querySelector(".agent-approval"), null);
+      assert.equal(document.querySelector('[aria-label="Stop"]'), null);
+      await waitFor(() => !exactButtonByAria("Send").disabled);
+      assert.equal(
+        requests,
+        1,
+        "Reveal does not repeat the requested native action",
+      );
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(
+            '.thread-row-shell[data-thread-id="thread-1"] > .thread-row',
+          )!
+          .click(),
+      );
+      assert.equal(
+        document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+        "New Zen draft",
+      );
+    } finally {
+      await unmountApp(harness);
+    }
+    assert.equal(
+      listeners.size,
+      0,
+      "Actual unmount removes all provider subscriptions",
+    );
+  });
+}
+
+test("native Settings reveal fences paused reads and never republishes an old identity", async () => {
+  const listeners = new Set<(event: AgentProviderEvent) => void>();
+  const old = deferred<AgentSessionSnapshot>();
+  const fresh = deferred<AgentSessionSnapshot>();
+  const departing = deferred<AgentSessionSnapshot>();
+  const initial = externalAgentSnapshot();
+  const latest = {
+    ...initial,
+    thread: { ...initial.thread, name: "Fresh native title" },
+  };
+  let reads = 0;
+  const service = externalAgentApi({
+    sessions: async () => [initial.binding],
+    read: async () => {
+      reads++;
+      return reads === 1
+        ? initial
+        : reads === 2
+          ? old.promise
+          : reads === 3
+            ? fresh.promise
+            : departing.promise;
+    },
+    onEvent: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  });
+  const harness = await mountThreadApp({
+    agentProviders: service,
+    request: async (method) => {
+      if (method === "zen/thread/resume")
+        return nativeRecoveryForThread(liveThread());
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  const emit = () => {
+    for (const listener of listeners)
+      listener({ type: "changed", sessionId: initial.binding.id });
+  };
+  try {
+    await act(async () =>
+      (
+        await waitFor(() =>
+          document.querySelector<HTMLButtonElement>(
+            ".native-session-row-shell > .thread-row",
+          ),
+        )
+      ).click(),
+    );
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        "#agent-composer-external-binding",
+      ),
+    );
+    await setTextareaValue(composer, "Keep native read draft");
+    await act(async () => emit());
+    await waitFor(() => reads === 2);
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          ".native-session-row-shell > .thread-row",
+        )!
+        .click(),
+    );
+    await waitFor(() => reads === 3);
+    assert.equal(
+      document.querySelector("#agent-composer-external-binding"),
+      composer,
+    );
+    assert.equal(
+      document.querySelector(".agent-surface .page-loading"),
+      null,
+      "Same-identity reread retains the existing view",
+    );
+    await act(async () =>
+      old.resolve({
+        ...initial,
+        thread: { ...initial.thread, name: "Stale paused title" },
+      }),
+    );
+    assert.doesNotMatch(document.body.textContent!, /Stale paused title/);
+    await act(async () => fresh.resolve(latest));
+    await waitFor(() =>
+      document.body.textContent?.includes("Fresh native title"),
+    );
+    assert.equal(composer.value, "Keep native read draft");
+    await act(async () => emit());
+    await waitFor(() => reads === 4);
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '.thread-row-shell[data-thread-id="thread-1"] > .thread-row',
+        )!
+        .click(),
+    );
+    await waitFor(() => document.querySelector("#thread-composer"));
+    await act(async () =>
+      departing.resolve({
+        ...initial,
+        thread: { ...initial.thread, name: "Stale departing title" },
+      }),
+    );
+    assert.doesNotMatch(document.body.textContent!, /Stale departing title/);
+    assert.equal(
+      document.querySelector("#agent-composer-external-binding"),
+      null,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+  assert.equal(listeners.size, 0);
+});
+
+test("selected Zen conversation accepts hidden terminal updates without losing its draft", async () => {
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  let terminal = false;
+  const harness = await mountThreadApp({
+    onNotification: (listener) => {
+      notify = listener;
+      return () => {
+        notify = undefined;
+      };
+    },
+    request: async (method) => {
+      if (method === "zen/thread/resume") {
+        const thread = runningThread();
+        return nativeRecoveryForThread(
+          terminal
+            ? {
+                ...thread,
+                status: { type: "idle" },
+                turns: thread.turns.map((turn) => ({
+                  ...turn,
+                  status: "completed",
+                  completedAt: 20,
+                })),
+              }
+            : thread,
+          { watermark: terminal ? 1 : 0 },
+        );
+      }
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "Keep Zen draft during Settings");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
+    );
+    assert.equal(
+      composer.closest<HTMLElement>(".agent-surface")!.style.display,
+      "none",
+    );
+    terminal = true;
+    await act(async () =>
+      notify?.("zen/thread/event", {
+        processEpoch: "test-process-epoch",
+        threadId: "thread-1",
+        watermark: 1,
+        event: {
+          type: "turn_completed",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          status: "completed",
+        },
+      }),
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '.thread-row-shell[data-thread-id="thread-1"] > .thread-row',
+        )!
+        .click(),
+    );
+    await waitFor(() => document.querySelector(".turn.completed"));
+    assert.equal(document.querySelector(".turn.inProgress"), null);
+    assert.equal(document.querySelector("#thread-composer"), composer);
+    assert.equal(composer.value, "Keep Zen draft during Settings");
+  } finally {
+    await unmountApp(harness);
+  }
+  assert.equal(notify, undefined);
 });

@@ -8,6 +8,8 @@ import {
 import { isCompactCommand } from "./compact-command.js";
 import { createPortal } from "react-dom";
 import {
+  createContext,
+  useContext,
   useEffect,
   useId,
   useLayoutEffect,
@@ -48,7 +50,7 @@ import {
   type ComposerState,
 } from "./composer-state.js";
 import type { ZenXThreadAttachmentProjection } from "../../main/image-attachments.js";
-import { ComposerShell, ComposerEditor } from "./Composer.js";
+import { ComposerShell, ComposerEditor, ComposerAction } from "./Composer.js";
 import { handleComposerSuggestionKey } from "./ComposerSuggestions.js";
 import { ComposerSendControl } from "./ComposerSendControl.js";
 import { ComposerModelMenu } from "./ComposerModelMenu.js";
@@ -76,13 +78,26 @@ import { WorkflowCommandMenu } from "./WorkflowCommandMenu.js";
 import type { WorkflowCommand } from "./workflow-commands.js";
 import { useComposerSelector } from "./use-composer-selector.js";
 import { Dialog } from "./ui/controls.js";
+import { useConversationDetailPreference } from "./conversation-presentation.js";
 import {
   compactionInitiatorLabel,
   projectContextCompactions,
+  groupContextCompactions,
   type ContextCompactionProjection,
 } from "./context-compaction-projection.js";
 
+/** Presentation only: never saved or sent to an agent engine. */
+const TraceDebugContext = createContext(false);
+const TraceCompactionsContext = createContext<
+  ReadonlyMap<string, readonly ContextCompactionProjection[]>
+>(new Map());
+
 interface ThreadViewProps {
+  /** External engines use their own controls and text semantics. */
+  zenFeatures?: boolean;
+  sendDisabled?: boolean;
+  interruptDisabled?: boolean;
+  composerTools?: ReactNode;
   composerId?: string;
   composerSendMode?: ComposerSendMode;
   onComposerSendModeChange?(mode: ComposerSendMode): Promise<void>;
@@ -144,6 +159,10 @@ interface ThreadViewProps {
 }
 
 export function ThreadView({
+  zenFeatures = true,
+  sendDisabled = false,
+  interruptDisabled = false,
+  composerTools = null,
   composerId = "thread-composer",
   composerSendMode = "soft",
   onComposerSendModeChange,
@@ -193,6 +212,12 @@ export function ThreadView({
   onSubmit,
   onOpenMessageLink,
 }: ThreadViewProps) {
+  const [conversationDetail] = useConversationDetailPreference();
+  const debugTrace = conversationDetail === "debug";
+  const [debugVisited, setDebugVisited] = useState(debugTrace);
+  useEffect(() => {
+    if (debugTrace) setDebugVisited(true);
+  }, [debugTrace]);
   const [interrupting, setInterrupting] = useState(false);
   const [interruptError, setInterruptError] = useState<string | null>(null);
   const [queueResumeError, setQueueResumeError] = useState<{
@@ -224,9 +249,11 @@ export function ThreadView({
   const [atLive, setAtLive] = useState(true);
   const [skills, setSkills] = useState<SkillEntry[]>([]);
   const [skillError, setSkillError] = useState<string | null>(null);
-  const skillDraft = parseSkillDraft(composer.draft.text);
+  const skillDraft = zenFeatures
+    ? parseSkillDraft(composer.draft.text)
+    : { text: composer.draft.text, skills: [], references: [] };
   useEffect(() => {
-    if (window.zenx?.skills === undefined) return;
+    if (!zenFeatures || window.zenx?.skills === undefined) return;
     let active = true;
     void window.zenx.skills
       .list()
@@ -240,7 +267,7 @@ export function ThreadView({
     return () => {
       active = false;
     };
-  }, [thread?.id, composer.draft.text.startsWith("/")]);
+  }, [zenFeatures, thread?.id, composer.draft.text.startsWith("/")]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const shouldFollowRef = useRef(true);
   const viewRef = useRef<HTMLDivElement>(null);
@@ -252,15 +279,23 @@ export function ThreadView({
     () => projectContextCompactions(thread?.canonicalItems),
     [thread?.canonicalItems],
   );
+  const compactionGroups = useMemo(
+    () => groupContextCompactions(contextCompactions, turns),
+    [contextCompactions, turns],
+  );
   const transcriptRows = useMemo(
     () =>
-      buildTranscriptRows(turns, thread?.canonicalItems, contextCompactions),
-    [contextCompactions, thread?.canonicalItems, turns],
+      buildTranscriptRows(
+        turns,
+        thread?.canonicalItems,
+        compactionGroups.independent,
+      ),
+    [compactionGroups.independent, thread?.canonicalItems, turns],
   );
   const pendingApprovals = approvals.filter(
     (approval) => approval.status === "pending",
   );
-  const compactRequested = isCompactCommand(composer.draft.text);
+  const compactRequested = zenFeatures && isCompactCommand(composer.draft.text);
   const submitting =
     composer.submission?.status === "pending" ||
     composer.compaction?.status === "pending";
@@ -270,7 +305,7 @@ export function ThreadView({
     composer.draft.images.length > 0 &&
     imageCapabilityError !== null;
   const selector = useComposerSelector({
-    draft: composer.draft.text,
+    draft: zenFeatures ? composer.draft.text : "",
     threadId: thread?.id,
     commands: workflowCommands,
     skills,
@@ -323,7 +358,13 @@ export function ThreadView({
   }, []);
 
   const submit = (intent: ComposerIntent) => {
-    if (composerDisabled || !hasDraft || submitting || blockedByImageCapability)
+    if (
+      sendDisabled ||
+      composerDisabled ||
+      !hasDraft ||
+      submitting ||
+      blockedByImageCapability
+    )
       return;
     if (intent === "start" && runningTurn !== null) return;
     if (intent !== "start" && runningTurn === null) return;
@@ -331,7 +372,13 @@ export function ThreadView({
   };
 
   const interrupt = async () => {
-    if (composerDisabled || runningTurn === null || interrupting || submitting)
+    if (
+      interruptDisabled ||
+      composerDisabled ||
+      runningTurn === null ||
+      interrupting ||
+      submitting
+    )
       return;
     setInterrupting(true);
     setInterruptError(null);
@@ -349,7 +396,11 @@ export function ThreadView({
     composerSendMode,
   );
   const primaryMode =
-    runningTurn === null ? "send" : !hasDraft ? "stop" : sendIntent;
+    runningTurn === null
+      ? "send"
+      : !zenFeatures || !hasDraft
+        ? "stop"
+        : sendIntent;
   const intentLabel = (intent: ComposerIntent) =>
     intent === "batch-next"
       ? "Next turn"
@@ -418,11 +469,11 @@ export function ThreadView({
       className={`thread-view${draggingImages ? " image-dragging" : ""}`}
       ref={viewRef}
       onDragEnter={(event) => {
-        if (composerDisabled || submitting) return;
+        if (!zenFeatures || composerDisabled || submitting) return;
         if (hasImageFiles(event.dataTransfer.files)) setDraggingImages(true);
       }}
       onDragOver={(event) => {
-        if (composerDisabled || submitting) return;
+        if (!zenFeatures || composerDisabled || submitting) return;
         if (!hasImageFiles(event.dataTransfer.files)) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = "copy";
@@ -433,7 +484,7 @@ export function ThreadView({
           setDraggingImages(false);
       }}
       onDrop={(event) => {
-        if (composerDisabled || submitting) return;
+        if (!zenFeatures || composerDisabled || submitting) return;
         const files = imageFiles(event.dataTransfer.files);
         setDraggingImages(false);
         if (files.length === 0) return;
@@ -455,56 +506,83 @@ export function ThreadView({
           setAtLive(live);
         }}
       >
-        <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
-          <ThreadImagesContext.Provider
-            value={{
-              cwd: thread?.cwd,
-              attachments: threadAttachments,
-              read: onReadAttachment,
-              open: (attachment, name, trigger) =>
-                setPreview({ attachment, name, trigger }),
-            }}
+        <TraceDebugContext.Provider value={debugTrace}>
+          <TraceCompactionsContext.Provider
+            value={compactionGroups.byToolItemId}
           >
-            <div className="messages-inner">
-              {transcriptRows.length === 0
-                ? (emptyContent ?? (
-                    <div className="thread-empty">
-                      <h2>Start a new thread</h2>
+            <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
+              <ThreadImagesContext.Provider
+                value={{
+                  cwd: thread?.cwd,
+                  attachments: threadAttachments,
+                  read: onReadAttachment,
+                  open: (attachment, name, trigger) =>
+                    setPreview({ attachment, name, trigger }),
+                }}
+              >
+                <div className="messages-inner">
+                  {thread !== null &&
+                  transcriptRows.length > 0 &&
+                  (debugTrace || debugVisited) ? (
+                    <div className="trace-debug-source" hidden={!debugTrace}>
                       <p>
-                        Describe the outcome you want. ZenX will use this
-                        Thread’s workspace, model, and permission policy.
+                        {thread.canonicalItems === undefined
+                          ? "Only the current display projection is available."
+                          : "Available committed items and the live display projection. Earlier history may be unavailable; streaming updates are display-only until committed."}
                       </p>
+                      {thread.canonicalItems === undefined ? null : (
+                        <TraceRawDetails
+                          label="Available canonical items"
+                          data={thread.canonicalItems}
+                        />
+                      )}
+                      <TraceRawDetails
+                        label="Live display projection"
+                        data={turns}
+                      />
                     </div>
-                  ))
-                : transcriptRows.map((row) =>
-                    row.type === "turn" ? (
-                      <TurnBlock
-                        index={row.index}
-                        key={row.turn.id}
-                        turn={row.turn}
-                        usage={threadUsage?.turns[row.turn.id]}
-                        wakeups={wakeups}
-                        attachments={threadAttachments}
-                        onOpenImage={(attachment, name, trigger) =>
-                          setPreview({ attachment, name, trigger })
-                        }
-                        onReadAttachment={onReadAttachment}
-                        pluginSnapshot={pluginSnapshot}
-                        pluginUiRegistry={pluginUiRegistry}
-                      />
-                    ) : (
-                      <ContextCompactionEvent
-                        key={row.compaction.item.id}
-                        projection={row.compaction}
-                      />
-                    ),
-                  )}
-              {composer.compaction?.status === "pending" ? (
-                <ContextCompactionProgress state={composer.compaction} />
-              ) : null}
-            </div>
-          </ThreadImagesContext.Provider>
-        </MessageLinkContext.Provider>
+                  ) : null}
+                  {transcriptRows.length === 0
+                    ? (emptyContent ?? (
+                        <div className="thread-empty">
+                          <h2>Start a new thread</h2>
+                          <p>
+                            Describe the outcome you want. ZenX will use this
+                            Thread’s workspace, model, and permission policy.
+                          </p>
+                        </div>
+                      ))
+                    : transcriptRows.map((row) =>
+                        row.type === "turn" ? (
+                          <TurnBlock
+                            index={row.index}
+                            key={row.turn.id}
+                            turn={row.turn}
+                            usage={threadUsage?.turns[row.turn.id]}
+                            wakeups={wakeups}
+                            attachments={threadAttachments}
+                            onOpenImage={(attachment, name, trigger) =>
+                              setPreview({ attachment, name, trigger })
+                            }
+                            onReadAttachment={onReadAttachment}
+                            pluginSnapshot={pluginSnapshot}
+                            pluginUiRegistry={pluginUiRegistry}
+                          />
+                        ) : (
+                          <ContextCompactionEvent
+                            key={row.compaction.item.id}
+                            projection={row.compaction}
+                          />
+                        ),
+                      )}
+                  {composer.compaction?.status === "pending" ? (
+                    <ContextCompactionProgress state={composer.compaction} />
+                  ) : null}
+                </div>
+              </ThreadImagesContext.Provider>
+            </MessageLinkContext.Provider>
+          </TraceCompactionsContext.Provider>
+        </TraceDebugContext.Provider>
       </div>
 
       {atLive ? null : (
@@ -704,11 +782,13 @@ export function ThreadView({
               ))}
             </div>
           )}
-          <WorkflowCommandMenu
-            id={selectorId}
-            selector={selector}
-            textarea={composerTextareaRef}
-          />
+          {zenFeatures ? (
+            <WorkflowCommandMenu
+              id={selectorId}
+              selector={selector}
+              textarea={composerTextareaRef}
+            />
+          ) : null}
           <label className="sr-only" htmlFor={composerId}>
             Message ZenX
           </label>
@@ -757,7 +837,7 @@ export function ThreadView({
               );
             }}
             onPaste={(event) => {
-              if (composerDisabled || submitting) return;
+              if (!zenFeatures || composerDisabled || submitting) return;
               const files = imageFiles(event.clipboardData.files);
               if (files.length === 0) return;
               event.preventDefault();
@@ -767,7 +847,8 @@ export function ThreadView({
               );
             }}
             onKeyDown={(event) => {
-              if (handleComposerSuggestionKey(event, selector)) return;
+              if (zenFeatures && handleComposerSuggestionKey(event, selector))
+                return;
               if (event.key !== "Enter" || event.shiftKey) return;
               if (event.nativeEvent.isComposing) return;
               event.preventDefault();
@@ -781,13 +862,17 @@ export function ThreadView({
               );
             }}
             placeholder={
-              runningTurn === null
-                ? watching
-                  ? "Send a message to wake this thread…"
-                  : "Ask ZenX anything…"
-                : composerSendMode === "queue" || composerSendMode === "batch"
-                  ? "Message for the next turn…"
-                  : "Steer the current run…"
+              !zenFeatures
+                ? runningTurn === null
+                  ? "Message the agent…"
+                  : "Wait for this turn, or stop it…"
+                : runningTurn === null
+                  ? watching
+                    ? "Send a message to wake this thread…"
+                    : "Ask ZenX anything…"
+                  : composerSendMode === "queue" || composerSendMode === "batch"
+                    ? "Message for the next turn…"
+                    : "Steer the current run…"
             }
             textareaRef={composerTextareaRef}
             rows={1}
@@ -795,21 +880,24 @@ export function ThreadView({
           />
           <div className="composer-rail">
             <div className="composer-tools">
-              <button
-                className="composer-tool icon-only"
-                type="button"
-                aria-label="Add images"
-                title="Add images"
-                disabled={composerDisabled || submitting}
-                onClick={() => {
-                  setAttachmentError(null);
-                  void onPickImages().catch((error: unknown) =>
-                    setAttachmentError(describeError(error)),
-                  );
-                }}
-              >
-                <Icon name="paperclip" />
-              </button>
+              {composerTools}
+              {zenFeatures ? (
+                <button
+                  className="composer-tool icon-only"
+                  type="button"
+                  aria-label="Add images"
+                  title="Add images"
+                  disabled={composerDisabled || submitting}
+                  onClick={() => {
+                    setAttachmentError(null);
+                    void onPickImages().catch((error: unknown) =>
+                      setAttachmentError(describeError(error)),
+                    );
+                  }}
+                >
+                  <Icon name="paperclip" />
+                </button>
+              ) : null}
               {selectedModel === undefined ? null : (
                 <ComposerModelMenu
                   disabled={composerDisabled || modelDisabled}
@@ -823,14 +911,16 @@ export function ThreadView({
                   switching={switchingModel}
                 />
               )}
-              <ContextUsageIndicator
-                context={threadUsage?.context}
-                threadCacheHitRate={threadUsage?.thread.cacheHitRate}
-                compactDisabled={
-                  composerDisabled || runningTurn !== null || submitting
-                }
-                onCompact={onCompact}
-              />
+              {zenFeatures ? (
+                <ContextUsageIndicator
+                  context={threadUsage?.context}
+                  threadCacheHitRate={threadUsage?.thread.cacheHitRate}
+                  compactDisabled={
+                    composerDisabled || runningTurn !== null || submitting
+                  }
+                  onCompact={onCompact}
+                />
+              ) : null}
               {permissionLabel === null ? null : (
                 <PermissionSelect
                   errorId={`${composerId}-permission-error`}
@@ -848,29 +938,45 @@ export function ThreadView({
               )}
             </div>
             <div className="composer-actions">
-              <ComposerSendControl
-                mode={composerSendMode}
-                running={runningTurn !== null}
-                hasDraft={hasDraft}
-                compact={compactRequested}
-                primaryMode={primaryMode}
-                primaryLabel={primaryLabel}
-                stopDisabled={composerDisabled || interrupting || submitting}
-                sendDisabled={
-                  composerDisabled || submitting || blockedByImageCapability
-                }
-                disabled={
-                  composerDisabled ||
-                  interrupting ||
-                  submitting ||
-                  (primaryMode === "send" && !hasDraft) ||
-                  blockedByImageCapability
-                }
-                onPrimary={primary}
-                onSend={submit}
-                onStop={() => void interrupt()}
-                onModeChange={onComposerSendModeChange}
-              />
+              {zenFeatures ? (
+                <ComposerSendControl
+                  mode={composerSendMode}
+                  running={runningTurn !== null}
+                  hasDraft={hasDraft}
+                  compact={compactRequested}
+                  primaryMode={primaryMode}
+                  primaryLabel={primaryLabel}
+                  stopDisabled={composerDisabled || interrupting || submitting}
+                  sendDisabled={
+                    composerDisabled || submitting || blockedByImageCapability
+                  }
+                  disabled={
+                    composerDisabled ||
+                    interrupting ||
+                    submitting ||
+                    (primaryMode === "send" && !hasDraft) ||
+                    blockedByImageCapability
+                  }
+                  onPrimary={primary}
+                  onSend={submit}
+                  onStop={() => void interrupt()}
+                  onModeChange={onComposerSendModeChange}
+                />
+              ) : (
+                <ComposerAction
+                  mode={primaryMode}
+                  label={primaryLabel}
+                  disabled={
+                    composerDisabled ||
+                    submitting ||
+                    interrupting ||
+                    (runningTurn === null
+                      ? sendDisabled || !hasDraft
+                      : interruptDisabled)
+                  }
+                  onClick={primary}
+                />
+              )}
             </div>
           </div>
           {composerError !== null ? (
@@ -1038,63 +1144,110 @@ export function ContextCompactionEvent({
   projection: ContextCompactionProjection;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const { item, effectiveMessages } = projection;
-  const [copyState, setCopyState] = useState("");
+  const [visited, setVisited] = useState(false);
+  const label = compactionSummaryLabel(projection);
   return (
     <section
-      className="context-compaction-event"
+      className="context-compaction-event trace-item trace-singleton"
       aria-label="Context compacted"
     >
       <button
-        className="context-compaction-toggle"
+        className="trace-item-toggle context-compaction-toggle"
         type="button"
         aria-expanded={expanded}
-        onClick={() => setExpanded((current) => !current)}
+        onClick={() => {
+          setVisited(true);
+          setExpanded((current) => !current);
+        }}
       >
-        <span className="context-compaction-mark" aria-hidden="true">
-          <Icon name="compress" size={14} />
+        <Icon name="compress" size={14} />
+        <span title={label}>{label}</span>
+        <span className="trace-item-chevron">
+          <Icon name="chevron-down" size={13} />
         </span>
-        <span>
-          <strong>Context compacted</strong>
-          <small>
-            {compactionInitiatorLabel(item)} ·{" "}
-            {Array.from(item.summary).length.toLocaleString()} summary
-            characters · Full input size unknown
-          </small>
-        </span>
-        <Icon name="chevron-down" size={13} />
       </button>
-      {expanded ? (
-        <div className="context-compaction-detail">
-          <div className="compaction-summary-heading">
-            <h3>Saved summary</h3>
-            <button
-              type="button"
-              className="quiet-button"
-              onClick={() => {
-                void navigator.clipboard.writeText(item.summary).then(
-                  () => setCopyState("Summary copied"),
-                  () =>
-                    setCopyState(
-                      "Could not copy. Select the summary text to copy it.",
-                    ),
-                );
-              }}
-            >
-              Copy summary
-            </button>
-          </div>
-          <span role="status">{copyState}</span>
-          <div className="compaction-summary">
-            <Markdown text={item.summary} />
-          </div>
-          <p>
-            {item.retainedItemIds.length} original items retained alongside the
-            summary. This snapshot is from the time of compaction; later
-            conversation adds to it.
+      <TraceReveal open={expanded}>
+        {visited ? <ContextCompactionDetails projection={projection} /> : null}
+      </TraceReveal>
+    </section>
+  );
+}
+
+function compactionSummaryLabel({ item }: ContextCompactionProjection): string {
+  return `Context compacted · ${compactionInitiatorLabel(item)} · ${Array.from(item.summary).length.toLocaleString()} summary characters · Full input size unknown`;
+}
+
+function ToolCompactionSummary({
+  projection,
+}: {
+  projection: ContextCompactionProjection;
+}) {
+  const [visited, setVisited] = useState(false);
+  return (
+    <details
+      className="trace-compaction-summary"
+      onToggle={(event) => {
+        if (event.currentTarget.open) setVisited(true);
+      }}
+    >
+      <summary>{compactionSummaryLabel(projection)}</summary>
+      {visited ? <ContextCompactionDetails projection={projection} /> : null}
+    </details>
+  );
+}
+
+function ContextCompactionDetails({
+  projection,
+}: {
+  projection: ContextCompactionProjection;
+}) {
+  const { item, effectiveMessages } = projection;
+  const [copyState, setCopyState] = useState("");
+  const [diagnosticsVisited, setDiagnosticsVisited] = useState(false);
+  const debugTrace = useContext(TraceDebugContext);
+  return (
+    <div className="context-compaction-detail">
+      <div className="compaction-summary-heading">
+        <h3>Saved summary</h3>
+        <button
+          type="button"
+          className="quiet-button"
+          onClick={() => {
+            void navigator.clipboard.writeText(item.summary).then(
+              () => setCopyState("Summary copied"),
+              () =>
+                setCopyState(
+                  "Could not copy. Select the summary text to copy it.",
+                ),
+            );
+          }}
+        >
+          Copy summary
+        </button>
+      </div>
+      {copyState ? <span role="status">{copyState}</span> : null}
+      <div className="compaction-summary">
+        <Markdown text={item.summary} />
+      </div>
+      <p>
+        {item.retainedItemIds.length} original items retained alongside the
+        summary. This snapshot is from the time of compaction; later
+        conversation adds to it.
+      </p>
+      <details
+        className="compaction-projection"
+        onToggle={(event) => {
+          if (event.currentTarget.open) setDiagnosticsVisited(true);
+        }}
+      >
+        <summary>Retained context and diagnostics</summary>
+        {diagnosticsVisited && effectiveMessages === null ? (
+          <p role="status">
+            {projection.snapshotError ??
+              "Retained context snapshot is unavailable in this view."}
           </p>
-          <details className="compaction-projection">
-            <summary>Retained context and diagnostics</summary>
+        ) : diagnosticsVisited && effectiveMessages !== null ? (
+          <>
             <p>
               {effectiveMessages.length} projected history messages, not tokens.
               This includes the summary and retained conversation. Rules, tool
@@ -1110,10 +1263,15 @@ export function ContextCompactionEvent({
                 </li>
               ))}
             </ol>
-          </details>
-        </div>
-      ) : null}
-    </section>
+          </>
+        ) : null}
+      </details>
+      <TraceRawDetails
+        label="Canonical compaction item"
+        data={item}
+        hidden={!debugTrace}
+      />
+    </div>
   );
 }
 
@@ -1185,12 +1343,25 @@ function TurnBlock({
   pluginUiRegistry: PluginUiRegistry | null;
   usage?: ModelUsageAggregate;
 }) {
+  const debugTrace = useContext(TraceDebugContext);
   const projection = useMemo(() => projectTurn(turn), [turn]);
   const [expandedOverride, setExpanded] = useState<boolean | null>(null);
   const expanded =
     expandedOverride ??
-    (turn.status === "failed" || turn.status === "interrupted");
+    (debugTrace || turn.status === "failed" || turn.status === "interrupted");
   const complete = turn.status !== "inProgress";
+  const historyVisible = !complete || expanded;
+  const [historyVisited, setHistoryVisited] = useState(historyVisible);
+  const previousComplete = useRef(complete);
+  useEffect(() => {
+    if (historyVisible) setHistoryVisited(true);
+  }, [historyVisible]);
+  // Normal terminal settlement still resets the intermediate trace. Mode changes alone preserve it.
+  useEffect(() => {
+    if (complete && !previousComplete.current && !debugTrace)
+      setHistoryVisited(false);
+    previousComplete.current = complete;
+  }, [complete]);
   const renderUserItem = (
     item: Extract<ThreadItem, { type: "userMessage" }>,
   ) => {
@@ -1226,32 +1397,34 @@ function TurnBlock({
       ) : (
         <RunningTurnLabel startedAt={turn.startedAt} />
       )}
-      {!complete || expanded ? (
-        <div className="turn-history">
-          {projection.history.map((node) =>
-            node.kind === "user" ? (
-              renderUserItem(node.item)
-            ) : (
-              <DisplayNode
-                key={node.kind === "agent" ? node.item.id : node.id}
-                node={node}
+      <TraceReveal open={historyVisible}>
+        {historyVisited || historyVisible ? (
+          <div className="turn-history">
+            {projection.history.map((node) =>
+              node.kind === "user" ? (
+                renderUserItem(node.item)
+              ) : (
+                <DisplayNode
+                  key={node.kind === "agent" ? node.item.id : node.id}
+                  node={node}
+                  turn={turn}
+                  usage={usage}
+                  pluginSnapshot={pluginSnapshot}
+                  pluginUiRegistry={pluginUiRegistry}
+                />
+              ),
+            )}
+            {!complete && projection.finalItem !== null ? (
+              <AgentMessage
+                item={projection.finalItem}
+                showActions={false}
                 turn={turn}
                 usage={usage}
-                pluginSnapshot={pluginSnapshot}
-                pluginUiRegistry={pluginUiRegistry}
               />
-            ),
-          )}
-          {!complete && projection.finalItem !== null ? (
-            <AgentMessage
-              item={projection.finalItem}
-              showActions={false}
-              turn={turn}
-              usage={usage}
-            />
-          ) : null}
-        </div>
-      ) : null}
+            ) : null}
+          </div>
+        ) : null}
+      </TraceReveal>
       {complete && !expanded
         ? projection.history
             .filter(
@@ -1597,16 +1770,21 @@ function TraceSequence({
   pluginSnapshot: ZenXPluginSnapshot | null;
   pluginUiRegistry: PluginUiRegistry | null;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const debugTrace = useContext(TraceDebugContext);
+  const grouped = node.kind === "traceGroup";
+  const [expandedOverride, setExpanded] = useState<boolean | null>(null);
+  const expanded = expandedOverride ?? (debugTrace && grouped);
   const sectionRef = useRef<HTMLElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const [openItems, setOpenItems] = useState<Set<string>>(new Set());
   const [visited, setVisited] = useState(false);
   const [visitedItems, setVisitedItems] = useState<Set<string>>(new Set());
-  const grouped = node.kind === "traceGroup";
+  useEffect(() => {
+    if (debugTrace && grouped) setVisited(true);
+  }, [debugTrace, grouped]);
   const singleton = node.kind === "traceItem" ? node.item : null;
   const singletonExpandable =
-    singleton !== null && traceItemExpandable(singleton);
+    singleton !== null && traceItemExpandable(singleton, debugTrace);
   const toggleExpanded = () => {
     if (expanded && sectionRef.current?.contains(document.activeElement)) {
       toggleRef.current?.focus();
@@ -1617,7 +1795,7 @@ function TraceSequence({
       setVisitedItems((seen) => new Set(seen).add(singleton.id));
       setOpenItems(new Set([singleton.id]));
     }
-    setExpanded((current) => !current);
+    setExpanded((current) => !(current ?? (debugTrace && grouped)));
   };
   return (
     <section
@@ -1675,17 +1853,21 @@ function TraceSequence({
       ) : null}
       {grouped ? (
         <TraceReveal open={expanded}>
-          {visited ? (
+          {visited || debugTrace ? (
             <div
               className="trace-items"
               role="region"
               aria-label="Execution details"
               tabIndex={0}
             >
-              {groupReasoningWithoutDetailsRows(traceDisplayRows(node.items))
+              {(debugTrace
+                ? traceDisplayRows(node.items)
+                : groupReasoningWithoutDetailsRows(traceDisplayRows(node.items))
+              )
                 // Models that do not expose reasoning should leave no
                 // completed "Think" heading behind in the transcript.
                 .filter((row) => {
+                  if (debugTrace) return true;
                   if ("kind" in row) {
                     return node.items.some(
                       (item) =>
@@ -1719,7 +1901,7 @@ function TraceSequence({
                   }
                   const { item, nested, parentToolName } = row;
                   const open = openItems.has(item.id);
-                  const expandable = traceItemExpandable(item);
+                  const expandable = traceItemExpandable(item, debugTrace);
                   return (
                     <div
                       className={`trace-item${nested ? " trace-item-nested" : ""}`}
@@ -1811,9 +1993,12 @@ function TraceItemHeader({
 
 function traceItemExpandable(
   item: Extract<ThreadItem, { type: "reasoning" | "commandExecution" }>,
+  debugTrace = false,
 ): boolean {
   return (
-    item.type !== "reasoning" || reasoningContentText(item).trim().length > 0
+    debugTrace ||
+    item.type !== "reasoning" ||
+    reasoningContentText(item).trim().length > 0
   );
 }
 
@@ -1840,10 +2025,17 @@ function TraceDetail({
   pluginSnapshot: ZenXPluginSnapshot | null;
   pluginUiRegistry: PluginUiRegistry | null;
 }) {
+  const debugTrace = useContext(TraceDebugContext);
+  const compactions = useContext(TraceCompactionsContext).get(item.id) ?? [];
   if (item.type === "reasoning") {
     return (
       <div className="trace-detail trace-detail-markdown">
         <Markdown text={reasoningContentText(item)} />
+        <TraceRawDetails
+          label="Item display data"
+          data={item}
+          hidden={!debugTrace}
+        />
       </div>
     );
   }
@@ -1871,7 +2063,47 @@ function TraceDetail({
           />
         </div>
       </div>
+      {compactions.map((projection) => (
+        <ToolCompactionSummary
+          key={projection.item.id}
+          projection={projection}
+        />
+      ))}
+      <TraceRawDetails
+        label="Item display data"
+        data={item}
+        hidden={!debugTrace}
+      />
     </div>
+  );
+}
+
+function TraceRawDetails({
+  label,
+  data,
+  hidden = false,
+}: {
+  label: string;
+  data: unknown;
+  hidden?: boolean;
+}) {
+  const [visited, setVisited] = useState(false);
+  const [available, setAvailable] = useState(!hidden);
+  useEffect(() => {
+    if (!hidden) setAvailable(true);
+  }, [hidden]);
+  if (hidden && !available) return null;
+  return (
+    <details
+      className="trace-debug-raw"
+      hidden={hidden}
+      onToggle={(event) => {
+        if (event.currentTarget.open) setVisited(true);
+      }}
+    >
+      <summary>{label}</summary>
+      {visited ? <pre tabIndex={0}>{JSON.stringify(data, null, 2)}</pre> : null}
+    </details>
   );
 }
 

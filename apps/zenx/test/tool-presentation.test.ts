@@ -148,3 +148,21 @@ function command(
     durationMs: null,
   };
 }
+
+test("context compaction uses the same category/status presentation as other tools", () => {
+  const compact = command("compact_context");
+  assert.deepEqual(toolPresentation("compact_context"), {
+    category: "Context",
+    icon: "compress",
+    action: "Compact context",
+  });
+  assert.equal(commandSummary(compact), "Context compacted");
+  assert.equal(
+    commandSummary({ ...compact, status: "inProgress" }),
+    "Compact context · started",
+  );
+  assert.equal(
+    commandSummary({ ...compact, status: "failed" }),
+    "Compact context · failed",
+  );
+});

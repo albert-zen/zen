@@ -1,3 +1,5 @@
+import type { AgentSessionBinding } from "../../main/agent-providers/types.js";
+import { agentSessionNavigationId } from "../../main/conversation-navigation.js";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { Thread } from "../../protocol-client/index.js";
 import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
@@ -20,10 +22,26 @@ export interface InboxSection {
   threads: NativeThreadSummary[];
 }
 
+export interface AgentNavigationSession {
+  binding: AgentSessionBinding;
+  providerLabel: string;
+  title?: string;
+  model?: string;
+  /** Unknown until observed from the native engine. */
+  status?: "active" | "idle" | "error";
+  updatedAt?: number;
+  pendingApproval?: boolean;
+}
+
+export type ConversationNavigationRow =
+  | { kind: "zen"; id: string; thread: NativeThreadSummary }
+  | { kind: "agent"; id: string; session: AgentNavigationSession };
+
 export interface ProjectGroup {
   key: string;
   label: string;
   threads: NativeThreadSummary[];
+  rows: ConversationNavigationRow[];
   workspace: string | null;
   configured: boolean;
   isDefault: boolean;
@@ -144,12 +162,85 @@ export function deriveInboxSections(
   ];
 }
 
+/** Native state is shown only when observed; unread sessions are not called completed. */
+export function deriveConversationInboxSections(
+  threads: readonly NativeThreadSummary[],
+  sessions: readonly AgentNavigationSession[],
+  pendingApprovalThreadIds: ReadonlySet<string>,
+  watchingThreadIds: ReadonlySet<string>,
+): Array<{ key: string; label: string; rows: ConversationNavigationRow[] }> {
+  const sections = deriveInboxSections(
+    threads,
+    pendingApprovalThreadIds,
+    watchingThreadIds,
+  ).map((section) => ({
+    key: section.key as string,
+    label: section.label,
+    rows: section.threads.map((thread): ConversationNavigationRow => ({
+      kind: "zen",
+      id: thread.threadId,
+      thread,
+    })),
+  }));
+  const unknown: ConversationNavigationRow[] = [];
+  for (const session of sessions) {
+    const row: ConversationNavigationRow = {
+      kind: "agent",
+      id: agentSessionNavigationId(session.binding.id),
+      session,
+    };
+    const key =
+      session.pendingApproval || session.status === "error"
+        ? "needs"
+        : session.status === "active"
+          ? "active"
+          : session.status === "idle"
+            ? "settled"
+            : null;
+    if (key === null) unknown.push(row);
+    else sections.find((section) => section.key === key)!.rows.push(row);
+  }
+  for (const section of sections)
+    section.rows.sort(
+      (left, right) =>
+        rowRecency(right) - rowRecency(left) || left.id.localeCompare(right.id),
+    );
+  if (unknown.length)
+    sections.push({ key: "unobserved", label: "Conversations", rows: unknown });
+  return sections;
+}
+
 export function deriveProjectGroups(
   threads: readonly NativeThreadSummary[],
   projection: ZenXProjectProjectionSnapshot,
   preference: ZenXSidebarOrder = EMPTY_SIDEBAR_ORDER,
+  sessions: readonly AgentNavigationSession[] = [],
 ): ProjectGroup[] {
   const byId = new Map(threads.map((thread) => [thread.threadId, thread]));
+  const agentById = new Map(
+    sessions.map((session) => [
+      agentSessionNavigationId(session.binding.id),
+      session,
+    ]),
+  );
+  const rowsFor = (
+    ids: readonly string[],
+    preferred: readonly string[] = [],
+  ): ConversationNavigationRow[] => {
+    const rows: ConversationNavigationRow[] = ids.flatMap(
+      (id): ConversationNavigationRow[] => {
+        const thread = byId.get(id);
+        if (thread) return [{ kind: "zen", id, thread }];
+        const session = agentById.get(id);
+        return session ? [{ kind: "agent", id, session }] : [];
+      },
+    );
+    rows.sort(
+      (left, right) =>
+        rowRecency(right) - rowRecency(left) || left.id.localeCompare(right.id),
+    );
+    return orderByPreference(rows, preferred, (row) => row.id);
+  };
   const groups: ProjectGroup[] = projection.projects
     .map((project) => {
       const stableThreads = sortByRecency(
@@ -160,6 +251,10 @@ export function deriveProjectGroups(
       );
       return {
         key: project.key,
+        rows: rowsFor(
+          project.threadIds,
+          preference.threadIdsByProject[project.key] ?? [],
+        ),
         label: project.name ?? projectLabel(project.workspace),
         workspace: project.workspace,
         configured: project.configured,
@@ -198,6 +293,7 @@ export function deriveProjectGroups(
       configured: false,
       isDefault: false,
       threads: unavailable,
+      rows: rowsFor(projection.unavailableThreadIds),
     });
   return orderedGroups;
 }
@@ -401,4 +497,13 @@ function projectLabel(cwd: string): string {
   const normalized = cwd.replace(/[\\/]+$/u, "");
   const parts = normalized.split(/[\\/]/u).filter(Boolean);
   return parts.at(-1) ?? cwd;
+}
+
+function rowRecency(row: ConversationNavigationRow): number {
+  if (row.kind === "agent") return row.session.updatedAt ?? 0;
+  const time =
+    row.thread.status === "systemError"
+      ? row.thread.createdAt
+      : (row.thread.turnSortAt ?? row.thread.createdAt);
+  return time === null ? 0 : Date.parse(time);
 }
