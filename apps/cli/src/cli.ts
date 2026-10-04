@@ -30,6 +30,9 @@ import { isRecord } from "../../../src/protocol/codex/wire.js";
 import { RemoteHostAccess } from "../../../src/protocol/native/remote-host.js";
 import { serveRemoteHost } from "../../../src/protocol/native/remote-transport.js";
 import { loadRemoteHostConfig } from "./remote-host-config.js";
+import { loadFleetHeadlessConfig } from "./fleet-headless-config.js";
+import { startFleetHeadlessHost } from "./fleet-headless-host.js";
+import { legacyModelCatalogEntries } from "./model-presets.js";
 
 interface ParsedArguments {
   options: Map<string, string | true>;
@@ -48,6 +51,8 @@ async function main(): Promise<void> {
   const [command = "help", ...args] = process.argv.slice(2);
   if (command === "app-server") {
     await appServerCommand(parseAppServerArguments(args));
+  } else if (command === "fleet-host") {
+    await fleetHostCommand(parseFleetHostArguments(args));
   } else if (command === "run") {
     await runCommand(parseArguments(args));
   } else if (command === "chat") {
@@ -60,6 +65,106 @@ async function main(): Promise<void> {
     printHelp();
   } else {
     throw new Error(`Unknown command: ${command}`);
+  }
+}
+
+async function fleetHostCommand(args: ParsedArguments): Promise<void> {
+  assertNoPositionals(args);
+  const configFile = option(args, "config");
+  if (configFile === undefined) throw new Error("fleet-host requires --config");
+  const dataDir = option(args, "data-dir");
+  if (
+    dataDir === undefined ||
+    !path.isAbsolute(dataDir) ||
+    dataDirectory(args) === path.join(os.homedir(), ".zen")
+  )
+    throw new Error(
+      "fleet-host requires an explicit absolute, non-default --data-dir",
+    );
+  const provider = option(args, "provider");
+  if (provider === undefined)
+    throw new Error("fleet-host requires an explicit --provider");
+  if (
+    provider === "openai-compatible" &&
+    option(args, "context-window") === undefined
+  )
+    throw new Error(
+      "fleet-host --provider openai-compatible requires --context-window",
+    );
+  const config = await loadFleetHeadlessConfig(configFile);
+  if (!args.options.has("cwd"))
+    args.options.set("cwd", config.workspaces[0]!.cwd);
+  if (
+    !config.workspaces.some(
+      (workspace) => workspace.cwd === workingDirectory(args),
+    )
+  )
+    throw new Error("fleet-host --cwd must identify a configured workspace");
+  // Remote operators cannot answer an unknown target tool approval. A local
+  // operator must explicitly select Full Access before bypassing that policy.
+  if (!args.options.has("approval")) args.options.set("approval", "always");
+  let stop!: () => void;
+  const shutdown = new Promise<void>((resolve) => {
+    stop = resolve;
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
+  let host: Awaited<ReturnType<typeof startFleetHeadlessHost>> | undefined;
+  let admin: ReturnType<typeof createInterface> | undefined;
+  let pending: Promise<void> = Promise.resolve();
+  try {
+    host = await startFleetHeadlessHost(config, hostOptions(args));
+    const running = host;
+    const pair = async () => {
+      await running.createPairingCodeFile();
+      process.stderr.write(
+        `One-use pairing code expires in 5 minutes; read protected local file ${config.pairCodeFile}\n`,
+      );
+    };
+    if (flag(args, "pair")) await pair();
+    admin = createInterface({
+      input: process.stdin,
+      output: process.stderr,
+      terminal: false,
+    });
+    admin.on("line", (line: string) => {
+      pending = pending
+        .then(async () => {
+          const command = line.trim();
+          if (command === "pair") await pair();
+          else if (command === "devices")
+            process.stderr.write(`${JSON.stringify(running.devices())}\n`);
+          else if (command === "status")
+            process.stderr.write(
+              `Fleet Host ${running.hostId} listening on ${running.url}\n`,
+            );
+          else if (command === "quit") stop();
+          else {
+            const match = /^revoke ([^\s]+)$/u.exec(command);
+            if (!match?.[1])
+              throw new Error(
+                "Local admin: pair | devices | revoke <deviceId> | status | quit",
+              );
+            running.revoke(match[1]);
+            process.stderr.write("Device durably revoked.\n");
+          }
+        })
+        .catch((error: unknown) => {
+          process.stderr.write(
+            `Fleet admin: ${error instanceof Error ? error.message : String(error)}\n`,
+          );
+        });
+    });
+    process.stderr.write(
+      `Fleet Host ${running.hostId} listening on ${running.url}\nForeground process; grants persist, execution stops on SIGINT/SIGTERM or quit. No service installed.\nLocal admin: pair | devices | revoke <deviceId> | status | quit\n`,
+    );
+    await shutdown;
+  } finally {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+    admin?.close();
+    await pending;
+    await host?.close();
   }
 }
 
@@ -655,11 +760,29 @@ function hostOptions(args: ParsedArguments) {
   ) {
     throw new Error("--tool-presentation must be direct, code, or both");
   }
+  const configuredWindow = option(args, "context-window");
+  const contextWindow =
+    configuredWindow === undefined ? undefined : Number(configuredWindow);
+  if (
+    contextWindow !== undefined &&
+    (!Number.isSafeInteger(contextWindow) || contextWindow <= 0)
+  )
+    throw new Error(
+      "--context-window must be a positive integer local model cap",
+    );
   return {
     cwd: workingDirectory(args),
     dataDirectory: dataDirectory(args),
     model: modelName(args, providerName),
     models: modelNames(args, providerName),
+    ...(contextWindow === undefined
+      ? {}
+      : {
+          modelCatalog: legacyModelCatalogEntries(
+            provider.type,
+            modelNames(args, providerName),
+          ).map((entry) => ({ ...entry, contextWindow })),
+        }),
     approvalPolicy: approval,
     provider,
     secretEnvironmentVariables,
@@ -667,17 +790,28 @@ function hostOptions(args: ParsedArguments) {
   } as const;
 }
 
-function parseArguments(args: string[]): ParsedArguments {
+function parseArguments(
+  args: string[],
+  extraOptions: readonly string[] = [],
+  extraBooleanOptions: readonly string[] = [],
+): ParsedArguments {
   const options = new Map<string, string | true>();
   const positionals: string[] = [];
-  const booleanOptions = new Set(["approve", "archived", "deny"]);
+  const booleanOptions = new Set([
+    "approve",
+    "archived",
+    "deny",
+    ...extraBooleanOptions,
+  ]);
   const allowedOptions = new Set([
+    ...extraOptions,
     "api-key-env",
     "approval",
     "approve",
     "archived",
     "auth-token-file",
     "base-url",
+    "context-window",
     "cwd",
     "data-dir",
     "deny",
@@ -721,6 +855,29 @@ function parseArguments(args: string[]): ParsedArguments {
     index += 1;
   }
   return { options, positionals };
+}
+
+function parseFleetHostArguments(args: string[]): ParsedArguments {
+  const parsed = parseArguments(args, ["config", "pair"], ["pair"]);
+  const allowed = new Set([
+    "config",
+    "pair",
+    "cwd",
+    "data-dir",
+    "provider",
+    "provider-name",
+    "model",
+    "models",
+    "context-window",
+    "base-url",
+    "api-key-env",
+    "approval",
+    "tool-presentation",
+  ]);
+  for (const name of parsed.options.keys())
+    if (!allowed.has(name))
+      throw new Error(`Option --${name} is not supported by fleet-host`);
+  return parsed;
 }
 
 function parseAppServerArguments(args: string[]): ParsedArguments {
@@ -932,6 +1089,7 @@ function printHelp(): void {
 Usage:
   zen app-server [--listen ws://127.0.0.1:4500] [--auth-token-file <path>]
   zen app-server --remote-host-config <private-config.json>  # isolated opt-in TLS gateway
+  zen fleet-host --config <private-config.json> --data-dir <absolute-path> --provider <name> [--pair]
   zen app-server --remote ws://127.0.0.1:4500 [--auth-token-file <path>]
   zen run [options] <prompt>
   zen chat [options]
@@ -945,6 +1103,7 @@ Core options:
   --data-dir <path>            Host-owned Zen data directory
   --model <name>               Model name (defaults to fake, or gpt-5.6-terra for subscription)
   --models <a,b,...>           Complete model catalog exposed by this Zen host
+  --context-window <tokens>   Explicit local model context cap (required for compatible provider models)
   --approval always|never      Tool approval policy (default: never / Full Access)
   --tool-presentation <mode>   Model tools: direct, code, or both (default: both)
   --approve                    Accept one-shot run approvals (implies --approval always)

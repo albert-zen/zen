@@ -17,6 +17,7 @@ export interface RemoteDeviceGrant {
   digest: string;
   revoked: boolean;
   access?: "read" | "control" | undefined;
+  shellEnabled?: boolean;
   workspaceIds: string[] | null;
 }
 /** Host-owned authorization configuration, never a conversation journal. */
@@ -56,6 +57,8 @@ export class RemoteGrantFile {
           (grant.access !== undefined &&
             grant.access !== "read" &&
             grant.access !== "control") ||
+          (grant.shellEnabled !== undefined &&
+            typeof grant.shellEnabled !== "boolean") ||
           (grant.workspaceIds !== null &&
             (!Array.isArray(grant.workspaceIds) ||
               grant.workspaceIds.length > 32 ||

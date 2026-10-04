@@ -20,7 +20,14 @@ import { realpath } from "node:fs/promises";
 import type { ZenAppServer, ThreadSnapshot } from "../../app-server.js";
 import { AppServerError } from "../../app-server.js";
 import type { CanonicalItem } from "../../item.js";
-import { REMOTE_HOST_VERSION } from "./remote-wire.js";
+import {
+  REMOTE_HOST_VERSION,
+  REMOTE_SHELL_MAX_COMMAND_BYTES,
+  REMOTE_SHELL_MAX_TIMEOUT_MS,
+  REMOTE_SHELL_MAX_OUTPUT_BYTES,
+  type RemoteShellRequest,
+  type RemoteShellResult,
+} from "./remote-wire.js";
 import type {
   RemoteWorkspaceView,
   RemotePairRequest,
@@ -120,8 +127,11 @@ function publicEvent(projected: NativeProjectedThreadEvent): RemoteEventView {
 }
 
 export class RemoteHostError extends Error {
-  constructor(readonly code: RemoteErrorCode) {
-    super(code);
+  constructor(
+    readonly code: RemoteErrorCode,
+    message: string = code,
+  ) {
+    super(message);
     this.name = "RemoteHostError";
   }
 }
@@ -241,11 +251,20 @@ export function projectRemoteRecoveryPage(
   };
 }
 
+/** Target Host execution boundary, not a general tool-forwarding port. */
+export interface RemoteShellPort {
+  execute(
+    request: RemoteShellRequest,
+    resolveTarget: () => Promise<ThreadSnapshot>,
+    signal: AbortSignal,
+  ): Promise<RemoteShellResult>;
+}
 interface Device {
   digest: Buffer;
   revoked: boolean;
   access?: "read" | "control" | undefined;
   workspaceIds: readonly string[] | null;
+  shellEnabled?: boolean;
 }
 /** Host-external grants; an explicit private state file preserves authorization across restarts. */
 export class RemoteHostAccess {
@@ -253,6 +272,9 @@ export class RemoteHostAccess {
   readonly #grantFile: RemoteGrantFile | undefined;
   readonly #accessMode: "read" | "control" | undefined;
   readonly #rooms: RemoteRoomsPort | undefined;
+  readonly #shell: RemoteShellPort | undefined;
+  readonly #shellEnabled: boolean;
+  readonly #shellRequests = new Map<AbortController, string>();
   readonly #hostId: string;
   readonly #workspaces: () =>
     readonly RemoteWorkspace[] | Promise<readonly RemoteWorkspace[]>;
@@ -270,6 +292,8 @@ export class RemoteHostAccess {
     grantFile?: string;
     access?: "read" | "control" | undefined;
     rooms?: RemoteRoomsPort;
+    shell?: RemoteShellPort;
+    shellEnabled?: boolean;
     workspaces: () =>
       readonly RemoteWorkspace[] | Promise<readonly RemoteWorkspace[]>;
   }) {
@@ -278,6 +302,8 @@ export class RemoteHostAccess {
     this.#hostId = options.hostId;
     this.#accessMode = options.access;
     this.#rooms = options.rooms;
+    this.#shell = options.shell;
+    this.#shellEnabled = options.shellEnabled === true;
     this.#grantFile = options.grantFile
       ? new RemoteGrantFile(options.grantFile, options.hostId)
       : undefined;
@@ -287,6 +313,7 @@ export class RemoteHostAccess {
         revoked: grant.revoked,
         workspaceIds: grant.workspaceIds,
         access: grant.access,
+        shellEnabled: grant.shellEnabled === true,
       });
     this.#workspaces = options.workspaces;
     this.#projection = new NativeRecoveryProjection(options.appServer);
@@ -311,7 +338,9 @@ export class RemoteHostAccess {
       !validToken(input.code) ||
       (input.access !== undefined &&
         input.access !== "read" &&
-        input.access !== "control")
+        input.access !== "control") ||
+      (input.shellEnabled !== undefined &&
+        typeof input.shellEnabled !== "boolean")
     )
       throw new RemoteHostError("invalid_request");
     const pair = this.#pair;
@@ -328,6 +357,11 @@ export class RemoteHostAccess {
       revoked: false,
       workspaceIds: pair.workspaceIds,
       access: input.access === "read" ? ("read" as const) : this.#accessMode,
+      shellEnabled:
+        this.#shellEnabled &&
+        input.shellEnabled === true &&
+        input.access !== "read" &&
+        this.#accessMode === "control",
     };
     this.#saveGrants(new Map([...this.#devices, [input.deviceId, device]]));
     this.#devices.set(input.deviceId, device);
@@ -340,6 +374,8 @@ export class RemoteHostAccess {
         new Map([...this.#devices, [deviceId, { ...device, revoked: true }]]),
       );
       device.revoked = true;
+      for (const [controller, owner] of this.#shellRequests)
+        if (owner === deviceId) controller.abort();
       for (const listener of this.#revocationListeners) listener(deviceId);
     }
   }
@@ -347,12 +383,15 @@ export class RemoteHostAccess {
     deviceId: string;
     revoked: boolean;
     workspaceIds: readonly string[] | null;
+    access?: "read" | "control" | undefined;
+    shellEnabled: boolean;
   }> {
     return [...this.#devices].map(([deviceId, device]) => ({
       deviceId,
       revoked: device.revoked,
       workspaceIds: device.workspaceIds,
       access: device.access,
+      shellEnabled: device.shellEnabled === true,
     }));
   }
   #saveGrants(devices: Map<string, Device>): void {
@@ -362,6 +401,7 @@ export class RemoteHostAccess {
         digest: device.digest.toString("hex"),
         revoked: device.revoked,
         access: device.access,
+        shellEnabled: device.shellEnabled === true,
         workspaceIds:
           device.workspaceIds === null ? null : [...device.workspaceIds],
       })),
@@ -403,6 +443,7 @@ export class RemoteHostAccess {
         "resumePage",
         "send",
         "interrupt",
+        ...(this.#shell && this.#shellAllowed(deviceId) ? ["shell"] : []),
       ],
     };
   }
@@ -459,6 +500,7 @@ export class RemoteHostAccess {
       throw new RemoteHostError("wrong_workspace");
     }
     this.authenticate(deviceId, token);
+    if (thread.archived) throw new RemoteHostError("stale_thread");
     return thread;
   }
   async threads(
@@ -632,6 +674,7 @@ export class RemoteHostAccess {
       this.#writeAccess(deviceId, token);
       const options = {
         clientId: input.clientId,
+        requireUnarchived: true,
         ...(control
           ? {}
           : {
@@ -648,6 +691,7 @@ export class RemoteHostAccess {
             input.threadId,
             input.text,
             input.clientId,
+            { requireUnarchived: true },
           );
           return { queued: true };
         }
@@ -691,6 +735,65 @@ export class RemoteHostAccess {
       }
     }
     throw new RemoteHostError("thread_busy");
+  }
+  #shellAllowed(deviceId: string): boolean {
+    return (
+      this.#shellEnabled &&
+      this.#accessMode === "control" &&
+      this.#devices.get(deviceId)?.access === "control" &&
+      this.#devices.get(deviceId)?.shellEnabled === true
+    );
+  }
+  async shell(
+    deviceId: string,
+    token: string,
+    input: RemoteShellRequest,
+    signal: AbortSignal,
+  ): Promise<RemoteShellResult> {
+    this.authenticate(deviceId, token);
+    if (!this.#shell || !this.#shellAllowed(deviceId))
+      throw new RemoteHostError("operation_forbidden");
+    if (
+      !validId(input.workspaceId) ||
+      !validId(input.targetThreadId) ||
+      typeof input.command !== "string" ||
+      !input.command.trim() ||
+      input.command.includes("\0") ||
+      Buffer.byteLength(input.command) > REMOTE_SHELL_MAX_COMMAND_BYTES ||
+      !Number.isSafeInteger(input.timeoutMs) ||
+      input.timeoutMs < 1 ||
+      input.timeoutMs > REMOTE_SHELL_MAX_TIMEOUT_MS ||
+      !Number.isSafeInteger(input.maxOutputBytes) ||
+      input.maxOutputBytes < 1 ||
+      input.maxOutputBytes > REMOTE_SHELL_MAX_OUTPUT_BYTES
+    )
+      throw new RemoteHostError("invalid_request");
+    const controller = new AbortController();
+    const bounded = AbortSignal.any([signal, controller.signal]);
+    const resolveTarget = async () => {
+      bounded.throwIfAborted();
+      const thread = await this.#thread(
+        deviceId,
+        token,
+        input.workspaceId,
+        input.targetThreadId,
+      );
+      const cwd = await this.#workspace(deviceId, token, input.workspaceId);
+      if (thread.archived) throw new RemoteHostError("stale_thread");
+      if ((await realpath(thread.cwd)) !== cwd)
+        throw new RemoteHostError("wrong_workspace");
+      this.authenticate(deviceId, token);
+      if (!this.#shellAllowed(deviceId))
+        throw new RemoteHostError("operation_forbidden");
+      bounded.throwIfAborted();
+      return thread;
+    };
+    this.#shellRequests.set(controller, deviceId);
+    try {
+      return await this.#shell.execute(input, resolveTarget, bounded);
+    } finally {
+      this.#shellRequests.delete(controller);
+    }
   }
   async roomRequest(
     deviceId: string,
@@ -811,6 +914,7 @@ export class RemoteHostAccess {
   }
   close(): void {
     this.#closed = true;
+    for (const controller of this.#shellRequests.keys()) controller.abort();
     this.#pair = undefined;
     this.#devices.clear();
     this.#projection.close();

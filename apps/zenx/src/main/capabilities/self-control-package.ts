@@ -204,7 +204,8 @@ const manifest: ZenXPluginManifestV2 = {
           model: { type: "string" },
           effort: { type: "string" },
         },
-        required: ["target", "model"],
+        required: ["model"],
+        ...threadTargetRequirement(),
         additionalProperties: false,
       },
       permissions: [
@@ -301,7 +302,7 @@ const manifest: ZenXPluginManifestV2 = {
             maximum: MAX_READ_ITEMS,
           },
         },
-        required: ["target"],
+        ...threadTargetRequirement(),
         additionalProperties: false,
       },
       permissions: [ZENX_SELF_CONTROL_WORKSPACE_PERMISSION],
@@ -316,7 +317,7 @@ const manifest: ZenXPluginManifestV2 = {
       inputSchema: {
         type: "object",
         properties: targetProperties(),
-        required: ["target"],
+        ...threadTargetRequirement(),
         additionalProperties: false,
       },
       permissions: [ZENX_SELF_CONTROL_WORKSPACE_PERMISSION],
@@ -334,7 +335,8 @@ const manifest: ZenXPluginManifestV2 = {
           ...targetProperties(),
           name: { type: "string" },
         },
-        required: ["target", "name"],
+        required: ["name"],
+        ...threadTargetRequirement(),
         additionalProperties: false,
       },
       permissions: [
@@ -387,7 +389,8 @@ const manifest: ZenXPluginManifestV2 = {
           },
           text: { type: "string" },
         },
-        required: ["target", "text"],
+        required: ["text"],
+        ...threadTargetRequirement(),
         additionalProperties: false,
       },
       permissions: [
@@ -473,7 +476,8 @@ manifest.tools.push(
         turnId: { type: "string" },
         timeoutSeconds: { type: "integer", minimum: 1, maximum: 30 },
       },
-      required: ["target", "turnId"],
+      required: ["turnId"],
+      ...threadTargetRequirement(),
       additionalProperties: false,
     },
     permissions: [ZENX_SELF_CONTROL_WORKSPACE_PERMISSION],
@@ -588,6 +592,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     args: Record<string, unknown>,
     invocation: ToolInvocation,
   ): Promise<unknown> {
+    let requireActive = false;
     if (
       [
         "zenx_threads_read",
@@ -601,15 +606,29 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       ].includes(name)
     ) {
       if (args.target !== undefined && args.threadId !== undefined)
-        throw new Error("Specify only target");
+        throw new Error("Specify only target or threadId");
+      const exact = args.threadId !== undefined;
       const resolution = await resolveThreadTarget(this.#appServer, {
-        target: requiredString(args.target ?? args.threadId, "target"),
+        target: requiredString(
+          exact ? args.threadId : args.target,
+          exact ? "threadId" : "target",
+        ),
+        exact,
         ...(args.workspace === undefined
           ? {}
           : { workspace: requiredString(args.workspace, "workspace") }),
       });
       if (resolution.status !== "resolved")
         return { source: SOURCE, ...resolution };
+      requireActive =
+        exact &&
+        [
+          "zenx_threads_read",
+          "zenx_threads_status",
+          "zenx_self_control_threads_wait",
+          "zenx_threads_send",
+        ].includes(name);
+      if (requireActive) assertActiveThread(resolution.candidate);
       const { target: _target, workspace: _workspace, ...rest } = args;
       args = { ...rest, threadId: resolution.threadId };
     }
@@ -650,7 +669,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       case "zenx_threads_create":
         return await this.#createThread(args);
       case "zenx_threads_read":
-        return await this.#readThread(args);
+        return await this.#readThread(args, requireActive);
       case "zenx_self_control_threads_wait": {
         assertOnly(args, ["threadId", "turnId", "timeoutSeconds"]);
         const threadId = requiredString(args.threadId, "threadId");
@@ -665,6 +684,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
         const deadline = Date.now() + (seconds as number) * 1000;
         for (;;) {
           invocation.signal.throwIfAborted();
+          if (requireActive) await this.#assertActiveThread(threadId);
           const { thread } = await this.#appServer.request("thread/read", {
             threadId,
             includeTurns: true,
@@ -686,7 +706,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
         }
       }
       case "zenx_threads_status":
-        return await this.#threadStatus(args);
+        return await this.#threadStatus(args, requireActive);
       case "zenx_threads_rename":
         return await this.#renameThread(args);
       case "zenx_threads_archive":
@@ -694,7 +714,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       case "zenx_threads_unarchive":
         return await this.#setArchived(args, false);
       case "zenx_threads_send":
-        return await this.#send(args, invocation);
+        return await this.#send(args, invocation, requireActive);
       case "zenx_self_control_workflows_get":
         assertOnly(args, []);
         return await this.#requireWorkflows().workflowConfiguration();
@@ -953,7 +973,17 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     };
   }
 
-  async #readThread(args: Record<string, unknown>): Promise<unknown> {
+  async #assertActiveThread(threadId: string): Promise<void> {
+    const { thread } = await this.#appServer.request("zen/thread/read", {
+      threadId,
+    });
+    assertActiveThread({ threadId: thread.id, archived: thread.archived });
+  }
+
+  async #readThread(
+    args: Record<string, unknown>,
+    requireActive: boolean,
+  ): Promise<unknown> {
     assertOnly(args, [
       "threadId",
       "maxTurns",
@@ -985,6 +1015,8 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     const thread = (
       await this.#appServer.request("zen/thread/read", { threadId })
     ).thread;
+    if (requireActive)
+      assertActiveThread({ threadId: thread.id, archived: thread.archived });
     return readThreadHistory(thread, {
       granularity,
       ...(turnId === undefined ? {} : { turnId }),
@@ -1005,9 +1037,13 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     });
   }
 
-  async #threadStatus(args: Record<string, unknown>): Promise<unknown> {
+  async #threadStatus(
+    args: Record<string, unknown>,
+    requireActive: boolean,
+  ): Promise<unknown> {
     assertOnly(args, ["threadId"]);
     const requestedThreadId = requiredString(args.threadId, "threadId");
+    if (requireActive) await this.#assertActiveThread(requestedThreadId);
     const thread = (
       await this.#appServer.request("thread/read", {
         threadId: requestedThreadId,
@@ -1065,6 +1101,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
   async #send(
     args: Record<string, unknown>,
     invocation: ToolInvocation,
+    requireActive: boolean,
   ): Promise<unknown> {
     assertOnly(args, ["threadId", "text", "messageType"]);
     const threadId = requiredString(args.threadId, "threadId");
@@ -1078,6 +1115,8 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     const thread = (
       await this.#appServer.request("zen/thread/read", { threadId })
     ).thread;
+    if (requireActive)
+      assertActiveThread({ threadId: thread.id, archived: thread.archived });
     const previous = thread.items.find(
       (item) =>
         (item.type === "user_message" ||
@@ -1234,7 +1273,7 @@ function threadIdSchema(): Record<string, unknown> {
   return {
     type: "object",
     properties: targetProperties(),
-    required: ["target"],
+    ...threadTargetRequirement(),
     additionalProperties: false,
   };
 }
@@ -1375,8 +1414,17 @@ function messageIdentity(invocation: ToolInvocation): string {
     .digest("hex")}`;
 }
 
+function threadTargetRequirement(): Record<string, unknown> {
+  return { oneOf: [{ required: ["target"] }, { required: ["threadId"] }] };
+}
+
 function targetProperties(): Record<string, unknown> {
   return {
+    threadId: {
+      type: "string",
+      description:
+        "Exact full Thread ID. Never matches a title or ID prefix. Read, status, send and wait require an active, non-archived Thread. Use either threadId or target.",
+    },
     target: {
       type: "string",
       description:
@@ -1387,4 +1435,12 @@ function targetProperties(): Record<string, unknown> {
       description: "Optional workspace path to disambiguate the target.",
     },
   };
+}
+
+function assertActiveThread(thread: {
+  threadId: string;
+  archived: boolean;
+}): void {
+  if (thread.archived)
+    throw new Error(`Thread ${thread.threadId} is archived and inactive`);
 }

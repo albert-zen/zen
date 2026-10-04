@@ -2,6 +2,8 @@ import { createImZenXPawHandler } from "./imzenx-paw.js";
 import { createFleetRoomsHandler } from "./fleet-rooms.js";
 import { deliverAssistantInput } from "./assistant-preset.js";
 import { FleetSettingsService } from "./fleet-settings.js";
+import { ZenXFleetCapabilityPackage } from "./capabilities/fleet-package.js";
+import { FleetProductService } from "./fleet-product.js";
 import { realpath } from "node:fs/promises";
 import { ZenXSubagentsCapabilityPackage } from "./capabilities/subagents-package.js";
 import { attachMainWindowDiagnostics } from "./main-window-diagnostics.js";
@@ -449,11 +451,34 @@ async function bootstrapZenX(): Promise<void> {
       },
     });
     ipcMain.removeHandler(ipcChannels.fleetControl);
+    const fleetProduct = new FleetProductService(fleetSettingsService);
     ipcMain.handle(
       ipcChannels.fleetControl,
       async (_event, action: unknown, input: unknown, revision?: number) => {
         const fleet = fleetSettingsService!;
         if (action === "status") return await fleet.status();
+        if (action === "catalog" && typeof input === "string")
+          return await fleetProduct.catalog(input);
+        if (action === "listThreads")
+          return await fleetProduct.list(
+            input as Parameters<typeof fleetProduct.list>[0],
+          );
+        if (action === "createThread")
+          return await fleetProduct.create(
+            input as Parameters<typeof fleetProduct.create>[0],
+          );
+        if (action === "readThread")
+          return await fleetProduct.read(
+            input as Parameters<typeof fleetProduct.read>[0],
+          );
+        if (action === "threadStatus")
+          return await fleetProduct.status(
+            input as Parameters<typeof fleetProduct.status>[0],
+          );
+        if (action === "sendThread")
+          return await fleetProduct.send(
+            input as Parameters<typeof fleetProduct.send>[0],
+          );
         if (action === "save") return await fleet.save(input, revision);
         if (action === "pair") return await fleet.pair(input);
         if (action === "remove" && typeof input === "string")
@@ -496,6 +521,10 @@ async function bootstrapZenX(): Promise<void> {
             );
         },
       },
+    });
+    const fleetPackage = new ZenXFleetCapabilityPackage({
+      threads: selfControlPackage,
+      fleet: fleetSettingsService,
     });
     const subagentsPackage = new ZenXSubagentsCapabilityPackage({
       appServer: selfControlPort,
@@ -564,6 +593,9 @@ async function bootstrapZenX(): Promise<void> {
         ),
         computer: createDelegatingFirstPartyProfileLoader(() =>
           capabilityService!.computerProfilePackage(),
+        ),
+        "zenx-fleet": createDelegatingFirstPartyProfileLoader(
+          () => fleetPackage,
         ),
         "zenx-subagents": createDelegatingFirstPartyProfileLoader(
           () => subagentsPackage,

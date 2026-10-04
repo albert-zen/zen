@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -60,6 +60,32 @@ const SELF_CONTROL_TOOL_NAMES = [
   "zenx_self_control_devices",
   "zenx_self_control_threads_wait",
 ];
+
+test("bundled and ordinary self-control manifests expose the same exact or readable selectors", async () => {
+  const bundled = new ZenXSelfControlCapabilityPackage({
+    appServer: new MutableAppServerRequestPort(),
+  }).manifest;
+  const ordinary = JSON.parse(
+    await readFile(
+      new URL(
+        "../../../packages/zenx-self-control-plugin/zenx.plugin.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  ) as typeof bundled;
+  for (const tool of bundled.tools) {
+    const matching = ordinary.tools.find((entry) => entry.name === tool.name);
+    assert.deepEqual(matching?.inputSchema, tool.inputSchema, tool.name);
+    const properties = tool.inputSchema.properties as Record<string, unknown>;
+    if (properties.target === undefined) continue;
+    assert.ok(properties.threadId, tool.name);
+    assert.deepEqual(tool.inputSchema.oneOf, [
+      { required: ["target"] },
+      { required: ["threadId"] },
+    ]);
+  }
+});
 
 test("self-control reads and updates the same workflow configuration port", async () => {
   let value = {
@@ -275,7 +301,13 @@ test("real ZenX host control tools make active semantics explicit", async () => 
       )[0]?.archived,
       true,
     );
-    const archivedRead = await invoke(tools, "zenx_threads_read", { threadId });
+    await assert.rejects(
+      invoke(tools, "zenx_threads_read", { threadId }),
+      /archived|inactive/i,
+    );
+    const archivedRead = await invoke(tools, "zenx_threads_read", {
+      target: threadId,
+    });
     assert.equal(archivedRead.threadId, threadId);
     const unarchived = await invoke(tools, "zenx_threads_unarchive", {
       threadId,

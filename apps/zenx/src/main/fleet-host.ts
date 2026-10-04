@@ -8,6 +8,7 @@ import {
   RemoteHostAccess,
   RemoteHostError,
   type RemoteRoomsPort,
+  type RemoteShellPort,
 } from "../../../../src/protocol/native/remote-host.js";
 import {
   serveRemoteHost,
@@ -24,6 +25,7 @@ export interface FleetHostConfig {
   tlsKeyFile: string;
   grantFile: string;
   access: "read" | "control";
+  shellEnabled?: boolean;
   relayEndpoint?: string;
   originEndpoint?: string;
   relayRegistrationToken?: string;
@@ -63,7 +65,8 @@ export function validateFleetHostConfig(value: unknown): FleetHostConfig {
     !Number.isInteger(c.port) ||
     c.port < 0 ||
     c.port > 65535 ||
-    !["read", "control"].includes(c.access)
+    !["read", "control"].includes(c.access) ||
+    (c.shellEnabled !== undefined && typeof c.shellEnabled !== "boolean")
   )
     throw new Error("Invalid Fleet hosting configuration");
   const workspaces = validateWorkspaces(c.workspaces);
@@ -94,6 +97,7 @@ export class FleetHostService {
   constructor(
     readonly appServer: ZenAppServer,
     readonly rooms: RemoteRoomsPort,
+    readonly shell?: RemoteShellPort,
   ) {}
   async control(action: string, input?: unknown): Promise<unknown> {
     const operation = this.#operations.then(async () => {
@@ -207,6 +211,8 @@ export class FleetHostService {
           return config.workspaces;
         },
         rooms: this.rooms,
+        shellEnabled: config.shellEnabled === true,
+        ...(this.shell ? { shell: this.shell } : {}),
       });
       this.#server = await serveRemoteHost({
         enabled: true,

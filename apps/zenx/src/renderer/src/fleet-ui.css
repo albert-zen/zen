@@ -1,0 +1,109 @@
+.fleet-composer-surface {
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.fleet-composer-surface > :is(.agent-surface, .thread-view) {
+  flex: 1;
+  min-height: 0;
+}
+.fleet-machine-strip {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.fleet-machine-strip .field {
+  min-width: 180px;
+  max-width: 240px;
+}
+.fleet-machine-strip > span {
+  color: var(--text-3);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.fleet-remote-conversation {
+  overflow: auto;
+  min-height: 0;
+  flex: 1;
+  padding: 24px;
+  display: grid;
+  align-content: start;
+  gap: 16px;
+}
+.fleet-remote-conversation > header h2 {
+  margin: 0 0 8px;
+  font-size: 22px;
+}
+.fleet-remote-conversation > header p {
+  color: var(--text-3);
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.fleet-remote-conversation form {
+  display: grid;
+  gap: 12px;
+}
+.fleet-remote-conversation form > button {
+  justify-self: start;
+}
+.fleet-remote-history {
+  display: grid;
+  gap: 16px;
+}
+.fleet-remote-history article {
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+  .fleet-machine-strip {
+    padding: 12px 16px;
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .fleet-machine-strip .field {
+    max-width: none;
+  }
+  .fleet-remote-conversation {
+    padding: 16px;
+  }
+}
+.fleet-history-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.fleet-wrap {
+  overflow-wrap: anywhere;
+}
+.settings-actions.fleet-actions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+.fleet-fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.fleet-block-space {
+  margin-block: 12px;
+}
+.fleet-top-space {
+  margin-top: 12px;
+}
+.fleet-section-space {
+  margin-top: 20px;
+}
+.fleet-confirmation {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-block: 12px;
+}

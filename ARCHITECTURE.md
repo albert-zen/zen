@@ -3,6 +3,10 @@
 ## 核心概念
 
 - **Fleet** — 用户配置的 SSH/HTTPS 设备目录将既有线程工具按可选 device 路由到远端同一工具实现；远端 Host 持有唯一会话权威，Fleet 不同步 journal、不新建调度器。
+- **Fleet 产品插件** — 独立的一方插件通过目标限定的 Fleet port 发现机器、用途描述、当前检查事实、工作空间和 Zen 模型目录，并调用已有线程能力；机器描述只是用户写的用途指导，不授予权限、不成为执行命令。
+- **Fleet 新线程目标** — 新稿显式选择 machine、目标工作空间和该目标的 Zen 模型；创建后机器/Host/工作空间/Thread 定位不可被本机同 ID 替代，界面只保留定位与易失显示投影，默认仍是本机。 远端消息可要求目标未归档，该条件在既有 Thread mutation lock 下核对，默认调用行为不变。
+- **Fleet Shell** — 独立 opt-in 的目标 Host shell capability 与设备 grant，仅在授权工作空间和已有 targetThreadId 的当前权限下复用目标 ToolEnvironment/ShellToolRuntime；没有审批通路时拒绝未知审批，不代理任意工具、不新增目标 Agent Turn，结果进入调用者已有 canonical 工具结果。
+- **Fleet 无界面 Host** — 显式生产进程入口沿用现有 provider/model 配置及受保护 durable grants；配对授权可跨进程重启保留，监听和执行只在该进程存活时存在，不安装服务或自动启动。
 - **Fleet Settings / Host** — 桌面设置保存设备定位与加密凭证，App Server 所在 Host 子进程持有原生 TLS gateway；授权摘要持久化且可撤销，进程重启不自动撤销配对，关闭进程停止服务。
 - **Fleet Relay** — 可选自托管 TLS relay 按预授权 Host 身份转发出站连接中的原生配对、请求与事件；relay 是可见消息与 grant 的受信任 TLS 终止端，不提供端到端加密、不拥有会话状态。
 - **Fleet Rooms** — Host 对已授权 workspace 内的助手 Room 投影有限消息与原生 Room 操作，客户端沿用 operation epoch 和幂等键，不复制 Room 状态机。

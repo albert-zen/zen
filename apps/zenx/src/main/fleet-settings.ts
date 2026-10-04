@@ -30,6 +30,13 @@ interface FleetObservation {
   dispose?: () => void;
   stop(): void;
 }
+export interface FleetCheck {
+  state: "not_checked" | "checking" | "reachable" | "failed";
+  /** Check sessions are closed afterwards; this is never a live socket claim. */
+  live: false;
+  checkedAt?: number;
+  detail?: string;
+}
 export class FleetSettingsService {
   readonly router: FleetRouter;
   readonly native: NativeFleetClient;
@@ -43,6 +50,7 @@ export class FleetSettingsService {
   #scopeGeneration = 0;
   #error: string | undefined;
   readonly #observations = new Set<FleetObservation>();
+  readonly #checks = new Map<string, { identity: string; check: FleetCheck }>();
   constructor(
     readonly options: {
       directory: string;
@@ -107,6 +115,21 @@ export class FleetSettingsService {
   async config() {
     return await readFleetConfig(this.file);
   }
+  async devices(snapshot?: FleetConfig) {
+    const config = snapshot ?? (await this.config());
+    const catalog = await this.router.devices(config);
+    return catalog.map((device) => {
+      const peer = config.devices.find((entry) => entry.id === device.id);
+      const observation = peer ? this.#checks.get(peer.id) : undefined;
+      const check: FleetCheck =
+        observation &&
+        peer &&
+        observation.identity === fleetObservationIdentity(peer)
+          ? { ...observation.check }
+          : { state: "not_checked", live: false };
+      return { ...device, check };
+    });
+  }
   async status() {
     const config = await this.config();
     const hostId = await this.#identity();
@@ -123,6 +146,7 @@ export class FleetSettingsService {
     return {
       revision: config.revision ?? 0,
       config,
+      devices: await this.devices(config),
       host: {
         ...(host as object),
         hostId,
@@ -414,6 +438,10 @@ export class FleetSettingsService {
         throw new Error(
           "Remove the old device identity before pairing a different Host",
         );
+      if (!this.options.encryption.isEncryptionAvailable())
+        throw new Error(
+          "Fleet pairing requires operating-system credential encryption. Unlock the system keychain or credential store before pairing; no remote grant was requested.",
+        );
       await this.native.pair(peer, code);
       this.#stopDeviceObservations(
         peer.id,
@@ -454,21 +482,54 @@ export class FleetSettingsService {
       return await this.status();
     });
   }
-  async test(id: string) {
+  async test(id: string, signal: AbortSignal = AbortSignal.timeout(10000)) {
+    signal.throwIfAborted();
     const peer = (await this.config()).devices.find((d) => d.id === id);
     if (!peer) throw new Error("Device not found");
-    if (peer.transport === "https") return await this.native.test(peer);
-    return await this.invoke({
-      device: id,
-      name: "zenx_threads_list",
-      arguments: { limit: 1 },
+    const identity = fleetObservationIdentity(peer);
+    this.#checks.set(id, {
+      identity,
+      check: { state: "checking", live: false },
     });
+    try {
+      const result =
+        peer.transport === "https"
+          ? await this.native.test(peer, signal)
+          : await this.invoke(
+              {
+                device: id,
+                name: "zenx_threads_list",
+                arguments: { limit: 1 },
+              },
+              signal,
+            );
+      this.#checks.set(id, {
+        identity,
+        check: { state: "reachable", live: false, checkedAt: Date.now() },
+      });
+      return result;
+    } catch (error) {
+      this.#checks.set(id, {
+        identity,
+        check: {
+          state: "failed",
+          live: false,
+          checkedAt: Date.now(),
+          detail: error instanceof Error ? error.message : String(error),
+        },
+      });
+      throw error;
+    }
   }
-  async invoke(input: {
-    device: string;
-    name: string;
-    arguments: Record<string, unknown>;
-  }) {
+  async invoke(
+    input: {
+      device: string;
+      name: string;
+      arguments: Record<string, unknown>;
+      expectedDeviceKey?: string;
+    },
+    signal?: AbortSignal,
+  ) {
     if (
       !input ||
       typeof input.device !== "string" ||
@@ -478,14 +539,18 @@ export class FleetSettingsService {
       Array.isArray(input.arguments)
     )
       throw new Error("Invalid Fleet operation");
-    return await this.router.invoke(input.device, {
-      name: input.name,
-      arguments: input.arguments,
-      callId: randomUUID(),
-      canonicalToolCallId: randomUUID(),
-      cwd: this.options.directory,
-      signal: AbortSignal.timeout(40000),
-    });
+    return await this.router.invoke(
+      input.device,
+      {
+        name: input.name,
+        arguments: input.arguments,
+        callId: randomUUID(),
+        canonicalToolCallId: randomUUID(),
+        cwd: this.options.directory,
+        signal: signal ?? AbortSignal.timeout(40000),
+      },
+      input.expectedDeviceKey,
+    );
   }
   async hostPair() {
     return await this.options.manager().fleetControl("pair");

@@ -117,3 +117,26 @@ test("Fleet host identity persists and same-epoch restore refreshes without rest
     3,
   );
 });
+
+test("Fleet pairing fails before consuming a code when OS encrypted storage is unavailable", async (t) => {
+  const { service } = await fixture(t);
+  service.options.encryption.isEncryptionAvailable = () => false;
+  let requests = 0;
+  service.native.pair = async () => {
+    requests++;
+    throw new Error("Unexpected pairing request");
+  };
+  await assert.rejects(
+    service.pair({
+      id: "peer",
+      label: "Peer",
+      endpoint: "https://peer.example:9443",
+      hostId: "host",
+      code: "throwaway",
+      access: "read",
+    }),
+    /requires operating-system credential encryption.*no remote grant was requested/u,
+  );
+  assert.equal(requests, 0);
+  assert.equal((await service.config()).devices.length, 0);
+});

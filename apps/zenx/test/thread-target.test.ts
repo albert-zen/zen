@@ -107,3 +107,47 @@ test("displayed short IDs remain unique even when an exact title collides with a
   assert.equal(full.status, "resolved");
   assert.equal(full.threadId, "12345678aaa");
 });
+
+test("exact Thread selectors never fall back to a title or ID prefix", async () => {
+  const selectedId = "selected-thread";
+  const selected = {
+    id: selectedId,
+    name: "Selected",
+    cwd: "/one",
+    status: { type: "idle" as const },
+  };
+  let present = true;
+  const collision = {
+    ...selected,
+    id: "collision-thread",
+    name: selectedId,
+  };
+  const prefix = { ...selected, id: `${selectedId}-another`, name: "Other" };
+  const port: ThreadTargetPort = {
+    projectProjection: new ZenXProjectProjection(),
+    async request(_method, params) {
+      return {
+        data: params.archived
+          ? []
+          : [...(present ? [selected] : []), collision, prefix],
+        nextCursor: null,
+      };
+    },
+  };
+  const exact = await resolveThreadTarget(port, {
+    target: selectedId,
+    exact: true,
+  });
+  assert.equal(exact.status, "resolved");
+  if (exact.status === "resolved") assert.equal(exact.threadId, selectedId);
+  present = false;
+  const missing = await resolveThreadTarget(port, {
+    target: selectedId,
+    exact: true,
+  });
+  assert.deepEqual(missing, { status: "not_found", candidates: [] });
+  assert.equal(
+    (await resolveThreadTarget(port, { target: selectedId })).status,
+    "ambiguous",
+  );
+});

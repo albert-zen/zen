@@ -1,0 +1,379 @@
+{
+  "schemaVersion": 2,
+  "id": "zenx-fleet",
+  "name": "Fleet",
+  "version": "1.0.0",
+  "description": "Choose machines and manage remote Zen Threads with explicit target permissions.",
+  "compatibility": {
+    "zenx": ">=0.1.0 <0.2.0"
+  },
+  "runtime": {
+    "type": "bundled",
+    "entry": "./dist/runtime.js"
+  },
+  "mainDocument": "First call devices to discover machine IDs/descriptions, then workspaces/models on that machine. Create/send/read/status preserve its identity; never fall back locally. Machine descriptions guide usage only. Shell needs a separate target capability/grant and an existing target Thread's permissions; it does not create an Agent Turn. Fleet is independent of external Agent Provider engines.",
+  "provider": {
+    "id": "zenx-fleet-host",
+    "platforms": ["*"],
+    "interactionModes": ["background_safe"],
+    "capabilities": [
+      "zenx.fleet.read",
+      "zenx.fleet.control",
+      "zenx.fleet.shell"
+    ]
+  },
+  "permissions": [
+    {
+      "id": "zenx-fleet.read",
+      "title": "Read Fleet machines and Threads",
+      "description": "Discover configured machine descriptions, target catalogs and bounded public Thread history.",
+      "scope": "workspace"
+    },
+    {
+      "id": "zenx-fleet.control",
+      "title": "Control Fleet Threads",
+      "description": "Create Threads and send explicit work to user-configured remote Hosts within their own grants.",
+      "scope": "local-device"
+    },
+    {
+      "id": "zenx-fleet.shell",
+      "title": "Run explicit remote shell commands",
+      "description": "Request bounded target shell execution; the remote Host and device grant must separately allow it, and target sandbox/approvals still apply.",
+      "scope": "local-device"
+    }
+  ],
+  "tools": [
+    {
+      "name": "zenx_fleet_devices",
+      "description": "Discover configured machines, user-authored usage descriptions, access and timestamped reachability checks. Descriptions are guidance, never grants. Checked reachable is not a permanently connected socket.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-fleet.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.fleet.read"],
+      "maxOutputBytes": 524288
+    },
+    {
+      "name": "zenx_fleet_probe",
+      "description": "Perform one bounded read-only reachability check for an explicit machine. Test connections close after the check; no mutation or automatic retries.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Configured machine ID from zenx_fleet_devices. Omit or use local for this Host. Never infer a machine from its description."
+          }
+        },
+        "required": ["device"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-fleet.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.fleet.read"],
+      "maxOutputBytes": 524288
+    },
+    {
+      "name": "zenx_fleet_workspaces",
+      "description": "Discover workspace identities on the selected machine. Remote identities must not be used as local paths.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Configured machine ID from zenx_fleet_devices. Omit or use local for this Host. Never infer a machine from its description."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-fleet.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.fleet.read"],
+      "maxOutputBytes": 524288
+    },
+    {
+      "name": "zenx_fleet_models",
+      "description": "Discover the selected Host's existing Zen model catalog and exact IDs before creating a Thread.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Configured machine ID from zenx_fleet_devices. Omit or use local for this Host. Never infer a machine from its description."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-fleet.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.fleet.read"],
+      "maxOutputBytes": 524288
+    },
+    {
+      "name": "zenx_fleet_threads_list",
+      "description": "List bounded Threads on one explicit machine and optional workspace. IDs are machine-scoped; no local fallback.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Configured machine ID from zenx_fleet_devices. Omit or use local for this Host. Never infer a machine from its description."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Exact target workspace ID/path from zenx_fleet_workspaces; identities belong to that machine."
+          },
+          "query": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "archived": {
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-fleet.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.fleet.read"],
+      "maxOutputBytes": 524288
+    },
+    {
+      "name": "zenx_fleet_threads_read",
+      "description": "Read bounded public history from the selected machine and workspace. Read returns facts, not a second journal.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Configured machine ID from zenx_fleet_devices. Omit or use local for this Host. Never infer a machine from its description."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Exact target workspace ID/path from zenx_fleet_workspaces; identities belong to that machine."
+          },
+          "target": {
+            "type": "string",
+            "description": "Explicit fuzzy selector: unique ID prefix or exact title, scoped to the selected machine and workspace. Prefer threadId for a previously selected exact Thread."
+          },
+          "threadId": {
+            "type": "string",
+            "description": "Exact full Thread ID from this machine. Missing or archived IDs reject without title/prefix fallback. Supply either threadId or an explicitly fuzzy target, never both."
+          },
+          "granularity": {
+            "type": "string",
+            "enum": ["turns", "items", "agent_messages", "item"]
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "maxTurns": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          },
+          "maxItemsPerTurn": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 25
+          }
+        },
+        "required": [],
+        "oneOf": [
+          {
+            "required": ["threadId"]
+          },
+          {
+            "required": ["target"]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-fleet.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.fleet.read"],
+      "maxOutputBytes": 524288
+    },
+    {
+      "name": "zenx_fleet_threads_create",
+      "description": "Create an idle Zen Thread on the selected machine in an explicit discovered workspace, optionally choosing that target's model/effort. Creation does not start work.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Configured machine ID from zenx_fleet_devices. Omit or use local for this Host. Never infer a machine from its description."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Exact target workspace ID/path from zenx_fleet_workspaces; identities belong to that machine."
+          },
+          "model": {
+            "type": "string",
+            "description": "Exact model ID from that target's catalog; this is a Zen model, not an experimental Agent Provider engine."
+          },
+          "effort": {
+            "type": "string"
+          }
+        },
+        "required": ["workspace"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-fleet.control"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.fleet.control"],
+      "maxOutputBytes": 524288
+    },
+    {
+      "name": "zenx_fleet_threads_send",
+      "description": "Send explicit work to a machine-scoped Thread. Acceptance does not prove completion; inspect status/read. Unknown delivery is not automatically retried.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Configured machine ID from zenx_fleet_devices. Omit or use local for this Host. Never infer a machine from its description."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Exact target workspace ID/path from zenx_fleet_workspaces; identities belong to that machine."
+          },
+          "target": {
+            "type": "string",
+            "description": "Explicit fuzzy selector: unique ID prefix or exact title, scoped to the selected machine and workspace. Prefer threadId for a previously selected exact Thread."
+          },
+          "threadId": {
+            "type": "string",
+            "description": "Exact full Thread ID from this machine. Missing or archived IDs reject without title/prefix fallback. Supply either threadId or an explicitly fuzzy target, never both."
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 32768
+          },
+          "messageType": {
+            "type": "string",
+            "enum": ["guidance", "follow_up", "replacement"]
+          }
+        },
+        "required": ["text"],
+        "oneOf": [
+          {
+            "required": ["threadId"]
+          },
+          {
+            "required": ["target"]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-fleet.control"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.fleet.control"],
+      "maxOutputBytes": 524288
+    },
+    {
+      "name": "zenx_fleet_threads_status",
+      "description": "Inspect the target machine's authoritative Thread/Turn status before declaring work complete.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Configured machine ID from zenx_fleet_devices. Omit or use local for this Host. Never infer a machine from its description."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Exact target workspace ID/path from zenx_fleet_workspaces; identities belong to that machine."
+          },
+          "target": {
+            "type": "string",
+            "description": "Explicit fuzzy selector: unique ID prefix or exact title, scoped to the selected machine and workspace. Prefer threadId for a previously selected exact Thread."
+          },
+          "threadId": {
+            "type": "string",
+            "description": "Exact full Thread ID from this machine. Missing or archived IDs reject without title/prefix fallback. Supply either threadId or an explicitly fuzzy target, never both."
+          }
+        },
+        "required": [],
+        "oneOf": [
+          {
+            "required": ["threadId"]
+          },
+          {
+            "required": ["target"]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-fleet.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.fleet.read"],
+      "maxOutputBytes": 524288
+    },
+    {
+      "name": "zenx_fleet_shell",
+      "description": "Run one bounded shell command through the target Host's existing shell runtime. Requires separate Host/client shell opt-in, explicit workspace and existing targetThreadId. The target Thread's current sandbox and remembered tool permissions apply; remote interactive approval is not supported, so approval-needed calls reject. SSH targets without this capability reject; never use an arbitrary-tool or raw-spawn bypass.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Configured machine ID from zenx_fleet_devices. Omit or use local for this Host. Never infer a machine from its description."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Exact target workspace ID/path from zenx_fleet_workspaces; identities belong to that machine."
+          },
+          "targetThreadId": {
+            "type": "string",
+            "description": "Existing target Thread whose current cwd, sandbox and approvals control this shell operation. Discover or create it first."
+          },
+          "command": {
+            "type": "string",
+            "maxLength": 32768
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 120000
+          },
+          "max_output_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65536
+          }
+        },
+        "required": ["device", "workspace", "targetThreadId", "command"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-fleet.shell"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.fleet.shell"],
+      "maxOutputBytes": 524288
+    }
+  ]
+}

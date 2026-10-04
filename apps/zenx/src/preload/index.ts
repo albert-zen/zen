@@ -272,6 +272,18 @@ contextBridge.exposeInMainWorld("zenx", {
       ),
   },
   fleet: {
+    catalog: (id: string) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "catalog", id),
+    listThreads: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "listThreads", input),
+    createThread: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "createThread", input),
+    readThread: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "readThread", input),
+    threadStatus: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "threadStatus", input),
+    sendThread: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "sendThread", input),
     status: () => ipcRenderer.invoke(ipcChannels.fleetControl, "status"),
     save: (config: unknown, revision?: number) =>
       ipcRenderer.invoke(ipcChannels.fleetControl, "save", config, revision),

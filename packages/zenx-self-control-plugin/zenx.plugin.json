@@ -51,6 +51,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "threadId": {
+            "type": "string",
+            "description": "Exact full Thread ID. Never matches a title or ID prefix. Read, status, send and wait require an active, non-archived Thread. Use either threadId or target."
+          },
           "target": {
             "type": "string",
             "description": "Full Thread ID, unique ID prefix, or exact title. Ambiguous targets return candidates without writing."
@@ -66,8 +70,16 @@
             "type": "string"
           }
         },
-        "required": ["target", "model"],
-        "additionalProperties": false
+        "required": ["model"],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": ["target"]
+          },
+          {
+            "required": ["threadId"]
+          }
+        ]
       },
       "permissions": [
         "zenx-self-control.workspace-read",
@@ -195,6 +207,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "threadId": {
+            "type": "string",
+            "description": "Exact full Thread ID. Never matches a title or ID prefix. Read, status, send and wait require an active, non-archived Thread. Use either threadId or target."
+          },
           "target": {
             "type": "string",
             "description": "Full Thread ID, unique ID prefix, or exact title. Ambiguous targets return candidates without writing."
@@ -231,8 +247,15 @@
             "description": "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine."
           }
         },
-        "required": ["target"],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": ["target"]
+          },
+          {
+            "required": ["threadId"]
+          }
+        ]
       },
       "permissions": ["zenx-self-control.workspace-read"],
       "interactionMode": "background_safe",
@@ -245,6 +268,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "threadId": {
+            "type": "string",
+            "description": "Exact full Thread ID. Never matches a title or ID prefix. Read, status, send and wait require an active, non-archived Thread. Use either threadId or target."
+          },
           "target": {
             "type": "string",
             "description": "Full Thread ID, unique ID prefix, or exact title. Ambiguous targets return candidates without writing."
@@ -258,8 +285,15 @@
             "description": "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine."
           }
         },
-        "required": ["target"],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": ["target"]
+          },
+          {
+            "required": ["threadId"]
+          }
+        ]
       },
       "permissions": ["zenx-self-control.workspace-read"],
       "interactionMode": "background_safe",
@@ -272,6 +306,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "threadId": {
+            "type": "string",
+            "description": "Exact full Thread ID. Never matches a title or ID prefix. Read, status, send and wait require an active, non-archived Thread. Use either threadId or target."
+          },
           "target": {
             "type": "string",
             "description": "Full Thread ID, unique ID prefix, or exact title. Ambiguous targets return candidates without writing."
@@ -284,8 +322,16 @@
             "type": "string"
           }
         },
-        "required": ["target", "name"],
-        "additionalProperties": false
+        "required": ["name"],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": ["target"]
+          },
+          {
+            "required": ["threadId"]
+          }
+        ]
       },
       "permissions": [
         "zenx-self-control.workspace-read",
@@ -301,6 +347,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "threadId": {
+            "type": "string",
+            "description": "Exact full Thread ID. Never matches a title or ID prefix. Read, status, send and wait require an active, non-archived Thread. Use either threadId or target."
+          },
           "target": {
             "type": "string",
             "description": "Full Thread ID, unique ID prefix, or exact title. Ambiguous targets return candidates without writing."
@@ -310,8 +360,15 @@
             "description": "Optional workspace path to disambiguate the target."
           }
         },
-        "required": ["target"],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": ["target"]
+          },
+          {
+            "required": ["threadId"]
+          }
+        ]
       },
       "permissions": [
         "zenx-self-control.workspace-read",
@@ -327,6 +384,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "threadId": {
+            "type": "string",
+            "description": "Exact full Thread ID. Never matches a title or ID prefix. Read, status, send and wait require an active, non-archived Thread. Use either threadId or target."
+          },
           "target": {
             "type": "string",
             "description": "Full Thread ID, unique ID prefix, or exact title. Ambiguous targets return candidates without writing."
@@ -336,8 +397,15 @@
             "description": "Optional workspace path to disambiguate the target."
           }
         },
-        "required": ["target"],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": ["target"]
+          },
+          {
+            "required": ["threadId"]
+          }
+        ]
       },
       "permissions": [
         "zenx-self-control.workspace-read",
@@ -353,6 +421,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "threadId": {
+            "type": "string",
+            "description": "Exact full Thread ID. Never matches a title or ID prefix. Read, status, send and wait require an active, non-archived Thread. Use either threadId or target."
+          },
           "target": {
             "type": "string",
             "description": "Full Thread ID, unique ID prefix, or exact title. Ambiguous targets return candidates without writing."
@@ -374,8 +446,16 @@
             "description": "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine."
           }
         },
-        "required": ["target", "text"],
-        "additionalProperties": false
+        "required": ["text"],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": ["target"]
+          },
+          {
+            "required": ["threadId"]
+          }
+        ]
       },
       "permissions": [
         "zenx-self-control.workspace-read",
@@ -462,6 +542,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "threadId": {
+            "type": "string",
+            "description": "Exact full Thread ID. Never matches a title or ID prefix. Read, status, send and wait require an active, non-archived Thread. Use either threadId or target."
+          },
           "target": {
             "type": "string",
             "description": "Full Thread ID, unique ID prefix, or exact title. Ambiguous targets return candidates without writing."
@@ -483,8 +567,16 @@
             "description": "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine."
           }
         },
-        "required": ["target", "turnId"],
-        "additionalProperties": false
+        "required": ["turnId"],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": ["target"]
+          },
+          {
+            "required": ["threadId"]
+          }
+        ]
       },
       "permissions": ["zenx-self-control.workspace-read"],
       "interactionMode": "background_safe",

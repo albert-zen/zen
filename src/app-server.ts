@@ -180,11 +180,13 @@ export interface CreateChildThreadInput {
 
 export interface SteerTurnOptions {
   clientId?: string;
+  requireUnarchived?: boolean;
 }
 
 export interface ReplaceTurnOptions {
   clientId: string;
   requestApproval?: ApprovalHandler;
+  requireUnarchived?: boolean;
 }
 
 export interface ReplaceTurnResult {
@@ -925,12 +927,15 @@ export class ZenAppServer {
     options: {
       requestApproval?: ApprovalHandler;
       deliveryMode?: "batch-next";
+      requireUnarchived?: boolean;
     } = {},
   ): Promise<void> {
     if (clientId.trim().length === 0)
       throw new AppServerError("invalid_input", "Queue client id is required");
     await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      if (options.requireUnarchived === true)
+        await this.#requireUnarchived(threadId);
       const input = await this.#prepareSkillInput(
         thread,
         requestedInput,
@@ -1078,7 +1083,10 @@ export class ZenAppServer {
 
   async resumeQueue(
     threadId: string,
-    options: { requestApproval?: ApprovalHandler } = {},
+    options: {
+      requestApproval?: ApprovalHandler;
+      requireUnarchived?: boolean;
+    } = {},
   ): Promise<void> {
     const thread = await this.#requireThread(threadId);
     const admissionInProgress = this.#queueAdmissions.get(threadId);
@@ -1256,7 +1264,10 @@ export class ZenAppServer {
 
   async #drainQueue(
     threadId: string,
-    options: { requestApproval?: ApprovalHandler },
+    options: {
+      requestApproval?: ApprovalHandler;
+      requireUnarchived?: boolean;
+    },
     firstAttempt?: { batch: QueuedUserMessageItem[]; attemptId: string },
     onFirstAdmission?: (
       outcome: { type: "admitted" } | { type: "rejected"; reason: unknown },
@@ -1379,6 +1390,8 @@ export class ZenAppServer {
       selection?: ProviderSelectionInput;
       model?: string;
       requestApproval?: ApprovalHandler;
+      /** Host admission fence, checked under the Thread mutation lock. */
+      requireUnarchived?: boolean;
       /** Host admission fence, checked under the Thread mutation lock. */
       requirePermissions?: {
         sandbox: SandboxMode;
@@ -1503,6 +1516,7 @@ export class ZenAppServer {
       selection?: ProviderSelectionInput;
       model?: string;
       requestApproval?: ApprovalHandler;
+      requireUnarchived?: boolean;
       requirePermissions?: {
         sandbox: SandboxMode;
         approvalPolicy: ApprovalPolicy;
@@ -1521,6 +1535,8 @@ export class ZenAppServer {
   ): Promise<TurnHandle> {
     const launch = await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      if (options.requireUnarchived === true)
+        await this.#requireUnarchived(threadId);
       if (
         internal.queuedAdmission !== undefined &&
         !internal.queuedAdmission.items.every((item) =>
@@ -1972,6 +1988,8 @@ export class ZenAppServer {
 
     const planned = await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      if (options.requireUnarchived === true)
+        await this.#requireUnarchived(threadId);
       const input = await this.#prepareSkillInput(
         thread,
         requestedInput,
@@ -2141,6 +2159,9 @@ export class ZenAppServer {
           inputFromReplacement(replacementIntent),
           {
             clientId: replacementIntent.clientId,
+            ...(options.requireUnarchived === undefined
+              ? {}
+              : { requireUnarchived: options.requireUnarchived }),
             ...(options.requestApproval === undefined
               ? {}
               : { requestApproval: options.requestApproval }),
@@ -2180,6 +2201,8 @@ export class ZenAppServer {
   ): Promise<TurnHandle> {
     return await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      if (options.requireUnarchived === true)
+        await this.#requireUnarchived(threadId);
       const input = await this.#prepareSkillInput(
         thread,
         requestedInput,
@@ -2829,6 +2852,16 @@ export class ZenAppServer {
       );
     }
     return thread;
+  }
+
+  /** Call under the same mutation lock used by setThreadArchived. */
+  async #requireUnarchived(threadId: string): Promise<void> {
+    if ((await this.#threadMetadata.read(threadId)).archived === true) {
+      throw new AppServerError(
+        "operation_forbidden",
+        `Thread ${threadId} is archived. Unarchive it before sending a message`,
+      );
+    }
   }
 
   async #commit(thread: Thread, item: CanonicalItem): Promise<void> {
@@ -3515,6 +3548,12 @@ function safeQueueFailure(error: unknown): { code: string; message: string } {
   const code =
     error instanceof AppServerError ? error.code : "queue_admission_failed";
   switch (code) {
+    case "operation_forbidden":
+      return {
+        code,
+        message:
+          "This Thread is archived. Unarchive it before using Continue queue; the queued input was not sent.",
+      };
     case "image_input_unsupported":
       return {
         code,
