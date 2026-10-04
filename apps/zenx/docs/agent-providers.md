@@ -8,6 +8,16 @@ An **Agent Provider** is a complete agent engine. A configured **instance** iden
 
 Settings provides engine-instance configuration. New conversations choose workspace, Agent Provider and then a model from its catalog. An existing conversation stays attached to the same instance and native session. Changing a default does not change old sessions. There is no silent cross-engine fallback or migration.
 
+All conversations appear under their ordinary Project, including Zen, Codex and OpenCode. The same Host workspace-identity resolver groups them; external sessions no longer occupy a separate navigation section. Rows prioritize the conversation title, with engine identity in their tooltip rather than repeating the workspace on every row. Unsupported native session management actions are not offered as if they were Zen operations.
+
+The Composer uses one model menu with engine-instance choice inside it for a new conversation. The model list belongs to the selected instance; an existing native session keeps its engine locked. Engine display names do not create separate accounts or credential profiles.
+
+## Reading execution details
+
+Normal trace remains compact. Choose **Conversation detail → Debug trace** in **Settings → General → Interaction** for an optional local view that exposes process groups and offers the available canonical items or external display projection on demand. This presentation preference applies immediately; it does not alter prompts, permissions or execution and does not imply that an external engine's complete native history is available. Normal conversations have no extra debug toolbar.
+
+A tool-associated context compaction shares that tool's details when its exact recorded call identity is available. Independent compaction uses a lightweight disclosure with its saved summary. If the display history is incomplete, the summary remains readable and retained-context diagnostics say why reconstruction is unavailable; the renderer does not invent missing history.
+
 ## Ownership and compatibility
 
 - Zen-native Threads keep their existing append-only ItemList, settings, tools, approvals and navigation. No old journal or profile is rewritten.

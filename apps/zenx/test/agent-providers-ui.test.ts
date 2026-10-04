@@ -15,12 +15,12 @@ import { AgentProviderSettings } from "../src/renderer/src/AgentProviderSettings
 import {
   ExternalAgentSession,
   useAgentModels,
-  AgentSessionNavigation,
 } from "../src/renderer/src/agent-providers-ui.js";
 import {
   emptyComposerState,
   type ComposerState,
 } from "../src/renderer/src/composer-state.js";
+import { AgentSessionRow } from "../src/renderer/src/Sidebar.js";
 import { subscribeAgentRefresh } from "../src/renderer/src/agent-provider-state.js";
 
 const { act, createElement: h } = React;
@@ -465,22 +465,26 @@ test("session navigation uses native labels with engine and workspace identity",
   let opened = "";
   await mounted(async ({ render }) => {
     await render(
-      h(AgentSessionNavigation, {
-        sessions: [snapshot().binding],
-        instances: [codex],
-        labels: { "binding-one": "Fix workspace issue" },
-        selectedId: "binding-one",
+      h(AgentSessionRow, {
+        session: {
+          binding: snapshot().binding,
+          title: "Fix workspace issue",
+          providerLabel: "Codex work",
+        },
+        selected: true,
         onOpen: (id) => {
           opened = id;
         },
-        error: null,
-        onRetry: () => undefined,
       }),
     );
     assert.match(document.body.textContent!, /Fix workspace issue/);
-    assert.match(document.body.textContent!, /Codex work · project/);
+    assert.doesNotMatch(document.body.textContent!, /Codex work/);
+    assert.match(
+      document.querySelector(".thread-row")!.getAttribute("title")!,
+      /Codex work.*\/work\/project/,
+    );
     await act(async () =>
-      document.querySelector<HTMLButtonElement>(".agent-session-row")!.click(),
+      document.querySelector<HTMLButtonElement>(".thread-row")!.click(),
     );
     assert.equal(opened, "binding-one");
   }, service.result);

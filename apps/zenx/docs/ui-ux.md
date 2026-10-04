@@ -73,6 +73,9 @@ Thread
 
 ### 2.4 Provider 与模型身份
 
+- Agent Provider 表示完整执行引擎；它的模型服务配置位于对应引擎之下。Zen、Codex、OpenCode 的会话共享普通 Project / Thread 导航，不设独立的 Agent Sessions 分区。外部会话按 Host 的同一 canonical Project projection 归组，不在 renderer 另行推测 cwd 身份，也不把原生历史转换成 Zen canonical Items。
+- 新会话在同一紧凑 Composer 选择界面中选择引擎及其模型。切换引擎后目录必须来自该引擎实例，不能保留另一个实例的模型作为可用选择。已有会话保持原引擎绑定；不支持的管理动作不以空操作或跨引擎替代实现。
+
 - Thread row 以完整标题为第一层，第二层仅显示运行或待审批状态；Provider/model 降为标题 tooltip，当前生成配置仍在 Composer 中可见。
 - 预设 Provider 使用随 ZenX 分发的本地正式品牌 asset；未知 Provider 使用克制的 generic fallback。
 - Thread row 不显示 Provider 文本、内部 `modelProvider`、API/订阅标签或 Fake 品牌。
@@ -193,6 +196,18 @@ ItemList replay，Renderer 不保存另一份 transcript authority。
 - Trace Group 保持轻量，不使用厚边框或每一步一个大卡片。
 - Thinking 与 Tool row 采用一致的紧凑视觉；完成色保持克制，避免大量成功状态争夺注意力。
 - 代码块属于相邻 Agent Message 内容，可以有容器，但不能被误认为 Tool Call。
+
+Debug trace 是会话视图的本地展示选择，不改变模型上下文、执行、权限或历史。普通模式维持轻量的完成态与过程 disclosure；调试模式使过程更易检查，详细输入、输出和 JSON 仍按需展开。用户已显式选择的 disclosure 状态不被流式刷新或模式切换反复覆盖。Zen 可检查已有 canonical Items；外部引擎只展示已经取得的显示投影，并明确不声称提供完整原生历史。
+
+入口位于现有 Settings → General → Interaction 的 **Conversation detail** 选择器（Normal / Debug trace），即时生效，并作为本机 renderer 展示偏好保留；不走 Host Apply，不进入执行配置。普通 transcript 不新增 Debug 控制行、标题栏层或常驻工具条。调试资料仅在用户选择 Debug 后按需出现。
+
+从当前会话进入 Settings 再返回同一会话时，保留其草稿、阅读位置和显式 Turn / Tool disclosure 选择。只暂停当前会话展示，不暂停 Host 的已启动执行；隐藏视图停止自身的读取订阅，返回时按原会话身份刷新。切换到另一会话或其他产品路由仍按原导航边界处理，不为全部历史会话建立常驻视图缓存。
+
+Context compaction 使用与其他 trace 相同的密度与中性表面。存在精确 turnId / callId 关联的工具压缩收进该工具的详情，不再另起重复卡片；独立压缩或无法关联到可展示工具的压缩保留轻量的单行 disclosure。关联只使用 canonical identity，不从时间、文本或工具名称猜测。摘要和上下文快照仍可检查，失败与进行中反馈不得因简化样式而消失。
+
+尚未取得完整 canonical 历史时，保存的压缩摘要仍可读，上下文快照明确显示不可用原因，不得让重建异常清空整个页面。压缩后通过既有 native read/recovery 更新可用历史；生命周期事件缺少的 canonical IDs 不由 renderer 伪造，迟到读取不能覆盖较新的导航或草稿。
+
+本轮参考 [T3 Code 的 ProviderModelPicker](https://github.com/pingdotgg/t3code/blob/5cc99e1c23980d7995a13c47f969b47cb68ed1be/apps/web/src/components/chat/ProviderModelPicker.tsx) 的单一入口与实例作用域模型目录，以及 [DeepSeek Harness 的 presentation policy](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/packages/client/ui-chat/src/client/presentation-policy.ts) 与 [conversation node rules](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/packages/client/ui-chat/src/client/conversation-nodes/README.md) 的展示模式/历史折叠边界。DSH 实际使用 compact / standard / detailed / verbose；ZenX 的 Debug trace 是按现有产品需求的简化适配，不声称照搬其控件或运行语义。
 
 ### 4.4 Composer、审批与 live following
 

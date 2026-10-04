@@ -352,6 +352,15 @@ test("compaction progress is a transcript item and completed items reveal exact 
     assert.match(event.textContent ?? "", /Full input size unknown/u);
     assert.doesNotMatch(event.textContent ?? "", /effective messages/u);
     await act(async () => requiredButton(".context-compaction-toggle").click());
+    const diagnostics = requiredElement<HTMLDetailsElement>(
+      ".compaction-projection",
+    );
+    assert.equal(diagnostics.open, false);
+    assert.equal(diagnostics.querySelector("ol"), null);
+    await act(async () => {
+      diagnostics.open = true;
+      diagnostics.dispatchEvent(new window.Event("toggle"));
+    });
     assert.match(event.textContent ?? "", /Keep this request/u);
     assert.match(event.textContent ?? "", /Kept answer/u);
     assert.match(event.textContent ?? "", /Continue with the accepted plan/u);
@@ -361,7 +370,7 @@ test("compaction progress is a transcript item and completed items reveal exact 
     );
     assert.equal(
       requiredElement(".compaction-projection").hasAttribute("open"),
-      false,
+      true,
     );
     assert.match(event.textContent ?? "", /not tokens/u);
     assert.match(

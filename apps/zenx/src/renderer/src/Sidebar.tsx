@@ -26,7 +26,8 @@ import { Icon } from "./icons.js";
 import type { LoadedPluginContribution } from "./plugin-contributions.js";
 import { ProviderLogo } from "./ProviderLogo.js";
 import {
-  deriveInboxSections,
+  deriveConversationInboxSections,
+  type AgentNavigationSession,
   deriveProjectGroups,
   EMPTY_SIDEBAR_ORDER,
   threadModelIdentity,
@@ -51,7 +52,11 @@ type ThreadDensity = "compact" | "detailed";
 const SidebarSettingsContext = createContext<PublicHostSettings | null>(null);
 
 interface SidebarProps {
-  agentSessions?: ReactNode;
+  agentSessions?: readonly AgentNavigationSession[];
+  selectedAgentSessionId?: string | null;
+  onSelectAgentSession?(id: string): void;
+  agentSessionError?: string | null;
+  onRetryAgentSessions?(): void;
   collapsed?: boolean;
   mode: SidebarMode;
   open: boolean;
@@ -100,7 +105,11 @@ interface SidebarProps {
 }
 
 export function Sidebar({
-  agentSessions,
+  agentSessions = [],
+  selectedAgentSessionId = null,
+  onSelectAgentSession = () => undefined,
+  agentSessionError = null,
+  onRetryAgentSessions,
   collapsed = false,
   mode,
   open,
@@ -425,7 +434,6 @@ export function Sidebar({
             />
           )}
 
-          {agentSessions}
           <div className="sidebar-view-head">
             {mode === "projects" ? (
               <button
@@ -448,7 +456,9 @@ export function Sidebar({
               </strong>
             )}
             <span className="sidebar-view-actions">
-              {mode === "inbox" ? <span>{threads.length}</span> : null}
+              {mode === "inbox" ? (
+                <span>{threads.length + agentSessions.length}</span>
+              ) : null}
               <button
                 className="sidebar-density-toggle"
                 type="button"
@@ -505,25 +515,52 @@ export function Sidebar({
               </button>
             </div>
           ) : null}
-          {serverStatus.type !== "ready" ? (
+          {agentSessionError === null ? null : (
+            <div className="sidebar-empty sidebar-error" role="alert">
+              <p>{agentSessionError}</p>
+              <button type="button" onClick={onRetryAgentSessions}>
+                Retry agent conversations
+              </button>
+            </div>
+          )}
+          {agentSessions.length > 0 &&
+          (serverStatus.type !== "ready" || threadError !== null) ? (
+            <div className="sidebar-empty sidebar-error" role="alert">
+              <p>
+                {threadError ??
+                  (serverStatus.type === "error"
+                    ? serverStatus.message
+                    : "Waiting for the Zen App Server.")}
+              </p>
+              <button type="button" onClick={onRetryThreads}>
+                Retry Zen conversations
+              </button>
+            </div>
+          ) : null}
+          {serverStatus.type !== "ready" && agentSessions.length === 0 ? (
             <p className="sidebar-empty">Waiting for the local App Server.</p>
-          ) : threadLoading ? (
+          ) : threadLoading && agentSessions.length === 0 ? (
             <p className="sidebar-empty" role="status">
               Loading active Threads…
             </p>
-          ) : threadError !== null ? (
+          ) : threadError !== null && agentSessions.length === 0 ? (
             <div className="sidebar-empty sidebar-error" role="alert">
               <p>{threadError}</p>
               <button type="button" onClick={onRetryThreads}>
                 Try again
               </button>
             </div>
-          ) : mode === "inbox" && threads.length === 0 ? (
+          ) : mode === "inbox" &&
+            threads.length === 0 &&
+            agentSessions.length === 0 ? (
             <p className="sidebar-empty">
               Your conversations will appear here.
             </p>
           ) : mode === "inbox" ? (
             <InboxView
+              agentSessions={agentSessions}
+              selectedAgentSessionId={selectedAgentSessionId}
+              onSelectAgentSession={onSelectAgentSession}
               onSelectThread={onSelectThread}
               onChangeThreadLifecycle={onChangeThreadLifecycle}
               onChangeThreadPinned={changeThreadPinned}
@@ -554,6 +591,9 @@ export function Sidebar({
               )}
               {!projectsOpen ? null : (
                 <ProjectsView
+                  agentSessions={agentSessions}
+                  selectedAgentSessionId={selectedAgentSessionId}
+                  onSelectAgentSession={onSelectAgentSession}
                   projects={projects}
                   sidebarOrder={sidebarOrder}
                   onNewThread={onNewThread}
@@ -673,6 +713,9 @@ function ServiceStatusDot({ status }: { status: AppServerHostStatus }) {
 }
 
 function InboxView({
+  agentSessions,
+  selectedAgentSessionId,
+  onSelectAgentSession,
   threads,
   selectedThreadId,
   onSelectThread,
@@ -685,6 +728,9 @@ function InboxView({
   watchingThreadIds,
   pinnedThreadIds,
 }: {
+  agentSessions: readonly AgentNavigationSession[];
+  selectedAgentSessionId: string | null;
+  onSelectAgentSession(id: string): void;
   threads: readonly NativeThreadSummary[];
   selectedThreadId: string | null;
   onSelectThread(threadId: string): void;
@@ -697,31 +743,42 @@ function InboxView({
   watchingThreadIds: ReadonlySet<string>;
   pinnedThreadIds: ReadonlySet<string>;
 }) {
-  return deriveInboxSections(
+  return deriveConversationInboxSections(
     threads,
+    agentSessions,
     pendingApprovalThreadIds,
     watchingThreadIds,
   ).map((section) =>
-    section.threads.length === 0 ? null : (
+    section.rows.length === 0 ? null : (
       <section className="inbox-group" key={section.key}>
         <h2>{section.label}</h2>
-        {section.threads.map((thread) => (
-          <ThreadRow
-            inbox
-            key={thread.threadId}
-            hasActiveTurn={threadHasActiveTurn(thread, liveThread)}
-            onChangeThreadLifecycle={onChangeThreadLifecycle}
-            onChangeThreadPinned={onChangeThreadPinned}
-            onRenameThread={onRenameThread}
-            onForkThread={onForkThread}
-            onSelectThread={onSelectThread}
-            pendingApproval={pendingApprovalThreadIds.has(thread.threadId)}
-            pinned={pinnedThreadIds.has(thread.threadId)}
-            selected={thread.threadId === selectedThreadId}
-            thread={thread}
-            watching={watchingThreadIds.has(thread.threadId)}
-          />
-        ))}
+        {section.rows.map((row) =>
+          row.kind === "agent" ? (
+            <AgentSessionRow
+              key={row.id}
+              session={row.session}
+              selected={row.session.binding.id === selectedAgentSessionId}
+              onOpen={onSelectAgentSession}
+              inbox
+            />
+          ) : (
+            <ThreadRow
+              inbox
+              key={row.id}
+              hasActiveTurn={threadHasActiveTurn(row.thread, liveThread)}
+              onChangeThreadLifecycle={onChangeThreadLifecycle}
+              onChangeThreadPinned={onChangeThreadPinned}
+              onRenameThread={onRenameThread}
+              onForkThread={onForkThread}
+              onSelectThread={onSelectThread}
+              pendingApproval={pendingApprovalThreadIds.has(row.id)}
+              pinned={pinnedThreadIds.has(row.id)}
+              selected={row.id === selectedThreadId}
+              thread={row.thread}
+              watching={watchingThreadIds.has(row.id)}
+            />
+          ),
+        )}
       </section>
     ),
   );
@@ -779,6 +836,9 @@ function PinnedThreadsView({
 }
 
 function ProjectsView({
+  agentSessions,
+  selectedAgentSessionId,
+  onSelectAgentSession,
   projects,
   sidebarOrder,
   onNewThread,
@@ -803,6 +863,9 @@ function ProjectsView({
   watchingThreadIds,
   pinnedThreadIds,
 }: {
+  agentSessions: readonly AgentNavigationSession[];
+  selectedAgentSessionId: string | null;
+  onSelectAgentSession(id: string): void;
   projects: ZenXProjectProjectionSnapshot;
   sidebarOrder: ZenXSidebarOrder;
   onNewThread(workspace?: string): void;
@@ -887,9 +950,16 @@ function ProjectsView({
       </div>
     );
   }
-  const groups = deriveProjectGroups(threads, projects, sidebarOrder);
+  const groups = deriveProjectGroups(
+    threads,
+    projects,
+    sidebarOrder,
+    agentSessions,
+  );
   return groups.map((group, projectIndex) => (
     <ProjectRows
+      selectedAgentSessionId={selectedAgentSessionId}
+      onSelectAgentSession={onSelectAgentSession}
       pinnedProject={
         sidebarOrder.pinnedProjectKeys?.includes(group.key) ?? false
       }
@@ -1141,6 +1211,8 @@ interface ThreadReorderHandlers {
 }
 
 function ProjectRows({
+  selectedAgentSessionId,
+  onSelectAgentSession,
   group,
   pinnedProject,
   onChangeProjectPinned,
@@ -1162,6 +1234,8 @@ function ProjectRows({
   projectReorder,
   threadReorder,
 }: {
+  selectedAgentSessionId: string | null;
+  onSelectAgentSession(id: string): void;
   group: ReturnType<typeof deriveProjectGroups>[number];
   pinnedProject: boolean;
   onChangeProjectPinned?: SidebarProps["onChangeProjectPinned"];
@@ -1253,8 +1327,10 @@ function ProjectRows({
     }
     openMenu(event.key === "ArrowUp" ? "last" : "first");
   };
-  const projectSelected = group.threads.some(
-    (thread) => thread.threadId === selectedThreadId,
+  const projectSelected = group.rows.some((row) =>
+    row.kind === "zen"
+      ? row.id === selectedThreadId
+      : row.session.binding.id === selectedAgentSessionId,
   );
   return (
     <section
@@ -1375,8 +1451,8 @@ function ProjectRows({
                 <div className="project-menu-summary">
                   <strong>{group.label}</strong>
                   <span>
-                    {group.threads.length}{" "}
-                    {group.threads.length === 1 ? "thread" : "threads"}
+                    {group.rows.length}{" "}
+                    {group.rows.length === 1 ? "thread" : "threads"}
                   </span>
                   <span title={group.workspace ?? undefined}>
                     {group.workspace}
@@ -1462,59 +1538,139 @@ function ProjectRows({
         aria-hidden={!open}
       >
         <div>
-          {group.threads.length === 0 ? (
+          {group.rows.length === 0 ? (
             <p className="project-empty">No threads yet.</p>
           ) : (
-            group.threads.map((thread, threadIndex) => (
-              <ThreadRow
-                hasActiveTurn={threadHasActiveTurn(thread, liveThread)}
-                key={thread.threadId}
-                onChangeThreadLifecycle={onChangeThreadLifecycle}
-                onChangeThreadPinned={onChangeThreadPinned}
-                onRenameThread={onRenameThread}
-                onForkThread={onForkThread}
-                onSelectThread={onSelectThread}
-                pendingApproval={pendingApprovalThreadIds.has(thread.threadId)}
-                pinned={pinnedThreadIds.has(thread.threadId)}
-                selected={thread.threadId === selectedThreadId}
-                thread={thread}
-                projectWorkspace={group.workspace}
-                watching={watchingThreadIds.has(thread.threadId)}
-                reorder={
-                  threadReorder === undefined
-                    ? undefined
-                    : {
-                        controlId: sidebarOrderControlId(
-                          "thread",
-                          thread.threadId,
-                        ),
-                        dragging: threadReorder.draggingId === thread.threadId,
-                        placement:
-                          threadReorder.targetId === thread.threadId
-                            ? threadReorder.placement
-                            : undefined,
-                        onDragLeave: threadReorder.onDragLeave,
-                        onDragStart: (event) =>
-                          threadReorder.onDragStart(thread.threadId, event),
-                        onDragEnd: threadReorder.onDragEnd,
-                        onDragOver: (event) =>
-                          threadReorder.onDragOver(thread.threadId, event),
-                        onDrop: (event) =>
-                          threadReorder.onDrop(thread.threadId, event),
-                        onKeyDown: (event) =>
-                          threadReorder.onKeyDown(
-                            threadIndex,
-                            thread.threadId,
-                            event,
-                          ),
+            group.rows.map((row) =>
+              row.kind === "agent" ? (
+                <AgentSessionRow
+                  key={row.id}
+                  session={row.session}
+                  selected={row.session.binding.id === selectedAgentSessionId}
+                  onOpen={onSelectAgentSession}
+                />
+              ) : (
+                (() => {
+                  const thread = row.thread;
+                  const threadIndex = group.threads.indexOf(thread);
+                  return (
+                    <ThreadRow
+                      hasActiveTurn={threadHasActiveTurn(thread, liveThread)}
+                      key={thread.threadId}
+                      onChangeThreadLifecycle={onChangeThreadLifecycle}
+                      onChangeThreadPinned={onChangeThreadPinned}
+                      onRenameThread={onRenameThread}
+                      onForkThread={onForkThread}
+                      onSelectThread={onSelectThread}
+                      pendingApproval={pendingApprovalThreadIds.has(
+                        thread.threadId,
+                      )}
+                      pinned={pinnedThreadIds.has(thread.threadId)}
+                      selected={thread.threadId === selectedThreadId}
+                      thread={thread}
+                      projectWorkspace={group.workspace}
+                      watching={watchingThreadIds.has(thread.threadId)}
+                      reorder={
+                        threadReorder === undefined
+                          ? undefined
+                          : {
+                              controlId: sidebarOrderControlId(
+                                "thread",
+                                thread.threadId,
+                              ),
+                              dragging:
+                                threadReorder.draggingId === thread.threadId,
+                              placement:
+                                threadReorder.targetId === thread.threadId
+                                  ? threadReorder.placement
+                                  : undefined,
+                              onDragLeave: threadReorder.onDragLeave,
+                              onDragStart: (event) =>
+                                threadReorder.onDragStart(
+                                  thread.threadId,
+                                  event,
+                                ),
+                              onDragEnd: threadReorder.onDragEnd,
+                              onDragOver: (event) =>
+                                threadReorder.onDragOver(
+                                  thread.threadId,
+                                  event,
+                                ),
+                              onDrop: (event) =>
+                                threadReorder.onDrop(thread.threadId, event),
+                              onKeyDown: (event) =>
+                                threadReorder.onKeyDown(
+                                  threadIndex,
+                                  thread.threadId,
+                                  event,
+                                ),
+                            }
                       }
-                }
-              />
-            ))
+                    />
+                  );
+                })()
+              ),
+            )
           )}
         </div>
       </div>
     </section>
+  );
+}
+
+export function AgentSessionRow({
+  session,
+  selected,
+  onOpen,
+  inbox = false,
+}: {
+  session: AgentNavigationSession;
+  selected: boolean;
+  onOpen(id: string): void;
+  inbox?: boolean;
+}) {
+  const { binding } = session;
+  const title =
+    session.title || `Session ${binding.nativeSessionId.slice(0, 8)}`;
+  const status = session.pendingApproval
+    ? "Needs your approval"
+    : session.status === "active"
+      ? "Working"
+      : session.status === "error"
+        ? "Needs attention"
+        : null;
+  const identity = `${title} · ${session.providerLabel}${session.model ? ` · ${session.model}` : ""} · Host: ${binding.hostId} · Working directory: ${binding.cwd} · Native session: ${binding.nativeSessionId}`;
+  return (
+    <div
+      className="thread-row-shell native-session-row-shell"
+      data-agent-session-id={binding.id}
+    >
+      <button
+        type="button"
+        className={`thread-row${selected ? " selected" : ""}${inbox ? " inbox" : ""}`}
+        title={identity}
+        aria-label={identity}
+        aria-current={selected ? "page" : undefined}
+        onClick={() => onOpen(binding.id)}
+      >
+        <span className="thread-title">
+          <span>{title}</span>
+        </span>
+        {status === null ? null : (
+          <span className="thread-state-inline">
+            <span
+              className={
+                session.pendingApproval || session.status === "error"
+                  ? "needs-dot"
+                  : "live-dot ready"
+              }
+              aria-hidden="true"
+            />
+            {status}
+          </span>
+        )}
+      </button>
+    </div>
   );
 }
 

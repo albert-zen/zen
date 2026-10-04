@@ -1,3 +1,4 @@
+import type { Turn } from "../../protocol-client/index.js";
 import {
   compileModelMessages,
   type ModelMessage,
@@ -11,7 +12,9 @@ import type {
 export interface ContextCompactionProjection {
   item: ContextCompactionItem;
   canonicalIndex: number;
-  effectiveMessages: readonly ModelMessage[];
+  effectiveMessages: readonly ModelMessage[] | null;
+  /** A partial display history cannot reconstruct the original snapshot. */
+  snapshotError?: string;
 }
 
 /** Derives the exact model-message projection immediately after each reset. */
@@ -19,19 +22,63 @@ export function projectContextCompactions(
   items: readonly CanonicalItem[] | undefined,
 ): ContextCompactionProjection[] {
   if (items === undefined) return [];
-  return items.flatMap((item, canonicalIndex) => {
+  return items.flatMap<ContextCompactionProjection>((item, canonicalIndex) => {
     if (item.type !== "context_compaction") return [];
-    return [
-      {
-        item,
-        canonicalIndex,
-        effectiveMessages: compileModelMessages(
-          items.slice(0, canonicalIndex + 1),
-          compactionSelection(items, item, canonicalIndex),
-        ),
-      },
-    ];
+    try {
+      return [
+        {
+          item,
+          canonicalIndex,
+          effectiveMessages: compileModelMessages(
+            items.slice(0, canonicalIndex + 1),
+            compactionSelection(items, item, canonicalIndex),
+          ),
+        },
+      ];
+    } catch (error) {
+      return [
+        {
+          item,
+          canonicalIndex,
+          effectiveMessages: null,
+          snapshotError: `Retained context snapshot is unavailable in this view. ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ];
+    }
   });
+}
+
+/** Associate a committed reset with its exact displayed call, never by nearby text or timing. */
+export function groupContextCompactions(
+  compactions: readonly ContextCompactionProjection[],
+  turns: readonly Turn[],
+): {
+  independent: ContextCompactionProjection[];
+  byToolItemId: ReadonlyMap<string, readonly ContextCompactionProjection[]>;
+} {
+  const independent: ContextCompactionProjection[] = [];
+  const byToolItemId = new Map<string, ContextCompactionProjection[]>();
+  for (const projection of compactions) {
+    const { item } = projection;
+    const tool =
+      item.provenance === "agentic"
+        ? turns
+            .find((turn) => turn.id === item.turnId)
+            ?.items.find(
+              (candidate) =>
+                candidate.type === "commandExecution" &&
+                candidate.callId === item.callId,
+            )
+        : undefined;
+    if (tool === undefined) {
+      independent.push(projection);
+      continue;
+    }
+    const entries = byToolItemId.get(tool.id) ?? [];
+    entries.push(projection);
+    byToolItemId.set(tool.id, entries);
+  }
+  return { independent, byToolItemId };
 }
 
 export function compactionInitiatorLabel(item: ContextCompactionItem): string {

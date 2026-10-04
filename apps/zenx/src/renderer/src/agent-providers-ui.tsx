@@ -1,4 +1,11 @@
 import {
+  AgentProviderModelScope,
+  agentProviderLabel,
+  type AgentProviderSelection,
+} from "./agent-provider-selection.js";
+import { ComposerModelMenu } from "./ComposerModelMenu.js";
+export { agentProviderLabel } from "./agent-provider-selection.js";
+import {
   useCallback,
   useEffect,
   useRef,
@@ -32,21 +39,8 @@ import {
   removeComposerImage,
   type ComposerState,
 } from "./composer-state.js";
+import type { AgentNavigationSession } from "./thread-list.js";
 import { activeTurn } from "./thread-view-state.js";
-
-export function agentProviderLabel(instance: AgentProviderInstance): string {
-  const engine =
-    instance.kind === "codex"
-      ? "Codex"
-      : instance.kind === "opencode"
-        ? "OpenCode"
-        : instance.kind === "zen"
-          ? "Zen"
-          : instance.kind;
-  return instance.name.toLocaleLowerCase().includes(engine.toLocaleLowerCase())
-    ? instance.name
-    : `${instance.name} · ${engine}`;
-}
 
 const ZEN: AgentProviderInstance = { id: "zen", kind: "zen", name: "Zen" };
 export function agentProvidersApi(): AgentProvidersApi | undefined {
@@ -56,16 +50,31 @@ export function agentProvidersApi(): AgentProvidersApi | undefined {
 export function useAgentProviders() {
   const [instances, setInstances] = useState<AgentProviderInstance[]>([ZEN]);
   const [sessions, setSessions] = useState<AgentSessionBinding[]>([]);
-  const [labels, setLabels] = useState<Record<string, string>>({});
+  const [observations, setObservations] = useState<
+    Record<string, Omit<AgentNavigationSession, "binding" | "providerLabel">>
+  >({});
+  const [pendingApprovals, setPendingApprovals] = useState<
+    Record<string, string[]>
+  >({});
   const rememberSnapshot = useCallback((snapshot: AgentSessionSnapshot) => {
-    const label =
+    const title =
       snapshot.thread.name?.trim() || snapshot.thread.preview.trim();
-    if (label)
-      setLabels((latest) =>
-        latest[snapshot.binding.id] === label
-          ? latest
-          : { ...latest, [snapshot.binding.id]: label },
-      );
+    setObservations((latest) => ({
+      ...latest,
+      [snapshot.binding.id]: {
+        ...(title ? { title } : {}),
+        model: snapshot.model,
+        updatedAt: snapshot.thread.updatedAt * 1000,
+        status:
+          snapshot.thread.status.type === "active"
+            ? "active"
+            : snapshot.thread.status.type === "idle"
+              ? "idle"
+              : snapshot.thread.status.type === "systemError"
+                ? "error"
+                : undefined,
+      },
+    }));
   }, []);
   const [error, setError] = useState<string | null>(null);
   const epoch = useRef(0);
@@ -97,16 +106,53 @@ export function useAgentProviders() {
     void refresh();
     const api = agentProvidersApi();
     const dispose = api && subscribeAgentRefresh(api, null, refresh);
+    const disposeApprovals = api?.onEvent((event) => {
+      if (event.type !== "approval" && event.type !== "approvalResolved")
+        return;
+      setPendingApprovals((latest) => ({
+        ...latest,
+        [event.sessionId]:
+          event.type === "approval"
+            ? [
+                ...new Set([
+                  ...(latest[event.sessionId] ?? []),
+                  event.requestId,
+                ]),
+              ]
+            : (latest[event.sessionId] ?? []).filter(
+                (id) => id !== event.requestId,
+              ),
+      }));
+    });
     return () => {
       epoch.current += 1;
       dispose?.();
+      disposeApprovals?.();
     };
   }, [refresh]);
   return {
     instances,
     sessions,
     error,
-    labels,
+    labels: Object.fromEntries(
+      Object.entries(observations).map(([id, observation]) => [
+        id,
+        observation.title ?? "",
+      ]),
+    ),
+    navigationSessions: sessions.map((binding): AgentNavigationSession => {
+      const instance = instances.find(
+        (value) => value.id === binding.providerInstanceId,
+      );
+      return {
+        binding,
+        providerLabel: instance
+          ? agentProviderLabel(instance)
+          : binding.providerInstanceId,
+        ...observations[binding.id],
+        pendingApproval: (pendingApprovals[binding.id]?.length ?? 0) > 0,
+      };
+    }),
     rememberSnapshot,
     refresh,
     rememberSession: (binding: AgentSessionBinding) =>
@@ -115,34 +161,6 @@ export function useAgentProviders() {
         binding,
       ]),
   };
-}
-
-export function AgentProviderSelector({
-  instances,
-  value,
-  onChange,
-  disabled = false,
-}: {
-  instances: readonly AgentProviderInstance[];
-  value: string;
-  onChange(id: string): void;
-  disabled?: boolean;
-}) {
-  return (
-    <Select
-      aria-label="Agent Provider"
-      className="agent-provider-select"
-      value={value}
-      disabled={disabled}
-      onValueChange={onChange}
-    >
-      {instances.map((instance) => (
-        <option key={instance.id} value={instance.id}>
-          {agentProviderLabel(instance)}
-        </option>
-      ))}
-    </Select>
-  );
 }
 
 export function useAgentModels(instance: AgentProviderInstance | undefined) {
@@ -235,70 +253,6 @@ export function useAgentModels(instance: AgentProviderInstance | undefined) {
   };
 }
 
-export function AgentSessionNavigation({
-  sessions,
-  instances,
-  selectedId,
-  labels = {},
-  onOpen,
-  error,
-  onRetry,
-}: {
-  sessions: readonly AgentSessionBinding[];
-  instances: readonly AgentProviderInstance[];
-  selectedId: string | null;
-  labels?: Readonly<Record<string, string>>;
-  onOpen(id: string): void;
-  error: string | null;
-  onRetry(): void;
-}) {
-  if (sessions.length === 0 && error === null) return null;
-  return (
-    <section
-      className="agent-session-navigation"
-      aria-label="External agent sessions"
-    >
-      <h2>Agent sessions</h2>
-      {sessions.map((session) => {
-        const instance = instances.find(
-          (candidate) => candidate.id === session.providerInstanceId,
-        );
-        const name = instance
-          ? agentProviderLabel(instance)
-          : session.providerInstanceId;
-        const cwd =
-          session.cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? session.cwd;
-        return (
-          <button
-            className="agent-session-row"
-            type="button"
-            key={session.id}
-            aria-current={selectedId === session.id ? "page" : undefined}
-            title={`${name} · ${session.cwd} · ${session.nativeSessionId}`}
-            onClick={() => onOpen(session.id)}
-          >
-            <span>
-              {labels[session.id] ||
-                `Session ${session.nativeSessionId.slice(0, 8)}`}
-            </span>
-            <small>
-              {name} · {cwd}
-            </small>
-          </button>
-        );
-      })}
-      {error === null ? null : (
-        <div className="settings-error" role="alert">
-          {error}
-          <button className="quiet-button" type="button" onClick={onRetry}>
-            Retry
-          </button>
-        </div>
-      )}
-    </section>
-  );
-}
-
 export function ExternalAgentSession({
   instance,
   sessionId,
@@ -307,7 +261,7 @@ export function ExternalAgentSession({
   onCreated,
   workspace,
   permissionMode = "workspace-write",
-  providerControl,
+  providerSelection,
   emptyContent,
   onPermissionChange,
   onOperationChange,
@@ -323,7 +277,7 @@ export function ExternalAgentSession({
   onCreated(snapshot: AgentSessionSnapshot): void;
   workspace: string | null;
   permissionMode?: FilePermissionMode;
-  providerControl?: ReactNode;
+  providerSelection?: AgentProviderSelection;
   emptyContent?: ReactNode;
   onPermissionChange?(mode: FilePermissionMode): void;
   onOperationChange?(pending: boolean, selectedModel?: string): void;
@@ -348,6 +302,7 @@ export function ExternalAgentSession({
     }>
   >([]);
   const readEpoch = useRef(0);
+  const readingActive = useRef(false);
   const approvalVersion = useRef(0);
   const approvalEvents = useRef(
     new Map<string, { version: number; resolved: boolean }>(),
@@ -366,12 +321,13 @@ export function ExternalAgentSession({
       instanceId: instance?.id,
       generation: selection.current.generation + 1,
     };
-  useEffect(
-    () => () => {
-      selection.current.generation += 1;
-    },
-    [],
-  );
+  useEffect(() => {
+    readingActive.current = true;
+    return () => {
+      readingActive.current = false;
+      readEpoch.current += 1;
+    };
+  }, []);
   const composerRef = useRef(composer);
   composerRef.current = composer;
   const operationRef = useRef(false);
@@ -379,7 +335,7 @@ export function ExternalAgentSession({
   const generation = selection.current.generation;
   const current = () => selection.current.generation === generation;
   const refresh = useCallback(async () => {
-    if (sessionId === null) return;
+    if (sessionId === null || !readingActive.current) return;
     const request = ++readEpoch.current;
     try {
       const version = approvalVersion.current;
@@ -388,6 +344,7 @@ export function ExternalAgentSession({
         agentProvidersApi()!.approvals(sessionId),
       ]);
       if (
+        !readingActive.current ||
         readEpoch.current !== request ||
         selection.current.sessionId !== sessionId ||
         selection.current.generation !== generation
@@ -425,6 +382,7 @@ export function ExternalAgentSession({
       setLoading(false);
     } catch (reason) {
       if (
+        !readingActive.current ||
         readEpoch.current !== request ||
         selection.current.sessionId !== sessionId ||
         selection.current.generation !== generation
@@ -434,15 +392,21 @@ export function ExternalAgentSession({
       setLoading(false);
     }
   }, [sessionId, generation]);
+  const initializedIdentity = useRef<number | null>(null);
   useEffect(() => {
-    approvalEvents.current.clear();
-    approvalVersion.current = 0;
-    setSnapshot(null);
-    setModel("");
-    setApprovals([]);
-    setReadError(null);
-    setEventError(null);
-    setLoading(sessionId !== null);
+    // Activity pauses effects without changing this conversation's identity.
+    // Keep its exact display snapshot and local disclosures while rereading.
+    if (initializedIdentity.current !== generation) {
+      initializedIdentity.current = generation;
+      approvalEvents.current.clear();
+      approvalVersion.current = 0;
+      setSnapshot(null);
+      setModel("");
+      setApprovals([]);
+      setReadError(null);
+      setEventError(null);
+      setLoading(sessionId !== null);
+    }
     void refresh();
     const api = agentProvidersApi();
     if (!api) return;
@@ -451,7 +415,8 @@ export function ExternalAgentSession({
         ? undefined
         : subscribeAgentRefresh(api, sessionId, refresh);
     const dispose = api.onEvent((event) => {
-      if (selection.current.generation !== generation) return;
+      if (!readingActive.current || selection.current.generation !== generation)
+        return;
       const belongsToSession =
         sessionId !== null && event.sessionId === sessionId;
       const belongsToInstance =
@@ -582,7 +547,7 @@ export function ExternalAgentSession({
           latest.filter((entry) => entry.requestId !== requestId),
         );
         await refresh();
-        if (current())
+        if (current() && readingActive.current)
           document.getElementById(`agent-composer-${sessionId}`)?.focus();
       }
     } catch (reason) {
@@ -627,142 +592,150 @@ export function ExternalAgentSession({
           <p>Loading conversation…</p>
         </div>
       ) : (
-        <ThreadView
-          composerId={`agent-composer-${sessionId ?? instance?.id ?? "draft"}`}
-          zenFeatures={false}
-          composer={composer}
-          thread={visibleSnapshot?.thread ?? null}
-          approvals={[]}
-          emptyContent={emptyContent}
-          composerDisabled={instance === undefined}
-          sendDisabled={running || workspace === null || issue !== null}
-          interruptDisabled={models.capabilities?.interrupt !== true}
-          modelError={issue}
-          imageCapabilityError="This Agent Provider cannot send image attachments"
-          onReadAttachment={(attachment) =>
-            window.zenx.imageAttachments.read(attachment)
+        <AgentProviderModelScope
+          selection={
+            providerSelection ??
+            (instance ? { instances: [instance], value: instance.id } : null)
           }
-          onRemoveImage={(imageId) =>
-            onComposerChange((latest) => removeComposerImage(latest, imageId))
-          }
-          permissionLabel={null}
-          permissionMode={permissionMode}
-          onPermissionChange={onPermissionChange}
-          composerTools={
-            <>
-              {providerControl}
-              <Select
-                aria-label="Agent model"
-                value={selectedModel}
-                disabled={
-                  operation ||
-                  running ||
-                  models.loading ||
-                  (sessionId !== null &&
-                    models.capabilities?.changeModel !== true)
-                }
-                onValueChange={(value) => {
-                  if (sessionId === null && onDraftModelChange)
-                    onDraftModelChange(value);
-                  else setModel(value);
-                }}
-              >
-                {models.models.map((entry) => (
-                  <option key={entry.id} value={entry.id}>
-                    {entry.displayName}
-                  </option>
-                ))}
-              </Select>
-              {sessionId === null ? (
-                <Select
-                  aria-label="File permissions"
-                  value={permissionMode}
-                  disabled={operation || models.loading}
-                  onValueChange={(value) =>
-                    onPermissionChange?.(value as FilePermissionMode)
-                  }
-                >
-                  {permissions.includes(permissionMode) ? null : (
-                    <option value={permissionMode}>Choose permissions</option>
-                  )}
-                  {permissions.map((mode) => (
-                    <option key={mode} value={mode}>
-                      {mode === "danger-full-access"
-                        ? "Full access"
-                        : mode === "read-only"
-                          ? "Read only"
-                          : "Workspace write"}
-                    </option>
-                  ))}
-                </Select>
-              ) : null}
-              {models.error === null ? null : (
-                <button
-                  className="quiet-button"
-                  type="button"
-                  onClick={models.retry}
-                >
-                  Retry models
-                </button>
-              )}
-            </>
-          }
-          composerContext={
-            <>
-              {instance?.kind === "opencode" && sessionId === null ? (
-                <p className="agent-provider-warning">
-                  OpenCode has no filesystem sandbox. Full access permits tools
-                  to access files outside this Project.
-                </p>
-              ) : null}
-              {approvals.map((approval) => (
-                <div
-                  className="agent-approval"
-                  key={approval.requestId}
-                  role="group"
-                  aria-label={approval.title}
-                >
-                  <strong>{approval.title}</strong>
-                  <pre>{approval.detail}</pre>
-                  {approval.error === null ? null : (
-                    <p role="alert">{approval.error}</p>
-                  )}
-                  <div>
-                    <button
-                      className="quiet-button"
-                      type="button"
-                      disabled={approval.busy}
-                      onClick={() =>
-                        void respond(approval.requestId, "decline")
-                      }
-                    >
-                      Decline
-                    </button>
-                    <button
-                      className="primary-button"
-                      type="button"
-                      disabled={approval.busy}
-                      onClick={() => void respond(approval.requestId, "accept")}
-                    >
-                      {approval.busy ? "Responding…" : "Approve"}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </>
-          }
-          onDraftChange={(text) =>
-            onComposerChange((state) => editComposer(state, text))
-          }
-          onInterrupt={async () => {
-            if (sessionId !== null) {
-              await agentProvidersApi()!.interrupt(sessionId);
-              await refresh();
+        >
+          <ThreadView
+            composerId={`agent-composer-${sessionId ?? instance?.id ?? "draft"}`}
+            zenFeatures={false}
+            composer={composer}
+            thread={visibleSnapshot?.thread ?? null}
+            approvals={[]}
+            emptyContent={emptyContent}
+            composerDisabled={instance === undefined}
+            sendDisabled={running || workspace === null || issue !== null}
+            interruptDisabled={models.capabilities?.interrupt !== true}
+            modelError={issue}
+            imageCapabilityError="This Agent Provider cannot send image attachments"
+            onReadAttachment={(attachment) =>
+              window.zenx.imageAttachments.read(attachment)
             }
-          }}
-          onRespondToApproval={async () => undefined}
-          onSubmit={submit}
-        />
+            onRemoveImage={(imageId) =>
+              onComposerChange((latest) => removeComposerImage(latest, imageId))
+            }
+            permissionLabel={null}
+            permissionMode={permissionMode}
+            onPermissionChange={onPermissionChange}
+            composerTools={
+              <>
+                <ComposerModelMenu
+                  models={models.models}
+                  providerProfiles={[]}
+                  selectedModel={selectedModel}
+                  selectedReasoningEffort={null}
+                  modelError={models.error}
+                  showReasoning={false}
+                  loading={models.loading}
+                  disabled={operation || running}
+                  switching={false}
+                  modelSelectionDisabled={
+                    sessionId !== null &&
+                    models.capabilities?.changeModel !== true
+                  }
+                  onReasoningChange={() => undefined}
+                  onRetryModels={models.error ? models.retry : undefined}
+                  onModelChange={(value) => {
+                    if (sessionId === null && onDraftModelChange)
+                      onDraftModelChange(value);
+                    else setModel(value);
+                  }}
+                />
+                {sessionId === null ? (
+                  <Select
+                    aria-label="File permissions"
+                    value={permissionMode}
+                    disabled={operation || models.loading}
+                    onValueChange={(value) =>
+                      onPermissionChange?.(value as FilePermissionMode)
+                    }
+                  >
+                    {permissions.includes(permissionMode) ? null : (
+                      <option value={permissionMode}>Choose permissions</option>
+                    )}
+                    {permissions.map((mode) => (
+                      <option key={mode} value={mode}>
+                        {mode === "danger-full-access"
+                          ? "Full access"
+                          : mode === "read-only"
+                            ? "Read only"
+                            : "Workspace write"}
+                      </option>
+                    ))}
+                  </Select>
+                ) : null}
+                {models.error === null ? null : (
+                  <button
+                    className="quiet-button"
+                    type="button"
+                    onClick={models.retry}
+                  >
+                    Retry models
+                  </button>
+                )}
+              </>
+            }
+            composerContext={
+              <>
+                {instance?.kind === "opencode" && sessionId === null ? (
+                  <p className="agent-provider-warning">
+                    OpenCode has no filesystem sandbox. Full access permits
+                    tools to access files outside this Project.
+                  </p>
+                ) : null}
+                {approvals.map((approval) => (
+                  <div
+                    className="agent-approval"
+                    key={approval.requestId}
+                    role="group"
+                    aria-label={approval.title}
+                  >
+                    <strong>{approval.title}</strong>
+                    <pre>{approval.detail}</pre>
+                    {approval.error === null ? null : (
+                      <p role="alert">{approval.error}</p>
+                    )}
+                    <div>
+                      <button
+                        className="quiet-button"
+                        type="button"
+                        disabled={approval.busy}
+                        onClick={() =>
+                          void respond(approval.requestId, "decline")
+                        }
+                      >
+                        Decline
+                      </button>
+                      <button
+                        className="primary-button"
+                        type="button"
+                        disabled={approval.busy}
+                        onClick={() =>
+                          void respond(approval.requestId, "accept")
+                        }
+                      >
+                        {approval.busy ? "Responding…" : "Approve"}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </>
+            }
+            onDraftChange={(text) =>
+              onComposerChange((state) => editComposer(state, text))
+            }
+            onInterrupt={async () => {
+              if (sessionId !== null) {
+                await agentProvidersApi()!.interrupt(sessionId);
+                await refresh();
+              }
+            }}
+            onRespondToApproval={async () => undefined}
+            onSubmit={submit}
+          />
+        </AgentProviderModelScope>
       )}
       {readError === null && eventError === null ? null : (
         <button

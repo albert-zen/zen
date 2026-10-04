@@ -20,6 +20,7 @@ export interface ZenXProjectProjectionEntry {
   name?: string;
   configured: boolean;
   isDefault: boolean;
+  /** Native Zen Thread IDs or namespaced external display-navigation locator IDs. */
   threadIds: string[];
 }
 
@@ -27,6 +28,7 @@ export interface ZenXProjectProjectionSnapshot {
   projects: ZenXProjectProjectionEntry[];
   unavailableThreadIds: string[];
   lastUsedWorkspace: string | null;
+  sourceErrors?: { zen?: string; agent?: string };
 }
 
 export type ProjectRealpath = (candidate: string) => Promise<string>;

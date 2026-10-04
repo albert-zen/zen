@@ -55,6 +55,7 @@ import { threadModelIdentity, threadTitle } from "./thread-list.js";
 import { PluginSettingsSurfaces } from "./PluginProductPage.js";
 import { ChromeConnectionSettings } from "./ChromeConnectionSettings.js";
 import { FleetSettings } from "./FleetSettings.js";
+import { useConversationDetailPreference } from "./conversation-presentation.js";
 
 export type SettingsTab =
   | "agent-providers"
@@ -3131,6 +3132,8 @@ function GeneralPanel({
   draft: ZenXHostProfile;
   setDraft(value: ZenXHostProfile): void;
 }) {
+  const [conversationDetail, setConversationDetail] =
+    useConversationDetailPreference();
   const [maximumInput, setMaximumInput] = useState(
     draft.maxToolRounds?.toString() ?? "",
   );
@@ -3146,7 +3149,26 @@ function GeneralPanel({
         <p>Choose how ZenX works with you and your projects.</p>
       </header>
       <section className="settings-card">
-        <h3>Interaction</h3>{" "}
+        <h3>Interaction</h3>
+        <label className="field">
+          <span id="conversation-detail-label">Conversation detail</span>
+          <Select
+            aria-labelledby="conversation-detail-label"
+            aria-describedby="conversation-detail-help"
+            value={conversationDetail}
+            onValueChange={(value) =>
+              setConversationDetail(value === "debug" ? "debug" : "normal")
+            }
+          >
+            <option value="normal">Normal</option>
+            <option value="debug">Debug trace</option>
+          </Select>
+          <small id="conversation-detail-help" className="settings-note">
+            Applies immediately to conversation views. You don't need to press
+            Apply. Debug shows execution rows and makes trace data available on
+            demand.
+          </small>
+        </label>
         <label className="field">
           <span id="composer-send-label">Send while a reply is running</span>
           <Select

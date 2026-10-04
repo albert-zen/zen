@@ -10,6 +10,12 @@ import { JSDOM } from "jsdom";
 import * as React from "react";
 import type { Root } from "react-dom/client";
 
+import type { Thread, ThreadItem } from "../src/protocol-client/index.js";
+import { CONVERSATION_DETAIL_STORAGE_KEY } from "../src/renderer/src/conversation-presentation.js";
+import {
+  editComposer,
+  emptyComposerState,
+} from "../src/renderer/src/composer-state.js";
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import type {
   PublicHostSettings,
@@ -130,6 +136,7 @@ Object.assign(globalThis, {
 });
 const { createRoot } = await import("react-dom/client");
 const { SettingsView } = await import("../src/renderer/src/SettingsView.js");
+const { ThreadView } = await import("../src/renderer/src/ThreadView.js");
 
 test("Settings send mode choice forwards explicit provenance through save", async () => {
   const submitted: ZenXSettingsUpdate[] = [];
@@ -1944,6 +1951,174 @@ test("General reports a browser connection with multiple available tabs", async 
       /one current tab|only to the selected tab/u,
     );
   } finally {
+    await unmount(harness);
+  }
+});
+
+test("Settings Conversation detail keyboard choice immediately updates retained Zen and external views without Host Apply", async () => {
+  let saves = 0;
+  const harness = await mountSettings("general", {
+    save: async () => {
+      saves++;
+      return settings;
+    },
+  });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const conversations = createRoot(container);
+  const tool: Extract<ThreadItem, { type: "commandExecution" }> = {
+    id: "existing-tool",
+    type: "commandExecution",
+    command: "echo retained",
+    cwd: "/workspace",
+    status: "completed",
+    aggregatedOutput: "unchanged output",
+    exitCode: 0,
+    processId: null,
+    pluginId: null,
+    scriptPath: null,
+    source: "agent",
+    durationMs: null,
+    commandActions: [],
+    toolName: "shell",
+  };
+  const fixture: Thread = {
+    id: "existing-thread",
+    sessionId: "existing-thread",
+    forkedFromId: null,
+    parentThreadId: null,
+    preview: "",
+    ephemeral: false,
+    isPinned: false,
+    modelProvider: "fake",
+    createdAt: 1,
+    updatedAt: 1,
+    recencyAt: null,
+    status: { type: "idle" },
+    path: null,
+    cwd: "/workspace",
+    cliVersion: "zen/0.1.0",
+    source: "appServer",
+    threadSource: null,
+    agentNickname: null,
+    agentRole: null,
+    gitInfo: null,
+    name: "Existing conversation",
+    turns: [
+      {
+        id: "existing-turn",
+        items: [tool, { ...tool, id: "second-tool" }],
+        itemsView: "full",
+        status: "inProgress",
+        error: null,
+        startedAt: 1,
+        completedAt: null,
+        durationMs: null,
+      },
+    ],
+  };
+  const noop = async () => undefined;
+  try {
+    await act(async () =>
+      conversations.render(
+        createElement(
+          React.Fragment,
+          null,
+          ...[true, false].map((zenFeatures) =>
+            createElement(
+              "section",
+              {
+                key: String(zenFeatures),
+                "data-test-conversation": zenFeatures ? "zen" : "external",
+              },
+              createElement(ThreadView, {
+                zenFeatures,
+                approvals: [],
+                composer: editComposer(
+                  emptyComposerState(),
+                  zenFeatures ? "Zen draft" : "External draft",
+                ),
+                thread: fixture,
+                onDraftChange: () => undefined,
+                onInterrupt: noop,
+                onRespondToApproval: noop,
+                onSubmit: noop,
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+    const rows = [
+      ...container.querySelectorAll<HTMLElement>("[data-test-conversation]"),
+    ];
+    for (const view of rows) {
+      const group = view.querySelector<HTMLButtonElement>(".trace-toggle")!;
+      await click(group);
+      await click(
+        view.querySelector<HTMLButtonElement>(
+          ".trace-items .trace-item-toggle",
+        )!,
+      );
+    }
+    const details = rows.map((view) =>
+      view.querySelector(".trace-tool-detail"),
+    );
+    container.hidden = true; // Existing conversations remain mounted while Settings is open.
+    const detail = await labeledSelect("Conversation detail");
+    assert.ok(detail);
+    assert.equal(detail.value, "normal");
+    assert.deepEqual(
+      detail.options.map((option) => option.textContent.trim()),
+      ["Normal", "Debug trace"],
+    );
+    assert.match(
+      document.getElementById("conversation-detail-help")?.textContent ?? "",
+      /Applies immediately.*don't need to press Apply/su,
+    );
+    await changeControl(detail, "debug"); // ArrowDown opens the shared Select; Enter confirms the focused option.
+    assert.equal(
+      harness.dom.window.localStorage.getItem(CONVERSATION_DETAIL_STORAGE_KEY),
+      "debug",
+    );
+    assert.equal(saves, 0);
+    await click(exactButtonRequired("Toggle settings visibility"));
+    container.hidden = false;
+    assert.equal(document.querySelector('[role="listbox"]'), null);
+    rows.forEach((view, index) => {
+      assert.equal(view.querySelector(".trace-tool-detail"), details[index]);
+      assert.equal(
+        view.querySelector(".trace-item-toggle")?.getAttribute("aria-expanded"),
+        "true",
+      );
+      assert.equal(
+        view.querySelector<HTMLTextAreaElement>("textarea")?.value,
+        index === 0 ? "Zen draft" : "External draft",
+      );
+      assert.ok(view.querySelector(".trace-debug-source"));
+      assert.equal(view.querySelector(".trace-presentation-controls"), null);
+    });
+    await click(exactButtonRequired("Toggle settings visibility"));
+    const normal = await labeledSelect("Conversation detail");
+    assert.ok(normal);
+    assert.equal(normal.value, "debug");
+    await changeControl(normal, "normal");
+    await click(exactButtonRequired("Toggle settings visibility"));
+    rows.forEach((view, index) => {
+      assert.equal(view.querySelector(".trace-tool-detail"), details[index]);
+      assert.equal(
+        view.querySelector<HTMLElement>(".trace-debug-source")?.hidden,
+        true,
+      );
+      assert.equal(
+        view.querySelector<HTMLTextAreaElement>("textarea")?.value,
+        index === 0 ? "Zen draft" : "External draft",
+      );
+    });
+    assert.equal(saves, 0);
+  } finally {
+    await act(async () => conversations.unmount());
+    container.remove();
     await unmount(harness);
   }
 });

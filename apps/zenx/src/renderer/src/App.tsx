@@ -1,7 +1,9 @@
 import {
-  AgentProviderSelector,
+  AgentProviderModelScope,
+  type AgentProviderSelection,
+} from "./agent-provider-selection.js";
+import {
   agentProviderLabel,
-  AgentSessionNavigation,
   ExternalAgentSession,
   useAgentProviders,
 } from "./agent-providers-ui.js";
@@ -30,6 +32,7 @@ import { AgentReadinessNotice } from "./AgentReadinessNotice.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
 import {
   default as React,
+  Activity,
   useCallback,
   useEffect,
   useId,
@@ -45,6 +48,7 @@ import type {
   QueuedCancellationResult,
   QueuedCancellationTarget,
 } from "../../../../../src/app-server.js";
+import type { CanonicalItem } from "../../../../../src/item.js";
 import type { EffectiveThreadConfiguration } from "../../../../../src/thread.js";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
@@ -181,6 +185,23 @@ interface ThreadProjectionCacheEntry {
   activeTurnNotifications: BufferedProtocolNotification[];
   processEpoch: string | null;
   watermark: number;
+}
+
+function hasCompactionPrefix(
+  items: readonly CanonicalItem[] | undefined,
+  id: string,
+): boolean {
+  const compaction = items?.find(
+    (item) => item.id === id && item.type === "context_compaction",
+  );
+  return (
+    compaction?.type === "context_compaction" &&
+    items !== undefined &&
+    items.some((item) => item.id === compaction.coveredThroughItemId) &&
+    compaction.retainedItemIds.every((retainedId) =>
+      items.some((item) => item.id === retainedId),
+    )
+  );
 }
 
 function replayThreadProjection(
@@ -360,6 +381,35 @@ function updateThreadProjectionCache(
   if (current === undefined) return undefined;
   if (
     notification.method === "zen/thread/event" &&
+    current.processEpoch === null &&
+    notification.params.watermark > current.watermark &&
+    notification.params.event.type === "item_completed" &&
+    notification.params.event.item.type === "context_compaction" &&
+    notification.params.event.item.threadId === threadId
+  ) {
+    const compactionItem = notification.params.event.item;
+    if (
+      current.thread.canonicalItems?.some(
+        (item) => item.id === compactionItem.id,
+      )
+    )
+      return current;
+    // A CAS start projection has no native epoch yet. Keep only this exact saved
+    // fact inspectable while reading its owner, without inventing a native prefix
+    // or promoting the notification's epoch/watermark to a recovery authority.
+    const next = {
+      ...current,
+      thread: applyNativeThreadEvent(current.thread, notification.params.event),
+      activeTurnNotifications: activeTurnNotificationTail([
+        ...current.activeTurnNotifications,
+        notification,
+      ]),
+    };
+    cache.set(threadId, next);
+    return next;
+  }
+  if (
+    notification.method === "zen/thread/event" &&
     (notification.params.processEpoch !== current.processEpoch ||
       notification.params.watermark <= current.watermark)
   )
@@ -406,6 +456,12 @@ export function App() {
     threadId: string;
     notifications: BufferedProtocolNotification[];
   } | null>(null);
+  const compactionHydrationRef = useRef(
+    new Map<
+      string,
+      { epoch: number; itemIds: Set<string>; promise: Promise<void> }
+    >(),
+  );
   const threadProjectionCacheRef = useRef(
     new Map<string, ThreadProjectionCacheEntry>(),
   );
@@ -813,6 +869,13 @@ export function App() {
     }
   };
 
+  const agentSessionLocatorRevision = agentProviders.sessions
+    .map((binding) => `${binding.id}:${binding.cwd}`)
+    .join("\0");
+  useEffect(() => {
+    if (agentProviders.sessions.length > 0) void loadProjects();
+  }, [agentSessionLocatorRevision]);
+
   const selectProjectDirectory = async (workspace: string) => {
     const intent = projectPickerIntentRef.current;
     if (intent === null || projectPickerPendingRef.current) return;
@@ -873,28 +936,51 @@ export function App() {
       });
   };
 
-  const resumeThread = async (threadId: string, preserveNavigation = false) => {
-    setSelectedAgentSessionId(null);
-    discardRecoverableDraft();
+  const resumeThread = async (
+    threadId: string,
+    preserveNavigation = false,
+    refreshOnly = false,
+  ): Promise<readonly CanonicalItem[] | undefined> => {
+    if (refreshOnly && selectedThreadIdRef.current !== threadId) return;
+    if (!refreshOnly) {
+      setSelectedAgentSessionId(null);
+      discardRecoverableDraft();
+    }
     const epoch = ++selectionEpoch.current;
     const cached = threadProjectionCacheRef.current.get(threadId);
-    pendingResumeProjectionRef.current = { epoch, threadId, notifications: [] };
-    confirmNewThreadDraft(null);
+    pendingResumeProjectionRef.current = {
+      epoch,
+      threadId,
+      // These exact facts were observed before the first native read. A stale
+      // successful snapshot must replay them under the recovered native fence.
+      notifications:
+        cached?.processEpoch === null
+          ? cached.activeTurnNotifications.filter(
+              (notification) =>
+                notification.method === "zen/thread/event" &&
+                notification.params.event.type === "item_completed" &&
+                notification.params.event.item.type === "context_compaction",
+            )
+          : [],
+    };
+    if (!refreshOnly) confirmNewThreadDraft(null);
     const usageEpoch = ++threadUsageLoadEpoch.current;
     selectedThreadIdRef.current = threadId;
     if (!preserveNavigation) {
       setPage("agent");
       setSidebarOpen(false);
     }
-    setSelectedThreadId(threadId);
-    setThreadDetail(cached?.thread ?? null);
-    setThreadAttachments({});
-    setThreadUsage(undefined);
-    setSelectedSettings(cached?.settings ?? null);
-    setModelUpdateError(null);
-    setThreadLoading(cached === undefined);
-    setThreadError(null);
-    void loadComposerCatalog();
+    if (!refreshOnly) {
+      setSelectedThreadId(threadId);
+      setThreadDetail(cached?.thread ?? null);
+      setThreadAttachments({});
+      setThreadUsage(undefined);
+      setSelectedSettings(cached?.settings ?? null);
+      setModelUpdateError(null);
+      setThreadLoading(cached === undefined);
+      setThreadError(null);
+      void loadComposerCatalog();
+    }
     try {
       const result = await window.zenx.protocol.request("zen/thread/resume", {
         threadId,
@@ -908,6 +994,18 @@ export function App() {
               ?.activeTurnNotifications ?? []);
       if (pending?.epoch === epoch && pending.threadId === threadId)
         pendingResumeProjectionRef.current = null;
+      if (
+        refreshOnly &&
+        cached?.processEpoch === result.processEpoch &&
+        result.watermark < cached.watermark
+      ) {
+        const latest = threadProjectionCacheRef.current.get(threadId);
+        if (latest !== undefined) {
+          setThreadDetail(latest.thread);
+          setSelectedSettings(latest.settings);
+        }
+        return result.thread.items;
+      }
       const projected = replayThreadProjection(
         projectNativeRecovery(result),
         settingsFromSnapshot(threadId, nativeSettingsSnapshot(result.thread)),
@@ -928,6 +1026,17 @@ export function App() {
         );
       }
       setSelectedSettings(projected.settings);
+      for (const item of projected.thread.canonicalItems ?? []) {
+        if (
+          item.type === "context_compaction" &&
+          !hasCompactionPrefix(result.thread.items, item.id)
+        ) {
+          // Initial recovery may first disclose this Item through its own event
+          // tail or buffered notifications. Share the existing hydration fence;
+          // the same incomplete target cannot schedule a self-retry.
+          void hydrateCompactionProjection(threadId, item.id, true);
+        }
+      }
       void window.zenx.imageAttachments
         .forThread(threadId)
         .then((attachments) => {
@@ -958,19 +1067,104 @@ export function App() {
               `Thread usage could not be loaded: ${describeError(error)}`,
             );
         });
-      void window.zenx.settings
-        .markWorkspaceUsed(result.thread.cwd)
-        .then(() => loadProjects())
-        .catch(() => undefined);
+      if (!refreshOnly)
+        void window.zenx.settings
+          .markWorkspaceUsed(result.thread.cwd)
+          .then(() => loadProjects())
+          .catch(() => undefined);
+      return result.thread.items;
     } catch (error) {
       if (selectionEpoch.current === epoch) {
         if (pendingResumeProjectionRef.current?.epoch === epoch)
           pendingResumeProjectionRef.current = null;
-        setThreadError(describeError(error));
+        if (refreshOnly) {
+          // The buffer already updated this cache. A details read failure cannot
+          // strand a valid terminal event or settings change outside the view.
+          const latest = threadProjectionCacheRef.current.get(threadId);
+          if (latest !== undefined) {
+            setThreadDetail(latest.thread);
+            setSelectedSettings(latest.settings);
+          }
+          setRequestError(
+            `Compacted context details could not be refreshed: ${describeError(error)}. Reopen this conversation to try again.`,
+          );
+        } else setThreadError(describeError(error));
       }
     } finally {
       if (selectionEpoch.current === epoch) setThreadLoading(false);
     }
+  };
+
+  const hydrateCompactionProjection = async (
+    threadId: string,
+    compactionItemId?: string,
+    forceRead = false,
+  ) => {
+    if (selectedThreadIdRef.current !== threadId) return;
+    const pending = compactionHydrationRef.current.get(threadId);
+    if (pending?.epoch === selectionEpoch.current) {
+      if (compactionItemId !== undefined) pending.itemIds.add(compactionItemId);
+      return await pending.promise;
+    }
+    const items =
+      threadProjectionCacheRef.current.get(threadId)?.thread.canonicalItems;
+    if (
+      !forceRead &&
+      compactionItemId !== undefined &&
+      hasCompactionPrefix(items, compactionItemId)
+    )
+      return;
+    const ownerEpoch = selectionEpoch.current;
+    const entry = {
+      epoch: ownerEpoch,
+      itemIds: new Set(
+        compactionItemId === undefined ? [] : [compactionItemId],
+      ),
+      promise: Promise.resolve(),
+    };
+    // Start after installing the request fence so synchronous event bursts also
+    // share this read. The target IDs are transient enrichment requests only.
+    const run = async () => {
+      let expectedEpoch = ownerEpoch;
+      for (;;) {
+        if (
+          selectedThreadIdRef.current !== threadId ||
+          selectionEpoch.current !== expectedEpoch
+        )
+          return;
+        const requested = new Set(entry.itemIds);
+        entry.epoch = expectedEpoch + 1;
+        const read = resumeThread(threadId, true, true);
+        expectedEpoch = entry.epoch;
+        const nativePrefix = await read;
+        if (
+          nativePrefix === undefined ||
+          selectedThreadIdRef.current !== threadId ||
+          selectionEpoch.current !== expectedEpoch
+        )
+          return;
+        const unsatisfied = [...entry.itemIds].filter(
+          (id) => !hasCompactionPrefix(nativePrefix, id),
+        );
+        if (!unsatisfied.some((id) => !requested.has(id))) {
+          if (unsatisfied.length > 0)
+            setRequestError(
+              "Compacted context details are still incomplete. Reopen this conversation to refresh them.",
+            );
+          return;
+        }
+        // Only a distinct newer recorded compaction can request a trailing read.
+        // An unchanged prefix, duplicate event, or failed read never retries itself.
+      }
+    };
+    entry.promise = Promise.resolve()
+      .then(run)
+      .finally(() => {
+        if (compactionHydrationRef.current.get(threadId) === entry)
+          compactionHydrationRef.current.delete(threadId);
+      });
+    compactionHydrationRef.current.set(threadId, entry);
+    await entry.promise;
   };
 
   const loadComposerCatalog = async () => {
@@ -1099,6 +1293,10 @@ export function App() {
           params,
         } as BufferedProtocolNotification;
         const eventThreadId = notificationThreadId(notification);
+        const previousProjection =
+          eventThreadId === null
+            ? undefined
+            : threadProjectionCacheRef.current.get(eventThreadId);
         const cached = updateThreadProjectionCache(
           threadProjectionCacheRef.current,
           notification,
@@ -1141,6 +1339,27 @@ export function App() {
           const projected =
             params as ServerNotificationParams["zen/thread/event"];
           const nativeEvent = projected.event;
+          if (
+            nativeEvent.type === "item_completed" &&
+            nativeEvent.item.type === "context_compaction" &&
+            nativeEvent.item.threadId === projected.threadId &&
+            cached !== undefined &&
+            ((cached.processEpoch === null &&
+              !previousProjection?.thread.canonicalItems?.some(
+                (item) => item.id === nativeEvent.item.id,
+              )) ||
+              (cached.processEpoch === projected.processEpoch &&
+                cached.watermark === projected.watermark &&
+                projected.watermark > (previousProjection?.watermark ?? 0)))
+          ) {
+            // Lifecycle event notifications are not the exact saved canonical prefix.
+            // Read it from the native owner; never synthesize missing Item IDs.
+            void hydrateCompactionProjection(
+              projected.threadId,
+              nativeEvent.item.id,
+              true,
+            );
+          }
           if (nativeEvent.type === "queue_admission_started") {
             const key = `${projected.threadId}:${nativeEvent.queuedItemId}`;
             queueAttemptsRef.current.set(key, nativeEvent.attemptId);
@@ -1909,13 +2128,13 @@ export function App() {
         read: () => composerStatesRef.current[threadId] ?? emptyComposerState(),
         update: (change) => updateComposer(threadId, change),
         compact: async (id, includeOriginalReference) => {
-          await window.zenx.protocol.request("thread/compact", {
+          const result = await window.zenx.protocol.request("thread/compact", {
             threadId: id,
             ...(includeOriginalReference
               ? {}
               : { includeOriginalReference: false }),
           });
-          if (selectedThreadIdRef.current === id) await resumeThread(id, true);
+          await hydrateCompactionProjection(id, result.compactionItemId);
         },
       });
       return;
@@ -2016,8 +2235,10 @@ export function App() {
       read: () => composerStatesRef.current[threadId] ?? emptyComposerState(),
       update: (change) => updateComposer(threadId, change),
       compact: async (id) => {
-        await window.zenx.protocol.request("thread/compact", { threadId: id });
-        if (selectedThreadIdRef.current === id) await resumeThread(id, true);
+        const result = await window.zenx.protocol.request("thread/compact", {
+          threadId: id,
+        });
+        await hydrateCompactionProjection(id, result.compactionItemId);
       },
     });
   };
@@ -2505,20 +2726,16 @@ export function App() {
           <PageTitleBar
             onOpenSidebar={openSidebar}
             title={
-              (agentProviders.labels[selectedAgentSessionId] ||
-                agentProviders.instances.find(
-                  (instance) =>
-                    instance.id === selectedAgentSession?.providerInstanceId,
-                )?.name) ??
-              "Agent session"
+              agentProviders.labels[selectedAgentSessionId] ||
+              (selectedAgentSession
+                ? `Session ${selectedAgentSession.nativeSessionId.slice(0, 8)}`
+                : "Loading conversation")
             }
-            subtitle={`${(() => {
-              const instance = agentProviders.instances.find(
-                (instance) =>
-                  instance.id === selectedAgentSession?.providerInstanceId,
-              );
-              return instance ? agentProviderLabel(instance) : "Agent";
-            })()} · ${selectedAgentSession?.cwd ?? "Loading session"}`}
+            titleDetails={
+              selectedAgentSession === undefined
+                ? undefined
+                : `${agentProviders.instances.find((instance) => instance.id === selectedAgentSession.providerInstanceId)?.name ?? selectedAgentSession.providerInstanceId} · Host: ${selectedAgentSession.hostId} · Working directory: ${selectedAgentSession.cwd} · Native session: ${selectedAgentSession.nativeSessionId}`
+            }
           />
         ) : page === "agent" &&
           newThreadDraft === null &&
@@ -2611,16 +2828,14 @@ export function App() {
         </button>
       ) : null}
       <Sidebar
-        agentSessions={
-          <AgentSessionNavigation
-            sessions={agentProviders.sessions}
-            labels={agentProviders.labels}
-            instances={agentProviders.instances}
-            selectedId={page === "agent" ? selectedAgentSessionId : null}
-            onOpen={openAgentSession}
-            error={agentProviders.error}
-            onRetry={() => void agentProviders.refresh()}
-          />
+        agentSessions={agentProviders.navigationSessions}
+        selectedAgentSessionId={
+          page === "agent" ? selectedAgentSessionId : null
+        }
+        onSelectAgentSession={openAgentSession}
+        agentSessionError={projects.sourceErrors?.agent ?? agentProviders.error}
+        onRetryAgentSessions={() =>
+          void Promise.all([agentProviders.refresh(), loadProjects()])
         }
         roomConversations={roomsAdmitted ? roomConversations : undefined}
         selectedRoomId={selectedRoomId}
@@ -2700,7 +2915,9 @@ export function App() {
           }
         }}
         onOpenSettings={() => openPage("settings")}
-        onRetryThreads={() => void loadThreadSummaries(true)}
+        onRetryThreads={() =>
+          void Promise.all([loadThreadSummaries(true), loadProjects()])
+        }
         onRenameThread={renameThread}
         onForkThread={forkThread}
         onSelectThread={(threadId) => void resumeThread(threadId)}
@@ -2722,7 +2939,9 @@ export function App() {
         }
         sidebarOrder={sidebarOrder}
         pinnedThreads={pinnedSummaries}
-        threadError={threadListErrors.active}
+        threadError={
+          threadListErrors.active ?? projects.sourceErrors?.zen ?? null
+        }
         threadLoading={!threadListLoaded.active}
         threads={activeSummaries}
       />
@@ -2797,8 +3016,7 @@ export function App() {
             browserSettingsFocusRequest={browserSettingsFocusRequest}
             showHeader={false}
           />
-          {page === "settings" ? null : genericPluginTarget !== undefined &&
-            pluginSnapshot !== null ? (
+          {genericPluginTarget !== undefined && pluginSnapshot !== null ? (
             <ImZenXDraftContext.Provider value={imzenxDrafts}>
               <PluginProductPage
                 context={
@@ -2811,334 +3029,359 @@ export function App() {
                 navigate={openPage}
               />
             </ImZenXDraftContext.Provider>
-          ) : selectedAgentSessionId !== null ? (
-            <ExternalAgentSession
-              key={`session:${selectedAgentSessionId}`}
-              instance={agentProviders.instances.find(
-                (instance) =>
-                  instance.id === selectedAgentSession?.providerInstanceId,
-              )}
-              sessionId={selectedAgentSessionId}
-              workspace={selectedAgentSession?.cwd ?? null}
-              composer={
-                composerStates[`agent:${selectedAgentSessionId}`] ??
-                emptyComposerState()
+          ) : (
+            <Activity
+              key={
+                selectedAgentSessionId !== null
+                  ? `agent:${selectedAgentSessionId}`
+                  : newThreadDraft !== null
+                    ? `draft:${newThreadDraft.id}`
+                    : `zen:${selectedThreadId ?? "empty"}`
               }
-              onComposerChange={(update) =>
-                updateComposer(`agent:${selectedAgentSessionId}`, update)
-              }
-              onCreated={() => undefined}
-              onSnapshot={agentProviders.rememberSnapshot}
-            />
-          ) : newThreadDraft !== null &&
-            (newThreadDraft.providerInstanceId ?? "zen") !== "zen" ? (
-            <ExternalAgentSession
-              key={`draft:${newThreadDraft.id}:${newThreadDraft.providerInstanceId}`}
-              instance={agentProviders.instances.find(
-                (instance) => instance.id === newThreadDraft.providerInstanceId,
-              )}
-              sessionId={null}
-              workspace={
-                configuredProjects.some(
-                  (project) => project.workspace === newThreadDraft.workspace,
-                )
-                  ? newThreadDraft.workspace
-                  : null
-              }
-              projectError={
-                newThreadDraft.workspace !== null &&
-                !configuredProjects.some(
-                  (project) => project.workspace === newThreadDraft.workspace,
-                )
-                  ? "This Project is no longer available. Choose another Project."
-                  : null
-              }
-              permissionMode={
-                newThreadDraft.permissionMode ?? "workspace-write"
-              }
-              composer={newThreadDraft.composer}
-              onComposerChange={(update) =>
-                updateNewThreadComposer(newThreadDraft.id, update)
-              }
-              draftModel={newThreadDraft.agentModel}
-              onDraftModelChange={(agentModel) =>
-                updateNewThreadDraft((draft) => ({
-                  ...draft,
-                  agentModel,
-                  composer: advanceComposerDraftRevision(draft.composer),
-                }))
-              }
-              onOperationChange={(pending, selectedModel) => {
-                if (pending) {
-                  const current =
-                    newThreadDraftRef.current?.id === newThreadDraft.id
-                      ? newThreadDraftRef.current
-                      : newThreadDraft;
-                  const selected = {
-                    ...current,
-                    agentModel: selectedModel ?? current.agentModel,
-                  };
-                  if (newThreadDraftRef.current?.id === current.id)
-                    confirmNewThreadDraft(selected);
-                  externalPendingDraftsRef.current.set(
-                    newThreadDraft.id,
-                    selected,
-                  );
-                } else if (
-                  externalPendingDraftsRef.current.has(newThreadDraft.id)
-                ) {
-                  const failed = externalPendingDraftsRef.current.get(
-                    newThreadDraft.id,
-                  )!;
-                  if (
-                    newThreadDraftRef.current?.id !== failed.id &&
-                    failed.composer.submission?.status === "failed" &&
-                    !newThreadPromotionsRef.current.has(failed.id)
-                  )
-                    setDraftRecoveryNotice({
-                      draft: failed,
-                      message:
-                        failed.composer.submission.error ??
-                        "Could not create agent session",
-                    });
-                  externalPendingDraftsRef.current.delete(newThreadDraft.id);
-                }
-              }}
-              onCreated={(snapshot) =>
-                promoteAgentDraft(newThreadDraft, snapshot)
-              }
-              onPermissionChange={(permissionMode) =>
-                updateNewThreadDraft((draft) => ({ ...draft, permissionMode }))
-              }
-              providerControl={
-                <AgentProviderSelector
-                  instances={agentProviders.instances}
-                  value={newThreadDraft.providerInstanceId!}
-                  onChange={changeAgentProvider}
-                  disabled={
-                    newThreadDraft.composer.submission?.status === "pending"
+              mode={page === "settings" ? "hidden" : "visible"}
+            >
+              {selectedAgentSessionId !== null ? (
+                <ExternalAgentSession
+                  key={`session:${selectedAgentSessionId}`}
+                  instance={agentProviders.instances.find(
+                    (instance) =>
+                      instance.id === selectedAgentSession?.providerInstanceId,
+                  )}
+                  sessionId={selectedAgentSessionId}
+                  workspace={selectedAgentSession?.cwd ?? null}
+                  composer={
+                    composerStates[`agent:${selectedAgentSessionId}`] ??
+                    emptyComposerState()
+                  }
+                  onComposerChange={(update) =>
+                    updateComposer(`agent:${selectedAgentSessionId}`, update)
+                  }
+                  onCreated={() => undefined}
+                  onSnapshot={agentProviders.rememberSnapshot}
+                />
+              ) : newThreadDraft !== null &&
+                (newThreadDraft.providerInstanceId ?? "zen") !== "zen" ? (
+                <ExternalAgentSession
+                  key={`draft:${newThreadDraft.id}:${newThreadDraft.providerInstanceId}`}
+                  instance={agentProviders.instances.find(
+                    (instance) =>
+                      instance.id === newThreadDraft.providerInstanceId,
+                  )}
+                  sessionId={null}
+                  workspace={
+                    configuredProjects.some(
+                      (project) =>
+                        project.workspace === newThreadDraft.workspace,
+                    )
+                      ? newThreadDraft.workspace
+                      : null
+                  }
+                  projectError={
+                    newThreadDraft.workspace !== null &&
+                    !configuredProjects.some(
+                      (project) =>
+                        project.workspace === newThreadDraft.workspace,
+                    )
+                      ? "This Project is no longer available. Choose another Project."
+                      : null
+                  }
+                  permissionMode={
+                    newThreadDraft.permissionMode ?? "workspace-write"
+                  }
+                  composer={newThreadDraft.composer}
+                  onComposerChange={(update) =>
+                    updateNewThreadComposer(newThreadDraft.id, update)
+                  }
+                  draftModel={newThreadDraft.agentModel}
+                  onDraftModelChange={(agentModel) =>
+                    updateNewThreadDraft((draft) => ({
+                      ...draft,
+                      agentModel,
+                      composer: advanceComposerDraftRevision(draft.composer),
+                    }))
+                  }
+                  onOperationChange={(pending, selectedModel) => {
+                    if (pending) {
+                      const current =
+                        newThreadDraftRef.current?.id === newThreadDraft.id
+                          ? newThreadDraftRef.current
+                          : newThreadDraft;
+                      const selected = {
+                        ...current,
+                        agentModel: selectedModel ?? current.agentModel,
+                      };
+                      if (newThreadDraftRef.current?.id === current.id)
+                        confirmNewThreadDraft(selected);
+                      externalPendingDraftsRef.current.set(
+                        newThreadDraft.id,
+                        selected,
+                      );
+                    } else if (
+                      externalPendingDraftsRef.current.has(newThreadDraft.id)
+                    ) {
+                      const failed = externalPendingDraftsRef.current.get(
+                        newThreadDraft.id,
+                      )!;
+                      if (
+                        newThreadDraftRef.current?.id !== failed.id &&
+                        failed.composer.submission?.status === "failed" &&
+                        !newThreadPromotionsRef.current.has(failed.id)
+                      )
+                        setDraftRecoveryNotice({
+                          draft: failed,
+                          message:
+                            failed.composer.submission.error ??
+                            "Could not create agent session",
+                        });
+                      externalPendingDraftsRef.current.delete(
+                        newThreadDraft.id,
+                      );
+                    }
+                  }}
+                  onCreated={(snapshot) =>
+                    promoteAgentDraft(newThreadDraft, snapshot)
+                  }
+                  onPermissionChange={(permissionMode) =>
+                    updateNewThreadDraft((draft) => ({
+                      ...draft,
+                      permissionMode,
+                    }))
+                  }
+                  providerSelection={{
+                    instances: agentProviders.instances,
+                    value: newThreadDraft.providerInstanceId!,
+                    onChange: changeAgentProvider,
+                    disabled:
+                      newThreadDraft.composer.submission?.status === "pending",
+                  }}
+                  emptyContent={
+                    <div className="thread-empty new-thread-draft-empty">
+                      <div
+                        className="new-thread-draft-heading"
+                        role="heading"
+                        aria-level={2}
+                      >
+                        What should we build in{" "}
+                        <NewThreadProjectSelector
+                          disabled={
+                            newThreadDraft.composer.submission?.status ===
+                            "pending"
+                          }
+                          onAddProject={() => openProjectPicker("new-thread")}
+                          onChange={(workspace) =>
+                            updateNewThreadDraft((draft) => ({
+                              ...draft,
+                              workspace,
+                            }))
+                          }
+                          projects={configuredProjects}
+                          selectedWorkspace={newThreadDraft.workspace}
+                        />
+                        ?
+                      </div>
+                    </div>
                   }
                 />
-              }
-              emptyContent={
-                <div className="thread-empty new-thread-draft-empty">
-                  <div
-                    className="new-thread-draft-heading"
-                    role="heading"
-                    aria-level={2}
-                  >
-                    What should we build in{" "}
-                    <NewThreadProjectSelector
-                      disabled={
-                        newThreadDraft.composer.submission?.status === "pending"
-                      }
-                      onAddProject={() => openProjectPicker("new-thread")}
-                      onChange={(workspace) =>
-                        updateNewThreadDraft((draft) => ({
-                          ...draft,
-                          workspace,
-                        }))
-                      }
-                      projects={configuredProjects}
-                      selectedWorkspace={newThreadDraft.workspace}
-                    />
-                    ?
-                  </div>
-                </div>
-              }
-            />
-          ) : (
-            <AgentSurface
-              threadHeader={
-                selectedThreadId !== null &&
-                newThreadDraft === null &&
-                pluginSnapshot !== null &&
-                (pluginSnapshot.threadHeaders?.length ?? 0) > 0 ? (
-                  <PluginThreadHeaders
-                    registry={pluginUiRegistry}
-                    snapshot={pluginSnapshot}
-                    threadId={selectedThreadId}
-                    threads={[...threadSummaries, ...archivedThreadSummaries]}
-                    navigate={openPage}
-                  />
-                ) : null
-              }
-              onOpenMessageLink={(threadId, target) => {
-                setMessageLinkRequest((previous) => ({
-                  ...target,
-                  id: (previous?.id ?? 0) + 1,
-                  threadId,
-                }));
-                setBrowserPanels((current) => ({
-                  ...current,
-                  [threadId]: true,
-                }));
-              }}
-              composerSendMode={composerSendMode}
-              onComposerSendModeChange={changeComposerSendMode}
-              onCancelQueued={cancelQueued}
-              composerSendModeMigration={composerSendModeMigration}
-              queueFailure={queueFailure}
-              onSettleLegacySendChoice={settleLegacySendChoice}
-              onNoticeError={setRequestError}
-              approvals={approvals}
-              pluginSnapshot={pluginSnapshot}
-              onOpenBrowserSettings={() => {
-                setSettingsTab("general");
-                setBrowserSettingsFocusRequest((value) => value + 1);
-                openPage("settings");
-              }}
-              composerStates={composerStates}
-              configuredProjects={configuredProjects}
-              newThreadDraft={newThreadDraft}
-              agentProviderControl={
-                newThreadDraft === null ? null : (
-                  <AgentProviderSelector
-                    instances={agentProviders.instances}
-                    value={newThreadDraft.providerInstanceId ?? "zen"}
-                    onChange={changeAgentProvider}
-                    disabled={
-                      newThreadDraft.composer.submission?.status === "pending"
+              ) : (
+                <AgentSurface
+                  threadHeader={
+                    selectedThreadId !== null &&
+                    newThreadDraft === null &&
+                    pluginSnapshot !== null &&
+                    (pluginSnapshot.threadHeaders?.length ?? 0) > 0 ? (
+                      <PluginThreadHeaders
+                        registry={pluginUiRegistry}
+                        snapshot={pluginSnapshot}
+                        threadId={selectedThreadId}
+                        threads={[
+                          ...threadSummaries,
+                          ...archivedThreadSummaries,
+                        ]}
+                        navigate={openPage}
+                      />
+                    ) : null
+                  }
+                  onOpenMessageLink={(threadId, target) => {
+                    setMessageLinkRequest((previous) => ({
+                      ...target,
+                      id: (previous?.id ?? 0) + 1,
+                      threadId,
+                    }));
+                    setBrowserPanels((current) => ({
+                      ...current,
+                      [threadId]: true,
+                    }));
+                  }}
+                  composerSendMode={composerSendMode}
+                  onComposerSendModeChange={changeComposerSendMode}
+                  onCancelQueued={cancelQueued}
+                  composerSendModeMigration={composerSendModeMigration}
+                  queueFailure={queueFailure}
+                  onSettleLegacySendChoice={settleLegacySendChoice}
+                  onNoticeError={setRequestError}
+                  approvals={approvals}
+                  pluginSnapshot={pluginSnapshot}
+                  onOpenBrowserSettings={() => {
+                    setSettingsTab("general");
+                    setBrowserSettingsFocusRequest((value) => value + 1);
+                    openPage("settings");
+                  }}
+                  composerStates={composerStates}
+                  configuredProjects={configuredProjects}
+                  newThreadDraft={newThreadDraft}
+                  agentProviderSelection={
+                    newThreadDraft === null
+                      ? null
+                      : {
+                          instances: agentProviders.instances,
+                          value: newThreadDraft.providerInstanceId ?? "zen",
+                          onChange: changeAgentProvider,
+                          disabled:
+                            newThreadDraft.composer.submission?.status ===
+                            "pending",
+                        }
+                  }
+                  threadAttachments={threadAttachments}
+                  threadUsage={threadUsage}
+                  models={models}
+                  providerProfiles={providerProfiles}
+                  workflowCommands={workflowCommands}
+                  modelCatalogError={modelCatalogError}
+                  modelUpdateError={modelUpdateError}
+                  onDraftChange={(threadId, draft) =>
+                    updateComposer(threadId, (state) =>
+                      editComposer(state, draft),
+                    )
+                  }
+                  onNewThreadDraftChange={(draft) =>
+                    updateNewThreadDraft((current) => ({
+                      ...current,
+                      composer: editComposer(current.composer, draft),
+                    }))
+                  }
+                  onNewThreadModelChange={changeNewThreadModel}
+                  onNewThreadReasoningChange={changeNewThreadReasoning}
+                  onNewThreadProjectChange={(workspace) => {
+                    setModelUpdateError(null);
+                    updateNewThreadDraft((current) => ({
+                      ...current,
+                      workspace,
+                      composer: {
+                        ...current.composer,
+                        submission:
+                          current.composer.submission?.status === "failed"
+                            ? null
+                            : current.composer.submission,
+                      },
+                    }));
+                  }}
+                  onAddNewThreadProject={() => openProjectPicker("new-thread")}
+                  onImportImages={async (threadId, files) => {
+                    const imports = await Promise.all(
+                      files.map(async (file) => ({
+                        name: file.name,
+                        mediaType: file.type,
+                        bytes: new Uint8Array(await file.arrayBuffer()),
+                      })),
+                    );
+                    const images =
+                      await window.zenx.imageAttachments.import(imports);
+                    updateComposer(threadId, (state) =>
+                      addComposerImages(state, images),
+                    );
+                  }}
+                  onImportNewThreadImages={async (files) => {
+                    const draftId = newThreadDraftRef.current?.id;
+                    if (draftId === undefined) return;
+                    acquireNewThreadImageLease(draftId);
+                    try {
+                      const imports = await Promise.all(
+                        files.map(async (file) => ({
+                          name: file.name,
+                          mediaType: file.type,
+                          bytes: new Uint8Array(await file.arrayBuffer()),
+                        })),
+                      );
+                      const images =
+                        await window.zenx.imageAttachments.import(imports);
+                      updateNewThreadComposer(draftId, (state) =>
+                        addComposerImages(state, images),
+                      );
+                    } finally {
+                      releaseNewThreadImageLease(draftId);
                     }
-                  />
-                )
-              }
-              threadAttachments={threadAttachments}
-              threadUsage={threadUsage}
-              models={models}
-              providerProfiles={providerProfiles}
-              workflowCommands={workflowCommands}
-              modelCatalogError={modelCatalogError}
-              modelUpdateError={modelUpdateError}
-              onDraftChange={(threadId, draft) =>
-                updateComposer(threadId, (state) => editComposer(state, draft))
-              }
-              onNewThreadDraftChange={(draft) =>
-                updateNewThreadDraft((current) => ({
-                  ...current,
-                  composer: editComposer(current.composer, draft),
-                }))
-              }
-              onNewThreadModelChange={changeNewThreadModel}
-              onNewThreadReasoningChange={changeNewThreadReasoning}
-              onNewThreadProjectChange={(workspace) => {
-                setModelUpdateError(null);
-                updateNewThreadDraft((current) => ({
-                  ...current,
-                  workspace,
-                  composer: {
-                    ...current.composer,
-                    submission:
-                      current.composer.submission?.status === "failed"
-                        ? null
-                        : current.composer.submission,
-                  },
-                }));
-              }}
-              onAddNewThreadProject={() => openProjectPicker("new-thread")}
-              onImportImages={async (threadId, files) => {
-                const imports = await Promise.all(
-                  files.map(async (file) => ({
-                    name: file.name,
-                    mediaType: file.type,
-                    bytes: new Uint8Array(await file.arrayBuffer()),
-                  })),
-                );
-                const images =
-                  await window.zenx.imageAttachments.import(imports);
-                updateComposer(threadId, (state) =>
-                  addComposerImages(state, images),
-                );
-              }}
-              onImportNewThreadImages={async (files) => {
-                const draftId = newThreadDraftRef.current?.id;
-                if (draftId === undefined) return;
-                acquireNewThreadImageLease(draftId);
-                try {
-                  const imports = await Promise.all(
-                    files.map(async (file) => ({
-                      name: file.name,
-                      mediaType: file.type,
-                      bytes: new Uint8Array(await file.arrayBuffer()),
-                    })),
-                  );
-                  const images =
-                    await window.zenx.imageAttachments.import(imports);
-                  updateNewThreadComposer(draftId, (state) =>
-                    addComposerImages(state, images),
-                  );
-                } finally {
-                  releaseNewThreadImageLease(draftId);
-                }
-              }}
-              onPickImages={async (threadId) => {
-                const images = await window.zenx.imageAttachments.pick();
-                updateComposer(threadId, (state) =>
-                  addComposerImages(state, images),
-                );
-              }}
-              onPickNewThreadImages={async () => {
-                const draftId = newThreadDraftRef.current?.id;
-                if (draftId === undefined) return;
-                acquireNewThreadImageLease(draftId);
-                try {
-                  const images = await window.zenx.imageAttachments.pick();
-                  updateNewThreadComposer(draftId, (state) =>
-                    addComposerImages(state, images),
-                  );
-                } finally {
-                  releaseNewThreadImageLease(draftId);
-                }
-              }}
-              onRemoveImage={(threadId, imageId) =>
-                updateComposer(threadId, (state) =>
-                  removeComposerImage(state, imageId),
-                )
-              }
-              onRemoveNewThreadImage={(imageId) =>
-                updateNewThreadDraft((current) => ({
-                  ...current,
-                  composer: removeComposerImage(current.composer, imageId),
-                }))
-              }
-              onReadAttachment={readAttachment}
-              onInterrupt={async (turnId) => {
-                if (threadDetail === null)
-                  throw new Error("No thread is selected");
-                await window.zenx.protocol.request("turn/interrupt", {
-                  threadId: threadDetail.id,
-                  turnId,
-                });
-              }}
-              onModelChange={(model) => void changeModel(model)}
-              onPermissionChange={(mode) => void changePermission(mode)}
-              onNewThreadPermissionChange={(permissionMode) =>
-                updateNewThreadDraft((draft) => ({
-                  ...draft,
-                  permissionMode,
-                }))
-              }
-              permissionError={permissionError}
-              switchingPermission={switchingPermission}
-              onReasoningChange={(effort) => void changeReasoning(effort)}
-              onRespondToApproval={respondToApproval}
-              onCompact={compactFromContext}
-              onDismissCompaction={(threadId) =>
-                updateComposer(threadId, dismissCompactionFeedback)
-              }
-              onSubmit={submitComposer}
-              onSubmitNewThread={submitNewThreadDraft}
-              selectedSettings={selectedSettings}
-              selectedSummary={selectedSummary}
-              serverStatus={serverStatus}
-              switchingModel={switchingModel}
-              threadArchiving={
-                threadDetail !== null && archivingThreadIds.has(threadDetail.id)
-              }
-              threadDetail={threadDetail}
-              threadError={threadError}
-              threadLoading={threadLoading}
-            />
+                  }}
+                  onPickImages={async (threadId) => {
+                    const images = await window.zenx.imageAttachments.pick();
+                    updateComposer(threadId, (state) =>
+                      addComposerImages(state, images),
+                    );
+                  }}
+                  onPickNewThreadImages={async () => {
+                    const draftId = newThreadDraftRef.current?.id;
+                    if (draftId === undefined) return;
+                    acquireNewThreadImageLease(draftId);
+                    try {
+                      const images = await window.zenx.imageAttachments.pick();
+                      updateNewThreadComposer(draftId, (state) =>
+                        addComposerImages(state, images),
+                      );
+                    } finally {
+                      releaseNewThreadImageLease(draftId);
+                    }
+                  }}
+                  onRemoveImage={(threadId, imageId) =>
+                    updateComposer(threadId, (state) =>
+                      removeComposerImage(state, imageId),
+                    )
+                  }
+                  onRemoveNewThreadImage={(imageId) =>
+                    updateNewThreadDraft((current) => ({
+                      ...current,
+                      composer: removeComposerImage(current.composer, imageId),
+                    }))
+                  }
+                  onReadAttachment={readAttachment}
+                  onInterrupt={async (turnId) => {
+                    if (threadDetail === null)
+                      throw new Error("No thread is selected");
+                    await window.zenx.protocol.request("turn/interrupt", {
+                      threadId: threadDetail.id,
+                      turnId,
+                    });
+                  }}
+                  onModelChange={(model) => void changeModel(model)}
+                  onPermissionChange={(mode) => void changePermission(mode)}
+                  onNewThreadPermissionChange={(permissionMode) =>
+                    updateNewThreadDraft((draft) => ({
+                      ...draft,
+                      permissionMode,
+                    }))
+                  }
+                  permissionError={permissionError}
+                  switchingPermission={switchingPermission}
+                  onReasoningChange={(effort) => void changeReasoning(effort)}
+                  onRespondToApproval={respondToApproval}
+                  onCompact={compactFromContext}
+                  onDismissCompaction={(threadId) =>
+                    updateComposer(threadId, dismissCompactionFeedback)
+                  }
+                  onSubmit={submitComposer}
+                  onSubmitNewThread={submitNewThreadDraft}
+                  selectedSettings={selectedSettings}
+                  selectedSummary={selectedSummary}
+                  serverStatus={serverStatus}
+                  switchingModel={switchingModel}
+                  threadArchiving={
+                    threadDetail !== null &&
+                    archivingThreadIds.has(threadDetail.id)
+                  }
+                  threadDetail={threadDetail}
+                  threadError={threadError}
+                  threadLoading={threadLoading}
+                />
+              )}
+            </Activity>
           )}
           {selectedRoom && roomPanel && pluginSnapshot ? (
             <CompanionWorkspace
@@ -3434,9 +3677,11 @@ function PageTitleBar({
   onOpenSidebar,
   subtitle,
   title,
+  titleDetails,
 }: {
   onOpenSidebar(): void;
-  subtitle: string;
+  subtitle?: string;
+  titleDetails?: string;
   title: string;
 }) {
   return (
@@ -3451,8 +3696,13 @@ function PageTitleBar({
           <Icon name="tree" />
         </button>
         <div>
-          <h1>{title}</h1>
-          <p>{subtitle}</p>
+          <h1
+            title={titleDetails}
+            aria-label={titleDetails ? `${title} · ${titleDetails}` : undefined}
+          >
+            {title}
+          </h1>
+          {subtitle === undefined ? null : <p>{subtitle}</p>}
         </div>
       </div>
     </div>
@@ -3460,7 +3710,7 @@ function PageTitleBar({
 }
 
 function AgentSurface({
-  agentProviderControl,
+  agentProviderSelection,
   threadHeader,
   onOpenMessageLink,
   composerSendMode,
@@ -3517,7 +3767,7 @@ function AgentSurface({
   threadError,
   threadLoading,
 }: {
-  agentProviderControl?: ReactNode;
+  agentProviderSelection?: AgentProviderSelection | null;
   onOpenMessageLink(
     threadId: string,
     target: { kind: "file" | "browser"; value: string },
@@ -3650,74 +3900,77 @@ function AgentSurface({
           detail={threadError}
         />
       ) : newThreadDraft !== null ? (
-        <ThreadView
-          approvals={[]}
-          composer={newThreadDraft.composer}
-          composerTools={agentProviderControl}
-          composerSendMode={composerSendMode}
-          onComposerSendModeChange={onComposerSendModeChange}
-          composerContext={
-            <NewThreadProjectContext
-              projects={configuredProjects}
-              selectedWorkspace={newThreadDraft.workspace}
-            />
-          }
-          emptyContent={
-            <div className="thread-empty new-thread-draft-empty">
-              <div
-                className="new-thread-draft-heading"
-                role="heading"
-                aria-level={2}
-              >
-                What should we build in{" "}
-                <NewThreadProjectSelector
-                  disabled={
-                    newThreadDraft.composer.submission?.status === "pending"
-                  }
-                  onAddProject={onAddNewThreadProject}
-                  onChange={onNewThreadProjectChange}
-                  projects={configuredProjects}
-                  selectedWorkspace={newThreadDraft.workspace}
-                />
-                ?
+        <AgentProviderModelScope selection={agentProviderSelection ?? null}>
+          <ThreadView
+            approvals={[]}
+            composer={newThreadDraft.composer}
+            composerSendMode={composerSendMode}
+            onComposerSendModeChange={onComposerSendModeChange}
+            composerContext={
+              <NewThreadProjectContext
+                projects={configuredProjects}
+                selectedWorkspace={newThreadDraft.workspace}
+              />
+            }
+            emptyContent={
+              <div className="thread-empty new-thread-draft-empty">
+                <div
+                  className="new-thread-draft-heading"
+                  role="heading"
+                  aria-level={2}
+                >
+                  What should we build in{" "}
+                  <NewThreadProjectSelector
+                    disabled={
+                      newThreadDraft.composer.submission?.status === "pending"
+                    }
+                    onAddProject={onAddNewThreadProject}
+                    onChange={onNewThreadProjectChange}
+                    projects={configuredProjects}
+                    selectedWorkspace={newThreadDraft.workspace}
+                  />
+                  ?
+                </div>
               </div>
-            </div>
-          }
-          imageCapabilityError={imageCapabilityMessage(
-            providerProfiles,
-            draftSettings,
-            models,
-          )}
-          imageCapabilityNotice={imageCapabilityNotice(
-            providerProfiles,
-            draftSettings,
-            models,
-          )}
-          modelDisabled={
-            newThreadDraft.composer.submission?.status === "pending"
-          }
-          modelError={
-            draftProjectError ?? modelUpdateError ?? modelCatalogError
-          }
-          models={models}
-          providerProfiles={providerProfiles}
-          permissionMode={newThreadDraft.permissionMode ?? "danger-full-access"}
-          onPermissionChange={onNewThreadPermissionChange}
-          selectedModel={draftSettings?.model}
-          selectedReasoningEffort={draftSettings?.reasoningEffort}
-          thread={null}
-          workflowCommands={workflowCommands}
-          onDraftChange={onNewThreadDraftChange}
-          onImportImages={onImportNewThreadImages}
-          onPickImages={onPickNewThreadImages}
-          onReadAttachment={onReadAttachment}
-          onRemoveImage={onRemoveNewThreadImage}
-          onInterrupt={async () => undefined}
-          onModelChange={onNewThreadModelChange}
-          onReasoningChange={onNewThreadReasoningChange}
-          onRespondToApproval={onRespondToApproval}
-          onSubmit={onSubmitNewThread}
-        />
+            }
+            imageCapabilityError={imageCapabilityMessage(
+              providerProfiles,
+              draftSettings,
+              models,
+            )}
+            imageCapabilityNotice={imageCapabilityNotice(
+              providerProfiles,
+              draftSettings,
+              models,
+            )}
+            modelDisabled={
+              newThreadDraft.composer.submission?.status === "pending"
+            }
+            modelError={
+              draftProjectError ?? modelUpdateError ?? modelCatalogError
+            }
+            models={models}
+            providerProfiles={providerProfiles}
+            permissionMode={
+              newThreadDraft.permissionMode ?? "danger-full-access"
+            }
+            onPermissionChange={onNewThreadPermissionChange}
+            selectedModel={draftSettings?.model ?? ""}
+            selectedReasoningEffort={draftSettings?.reasoningEffort}
+            thread={null}
+            workflowCommands={workflowCommands}
+            onDraftChange={onNewThreadDraftChange}
+            onImportImages={onImportNewThreadImages}
+            onPickImages={onPickNewThreadImages}
+            onReadAttachment={onReadAttachment}
+            onRemoveImage={onRemoveNewThreadImage}
+            onInterrupt={async () => undefined}
+            onModelChange={onNewThreadModelChange}
+            onReasoningChange={onNewThreadReasoningChange}
+            onRespondToApproval={onRespondToApproval}
+            onSubmit={onSubmitNewThread}
+          />
+        </AgentProviderModelScope>
       ) : selectedSummary === null || threadDetail === null ? null : (
         <>
           <ThreadView

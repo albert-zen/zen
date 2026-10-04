@@ -1,3 +1,7 @@
+import {
+  agentProviderLabel,
+  useAgentProviderSelection,
+} from "./agent-provider-selection.js";
 import { Popover, PopoverTrigger, PopoverContent } from "./ui/controls.js";
 import {
   useEffect,
@@ -16,7 +20,7 @@ import {
   reasoningOptions,
 } from "./model-settings.js";
 
-type MenuPanel = "root" | "model" | "reasoning";
+type MenuPanel = "root" | "engine" | "model" | "reasoning";
 
 export function ComposerModelMenu({
   disabled,
@@ -28,6 +32,10 @@ export function ComposerModelMenu({
   selectedModel,
   selectedReasoningEffort,
   switching,
+  loading = false,
+  modelSelectionDisabled = false,
+  showReasoning = true,
+  onRetryModels,
 }: {
   disabled: boolean;
   modelError: string | null;
@@ -38,7 +46,18 @@ export function ComposerModelMenu({
   selectedModel: string;
   selectedReasoningEffort: string | null;
   switching: boolean;
+  loading?: boolean;
+  modelSelectionDisabled?: boolean;
+  showReasoning?: boolean;
+  onRetryModels?(): void;
 }) {
+  const engineSelection = useAgentProviderSelection();
+  const selectedEngine = engineSelection?.instances.find(
+    (instance) => instance.id === engineSelection.value,
+  );
+  const engineLabel = selectedEngine
+    ? agentProviderLabel(selectedEngine)
+    : engineSelection?.value;
   const containerRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -50,7 +69,18 @@ export function ComposerModelMenu({
   const [query, setQuery] = useState("");
   const selected = models.find((model) => model.id === selectedModel);
   const available = canSendWithModel(models, selectedModel);
-  const groups = groupedModelOptions(models, providerProfiles)
+  const nativeModels =
+    selectedEngine !== undefined && selectedEngine.kind !== "zen";
+  const modelGroups = nativeModels
+    ? [
+        {
+          providerProfileId: selectedEngine.id,
+          displayName: agentProviderLabel(selectedEngine),
+          models: models.filter((model) => !model.hidden),
+        },
+      ]
+    : groupedModelOptions(models, providerProfiles);
+  const groups = modelGroups
     .map((group) => ({
       ...group,
       models: group.models.filter((model) =>
@@ -61,8 +91,15 @@ export function ComposerModelMenu({
     }))
     .filter((group) => group.models.length > 0);
   const efforts = reasoningOptions(models, selectedModel);
-  const currentModelLabel = selected?.displayName ?? "Unavailable model";
+  const currentModelLabel =
+    selected?.displayName ??
+    (loading
+      ? "Loading models…"
+      : nativeModels
+        ? selectedModel || "Choose model"
+        : "Unavailable model");
   const selectedReasoningLabel =
+    !showReasoning ||
     selected === undefined ||
     efforts.length === 0 ||
     selectedReasoningEffort === null
@@ -72,6 +109,9 @@ export function ComposerModelMenu({
     selectedReasoningLabel === null
       ? currentModelLabel
       : `${currentModelLabel} ${selectedReasoningLabel}`;
+  const currentScopeLabel = engineLabel
+    ? `${engineLabel} · ${currentSelectionLabel}`
+    : currentSelectionLabel;
   const reasoningLabel =
     selected === undefined
       ? "Unknown"
@@ -122,8 +162,12 @@ export function ComposerModelMenu({
             }
             aria-expanded={panel !== null}
             aria-haspopup="menu"
-            aria-label={`Model and reasoning: ${currentSelectionLabel}`}
-            title={currentSelectionLabel}
+            aria-label={
+              engineLabel
+                ? `Agent Provider and model: ${currentScopeLabel}`
+                : `Model and reasoning: ${currentSelectionLabel}`
+            }
+            title={currentScopeLabel}
             disabled={disabled || switching}
             onClick={() => {
               panel === null ? setPanel("root") : close();
@@ -134,7 +178,22 @@ export function ComposerModelMenu({
               setPanel("root");
             }}
           >
-            <span>{switching ? "Changing…" : currentSelectionLabel}</span>
+            {engineLabel ? (
+              <span className="composer-engine-mark" aria-hidden="true">
+                <Icon
+                  name={
+                    selectedEngine?.kind === "codex" ||
+                    selectedEngine?.kind === "opencode"
+                      ? "terminal"
+                      : "layers"
+                  }
+                  size={13}
+                />
+              </span>
+            ) : null}
+            <span className="composer-selection-label">
+              {switching ? "Changing…" : currentSelectionLabel}
+            </span>
             <Icon name="chevron-down" size={12} />
           </button>
         </PopoverTrigger>
@@ -149,10 +208,14 @@ export function ComposerModelMenu({
           role="menu"
           aria-label={
             visiblePanel === "root"
-              ? "Model and reasoning"
-              : visiblePanel === "model"
-                ? "Choose model"
-                : "Choose reasoning effort"
+              ? engineLabel
+                ? "Agent Provider and model"
+                : "Model and reasoning"
+              : visiblePanel === "engine"
+                ? "Choose Agent Provider"
+                : visiblePanel === "model"
+                  ? "Choose model"
+                  : "Choose reasoning effort"
           }
           onKeyDown={(event) => {
             if (event.key === "Tab") triggerRef.current?.focus();
@@ -161,20 +224,47 @@ export function ComposerModelMenu({
         >
           {visiblePanel === "root" ? (
             <>
+              {engineSelection === null ? null : (
+                <MenuEntry
+                  label="Agent Provider"
+                  value={engineLabel ?? "Unavailable instance"}
+                  disabled={
+                    !engineSelection.onChange || engineSelection.disabled
+                  }
+                  onClick={() => setPanel("engine")}
+                />
+              )}
               <MenuEntry
+                disabled={loading || modelSelectionDisabled}
                 label="Model"
                 value={currentModelLabel}
                 onClick={() => setPanel("model")}
               />
-              <MenuEntry
-                disabled={efforts.length === 0}
-                label="Reasoning"
-                value={reasoningLabel}
-                onClick={() => setPanel("reasoning")}
-              />
-              {available ? (
+              {showReasoning ? (
+                <MenuEntry
+                  disabled={efforts.length === 0}
+                  label="Reasoning"
+                  value={reasoningLabel}
+                  onClick={() => setPanel("reasoning")}
+                />
+              ) : null}
+              {modelError === null ? null : (
+                <p className="composer-menu-warning" role="alert">
+                  {modelError}
+                </p>
+              )}
+              {onRetryModels === undefined ? null : (
+                <button type="button" role="menuitem" onClick={onRetryModels}>
+                  Retry models
+                </button>
+              )}
+              {loading ? (
+                <p className="composer-menu-note" role="status">
+                  Loading this Agent Provider’s models…
+                </p>
+              ) : available ? (
                 <p className="composer-menu-note">
-                  {efforts.length === 0
+                  {showReasoning && efforts.length === 0
                     ? "This model sends text without a Provider-specific reasoning control. Configure or detect capabilities to enable one."
                     : "Changes apply to the next turn."}
                 </p>
@@ -183,6 +273,36 @@ export function ComposerModelMenu({
                   This model cannot run. Choose another model before sending.
                 </p>
               )}
+            </>
+          ) : visiblePanel === "engine" ? (
+            <>
+              <MenuBack
+                label="Agent Provider"
+                onClick={() => setPanel("root")}
+              />
+              <div className="composer-menu-scroll">
+                {engineSelection?.instances.map((instance) => (
+                  <button
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={instance.id === engineSelection.value}
+                    data-agent-provider-id={instance.id}
+                    key={instance.id}
+                    disabled={engineSelection.disabled}
+                    onClick={() => {
+                      engineSelection.onChange?.(instance.id);
+                      close();
+                    }}
+                  >
+                    <span>
+                      <strong>{agentProviderLabel(instance)}</strong>
+                    </span>
+                    {instance.id === engineSelection.value ? (
+                      <Icon name="check" size={13} />
+                    ) : null}
+                  </button>
+                ))}
+              </div>
             </>
           ) : visiblePanel === "model" ? (
             <>
@@ -226,6 +346,7 @@ export function ComposerModelMenu({
                     {group.models.map((model) => (
                       <button
                         key={model.id}
+                        data-model-id={model.id}
                         type="button"
                         role="menuitemradio"
                         aria-checked={model.id === selectedModel}
@@ -233,7 +354,11 @@ export function ComposerModelMenu({
                       >
                         <span>
                           <strong>{model.displayName}</strong>
-                          <small>{capabilityLabel(model)}</small>
+                          <small>
+                            {showReasoning
+                              ? capabilityLabel(model)
+                              : model.description || "Native model"}
+                          </small>
                         </span>
                         {model.id === selectedModel ? (
                           <Icon name="check" size={13} />

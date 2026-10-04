@@ -31,44 +31,6 @@
   padding-left: 28px;
   font-size: 12px;
 }
-.agent-session-navigation {
-  margin: 14px 0 8px;
-}
-.agent-session-navigation h2 {
-  margin: 0;
-  padding: 8px 12px;
-  color: var(--text-3);
-  font-size: 12px;
-  font-weight: 600;
-}
-.agent-session-row {
-  display: grid;
-  align-items: center;
-  width: 100%;
-  gap: 3px;
-  text-align: left;
-  padding: 8px 12px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-secondary);
-}
-.agent-session-row span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.agent-session-row small {
-  flex-shrink: 0;
-  font-size: 11px;
-  color: var(--text-3);
-}
-.agent-session-row:hover,
-.agent-session-row[aria-current="page"] {
-  background: var(--surface-hover);
-  color: var(--text);
-}
 .agent-approval {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -99,11 +61,19 @@
   font-size: 12px;
   color: var(--text-3);
 }
-.agent-provider-select {
-  max-width: 190px;
+/* One compact engine/model trigger; all native instance details stay in its popover. */
+.composer-model-trigger .composer-engine-mark {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+.composer-model-trigger .composer-selection-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* Provider, model and permissions keep their hit targets; narrower rails wrap. */
 .composer .composer-tools {
   flex: 1 1 auto;
   flex-wrap: wrap;
@@ -113,9 +83,6 @@
   width: auto;
   flex: 0 0 auto;
   max-width: min(220px, 100%);
-}
-.composer .composer-tools > .agent-provider-select {
-  max-width: 190px;
 }
 .composer .composer-tools > .composer-model-menu,
 .composer .composer-tools > .permission-picker,

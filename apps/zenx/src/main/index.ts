@@ -1,3 +1,4 @@
+import { readProjectConversationNavigation } from "./conversation-navigation.js";
 import { OpenCodeAgentProviderAdapter } from "./agent-providers/opencode-adapter.js";
 import { ZenAgentAdapter } from "./agent-providers/zen-adapter.js";
 import { AgentProviderService } from "./agent-providers/service.js";
@@ -1269,15 +1270,14 @@ function installProtocolIpc(
     },
   );
   ipcMain.handle(ipcChannels.projectsGet, async (_event, options: unknown) => {
-    const threads = await manager.listThreadSummaries(
-      readThreadSummaryListOptions(options),
-    );
-    return await projects.project(
-      threads.map((thread) => ({
-        id: thread.threadId,
-        cwd:
-          thread.status === "systemError" ? null : thread.currentMetadata.cwd,
-      })),
+    const query = readThreadSummaryListOptions(options);
+    return await readProjectConversationNavigation(
+      projects,
+      () => manager.listThreadSummaries(query),
+      () =>
+        query.archived === true
+          ? Promise.resolve([])
+          : agentProviderService!.sessions(),
     );
   });
   ipcMain.handle(
