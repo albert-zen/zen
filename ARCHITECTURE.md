@@ -1113,3 +1113,7 @@ Room quotes are immutable bounded snapshots of a same-Room message captured with
 ### IMZenX PAW Room routes
 
 IMZenX may explicitly bind an external IM conversation to an existing PAW Room in its configured workspace; a bounded private child-pipe adapter invokes the existing Room service, and the SDK delivers only explicit Room posts, keeping direct working-Thread output separate. The adapter stores route selection and projection checkpoints, never a second transcript or Agent runtime; normal Thread subscriptions remain a separate mode. The PAW product label preserves existing assistant/companion serialization and user-chosen names.
+
+## Experimental harness boundary
+
+`experiments/harness-adapters` is a non-integrated request-mapping probe: each external harness retains its own execution/history authority, while a transport-scoped session reference and honest capability/acceptance contract explore shared client behavior without creating a Zen runtime, transcript, scheduler, or permission authority.
