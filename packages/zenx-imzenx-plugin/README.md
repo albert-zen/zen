@@ -7,7 +7,7 @@ by the same pinned IM Agent SDK used by IMZen:
 `codex/im-input-failure-fix-sdk-compat` ref. This Git revision is not a PyPI
 release or a merge to the SDK v1 main.
 
-IM and the desktop use **the same authenticated local ZAS and Thread**.
+In direct Thread mode, IM and the desktop use **the same authenticated local ZAS and Thread**.
 IM input becomes canonical user messages and Agent replies visible in ZenX;
 Agent replies to desktop input are delivered to subscribed IM conversations.
 No bot message is copied into a second transcript or Agent runtime.
@@ -98,3 +98,11 @@ can be retried explicitly. Desktop discovery subscribes to new external Threads
 without changing the selected Thread and feeds their first canonical input into
 ZenX's existing automatic naming coordinator. Opening an older unnamed Thread
 also supplies its first input; native and manually assigned names are preserved.
+
+## PAW conversations
+
+Use `/paws` to list existing PAW Rooms in the configured workspace and `/paw <number>` (or exact Room ID) to select one. The selection is local to the external IM conversation and survives restart. Ordinary text enters the canonical Room through its existing admission/steering mechanism. Only explicit agent Room posts are delivered back; private working-Thread output is never treated as an IM reply. `/new` clears the selection; `/threads` and `/pick` retain direct Thread mode.
+
+The Host uses its existing private child pipe and scopes every Room read/post to the configured workspace. The bridge owns route selection and outbound checkpoints, not a transcript or runtime. Existing SDK channel restrictions and proactive-delivery limits still apply. No credentials, ports, grants or timers are created by selecting a PAW. PAW management, notebook and Trigger configuration remain in ZenX's existing workspace panel.
+
+This first adapter supports text. Attachments and platform-native quoted replies, reactions and read indicators are not yet mapped; they must not be advertised as equivalent to Room context-consumption receipts. Mock verification does not certify real bot delivery.

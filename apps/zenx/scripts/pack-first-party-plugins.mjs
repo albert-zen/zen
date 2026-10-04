@@ -24,7 +24,7 @@ const pluginSdkCli = path.join(
   "dist",
   "cli.js",
 );
-export const ZENX_ROOMS_TARBALL = "zenx-rooms-plugin-1.0.3.tgz";
+export const ZENX_ROOMS_TARBALL = "zenx-rooms-plugin-1.0.5.tgz";
 export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
     "@zenx/subagents-plugin",
@@ -34,7 +34,7 @@ export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
     "@zenx/imzenx-plugin",
     "zenx-imzenx-plugin",
-    "zenx-imzenx-plugin-1.0.0.tgz",
+    "zenx-imzenx-plugin-1.0.1.tgz",
   ),
   plugin(
     "@zenx/browser-plugin",
@@ -74,7 +74,7 @@ export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
     "@zenx/self-control-plugin",
     "zenx-self-control-plugin",
-    "zenx-self-control-plugin-1.0.0.tgz",
+    "zenx-self-control-plugin-1.0.1.tgz",
   ),
   plugin(
     "@zenx/triggers-plugin",

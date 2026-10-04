@@ -166,7 +166,8 @@ export class AppServerManager {
         | "configuration/prepared"
         | "configuration/published"
         | "configuration/discarded"
-        | "configuration/current";
+        | "configuration/current"
+        | "fleet/result";
       resolve(event: HostEvent): void;
       reject(error: Error): void;
     }
@@ -680,6 +681,40 @@ export class AppServerManager {
     }
   }
 
+  #remoteRooms:
+    | ((
+        operation: "list" | "read" | "post",
+        params: Extract<HostEvent, { type: "fleet/room-request" }>["params"],
+      ) => Promise<unknown>)
+    | undefined;
+  setRemoteRoomsHandler(
+    handler: (
+      operation: "list" | "read" | "post",
+      params: Extract<HostEvent, { type: "fleet/room-request" }>["params"],
+    ) => Promise<unknown>,
+  ): void {
+    this.#remoteRooms = handler;
+  }
+  notifyRemoteRoom(roomId: string, threadId: string): void {
+    if (this.#child?.connected)
+      this.#child.send({
+        type: "fleet/room-event",
+        roomId,
+        threadId,
+      } satisfies HostCommand);
+  }
+  async fleetControl(action: string, input?: unknown): Promise<unknown> {
+    return await this.#sendConfigurationRequest(
+      "fleet/result",
+      (requestId) => ({ type: "fleet/control", requestId, action, input }),
+      (event) => {
+        if (event.type !== "fleet/result")
+          throw new Error("Invalid Fleet response");
+        if (event.error) throw new Error(event.error);
+        return event.result;
+      },
+    );
+  }
   async prepareConfiguration(
     config: ZenXHostConfig,
     revision: number,
@@ -779,7 +814,8 @@ export class AppServerManager {
       | "configuration/prepared"
       | "configuration/published"
       | "configuration/discarded"
-      | "configuration/current",
+      | "configuration/current"
+      | "fleet/result",
     command: (requestId: string) => HostCommand,
     read: (event: HostEvent) => T,
     onTimeout?: (requestId: string) => void,
@@ -1373,7 +1409,33 @@ export class AppServerManager {
     child.on("message", (message: unknown) => {
       if (this.#child !== child) return;
       const hostEvent = isHostEvent(message) ? message : undefined;
+      if (hostEvent?.type === "fleet/room-request") {
+        void (async () => {
+          try {
+            if (!this.#remoteRooms) throw new Error("Rooms unavailable");
+            const result = await this.#remoteRooms(
+              hostEvent.operation,
+              hostEvent.params,
+            );
+            if (this.#child === child && child.connected)
+              child.send({
+                type: "fleet/room-result",
+                requestId: hostEvent.requestId,
+                result,
+              } satisfies HostCommand);
+          } catch (error) {
+            if (this.#child === child && child.connected)
+              child.send({
+                type: "fleet/room-result",
+                requestId: hostEvent.requestId,
+                error: asError(error).message,
+              } satisfies HostCommand);
+          }
+        })();
+        return;
+      }
       if (
+        hostEvent?.type === "fleet/result" ||
         hostEvent?.type === "configuration/prepared" ||
         hostEvent?.type === "configuration/published" ||
         hostEvent?.type === "configuration/discarded" ||

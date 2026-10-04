@@ -1,3 +1,20 @@
+export interface RemoteRoomsPort {
+  request(
+    operation: "list" | "read" | "post",
+    params: {
+      workspaceId: string;
+      workspaceCwd: string;
+      deviceId: string;
+      roomId?: string;
+      text?: string;
+      clientId?: string;
+    },
+  ): Promise<unknown>;
+  subscribe(
+    listener: (event: { roomId: string; threadId: string }) => void,
+  ): () => void;
+}
+import { RemoteGrantFile } from "./remote-grants.js";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import type { ZenAppServer, ThreadSnapshot } from "../../app-server.js";
@@ -227,11 +244,15 @@ export function projectRemoteRecoveryPage(
 interface Device {
   digest: Buffer;
   revoked: boolean;
+  access?: "read" | "control" | undefined;
   workspaceIds: readonly string[] | null;
 }
-/** Host-external, process-local device grants: losing the process invalidates every token. */
+/** Host-external grants; an explicit private state file preserves authorization across restarts. */
 export class RemoteHostAccess {
   readonly #appServer: ZenAppServer;
+  readonly #grantFile: RemoteGrantFile | undefined;
+  readonly #accessMode: "read" | "control" | undefined;
+  readonly #rooms: RemoteRoomsPort | undefined;
   readonly #hostId: string;
   readonly #workspaces: () =>
     readonly RemoteWorkspace[] | Promise<readonly RemoteWorkspace[]>;
@@ -246,12 +267,27 @@ export class RemoteHostAccess {
   constructor(options: {
     appServer: ZenAppServer;
     hostId: string;
+    grantFile?: string;
+    access?: "read" | "control" | undefined;
+    rooms?: RemoteRoomsPort;
     workspaces: () =>
       readonly RemoteWorkspace[] | Promise<readonly RemoteWorkspace[]>;
   }) {
     if (!options.hostId.trim()) throw new Error("Host ID required");
     this.#appServer = options.appServer;
     this.#hostId = options.hostId;
+    this.#accessMode = options.access;
+    this.#rooms = options.rooms;
+    this.#grantFile = options.grantFile
+      ? new RemoteGrantFile(options.grantFile, options.hostId)
+      : undefined;
+    for (const grant of this.#grantFile?.read() ?? [])
+      this.#devices.set(grant.deviceId, {
+        digest: Buffer.from(grant.digest, "hex"),
+        revoked: grant.revoked,
+        workspaceIds: grant.workspaceIds,
+        access: grant.access,
+      });
     this.#workspaces = options.workspaces;
     this.#projection = new NativeRecoveryProjection(options.appServer);
   }
@@ -270,7 +306,13 @@ export class RemoteHostAccess {
   }
   async pair(input: RemotePairRequest): Promise<RemotePairResult> {
     if (input.hostId !== this.#hostId) throw new RemoteHostError("wrong_host");
-    if (!validId(input.deviceId) || !validToken(input.code))
+    if (
+      !validId(input.deviceId) ||
+      !validToken(input.code) ||
+      (input.access !== undefined &&
+        input.access !== "read" &&
+        input.access !== "control")
+    )
       throw new RemoteHostError("invalid_request");
     const pair = this.#pair;
     if (
@@ -281,19 +323,49 @@ export class RemoteHostAccess {
       throw new RemoteHostError("unauthorized");
     this.#pair = undefined;
     const token = randomBytes(32).toString("base64url");
-    this.#devices.set(input.deviceId, {
+    const device = {
       digest: digest(token),
       revoked: false,
       workspaceIds: pair.workspaceIds,
-    });
+      access: input.access === "read" ? ("read" as const) : this.#accessMode,
+    };
+    this.#saveGrants(new Map([...this.#devices, [input.deviceId, device]]));
+    this.#devices.set(input.deviceId, device);
     return { hostId: this.#hostId, deviceId: input.deviceId, token };
   }
   revoke(deviceId: string): void {
     const device = this.#devices.get(deviceId);
     if (device) {
+      this.#saveGrants(
+        new Map([...this.#devices, [deviceId, { ...device, revoked: true }]]),
+      );
       device.revoked = true;
       for (const listener of this.#revocationListeners) listener(deviceId);
     }
+  }
+  devices(): Array<{
+    deviceId: string;
+    revoked: boolean;
+    workspaceIds: readonly string[] | null;
+  }> {
+    return [...this.#devices].map(([deviceId, device]) => ({
+      deviceId,
+      revoked: device.revoked,
+      workspaceIds: device.workspaceIds,
+      access: device.access,
+    }));
+  }
+  #saveGrants(devices: Map<string, Device>): void {
+    this.#grantFile?.write(
+      [...devices].map(([deviceId, device]) => ({
+        deviceId,
+        digest: device.digest.toString("hex"),
+        revoked: device.revoked,
+        access: device.access,
+        workspaceIds:
+          device.workspaceIds === null ? null : [...device.workspaceIds],
+      })),
+    );
   }
   onRevocation(listener: (id: string) => void): () => void {
     this.#revocationListeners.add(listener);
@@ -323,6 +395,8 @@ export class RemoteHostAccess {
       processEpoch: this.#projection.processEpoch,
       capabilities: [
         "workspaces",
+        "models",
+        ...(this.#rooms ? ["rooms"] : []),
         "threads",
         "create",
         "resume",
@@ -415,16 +489,40 @@ export class RemoteHostAccess {
     deviceId: string,
     token: string,
     workspaceId: string,
+    settings: { model?: string; effort?: string } = {},
   ): Promise<RemoteThreadView> {
+    const control = this.#writeAccess(deviceId, token);
     const cwd = await this.#workspace(deviceId, token, workspaceId);
     this.authenticate(deviceId, token);
     // Until mobile approval policy is designed, remote commands may not
     // silently inherit the local Full Access default or approve tool calls.
+    const choices = this.#appServer.listModels();
+    const selected =
+      settings.model === undefined
+        ? undefined
+        : choices.filter(
+            (entry) =>
+              `${entry.providerProfileId}::${entry.model.id}` ===
+                settings.model || entry.model.id === settings.model,
+          );
+    if (selected && selected.length !== 1)
+      throw new RemoteHostError("invalid_request");
     return publicThread(
       await this.#appServer.startThread({
         cwd,
-        sandbox: "read-only",
-        approvalPolicy: "always",
+        ...(control
+          ? {}
+          : {
+              sandbox: "read-only" as const,
+              approvalPolicy: "always" as const,
+            }),
+        ...(selected?.[0]
+          ? {
+              providerProfileId: selected[0].providerProfileId,
+              modelId: selected[0].model.id,
+            }
+          : {}),
+        ...(settings.effort ? { reasoningEffort: settings.effort } : {}),
       }),
     );
   }
@@ -479,44 +577,167 @@ export class RemoteHostAccess {
       throw new RemoteHostError("resync_required");
     return thread;
   }
+  #writeAccess(deviceId: string, token: string): boolean {
+    this.authenticate(deviceId, token);
+    const mode =
+      this.#accessMode === "read"
+        ? "read"
+        : this.#devices.get(deviceId)?.access;
+    if (mode === "read") throw new RemoteHostError("operation_forbidden");
+    return mode === "control";
+  }
+  models(deviceId: string, token: string) {
+    this.authenticate(deviceId, token);
+    return this.#appServer.listModels().map((entry) => ({
+      id: `${entry.providerProfileId}::${entry.model.id}`,
+      model: entry.model.id,
+      displayName: entry.model.displayName ?? entry.model.id,
+      isDefault: entry.isDefault,
+      supportedReasoningEfforts: (
+        entry.model.supportedReasoningEfforts ?? []
+      ).map((reasoningEffort) => ({
+        reasoningEffort,
+        description: reasoningEffort,
+      })),
+      defaultReasoningEffort: entry.model.defaultReasoningEffort ?? null,
+    }));
+  }
   async send(
     deviceId: string,
     token: string,
     input: RemoteSend,
-  ): Promise<{ turnId: string }> {
+  ): Promise<{ turnId?: string; queued?: boolean }> {
+    const control = this.#writeAccess(deviceId, token);
     if (
       !validId(input.clientId) ||
       typeof input.text !== "string" ||
-      input.text.length < 1 ||
-      input.text.length > 32_768
+      !input.text ||
+      input.text.length > 32768 ||
+      (input.messageType !== undefined &&
+        !["guidance", "follow_up", "replacement"].includes(input.messageType))
     )
       throw new RemoteHostError("invalid_request");
-    const thread = await this.#thread(
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const thread = await this.#thread(
+        deviceId,
+        token,
+        input.workspaceId,
+        input.threadId,
+      );
+      if (
+        !control &&
+        (thread.sandbox !== "read-only" || thread.approvalPolicy !== "always")
+      )
+        throw new RemoteHostError("operation_forbidden");
+      this.#writeAccess(deviceId, token);
+      const options = {
+        clientId: input.clientId,
+        ...(control
+          ? {}
+          : {
+              requirePermissions: {
+                sandbox: "read-only" as const,
+                approvalPolicy: "always" as const,
+              },
+            }),
+      };
+      try {
+        if (input.messageType === "follow_up") {
+          if (!control) throw new RemoteHostError("operation_forbidden");
+          await this.#appServer.queueMessage(
+            input.threadId,
+            input.text,
+            input.clientId,
+          );
+          return { queued: true };
+        }
+        const active = control
+          ? publicThread(thread).turns.find(
+              (turn) => turn.status === "inProgress",
+            )?.id
+          : undefined;
+        if (active && input.messageType === "replacement") {
+          const result = await this.#appServer.replaceTurn(
+            input.threadId,
+            active,
+            input.text,
+            options,
+          );
+          void result.turn.done.catch(() => undefined);
+          return { turnId: result.turn.id };
+        }
+        const handle = active
+          ? await this.#appServer.steerTurn(
+              input.threadId,
+              active,
+              input.text,
+              options,
+            )
+          : await this.#appServer.startTurn(
+              input.threadId,
+              input.text,
+              options,
+            );
+        void handle.done.catch(() => undefined);
+        return { turnId: handle.id };
+      } catch (error) {
+        if (
+          error instanceof AppServerError &&
+          ["thread_busy", "turn_not_running"].includes(error.code) &&
+          attempt < 7
+        )
+          continue;
+        throw fromAppServer(error);
+      }
+    }
+    throw new RemoteHostError("thread_busy");
+  }
+  async roomRequest(
+    deviceId: string,
+    token: string,
+    operation: "list" | "read" | "post",
+    params: {
+      workspaceId: string;
+      roomId?: string;
+      text?: string;
+      clientId?: string;
+    },
+  ): Promise<unknown> {
+    if (!this.#rooms) throw new RemoteHostError("operation_forbidden");
+    if (operation === "post" && !this.#writeAccess(deviceId, token))
+      throw new RemoteHostError("operation_forbidden");
+    const workspaceCwd = await this.#workspace(
       deviceId,
       token,
-      input.workspaceId,
-      input.threadId,
+      params.workspaceId,
     );
-    if (thread.sandbox !== "read-only" || thread.approvalPolicy !== "always")
-      throw new RemoteHostError("operation_forbidden");
+    const result = await this.#rooms.request(operation, {
+      ...params,
+      workspaceCwd,
+      deviceId,
+    });
     this.authenticate(deviceId, token);
-    try {
-      const handle = await this.#appServer.startTurn(
-        input.threadId,
-        input.text,
-        {
-          clientId: input.clientId,
-          requirePermissions: {
-            sandbox: "read-only",
-            approvalPolicy: "always",
-          },
-        },
-      );
-      void handle.done.catch(() => undefined);
-      return { turnId: handle.id };
-    } catch (error) {
-      throw fromAppServer(error);
-    }
+    return result;
+  }
+  onRoomChange(
+    deviceId: string,
+    token: string,
+    workspaceId: string,
+    listener: (event: { roomId: string; workspaceId: string }) => void,
+  ): () => void {
+    if (!this.#rooms) return () => {};
+    let active = true;
+    const dispose = this.#rooms.subscribe((event) => {
+      void this.#thread(deviceId, token, workspaceId, event.threadId)
+        .then(() => {
+          if (active) listener({ roomId: event.roomId, workspaceId });
+        })
+        .catch(() => {});
+    });
+    return () => {
+      active = false;
+      dispose();
+    };
   }
   async interrupt(
     deviceId: string,
@@ -525,6 +746,7 @@ export class RemoteHostAccess {
     threadId: string,
     expectedTurnId: string,
   ): Promise<{}> {
+    this.#writeAccess(deviceId, token);
     if (!validId(expectedTurnId)) throw new RemoteHostError("invalid_request");
     await this.#thread(deviceId, token, workspaceId, threadId);
     try {
@@ -619,5 +841,5 @@ function fromAppServer(error: unknown): RemoteHostError {
     return new RemoteHostError("stale_turn");
   if (error instanceof AppServerError && error.code === "operation_forbidden")
     return new RemoteHostError("operation_forbidden");
-  return new RemoteHostError("invalid_request");
+  return new RemoteHostError("operation_unknown");
 }

@@ -1,0 +1,86 @@
+.companion-content {
+  padding: 22px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.companion-content h3 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+.companion-content h4 {
+  margin: 0 0 8px;
+  font-size: var(--font-size-label);
+}
+.companion-content p {
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+.companion-content article {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+.companion-content ul {
+  list-style: none;
+  margin: 12px 0;
+  padding: 0;
+}
+.companion-content li {
+  display: grid;
+  gap: 5px;
+  padding: 10px 0;
+}
+.companion-content small,
+.companion-note {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+}
+.companion-content dt {
+  color: var(--color-text-secondary);
+  margin-top: 16px;
+  font-size: var(--font-size-caption);
+}
+.companion-content dd {
+  margin: 6px 0;
+  line-height: 1.5;
+}
+.companion-content button {
+  justify-self: start;
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-main);
+  color: var(--color-text-primary);
+  padding: 7px 10px;
+  border-radius: var(--radius-control);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.companion-content button:hover {
+  background: var(--color-surface-hover);
+}
+.companion-context {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+}
+.companion-context select {
+  min-width: 0;
+  max-width: 100%;
+  background: var(--color-surface-main);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-subtle);
+  padding: 6px;
+  border-radius: var(--radius-control);
+}
+
+.companion-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}

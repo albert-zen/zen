@@ -28,25 +28,31 @@ interface ContentTab {
   icon: IconName;
   path?: string;
   browser?: WorkspaceBrowserTab;
+  render?: () => React.ReactNode;
 }
-export function AuxiliaryPanel({
-  navigate,
-  threadId,
-  title,
-  open,
-  onOpenChange,
-  snapshot,
-  selectedTab,
-  onSelectTab,
-  fileDrafts,
-  workspacePath,
-  openedTabs,
-  onTabsChange,
-  onWidthChange,
-  messageLinkRequest,
-  threadContext,
-  conversation,
-}: {
+export type AuxiliaryConversationContext =
+  | { kind: "thread"; threadId: string }
+  | {
+      kind: "room";
+      roomId: string;
+      resourceThread?: {
+        threadId: string;
+        title: string;
+        workspacePath?: string;
+      };
+    };
+
+export interface AuxiliaryCustomTab {
+  /** The shell namespaces this ID as custom:<id>. */
+  id: string;
+  title: string;
+  icon: IconName;
+  render(): React.ReactNode;
+}
+
+type AuxiliaryPanelProps = {
+  customTabs?: readonly AuxiliaryCustomTab[];
+  contextControl?: React.ReactNode;
   threadContext?: Readonly<Record<string, unknown>>;
   conversation?: {
     threadId: string;
@@ -62,7 +68,6 @@ export function AuxiliaryPanel({
   navigate?(route: string): void;
   fileDrafts?: WorkspaceFileDrafts;
   workspacePath?: string;
-  threadId: string;
   title: string;
   open: boolean | undefined;
   onOpenChange(open: boolean): void;
@@ -71,7 +76,43 @@ export function AuxiliaryPanel({
   onSelectTab(tab: string): void;
   openedTabs?: string[];
   onTabsChange?(tabs: string[]): void;
-}) {
+} & (
+  | { conversationContext: AuxiliaryConversationContext; threadId?: never }
+  | { conversationContext?: undefined; threadId: string }
+);
+
+export function AuxiliaryPanel({
+  navigate,
+  threadId: legacyThreadId,
+  conversationContext,
+  customTabs = [],
+  contextControl,
+  title,
+  open,
+  onOpenChange,
+  snapshot,
+  selectedTab,
+  onSelectTab,
+  fileDrafts,
+  workspacePath: legacyWorkspacePath,
+  openedTabs,
+  onTabsChange,
+  onWidthChange,
+  messageLinkRequest,
+  threadContext,
+  conversation,
+}: AuxiliaryPanelProps) {
+  const roomContext =
+    conversationContext?.kind === "room" ? conversationContext : undefined;
+  // Room identity owns presentation only. Execution APIs always use a real Thread.
+  const threadId = roomContext
+    ? roomContext.resourceThread?.threadId
+    : conversationContext?.kind === "thread"
+      ? conversationContext.threadId
+      : legacyThreadId;
+  const workspacePath = roomContext
+    ? roomContext.resourceThread?.workspacePath
+    : legacyWorkspacePath;
   const [localDrafts] = useState(() => new WorkspaceFileDrafts());
   const drafts = fileDrafts ?? localDrafts;
   const entries = useSyncExternalStore(drafts.subscribe, drafts.snapshot);
@@ -81,6 +122,7 @@ export function AuxiliaryPanel({
   const theme = useAppearance();
   const [width, setWidth] = useState(520);
   const panel = useRef<HTMLElement>(null);
+  const tabRail = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (!panel.current || !onWidthChange) return;
     const measure = () =>
@@ -117,6 +159,7 @@ export function AuxiliaryPanel({
   const [busy, setBusy] = useState(false);
   const mounted = useRef(true);
   const selectionEpoch = useRef(0);
+  const pendingTabFocus = useRef<string | null>(null);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -124,21 +167,28 @@ export function AuxiliaryPanel({
     };
   }, []);
   const browser =
-    snapshot?.plugins.some(
+    threadId !== undefined &&
+    (snapshot?.plugins.some(
       (p) => p.id === "browser" && p.enabled && p.available,
-    ) ?? false;
+    ) ??
+      false);
   const computer =
-    snapshot?.plugins.some(
+    threadId !== undefined &&
+    (snapshot?.plugins.some(
       (p) => p.id === "computer" && p.enabled && p.available,
-    ) ?? false;
-  const panels = [...(snapshot?.panels ?? [])].sort(
+    ) ??
+      false);
+  const panels = [
+    ...(threadId === undefined ? [] : (snapshot?.panels ?? [])),
+  ].sort(
     (a, b) => (a.order ?? 0) - (b.order ?? 0) || a.key.localeCompare(b.key),
   );
   const files = [...entries.entries()].filter(
-    ([key]) => JSON.parse(key)[0] === threadId,
+    ([key]) => threadId !== undefined && JSON.parse(key)[0] === threadId,
   );
   const candidates: ContentTab[] = [
-    ...(conversation
+    ...customTabs.map((tab) => ({ ...tab, id: `custom:${tab.id}` })),
+    ...(conversation && threadId !== undefined
       ? [
           {
             id: `thread:${conversation.threadId}`,
@@ -153,7 +203,10 @@ export function AuxiliaryPanel({
       icon: "file" as const,
       path: draft.base.path,
     })),
-    ...browserTabs.map((tab) => ({
+    ...(threadId !== undefined && browserListThread === threadId
+      ? browserTabs
+      : []
+    ).map((tab) => ({
       id: `browser:${tab.id}`,
       title: tab.title || "New tab",
       icon: "browser" as const,
@@ -189,12 +242,15 @@ export function AuxiliaryPanel({
   ].filter((id) => available.has(id));
   const signature = JSON.stringify(ids);
   const browserListReady =
-    !window.zenx.workspaceBrowser || browserListThread === threadId;
+    threadId === undefined ||
+    !window.zenx.workspaceBrowser ||
+    browserListThread === threadId;
   useEffect(() => {
     if (browserListReady && JSON.stringify(order) !== signature)
       setOrder(JSON.parse(signature));
-    const selectionKnown =
-      selectedTab?.startsWith("file:") || selectedTab?.startsWith("browser:")
+    const selectionKnown = selectedTab?.startsWith("custom:")
+      ? true
+      : selectedTab?.startsWith("file:") || selectedTab?.startsWith("browser:")
         ? browserListReady
         : snapshot !== null;
     if (
@@ -223,13 +279,20 @@ export function AuxiliaryPanel({
   const activeRef = useRef(active);
   const orderRef = useRef(order);
   const threadIdRef = useRef(threadId);
+  const resourceEpoch = useRef(0);
+  if (threadIdRef.current !== threadId) resourceEpoch.current += 1;
   idsRef.current = ids;
   activeRef.current = active;
   orderRef.current = order;
   threadIdRef.current = threadId;
+  const resourceCurrent = (epoch: number, owner: string) =>
+    mounted.current &&
+    threadIdRef.current === owner &&
+    resourceEpoch.current === epoch;
   const showChooser = choosing || tabs.length === 0;
-  const select = (id: string) => {
+  const select = (id: string, focusTab = false) => {
     selectionEpoch.current += 1;
+    pendingTabFocus.current = focusTab ? id : null;
     setChoosing(false);
     setPickingFile(false);
     setError("");
@@ -239,14 +302,59 @@ export function AuxiliaryPanel({
     // Host SDK panel requests can change selection without calling select().
     // Fence pending actions as soon as that external selection is committed.
     selectionEpoch.current += 1;
+    if (pendingTabFocus.current !== selectedTab) pendingTabFocus.current = null;
     setChoosing(false);
     setPickingFile(false);
   }, [selectedTab]);
+  useLayoutEffect(() => {
+    const rail = tabRail.current;
+    if (!rail || !open) return;
+    const reveal = () => {
+      const tab = active ? document.getElementById(`aux-tab-${active}`) : null;
+      const item = tab?.closest<HTMLElement>(".workspace-content-tab");
+      if (!item || !rail.contains(item) || rail.clientWidth <= 0) return;
+      const bounds = item.getBoundingClientRect();
+      const railBounds = rail.getBoundingClientRect();
+      const left = bounds.left - railBounds.left + rail.scrollLeft;
+      const right = bounds.right - railBounds.left + rail.scrollLeft;
+      const visibleEnd = rail.scrollLeft + rail.clientWidth;
+      const next =
+        left < rail.scrollLeft || bounds.width > rail.clientWidth
+          ? left
+          : right > visibleEnd
+            ? right - rail.clientWidth
+            : rail.scrollLeft;
+      rail.scrollLeft = Math.max(
+        0,
+        Math.min(next, rail.scrollWidth - rail.clientWidth),
+      );
+    };
+    reveal();
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(reveal);
+    observer?.observe(rail);
+    return () => observer?.disconnect();
+  }, [active, open, signature, width, expanded]);
+  useLayoutEffect(() => {
+    const target = pendingTabFocus.current;
+    if (target === null || showChooser || active !== target) return;
+    const tab = document.getElementById(`aux-tab-${target}`);
+    if (tab && panel.current?.contains(tab)) {
+      pendingTabFocus.current = null;
+      tab.focus({ preventScroll: true });
+    }
+  }, [active, selectedTab, showChooser, signature]);
   useEffect(() => {
     const api = window.zenx.workspaceBrowser;
     selectionEpoch.current += 1;
     setBrowserListThread(undefined);
     setBrowserTabs([]);
+    setBusy(false);
+    setError("");
+    setPickingFile(false);
+    if (threadId === undefined) return;
     if (!api) {
       setBrowserListThread(threadId);
       return;
@@ -278,6 +386,7 @@ export function AuxiliaryPanel({
   }, [threadId]);
   const add = async (id: string) => {
     const operationEpoch = ++selectionEpoch.current;
+    const bindingEpoch = resourceEpoch.current;
     setError("");
     if (id === "file") {
       setPickingFile(true);
@@ -286,34 +395,36 @@ export function AuxiliaryPanel({
     }
     if (id !== "browser") {
       setOrder([...new Set([...orderRef.current, id])]);
-      select(id);
+      select(id, true);
       return;
     }
     if (!window.zenx.workspaceBrowser) {
       setError("Interactive browsing is available in the ZenX desktop app.");
       return;
     }
+    if (threadId === undefined) return;
     setBusy(true);
     try {
       const value = await window.zenx.workspaceBrowser.command(threadId, "new");
-      if (!mounted.current || threadIdRef.current !== threadId) return;
+      if (!resourceCurrent(bindingEpoch, threadId)) return;
       setBrowserTabs(value);
       if (selectionEpoch.current !== operationEpoch) return;
       const created = value.at(-1);
-      if (created) select(`browser:${created.id}`);
+      if (created) select(`browser:${created.id}`, true);
     } catch (reason) {
-      if (mounted.current && threadIdRef.current === threadId)
+      if (resourceCurrent(bindingEpoch, threadId))
         setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      if (mounted.current && threadIdRef.current === threadId) setBusy(false);
+      if (resourceCurrent(bindingEpoch, threadId)) setBusy(false);
     }
   };
   const openFile = async (path: string) => {
+    if (threadId === undefined) return;
     const operationEpoch = selectionEpoch.current;
+    const bindingEpoch = resourceEpoch.current;
     const value = await window.zenx.workspaceFiles.read(threadId, path);
     if (
-      !mounted.current ||
-      threadIdRef.current !== threadId ||
+      !resourceCurrent(bindingEpoch, threadId) ||
       selectionEpoch.current !== operationEpoch
     )
       return;
@@ -325,7 +436,11 @@ export function AuxiliaryPanel({
   };
   const handledLink = useRef<number | null>(null);
   useEffect(() => {
-    if (!messageLinkRequest || handledLink.current === messageLinkRequest.id)
+    if (
+      threadId === undefined ||
+      !messageLinkRequest ||
+      handledLink.current === messageLinkRequest.id
+    )
       return;
     handledLink.current = messageLinkRequest.id;
     selectionEpoch.current += 1;
@@ -378,8 +493,10 @@ export function AuxiliaryPanel({
   };
   const closeTab = async (tab: ContentTab) => {
     setError("");
+    const bindingEpoch = resourceEpoch.current;
     let operationEpoch: number | undefined;
     if (tab.path) {
+      if (threadId === undefined) return;
       const key = fileDraftKey(threadId, tab.path);
       const draft = drafts.snapshot().get(key);
       if (draft && (isFileDirty(draft) || draft.saving)) {
@@ -395,6 +512,7 @@ export function AuxiliaryPanel({
       }
       drafts.remove(key);
     } else if (tab.browser) {
+      if (threadId === undefined) return;
       operationEpoch = selectionEpoch.current;
       try {
         const value = await window.zenx.workspaceBrowser.command(
@@ -402,11 +520,10 @@ export function AuxiliaryPanel({
           "close",
           tab.browser.id,
         );
-        if (!mounted.current || threadIdRef.current !== threadId) return;
+        if (!resourceCurrent(bindingEpoch, threadId)) return;
         setBrowserTabs(value);
       } catch (reason) {
-        if (mounted.current && threadIdRef.current === threadId)
-          setError(String(reason));
+        if (resourceCurrent(bindingEpoch, threadId)) setError(String(reason));
         return;
       }
     }
@@ -481,7 +598,7 @@ export function AuxiliaryPanel({
       />
       <header className="auxiliary-heading">
         <div className="workspace-tab-rail">
-          <div role="tablist" aria-label="Workspace tabs">
+          <div ref={tabRail} role="tablist" aria-label="Workspace tabs">
             {tabs.map((tab, index) => (
               <span
                 className="workspace-content-tab"
@@ -520,6 +637,7 @@ export function AuxiliaryPanel({
                   <Icon name={tab.icon} />
                   <span>{tab.title}</span>
                   {tab.path &&
+                  threadId !== undefined &&
                   isFileDirty(
                     entries.get(fileDraftKey(threadId, tab.path))!,
                   ) ? (
@@ -535,8 +653,9 @@ export function AuxiliaryPanel({
                   type="button"
                   className="workspace-tab-close"
                   aria-label={`Close tab ${tab.title}`}
+                  title={`Close tab ${tab.title}`}
                   disabled={
-                    tab.path
+                    tab.path && threadId !== undefined
                       ? entries.get(fileDraftKey(threadId, tab.path))
                           ?.closing === true
                       : false
@@ -552,6 +671,7 @@ export function AuxiliaryPanel({
             type="button"
             className="icon-button workspace-add-tab"
             aria-label="New workspace tab"
+            title="New workspace tab"
             aria-pressed={showChooser}
             onClick={() => {
               selectionEpoch.current += 1;
@@ -583,6 +703,9 @@ export function AuxiliaryPanel({
           <Icon name="panel-right" />
         </button>
       </header>
+      {contextControl ? (
+        <div className="auxiliary-context-control">{contextControl}</div>
+      ) : null}
       {error ? (
         <p className="workspace-panel-error" role="alert">
           {error}
@@ -591,68 +714,96 @@ export function AuxiliaryPanel({
       {showChooser ? (
         <div className="auxiliary-content workspace-new-tab">
           {pickingFile ? (
-            <WorkspaceFilePicker
-              threadId={threadId}
-              onOpen={openFile}
-              onBack={() => {
-                selectionEpoch.current += 1;
-                setPickingFile(false);
-              }}
-            />
+            threadId !== undefined ? (
+              <WorkspaceFilePicker
+                threadId={threadId}
+                onOpen={openFile}
+                onBack={() => {
+                  selectionEpoch.current += 1;
+                  setPickingFile(false);
+                }}
+              />
+            ) : null
           ) : (
             <div className="workspace-tab-types" aria-label="New tab type">
               <header>
-                <h3>Open beside this conversation</h3>
-                <p>Files, pages and observations share this workspace.</p>
+                <h3>
+                  {roomContext
+                    ? "Open beside this Room"
+                    : "Open beside this conversation"}
+                </h3>
+                <p>
+                  {roomContext
+                    ? roomContext.resourceThread
+                      ? `Conversation resources use ${roomContext.resourceThread.title}.`
+                      : "Choose a Room member to enable conversation resources."
+                    : "Files, pages and observations share this workspace."}
+                </p>
               </header>
-              <button type="button" onClick={() => void add("file")}>
-                <Icon name="file" />
-                <span>
-                  <strong>File</strong>
-                  <small>Read or edit a file in this project</small>
-                </span>
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void add("browser")}
-              >
-                <Icon name="browser" />
-                <span>
-                  <strong>Browser</strong>
-                  <small>Browse a shared page with the agent</small>
-                </span>
-              </button>
-              {computer ? (
-                <button type="button" onClick={() => void add("computer")}>
-                  <Icon name="computer" />
-                  <span>
-                    <strong>Computer</strong>
-                    <small>Observe the agent’s desktop activity</small>
-                  </span>
-                </button>
-              ) : null}
-              {browser ? (
-                <button type="button" onClick={() => void add("attached")}>
-                  <Icon name="browser" />
-                  <span>
-                    <strong>Attached browser</strong>
-                    <small>Inspect connected browser activity</small>
-                  </span>
-                </button>
-              ) : null}
-              {panels.map((panel) => (
+              {customTabs.map((tab) => (
                 <button
                   type="button"
-                  key={panel.key}
-                  onClick={() => void add(`plugin:${panel.key}`)}
+                  key={`custom:${tab.id}`}
+                  onClick={() => void add(`custom:${tab.id}`)}
                 >
-                  <Icon name="layers" />
+                  <Icon name={tab.icon} />
                   <span>
-                    <strong>{panel.title}</strong>
+                    <strong>{tab.title}</strong>
                   </span>
                 </button>
               ))}
+              {threadId !== undefined ? (
+                <>
+                  <button type="button" onClick={() => void add("file")}>
+                    <Icon name="file" />
+                    <span>
+                      <strong>File</strong>
+                      <small>Read or edit a file in this project</small>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void add("browser")}
+                  >
+                    <Icon name="browser" />
+                    <span>
+                      <strong>Browser</strong>
+                      <small>Browse a shared page with the agent</small>
+                    </span>
+                  </button>
+                  {computer ? (
+                    <button type="button" onClick={() => void add("computer")}>
+                      <Icon name="computer" />
+                      <span>
+                        <strong>Computer</strong>
+                        <small>Observe the agent’s desktop activity</small>
+                      </span>
+                    </button>
+                  ) : null}
+                  {browser ? (
+                    <button type="button" onClick={() => void add("attached")}>
+                      <Icon name="browser" />
+                      <span>
+                        <strong>Attached browser</strong>
+                        <small>Inspect connected browser activity</small>
+                      </span>
+                    </button>
+                  ) : null}
+                  {panels.map((panel) => (
+                    <button
+                      type="button"
+                      key={panel.key}
+                      onClick={() => void add(`plugin:${panel.key}`)}
+                    >
+                      <Icon name="layers" />
+                      <span>
+                        <strong>{panel.title}</strong>
+                      </span>
+                    </button>
+                  ))}
+                </>
+              ) : null}
             </div>
           )}
         </div>
@@ -670,6 +821,7 @@ export function AuxiliaryPanel({
             hidden={!visible}
           >
             {conversation &&
+            threadId !== undefined &&
             tab.id === `thread:${conversation.threadId}` &&
             open &&
             visible ? (
@@ -680,6 +832,7 @@ export function AuxiliaryPanel({
                     type="button"
                     className="icon-button"
                     aria-label="Open conversation full screen"
+                    title="Open conversation full screen"
                     onClick={() =>
                       navigate?.(
                         `/threads/${encodeURIComponent(conversation.threadId)}`,
@@ -692,7 +845,8 @@ export function AuxiliaryPanel({
                 {conversation.render(conversation.threadId)}
               </div>
             ) : null}
-            {tab.path ? (
+            {tab.render ? tab.render() : null}
+            {tab.path && threadId !== undefined ? (
               <WorkspaceFilesPanel
                 threadId={threadId}
                 drafts={drafts}
@@ -701,20 +855,20 @@ export function AuxiliaryPanel({
                 standalone
               />
             ) : null}
-            {tab.browser && visible ? (
+            {tab.browser && threadId !== undefined && visible ? (
               <WorkspaceBrowserPanel
                 threadId={threadId}
                 tab={tab.browser}
                 open={open === true}
               />
             ) : null}
-            {tab.id === "computer" ? (
+            {tab.id === "computer" && threadId !== undefined ? (
               <ComputerThreadPanel
                 threadId={threadId}
                 active={open === true && visible}
               />
             ) : null}
-            {tab.id === "attached" ? (
+            {tab.id === "attached" && threadId !== undefined ? (
               <BrowserThreadPanel
                 threadId={threadId}
                 title={title}
@@ -724,7 +878,7 @@ export function AuxiliaryPanel({
                 providerRevision={snapshot}
               />
             ) : null}
-            {panel && snapshot ? (
+            {panel && snapshot && threadId !== undefined ? (
               <GenericPluginUiHost
                 key={panel.key}
                 className="auxiliary-plugin"
@@ -732,7 +886,13 @@ export function AuxiliaryPanel({
                 snapshot={snapshot}
                 pluginId={panel.pluginId}
                 surfaceId={panel.surfaceId}
-                context={{ ...threadContext, route: "agent", threadId }}
+                context={{
+                  ...threadContext,
+                  active: open === true && visible,
+                  route: roomContext ? "room" : "agent",
+                  threadId,
+                  ...(roomContext ? { roomId: roomContext.roomId } : {}),
+                }}
                 theme={theme}
                 executeCommand={window.zenx.plugins.executeCommand}
                 readHandle={window.zenx.plugins.readHandle}

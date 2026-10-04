@@ -1,6 +1,6 @@
 {
   "name": "@zenx/imzenx-plugin",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Connect IM conversations to the same local ZenX App Server",
   "type": "module",
   "files": [

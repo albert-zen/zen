@@ -15,6 +15,7 @@ import { Icon } from "../icons.js";
 interface Choice {
   value: string;
   label: ReactNode;
+  title?: string;
   disabled?: boolean;
   group?: string;
 }
@@ -35,6 +36,7 @@ function choices(children: ReactNode, group?: string): Choice[] {
         children?: ReactNode;
         disabled?: boolean;
         label?: string;
+        title?: string;
       }>(child)
     )
       return [];
@@ -43,6 +45,7 @@ function choices(children: ReactNode, group?: string): Choice[] {
         {
           value: String(child.props.value ?? ""),
           label: child.props.children,
+          title: child.props.title,
           disabled: child.props.disabled,
           group,
         },
@@ -296,7 +299,7 @@ export function Combobox({
   const filtered = items.filter(
     (item) =>
       !item.disabled &&
-      `${choiceText(item.label)} ${item.group ?? ""} ${item.value}`
+      `${choiceText(item.label)} ${item.group ?? ""} ${item.value} ${item.title ?? ""}`
         .toLocaleLowerCase()
         .includes(query.toLocaleLowerCase()),
   );
@@ -322,7 +325,10 @@ export function Combobox({
           data-value={value}
           disabled={disabled}
           aria-label={label}
-          title={choiceText(items.find((item) => item.value === value)?.label)}
+          title={
+            items.find((item) => item.value === value)?.title ??
+            choiceText(items.find((item) => item.value === value)?.label)
+          }
           aria-describedby={`${id}-value`}
           aria-haspopup="listbox"
           onKeyDown={(event) => {
@@ -412,6 +418,8 @@ export function Combobox({
               id={`${id}-${index}`}
               role="option"
               data-value={item.value}
+              title={item.title}
+              aria-label={item.title}
               aria-selected={item.value === value}
               data-highlighted={cursor === index ? "" : undefined}
               className="ui-select-option"

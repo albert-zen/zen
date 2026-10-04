@@ -482,3 +482,120 @@ test("an unfragmentable public metadata entry fails explicitly instead of claimi
     await f.close();
   }
 });
+
+test("explicit Fleet grants survive Host recreation and revocation persists without storing bearer plaintext", async () => {
+  const f = await fixture();
+  const file = path.join(f.a, "device-grants.json");
+  const options = {
+    appServer: f.host,
+    hostId: "stable-host",
+    grantFile: file,
+    access: "control" as const,
+    workspaces: () => [{ id: "a", cwd: f.a, label: "A" }],
+  };
+  let access = new RemoteHostAccess(options);
+  try {
+    const paired = await access.pair({
+      hostId: "stable-host",
+      deviceId: "desktop-b",
+      code: access.createPairingCode(),
+    });
+    access.close();
+    access = new RemoteHostAccess(options);
+    assert.equal(
+      (await access.hello("desktop-b", paired.token, "stable-host", 1)).hostId,
+      "stable-host",
+    );
+    const thread = await access.create("desktop-b", paired.token, "a");
+    const sent = await access.send("desktop-b", paired.token, {
+      workspaceId: "a",
+      threadId: thread.id,
+      clientId: "fleet-message",
+      text: "hello",
+    });
+    assert.ok(sent.turnId);
+    const { readFile } = await import("node:fs/promises");
+    assert.ok(!(await readFile(file, "utf8")).includes(paired.token));
+    access.revoke("desktop-b");
+    access.close();
+    access = new RemoteHostAccess(options);
+    await assert.rejects(
+      access.hello("desktop-b", paired.token, "stable-host", 1),
+      /revoked/,
+    );
+  } finally {
+    access.close();
+    await f.close();
+  }
+});
+
+test("read-only Fleet grant rejects creation and sending even if local Host is full-access", async () => {
+  const f = await fixture();
+  const access = new RemoteHostAccess({
+    appServer: f.host,
+    hostId: "read-host",
+    access: "read",
+    workspaces: () => [{ id: "a", cwd: f.a, label: "A" }],
+  });
+  try {
+    const paired = await access.pair({
+      hostId: "read-host",
+      deviceId: "reader",
+      code: access.createPairingCode(),
+    });
+    await errorCode(
+      () => access.create("reader", paired.token, "a"),
+      "operation_forbidden",
+    );
+    const thread = await f.host.startThread({ cwd: f.a });
+    await errorCode(
+      () =>
+        access.send("reader", paired.token, {
+          workspaceId: "a",
+          threadId: thread.id,
+          clientId: "no-write",
+          text: "hello",
+        }),
+      "operation_forbidden",
+    );
+  } finally {
+    access.close();
+    await f.close();
+  }
+});
+
+test("client read-only enrollment narrows a control Host grant at the server", async () => {
+  const f = await fixture();
+  const access = new RemoteHostAccess({
+    appServer: f.host,
+    hostId: "read-host",
+    access: "control",
+    workspaces: () => [{ id: "a", cwd: f.a, label: "A" }],
+  });
+  try {
+    const paired = await access.pair({
+      hostId: "read-host",
+      deviceId: "reader",
+      access: "read",
+      code: access.createPairingCode(),
+    });
+    await errorCode(
+      () => access.create("reader", paired.token, "a"),
+      "operation_forbidden",
+    );
+    const thread = await f.host.startThread({ cwd: f.a });
+    await errorCode(
+      () =>
+        access.send("reader", paired.token, {
+          workspaceId: "a",
+          threadId: thread.id,
+          clientId: "no-write",
+          text: "hello",
+        }),
+      "operation_forbidden",
+    );
+  } finally {
+    access.close();
+    await f.close();
+  }
+});

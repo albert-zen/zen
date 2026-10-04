@@ -1,3 +1,4 @@
+import { attachPawPipe, type PawRequest } from "./paw-pipe.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -6,6 +7,11 @@ import type { ZenXPluginHostSdkV1 } from "@zenx/plugin-sdk";
 
 export interface ImZenXHost {
   readonly dataDirectory: string;
+  pawRequest?(
+    cwd: string,
+    operation: Parameters<PawRequest>[0],
+    params: Parameters<PawRequest>[1],
+  ): Promise<unknown>;
   isServerReady(): boolean;
   onServerStatus(listener: () => void): () => void;
   readConnection(): Promise<{
@@ -42,6 +48,7 @@ export class ImZenXRuntime {
   #config: Configuration | undefined;
   #child: ChildProcessWithoutNullStreams | undefined;
   #unsubscribe: (() => void) | undefined;
+  #detachPaw: (() => void) | undefined;
   #queue: Promise<unknown> = Promise.resolve();
   #closed = false;
   #activated = false;
@@ -181,6 +188,15 @@ export class ImZenXRuntime {
         this.#error =
           "IM Gateway exited. Check configuration, then Connect again.";
       });
+      this.#detachPaw = attachPawPipe(
+        child,
+        async (operation, params) => {
+          if (!this.#host.pawRequest)
+            throw new Error("PAW Rooms unavailable on this Host");
+          return this.#host.pawRequest(config.cwd, operation, params);
+        },
+        () => this.#child === child && !this.#closed,
+      );
       const ready = waitForReady(child);
       child.stdin.write(
         JSON.stringify({
@@ -218,6 +234,8 @@ export class ImZenXRuntime {
 
   async #stop(): Promise<void> {
     const child = this.#child;
+    this.#detachPaw?.();
+    this.#detachPaw = undefined;
     this.#child = undefined;
     if (
       child === undefined ||

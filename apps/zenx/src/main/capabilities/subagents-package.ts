@@ -92,8 +92,12 @@ export class ZenXSubagentsCapabilityPackage implements ZenXCapabilityPackage {
       };
     }
     const mode = args.mode;
-    if (mode !== "fresh" && mode !== "fork")
-      throw new Error("mode must be fresh or fork");
+    if (mode !== "fresh" && mode !== "fork" && mode !== "side-chat")
+      throw new Error("mode must be fresh, fork, or side-chat");
+    if (mode === "side-chat" && args.task !== undefined)
+      throw new Error(
+        "Side chat creation waits for an explicit user request; task is not allowed",
+      );
     const title =
       args.title === undefined ? undefined : string(args.title, "title", 256);
     const task =

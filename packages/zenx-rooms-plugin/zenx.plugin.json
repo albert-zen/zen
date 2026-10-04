@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "zenx-rooms",
   "name": "Rooms",
-  "version": "1.0.3",
+  "version": "1.0.5",
   "description": "Manage shared ZenX Room collaboration.",
   "compatibility": {
     "zenx": ">=0.1.0 <0.2.0"
@@ -11,7 +11,7 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "Use Rooms to manage shared collaboration and explicit member routing.",
+  "mainDocument": "Use Rooms for shared communication. PAW workspace/read/update tools maintain bounded editable planning annotations with revision CAS; inspect real Thread/Trigger status separately. No mutable notes are injected into context without explicit reads.",
   "storageVersion": 1,
   "provider": {
     "id": "zenx-automation-service",
@@ -201,6 +201,10 @@
           "operationId": {
             "type": "string",
             "maxLength": 512
+          },
+          "replyToMessageId": {
+            "type": "string",
+            "maxLength": 512
           }
         },
         "required": ["roomId", "text"],
@@ -228,6 +232,10 @@
           "text": {
             "type": "string",
             "maxLength": 8000
+          },
+          "replyToMessageId": {
+            "type": "string",
+            "maxLength": 512
           }
         },
         "required": ["roomId", "operationId", "text"],
@@ -244,8 +252,14 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "roomId": { "type": "string", "maxLength": 512 },
-          "operationId": { "type": "string", "maxLength": 512 }
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "operationId": {
+            "type": "string",
+            "maxLength": 512
+          }
         },
         "required": ["roomId", "operationId"],
         "additionalProperties": false
@@ -368,7 +382,268 @@
       "permissions": ["zenx-rooms.read"],
       "interactionMode": "background_safe",
       "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 524288
+    },
+    {
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536,
+      "name": "zenx_rooms_create_assistant",
+      "description": "Trusted UI only: create a single-member Always On Assistant preset Room and its input Trigger. Setup does not start a Turn; future human messages can start model execution.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "members": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                "threadId": {
+                  "type": "string",
+                  "maxLength": 512
+                }
+              },
+              "required": ["name", "threadId"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["name", "members"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536,
+      "name": "zenx_rooms_assistant_replies",
+      "description": "Trusted UI only: pause or enable future assistant replies. Does not interrupt already admitted work.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": ["roomId", "enabled"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "zenx_rooms_workspace",
+      "description": "Explicitly read a PAW Room planning notebook. Editable matters, memory and exact references are annotations, not live execution status.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": ["roomId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
       "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_rooms_update_workspace",
+      "description": "Replace PAW planning annotations only if expectedRevision matches. Host validates bounded UTF-8, uniqueness, exact references and total 40 KiB. Re-read and deliberately merge after conflict. Does not execute resources or create Triggers.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "matters": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "plan": {
+                  "type": "string",
+                  "maxLength": 2000
+                },
+                "statusNote": {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                "notes": {
+                  "type": "string",
+                  "maxLength": 4000
+                },
+                "references": {
+                  "type": "array",
+                  "maxItems": 32,
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": ["thread"]
+                          },
+                          "device": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "workspace": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4096
+                          },
+                          "threadId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "label": {
+                            "type": "string",
+                            "maxLength": 256
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "device",
+                          "workspace",
+                          "threadId",
+                          "label"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": ["trigger"]
+                          },
+                          "triggerId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "label": {
+                            "type": "string",
+                            "maxLength": 256
+                          }
+                        },
+                        "required": ["kind", "triggerId", "label"],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "title",
+                "plan",
+                "statusNote",
+                "notes",
+                "references"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "memory": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "text": {
+                  "type": "string",
+                  "maxLength": 4000
+                }
+              },
+              "required": ["id", "title", "text"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["roomId", "expectedRevision", "matters", "memory"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_rooms_react",
+      "description": "Set or remove your own reaction on a retained Room message. Does not start a Turn.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "messageId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "emoji": {
+            "enum": ["👍", "❤️", "🎉", "👀", "✅", "🤔", null]
+          }
+        },
+        "required": ["roomId", "messageId", "emoji"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 524288
     }
   ],
   "ui": {
@@ -476,6 +751,31 @@
         "id": "messages",
         "title": "Read bounded Room messages page.",
         "tool": "zenx_rooms_messages"
+      },
+      {
+        "id": "create-assistant",
+        "title": "Create an Always On Assistant conversation",
+        "tool": "zenx_rooms_create_assistant"
+      },
+      {
+        "id": "assistant-replies",
+        "title": "Change future assistant replies",
+        "tool": "zenx_rooms_assistant_replies"
+      },
+      {
+        "id": "workspace",
+        "title": "Read PAW planning notebook",
+        "tool": "zenx_rooms_workspace"
+      },
+      {
+        "id": "update-workspace",
+        "title": "Save PAW planning notebook with revision check",
+        "tool": "zenx_rooms_update_workspace"
+      },
+      {
+        "id": "react",
+        "title": "Set a Room message reaction",
+        "tool": "zenx_rooms_react"
       }
     ]
   }

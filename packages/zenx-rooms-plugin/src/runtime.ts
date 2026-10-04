@@ -13,6 +13,8 @@ export interface RoomMember {
 }
 
 export interface RoomMessage {
+  replyTo?: { messageId: string; author: string; text: string };
+  reactions?: Array<{ actorId: string; label: string; emoji: string }>;
   id: string;
   roomId: string;
   author: string;
@@ -33,6 +35,7 @@ export interface RoomOperation {
 }
 
 export interface Room {
+  assistant?: { threadId: string; triggerId: string };
   id: string;
   name: string;
   members: RoomMember[];
@@ -42,18 +45,68 @@ export interface Room {
   createdAt: number;
 }
 
+// Plugin service JSON contract. The Host validates and commits annotations.
+export type AssistantReference =
+  | {
+      kind: "thread";
+      device: string;
+      workspace: string;
+      threadId: string;
+      label: string;
+    }
+  | { kind: "trigger"; triggerId: string; label: string };
+export interface AssistantMatter {
+  id: string;
+  title: string;
+  plan: string;
+  statusNote: string;
+  notes: string;
+  references: AssistantReference[];
+}
+export interface AssistantMemory {
+  id: string;
+  title: string;
+  text: string;
+}
+export interface AssistantWorkspace {
+  revision: number;
+  updatedAt: number;
+  matters: AssistantMatter[];
+  memory: AssistantMemory[];
+}
+export interface UpdateAssistantWorkspaceInput {
+  roomId: string;
+  expectedRevision: number;
+  matters: AssistantMatter[];
+  memory: AssistantMemory[];
+}
+
 export interface ZenXRoomsTrustedService {
+  assistantWorkspace?(roomId: string): AssistantWorkspace;
+  updateAssistantWorkspace?(
+    input: UpdateAssistantWorkspaceInput,
+  ): Promise<AssistantWorkspace>;
+  createAssistantRoom?(input: {
+    name: string;
+    members: RoomMember[];
+  }): Promise<Room>;
+  setAssistantReplies?(roomId: string, enabled: boolean): Promise<void>;
   createRoom(input: { name: string; members: RoomMember[] }): Promise<Room>;
   renameRoom(roomId: string, name: string): Promise<void>;
   deleteRoom(roomId: string): Promise<void>;
   addRoomMember(roomId: string, member: RoomMember): Promise<void>;
   removeRoomMember(roomId: string, threadId: string): Promise<void>;
-  postAgentRoomMessage(roomId: string, text: string): Promise<void>;
+  postAgentRoomMessage(
+    roomId: string,
+    text: string,
+    replyToMessageId?: string,
+  ): Promise<void>;
   postRoomMessage?(roomId: string, author: string, text: string): Promise<void>;
   prepareRoomMessage?(
     roomId: string,
     operationId: string,
     text: string,
+    replyToMessageId?: string,
   ): Promise<RoomOperation>;
   postPreparedRoomMessage?(
     roomId: string,
@@ -66,11 +119,17 @@ export interface ZenXRoomsTrustedService {
   ): Promise<unknown>;
   roomOperation?(roomId: string, operationId: string): unknown;
   roomDelivery?(roomId: string, messageId: string): unknown;
+  reactRoomMessage?(
+    roomId: string,
+    messageId: string,
+    emoji: string | null,
+  ): Promise<RoomMessage>;
   wakeupsEnabled?(): boolean;
   acknowledgeRoomOperation?(roomId: string, operationId: string): Promise<void>;
   snapshot(): {
     rooms: Room[];
     triggers?: Array<{
+      id?: string;
       active: boolean;
       kind: string;
       threadId: string;
@@ -126,6 +185,31 @@ export function createZenXTrustedPlugin(
           : null;
       const args = uiInput ?? invocation.arguments;
       switch (toolName) {
+        case "zenx_rooms_workspace":
+          fields(args, ["roomId"]);
+          if (!service.assistantWorkspace)
+            throw Error("PAW workspace service unavailable");
+          return service.assistantWorkspace(
+            string(args, "roomId", MAX_ID_BYTES),
+          );
+        case "zenx_rooms_update_workspace": {
+          fields(args, ["roomId", "expectedRevision", "matters", "memory"]);
+          if (!service.updateAssistantWorkspace)
+            throw Error("PAW workspace service unavailable");
+          if (
+            !Number.isSafeInteger(args["expectedRevision"]) ||
+            Number(args["expectedRevision"]) < 0 ||
+            !Array.isArray(args["matters"]) ||
+            !Array.isArray(args["memory"])
+          )
+            throw Error("Invalid PAW workspace update fields or revision");
+          return await service.updateAssistantWorkspace({
+            roomId: string(args, "roomId", MAX_ID_BYTES),
+            expectedRevision: Number(args["expectedRevision"]),
+            matters: args["matters"] as AssistantMatter[],
+            memory: args["memory"] as AssistantMemory[],
+          });
+        }
         case "zenx_rooms_list": {
           const state = service.snapshot();
           const cursor = Number(args["cursor"] ?? 0);
@@ -136,13 +220,32 @@ export function createZenXTrustedPlugin(
             rooms: state.rooms.slice(cursor, cursor + 1).map((room) => ({
               ...readSafeRoom(room),
               messageCount: room.messages.length,
-              messages: room.messages.slice(-1).map((message) => ({
-                ...message,
-                text: Array.from(message.text).slice(0, 120).join(""),
-              })),
+              messages: room.messages
+                .slice(-1)
+                .map(
+                  ({
+                    replyTo: _replyTo,
+                    reactions: _reactions,
+                    ...message
+                  }) => ({
+                    ...message,
+                    text: Array.from(message.text).slice(0, 120).join(""),
+                  }),
+                ),
               ...(uiInput === null
                 ? {}
                 : {
+                    assistantRepliesEnabled: room.assistant
+                      ? (service.wakeupsEnabled?.() ?? false) &&
+                        state.triggers?.some(
+                          (t) =>
+                            t.active &&
+                            t.kind === "roomMention" &&
+                            t.threadId === room.assistant!.threadId &&
+                            t.room?.roomId === room.id &&
+                            t.id === room.assistant!.triggerId,
+                        ) === true
+                      : undefined,
                     operationEpoch: room.operationEpoch ?? "legacy",
                     pendingCount: (room.operations ?? []).filter(
                       (operation) => !operation.acknowledged,
@@ -177,7 +280,16 @@ export function createZenXTrustedPlugin(
             .rooms.find((entry) => entry.id === roomId);
           if (!room) throw new Error("Room was not found");
           const end = Math.max(0, room.messages.length - cursor);
-          const start = Math.max(0, end - 4);
+          let start = end;
+          while (start > 0 && end - start < 4) {
+            const bytes = new TextEncoder().encode(
+              JSON.stringify(room.messages.slice(start - 1, end)),
+            ).byteLength;
+            // Usually keep pages under 60 KiB. One reaction-heavy message may
+            // exceed that target, but never split or truncate its body.
+            if (start < end && bytes > 60 * 1024) break;
+            start -= 1;
+          }
           return {
             roomId,
             messages: room.messages.slice(start, end),
@@ -218,7 +330,19 @@ export function createZenXTrustedPlugin(
             string(args, "roomId", MAX_ID_BYTES),
             string(args, "operationId", MAX_ID_BYTES),
             string(args, "text", MAX_MESSAGE_TEXT_BYTES),
+            args["replyToMessageId"] === undefined
+              ? undefined
+              : string(args, "replyToMessageId", MAX_ID_BYTES),
           );
+        case "zenx_rooms_react":
+          if (!service.reactRoomMessage)
+            throw new Error("Room reactions unavailable");
+          const updatedMessage = await service.reactRoomMessage(
+            string(args, "roomId", MAX_ID_BYTES),
+            string(args, "messageId", MAX_ID_BYTES),
+            args["emoji"] === null ? null : string(args, "emoji", 32),
+          );
+          return { updated: true, message: updatedMessage };
         case "zenx_rooms_cancel_prepared":
           if (uiInput === null || !service.cancelPreparedRoomOperation)
             throw new Error("Trusted Room UI required");
@@ -248,6 +372,23 @@ export function createZenXTrustedPlugin(
             string(args, "operationId", MAX_ID_BYTES),
           );
           return { acknowledged: true };
+        case "zenx_rooms_create_assistant":
+          if (uiInput === null || !service.createAssistantRoom)
+            throw new Error("Trusted Room UI required");
+          return await service.createAssistantRoom({
+            name: string(args, "name", MAX_ROOM_NAME_BYTES),
+            members: members(args["members"]),
+          });
+        case "zenx_rooms_assistant_replies":
+          if (uiInput === null || !service.setAssistantReplies)
+            throw new Error("Trusted Room UI required");
+          if (typeof args["enabled"] !== "boolean")
+            throw new Error("enabled must be boolean");
+          await service.setAssistantReplies(
+            string(args, "roomId", MAX_ID_BYTES),
+            args["enabled"],
+          );
+          return { updated: true };
         case "zenx_rooms_create":
           return await service.createRoom({
             name: string(args, "name", MAX_ROOM_NAME_BYTES),
@@ -292,7 +433,13 @@ export function createZenXTrustedPlugin(
               messageId: operation.messageId,
             };
           }
-          await service.postAgentRoomMessage(roomId, text);
+          await service.postAgentRoomMessage(
+            roomId,
+            text,
+            args["replyToMessageId"] === undefined
+              ? undefined
+              : string(args, "replyToMessageId", MAX_ID_BYTES),
+          );
           return { posted: true };
         }
         default:
@@ -325,6 +472,7 @@ function members(value: unknown): RoomMember[] {
 
 function readSafeRoom(room: Room) {
   return {
+    ...(room.assistant ? { assistant: { ...room.assistant } } : {}),
     id: room.id,
     name: room.name,
     createdAt: room.createdAt,
@@ -333,6 +481,10 @@ function readSafeRoom(room: Room) {
       threadId: member.threadId,
     })),
     messages: room.messages.slice(-50).map((message) => ({
+      ...(message.replyTo === undefined ? {} : { replyTo: message.replyTo }),
+      ...(message.reactions === undefined
+        ? {}
+        : { reactions: message.reactions }),
       id: message.id,
       roomId: message.roomId,
       author: message.author,
@@ -365,4 +517,8 @@ function record(value: unknown): Readonly<Record<string, unknown>> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Readonly<Record<string, unknown>>)
     : null;
+}
+function fields(args: Readonly<Record<string, unknown>>, allowed: string[]) {
+  if (Object.keys(args).some((key) => !allowed.includes(key)))
+    throw Error("Unknown PAW workspace input field");
 }

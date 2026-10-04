@@ -19,6 +19,11 @@ const thread = readFileSync(
   "utf8",
 );
 
+const composer = readFileSync(
+  new URL("../src/renderer/src/Composer.tsx", import.meta.url),
+  "utf8",
+);
+
 function rule(selector, last = false) {
   const start = last
     ? css.lastIndexOf(`\n${selector} {`)
@@ -83,8 +88,11 @@ test("overflow track begins on straight edge while the total editor height remai
     rule(".composer > textarea"),
     /max-height: max\(36px, min\(136px, calc\(35vh - 14px\)\)\);/u,
   );
-  assert.match(thread, /const style = window\.getComputedStyle\(textarea\);/u);
-  assert.match(thread, /Number\.parseFloat\(style\.minHeight\)/u);
+  assert.match(
+    composer,
+    /const style = window\.getComputedStyle\(textarea\);/u,
+  );
+  assert.match(composer, /Number\.parseFloat\(style\.minHeight\)/u);
   assert.match(rule(".composer-rail"), /min-height: 50px;/u);
   assert.match(rule(".composer", false), /border-radius: 22px;/u);
   assert.match(css, /  \.composer \{\s*border-radius: 20px;/u);
