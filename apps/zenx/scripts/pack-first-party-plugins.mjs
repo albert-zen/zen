@@ -34,7 +34,7 @@ export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
     "@zenx/imzenx-plugin",
     "zenx-imzenx-plugin",
-    "zenx-imzenx-plugin-1.0.0.tgz",
+    "zenx-imzenx-plugin-1.0.1.tgz",
   ),
   plugin(
     "@zenx/browser-plugin",

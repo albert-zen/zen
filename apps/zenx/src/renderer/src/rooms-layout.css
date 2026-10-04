@@ -357,3 +357,26 @@
 .room-reaction-options button[aria-pressed="true"] {
   background: var(--surface-active);
 }
+
+/* Conversation tools stay compact; the selected conversation already owns the app title. */
+.rooms-chat-header {
+  min-height: 44px;
+  padding: 6px 20px;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.rooms-chat-header > div {
+  flex: 1;
+}
+.rooms-chat-header > button {
+  width: 32px;
+  height: 32px;
+  padding: 7px;
+  justify-content: center;
+}
+@media (pointer: coarse) {
+  .rooms-chat-header > button {
+    width: 44px;
+    height: 44px;
+  }
+}

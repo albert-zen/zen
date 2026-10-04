@@ -170,7 +170,7 @@ function navigationRoom(value: unknown): RoomConversation {
       !text(candidate.threadId, 512) ||
       !text(candidate.triggerId, 512)
     )
-      throw new Error("Invalid companion identity");
+      throw new Error("Invalid PAW identity");
     assistant = {
       threadId: candidate.threadId,
       triggerId: candidate.triggerId,
@@ -220,13 +220,15 @@ export function RoomConversationNavigation({
 }) {
   const groups = [
     {
-      label: "Companions",
+      label: "PAW",
+      displayKind: "PAW",
       kind: "companion",
       rooms: rooms.filter((room) => room.assistant !== undefined),
       icon: "conversation" as const,
     },
     {
       label: "Rooms",
+      displayKind: "room",
       kind: "room",
       rooms: rooms.filter((room) => room.assistant === undefined),
       icon: "users" as const,
@@ -249,8 +251,8 @@ export function RoomConversationNavigation({
             <button
               type="button"
               className="room-conversation-create"
-              aria-label={`New ${group.kind}`}
-              title={`New ${group.kind}`}
+              aria-label={`New ${group.displayKind}`}
+              title={`New ${group.displayKind}`}
               onClick={() => onOpen(`${ROOM_ROUTE}?create=${group.kind}`)}
             >
               <Icon name="plus" size={13} />
@@ -261,7 +263,7 @@ export function RoomConversationNavigation({
               type="button"
               className="room-conversation-row"
               key={room.id}
-              aria-label={`Open ${group.kind} ${room.name}`}
+              aria-label={`Open ${group.displayKind} ${room.name}`}
               aria-current={
                 selectedRoomId === room.id &&
                 selectedPage.split(/[?#]/u, 1)[0] === ROOM_ROUTE
@@ -286,7 +288,7 @@ export function RoomConversationNavigation({
           {group.rooms.length === 0 && !loading && error === null ? (
             <p className="room-conversation-empty">
               {group.kind === "companion"
-                ? "Your companion conversations"
+                ? "Your PAW conversations"
                 : "Your shared conversations"}
             </p>
           ) : null}

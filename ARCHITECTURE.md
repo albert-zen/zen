@@ -1109,3 +1109,7 @@ Models cannot invoke trusted-only setup/pause commands.
 Room delivered receipts derive from committed Room messages; read receipts derive from exact bound-Thread `userMessage.clientId` admission, including the existing ordered steer anchor, never from queued input or provider acknowledgments. The UI explains read as harness-context admission. Reads do not schedule work and no direct Thread messages are mirrored into Room history. Missing or expired observation stays unconfirmed.
 
 Room quotes are immutable bounded snapshots of a same-Room message captured with the prepared send operation; operation identity binds both text and quote target. Reactions are Room-domain annotations with one chosen emoji per Host-derived actor; setting the same reaction is idempotent, and reactions never wake an Agent. Both use the existing serialized Room storage, with optional fields for older profiles.
+
+### IMZenX PAW Room routes
+
+IMZenX may explicitly bind an external IM conversation to an existing PAW Room in its configured workspace; a bounded private child-pipe adapter invokes the existing Room service, and the SDK delivers only explicit Room posts, keeping direct working-Thread output separate. The adapter stores route selection and projection checkpoints, never a second transcript or Agent runtime; normal Thread subscriptions remain a separate mode. The PAW product label preserves existing assistant/companion serialization and user-chosen names.

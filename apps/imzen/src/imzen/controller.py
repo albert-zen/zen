@@ -199,6 +199,21 @@ class ImZenController:
             ImZenXSlashController(self._presenter) if subscription_commands else SlashController()
         )
 
+    def register_command_names(self, names: Mapping[str, str]) -> None:
+        """Include product wrapper commands in the shared prefix namespace."""
+        self._command_names.update(names)
+
+    def resolve_command_name(self, name: str) -> tuple[str, ...]:
+        return resolve_command_name(
+            name, self._command_names, allow_unique_prefix=self._allow_unique_prefix
+        )
+
+    def present_response(self, message: InboundMessage, text: str) -> OutboundMessage:
+        return self._presenter.response(message, text)
+
+    async def clear_thread(self, message: InboundMessage, actions: ControllerActions) -> str:
+        return await self._clear_thread(message, actions)
+
     async def handle(
         self,
         message: InboundMessage,
@@ -209,9 +224,7 @@ class ImZenController:
             if command is None:
                 await self._ensure_thread(message, actions)
                 return None
-            candidates = resolve_command_name(
-                command.name, self._command_names, allow_unique_prefix=self._allow_unique_prefix
-            )
+            candidates = self.resolve_command_name(command.name)
             if len(candidates) > 1:
                 choices = ", ".join("/" + name for name in candidates)
                 return (

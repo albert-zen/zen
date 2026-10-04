@@ -7,7 +7,7 @@ import { JSDOM } from "jsdom";
 import { CompanionWorkspace } from "../src/renderer/src/companion-workspace.js";
 import { WorkspaceFileDrafts } from "../src/renderer/src/workspace-file-drafts.js";
 
-test("Companion exposes explicit notes, exact local references and truthful unconfigured heartbeat without starting work", async () => {
+test("PAW exposes explicit notes, exact local references and truthful unconfigured heartbeat without starting work", async () => {
   const dom = new JSDOM('<div id="root"></div>', {
     url: "http://localhost",
     pretendToBeVisual: true,
@@ -92,6 +92,11 @@ test("Companion exposes explicit notes, exact local references and truthful unco
     await act(async () =>
       root.render(React.createElement(CompanionWorkspace, props)),
     );
+    assert.equal(
+      document.querySelector(".companion-content h3")?.textContent,
+      "PAW",
+    );
+    assert.match(document.body.textContent ?? "", /Creating a PAW/);
     assert.match(
       document.body.textContent ?? "",
       /No recurring check configured/,

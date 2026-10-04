@@ -403,14 +403,6 @@ export function Sidebar({
           className="sidebar-scroll"
           aria-labelledby="sidebar-thread-list-heading"
         >
-          {roomConversations === undefined ? null : (
-            <RoomConversationNavigation
-              {...roomConversations}
-              selectedRoomId={selectedRoomId}
-              selectedPage={selectedPage}
-              onOpen={onOpenContribution}
-            />
-          )}
           <PluginSpaces
             contributions={
               roomConversations === undefined
@@ -422,6 +414,14 @@ export function Sidebar({
             onOpen={onOpenContribution}
             selectedPage={selectedPage}
           />
+          {roomConversations === undefined ? null : (
+            <RoomConversationNavigation
+              {...roomConversations}
+              selectedRoomId={selectedRoomId}
+              selectedPage={selectedPage}
+              onOpen={onOpenContribution}
+            />
+          )}
 
           <div className="sidebar-view-head">
             {mode === "projects" ? (

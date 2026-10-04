@@ -783,7 +783,7 @@ async function postTrustedHuman(
   );
 }
 
-test("normal bundled profile upgrades 1.0.3 to Companion notebook tools without losing Room data", async () => {
+test("normal bundled profile upgrades 1.0.3 to PAW notebook tools without losing Room data", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-rooms-upgrade-"),
   );

@@ -209,7 +209,7 @@ export function CompanionWorkspace({
   };
   const facts = (
     <>
-      <h3>Companion</h3>
+      <h3>PAW</h3>
       <p>
         An ongoing assistant using Rooms, Triggers and Fleet. Its working thread
         keeps the execution history.
@@ -264,9 +264,9 @@ export function CompanionWorkspace({
         connected without copying every message between them.
       </p>
       <p className="companion-note">
-        Creating a Companion enables message wakeups only. Configure recurring
-        checks in Automations when needed; they can consume model quota. Reading
-        this workspace does not start agent work.
+        Creating a PAW enables message wakeups only. Configure recurring checks
+        in Automations when needed; they can consume model quota. Reading this
+        workspace does not start agent work.
       </p>
     </>
   );
@@ -334,8 +334,7 @@ export function CompanionWorkspace({
                   <p>Loading…</p>
                 ) : notebook.matters.length === 0 ? (
                   <p>
-                    No matters recorded yet. Ask your companion to track
-                    something.
+                    No matters recorded yet. Ask your PAW to track something.
                   </p>
                 ) : (
                   notebook.matters.map((m) => (
