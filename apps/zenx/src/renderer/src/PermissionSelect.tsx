@@ -1,18 +1,24 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import { Popover, PopoverTrigger, PopoverContent } from "./ui/controls.js";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
 import { Icon } from "./icons.js";
 
-export const permissionLabels: Record<FilePermissionMode, string> = {
-  "read-only": "Read only",
-  "workspace-write": "Workspace write",
-  "danger-full-access": "Full access",
-};
-const permissionDescriptions: Record<FilePermissionMode, string> = {
-  "read-only": "Read files without changing them",
-  "workspace-write": "Edit files inside this project",
-  "danger-full-access": "Run tools and edit files without approval",
-};
+export function permissionLabels(): Record<FilePermissionMode, string> {
+  return {
+    "read-only": i18n.t("shell:readOnly"),
+    "workspace-write": i18n.t("shell:workspaceWrite"),
+    "danger-full-access": i18n.t("shell:fullAccess"),
+  };
+}
+function permissionDescriptions(): Record<FilePermissionMode, string> {
+  return {
+    "read-only": i18n.t("shell:readFilesWithoutChangingThem"),
+    "workspace-write": i18n.t("shell:editFilesInsideThisProject"),
+    "danger-full-access": i18n.t("shell:runToolsAndEditFilesWithoutApproval"),
+  };
+}
 export function PermissionSelect({
   errorId = "composer-permission-error",
   value,
@@ -30,7 +36,10 @@ export function PermissionSelect({
   error?: string | null;
   onChange?(mode: FilePermissionMode): void;
 }) {
+  useTranslation("shell");
   const [open, setOpen] = useState(false);
+  const labels = permissionLabels();
+  const descriptions = permissionDescriptions();
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -64,15 +73,17 @@ export function PermissionSelect({
             ref={triggerRef}
             className="composer-model-trigger permission-trigger"
             type="button"
-            aria-label="File permissions"
+            aria-label={i18n.t("shell:filePermissions")}
             aria-haspopup="menu"
             aria-expanded={open}
             aria-describedby={error ? errorId : undefined}
             disabled={unavailable}
             title={
               disabled
-                ? "Wait for the current operation to finish before changing permissions"
-                : "File permissions for this thread"
+                ? i18n.t(
+                    "shell:waitForTheCurrentOperationToFinishBeforeChangingPermissions",
+                  )
+                : i18n.t("shell:filePermissionsForThisThread")
             }
             onClick={() => (open ? close() : setOpen(true))}
             onKeyDown={(event) => {
@@ -83,10 +94,10 @@ export function PermissionSelect({
           >
             <span role={switching ? "status" : undefined}>
               {switching
-                ? "Saving…"
+                ? i18n.t("shell:saving")
                 : legacyApproval
-                  ? "Approval required"
-                  : permissionLabels[value]}
+                  ? i18n.t("shell:approvalRequired")
+                  : labels[value]}
             </span>
             <Icon name="chevron-down" size={12} />
           </button>
@@ -104,7 +115,7 @@ export function PermissionSelect({
           }}
           onCloseAutoFocus={(event) => event.preventDefault()}
           role="menu"
-          aria-label="File permissions"
+          aria-label={i18n.t("shell:filePermissions")}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.preventDefault();
@@ -138,7 +149,7 @@ export function PermissionSelect({
             items[next]?.focus();
           }}
         >
-          {Object.entries(permissionLabels).map(([mode, label]) => (
+          {Object.entries(labels).map(([mode, label]) => (
             <button
               key={mode}
               type="button"
@@ -152,9 +163,7 @@ export function PermissionSelect({
             >
               <span>
                 <strong>{label}</strong>
-                <small>
-                  {permissionDescriptions[mode as FilePermissionMode]}
-                </small>
+                <small>{descriptions[mode as FilePermissionMode]}</small>
               </span>
               {!legacyApproval && mode === value ? (
                 <Icon name="check" size={13} />
@@ -163,7 +172,7 @@ export function PermissionSelect({
           ))}
           {legacyApproval || value !== "danger-full-access" ? (
             <p className="composer-menu-note">
-              Actions outside these limits require approval.
+              {i18n.t("shell:actionsOutsideTheseLimitsRequireApproval")}
             </p>
           ) : null}
         </PopoverContent>

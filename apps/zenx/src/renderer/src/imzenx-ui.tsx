@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import { Dialog, Select } from "./ui/controls.js";
 import {
   createContext,
@@ -64,15 +66,15 @@ const empty: Configuration = {
   permissionMode: "approval-required",
   allowUnrestrictedFullAccess: false,
 };
-const states: Record<string, string> = {
-  unconfigured: "尚未配置",
-  prepared: "准备已保存，等待连接",
-  "waiting-for-activation": "等待插件启动",
-  "waiting-for-zas": "等待 ZenX Agent 服务",
-  starting: "正在连接",
-  connected: "本机连接进程运行中",
-  failed: "连接失败",
-  stopped: "已停止",
+const stateKeys: Record<string, string> = {
+  unconfigured: "notConfigured",
+  prepared: "imPreparedWaitingToConnect",
+  "waiting-for-activation": "waitingForPluginActivation",
+  "waiting-for-zas": "waitingForZenxAgentService",
+  starting: "connecting",
+  connected: "imLocalConsumerRunning",
+  failed: "connectionFailed",
+  stopped: "stopped",
 };
 export function registerImZenXUi(registry: PluginUiRegistry): () => void {
   return registry.registerTrusted("zenx/bundled/imzenx-ui", {
@@ -124,6 +126,7 @@ function OwnImSetup({
   onBusy(busy: boolean): void;
   onDirty(dirty: boolean): void;
 }) {
+  useTranslation("panels");
   const [snapshot, setSnapshot] = useState<OwnImSnapshot | null>(null);
   const [channelId, setChannelId] = useState("");
   const [values, setValues] = useState<OwnImChannel["values"]>({});
@@ -133,7 +136,9 @@ function OwnImSetup({
   const [busy, setBusy] = useState<string | null>("inspect");
   const busyRef = useRef(true);
   const [dirty, setDirty] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<
+    { key: string } | { message: string } | null
+  >(null);
   const [notice, setNotice] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const mounted = useRef(false);
@@ -193,7 +198,7 @@ function OwnImSetup({
         if (mounted.current) applySnapshot(result);
       })
       .catch(() => {
-        if (mounted.current) setError("无法读取本机 IM 设置，请重试");
+        if (mounted.current) setError({ key: "imReadSettingsFailed" });
       })
       .finally(() => {
         busyRef.current = false;
@@ -238,11 +243,12 @@ function OwnImSetup({
         setSnapshot(result);
         if (result.runtime.prepared) {
           callbacks.current.onApply(result);
-          setNotice("运行环境已准备。保存频道后再检查连接准备情况。");
+          setNotice("imRuntimePreparedNotice");
         } else
           setError(
-            result.runtime.error ??
-              "运行环境未准备完成，请检查可信项目与私有仓库访问后重试",
+            result.runtime.error
+              ? { message: result.runtime.error }
+              : { key: "imRuntimePreparationIncomplete" },
           );
       } else if (action === "save") {
         const channel = snapshot!.channels.find(
@@ -274,7 +280,7 @@ function OwnImSetup({
         if (!mounted.current) return;
         applySnapshot(result);
         callbacks.current.onApply(result);
-        setNotice("频道设置已安全保存，连接尚未启动");
+        setNotice("imChannelSavedNotice");
       } else {
         const result = await api.inspect();
         if (mounted.current) {
@@ -287,10 +293,10 @@ function OwnImSetup({
       if (mounted.current)
         setError(
           action === "save"
-            ? "频道设置未保存。检查本机安全存储与必填项后重试；新凭证需要重新输入。"
+            ? { key: "imChannelSaveFailed" }
             : action === "runtime"
-              ? "运行环境未准备完成。检查可信项目与私有仓库访问后重试。"
-              : "无法读取本机 IM 设置，请重试",
+              ? { key: "imRuntimePreparationFailed" }
+              : { key: "imReadSettingsFailed" },
         );
     } finally {
       busyRef.current = false;
@@ -304,15 +310,15 @@ function OwnImSetup({
   return (
     <section
       className="imzenx-connection imzenx-routing imzenx-own-setup"
-      aria-label="设置自己的 IM"
+      aria-label={i18n.t("panels:imOwnSetup")}
     >
-      <h3>设置自己的 IM</h3>
+      <h3>{i18n.t("panels:imOwnSetup")}</h3>
       <p className="imzenx-hint">
-        凭证由这个本机表单直接交给系统安全存储，不进入 Agent 工具或聊天。
+        {i18n.t("panels:imCredentialStorageNotice")}
       </p>
       {error ? (
         <p className="imzenx-error" role="alert">
-          {error}
+          {"key" in error ? i18n.t(`panels:${error.key}`) : error.message}
         </p>
       ) : null}
       {snapshot ? (
@@ -320,10 +326,10 @@ function OwnImSetup({
           <div className="imzenx-runtime-setup">
             <span role="status">
               {snapshot.runtime.prepared
-                ? "运行环境已准备"
+                ? i18n.t("panels:imRuntimePrepared")
                 : snapshot.runtime.preparing || busy === "runtime"
-                  ? "正在准备运行环境…"
-                  : "需要准备运行环境"}
+                  ? i18n.t("panels:imPreparingRuntime")
+                  : i18n.t("panels:imRuntimePreparationRequired")}
             </span>
             <button
               className="secondary-button"
@@ -331,12 +337,13 @@ function OwnImSetup({
               disabled={disabled || busy !== null || snapshot.runtime.preparing}
               onClick={() => void run("runtime")}
             >
-              {busy === "runtime" ? "准备中…" : "准备运行环境"}
+              {busy === "runtime"
+                ? i18n.t("panels:imPreparing")
+                : i18n.t("panels:imPrepareRuntime")}
             </button>
           </div>
           <p className="imzenx-hint">
-            此操作会从可信的 IMZen
-            项目安装锁定依赖，需要当前用户已有的私有仓库访问权限。
+            {i18n.t("panels:imRuntimeInstallNotice")}
           </p>
           <p className="imzenx-hint">
             {snapshot.runtime.source}{" "}
@@ -345,16 +352,16 @@ function OwnImSetup({
               target="_blank"
               rel="noreferrer"
             >
-              uv 官方安装说明
+              {i18n.t("panels:imUvInstallationGuide")}
             </a>
           </p>
           {!snapshot.encryptionAvailable ? (
             <p role="alert" className="imzenx-storage-warning">
-              系统安全存储不可用，无法保存频道凭证。恢复安全存储后重新读取设置。
+              {i18n.t("panels:imSecureStorageUnavailable")}
             </p>
           ) : null}
           <label className="field">
-            <span>IM 渠道</span>
+            <span>{i18n.t("panels:imChannel")}</span>
             <Select
               value={channelId}
               disabled={
@@ -377,8 +384,11 @@ function OwnImSetup({
                   value={entry.id}
                   disabled={!entry.supported}
                 >
-                  {entry.label}
-                  {!entry.supported ? "（当前 SDK 不支持表单）" : ""}
+                  {entry.supported
+                    ? entry.label
+                    : i18n.t("panels:imUnsupportedChannel", {
+                        channel: entry.label,
+                      })}
                 </option>
               ))}
             </Select>
@@ -387,7 +397,7 @@ function OwnImSetup({
             .filter((entry) => !entry.supported && entry.prerequisite)
             .map((entry) => (
               <p key={entry.id} className="imzenx-hint">
-                {entry.label}：{entry.prerequisite}
+                {entry.label}: {entry.prerequisite}
               </p>
             ))}
           {channel?.supported ? (
@@ -420,10 +430,10 @@ function OwnImSetup({
                           ) : (
                             <span className="imzenx-secret-state">
                               {secretOperations[field.key] === "clear"
-                                ? "保存后清除"
+                                ? i18n.t("panels:imSecretWillClear")
                                 : channel.secretConfigured[field.key]
-                                  ? "已安全保存"
-                                  : "尚未设置"}
+                                  ? i18n.t("panels:imSecretStored")
+                                  : i18n.t("panels:imSecretNotSet")}
                             </span>
                           )}
                         </label>
@@ -440,7 +450,9 @@ function OwnImSetup({
                               markDirty();
                             }}
                           >
-                            更换 {field.label}
+                            {i18n.t("panels:imReplaceCredential", {
+                              field: field.label,
+                            })}
                           </button>
                           <button
                             className="imzenx-text-button"
@@ -454,7 +466,9 @@ function OwnImSetup({
                               markDirty();
                             }}
                           >
-                            清除 {field.label}
+                            {i18n.t("panels:imClearCredential", {
+                              field: field.label,
+                            })}
                           </button>
                         </div>
                       </div>
@@ -528,35 +542,34 @@ function OwnImSetup({
                       setNotice(null);
                     }}
                   >
-                    取消修改
+                    {i18n.t("panels:imCancelChanges")}
                   </button>
                   <button
                     type="submit"
                     className="primary-button"
                     disabled={!snapshot.encryptionAvailable || !dirty}
                   >
-                    保存频道
+                    {i18n.t("panels:imSaveChannel")}
                   </button>
                 </div>
               </fieldset>
             </form>
           ) : (
             <p className="imzenx-hint">
-              准备运行环境后读取 SDK
-              声明的字段；未声明字段的渠道不能在此表单配置。
+              {i18n.t("panels:imDeclaredFieldsNotice")}
             </p>
           )}
         </>
       ) : (
         <p role="status">
           {busy === "inspect"
-            ? "正在读取本机 IM 设置…"
-            : "本机 IM 设置暂不可用"}
+            ? i18n.t("panels:imReadingSettings")
+            : i18n.t("panels:imSettingsUnavailable")}
         </p>
       )}
       {notice ? (
         <p className="imzenx-notice" role="status">
-          {notice}
+          {i18n.t(`panels:${notice}`)}
         </p>
       ) : null}
       <button
@@ -565,12 +578,13 @@ function OwnImSetup({
         disabled={disabled || busy !== null}
         onClick={() => void run("inspect")}
       >
-        重新读取设置
+        {i18n.t("panels:imReloadSettings")}
       </button>
     </section>
   );
 }
 export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
+  useTranslation("panels");
   const sdkRef = useRef(sdk);
   useEffect(() => {
     sdkRef.current = sdk;
@@ -705,7 +719,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
     setReadiness(null);
     setConnectOpen(false);
     setSingleConsumerConfirmed(false);
-    setNotice("配置已修改，请重新检查准备情况");
+    setNotice("imReadinessChanged");
   }, [status]);
   const run = async (
     command: "status" | "readiness" | "prepare" | "connect",
@@ -736,14 +750,14 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
       if (command === "readiness") {
         if (revision.current === savedRevision)
           setReadiness({ value: value as Readiness, revision: savedRevision });
-        else setNotice("配置已修改，请重新检查准备情况");
+        else setNotice("imConfigurationEditedNotice");
       } else {
         if (request === statusVersion.current) setStatus(value as Status);
         if (command === "prepare") {
           setReadiness(null);
           setConnectOpen(false);
           setSingleConsumerConfirmed(false);
-          setNotice("准备已保存。完成本机私有凭证设置后，检查并明确连接。");
+          setNotice("imPreparationSavedNotice");
           if (revision.current === savedRevision) {
             dirtyRef.current = false;
             setDirty(false);
@@ -797,17 +811,20 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
           <Icon name="imzenx" size={24} />
         </span>
         <div>
-          <h2>IM 连接</h2>
-          <p>选择本机运行环境、工作目录与自己的私有频道配置。</p>
+          <h2>{i18n.t("panels:imConnection")}</h2>
+          <p>{i18n.t("panels:imSetupDescription")}</p>
         </div>
       </header>
-      <section className="imzenx-connection" aria-label="连接概览">
+      <section
+        className="imzenx-connection"
+        aria-label={i18n.t("panels:connectionOverview")}
+      >
         <div className="imzenx-connection-top">
           <div className="imzenx-endpoint">
             <Icon name="terminal" size={20} />
             <div>
-              <h3>本机 ZenX Agent</h3>
-              <p>使用当前 ZenX 的会话服务</p>
+              <h3>{i18n.t("panels:localZenxAgent")}</h3>
+              <p>{i18n.t("panels:usesTheCurrentZenxConversationService")}</p>
             </div>
           </div>
           <span
@@ -816,28 +833,35 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
             role="status"
           >
             <span aria-hidden="true" />
-            {status ? (states[status.state] ?? status.state) : "正在读取…"}
+            {status
+              ? stateKeys[status.state]
+                ? i18n.t(`panels:${stateKeys[status.state]}`)
+                : status.state
+              : i18n.t("panels:loading")}
           </span>
         </div>
         {error || status?.error ? (
           <p className="imzenx-error" role="alert">
-            {error ?? status?.error}
+            {error ===
+            "IM settings changed after readiness was reviewed. Check readiness, confirm other bot consumers are stopped, then Connect again."
+              ? i18n.t("panels:imReadinessChanged")
+              : (error ?? status?.error)}
           </p>
         ) : null}
         {pendingConnection ? (
           <p className="imzenx-active-note">
-            当前连接仍使用此前的运行配置。新保存的准备配置或频道设置会在明确连接后使用。
+            {i18n.t("panels:imPendingConfigurationNotice")}
           </p>
         ) : null}
         <div className="imzenx-connection-bottom">
-          <span>本机进程状态不能证明 QQ 等渠道已完成真实消息投递</span>
+          <span>{i18n.t("panels:imDeliveryVerificationNotice")}</span>
           <button
             className="imzenx-text-button"
             type="button"
             disabled={busy}
             onClick={() => void run("status")}
           >
-            刷新状态
+            {i18n.t("panels:refreshStatus")}
           </button>
         </div>
       </section>
@@ -880,21 +904,23 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
           />
           <section
             className="imzenx-connection imzenx-routing"
-            aria-label="选择工作目录"
+            aria-label={i18n.t("panels:imChooseWorkingDirectory")}
           >
-            <h3>工作目录</h3>
+            <h3>{i18n.t("panels:imWorkingDirectory")}</h3>
             <p className="imzenx-hint">
-              IM 中的新会话与 PAW 列表使用这个目录。
+              {i18n.t("panels:imWorkspaceDescription")}
             </p>
             <div className="imzenx-workspace-choice">
-              <span title={config.cwd}>{config.cwd || "尚未选择"}</span>
+              <span title={config.cwd}>
+                {config.cwd || i18n.t("panels:imNotSelected")}
+              </span>
               <button
                 className="secondary-button"
                 type="button"
                 disabled={busy}
                 onClick={() => setPickingWorkspace(true)}
               >
-                选择工作目录
+                {i18n.t("panels:imChooseWorkingDirectory")}
               </button>
             </div>
           </section>
@@ -923,13 +949,13 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
         <summary>
           <Icon name="settings" size={18} />
           <span>
-            连接配置
+            {i18n.t("panels:imConnectionConfiguration")}
             <small>
               {dirty
-                ? "有未保存的修改"
+                ? i18n.t("panels:imUnsavedChanges")
                 : status?.configuration
-                  ? "准备配置已保存"
-                  : "选择运行环境与频道文件"}
+                  ? i18n.t("panels:imPreparationConfigurationSaved")
+                  : i18n.t("panels:imChooseRuntimeAndChannelFile")}
             </small>
           </span>
           <Icon name="chevron-down" className="imzenx-disclosure" />
@@ -944,9 +970,12 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
             <div className="imzenx-form-grid">
               {(
                 [
-                  ["pythonExecutable", "Python 可执行文件"],
-                  ["channelsConfigFile", "自己的私有频道配置文件"],
-                  ["cwd", "工作目录"],
+                  ["pythonExecutable", i18n.t("panels:pythonExecutable")],
+                  [
+                    "channelsConfigFile",
+                    i18n.t("panels:imPrivateChannelConfigurationFile"),
+                  ],
+                  ["cwd", i18n.t("panels:imWorkingDirectory")],
                 ] as const
               ).map(([key, label]) => (
                 <label className="field" key={key}>
@@ -962,14 +991,13 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
               ))}
             </div>
             <p className="imzenx-hint">
-              使用绝对路径和自己的 IMZen
-              格式配置。这里只填写路径；凭证值在本机私有文件中设置。
+              {i18n.t("panels:imPrivatePathNotice")}
             </p>
             <details>
-              <summary>高级设置</summary>
+              <summary>{i18n.t("panels:advancedSettings")}</summary>
               <div className="imzenx-form-grid">
                 <label className="field">
-                  <span>图片共享目录（可选）</span>
+                  <span>{i18n.t("panels:sharedImageDirectoryOptional")}</span>
                   <input
                     value={config.sharedFilesystemRoot}
                     onChange={(event) =>
@@ -981,7 +1009,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
                   />
                 </label>
                 <label className="field">
-                  <span>新会话执行权限</span>
+                  <span>{i18n.t("panels:newConversationPermissions")}</span>
                   <Select
                     value={config.permissionMode}
                     onValueChange={(value) =>
@@ -992,8 +1020,12 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
                       })
                     }
                   >
-                    <option value="full-access">Full access</option>
-                    <option value="approval-required">执行前审批</option>
+                    <option value="full-access">
+                      {i18n.t("panels:fullAccess")}
+                    </option>
+                    <option value="approval-required">
+                      {i18n.t("panels:requireApprovalBeforeExecution")}
+                    </option>
                   </Select>
                 </label>
                 <label className="imzenx-checkbox">
@@ -1007,18 +1039,24 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
                       })
                     }
                   />
-                  <span>允许未配置用户／会话白名单的频道使用 Full access</span>
+                  <span>
+                    {i18n.t(
+                      "panels:allowChannelsWithoutAUserConversationAllowlist",
+                    )}
+                  </span>
                 </label>
               </div>
             </details>
             <div className="imzenx-save">
-              <span>保存准备不会启动或重启连接</span>
+              <span>{i18n.t("panels:imPreparationDoesNotConnect")}</span>
               <button
                 className="primary-button"
                 type="submit"
                 disabled={busy || !pathsComplete}
               >
-                {operation === "prepare" ? "保存中…" : "保存准备"}
+                {operation === "prepare"
+                  ? i18n.t("panels:saving")
+                  : i18n.t("panels:imSavePreparation")}
               </button>
             </div>
           </fieldset>
@@ -1026,24 +1064,26 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
       </details>
       <section
         className="imzenx-connection imzenx-routing imzenx-readiness"
-        aria-label="连接前准备"
+        aria-label={i18n.t("panels:imConnectionReadiness")}
       >
-        <h3>连接前准备</h3>
+        <h3>{i18n.t("panels:imConnectionReadiness")}</h3>
         <p className="imzenx-hint">
           {nativeApi
-            ? "保存频道并选择工作目录后，保存准备、检查，再明确确认连接。"
-            : "检查所选路径，保存准备，再在本机完成私有凭证设置。缺少 SDK 时，按检查结果从可信的 IMZen 项目准备环境，再重新检查。"}
+            ? i18n.t("panels:imNativePreparationSteps")
+            : i18n.t("panels:imManualPreparationSteps")}
         </p>
         {currentReadiness ? (
           <>
             <p role="status">
               {currentReadiness.ready
-                ? "本机准备检查通过，可以确认连接"
-                : "还有准备步骤需要完成"}
+                ? i18n.t("panels:imReadinessPassed")
+                : i18n.t("panels:imReadinessIncomplete")}
             </p>
             {currentReadiness.enabledChannels.length ? (
               <p className="imzenx-hint">
-                启用的渠道：{currentReadiness.enabledChannels.join("、")}
+                {i18n.t("panels:imEnabledChannels", {
+                  channels: currentReadiness.enabledChannels.join(", "),
+                })}
               </p>
             ) : null}
             <ul className="imzenx-checks">
@@ -1051,10 +1091,10 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
                 <li key={check.id} data-status={check.status}>
                   <span className="imzenx-check-status">
                     {check.status === "ready"
-                      ? "就绪"
+                      ? i18n.t("panels:imCheckReady")
                       : check.status === "blocked"
-                        ? "需处理"
-                        : "注意"}
+                        ? i18n.t("panels:imCheckBlocked")
+                        : i18n.t("panels:imCheckWarning")}
                   </span>
                   <div>
                     <p>{check.message}</p>
@@ -1069,23 +1109,25 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
         ) : (
           <p className="imzenx-hint">
             {pathsComplete
-              ? "检查只读取明确选择的配置，不启动渠道连接"
+              ? i18n.t("panels:imReadinessDoesNotConnect")
               : nativeApi
-                ? "先准备运行环境、保存自己的频道，并选择工作目录"
-                : "先展开连接配置，填写运行环境、工作目录与私有频道文件路径"}
+                ? i18n.t("panels:imPrepareNativeBeforeReadiness")
+                : i18n.t("panels:imFillPathsBeforeReadiness")}
           </p>
         )}
         {notice ? (
           <p className="imzenx-notice" role="status">
-            {notice}
+            {i18n.t(`panels:${notice}`)}
           </p>
         ) : null}
         {currentReadiness?.ready && !saved ? (
-          <p className="imzenx-hint">先保存当前准备配置，再确认连接</p>
+          <p className="imzenx-hint">
+            {i18n.t("panels:imSavePreparationBeforeConnect")}
+          </p>
         ) : null}
         {nativeDirty ? (
           <p className="imzenx-hint">
-            先保存或取消频道表单中的修改，再检查连接准备情况
+            {i18n.t("panels:imSaveChannelBeforeReadiness")}
           </p>
         ) : null}
         <div className="imzenx-actions">
@@ -1096,7 +1138,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
               disabled={busy || !pathsComplete || nativeDirty}
               onClick={() => void run("prepare")}
             >
-              保存准备
+              {i18n.t("panels:imSavePreparation")}
             </button>
           ) : null}
           <button
@@ -1105,7 +1147,9 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
             disabled={busy || !pathsComplete || nativeDirty}
             onClick={() => void run("readiness")}
           >
-            {operation === "readiness" ? "检查中…" : "检查准备情况"}
+            {operation === "readiness"
+              ? i18n.t("panels:imCheckingReadiness")
+              : i18n.t("panels:imCheckReadiness")}
           </button>
           <button
             className="primary-button"
@@ -1117,12 +1161,12 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
               setConnectOpen(true);
             }}
           >
-            {operation === "connect" ? "连接中…" : "确认连接…"}
+            {operation === "connect"
+              ? i18n.t("panels:imConnecting")
+              : i18n.t("panels:imConfirmConnection")}
           </button>
         </div>
-        <p className="imzenx-hint">
-          连接后，在机器人聊天中实际收发一条消息，确认渠道可用。
-        </p>
+        <p className="imzenx-hint">{i18n.t("panels:imVerifyActualDelivery")}</p>
       </section>
       <Dialog
         open={connectOpen}
@@ -1130,13 +1174,11 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
           setConnectOpen(open);
           if (!open) setSingleConsumerConfirmed(false);
         }}
-        title="确认唯一机器人连接"
+        title={i18n.t("panels:imSingleConsumerTitle")}
         className="imzenx-connect-dialog"
       >
-        <h3>确认唯一机器人连接</h3>
-        <p>
-          请只选择一个进程消费这个机器人的消息。连接前，停止其他使用同一机器人账号的进程。
-        </p>
+        <h3>{i18n.t("panels:imSingleConsumerTitle")}</h3>
+        <p>{i18n.t("panels:imSingleConsumerInstruction")}</p>
         <p className="imzenx-hint">{config.channelsConfigFile}</p>
         <label className="imzenx-checkbox">
           <input
@@ -1146,12 +1188,10 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
               setSingleConsumerConfirmed(event.target.checked)
             }
           />
-          <span>
-            我确认 ZenX 是这个机器人唯一选定的消费进程，其他机器人消费进程已停止
-          </span>
+          <span>{i18n.t("panels:imSingleConsumerConfirmation")}</span>
         </label>
         <p className="imzenx-hint">
-          这是你的确认；准备检查无法验证其他进程是否已停止。
+          {i18n.t("panels:imSingleConsumerVerificationLimit")}
         </p>
         <div className="imzenx-actions">
           <button
@@ -1162,7 +1202,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
               setSingleConsumerConfirmed(false);
             }}
           >
-            取消
+            {i18n.t("panels:cancel")}
           </button>
           <button
             className="primary-button"
@@ -1176,35 +1216,30 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
               void run("connect");
             }}
           >
-            连接
+            {i18n.t("panels:imConnectButton")}
           </button>
         </div>
       </Dialog>
       <section
         className="imzenx-connection imzenx-routing"
-        aria-label="选择对话方式"
+        aria-label={i18n.t("panels:chooseAConversationMode")}
       >
-        <h3>选择对话方式</h3>
-        <p className="imzenx-hint">
-          在 IM 中发送 /paws 查看这个工作目录下的 PAW，再用 /paw
-          选择。你发的消息进入 PAW 聊天室，只接收它主动发到聊天室的回复。
-        </p>
-        <p className="imzenx-hint">
-          /threads 和 /pick
-          继续直接工作会话；这个模式会同步该线程的模型回复。/new 清除选择。PAW
-          模式目前支持文字，平台原生已读、引用和表情取决于后续渠道适配。
-        </p>
+        <h3>{i18n.t("panels:chooseAConversationMode")}</h3>
+        <p className="imzenx-hint">{i18n.t("panels:imPawInstructions")}</p>
+        <p className="imzenx-hint">{i18n.t("panels:imThreadInstructions")}</p>
       </section>
       <section className="imzenx-guide" aria-labelledby="imzenx-guide-title">
         <div className="imzenx-section-heading">
-          <h3 id="imzenx-guide-title">从 IM 开始</h3>
-          <span>在机器人聊天中发送</span>
+          <h3 id="imzenx-guide-title">{i18n.t("panels:getStartedInIm")}</h3>
+          <span>{i18n.t("panels:sendInTheBotChat")}</span>
         </div>
         <div className="imzenx-quickstart">
           <Icon name="compose" size={18} />
           <p>
-            先选择 PAW 聊天室或工作会话。
-            <span>没有选择时，直接发消息会新建工作会话。</span>
+            {i18n.t("panels:firstChooseAPawRoomOrWork")}
+            <span>
+              {i18n.t("panels:withoutASelectionSendingAMessageCreates")}
+            </span>
           </p>
         </div>
         <dl className="imzenx-commands">
@@ -1212,41 +1247,43 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
             <dt>
               <code>/paws</code>
             </dt>
-            <dd>查看工作目录下的 PAW</dd>
+            <dd>{i18n.t("panels:listPawsInTheWorkingDirectory")}</dd>
           </div>
           <div>
             <dt>
               <code>
-                /paw <span>列表序号或 ID</span>
+                /paw <span>{i18n.t("panels:listNumberOrId")}</span>
               </code>
             </dt>
-            <dd>选择 PAW 聊天室；不带参数查看当前选择</dd>
+            <dd>{i18n.t("panels:chooseAPawRoomOmitTheArgument")}</dd>
           </div>
           <div>
             <dt>
               <code>/threads</code>
             </dt>
-            <dd>查看会话列表</dd>
+            <dd>{i18n.t("panels:listConversations")}</dd>
           </div>
           <div>
             <dt>
               <code>
-                /pick <span>列表序号</span>
+                /pick <span>{i18n.t("panels:listNumber")}</span>
               </code>
             </dt>
-            <dd>选择会话并接收回复</dd>
+            <dd>{i18n.t("panels:chooseAConversationAndReceiveReplies")}</dd>
           </div>
           <div>
             <dt>
               <code>/new</code>
             </dt>
-            <dd>清除选择，下条消息新建会话</dd>
+            <dd>{i18n.t("panels:clearTheSelectionTheNextMessageCreates")}</dd>
           </div>
         </dl>
       </section>
       <footer className="imzenx-footer">
         <Icon name="imzenx" />
-        <span>关闭窗口仍保持连接；退出 ZenX 或停用插件后断开。</span>
+        <span>
+          {i18n.t("panels:closingTheWindowKeepsTheConnectionQuitting")}
+        </span>
       </footer>
     </div>
   );

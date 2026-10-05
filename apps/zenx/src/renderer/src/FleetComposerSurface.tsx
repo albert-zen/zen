@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Select } from "./ui/controls.js";
 import { FleetHistory } from "./FleetHistory.js";
@@ -47,6 +48,26 @@ export function FleetComposerSurface({
   attachmentCount?: number;
   onNotice?(notice: string): void;
 }) {
+  const { t, i18n } = useTranslation("settings");
+  const translateStatus = (value: string) =>
+    value === "active"
+      ? t("fleetComposer.statusActive")
+      : value === "idle"
+        ? t("fleetComposer.statusIdle")
+        : value;
+  const translateMessage = (value: FleetComposerMessage) =>
+    typeof value === "string"
+      ? value
+      : t(value.key, {
+          ...value.values,
+          ...(value.checkedAt !== undefined
+            ? {
+                time: new Date(value.checkedAt).toLocaleTimeString(
+                  i18n.resolvedLanguage,
+                ),
+              }
+            : {}),
+        });
   const api = (window.zenx as unknown as { fleet?: FleetProductApi }).fleet;
   const [machines, setMachines] = useState<
     Array<{ id: string; label: string; description?: string }>
@@ -62,9 +83,9 @@ export function FleetComposerSurface({
   >([]);
   const [locator, setLocator] = useState<FleetThreadLocator | null>(null);
   const [history, setHistory] = useState<Record<string, unknown> | null>(null);
-  const [status, setStatus] = useState("Not checked");
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<FleetComposerMessage | null>(null);
+  const [notice, setNotice] = useState<FleetComposerMessage | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [unknown, setUnknown] = useState(false);
@@ -129,9 +150,10 @@ export function FleetComposerSurface({
       })
       .catch((reason: unknown) => {
         if (live.current && version === scope.current)
-          setError(
-            `${describe(reason)} Your text is preserved; no local machine was substituted.`,
-          );
+          setError({
+            key: "fleetComposer.catalogFailedPreserved",
+            values: { error: describe(reason) },
+          });
       })
       .finally(() => {
         if (live.current && version === scope.current) setLoading(false);
@@ -172,9 +194,12 @@ export function FleetComposerSurface({
       )
         return;
       setHistory(items);
-      setStatus(typeof state.status === "string" ? state.status : "Unknown");
+      setStatus(typeof state.status === "string" ? state.status : "unknown");
       setError(null);
-      setNotice(`Snapshot checked ${new Date().toLocaleTimeString()}`);
+      setNotice({
+        key: "fleetComposer.snapshotChecked",
+        checkedAt: Date.now(),
+      });
     } catch (reason) {
       if (
         !live.current ||
@@ -182,7 +207,7 @@ export function FleetComposerSurface({
         readVersion !== reading.current
       )
         return;
-      setStatus("Unavailable · last snapshot may be stale");
+      setStatus("snapshot_unavailable");
       setError(describe(reason));
       throw reason;
     }
@@ -233,13 +258,17 @@ export function FleetComposerSurface({
       await operation();
     } catch (reason) {
       if (live.current) {
-        setError(
-          `${describe(reason)} Inspect the selected remote machine before trying again. No operation was automatically retried.`,
-        );
+        setError({
+          key: "fleetComposer.operationFailedInspect",
+          values: { error: describe(reason) },
+        });
         if (uncertainOnError) setUnknown(true);
       } else
         onNotice?.(
-          `Earlier Fleet operation on ${deviceId} has an uncertain outcome: ${describe(reason)}. Inspect that machine before retrying.`,
+          i18n.t("settings:fleetComposer.earlierOperationUncertain", {
+            deviceId,
+            error: describe(reason),
+          }),
         );
     } finally {
       mutation.current = false;
@@ -258,7 +287,10 @@ export function FleetComposerSurface({
     });
     if (!live.current) {
       onNotice?.(
-        `Message accepted on machine ${current.deviceId}, Thread ${current.threadId}, after leaving its view. Acceptance is not completion.`,
+        i18n.t("settings:fleetComposer.acceptedAfterLeaving", {
+          deviceId: current.deviceId,
+          threadId: current.threadId,
+        }),
       );
       return;
     }
@@ -267,14 +299,16 @@ export function FleetComposerSurface({
       onTextChange("");
     }
     setUnknown(false);
-    setNotice(
-      `Message accepted on ${current.deviceId}; the target may still be running`,
-    );
+    setNotice({
+      key: "fleetComposer.messageAccepted",
+      values: { deviceId: current.deviceId },
+    });
     await read(current).catch((reason: unknown) => {
       if (live.current)
-        setError(
-          `Message accepted on ${current.deviceId}, but its latest snapshot is unavailable: ${describe(reason)}. Refresh to inspect; the message was not retried.`,
-        );
+        setError({
+          key: "fleetComposer.acceptedSnapshotUnavailable",
+          values: { deviceId: current.deviceId, error: describe(reason) },
+        });
     });
   };
   if (!api) return <>{children}</>;
@@ -285,13 +319,13 @@ export function FleetComposerSurface({
     <div className="fleet-composer-surface">
       <div className="fleet-machine-strip">
         <label className="field">
-          <span>Machine</span>
+          <span>{t("fleetComposer.machine")}</span>
           <Select
             value={deviceId}
             disabled={busy || locator !== null}
             onValueChange={changeMachine}
           >
-            <option value="local">This machine</option>
+            <option value="local">{t("fleetComposer.thisMachine")}</option>
             {machines.map((machine) => (
               <option value={machine.id} key={machine.id}>
                 {machine.label}
@@ -301,12 +335,15 @@ export function FleetComposerSurface({
         </label>
         {locator ? (
           <span>
-            Machine locked · {locator.deviceId} · Thread {locator.threadId}
+            {t("fleetComposer.machineLocked", {
+              deviceId: locator.deviceId,
+              threadId: locator.threadId,
+            })}
           </span>
         ) : (
           <span>
             {machines.find((machine) => machine.id === deviceId)?.description ??
-              "The selected machine owns the Thread and its permissions"}
+              t("fleetComposer.machineOwnsThread")}
           </span>
         )}
       </div>
@@ -314,7 +351,9 @@ export function FleetComposerSurface({
         <>
           {error ? (
             <p className="settings-note" role="status">
-              Fleet catalog unavailable: {error}
+              {t("fleetComposer.localCatalogUnavailable", {
+                error: translateMessage(error),
+              })}
             </p>
           ) : null}
           {children}
@@ -324,12 +363,17 @@ export function FleetComposerSurface({
           <header>
             <h2>
               {locator
-                ? "Remote conversation"
-                : `New conversation on ${catalog?.machine.label ?? machines.find((entry) => entry.id === deviceId)?.label ?? deviceId}`}
+                ? t("fleetComposer.remoteConversation")
+                : t("fleetComposer.newConversationOn", {
+                    name:
+                      catalog?.machine.label ??
+                      machines.find((entry) => entry.id === deviceId)?.label ??
+                      deviceId,
+                  })}
             </h2>
             <p>
               {catalog?.machine.description ??
-                "Target permissions and models apply. Your local Thread is unchanged."}
+                t("fleetComposer.targetPermissions")}
             </p>
             {!locator ? (
               <button
@@ -341,23 +385,23 @@ export function FleetComposerSurface({
                   setCatalogReload((value) => value + 1);
                 }}
               >
-                Reload target catalog
+                {t("fleetComposer.reloadCatalog")}
               </button>
             ) : null}
           </header>
           {error ? (
             <p className="settings-error" role="alert">
-              {error}
+              {translateMessage(error)}
             </p>
           ) : null}
           {loading ? (
-            <p role="status">Loading this machine’s workspaces and models…</p>
+            <p role="status">{t("fleetComposer.loadingCatalog")}</p>
           ) : null}
           {catalog ? (
             <>
               <div className="form-grid">
                 <label className="field">
-                  <span>Target workspace</span>
+                  <span>{t("fleetComposer.targetWorkspace")}</span>
                   <Select
                     value={workspace}
                     disabled={busy || locator !== null}
@@ -369,7 +413,9 @@ export function FleetComposerSurface({
                       setError(null);
                     }}
                   >
-                    <option value="">Choose a target workspace</option>
+                    <option value="">
+                      {t("fleetComposer.chooseWorkspace")}
+                    </option>
                     {catalog.workspaces.map((entry) => (
                       <option key={entry.id} value={entry.id}>
                         {entry.label}
@@ -378,7 +424,7 @@ export function FleetComposerSurface({
                   </Select>
                 </label>
                 <label className="field">
-                  <span>Model for new Threads</span>
+                  <span>{t("fleetComposer.newThreadModel")}</span>
                   <Select
                     value={model}
                     disabled={busy || locator !== null}
@@ -391,25 +437,30 @@ export function FleetComposerSurface({
                     }}
                   >
                     <option value="" disabled>
-                      Choose a target model
+                      {t("fleetComposer.chooseModel")}
                     </option>
                     {catalog.models.map((entry) => (
                       <option key={entry.id} value={entry.id}>
-                        {entry.label}
-                        {entry.isDefault ? " · Default" : ""}
+                        {entry.isDefault
+                          ? t("fleetComposer.modelDefault", {
+                              name: entry.label,
+                            })
+                          : entry.label}
                       </option>
                     ))}
                   </Select>
                 </label>
                 {selectedModel?.efforts.length ? (
                   <label className="field">
-                    <span>Target reasoning</span>
+                    <span>{t("fleetComposer.targetReasoning")}</span>
                     <Select
                       value={effort}
                       disabled={busy || locator !== null}
                       onValueChange={setEffort}
                     >
-                      <option value="">Target default</option>
+                      <option value="">
+                        {t("fleetComposer.targetDefault")}
+                      </option>
                       {selectedModel.efforts.map((entry) => (
                         <option key={entry} value={entry}>
                           {entry}
@@ -420,7 +471,7 @@ export function FleetComposerSurface({
                 ) : null}
                 {!locator && workspace ? (
                   <label className="field">
-                    <span>Open an existing remote Thread</span>
+                    <span>{t("fleetComposer.openExistingThread")}</span>
                     <Select
                       value=""
                       disabled={busy}
@@ -439,11 +490,11 @@ export function FleetComposerSurface({
                       }}
                     >
                       <option value="">
-                        Create new, or choose an existing Thread
+                        {t("fleetComposer.createOrChooseThread")}
                       </option>
                       {threads.map((entry) => (
                         <option key={entry.id} value={entry.id}>
-                          {entry.label} · {entry.status}
+                          {entry.label} · {translateStatus(entry.status)}
                         </option>
                       ))}
                     </Select>
@@ -453,9 +504,20 @@ export function FleetComposerSurface({
               {locator ? (
                 <>
                   <p className="settings-note">
-                    {deviceId} · {locator.hostId ?? "Verified SSH route"} ·{" "}
-                    {workspace} · {status}. This is a checked public snapshot,
-                    not a full local copy of remote history.
+                    {t("fleetComposer.snapshotScope", {
+                      deviceId,
+                      route:
+                        locator.hostId ?? t("fleetComposer.verifiedSshRoute"),
+                      workspace,
+                      status:
+                        status === null
+                          ? t("fleetComposer.notChecked")
+                          : status === "snapshot_unavailable"
+                            ? t("fleetComposer.snapshotUnavailable")
+                            : status === "unknown"
+                              ? t("fleetComposer.unknownStatus")
+                              : translateStatus(status),
+                    })}
                   </p>
                   <button
                     className="secondary-button"
@@ -467,30 +529,23 @@ export function FleetComposerSurface({
                       }, false)
                     }
                   >
-                    Refresh remote Thread
+                    {t("fleetComposer.refreshThread")}
                   </button>
                   <div
                     className="fleet-remote-history"
-                    aria-label="Remote conversation history"
+                    aria-label={t("fleetComposer.history")}
                   >
                     <FleetHistory value={history} />
                   </div>
                 </>
               ) : (
                 <p className="settings-note">
-                  Create uses this target’s current defaults and selected Zen
-                  model. It creates an idle Thread first; sending starts work.{" "}
-                  {control
-                    ? ""
-                    : "This machine is read-only; you can inspect existing Threads."}
+                  {t("fleetComposer.createDescription")}{" "}
+                  {control ? "" : t("fleetComposer.readOnly")}
                 </p>
               )}
               {attachmentCount ? (
-                <p role="alert">
-                  This remote entry supports text only. Remove local
-                  images/attachments or return to This machine before sending;
-                  nothing was discarded.
-                </p>
+                <p role="alert">{t("fleetComposer.attachmentWarning")}</p>
               ) : null}
               <form
                 onSubmit={(event) => {
@@ -518,7 +573,10 @@ export function FleetComposerSurface({
                       });
                       if (!live.current) {
                         onNotice?.(
-                          `Remote Thread ${current.threadId} was created on ${current.deviceId} after leaving its draft; inspect it before creating another. No message was sent.`,
+                          i18n.t("settings:fleetComposer.createdAfterLeaving", {
+                            threadId: current.threadId,
+                            deviceId: current.deviceId,
+                          }),
                         );
                         return;
                       }
@@ -531,8 +589,8 @@ export function FleetComposerSurface({
                 <label className="field">
                   <span>
                     {locator
-                      ? "Message to remote Thread"
-                      : "Task for the remote machine"}
+                      ? t("fleetComposer.messageToThread")
+                      : t("fleetComposer.taskForMachine")}
                   </span>
                   <textarea
                     value={text}
@@ -545,15 +603,21 @@ export function FleetComposerSurface({
                 </label>
                 {locator ? (
                   <label className="field">
-                    <span>Remote message behavior</span>
+                    <span>{t("fleetComposer.messageBehavior")}</span>
                     <Select
                       value={messageType}
                       disabled={busy}
                       onValueChange={setMessageType}
                     >
-                      <option value="guidance">Add guidance</option>
-                      <option value="follow_up">Queue next work</option>
-                      <option value="replacement">Interrupt and replace</option>
+                      <option value="guidance">
+                        {t("fleetComposer.guidance")}
+                      </option>
+                      <option value="follow_up">
+                        {t("fleetComposer.followUp")}
+                      </option>
+                      <option value="replacement">
+                        {t("fleetComposer.replacement")}
+                      </option>
                     </Select>
                   </label>
                 ) : null}
@@ -571,19 +635,18 @@ export function FleetComposerSurface({
                   }
                 >
                   {busy
-                    ? "Sending to target…"
+                    ? t("fleetComposer.sending")
                     : locator
-                      ? "Send to remote Thread"
-                      : "Start on selected machine"}
+                      ? t("fleetComposer.send")
+                      : t("fleetComposer.start")}
                 </button>
               </form>
               {unknown ? (
                 <p className="settings-note">
-                  Outcome needs inspection. Refresh the remote Thread or reopen
-                  this machine’s catalog; automatic retry is disabled.
+                  {t("fleetComposer.inspectOutcome")}
                 </p>
               ) : null}
-              {notice ? <p role="status">{notice}</p> : null}
+              {notice ? <p role="status">{translateMessage(notice)}</p> : null}
               {locator ? (
                 <button
                   className="quiet-button"
@@ -595,10 +658,10 @@ export function FleetComposerSurface({
                     setHistory(null);
                     setError(null);
                     setUnknown(false);
-                    setStatus("Not checked");
+                    setStatus(null);
                   }}
                 >
-                  New draft on this machine
+                  {t("fleetComposer.newDraft")}
                 </button>
               ) : null}
             </>
@@ -611,7 +674,7 @@ export function FleetComposerSurface({
                 scope.current++;
               }}
             >
-              Return to This machine
+              {t("fleetComposer.returnLocal")}
             </button>
           ) : null}
         </div>
@@ -622,3 +685,11 @@ export function FleetComposerSurface({
 function describe(value: unknown): string {
   return value instanceof Error ? value.message : String(value);
 }
+
+type FleetComposerMessage =
+  | string
+  | {
+      key: string;
+      values?: Record<string, string | number>;
+      checkedAt?: number;
+    };

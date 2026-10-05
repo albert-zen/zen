@@ -2,6 +2,8 @@ export const ipcChannels = {
   imzenxSetupInspect: "zenx:imzenx-setup:inspect",
   imzenxSetupSaveChannel: "zenx:imzenx-setup:save-channel",
   imzenxSetupPrepareRuntime: "zenx:imzenx-setup:prepare-runtime",
+  localeSystemLanguages: "zenx:locale:system-languages",
+  localeSetLanguage: "zenx:locale:set-language",
   skillsList: "zenx:skills:list",
   skillsImport: "zenx:skills:import",
   skillsMode: "zenx:skills:mode",

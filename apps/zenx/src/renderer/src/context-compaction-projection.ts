@@ -1,3 +1,4 @@
+import { i18n } from "./i18n.js";
 import {
   compileModelMessages,
   type ModelMessage,
@@ -37,10 +38,10 @@ export function projectContextCompactions(
 export function compactionInitiatorLabel(item: ContextCompactionItem): string {
   const initiator =
     item.initiator ?? (item.provenance === "agentic" ? "agent" : undefined);
-  if (initiator === "human") return "Human initiated";
-  if (initiator === "agent") return "Agent initiated";
-  if (initiator === "automatic") return "Automatic";
-  return "Initiator unavailable";
+  if (initiator === "human") return i18n.t("shell:humanInitiated");
+  if (initiator === "agent") return i18n.t("shell:agentInitiated");
+  if (initiator === "automatic") return i18n.t("shell:automatic");
+  return i18n.t("shell:initiatorUnavailable");
 }
 
 function compactionSelection(

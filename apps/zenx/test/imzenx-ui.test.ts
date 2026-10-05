@@ -9,6 +9,7 @@ import type {
   ImZenXSetupView,
   ImZenXChannelSave,
 } from "../src/main/imzenx-setup-service.js";
+import { i18n } from "../src/renderer/src/i18n.js";
 import { IM_CHANNEL_SCHEMAS } from "../../../packages/zenx-imzenx-plugin/src/channel-schema.js";
 
 test("background parent updates preserve the open IM settings and do not reload its draft", async () => {
@@ -117,11 +118,11 @@ test("background parent updates preserve the open IM settings and do not reload 
     assert.match(dom.window.document.body.textContent ?? "", /\/paws/);
     assert.match(
       dom.window.document.body.textContent ?? "",
-      /只接收它主动发到聊天室的回复/,
+      /receive only replies it posts to that room/,
     );
     assert.match(
       dom.window.document.body.textContent ?? "",
-      /自己的私有频道配置文件/,
+      /Your own private channel configuration file/,
     );
     const settings =
       dom.window.document.querySelector<HTMLDetailsElement>(
@@ -322,19 +323,19 @@ test("IM preparation checks only selected paths and saves without connecting or 
     };
   });
   try {
-    assert.equal(button("确认连接…").disabled, true);
+    assert.equal(button("Confirm connection…").disabled, true);
     await changeInput(
       harness.dom,
-      "Python 可执行文件",
+      "Python executable",
       preparedConfig.pythonExecutable,
     );
     await changeInput(
       harness.dom,
-      "自己的私有频道配置文件",
+      "Your own private channel configuration file",
       preparedConfig.channelsConfigFile,
     );
-    await changeInput(harness.dom, "工作目录", preparedConfig.cwd);
-    await click(button("检查准备情况"));
+    await changeInput(harness.dom, "Working directory", preparedConfig.cwd);
+    await click(button("Check readiness"));
     assert.deepEqual(
       harness.calls.find((call) => call.command === "readiness")?.input,
       preparedConfig,
@@ -346,15 +347,21 @@ test("IM preparation checks only selected paths and saves without connecting or 
     assert.equal(
       document
         .querySelector('[data-status="blocked"]')
-        ?.textContent?.includes("需处理"),
+        ?.textContent?.includes("Action required"),
       true,
     );
-    assert.equal(button("确认连接…").disabled, true);
-    await click(button("保存准备"));
+    assert.equal(button("Confirm connection…").disabled, true);
+    await click(button("Save preparation"));
     assert.deepEqual(configuration, preparedConfig);
     assert.equal(harness.drafts.current.imzenx?.dirty, false);
-    assert.match(document.body.textContent ?? "", /准备已保存，等待连接/);
-    assert.match(document.body.textContent ?? "", /保存准备不会启动或重启连接/);
+    assert.match(
+      document.body.textContent ?? "",
+      /Preparation saved; waiting to connect/,
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /Saving preparation does not start or restart a connection/,
+    );
     assert.deepEqual(
       harness.calls.map((call) => call.command),
       ["status", "readiness", "prepare"],
@@ -382,24 +389,27 @@ test("IM connect requires fresh saved preparation and explicit single-consumer c
     };
   });
   try {
-    const trigger = button("确认连接…");
+    const trigger = button("Confirm connection…");
     assert.equal(
       trigger.disabled,
       true,
       "saved paths alone do not allow connection",
     );
-    await click(button("检查准备情况"));
+    await click(button("Check readiness"));
     assert.equal(trigger.disabled, false);
     trigger.focus();
     await click(trigger);
     let dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
     assert(dialog);
-    assert.match(dialog.textContent ?? "", /无法验证其他进程是否已停止/);
-    assert.equal(button("连接", dialog).disabled, true);
+    assert.match(
+      dialog.textContent ?? "",
+      /cannot verify whether other processes have stopped/,
+    );
+    assert.equal(button("Connect", dialog).disabled, true);
     await click(
       dialog.querySelector<HTMLInputElement>('input[type="checkbox"]')!,
     );
-    await click(button("取消", dialog));
+    await click(button("Cancel", dialog));
     assert.equal(document.querySelector('[role="dialog"]'), null);
     assert.equal(document.activeElement, trigger);
     assert.equal(
@@ -432,7 +442,7 @@ test("IM connect requires fresh saved preparation and explicit single-consumer c
     await click(
       dialog.querySelector<HTMLInputElement>('input[type="checkbox"]')!,
     );
-    const connect = button("连接", dialog);
+    const connect = button("Connect", dialog);
     await act(async () => {
       connect.click();
       connect.click();
@@ -460,7 +470,7 @@ test("IM connect requires fresh saved preparation and explicit single-consumer c
     });
     assert.match(
       document.body.textContent ?? "",
-      /本机进程状态不能证明 QQ 等渠道已完成真实消息投递/,
+      /Local process status does not prove actual message delivery on channels such as QQ/,
     );
   } finally {
     connection.resolve({ state: "prepared", configuration: preparedConfig });
@@ -480,7 +490,7 @@ test("IM save races preserve newer drafts, reject duplicate submits and do not r
     };
   });
   try {
-    await changeInput(harness.dom, "工作目录", "/selected-work");
+    await changeInput(harness.dom, "Working directory", "/selected-work");
     const form = document.querySelector<HTMLFormElement>(
       ".imzenx-settings form",
     )!;
@@ -502,7 +512,7 @@ test("IM save races preserve newer drafts, reject duplicate submits and do not r
       harness.calls.filter((call) => call.command === "prepare").length,
       1,
     );
-    await changeInput(harness.dom, "工作目录", "/newer-draft");
+    await changeInput(harness.dom, "Working directory", "/newer-draft");
     assert.equal(harness.drafts.current.imzenx?.dirty, true);
     preparation.resolve({
       state: "connected",
@@ -516,9 +526,9 @@ test("IM save races preserve newer drafts, reject duplicate submits and do not r
     assert.equal(harness.drafts.current.imzenx?.dirty, true);
     assert.match(
       document.body.textContent ?? "",
-      /当前连接仍使用此前的运行配置/,
+      /The current connection still uses the previous runtime configuration/,
     );
-    assert.equal(button("确认连接…").disabled, true);
+    assert.equal(button("Confirm connection…").disabled, true);
     await harness.render();
     assert.equal(
       document.querySelector<HTMLInputElement>('input[value="/newer-draft"]')
@@ -542,8 +552,8 @@ test("IM readiness results cannot authorize an edited configuration", async () =
     };
   });
   try {
-    await click(button("检查准备情况"));
-    await changeInput(harness.dom, "工作目录", "/changed-work");
+    await click(button("Check readiness"));
+    await changeInput(harness.dom, "Working directory", "/changed-work");
     inspection.resolve(ready);
     await act(async () => {
       await inspection.promise;
@@ -551,9 +561,9 @@ test("IM readiness results cannot authorize an edited configuration", async () =
     assert.equal(document.querySelector(".imzenx-checks"), null);
     assert.match(
       document.body.textContent ?? "",
-      /配置已修改，请重新检查准备情况/,
+      /Configuration changed; check readiness again/,
     );
-    assert.equal(button("确认连接…").disabled, true);
+    assert.equal(button("Confirm connection…").disabled, true);
     assert.equal(harness.drafts.current.imzenx?.dirty, true);
   } finally {
     inspection.resolve(ready);
@@ -578,24 +588,24 @@ test("IM readiness may inspect an unsaved draft but connection waits for save-on
     };
   });
   try {
-    await changeInput(harness.dom, "工作目录", "/chosen-work");
-    await click(button("检查准备情况"));
+    await changeInput(harness.dom, "Working directory", "/chosen-work");
+    await click(button("Check readiness"));
     assert.match(
       document.body.textContent ?? "",
-      /先保存当前准备配置，再确认连接/,
+      /Save the current preparation configuration before confirming connection/,
     );
-    assert.equal(button("确认连接…").disabled, true);
-    await click(button("保存准备"));
-    assert.equal(button("确认连接…").disabled, true);
+    assert.equal(button("Confirm connection…").disabled, true);
+    await click(button("Save preparation"));
+    assert.equal(button("Confirm connection…").disabled, true);
     assert.equal(document.querySelector(".imzenx-checks"), null);
-    await click(button("检查准备情况"));
-    assert.equal(button("确认连接…").disabled, false);
+    await click(button("Check readiness"));
+    assert.equal(button("Confirm connection…").disabled, false);
     assert.deepEqual(
       harness.calls.map((call) => call.command),
       ["status", "readiness", "prepare", "readiness"],
     );
-    await changeInput(harness.dom, "工作目录", "/another-work");
-    assert.equal(button("确认连接…").disabled, true);
+    await changeInput(harness.dom, "Working directory", "/another-work");
+    assert.equal(button("Confirm connection…").disabled, true);
     assert.equal(document.querySelector(".imzenx-checks"), null);
   } finally {
     await harness.close();
@@ -616,15 +626,15 @@ test("IM readiness errors remain recoverable and never implicitly connect", asyn
     };
   });
   try {
-    await click(button("检查准备情况"));
+    await click(button("Check readiness"));
     assert.match(
       document.querySelector('[role="alert"]')?.textContent ?? "",
       /Python readiness request failed/,
     );
-    assert.equal(button("确认连接…").disabled, true);
-    await click(button("检查准备情况"));
+    assert.equal(button("Confirm connection…").disabled, true);
+    await click(button("Check readiness"));
     assert.equal(document.querySelector('[role="alert"]'), null);
-    assert.equal(button("确认连接…").disabled, false);
+    assert.equal(button("Confirm connection…").disabled, false);
     assert.equal(
       harness.calls.some((call) => call.command === "connect"),
       false,
@@ -655,9 +665,9 @@ test("late IM background status cannot replace saved status or an edited draft",
     };
   });
   try {
-    await changeInput(harness.dom, "工作目录", "/draft-work");
+    await changeInput(harness.dom, "Working directory", "/draft-work");
     await act(async () => poll());
-    await click(button("保存准备"));
+    await click(button("Save preparation"));
     assert.equal(harness.drafts.current.imzenx?.dirty, false);
     background.resolve({
       state: "failed",
@@ -735,7 +745,7 @@ test("native IM form uses declared fields and sends write-only credentials only 
   try {
     assert.match(
       document.body.textContent ?? "",
-      /系统安全存储，不进入 Agent 工具或聊天/,
+      /system secure storage\. They do not enter Agent tools or chat/,
     );
     assert.equal(
       document.querySelector<HTMLDetailsElement>(".imzenx-settings")?.open,
@@ -812,7 +822,7 @@ test("native IM form uses declared fields and sends write-only credentials only 
     });
     assert.match(
       document.body.textContent ?? "",
-      /频道设置已安全保存，连接尚未启动/,
+      /Channel settings saved securely; the connection has not started/,
     );
     assert.equal(
       document.querySelector('input[type="password"]'),
@@ -859,7 +869,7 @@ test("native IM Cancel, channel changes and route unmount discard unsaved creden
     const canceled = document.querySelector<HTMLInputElement>(
       'input[type="password"]',
     )!;
-    await click(button("取消修改"));
+    await click(button("Cancel changes"));
     assert.equal(canceled.value, "");
     assert.equal(
       document.querySelector<HTMLInputElement>('input[type="password"]')?.value,
@@ -920,14 +930,17 @@ test("native IM encryption failure prevents save and safe recovery preserves non
     },
   });
   try {
-    assert.match(document.body.textContent ?? "", /系统安全存储不可用/);
+    assert.match(
+      document.body.textContent ?? "",
+      /System secure storage is unavailable/,
+    );
     assert.equal(
       document.querySelector<HTMLInputElement>('input[type="password"]')!
         .disabled,
       true,
     );
     await changeInput(harness.dom, "App ID", "789012");
-    assert.equal(button("保存频道").disabled, true);
+    assert.equal(button("Save channel").disabled, true);
     await act(async () =>
       document
         .querySelector<HTMLFormElement>(".imzenx-own-setup form")!
@@ -940,7 +953,7 @@ test("native IM encryption failure prevents save and safe recovery preserves non
     );
     assert.equal(saves, 0);
     view = { ...view, encryptionAvailable: true };
-    await click(button("重新读取设置"));
+    await click(button("Reload settings"));
     assert.equal(
       document.querySelector<HTMLInputElement>('input[value="789012"]')?.value,
       "789012",
@@ -973,7 +986,7 @@ test("native runtime preparation is explicit and preserves a channel form being 
     assert.equal(preparations, 0);
     await changeInput(harness.dom, "App ID", "13579");
     await changeInput(harness.dom, "App secret", "synthetic-runtime-secret");
-    const prepare = button("准备运行环境");
+    const prepare = button("Prepare runtime");
     await act(async () => {
       prepare.click();
       prepare.click();
@@ -993,10 +1006,10 @@ test("native runtime preparation is explicit and preserves a channel form being 
       document.querySelector<HTMLInputElement>('input[type="password"]')?.value,
       "synthetic-runtime-secret",
     );
-    assert.equal(button("确认连接…").disabled, true);
+    assert.equal(button("Confirm connection…").disabled, true);
     assert.match(
       document.body.textContent ?? "",
-      /先保存或取消频道表单中的修改/,
+      /Save or cancel changes in the channel form/,
     );
     assert.equal(
       harness.calls.some((call) => call.command === "connect"),
@@ -1024,11 +1037,11 @@ test("native secret-save failure clears inputs and never echoes credential-beari
   try {
     await changeInput(harness.dom, "App ID", "12345");
     await changeInput(harness.dom, "App secret", "synthetic-rejected-secret");
-    await click(button("保存频道"));
+    await click(button("Save channel"));
     assert.match(
       document.querySelector('.imzenx-own-setup [role="alert"]')?.textContent ??
         "",
-      /频道设置未保存/,
+      /Channel settings were not saved/,
     );
     assert.equal(
       document.body.textContent?.includes("synthetic-rejected-secret"),
@@ -1061,9 +1074,9 @@ test("same-path managed IM edits show the explicit pending gate while the old co
   try {
     assert.match(
       document.querySelector(".imzenx-active-note")?.textContent ?? "",
-      /新保存的准备配置或频道设置会在明确连接后使用/,
+      /Newly saved preparation or channel settings take effect after an explicit connection/,
     );
-    assert.equal(button("确认连接…").disabled, true);
+    assert.equal(button("Confirm connection…").disabled, true);
     assert.equal(
       harness.calls.some((call) => call.command === "connect"),
       false,
@@ -1079,8 +1092,8 @@ test("IM ready paths without a server revision cannot authorize connection", asy
     return { state: "prepared", configuration: preparedConfig };
   });
   try {
-    await click(button("检查准备情况"));
-    assert.equal(button("确认连接…").disabled, true);
+    await click(button("Check readiness"));
+    assert.equal(button("Confirm connection…").disabled, true);
     assert.equal(
       harness.calls.some((call) => call.command === "connect"),
       false,
@@ -1109,32 +1122,42 @@ test("IM stale server revision rejection clears consent and requires a fresh che
     };
   });
   try {
-    await click(button("检查准备情况"));
-    await click(button("确认连接…"));
+    await click(button("Check readiness"));
+    await click(button("Confirm connection…"));
     let dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
     await click(
       dialog.querySelector<HTMLInputElement>('input[type="checkbox"]')!,
     );
-    await click(button("连接", dialog));
+    await click(button("Connect", dialog));
     assert.equal(document.querySelector('[role="dialog"]'), null);
     assert.equal(document.querySelector(".imzenx-checks"), null);
-    assert.equal(button("确认连接…").disabled, true);
+    assert.equal(button("Confirm connection…").disabled, true);
     assert.match(
       document.querySelector('[role="alert"]')?.textContent ?? "",
       /IM settings changed after readiness was reviewed/,
     );
-    await click(button("检查准备情况"));
-    await click(button("确认连接…"));
+    await act(async () => {
+      await i18n.changeLanguage("zh-CN");
+    });
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /IM 设置发生了变化/,
+    );
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
+    await click(button("Check readiness"));
+    await click(button("Confirm connection…"));
     dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
     assert.equal(
       dialog.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked,
       false,
     );
-    assert.equal(button("连接", dialog).disabled, true);
+    assert.equal(button("Connect", dialog).disabled, true);
     await click(
       dialog.querySelector<HTMLInputElement>('input[type="checkbox"]')!,
     );
-    await click(button("连接", dialog));
+    await click(button("Connect", dialog));
     assert.deepEqual(
       harness.calls
         .filter((call) => call.command === "connect")
@@ -1151,6 +1174,9 @@ test("IM stale server revision rejection clears consent and requires a fresh che
       ],
     );
   } finally {
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
     await harness.close();
   }
 });
@@ -1175,8 +1201,8 @@ test("IM background status revision changes invalidate an open same-path consent
         },
   );
   try {
-    await click(button("检查准备情况"));
-    await click(button("确认连接…"));
+    await click(button("Check readiness"));
+    await click(button("Confirm connection…"));
     const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
     await click(
       dialog.querySelector<HTMLInputElement>('input[type="checkbox"]')!,
@@ -1185,13 +1211,13 @@ test("IM background status revision changes invalidate an open same-path consent
     await act(async () => poll());
     assert.equal(document.querySelector('[role="dialog"]'), null);
     assert.equal(document.querySelector(".imzenx-checks"), null);
-    assert.equal(button("确认连接…").disabled, true);
+    assert.equal(button("Confirm connection…").disabled, true);
     assert.equal(
       harness.calls.some((call) => call.command === "connect"),
       false,
     );
-    await click(button("检查准备情况"));
-    await click(button("确认连接…"));
+    await click(button("Check readiness"));
+    await click(button("Confirm connection…"));
     assert.equal(
       document.querySelector<HTMLInputElement>(
         '[role="dialog"] input[type="checkbox"]',
@@ -1202,5 +1228,65 @@ test("IM background status revision changes invalidate an open same-path consent
     await harness.close();
     globalThis.setInterval = beforeInterval;
     globalThis.clearInterval = beforeClearInterval;
+  }
+});
+
+test("live IM localization preserves provider-declared fields, transient credentials and local drafts", async () => {
+  const view = nativeView();
+  const harness = await mountImPage(unconfiguredStatus, {
+    inspect: async () => view,
+    prepareRuntime: async () => view,
+    saveChannel: async () => view,
+  });
+  try {
+    await changeInput(harness.dom, "App ID", "local-id-untouched");
+    await changeInput(
+      harness.dom,
+      "App secret",
+      "synthetic-live-language-secret",
+    );
+    const password = document.querySelector<HTMLInputElement>(
+      'input[type="password"]',
+    )!;
+    await click(button("Prepare runtime"));
+    assert.match(
+      document.body.textContent ?? "",
+      /Runtime prepared\. Save the channel/,
+    );
+    await act(async () => {
+      await i18n.changeLanguage("zh-CN");
+    });
+    assert.match(
+      document.body.textContent ?? "",
+      /运行环境已准备。保存频道后再检查连接准备情况/,
+    );
+    assert(document.querySelector('[aria-label="设置自己的 IM"]'));
+    assert(document.querySelector('[aria-label="连接前准备"]'));
+    assert.equal(password.value, "synthetic-live-language-secret");
+    assert.equal(
+      document.querySelector<HTMLInputElement>(
+        'input[value="local-id-untouched"]',
+      )?.value,
+      "local-id-untouched",
+    );
+    assert.match(document.body.textContent ?? "", /App secret/);
+    assert.match(document.body.textContent ?? "", /private state directory/);
+    assert.equal(
+      JSON.stringify(harness.calls).includes("synthetic-live-language-secret"),
+      false,
+    );
+    assert.equal(
+      JSON.stringify(harness.drafts).includes("synthetic-live-language-secret"),
+      false,
+    );
+    assert.equal(
+      harness.calls.some((call) => call.command === "connect"),
+      false,
+    );
+  } finally {
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
+    await harness.close();
   }
 });

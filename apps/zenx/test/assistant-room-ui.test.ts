@@ -317,7 +317,7 @@ for (const entry of ["primary route", "plugin button"] as const) {
       await act(async () =>
         document
           .querySelector<HTMLButtonElement>(
-            '[aria-label="Member conversation"]',
+            '[aria-label="Working conversation"]',
           )!
           .click(),
       );

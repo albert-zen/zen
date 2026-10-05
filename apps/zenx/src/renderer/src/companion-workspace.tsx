@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import type { WorkspaceFileDrafts } from "./workspace-file-drafts.js";
 import React, { useEffect, useState } from "react";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
@@ -44,6 +46,7 @@ export function CompanionWorkspace({
   navigate(route: string): void;
   onClose(): void;
 }) {
+  useTranslation("panels");
   const [localView, setLocalView] = useState<CompanionViewState>({
     selected: `custom:${section || "overview"}`,
     tabs: [],
@@ -165,8 +168,8 @@ export function CompanionWorkspace({
           <strong>{ref.label || ref.triggerId}</strong>
           <small>
             {trigger
-              ? `${trigger.kind} · ${trigger.active ? "Enabled" : "Paused"}`
-              : "Trigger unavailable in this assistant context"}
+              ? `${trigger.kind} · ${trigger.active ? i18n.t("panels:enabled") : i18n.t("panels:paused")}`
+              : i18n.t("panels:triggerUnavailableInThisAssistantContext")}
           </small>
         </li>
       );
@@ -201,8 +204,8 @@ export function CompanionWorkspace({
           {candidate
             ? `Thread: ${candidate.status}`
             : ref.device === "local"
-              ? "Thread unavailable or workspace changed"
-              : "Remote status not loaded"}
+              ? i18n.t("panels:threadUnavailableOrWorkspaceChanged")
+              : i18n.t("panels:remoteStatusNotLoaded")}
         </small>
       </li>
     );
@@ -210,12 +213,9 @@ export function CompanionWorkspace({
   const facts = (
     <>
       <h3>PAW</h3>
-      <p>
-        An ongoing assistant using Rooms, Triggers and Fleet. Its working thread
-        keeps the execution history.
-      </p>
+      <p>{i18n.t("panels:pawOverviewDescription")}</p>
       <dl>
-        <dt>Working thread</dt>
+        <dt>{i18n.t("panels:workingThread")}</dt>
         <dd>
           {room.assistant ? (
             <button
@@ -226,54 +226,55 @@ export function CompanionWorkspace({
                 )
               }
             >
-              Open working Thread
+              {i18n.t("panels:openWorkingThread")}
             </button>
           ) : (
-            "Shared room"
+            i18n.t("panels:sharedRoom")
           )}
         </dd>
-        <dt>Heartbeat / recurring checks</dt>
+        <dt>{i18n.t("panels:heartbeatRecurringChecks")}</dt>
         <dd>
           {!triggersEnabled
-            ? "Triggers disabled"
+            ? i18n.t("panels:triggersDisabled")
             : triggerError
-              ? "Unavailable"
+              ? i18n.t("panels:unavailable")
               : !triggersLoaded
-                ? "Loading…"
+                ? i18n.t("panels:loading")
                 : recurring.length
                   ? recurring
-                      .map(
-                        (t) =>
-                          `${t.label}: every ${t.timer!.intervalMinutes} min (${t.active ? "enabled" : "paused"})`,
+                      .map((t) =>
+                        i18n.t("panels:recurringCheck", {
+                          name: t.label,
+                          count: t.timer!.intervalMinutes,
+                          status: t.active
+                            ? i18n.t("panels:enabled")
+                            : i18n.t("panels:paused"),
+                        }),
                       )
                       .join("; ")
-                  : "No recurring check configured"}
+                  : i18n.t("panels:noRecurringCheckConfigured")}
         </dd>
-        <dt>Notebook</dt>
+        <dt>{i18n.t("panels:notebook")}</dt>
         <dd>
           {notebook
-            ? `${notebook.matters.length} matters · ${notebook.memory.length} notes · revision ${notebook.revision}`
+            ? i18n.t("panels:notebookCounts", {
+                matters: notebook.matters.length,
+                notes: notebook.memory.length,
+                revision: notebook.revision,
+              })
             : error
-              ? "Unavailable"
-              : "Loading…"}
+              ? i18n.t("panels:unavailable")
+              : i18n.t("panels:loading")}
         </dd>
       </dl>
-      <p className="companion-note">
-        Direct Thread messages stay in the Thread. The assistant posts here only
-        through its Room messaging tool. This binding keeps both conversations
-        connected without copying every message between them.
-      </p>
-      <p className="companion-note">
-        Creating a PAW enables message wakeups only. Configure recurring checks
-        in Automations when needed; they can consume model quota. Reading this
-        workspace does not start agent work.
-      </p>
+      <p className="companion-note">{i18n.t("panels:pawThreadRoomNote")}</p>
+      <p className="companion-note">{i18n.t("panels:pawWakeupNote")}</p>
     </>
   );
   const tabsContent = [
     {
       id: "overview",
-      title: "Overview",
+      title: i18n.t("panels:overview"),
       icon: "layers" as const,
       render: () => (
         <div className="companion-content">
@@ -283,21 +284,24 @@ export function CompanionWorkspace({
             <>
               <h3>{room.name}</h3>
               <p>
-                {room.members.length} members share this conversation. Choose a
-                member above to use its files, browser and other thread tools.
+                {i18n.t("panels:roomMemberResourceCount", {
+                  count: room.members.length,
+                })}
               </p>
             </>
           )}
           {error ? <p role="alert">{error}</p> : null}
           {triggerError ? (
-            <p role="alert">Automation status unavailable: {triggerError}</p>
+            <p role="alert">
+              {i18n.t("panels:automationStatusUnavailable")} {triggerError}
+            </p>
           ) : null}
           <button type="button" onClick={() => setRevision((v) => v + 1)}>
-            Refresh
+            {i18n.t("panels:refresh")}
           </button>
           <nav
             className="companion-shortcuts"
-            aria-label="Assistant workspace sections"
+            aria-label={i18n.t("panels:assistantWorkspaceSections")}
           >
             {(room.assistant
               ? ["matters", "memory", "automations", "threads"]
@@ -308,7 +312,7 @@ export function CompanionWorkspace({
                 type="button"
                 onClick={() => setSelected(`custom:${id}`)}
               >
-                {id[0]!.toUpperCase() + id.slice(1)}
+                {i18n.t(`panels:${id}`)}
               </button>
             ))}
           </nav>
@@ -319,23 +323,20 @@ export function CompanionWorkspace({
       ? [
           {
             id: "matters",
-            title: "Matters",
+            title: i18n.t("panels:matters"),
             icon: "thread" as const,
             render: () => (
               <div className="companion-content">
-                <h3>What I’m tracking</h3>
+                <h3>{i18n.t("panels:whatIMTracking")}</h3>
                 <p className="companion-note">
-                  Assistant-written plans and notes. Linked execution status is
-                  shown separately.
+                  {i18n.t("panels:mattersDescription")}
                 </p>
                 {error ? (
                   <p role="alert">{error}</p>
                 ) : notebook === null ? (
-                  <p>Loading…</p>
+                  <p>{i18n.t("panels:loading")}</p>
                 ) : notebook.matters.length === 0 ? (
-                  <p>
-                    No matters recorded yet. Ask your PAW to track something.
-                  </p>
+                  <p>{i18n.t("panels:noMattersRecordedYetAskYourPaw")}</p>
                 ) : (
                   notebook.matters.map((m) => (
                     <article key={m.id}>
@@ -354,17 +355,17 @@ export function CompanionWorkspace({
           },
           {
             id: "memory",
-            title: "Memory",
+            title: i18n.t("panels:memory"),
             icon: "file" as const,
             render: () => (
               <div className="companion-content">
-                <h3>What I’m keeping in mind</h3>
+                <h3>{i18n.t("panels:whatIMKeepingInMind")}</h3>
                 {error ? (
                   <p role="alert">{error}</p>
                 ) : notebook === null ? (
-                  <p>Loading…</p>
+                  <p>{i18n.t("panels:loading")}</p>
                 ) : notebook.memory.length === 0 ? (
-                  <p>No notes saved yet.</p>
+                  <p>{i18n.t("panels:noNotesSavedYet")}</p>
                 ) : (
                   notebook.memory.map((n) => (
                     <article key={n.id}>
@@ -378,39 +379,46 @@ export function CompanionWorkspace({
           },
           {
             id: "automations",
-            title: "Automations",
+            title: i18n.t("panels:automations"),
             icon: "layers" as const,
             render: () => (
               <div className="companion-content">
-                <h3>Checks and triggers</h3>
+                <h3>{i18n.t("panels:checksAndTriggers")}</h3>
                 {triggerError ? (
                   <p role="alert">{triggerError}</p>
                 ) : !triggersEnabled ? (
-                  <p>Triggers is disabled.</p>
+                  <p>{i18n.t("panels:triggersIsDisabled")}</p>
                 ) : !triggersLoaded ? (
-                  <p>Loading…</p>
+                  <p>{i18n.t("panels:loading")}</p>
                 ) : (
                   <ul>
                     {triggers.map((t) => (
                       <li key={t.id}>
                         <strong>{t.label}</strong>
                         <small>
-                          {t.kind} · {t.active ? "Enabled" : "Paused"}
+                          {t.kind} ·{" "}
+                          {t.active
+                            ? i18n.t("panels:enabled")
+                            : i18n.t("panels:paused")}
                         </small>
                         {t.timer ? (
                           <small>
                             {t.timer.intervalMinutes
-                              ? `Every ${t.timer.intervalMinutes} min`
-                              : "One time"}{" "}
-                            · next{" "}
-                            {new Date(t.timer.nextRunAt).toLocaleString()}
+                              ? i18n.t("panels:everyMinutes", {
+                                  count: t.timer.intervalMinutes,
+                                })
+                              : i18n.t("panels:oneTime")}{" "}
+                            {i18n.t("panels:next")}{" "}
+                            {new Date(t.timer.nextRunAt).toLocaleString(
+                              i18n.resolvedLanguage,
+                            )}
                           </small>
                         ) : null}
                         {t.sourceError ? (
                           <small role="alert">{t.sourceError}</small>
                         ) : null}
                         <details>
-                          <summary>Instructions</summary>
+                          <summary>{i18n.t("panels:instructions")}</summary>
                           <p>{t.prompt}</p>
                         </details>
                       </li>
@@ -422,7 +430,7 @@ export function CompanionWorkspace({
                     type="button"
                     onClick={() => setSelected(`plugin:${triggerPanel.key}`)}
                   >
-                    Configure automations
+                    {i18n.t("panels:configureAutomations")}
                   </button>
                 ) : null}
               </div>
@@ -432,11 +440,11 @@ export function CompanionWorkspace({
       : []),
     {
       id: "threads",
-      title: "Threads",
+      title: i18n.t("panels:threads"),
       icon: "users" as const,
       render: () => (
         <div className="companion-content">
-          <h3>Members and delegated work</h3>
+          <h3>{i18n.t("panels:membersAndDelegatedWork")}</h3>
           <ul>
             {room.members.map((m) => (
               <li key={m.threadId}>
@@ -454,7 +462,7 @@ export function CompanionWorkspace({
           </ul>
           {localThreads.length ? (
             <>
-              <h4>Native child threads</h4>
+              <h4>{i18n.t("panels:nativeChildThreads")}</h4>
               <ul>
                 {localThreads.map((t) => (
                   <li key={t.threadId}>
@@ -468,7 +476,7 @@ export function CompanionWorkspace({
                     </button>
                     <small>
                       {t.status}
-                      {t.archived ? " · archived" : ""}
+                      {t.archived ? i18n.t("panels:archived") : ""}
                     </small>
                   </li>
                 ))}
@@ -476,8 +484,7 @@ export function CompanionWorkspace({
             </>
           ) : null}
           <p className="companion-note">
-            Other delegated work appears under its matter with its device and
-            workspace identity.
+            {i18n.t("panels:delegatedWorkDescription")}
           </p>
         </div>
       ),
@@ -493,7 +500,7 @@ export function CompanionWorkspace({
                 const t = threads.find(
                   (t) => t.threadId === view.conversationThreadId,
                 );
-                return t ? threadTitle(t) : "Conversation";
+                return t ? threadTitle(t) : i18n.t("panels:conversation");
               })(),
               render: renderConversation,
             }
@@ -535,20 +542,22 @@ export function CompanionWorkspace({
       customTabs={tabsContent}
       contextControl={
         <label className="companion-context">
-          Resources from
+          {i18n.t("panels:resourcesFrom")}
           <select
-            aria-label="Room resource thread"
+            aria-label={i18n.t("panels:roomResourceThread")}
             value={memberExists ? member : ""}
             onChange={(event) => setMember(event.target.value)}
           >
-            <option value="">Choose a room member</option>
+            <option value="">{i18n.t("panels:chooseARoomMember2")}</option>
             {room.members.map((m) => (
               <option key={m.threadId} value={m.threadId}>
                 {m.name}
               </option>
             ))}
           </select>
-          {memberExists && !resource ? <small>Thread unavailable</small> : null}
+          {memberExists && !resource ? (
+            <small>{i18n.t("panels:threadUnavailable")}</small>
+          ) : null}
         </label>
       }
     />

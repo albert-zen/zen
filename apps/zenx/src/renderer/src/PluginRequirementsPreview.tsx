@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import { useEffect, useState } from "react";
 import {
   pluginReadiness,
@@ -9,13 +11,16 @@ import {
 /** Ordinary plugin lifecycle preview, reusable by any configuration/preset UI. */
 export function PluginRequirementsPreview({
   requirements,
+  purposeLabels,
   onReady,
   openSettings,
 }: {
   requirements: readonly PluginRequirement[];
+  purposeLabels?: Readonly<Record<string, string>>;
   onReady(ready: boolean): void;
   openSettings(): void;
 }) {
+  useTranslation("panels");
   const [readiness, setReadiness] = useState<PluginReadiness[] | null>(null);
   const [error, setError] = useState(false);
   useEffect(() => {
@@ -54,13 +59,11 @@ export function PluginRequirementsPreview({
   const missing = readiness?.some((entry) => entry.state !== "ready");
   return (
     <section
-      aria-label="Plugin readiness"
+      aria-label={i18n.t("panels:pluginReadinessLabel")}
       className="room-assistant-disclosure"
     >
       {error ? (
-        <p role="alert">
-          Plugin status is unavailable. Open Settings to check it.
-        </p>
+        <p role="alert">{i18n.t("panels:pluginReadinessUnavailable")}</p>
       ) : readiness ? (
         <ul>
           {requirements.map((requirement) => {
@@ -69,33 +72,30 @@ export function PluginRequirementsPreview({
             )!;
             return (
               <li key={entry.pluginId}>
-                {requirement.purpose}:{" "}
+                {purposeLabels?.[requirement.pluginId] ?? requirement.purpose}:{" "}
                 {entry.state === "ready"
-                  ? "Ready"
+                  ? i18n.t("panels:pluginReadinessReady")
                   : entry.state === "disabled"
-                    ? "Enable plugin"
+                    ? i18n.t("panels:pluginReadinessEnable")
                     : entry.state === "missing"
-                      ? "Install plugin"
-                      : "Check plugin"}
+                      ? i18n.t("panels:pluginReadinessInstall")
+                      : i18n.t("panels:pluginReadinessCheck")}
                 {!requirement.required && entry.state !== "ready"
-                  ? " (optional)"
+                  ? i18n.t("panels:pluginReadinessOptional")
                   : ""}
               </li>
             );
           })}
         </ul>
       ) : (
-        <p role="status">Checking plugins…</p>
+        <p role="status">{i18n.t("panels:pluginReadinessChecking")}</p>
       )}
       {missing || error ? (
         <button type="button" onClick={openSettings}>
-          Open Settings → Plugins
+          {i18n.t("panels:pluginReadinessOpenSettings")}
         </button>
       ) : null}
-      <p>
-        Tool permissions are checked when used. Device and IM connections are
-        configured in their own plugins.
-      </p>
+      <p>{i18n.t("panels:pluginReadinessPermissionNotice")}</p>
     </section>
   );
 }

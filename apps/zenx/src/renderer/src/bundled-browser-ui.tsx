@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 
 import type { PluginUiModule, PluginUiRegistry } from "./plugin-ui-host.js";
 
@@ -13,9 +14,8 @@ export function registerBundledBrowserUi(
 }
 
 export function BrowserPage() {
+  const { t } = useTranslation("panels");
   return (
-    <p className="browser-page-redirect">
-      Open a thread and use its Browser panel to view that thread's pages.
-    </p>
+    <p className="browser-page-redirect">{t("browserPageInstructions")}</p>
   );
 }

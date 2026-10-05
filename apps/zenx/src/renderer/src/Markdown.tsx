@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import {
   Children,
   createContext,
@@ -24,6 +26,7 @@ export type MarkdownBlock =
   | { type: "code"; language: string; text: string; closed: boolean };
 
 export function Markdown({ text }: { text: string }) {
+  useTranslation("panels");
   const onOpen = useContext(MessageLinkContext);
   const components = { ...markdownComponents, a: messageAnchor(onOpen) };
   const blocks = parseMarkdown(text);
@@ -241,6 +244,7 @@ function CodeBlock({
 }: {
   block: Extract<MarkdownBlock, { type: "code" }>;
 }) {
+  useTranslation("panels");
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     await navigator.clipboard.writeText(block.text);
@@ -252,7 +256,7 @@ function CodeBlock({
       <div className="markdown-code-header">
         <span>{block.language || "text"}</span>
         <button type="button" onClick={() => void copy()}>
-          {copied ? "Copied" : "Copy"}
+          {copied ? i18n.t("panels:copied") : i18n.t("panels:copy")}
         </button>
       </div>
       <pre>

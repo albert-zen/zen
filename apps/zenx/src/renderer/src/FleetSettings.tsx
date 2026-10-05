@@ -1,3 +1,5 @@
+import { i18n } from "./i18n.js";
+import { useTranslation } from "react-i18next";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Select } from "./ui/controls.js";
 import { FleetHistory } from "./FleetHistory.js";
@@ -150,6 +152,7 @@ const defaultHosting: Hosting = {
 };
 
 export function FleetSettings() {
+  const { t } = useTranslation("settings");
   const api = (window.zenx as unknown as { fleet?: FleetSettingsApi }).fleet;
   const [snapshot, setSnapshot] = useState<FleetSettingsSnapshot | null>(null);
   const [hosting, setHosting] = useState(defaultHosting);
@@ -166,7 +169,14 @@ export function FleetSettings() {
     ReturnType<FleetSettingsApi["hostPair"]>
   > | null>(null);
   const [connections, setConnections] = useState<
-    Record<string, { key: string; label: string }>
+    Record<
+      string,
+      {
+        key: string;
+        state: "checking" | "reachable" | "failed";
+        checkedAt?: number;
+      }
+    >
   >({});
   const [busy, setBusy] = useState<string | null>(null);
   const [onboardingBusy, setOnboardingBusy] = useState(false);
@@ -209,9 +219,7 @@ export function FleetSettings() {
     if (key !== inspection.deviceKey) {
       inspectionVersion.current++;
       setInspection(null);
-      setError(
-        "This device route or access changed. Reopen Browse before sending; the old remote Thread was not retargeted.",
-      );
+      setError(i18n.t("settings:fleetSettings.routeChanged"));
     }
   }, [snapshot, inspection]);
   useEffect(() => {
@@ -256,7 +264,10 @@ export function FleetSettings() {
   }, [api, pairCode]);
 
   const refresh = async (resetHosting = false) => {
-    if (!api) throw new Error("Fleet connection is unavailable");
+    if (!api)
+      throw new Error(
+        i18n.t("settings:fleetSettings.fleetConnectionIsUnavailable"),
+      );
     const value = normalizeFleetSnapshot(await api.status());
     if (mounted.current) {
       setSnapshot(value);
@@ -324,23 +335,30 @@ export function FleetSettings() {
       current.id === "local"
     )
       throw new Error(
-        "Use a unique device ID of 1–64 letters, numbers, underscores or hyphens; local is reserved.",
+        i18n.t("settings:fleetSettings.useAUniqueDeviceIdOf164Letters"),
       );
     if (
       snapshot.config.devices.some(
         (entry) => entry.id === current.id && entry.id !== current.originalId,
       )
     )
-      throw new Error("That device ID is already configured.");
-    if (!current.label.trim()) throw new Error("Enter a device label.");
+      throw new Error(
+        i18n.t("settings:fleetSettings.thatDeviceIdIsAlreadyConfigured"),
+      );
+    if (!current.label.trim())
+      throw new Error(i18n.t("settings:fleetSettings.enterADeviceLabel"));
     if (current.access === "control" && !current.controlConfirmed)
-      throw new Error("Confirm remote Thread control before saving.");
+      throw new Error(
+        i18n.t("settings:fleetSettings.confirmRemoteThreadControlBeforeSaving"),
+      );
     let device: Device;
     if (current.transport === "ssh") {
       const command = current.command.split(/\r?\n/u);
       if (!current.sshHost.trim() || command.some((arg) => !arg.trim()))
         throw new Error(
-          "Enter an SSH host and non-empty command arguments, one per line.",
+          i18n.t(
+            "settings:fleetSettings.enterAnSshHostAndNonEmptyCommandArguments",
+          ),
         );
       device = {
         transport: "ssh",
@@ -360,13 +378,23 @@ export function FleetSettings() {
         endpoint.username ||
         endpoint.password
       )
-        throw new Error("Use an HTTPS endpoint without embedded credentials.");
+        throw new Error(
+          i18n.t(
+            "settings:fleetSettings.useAnHttpsEndpointWithoutEmbeddedCredentials",
+          ),
+        );
       if (!current.hostId.trim())
-        throw new Error("Enter the remote Host ID shown by that device.");
+        throw new Error(
+          i18n.t(
+            "settings:fleetSettings.enterTheRemoteHostIdShownByThatDevice",
+          ),
+        );
       if (!current.originalId) {
         if (!current.code.trim())
           throw new Error(
-            "Enter a current one-time pairing code from the remote Host.",
+            i18n.t(
+              "settings:fleetSettings.enterACurrentOneTimePairingCodeFromThe",
+            ),
           );
         await api.pair({
           id: current.id,
@@ -383,7 +411,11 @@ export function FleetSettings() {
         await refresh();
         if (mounted.current) {
           closeEditor();
-          setNotice("Device paired. Browse it to choose a workspace.");
+          setNotice(
+            i18n.t(
+              "settings:fleetSettings.devicePairedBrowseItToChooseAWorkspace",
+            ),
+          );
         }
         return;
       }
@@ -410,7 +442,7 @@ export function FleetSettings() {
     await refresh();
     if (mounted.current) {
       closeEditor();
-      setNotice("Device saved");
+      setNotice(i18n.t("settings:fleetSettings.deviceSaved"));
     }
   };
 
@@ -420,11 +452,12 @@ export function FleetSettings() {
     name: string,
     args: Record<string, unknown>,
   ) => {
-    if (!api) throw new Error("Fleet connection is unavailable");
-    if (!deviceKey)
+    if (!api)
       throw new Error(
-        "Fleet route identity is missing. Refresh Fleet before browsing this device.",
+        i18n.t("settings:fleetSettings.fleetConnectionIsUnavailable"),
       );
+    if (!deviceKey)
+      throw new Error(i18n.t("settings:fleetSettings.routeIdentityMissing"));
     const value = await api.invoke({
       device,
       expectedDeviceKey: deviceKey,
@@ -433,9 +466,7 @@ export function FleetSettings() {
     });
     const result = record(unwrap(value));
     if (result.status === "not_found" || result.status === "ambiguous")
-      throw new Error(
-        "The exact remote Thread is unavailable; no other Thread was selected.",
-      );
+      throw new Error(i18n.t("settings:fleetSettings.exactThreadUnavailable"));
     return unwrap(value);
   };
   const listThreads = async (
@@ -444,7 +475,7 @@ export function FleetSettings() {
     cursor?: string,
   ) => {
     if (!workspace)
-      throw new Error("Choose this target's workspace before listing Threads.");
+      throw new Error(i18n.t("settings:fleetSettings.chooseTargetWorkspace"));
     const version = inspectionVersion.current;
     const result = record(
       await invoke(current.device.id, current.deviceKey, "zenx_threads_list", {
@@ -484,9 +515,7 @@ export function FleetSettings() {
       (entry) => entry.id === device.id,
     )?.key;
     if (!deviceKey)
-      throw new Error(
-        "Fleet route identity is missing. Refresh Fleet before browsing this device.",
-      );
+      throw new Error(i18n.t("settings:fleetSettings.routeIdentityMissing"));
     const result = record(
       await invoke(device.id, deviceKey, "zenx_projects_list", { limit: 100 }),
     );
@@ -567,13 +596,15 @@ export function FleetSettings() {
   if (!api)
     return (
       <div className="settings-error" role="alert">
-        Fleet connection is unavailable in this app build.
+        {t("fleetSettings.fleetConnectionIsUnavailableInThisAppBuild")}
       </div>
     );
   if (!snapshot)
     return (
       <div className="page-card settings-card">
-        <p role={error ? "alert" : "status"}>{error ?? "Loading Fleet…"}</p>
+        <p role={error ? "alert" : "status"}>
+          {error ?? t("fleetSettings.loadingFleet")}
+        </p>
         {error ? (
           <button
             className="secondary-button"
@@ -584,7 +615,7 @@ export function FleetSettings() {
               })
             }
           >
-            Retry
+            {t("fleetSettings.retry")}
           </button>
         ) : null}
       </div>
@@ -601,11 +632,8 @@ export function FleetSettings() {
   return (
     <>
       <header>
-        <h2>Fleet</h2>
-        <p>
-          Connect your Zen Hosts. Each device keeps its own workspaces, Threads
-          and permissions.
-        </p>
+        <h2>{t("fleetSettings.fleet")}</h2>
+        <p>{t("fleetSettings.connectYourZenHostsEachDeviceKeepsItsOwn")}</p>
         <button
           className="quiet-button"
           type="button"
@@ -620,17 +648,19 @@ export function FleetSettings() {
               ) {
                 setSnapshot({ ...snapshot, host: value.host });
                 throw new Error(
-                  "Fleet configuration changed while you were editing. Cancel the device editor or discard hosting changes, then refresh before saving.",
+                  t(
+                    "fleetSettings.fleetConfigurationChangedWhileYouWereEditingCancelThe",
+                  ),
                 );
               }
               setSnapshot(value);
               if (!hostingDirty)
                 setHosting(value.config.hosting ?? defaultHosting);
-              setNotice("Fleet status refreshed");
+              setNotice(t("fleetSettings.fleetStatusRefreshed"));
             })
           }
         >
-          Refresh Fleet
+          {t("fleetSettings.refreshFleet")}
         </button>
       </header>
       {error && !editor ? (
@@ -648,12 +678,8 @@ export function FleetSettings() {
       <div className="page-card settings-card">
         <div className="settings-card-head">
           <div>
-            <h3>Devices</h3>
-            <p>
-              SSH uses your existing SSH setup. HTTPS uses a pinned Host ID and
-              a one-time pairing code. Reachability is a timestamped check; test
-              connections close afterwards and do not imply a live session.
-            </p>
+            <h3>{t("fleetSettings.devices")}</h3>
+            <p>{t("fleetSettings.routeHelp")}</p>
           </div>
           <button
             ref={addButton}
@@ -662,11 +688,13 @@ export function FleetSettings() {
             disabled={disabled}
             onClick={(event) => openEditor(event.currentTarget)}
           >
-            Add device
+            {t("fleetSettings.addDevice")}
           </button>
         </div>
         {snapshot.config.devices.length === 0 ? (
-          <p className="settings-empty">No remote devices configured</p>
+          <p className="settings-empty">
+            {t("fleetSettings.noRemoteDevicesConfigured")}
+          </p>
         ) : (
           snapshot.config.devices.map((device) => (
             <div className="settings-row" key={device.id}>
@@ -680,7 +708,9 @@ export function FleetSettings() {
                 <span>
                   {device.id} · {device.transport === "https" ? "HTTPS" : "SSH"}{" "}
                   ·{" "}
-                  {device.access === "control" ? "Thread control" : "Read only"}
+                  {device.access === "control"
+                    ? t("fleetSettings.threadControl")
+                    : t("fleetSettings.readOnly")}
                 </span>
                 <span className="fleet-wrap">
                   {device.transport === "https"
@@ -691,7 +721,7 @@ export function FleetSettings() {
                   {connections[device.id]?.key ===
                   (snapshot.devices?.find((entry) => entry.id === device.id)
                     ?.key ?? JSON.stringify(device))
-                    ? connections[device.id]!.label
+                    ? connectionCheckLabel(connections[device.id]!)
                     : deviceCheckLabel(snapshot, device.id)}
                 </span>
               </div>
@@ -699,7 +729,9 @@ export function FleetSettings() {
                 <button
                   type="button"
                   className="quiet-button"
-                  aria-label={`Test ${device.label}`}
+                  aria-label={t("fleetSettings.testDevice", {
+                    name: device.label,
+                  })}
                   disabled={disabled}
                   onClick={() =>
                     void run(`test:${device.id}`, async () => {
@@ -710,14 +742,15 @@ export function FleetSettings() {
                             snapshot.devices?.find(
                               (entry) => entry.id === device.id,
                             )?.key ?? JSON.stringify(device),
-                          label: "Checking…",
+                          state: "checking",
                         },
                       }));
                       try {
                         const result = record(await api.test(device.id));
                         if (result.ok === false)
                           throw new Error(
-                            string(result.error) || "Connection failed",
+                            string(result.error) ||
+                              t("fleetSettings.connectionFailed"),
                           );
                         if (mounted.current)
                           setConnections((value) => ({
@@ -727,7 +760,8 @@ export function FleetSettings() {
                                 snapshot.devices?.find(
                                   (entry) => entry.id === device.id,
                                 )?.key ?? JSON.stringify(device),
-                              label: `Reachable · checked ${new Date().toLocaleTimeString()}`,
+                              state: "reachable",
+                              checkedAt: Date.now(),
                             },
                           }));
                       } catch (reason) {
@@ -739,7 +773,7 @@ export function FleetSettings() {
                                 snapshot.devices?.find(
                                   (entry) => entry.id === device.id,
                                 )?.key ?? JSON.stringify(device),
-                              label: "Connection failed",
+                              state: "failed",
                             },
                           }));
                         throw reason;
@@ -747,12 +781,14 @@ export function FleetSettings() {
                     })
                   }
                 >
-                  Test
+                  {t("fleetSettings.test")}
                 </button>
                 <button
                   type="button"
                   className="quiet-button"
-                  aria-label={`Browse ${device.label}`}
+                  aria-label={t("fleetSettings.browseDevice", {
+                    name: device.label,
+                  })}
                   disabled={disabled}
                   onClick={(event) => {
                     const trigger = event.currentTarget;
@@ -761,21 +797,25 @@ export function FleetSettings() {
                     );
                   }}
                 >
-                  Browse
+                  {t("fleetSettings.browse")}
                 </button>
                 <button
                   type="button"
                   className="quiet-button"
-                  aria-label={`Edit ${device.label}`}
+                  aria-label={t("fleetSettings.editDevice", {
+                    name: device.label,
+                  })}
                   disabled={disabled}
                   onClick={(event) => openEditor(event.currentTarget, device)}
                 >
-                  Edit
+                  {t("fleetSettings.edit")}
                 </button>
                 <button
                   type="button"
                   className="quiet-button"
-                  aria-label={`Remove ${device.label}`}
+                  aria-label={t("fleetSettings.removeNamedDevice", {
+                    name: device.label,
+                  })}
                   disabled={disabled}
                   onClick={() => {
                     setRemoving(device);
@@ -783,7 +823,7 @@ export function FleetSettings() {
                     setError(null);
                   }}
                 >
-                  Remove
+                  {t("fleetSettings.remove")}
                 </button>
               </div>
             </div>
@@ -795,7 +835,7 @@ export function FleetSettings() {
         <div
           ref={editorRegion}
           className="page-card settings-card provider-editor"
-          aria-label="Device editor"
+          aria-label={t("fleetSettings.deviceEditor")}
           onKeyDown={(event) => {
             if (event.key === "Escape" && !disabled) {
               event.preventDefault();
@@ -803,7 +843,11 @@ export function FleetSettings() {
             }
           }}
         >
-          <h3>{editor.originalId ? `Edit ${editor.label}` : "Add device"}</h3>
+          <h3>
+            {editor.originalId
+              ? t("fleetSettings.editDevice", { name: editor.label })
+              : t("fleetSettings.addDevice")}
+          </h3>
           <form
             onSubmit={(event) => {
               event.preventDefault();
@@ -813,30 +857,28 @@ export function FleetSettings() {
             <fieldset disabled={disabled} className="fleet-fieldset">
               <div className="form-grid">
                 <Field
-                  label="Device ID"
+                  label={t("fleetSettings.deviceId")}
                   value={editor.id}
                   disabled={!!editor.originalId}
                   onChange={(id) => edit({ id })}
                 />
                 <Field
-                  label="Label"
+                  label={t("fleetSettings.label")}
                   value={editor.label}
                   onChange={(label) => edit({ label })}
                 />
                 <Field
-                  label="Machine description"
+                  label={t("fleetSettings.machineDescription")}
                   value={editor.description}
                   onChange={(description) => edit({ description })}
                   multiline
                   wide
                 />
                 <p className="settings-note field wide">
-                  Describe what this machine is for and when the Agent should
-                  use it. This is guidance only; it cannot grant permissions or
-                  change commands.
+                  {t("fleetSettings.machineDescriptionHelp")}
                 </p>
                 <label className="field">
-                  <span>Connection</span>
+                  <span>{t("fleetSettings.connection")}</span>
                   <Select
                     value={editor.transport}
                     disabled={!!editor.originalId || disabled}
@@ -847,8 +889,10 @@ export function FleetSettings() {
                       })
                     }
                   >
-                    <option value="ssh">SSH</option>
-                    <option value="https">HTTPS pairing</option>
+                    <option value="ssh">{t("fleetSettings.ssh")}</option>
+                    <option value="https">
+                      {t("fleetSettings.httpsPairing")}
+                    </option>
                   </Select>
                 </label>
                 <AccessField
@@ -865,14 +909,16 @@ export function FleetSettings() {
                 {editor.transport === "ssh" ? (
                   <>
                     <Field
-                      label="SSH host"
+                      label={t("fleetSettings.sshHost")}
                       value={editor.sshHost}
-                      placeholder="user@device or SSH config alias"
+                      placeholder={t(
+                        "fleetSettings.userDeviceOrSshConfigAlias",
+                      )}
                       onChange={(sshHost) => edit({ sshHost })}
                       wide
                     />
                     <Field
-                      label="Command arguments (one per line)"
+                      label={t("fleetSettings.commandArgumentsOnePerLine")}
                       value={editor.command}
                       placeholder={
                         "node\n/path/to/fleet-bridge.js\n/path/to/connection.json"
@@ -882,15 +928,15 @@ export function FleetSettings() {
                       multiline
                     />
                     <p className="settings-note field wide">
-                      These exact arguments run on the remote device through
-                      verified SSH. Configure SSH keys and known hosts yourself
-                      before testing.
+                      {t(
+                        "fleetSettings.theseExactArgumentsRunOnTheRemoteDeviceThrough",
+                      )}
                     </p>
                   </>
                 ) : (
                   <>
                     <Field
-                      label="HTTPS endpoint"
+                      label={t("fleetSettings.httpsEndpoint")}
                       value={editor.endpoint}
                       placeholder="https://device.example:3940"
                       disabled={!!editor.originalId}
@@ -898,7 +944,7 @@ export function FleetSettings() {
                       wide
                     />
                     <Field
-                      label="Remote Host ID"
+                      label={t("fleetSettings.remoteHostId")}
                       value={editor.hostId}
                       disabled={!!editor.originalId}
                       onChange={(hostId) => edit({ hostId })}
@@ -906,14 +952,14 @@ export function FleetSettings() {
                     />
                     {editor.originalId ? (
                       <Field
-                        label="Workspace ID (optional)"
+                        label={t("fleetSettings.workspaceIdOptional")}
                         value={editor.workspace}
                         onChange={(workspace) => edit({ workspace })}
                         wide
                       />
                     ) : (
                       <Field
-                        label="One-time pairing code"
+                        label={t("fleetSettings.oneTimePairingCode2")}
                         value={editor.code}
                         onChange={(code) => edit({ code })}
                         secret
@@ -921,14 +967,9 @@ export function FleetSettings() {
                       />
                     )}
                     <p className="settings-note field wide">
-                      Check the Host ID directly on the remote device. Pairing
-                      verifies its identity; saved credentials stay in this
-                      app’s protected backend. To change the endpoint or
-                      identity, remove this device and pair again. Changing
-                      local access cannot expand a server-issued read-only
-                      grant. To upgrade, remove this saved device and pair again
-                      with Thread control selected; the remote Host must allow
-                      it.
+                      {t(
+                        "fleetSettings.checkTheHostIdDirectlyOnTheRemoteDevice",
+                      )}
                     </p>
                     <Confirmation
                       checked={editor.shellEnabled}
@@ -942,17 +983,10 @@ export function FleetSettings() {
                       }
                       onChange={(shellEnabled) => edit({ shellEnabled })}
                     >
-                      Request target-owned remote shell execution for this HTTPS
-                      device
+                      {t("fleetSettings.requestShell")}
                     </Confirmation>
                     <p className="settings-note field wide">
-                      Shell is a separate opt-in on this client and the remote
-                      Host. It uses an existing target Thread’s current sandbox
-                      and remembered approvals, not local permissions. Unknown
-                      interactive approvals cannot be answered remotely and
-                      reject. Enabling a server-issued shell grant requires
-                      fresh pairing; changing this saved request flag alone
-                      cannot expand it.
+                      {t("fleetSettings.shellHelp")}
                     </p>
                   </>
                 )}
@@ -962,8 +996,7 @@ export function FleetSettings() {
                   checked={editor.controlConfirmed}
                   onChange={(controlConfirmed) => edit({ controlConfirmed })}
                 >
-                  I allow ZenX to create Threads and send messages that can run
-                  work on this remote device
+                  {t("fleetSettings.iAllowZenxToCreateThreadsAndSendMessages")}
                 </Confirmation>
               ) : null}
             </fieldset>
@@ -982,10 +1015,10 @@ export function FleetSettings() {
                 }
               >
                 {busy === "save-device"
-                  ? "Saving…"
+                  ? t("fleetSettings.saving")
                   : editor.transport === "https" && !editor.originalId
-                    ? "Pair device"
-                    : "Save device"}
+                    ? t("fleetSettings.pairDevice")
+                    : t("fleetSettings.saveDevice")}
               </button>
               <button
                 className="secondary-button"
@@ -993,7 +1026,7 @@ export function FleetSettings() {
                 disabled={disabled}
                 onClick={closeEditor}
               >
-                Cancel
+                {t("fleetSettings.cancel")}
               </button>
             </div>
           </form>
@@ -1007,11 +1040,11 @@ export function FleetSettings() {
           aria-labelledby="fleet-remove-title"
           aria-describedby="fleet-remove-detail"
         >
-          <h3 id="fleet-remove-title">Remove {removing.label}?</h3>
+          <h3 id="fleet-remove-title">
+            {t("fleetSettings.remove2")} {removing.label}?
+          </h3>
           <p id="fleet-remove-detail">
-            This removes the saved connection from this app. Remote Threads
-            remain on their Host. Revoke this app on the remote Host to end its
-            grant there.
+            {t("fleetSettings.thisRemovesTheSavedConnectionFromThisAppRemote")}
           </p>
           <div className="settings-actions fleet-actions">
             <button
@@ -1031,13 +1064,13 @@ export function FleetSettings() {
                       delete next[removing.id];
                       return next;
                     });
-                    setNotice("Device removed");
+                    setNotice(t("fleetSettings.deviceRemoved"));
                     addButton.current?.focus();
                   }
                 })
               }
             >
-              Remove device
+              {t("fleetSettings.removeDevice")}
             </button>
             <button
               className="secondary-button"
@@ -1048,7 +1081,7 @@ export function FleetSettings() {
                 addButton.current?.focus();
               }}
             >
-              Cancel
+              {t("fleetSettings.cancel2")}
             </button>
           </div>
         </div>
@@ -1059,7 +1092,9 @@ export function FleetSettings() {
           ref={inspectorRegion}
           className="page-card settings-card"
           tabIndex={-1}
-          aria-label={`Browse ${inspection.device.label}`}
+          aria-label={t("fleetSettings.browseDevice", {
+            name: inspection.device.label,
+          })}
           onKeyDown={(event) => {
             if (event.key === "Escape" && !disabled) {
               event.preventDefault();
@@ -1071,10 +1106,10 @@ export function FleetSettings() {
             <div>
               <h3>{inspection.device.label}</h3>
               <p>
-                Remote workspaces and Threads ·{" "}
+                {t("fleetSettings.remoteWorkspacesAndThreads")}{" "}
                 {inspection.device.access === "control"
-                  ? "Control enabled"
-                  : "Read only"}
+                  ? t("fleetSettings.controlEnabled")
+                  : t("fleetSettings.readOnly")}
               </p>
             </div>
             <button
@@ -1083,11 +1118,11 @@ export function FleetSettings() {
               disabled={disabled}
               onClick={closeInspection}
             >
-              Close browser
+              {t("fleetSettings.closeBrowser")}
             </button>
           </div>
           <label className="field">
-            <span>Remote workspace</span>
+            <span>{t("fleetSettings.remoteWorkspace")}</span>
             <Select
               value={inspection.workspace}
               disabled={disabled}
@@ -1100,8 +1135,8 @@ export function FleetSettings() {
             >
               <option value="" disabled>
                 {inspection.device.transport === "https"
-                  ? "Choose a workspace"
-                  : "All workspaces"}
+                  ? t("fleetSettings.chooseAWorkspace")
+                  : t("fleetSettings.allWorkspaces")}
               </option>
               {inspection.workspace &&
               !inspection.projects.some(
@@ -1134,7 +1169,7 @@ export function FleetSettings() {
                 );
               }}
             >
-              Refresh Threads
+              {t("fleetSettings.refreshThreads")}
             </button>
             {inspection.device.transport === "https" ? (
               <button
@@ -1161,21 +1196,23 @@ export function FleetSettings() {
                       inspectionVersion.current++;
                       setInspection(null);
                       setNotice(
-                        "Workspace selected. Reopen Browse to inspect this route before sending.",
+                        i18n.t(
+                          "settings:fleetSettings.workspaceSelectedReopen",
+                        ),
                       );
                     }
                   })
                 }
               >
-                Use selected workspace
+                {t("fleetSettings.useSelectedWorkspace")}
               </button>
             ) : null}
           </div>
           {inspection.threads.length === 0 ? (
             <p>
               {inspection.device.transport === "https" && !inspection.workspace
-                ? "Choose a workspace to browse its Threads"
-                : "No Threads in this workspace"}
+                ? t("fleetSettings.chooseAWorkspaceToBrowseItsThreads")
+                : t("fleetSettings.noThreadsInThisWorkspace")}
             </p>
           ) : (
             inspection.threads.map((thread) => (
@@ -1189,14 +1226,16 @@ export function FleetSettings() {
                 <button
                   className="quiet-button"
                   type="button"
-                  aria-label={`Read ${thread.name || thread.id}`}
+                  aria-label={t("fleetSettings.readThread", {
+                    name: thread.name || thread.id,
+                  })}
                   disabled={disabled}
                   onClick={() => {
                     inspectionVersion.current++;
                     void run("read-thread", () => read(inspection, thread));
                   }}
                 >
-                  Read
+                  {t("fleetSettings.read")}
                 </button>
               </div>
             ))
@@ -1216,11 +1255,14 @@ export function FleetSettings() {
                 )
               }
             >
-              More Threads
+              {t("fleetSettings.moreThreads")}
             </button>
           ) : null}
           {inspection.thread ? (
-            <section aria-label="Remote Thread" className="fleet-section-space">
+            <section
+              aria-label={t("fleetSettings.remoteThread")}
+              className="fleet-section-space"
+            >
               <h3>{inspection.thread.name || inspection.thread.id}</h3>
               <History value={inspection.history} />
               {inspection.historyCursor ? (
@@ -1238,7 +1280,7 @@ export function FleetSettings() {
                     )
                   }
                 >
-                  Read older items
+                  {t("fleetSettings.readOlderItems")}
                 </button>
               ) : null}
               {inspection.device.access === "control" ? (
@@ -1262,14 +1304,16 @@ export function FleetSettings() {
                       if (mounted.current) {
                         setMessage("");
                         setNotice(
-                          "Message accepted by the remote Host. Work may still be running; refresh to check its reply.",
+                          t(
+                            "fleetSettings.messageAcceptedByTheRemoteHostWorkMayStill",
+                          ),
                         );
                       }
                     });
                   }}
                 >
                   <Field
-                    label="Message to remote Thread"
+                    label={t("fleetSettings.messageToRemoteThread")}
                     value={message}
                     onChange={setMessage}
                     multiline
@@ -1277,34 +1321,38 @@ export function FleetSettings() {
                     disabled={disabled}
                   />
                   <label className="field">
-                    <span>Message behavior</span>
+                    <span>{t("fleetSettings.messageBehavior")}</span>
                     <Select
                       value={messageType}
                       disabled={disabled}
                       onValueChange={setMessageType}
                     >
                       <option value="guidance">
-                        Add guidance to current work
+                        {t("fleetSettings.addGuidanceToCurrentWork")}
                       </option>
-                      <option value="follow_up">Queue next work</option>
+                      <option value="follow_up">
+                        {t("fleetSettings.queueNextWork")}
+                      </option>
                       <option value="replacement">
-                        Interrupt and replace current work
+                        {t("fleetSettings.interruptAndReplaceCurrentWork")}
                       </option>
                     </Select>
                   </label>
                   <p className="settings-note">
-                    Sending can run work on {inspection.device.label}
                     {messageType === "replacement"
-                      ? " and interrupt its current task"
-                      : ""}
-                    .
+                      ? t("fleetSettings.sendingCanInterrupt", {
+                          name: inspection.device.label,
+                        })
+                      : t("fleetSettings.sendingCanRunWork", {
+                          name: inspection.device.label,
+                        })}
                   </p>
                   <button
                     className="primary-button"
                     type="submit"
                     disabled={disabled || !message.trim()}
                   >
-                    Send to remote Thread
+                    {t("fleetSettings.sendToRemoteThread")}
                   </button>
                 </form>
               ) : null}
@@ -1316,31 +1364,36 @@ export function FleetSettings() {
       <div className="page-card settings-card">
         <div className="settings-card-head">
           <div>
-            <h3>Host this device</h3>
+            <h3>{t("fleetSettings.hostThisDevice")}</h3>
             <p>
-              Allow paired desktop and mobile clients to reach this Host over
-              HTTPS.
+              {t("fleetSettings.allowPairedDesktopAndMobileClientsToReachThis")}
             </p>
           </div>
           <span
             role="status"
             className={snapshot.host.enabled ? "status-good" : "status-muted"}
           >
-            {snapshot.host.enabled ? "Hosting enabled" : "Hosting disabled"}
+            {snapshot.host.enabled
+              ? t("fleetSettings.hostingEnabled")
+              : t("fleetSettings.hostingDisabled")}
           </span>
         </div>
-        <p className="fleet-wrap">Host ID: {snapshot.host.hostId}</p>
+        <p className="fleet-wrap">
+          {t("fleetSettings.hostId")} {snapshot.host.hostId}
+        </p>
         {snapshot.host.url ? (
-          <p className="fleet-wrap">Endpoint: {snapshot.host.url}</p>
+          <p className="fleet-wrap">
+            {t("fleetSettings.endpoint")} {snapshot.host.url}
+          </p>
         ) : null}
         {snapshot.host.relayConfigured || hosting.relayEndpoint ? (
           <p role="status">
-            Relay:{" "}
+            {t("fleetSettings.relay")}{" "}
             {snapshot.host.relayConnected
-              ? "Connected"
+              ? t("fleetSettings.connected")
               : snapshot.host.relayConfigured
-                ? "Registered · not connected"
-                : "Not registered"}
+                ? t("fleetSettings.registeredNotConnected")
+                : t("fleetSettings.notRegistered")}
           </p>
         ) : null}
         {snapshot.host.error ? (
@@ -1353,7 +1406,7 @@ export function FleetSettings() {
           disabled={disabled}
           onChange={(enabled) => changeHosting({ enabled })}
         >
-          Enable HTTPS hosting
+          {t("fleetSettings.enableHttpsHosting")}
         </Confirmation>
         <fieldset
           disabled={disabled || !hosting.enabled}
@@ -1361,17 +1414,17 @@ export function FleetSettings() {
         >
           <div className="form-grid">
             <Field
-              label="Bind address"
+              label={t("fleetSettings.bindAddress")}
               value={hosting.bindAddress}
               onChange={(bindAddress) => changeHosting({ bindAddress })}
             />
             <Field
-              label="Port"
+              label={t("fleetSettings.port")}
               value={String(hosting.port)}
               onChange={(port) => changeHosting({ port: Number(port) })}
             />
             <Field
-              label="TLS certificate file"
+              label={t("fleetSettings.tlsCertificateFile")}
               value={hosting.tlsCertificateFile}
               onChange={(tlsCertificateFile) =>
                 changeHosting({ tlsCertificateFile })
@@ -1379,13 +1432,13 @@ export function FleetSettings() {
               wide
             />
             <Field
-              label="TLS private key file"
+              label={t("fleetSettings.tlsPrivateKeyFile")}
               value={hosting.tlsKeyFile}
               onChange={(tlsKeyFile) => changeHosting({ tlsKeyFile })}
               wide
             />
             <Field
-              label="Client-facing HTTPS endpoint"
+              label={t("fleetSettings.clientHttpsEndpoint")}
               value={hosting.originEndpoint ?? ""}
               placeholder="https://device.example:3940"
               onChange={(originEndpoint) =>
@@ -1396,14 +1449,10 @@ export function FleetSettings() {
               wide
             />
             <p className="settings-note field wide">
-              Use an exact certificate SAN hostname or IPv4 address and an
-              explicit port matching the listener, with no trailing slash. Blank
-              allows only native Origin-absent clients; Android WebSocket
-              clients need this exact HTTPS endpoint. This does not enable
-              browser pairing or broad CORS access.
+              {t("fleetSettings.useAnExactCertificateSanHostnameOrIpv4Address")}
             </p>
             <Field
-              label="Relay endpoint (optional)"
+              label={t("fleetSettings.relayEndpointOptional")}
               value={hosting.relayEndpoint ?? ""}
               placeholder="https://relay.example"
               onChange={(relayEndpoint) =>
@@ -1414,12 +1463,12 @@ export function FleetSettings() {
               wide
             />
             <Field
-              label="Relay registration token"
+              label={t("fleetSettings.relayRegistrationToken")}
               value={relayToken}
               placeholder={
                 snapshot.host.relayConfigured
-                  ? "Saved in backend; leave blank to keep it"
-                  : "Enter the trusted relay’s registration token"
+                  ? t("fleetSettings.savedInBackendLeaveBlankToKeepIt")
+                  : t("fleetSettings.enterTheTrustedRelaySRegistrationToken")
               }
               onChange={(value) => {
                 setRelayToken(value);
@@ -1430,7 +1479,7 @@ export function FleetSettings() {
               wide
             />
             <AccessField
-              label="Maximum client access"
+              label={t("fleetSettings.maximumClientAccess")}
               value={hosting.access}
               disabled={disabled || !hosting.enabled}
               onChange={(access) =>
@@ -1449,27 +1498,14 @@ export function FleetSettings() {
           }
           onChange={(shellEnabled) => changeHosting({ shellEnabled })}
         >
-          Allow separately paired shell clients to request bounded commands on
-          this Host
+          {t("fleetSettings.allowShell")}
         </Confirmation>
+        <p className="settings-note">{t("fleetSettings.hostShellHelp")}</p>
         <p className="settings-note">
-          Remote shell requires a fresh separate client grant and an explicit
-          authorized workspace/target Thread. That Thread’s current sandbox and
-          approvals apply; existing read-only or legacy grants never gain shell
-          access. Interactive remote approval is not available.
+          {t("fleetSettings.anOptionalSelfHostedRelayTerminatesTlsAndCan")}
         </p>
         <p className="settings-note">
-          An optional self-hosted relay terminates TLS and can see relayed
-          pairing codes, messages and device credentials. Use a trusted
-          operator; this is not end-to-end encrypted. The registration token is
-          saved only in the protected backend; leave it blank to keep the
-          existing token.
-        </p>
-        <p className="settings-note">
-          Use existing TLS files. Hosting does not generate keys or change
-          firewall/router settings. A loopback bind is reachable only on this
-          computer; a network bind can expose this Host to other devices.
-          Clients still require pairing.
+          {t("fleetSettings.useExistingTlsFilesHostingDoesNotGenerateKeys")}
         </p>
         {hosting.enabled && hostingDirty ? (
           <Confirmation
@@ -1477,16 +1513,21 @@ export function FleetSettings() {
             disabled={disabled}
             onChange={setExposureConfirmed}
           >
-            I allow this Host to listen on {hosting.bindAddress}:{hosting.port}{" "}
-            and expose its workspaces and Threads to paired clients
+            {t("fleetSettings.iAllowThisHostToListenOn")} {hosting.bindAddress}:
+            {hosting.port}{" "}
+            {t("fleetSettings.andExposeItsWorkspacesAndThreadsToPairedClients")}
             {hosting.shellEnabled
-              ? ", including separately authorized target-owned shell execution"
+              ? i18n.t("settings:fleetSettings.includingShell")
               : ""}
             {hosting.originEndpoint
-              ? `, including Android connections from ${hosting.originEndpoint}`
+              ? t("fleetSettings.androidConnectionsFrom", {
+                  endpoint: hosting.originEndpoint,
+                })
               : ""}
             {hosting.relayEndpoint
-              ? ` through ${hosting.relayEndpoint}, whose operator can see relayed credentials and messages`
+              ? t("fleetSettings.throughRelay", {
+                  endpoint: hosting.relayEndpoint,
+                })
               : ""}
           </Confirmation>
         ) : null}
@@ -1496,8 +1537,7 @@ export function FleetSettings() {
             disabled={disabled}
             onChange={setHostControlConfirmed}
           >
-            I allow paired clients with control access to create Threads and run
-            work on this device
+            {t("fleetSettings.iAllowPairedClientsWithControlAccessToCreate")}
           </Confirmation>
         ) : null}
         <div className="settings-actions fleet-actions fleet-top-space">
@@ -1523,7 +1563,7 @@ export function FleetSettings() {
                     !hosting.tlsKeyFile.trim())
                 )
                   throw new Error(
-                    "Enter a bind address, a port from 1–65535 and existing TLS certificate/key file paths.",
+                    t("fleetSettings.enterABindAddressAPortFrom165535"),
                   );
                 if (hosting.relayEndpoint) {
                   const endpoint = new URL(hosting.relayEndpoint);
@@ -1536,11 +1576,13 @@ export function FleetSettings() {
                     endpoint.hash
                   )
                     throw new Error(
-                      "Use an HTTPS relay origin without a path, query, fragment or embedded credentials.",
+                      t("fleetSettings.useAnHttpsRelayOriginWithoutAPathQuery"),
                     );
                 } else if (relayToken) {
                   throw new Error(
-                    "Enter the trusted relay endpoint before its registration token.",
+                    t(
+                      "fleetSettings.enterTheTrustedRelayEndpointBeforeItsRegistrationToken",
+                    ),
                   );
                 }
                 if (hosting.originEndpoint) {
@@ -1550,7 +1592,9 @@ export function FleetSettings() {
                     );
                   if (!authority || Number(authority[2]) !== hosting.port)
                     throw new Error(
-                      "Use an exact HTTPS hostname or IPv4 address with the listener’s explicit port for Android. The Host will verify the certificate SAN.",
+                      t(
+                        "fleetSettings.useAnExactHttpsHostnameOrIpv4AddressWith",
+                      ),
                     );
                 }
                 await api.save(
@@ -1571,12 +1615,14 @@ export function FleetSettings() {
                   setExposureConfirmed(false);
                   setHostControlConfirmed(false);
                   setPairCode(null);
-                  setNotice("Hosting configuration saved");
+                  setNotice(t("fleetSettings.hostingConfigurationSaved"));
                 }
               })
             }
           >
-            {busy === "hosting" ? "Saving…" : "Apply hosting"}
+            {busy === "hosting"
+              ? t("fleetSettings.saving")
+              : t("fleetSettings.applyHosting")}
           </button>
           {hostingDirty ? (
             <button
@@ -1590,7 +1636,7 @@ export function FleetSettings() {
                 setHostControlConfirmed(false);
               }}
             >
-              Discard changes
+              {t("fleetSettings.discardChanges")}
             </button>
           ) : null}
         </div>
@@ -1608,12 +1654,12 @@ export function FleetSettings() {
                 current ? { ...current, host: latest.host } : current,
               );
             } catch {
-              setError("Could not refresh Fleet hosting status.");
+              setError(i18n.t("settings:fleetSettings.hostRefreshFailed"));
             }
           }}
         />
         <details className="fleet-section-space">
-          <summary>Advanced: separate pairing code</summary>
+          <summary>{t("fleetSettings.advancedPairingCode")}</summary>
           <button
             className="secondary-button"
             type="button"
@@ -1625,61 +1671,73 @@ export function FleetSettings() {
               })
             }
           >
-            Create pairing code
+            {t("fleetSettings.createPairingCode")}
           </button>
           {pairCode ? (
             <div role="status" className="fleet-top-space">
               <p>
-                One-time pairing code: <strong>{pairCode.code}</strong>
+                {t("fleetSettings.oneTimePairingCode")}{" "}
+                <strong>{pairCode.code}</strong>
               </p>
               <p>
-                Host ID: {pairCode.hostId}
+                {t("fleetSettings.hostId2")} {pairCode.hostId}
                 {pairCode.expiresAt
-                  ? ` · Expires ${new Date(pairCode.expiresAt).toLocaleString()}`
-                  : " · Short-lived; use it now"}
+                  ? t("fleetSettings.codeExpires", {
+                      time: new Date(pairCode.expiresAt).toLocaleString(
+                        i18n.resolvedLanguage,
+                      ),
+                    })
+                  : t("fleetSettings.shortLivedCode")}
               </p>
               <p className="settings-note">
-                Enter this code and the HTTPS endpoint on the client you want to
-                pair. Anyone with this code can request access until it expires
-                or is used.
+                {t("fleetSettings.enterThisCodeAndTheHttpsEndpointOnThe")}
               </p>
               <button
                 type="button"
                 className="quiet-button"
                 onClick={() => setPairCode(null)}
               >
-                Hide code
+                {t("fleetSettings.hideCode")}
               </button>
             </div>
           ) : null}
         </details>
-        <h3 className="fleet-section-space">Paired clients</h3>
+        <h3 className="fleet-section-space">
+          {t("fleetSettings.pairedClients")}
+        </h3>
         {snapshot.host.clients.length === 0 ? (
-          <p>No paired clients</p>
+          <p>{t("fleetSettings.noPairedClients")}</p>
         ) : (
           snapshot.host.clients.map((client) => (
             <div className="settings-row" key={client.deviceId}>
               <div>
                 <strong>{client.label ?? client.deviceId}</strong>
                 <span>
-                  {client.access === "control" ? "Thread control" : "Read only"}{" "}
-                  · {client.revoked ? "Revoked" : "Paired"}
+                  {client.access === "control"
+                    ? t("fleetSettings.threadControl")
+                    : t("fleetSettings.readOnly")}{" "}
+                  ·{" "}
+                  {client.revoked
+                    ? t("fleetSettings.revoked")
+                    : t("fleetSettings.paired")}
                   {client.shellEnabled
-                    ? " · Shell granted"
-                    : " · No shell grant"}
+                    ? i18n.t("settings:fleetSettings.shellGranted")
+                    : i18n.t("settings:fleetSettings.noShellGrant")}
                 </span>
               </div>
               <button
                 type="button"
                 className="quiet-button"
                 disabled={disabled || client.revoked}
-                aria-label={`Revoke ${client.label ?? client.deviceId}`}
+                aria-label={t("fleetSettings.revokeNamedClient", {
+                  name: client.label ?? client.deviceId,
+                })}
                 onClick={() => {
                   setRevoking(client.deviceId);
                   setError(null);
                 }}
               >
-                Revoke
+                {t("fleetSettings.revoke")}
               </button>
             </div>
           ))
@@ -1687,16 +1745,13 @@ export function FleetSettings() {
         {revoking ? (
           <div role="alertdialog" aria-labelledby="fleet-revoke-title">
             <h3 id="fleet-revoke-title">
-              Revoke{" "}
+              {t("fleetSettings.revoke2")}{" "}
               {snapshot.host.clients.find(
                 (client) => client.deviceId === revoking,
               )?.label ?? revoking}
               ?
             </h3>
-            <p>
-              This ends this client’s access to this Host. It must pair again to
-              reconnect.
-            </p>
+            <p>{t("fleetSettings.thisEndsThisClientSAccessToThisHost")}</p>
             <div className="settings-actions fleet-actions">
               <button
                 className="danger-button"
@@ -1708,12 +1763,12 @@ export function FleetSettings() {
                     await refresh();
                     if (mounted.current) {
                       setRevoking(null);
-                      setNotice("Client revoked");
+                      setNotice(t("fleetSettings.clientRevoked"));
                     }
                   })
                 }
               >
-                Revoke client
+                {t("fleetSettings.revokeClient")}
               </button>
               <button
                 className="secondary-button"
@@ -1721,7 +1776,7 @@ export function FleetSettings() {
                 disabled={disabled}
                 onClick={() => setRevoking(null)}
               >
-                Cancel
+                {t("fleetSettings.cancel3")}
               </button>
             </div>
           </div>
@@ -1784,7 +1839,7 @@ function Field({
   );
 }
 function AccessField({
-  label = "Access",
+  label,
   value,
   onChange,
   disabled,
@@ -1794,16 +1849,17 @@ function AccessField({
   onChange(value: Access): void;
   disabled?: boolean;
 }) {
+  const { t } = useTranslation("settings");
   return (
     <label className="field">
-      <span>{label}</span>
+      <span>{label ?? t("fleetSettings.access")}</span>
       <Select
         value={value}
         disabled={disabled}
         onValueChange={(access) => onChange(access as Access)}
       >
-        <option value="read">Read only</option>
-        <option value="control">Thread control</option>
+        <option value="read">{t("fleetSettings.readOnly")}</option>
+        <option value="control">{t("fleetSettings.threadControl")}</option>
       </Select>
     </label>
   );
@@ -1832,22 +1888,47 @@ function Confirmation({
   );
 }
 function History({ value }: { value: unknown }) {
+  const { t } = useTranslation("settings");
   return (
-    <div className="fleet-remote-history" aria-label="Remote history">
+    <div
+      className="fleet-remote-history"
+      aria-label={t("fleetSettings.remoteHistory")}
+    >
       <FleetHistory value={value} />
     </div>
   );
 }
 
-function deviceCheckLabel(snapshot: FleetSettingsSnapshot, id: string): string {
-  const check = snapshot.devices?.find((device) => device.id === id)?.check;
-  if (!check || check.state === "not_checked") return "Not checked";
+function connectionCheckLabel(check: {
+  state: "not_checked" | "checking" | "reachable" | "failed";
+  checkedAt?: number;
+  detail?: string;
+}): string {
   const time = check.checkedAt
-    ? ` · checked ${new Date(check.checkedAt).toLocaleString()}`
+    ? i18n.t("settings:fleetSettings.checkedTime", {
+        time: new Date(check.checkedAt).toLocaleString(i18n.resolvedLanguage),
+      })
     : "";
-  if (check.state === "reachable") return `Reachable${time}`;
-  if (check.state === "checking") return "Checking…";
-  return `Last check failed${time}${check.detail ? ` · ${check.detail}` : ""}`;
+  if (check.state === "not_checked")
+    return i18n.t("settings:fleetSettings.notChecked");
+  if (check.state === "checking")
+    return i18n.t("settings:fleetSettings.checking");
+  if (check.state === "reachable")
+    return i18n.t("settings:fleetSettings.reachable") + time;
+  return (
+    (check.checkedAt
+      ? i18n.t("settings:fleetSettings.lastCheckFailed")
+      : i18n.t("settings:fleetSettings.connectionFailed")) +
+    time +
+    (check.detail ? ` · ${check.detail}` : "")
+  );
+}
+function deviceCheckLabel(snapshot: FleetSettingsSnapshot, id: string): string {
+  return connectionCheckLabel(
+    snapshot.devices?.find((device) => device.id === id)?.check ?? {
+      state: "not_checked",
+    },
+  );
 }
 function describeError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -1885,11 +1966,15 @@ function normalizeFleetSnapshot(value: unknown): FleetSettingsSnapshot {
     (snapshot.revision as number) < 0
   )
     throw new Error(
-      "Invalid Fleet settings response; retry after checking the Host connection.",
+      i18n.t(
+        "settings:fleetSettings.invalidFleetSettingsResponseRetryAfterCheckingTheHost",
+      ),
     );
   if (host.clients !== undefined && !Array.isArray(host.clients))
     throw new Error(
-      "Invalid Fleet client list; retry after checking the Host connection.",
+      i18n.t(
+        "settings:fleetSettings.invalidFleetClientListRetryAfterCheckingTheHost",
+      ),
     );
   return {
     ...(value as FleetSettingsSnapshot),

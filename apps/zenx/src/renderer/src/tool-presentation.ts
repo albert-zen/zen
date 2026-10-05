@@ -1,3 +1,4 @@
+import { i18n } from "./i18n.js";
 import type { IconName } from "./icons.js";
 import type { ThreadItem } from "../../protocol-client/index.js";
 
@@ -13,129 +14,137 @@ export function commandStatus(
     !Array.isArray(data) &&
     "status" in data
   ) {
-    if (data.status === "queued") return "Queued";
+    if (data.status === "queued") return i18n.t("shell:queued");
     if (data.status === "running")
-      return item.toolName === "wait" ? "Waiting" : "Running";
-    if (data.status === "cancel_requested") return "Cancelling";
+      return item.toolName === "wait"
+        ? i18n.t("shell:waiting")
+        : i18n.t("shell:running");
+    if (data.status === "cancel_requested") return i18n.t("shell:cancelling");
     if (data.status === "cancellation_unconfirmed")
-      return "Cancellation unconfirmed";
-    if (data.status === "failed") return "Failed";
+      return i18n.t("shell:cancellationUnconfirmed");
+    if (data.status === "failed") return i18n.t("shell:failed");
     if (data.status === "completed")
       return item.toolName === "wait"
-        ? "Waited"
+        ? i18n.t("shell:waited")
         : item.toolName === "shell"
-          ? "Ran command"
-          : "Completed";
-    if (data.status === "timed_out") return "Timed out";
-    if (data.status === "cancelled") return "Cancelled";
+          ? i18n.t("shell:ranCommand")
+          : i18n.t("shell:completed");
+    if (data.status === "timed_out") return i18n.t("shell:timedOut");
+    if (data.status === "cancelled") return i18n.t("shell:cancelled");
   }
   if (item.status === "completed")
     return item.toolName === "wait"
-      ? "Waited"
+      ? i18n.t("shell:waited")
       : item.toolName === "shell"
-        ? "Ran command"
-        : "Completed";
+        ? i18n.t("shell:ranCommand")
+        : i18n.t("shell:completed");
   return {
-    inProgress: "Started",
-    failed: "Failed",
-    declined: "Declined",
+    inProgress: i18n.t("shell:started"),
+    failed: i18n.t("shell:failed"),
+    declined: i18n.t("shell:declined"),
   }[item.status];
 }
 
 // These are presentation labels for known capabilities, never execution routing.
-const actions: Record<string, string> = {
-  browser_list_tabs: "List tabs",
-  browser_open: "Open page",
-  browser_navigate: "Navigate",
-  browser_inspect: "Inspect page",
-  browser_click: "Click element",
-  browser_type: "Fill field",
-  browser_select: "Select option",
-  browser_scroll: "Scroll page",
-  browser_close: "Close tab",
-  browser_close_session: "Close session",
-  computer_list_windows: "List windows",
-  computer_inspect: "Inspect window",
-  computer_press: "Press element",
-  computer_set_value: "Fill field",
-  computer_screenshot: "Capture window",
-  computer_foreground_click: "Click screen",
-  computer_foreground_key_press: "Press keys",
-  computer_foreground_scroll: "Scroll screen",
-};
+function actions(): Record<string, string> {
+  return {
+    browser_list_tabs: i18n.t("shell:listTabs"),
+    browser_open: i18n.t("shell:openPage"),
+    browser_navigate: i18n.t("shell:navigate"),
+    browser_inspect: i18n.t("shell:inspectPage"),
+    browser_click: i18n.t("shell:clickElement"),
+    browser_type: i18n.t("shell:fillField"),
+    browser_select: i18n.t("shell:selectOption"),
+    browser_scroll: i18n.t("shell:scrollPage"),
+    browser_close: i18n.t("shell:closeTab"),
+    browser_close_session: i18n.t("shell:closeSession"),
+    computer_list_windows: i18n.t("shell:listWindows"),
+    computer_inspect: i18n.t("shell:inspectWindow"),
+    computer_press: i18n.t("shell:pressElement"),
+    computer_set_value: i18n.t("shell:fillField"),
+    computer_screenshot: i18n.t("shell:captureWindow"),
+    computer_foreground_click: i18n.t("shell:clickScreen"),
+    computer_foreground_key_press: i18n.t("shell:pressKeys"),
+    computer_foreground_scroll: i18n.t("shell:scrollScreen"),
+  };
+}
 
-const completedActions: Record<string, string> = {
-  browser_list_tabs: "Listed tabs",
-  browser_open: "Opened page",
-  browser_navigate: "Navigated",
-  browser_inspect: "Inspected page",
-  browser_click: "Clicked element",
-  browser_type: "Filled field",
-  browser_select: "Selected option",
-  browser_scroll: "Scrolled page",
-  browser_close: "Closed tab",
-  browser_close_session: "Closed session",
-  computer_list_windows: "Listed windows",
-  computer_inspect: "Inspected window",
-  computer_press: "Pressed element",
-  computer_set_value: "Filled field",
-  computer_screenshot: "Captured window",
-  computer_foreground_click: "Clicked screen",
-  computer_foreground_key_press: "Pressed keys",
-  computer_foreground_scroll: "Scrolled screen",
-  view_image: "Viewed images",
-};
+function completedActions(): Record<string, string> {
+  return {
+    browser_list_tabs: i18n.t("shell:listedTabs"),
+    browser_open: i18n.t("shell:openedPage"),
+    browser_navigate: i18n.t("shell:navigated"),
+    browser_inspect: i18n.t("shell:inspectedPage"),
+    browser_click: i18n.t("shell:clickedElement"),
+    browser_type: i18n.t("shell:filledField"),
+    browser_select: i18n.t("shell:selectedOption"),
+    browser_scroll: i18n.t("shell:scrolledPage"),
+    browser_close: i18n.t("shell:closedTab"),
+    browser_close_session: i18n.t("shell:closedSession"),
+    computer_list_windows: i18n.t("shell:listedWindows"),
+    computer_inspect: i18n.t("shell:inspectedWindow"),
+    computer_press: i18n.t("shell:pressedElement"),
+    computer_set_value: i18n.t("shell:filledField"),
+    computer_screenshot: i18n.t("shell:capturedWindow"),
+    computer_foreground_click: i18n.t("shell:clickedScreen"),
+    computer_foreground_key_press: i18n.t("shell:pressedKeys"),
+    computer_foreground_scroll: i18n.t("shell:scrolledScreen"),
+    view_image: i18n.t("shell:viewedImages"),
+  };
+}
 
-const threadActions: Record<
+function threadActions(): Record<
   string,
   { action: string; completed: string; icon: IconName }
-> = {
-  threads_send: {
-    action: "Send message",
-    completed: "Sent message",
-    icon: "send",
-  },
-  threads_create: {
-    action: "Create thread",
-    completed: "Created thread",
-    icon: "plus",
-  },
-  threads_rename: {
-    action: "Rename thread",
-    completed: "Renamed thread",
-    icon: "compose",
-  },
-  threads_read: {
-    action: "Read thread",
-    completed: "Read thread",
-    icon: "thread",
-  },
-  threads_list: {
-    action: "List threads",
-    completed: "Listed threads",
-    icon: "thread",
-  },
-  threads_status: {
-    action: "Check thread status",
-    completed: "Checked thread status",
-    icon: "thread",
-  },
-  threads_configure: {
-    action: "Configure thread",
-    completed: "Configured thread",
-    icon: "settings",
-  },
-  threads_archive: {
-    action: "Archive thread",
-    completed: "Archived thread",
-    icon: "archive",
-  },
-  threads_unarchive: {
-    action: "Restore thread",
-    completed: "Restored thread",
-    icon: "restore",
-  },
-};
+> {
+  return {
+    threads_send: {
+      action: i18n.t("shell:sendMessage"),
+      completed: i18n.t("shell:sentMessage"),
+      icon: "send",
+    },
+    threads_create: {
+      action: i18n.t("shell:createThread"),
+      completed: i18n.t("shell:createdThread"),
+      icon: "plus",
+    },
+    threads_rename: {
+      action: i18n.t("shell:renameThread"),
+      completed: i18n.t("shell:renamedThread"),
+      icon: "compose",
+    },
+    threads_read: {
+      action: i18n.t("shell:readThread"),
+      completed: i18n.t("shell:readThread"),
+      icon: "thread",
+    },
+    threads_list: {
+      action: i18n.t("shell:listThreads"),
+      completed: i18n.t("shell:listedThreads"),
+      icon: "thread",
+    },
+    threads_status: {
+      action: i18n.t("shell:checkThreadStatus"),
+      completed: i18n.t("shell:checkedThreadStatus"),
+      icon: "thread",
+    },
+    threads_configure: {
+      action: i18n.t("shell:configureThread"),
+      completed: i18n.t("shell:configuredThread"),
+      icon: "settings",
+    },
+    threads_archive: {
+      action: i18n.t("shell:archiveThread"),
+      completed: i18n.t("shell:archivedThread"),
+      icon: "archive",
+    },
+    threads_unarchive: {
+      action: i18n.t("shell:restoreThread"),
+      completed: i18n.t("shell:restoredThread"),
+      icon: "restore",
+    },
+  };
+}
 
 export function toolPresentation(name: string): {
   category: string;
@@ -144,29 +153,46 @@ export function toolPresentation(name: string): {
 } {
   const key = name.replace(/^zenx_/u, "");
   if (/^view_image(?:\s|$)/u.test(key)) {
-    return { category: "Image", icon: "image", action: "View images" };
+    return {
+      category: i18n.t("shell:image"),
+      icon: "image",
+      action: i18n.t("shell:viewImages"),
+    };
   }
   if (key === "shell")
-    return { category: "Shell", icon: "terminal", action: "Run command" };
+    return {
+      category: i18n.t("shell:shell"),
+      icon: "terminal",
+      action: i18n.t("shell:runCommand"),
+    };
   if (key === "wait")
-    return { category: "Wait", icon: "clock", action: "Wait for task" };
-  const threadAction = Object.hasOwn(threadActions, key)
-    ? threadActions[key]
+    return {
+      category: i18n.t("shell:wait"),
+      icon: "clock",
+      action: i18n.t("shell:waitForTask"),
+    };
+  const threadAction = Object.hasOwn(threadActions(), key)
+    ? threadActions()[key]
     : undefined;
   if (threadAction)
     return {
-      category: "Thread",
+      category: i18n.t("shell:thread"),
       icon: threadAction.icon,
       action: threadAction.action,
     };
-  const action = actions[key];
+  const action = actions()[key];
   if (action)
     return {
-      category: key.startsWith("browser_") ? "Browser" : "Computer",
+      category: key.startsWith("browser_")
+        ? i18n.t("shell:browser")
+        : i18n.t("shell:computer"),
       icon: key.startsWith("browser_") ? "browser" : "computer",
       action,
     };
-  return { category: name === "run_code" ? "Code" : "Tool", icon: "terminal" };
+  return {
+    category: name === "run_code" ? i18n.t("shell:code") : i18n.t("shell:tool"),
+    icon: "terminal",
+  };
 }
 
 /** Concise labels for existing tool facts; never infer a task or agent from a process. */
@@ -175,14 +201,14 @@ export function commandTitle(
 ): string {
   const name = item.toolName ?? item.command.trim().split(/\s+/u)[0] ?? "tool";
   const args = item.toolArguments;
-  const completed = commandStatus(item) === "Completed";
+  const completed = commandStatus(item) === i18n.t("shell:completed");
   const key = name.replace(/^zenx_/u, "");
   const completedAction =
     completed && item.toolName !== undefined
-      ? Object.hasOwn(threadActions, key)
-        ? threadActions[key]?.completed
-        : Object.hasOwn(completedActions, key)
-          ? completedActions[key]
+      ? Object.hasOwn(threadActions(), key)
+        ? threadActions()[key]?.completed
+        : Object.hasOwn(completedActions(), key)
+          ? completedActions()[key]
           : undefined
       : undefined;
   const text =
@@ -192,10 +218,10 @@ export function commandTitle(
         ? args.command
         : name === "zenx_plugin" && args?.operation === "discover"
           ? completed
-            ? "Discovered plugins"
-            : "Discover plugins"
+            ? i18n.t("shell:discoveredPlugins")
+            : i18n.t("shell:discoverPlugins")
           : name === "zenx_plugin" && args?.operation === "read"
-            ? "Read plugin"
+            ? i18n.t("shell:readPlugin")
             : (completedAction ??
               (item.toolName === undefined
                 ? item.command
@@ -211,16 +237,29 @@ export function commandSummary(
   const status = commandStatus(item);
   const title = commandTitle(item);
   if (item.toolName === "wait" || item.command.trim() === "wait") {
-    if (status === "Waiting" || status === "Started") return "Waiting for task";
-    if (status === "Waited" || status === "Completed") return "Waited for task";
-    return `Wait · ${status.toLowerCase()}`;
+    if (
+      status === i18n.t("shell:waiting") ||
+      status === i18n.t("shell:started")
+    )
+      return i18n.t("shell:waitingForTask");
+    if (
+      status === i18n.t("shell:waited") ||
+      status === i18n.t("shell:completed")
+    )
+      return i18n.t("shell:waitedForTask");
+    return i18n.t("shell:waitStatus", { status: status.toLowerCase() });
   }
   if (item.toolName === "shell") {
-    if (status === "Started") return `Started · ${title}`;
-    if (status === "Running") return `Running · ${title}`;
-    if (status === "Ran command" || status === "Completed")
-      return `Ran · ${title}`;
+    if (status === i18n.t("shell:started"))
+      return i18n.t("shell:startedTitle", { title });
+    if (status === i18n.t("shell:running"))
+      return i18n.t("shell:runningTitle", { title });
+    if (
+      status === i18n.t("shell:ranCommand") ||
+      status === i18n.t("shell:completed")
+    )
+      return i18n.t("shell:ranTitle", { title });
   }
-  if (status === "Completed") return title;
-  return `${title} · ${status.toLowerCase()}`;
+  if (status === i18n.t("shell:completed")) return title;
+  return i18n.t("shell:titleStatus", { title, status: status.toLowerCase() });
 }

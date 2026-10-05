@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
@@ -32,6 +34,7 @@ export function PluginThreadHeaders({
   navigate(route: string): void;
   registry?: PluginUiRegistry;
 }) {
+  useTranslation("panels");
   const theme = useAppearance();
   // Registry is injected by App to keep plugin registration independent of mounting.
   if (registry === undefined || !snapshot.threadHeaders?.length) return null;
@@ -127,6 +130,7 @@ function CreateSideChat({
   parent: string;
   onCreated(): void;
 }) {
+  useTranslation("panels");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inflight = useRef(false);
@@ -158,7 +162,7 @@ function CreateSideChat({
         mode: "side-chat",
       })) as { thread?: { id?: string }; threadId?: string };
       const id = result.thread?.id ?? result.threadId;
-      if (!id) throw new Error("The new conversation could not be identified.");
+      if (!id) throw new Error(i18n.t("panels:newConversationUnidentified"));
       if (mounted.current && epoch.current === requestEpoch) {
         onCreated();
         sdk.navigation.navigate(
@@ -178,13 +182,15 @@ function CreateSideChat({
       <button
         type="button"
         className="subagent-create-button"
-        aria-label="New side chat"
-        title="Fork this conversation into a side chat"
+        aria-label={i18n.t("panels:newSideChat")}
+        title={i18n.t("panels:forkThisConversationIntoASideChat")}
         disabled={!parent || busy || !active}
         onClick={() => void create()}
       >
         <Icon name="plus" />
-        <span>{busy ? "Creating…" : "Side chat"}</span>
+        <span>
+          {busy ? i18n.t("panels:creating") : i18n.t("panels:sideChat")}
+        </span>
       </button>
       {error ? (
         <p className="subagent-create-error" role="alert">
@@ -205,6 +211,7 @@ export function ThreadBreadcrumbAncestors({
   threads: readonly NativeThreadSummary[];
   navigate(route: string): void;
 }) {
+  useTranslation("panels");
   const byId = new Map(threads.map((thread) => [thread.threadId, thread]));
   const ancestors: Array<{ threadId: string; title: string }> = [];
   const visited = new Set([threadId]);
@@ -214,7 +221,7 @@ export function ThreadBreadcrumbAncestors({
     const parent = byId.get(parentId);
     ancestors.unshift({
       threadId: parentId,
-      title: parent ? threadTitle(parent) : "Parent conversation",
+      title: parent ? threadTitle(parent) : i18n.t("panels:parentConversation"),
     });
     parentId = parent?.parentThreadId;
   }
@@ -222,7 +229,7 @@ export function ThreadBreadcrumbAncestors({
   return (
     <nav
       className="thread-breadcrumb-ancestors"
-      aria-label="Parent conversations"
+      aria-label={i18n.t("panels:parentConversations")}
     >
       {ancestors.map((ancestor) => (
         <React.Fragment key={ancestor.threadId}>
@@ -243,6 +250,7 @@ export function ThreadBreadcrumbAncestors({
 }
 
 function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
+  useTranslation("panels");
   const { parent, all, error, refresh } = useRelatedThreads(sdk);
   const [showArchived, setShowArchived] = useState(false);
   const render = (
@@ -273,12 +281,12 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
               <span className="subagent-tree-title">{threadTitle(child)}</span>
               <span className="subagent-tree-status">
                 {child.archived
-                  ? "Archived"
+                  ? i18n.t("panels:archivedStatus")
                   : child.status === "active"
-                    ? "Working"
+                    ? i18n.t("shell:working")
                     : child.status === "systemError"
-                      ? "Unavailable"
-                      : "Idle"}
+                      ? i18n.t("panels:unavailable")
+                      : i18n.t("panels:idleStatus")}
               </span>
             </button>
             {visited.size < 32
@@ -291,9 +299,12 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
   };
   const tree = render(parent, new Set([parent]));
   return (
-    <section className="subagents-panel" aria-label="Subagent conversations">
+    <section
+      className="subagents-panel"
+      aria-label={i18n.t("panels:subagentConversations")}
+    >
       <header>
-        <strong>Subagents</strong>
+        <strong>{i18n.t("panels:subagents")}</strong>
         <CreateSideChat
           key={parent}
           sdk={sdk}
@@ -305,11 +316,13 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
         <p role="alert">
           {error}
           <button type="button" onClick={refresh}>
-            Retry
+            {i18n.t("panels:retry")}
           </button>
         </p>
       ) : null}
-      {tree ?? <p className="subagent-empty">No subagents yet.</p>}
+      {tree ?? (
+        <p className="subagent-empty">{i18n.t("panels:noSubagentsYet")}</p>
+      )}
       {all.some((entry) => entry.archived && entry.parentThreadId) ? (
         <label className="subagent-archived-toggle">
           <input
@@ -317,7 +330,7 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
             checked={showArchived}
             onChange={(event) => setShowArchived(event.target.checked)}
           />
-          Show archived
+          {i18n.t("panels:showArchived")}
         </label>
       ) : null}
     </section>

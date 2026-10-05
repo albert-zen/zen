@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { DEFAULT_TITLE_PROMPT } from "../../main/workflow-configuration.js";
 import type { WorkflowCommand } from "../../main/workflow-configuration.js";
 
@@ -13,6 +14,7 @@ export function WorkflowSettingsPanel({
     titlePrompt?: string;
   }): void;
 }) {
+  const { t } = useTranslation("settings");
   const update = (index: number, change: Partial<WorkflowCommand>) => {
     const next = commands.map((command, commandIndex) =>
       commandIndex === index ? { ...command, ...change } : command,
@@ -25,20 +27,21 @@ export function WorkflowSettingsPanel({
   return (
     <>
       <header>
-        <h2>Workflows</h2>
+        <h2>{t("workflowSettingsPanel.workflows")}</h2>
         <p>
-          Create user-scoped Slash commands that expand into message drafts.
-          Review or edit the expanded prompt before sending it.
+          {t(
+            "workflowSettingsPanel.createUserScopedSlashCommandsThatExpandIntoMessage",
+          )}
         </p>
       </header>
       <section className="settings-card workflow-settings-card">
         <div className="settings-card-head">
           <div>
-            <h3>Slash commands</h3>
+            <h3>{t("workflowSettingsPanel.slashCommands")}</h3>
             <span>
-              Names use lowercase letters, numbers, and hyphens. /compact is
-              built in and cannot be replaced. Use {"{{args}}"} where typed
-              arguments should appear.
+              {t("workflowSettingsPanel.commandNameHelp", {
+                placeholder: "{{args}}",
+              })}
             </span>
           </div>
           <button
@@ -54,7 +57,9 @@ export function WorkflowSettingsPanel({
                   ...commands,
                   {
                     name,
-                    description: "Describe what this workflow does",
+                    description: t(
+                      "workflowSettingsPanel.describeWhatThisWorkflowDoes",
+                    ),
                     prompt: "Describe the task here.\n\n{{args}}",
                     enabled: true,
                   },
@@ -63,11 +68,13 @@ export function WorkflowSettingsPanel({
               });
             }}
           >
-            Add command
+            {t("workflowSettingsPanel.addCommand")}
           </button>
         </div>
         {commands.length === 0 ? (
-          <p className="settings-empty">No custom Slash commands.</p>
+          <p className="settings-empty">
+            {t("workflowSettingsPanel.noCustomSlashCommands")}
+          </p>
         ) : (
           <div className="workflow-command-editors">
             {commands.map((command, index) => (
@@ -81,7 +88,7 @@ export function WorkflowSettingsPanel({
                         update(index, { enabled: event.target.checked })
                       }
                     />
-                    Enabled
+                    {t("workflowSettingsPanel.enabled")}
                   </label>
                   <button
                     className="quiet-button danger"
@@ -98,14 +105,16 @@ export function WorkflowSettingsPanel({
                       });
                     }}
                   >
-                    Delete
+                    {t("workflowSettingsPanel.delete")}
                   </button>
                 </div>
                 <div className="form-grid">
                   <label className="field">
-                    <span>Name</span>
+                    <span>{t("workflowSettingsPanel.name")}</span>
                     <input
-                      aria-label={`Command ${index + 1} name`}
+                      aria-label={t("workflowSettingsPanel.commandNumberName", {
+                        number: index + 1,
+                      })}
                       value={command.name}
                       onChange={(event) =>
                         update(index, { name: event.target.value })
@@ -113,9 +122,12 @@ export function WorkflowSettingsPanel({
                     />
                   </label>
                   <label className="field">
-                    <span>Description</span>
+                    <span>{t("workflowSettingsPanel.description")}</span>
                     <input
-                      aria-label={`Command ${index + 1} description`}
+                      aria-label={t(
+                        "workflowSettingsPanel.commandNumberDescription",
+                        { number: index + 1 },
+                      )}
                       value={command.description}
                       onChange={(event) =>
                         update(index, { description: event.target.value })
@@ -123,9 +135,12 @@ export function WorkflowSettingsPanel({
                     />
                   </label>
                   <label className="field workflow-prompt-field">
-                    <span>Prompt</span>
+                    <span>{t("workflowSettingsPanel.prompt")}</span>
                     <textarea
-                      aria-label={`Command ${index + 1} prompt`}
+                      aria-label={t(
+                        "workflowSettingsPanel.commandNumberPrompt",
+                        { number: index + 1 },
+                      )}
                       rows={5}
                       value={command.prompt}
                       onChange={(event) =>
@@ -142,10 +157,11 @@ export function WorkflowSettingsPanel({
       <section className="settings-card workflow-settings-card">
         <div className="settings-card-head">
           <div>
-            <h3>Thread title prompt</h3>
+            <h3>{t("workflowSettingsPanel.threadTitlePrompt")}</h3>
             <span>
-              Use {"{{request}}"} for the first request. This auxiliary prompt
-              is not added to the Thread conversation.
+              {t("workflowSettingsPanel.titlePromptHelp", {
+                placeholder: "{{request}}",
+              })}
             </span>
           </div>
           <button
@@ -160,11 +176,11 @@ export function WorkflowSettingsPanel({
               })
             }
           >
-            Restore default
+            {t("workflowSettingsPanel.restoreDefault")}
           </button>
         </div>
         <label className="field">
-          <span>Prompt</span>
+          <span>{t("workflowSettingsPanel.prompt2")}</span>
           <textarea
             rows={7}
             value={titlePrompt ?? DEFAULT_TITLE_PROMPT}
@@ -179,8 +195,8 @@ export function WorkflowSettingsPanel({
           />
           <small>
             {titlePrompt === undefined
-              ? "Using the ZenX default"
-              : "Custom prompt"}
+              ? t("workflowSettingsPanel.usingTheZenxDefault")
+              : t("workflowSettingsPanel.customPrompt")}
           </small>
         </label>
       </section>

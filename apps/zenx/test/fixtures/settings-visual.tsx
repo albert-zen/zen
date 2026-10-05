@@ -1,3 +1,4 @@
+import { initializeLanguage } from "../../src/renderer/src/language.js";
 import { installScrollbarVisibility } from "../../src/renderer/src/scrollbar-visibility.js";
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -207,4 +208,8 @@ function Preview() {
     />
   );
 }
-createRoot(document.getElementById("root")!).render(<Preview />);
+const previewLanguage = params.get("language");
+if (previewLanguage) localStorage.setItem("zenx.language", previewLanguage);
+void initializeLanguage(window).then(() => {
+  createRoot(document.getElementById("root")!).render(<Preview />);
+});

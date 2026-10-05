@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import {
   useLayoutEffect,
   useRef,
@@ -10,13 +12,13 @@ import { createPortal } from "react-dom";
 import { Icon, type IconName } from "./icons.js";
 
 const groups = {
-  "built-in": "Built in",
-  custom: "Your commands",
-  skill: "Skills",
-  file: "Workspace files",
-  thread: "Agent threads",
-  more: "More results",
-  member: "Room members",
+  "built-in": "builtIn",
+  custom: "yourCommands",
+  skill: "skills",
+  file: "workspaceFiles",
+  thread: "agentThreads",
+  more: "moreResults",
+  member: "roomMembers",
 };
 const icons: Record<keyof typeof groups, IconName> = {
   "built-in": "terminal",
@@ -97,6 +99,7 @@ export function ComposerSuggestions({
   label: string;
   hint: string;
 }) {
+  useTranslation("shell");
   const panel = useRef<HTMLDivElement>(null);
   const [layout, setLayout] = useState<CSSProperties>({
     left: 10,
@@ -192,7 +195,7 @@ export function ComposerSuggestions({
     >
       {selector.loading || selector.busy ? (
         <div className="selector-heading" role="status">
-          {selector.busy ? "Checking…" : "Searching…"}
+          {selector.busy ? i18n.t("shell:checking") : i18n.t("shell:searching")}
         </div>
       ) : null}
       <div
@@ -206,7 +209,7 @@ export function ComposerSuggestions({
           <div role="presentation" key={row.key}>
             {index === 0 || selector.rows[index - 1]?.kind !== row.kind ? (
               <div className="selector-group" role="presentation">
-                {groups[row.kind]}
+                {i18n.t(`shell:${groups[row.kind]}`)}
                 {row.kind === "file" && row.reference ? (
                   <span title={row.reference.cwd}>{row.reference.cwd}</span>
                 ) : null}
@@ -246,7 +249,7 @@ export function ComposerSuggestions({
         ))}
         {!selector.loading && !selector.rows.length ? (
           <p className="selector-status" role="status">
-            No matches. Try another name or description.
+            {i18n.t("shell:noMatchesTryAnother")}
           </p>
         ) : null}
       </div>
@@ -261,8 +264,9 @@ export function ComposerSuggestions({
       <footer id={`${id}-hint`}>
         <span className="sr-only">{hint}</span>
         <span>
-          <kbd>↑↓</kbd> <kbd>Enter</kbd> <kbd>Tab</kbd> select · <kbd>Esc</kbd>{" "}
-          close
+          <kbd>↑↓</kbd> <kbd>Enter</kbd> <kbd>Tab</kbd>{" "}
+          {i18n.t("shell:selectShortcut")}
+          <kbd>Esc</kbd> {i18n.t("shell:closeShortcut")}
         </span>
       </footer>
     </div>,

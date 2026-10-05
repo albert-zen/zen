@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "./icons.js";
 
@@ -113,7 +115,7 @@ async function readRoomConversations(
 ): Promise<RoomConversation[]> {
   const api = window.zenx?.plugins;
   if (api?.executeCommand === undefined)
-    throw new Error("Rooms are unavailable");
+    throw new Error(i18n.t("panels:roomsAreUnavailable"));
   const rooms: RoomConversation[] = [];
   const ids = new Set<string>();
   let cursor = 0;
@@ -124,13 +126,13 @@ async function readRoomConversations(
     );
     if (!active()) return [];
     if (!page || !Array.isArray(page.rooms))
-      throw new Error("Invalid Room list");
+      throw new Error(i18n.t("panels:invalidRoomList"));
     if (rooms.length + page.rooms.length > MAX_ROOMS)
-      throw new Error("Room list exceeds its navigation limit");
+      throw new Error(i18n.t("panels:roomListExceedsItsNavigationLimit"));
     for (const value of page.rooms) {
       const room = navigationRoom(value);
       if (ids.has(room.id))
-        throw new Error("Duplicate Room identity in navigation");
+        throw new Error(i18n.t("panels:duplicateRoomIdentityInNavigation"));
       ids.add(room.id);
       rooms.push(room);
     }
@@ -140,10 +142,10 @@ async function readRoomConversations(
       !Number.isSafeInteger(page.nextCursor) ||
       page.nextCursor <= cursor
     )
-      throw new Error("Room list cursor did not advance");
+      throw new Error(i18n.t("panels:roomListCursorDidNotAdvance"));
     cursor = page.nextCursor;
   }
-  throw new Error("Room pagination exceeds its navigation limit");
+  throw new Error(i18n.t("panels:roomPaginationExceedsItsNavigationLimit"));
 }
 
 function navigationRoom(value: unknown): RoomConversation {
@@ -155,11 +157,11 @@ function navigationRoom(value: unknown): RoomConversation {
     !Array.isArray(room.members) ||
     room.members.length > 64
   )
-    throw new Error("Invalid Room navigation facts");
+    throw new Error(i18n.t("panels:invalidRoomNavigationFacts"));
   const members = room.members.map((value: unknown) => {
     const member = record(value);
     if (!member || !text(member.name, 128) || !text(member.threadId, 512))
-      throw new Error("Invalid Room member");
+      throw new Error(i18n.t("panels:invalidRoomMember"));
     return { name: member.name, threadId: member.threadId };
   });
   let assistant: RoomConversation["assistant"];
@@ -170,7 +172,7 @@ function navigationRoom(value: unknown): RoomConversation {
       !text(candidate.threadId, 512) ||
       !text(candidate.triggerId, 512)
     )
-      throw new Error("Invalid PAW identity");
+      throw new Error(i18n.t("panels:invalidPawIdentity"));
     assistant = {
       threadId: candidate.threadId,
       triggerId: candidate.triggerId,
@@ -218,6 +220,7 @@ export function RoomConversationNavigation({
   selectedPage: string;
   onOpen(route: string): void;
 }) {
+  useTranslation("panels");
   const groups = [
     {
       label: "PAW",
@@ -227,7 +230,7 @@ export function RoomConversationNavigation({
       icon: "conversation" as const,
     },
     {
-      label: "Rooms",
+      label: i18n.t("panels:rooms"),
       displayKind: "room",
       kind: "room",
       rooms: rooms.filter((room) => room.assistant === undefined),
@@ -237,7 +240,7 @@ export function RoomConversationNavigation({
   return (
     <nav
       className="room-conversations"
-      aria-label="Conversations"
+      aria-label={i18n.t("panels:conversations")}
       aria-busy={loading}
     >
       {groups.map((group) => (
@@ -279,8 +282,10 @@ export function RoomConversationNavigation({
                 <small>
                   {room.messagePreview ||
                     (room.assistant
-                      ? "Personal conversation"
-                      : `${room.memberCount} ${room.memberCount === 1 ? "member" : "members"}`)}
+                      ? i18n.t("panels:personalConversation")
+                      : i18n.t("panels:memberCount", {
+                          count: room.memberCount,
+                        }))}
                 </small>
               </span>
             </button>
@@ -288,22 +293,24 @@ export function RoomConversationNavigation({
           {group.rooms.length === 0 && !loading && error === null ? (
             <p className="room-conversation-empty">
               {group.kind === "companion"
-                ? "Your PAW conversations"
-                : "Your shared conversations"}
+                ? i18n.t("panels:yourPawConversations")
+                : i18n.t("panels:yourSharedConversations")}
             </p>
           ) : null}
         </section>
       ))}
       {loading && rooms.length === 0 ? (
         <p className="room-conversation-empty" role="status">
-          Loading conversations…
+          {i18n.t("panels:loadingConversations")}
         </p>
       ) : null}
       {error !== null ? (
         <div className="room-conversation-error" role="alert">
-          <p>Could not load conversations: {error}</p>
+          <p>
+            {i18n.t("panels:couldNotLoadConversations")} {error}
+          </p>
           <button type="button" onClick={() => onOpen(ROOM_ROUTE)}>
-            Open Rooms
+            {i18n.t("panels:openRooms")}
           </button>
         </div>
       ) : null}

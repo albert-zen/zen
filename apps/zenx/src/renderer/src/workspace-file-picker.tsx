@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import React, { useEffect, useState } from "react";
 import type { WorkspaceFileListing } from "../../main/workspace-files.js";
 import { Icon } from "./icons.js";
@@ -11,6 +13,7 @@ export function WorkspaceFilePicker({
   onOpen(path: string): Promise<void>;
   onBack(): void;
 }) {
+  useTranslation("panels");
   const [directory, setDirectory] = useState(".");
   const [listing, setListing] = useState<WorkspaceFileListing>();
   const [path, setPath] = useState("");
@@ -44,17 +47,20 @@ export function WorkspaceFilePicker({
     }
   };
   return (
-    <section className="workspace-file-picker" aria-label="Choose a file">
+    <section
+      className="workspace-file-picker"
+      aria-label={i18n.t("panels:chooseAFile")}
+    >
       <div className="workspace-picker-heading">
         <button
           type="button"
           className="icon-button"
-          aria-label="Back to tab types"
+          aria-label={i18n.t("panels:backToTabTypes")}
           onClick={onBack}
         >
           <Icon name="chevron-left" />
         </button>
-        <span>Open a file</span>
+        <span>{i18n.t("panels:openAFile")}</span>
       </div>
       <form
         className="file-path-form"
@@ -64,20 +70,23 @@ export function WorkspaceFilePicker({
         }}
       >
         <input
-          aria-label="File path"
-          placeholder="File path relative to this workspace"
+          aria-label={i18n.t("panels:filePath")}
+          placeholder={i18n.t("panels:filePathRelativeToThisWorkspace")}
           value={path}
           onChange={(event) => setPath(event.target.value)}
         />
-        <button disabled={!path.trim() || busy}>Open</button>
+        <button disabled={!path.trim() || busy}>{i18n.t("panels:open")}</button>
       </form>
-      <nav className="file-breadcrumbs" aria-label="File location">
+      <nav
+        className="file-breadcrumbs"
+        aria-label={i18n.t("panels:fileLocation")}
+      >
         <button
           type="button"
           disabled={directory === "."}
           onClick={() => setDirectory(".")}
         >
-          Workspace
+          {i18n.t("panels:workspace")}
         </button>
         {directory !== "." ? (
           <>
@@ -88,7 +97,7 @@ export function WorkspaceFilePicker({
                 setDirectory(directory.split("/").slice(0, -1).join("/") || ".")
               }
             >
-              Up
+              {i18n.t("panels:up")}
             </button>
           </>
         ) : null}
@@ -99,7 +108,7 @@ export function WorkspaceFilePicker({
         </p>
       ) : null}
       <div className="file-list">
-        {!listing && !error ? <p>Loading files…</p> : null}
+        {!listing && !error ? <p>{i18n.t("panels:loadingFiles")}</p> : null}
         {listing?.entries.map((entry) => (
           <button
             type="button"
@@ -115,9 +124,11 @@ export function WorkspaceFilePicker({
             <span>{entry.name}</span>
           </button>
         ))}
-        {listing?.entries.length === 0 ? <p>No files in this folder.</p> : null}
+        {listing?.entries.length === 0 ? (
+          <p>{i18n.t("panels:noFilesInThisFolder")}</p>
+        ) : null}
         {listing?.truncated ? (
-          <p>Some entries are omitted. Enter a file path above to open it.</p>
+          <p>{i18n.t("panels:someEntriesAreOmittedEnterAFile")}</p>
         ) : null}
       </div>
     </section>

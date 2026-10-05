@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import { ImZenXDraftContext, type ImZenXDraft } from "./imzenx-ui.js";
 import { RoomDraftContext } from "./room-drafts.js";
 import {
@@ -148,7 +150,11 @@ import type { WorkflowCommand } from "./workflow-commands.js";
 import { ZenXBrand } from "./ZenXBrand.js";
 
 type ProductPage = string;
-const MODEL_CATALOG_LOADING = "Models are still loading. Try again.";
+const modelCatalogLoading = () => i18n.t("shell:modelsAreStillLoadingTryAgain");
+const isModelCatalogLoading = (value: string | null) =>
+  value !== null &&
+  (value === i18n.t("shell:modelsAreStillLoadingTryAgain", { lng: "en" }) ||
+    value === i18n.t("shell:modelsAreStillLoadingTryAgain", { lng: "zh-CN" }));
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "zenx.sidebar-collapsed";
 
 interface NewThreadDraft {
@@ -382,6 +388,7 @@ function updateThreadProjectionCache(
 }
 
 export function App() {
+  const { i18n: activeI18n } = useTranslation("shell");
   const selectionEpoch = useRef(0);
   const pendingResumeProjectionRef = useRef<{
     epoch: number;
@@ -611,6 +618,11 @@ export function App() {
   const [switchingPermission, setSwitchingPermission] = useState(false);
   const [permissionError, setPermissionError] = useState<string | null>(null);
   const [modelUpdateError, setModelUpdateError] = useState<string | null>(null);
+  useEffect(() => {
+    setModelUpdateError((current) =>
+      isModelCatalogLoading(current) ? modelCatalogLoading() : current,
+    );
+  }, [activeI18n.resolvedLanguage]);
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>(() => {
     try {
       return readSidebarMode(window.localStorage);
@@ -839,7 +851,9 @@ export function App() {
           threadUsageLoadEpoch.current === epoch
         )
           setRequestError(
-            `Thread usage could not be loaded: ${describeError(error)}`,
+            i18n.t("shell:threadUsageLoadFailed", {
+              error: describeError(error),
+            }),
           );
       });
   };
@@ -907,7 +921,9 @@ export function App() {
         .catch((error: unknown) => {
           if (selectionEpoch.current === epoch)
             setRequestError(
-              `Thread images could not be loaded: ${describeError(error)}`,
+              i18n.t("shell:threadImagesLoadFailed", {
+                error: describeError(error),
+              }),
             );
         });
       void window.zenx.modelUsage
@@ -925,7 +941,9 @@ export function App() {
             threadUsageLoadEpoch.current === usageEpoch
           )
             setRequestError(
-              `Thread usage could not be loaded: ${describeError(error)}`,
+              i18n.t("shell:threadUsageLoadFailed", {
+                error: describeError(error),
+              }),
             );
         });
       void window.zenx.settings
@@ -959,7 +977,7 @@ export function App() {
       setModels(result.value.data);
       setModelCatalogError(null);
       setModelUpdateError((current) =>
-        current === MODEL_CATALOG_LOADING ? null : current,
+        isModelCatalogLoading(current) ? null : current,
       );
     } catch (error) {
       setModelCatalogError(describeError(error));
@@ -984,7 +1002,7 @@ export function App() {
         setModels(result.value.data);
         setModelCatalogError(null);
         setModelUpdateError((current) =>
-          current === MODEL_CATALOG_LOADING ? null : current,
+          isModelCatalogLoading(current) ? null : current,
         );
       } catch (error) {
         setModelCatalogError(describeError(error));
@@ -1011,7 +1029,9 @@ export function App() {
           pendingApprovalSnapshotRef.current = null;
         setApprovals(replacePendingApprovals([], pending.events));
         setRequestError(
-          `Pending approvals could not be loaded: ${describeError(error)}`,
+          i18n.t("shell:pendingApprovalsLoadFailed", {
+            error: describeError(error),
+          }),
         );
       }
     };
@@ -1178,7 +1198,9 @@ export function App() {
               })
               .catch((error: unknown) =>
                 setRequestError(
-                  `Thread images could not be loaded: ${describeError(error)}`,
+                  i18n.t("shell:threadImagesLoadFailed", {
+                    error: describeError(error),
+                  }),
                 ),
               );
           }
@@ -1204,7 +1226,9 @@ export function App() {
               })
               .catch((error: unknown) =>
                 setRequestError(
-                  `Thread images could not be loaded: ${describeError(error)}`,
+                  i18n.t("shell:threadImagesLoadFailed", {
+                    error: describeError(error),
+                  }),
                 ),
               );
           }
@@ -1262,7 +1286,9 @@ export function App() {
       .get()
       .then(setPluginSnapshot)
       .catch((error: unknown) =>
-        setRequestError(`ZenX plugin catalog failed: ${describeError(error)}`),
+        setRequestError(
+          i18n.t("shell:pluginCatalogFailed", { error: describeError(error) }),
+        ),
       );
     return dispose;
   }, []);
@@ -1282,7 +1308,9 @@ export function App() {
       .get()
       .then(setTitleSnapshot)
       .catch((error: unknown) =>
-        setRequestError(`ZenX title metadata failed: ${describeError(error)}`),
+        setRequestError(
+          i18n.t("shell:titleMetadataFailed", { error: describeError(error) }),
+        ),
       );
     return dispose;
   }, []);
@@ -1490,17 +1518,19 @@ export function App() {
         })
         .catch((error: unknown) =>
           setRequestError(
-            `Thread title could not be staged: ${describeError(error)}`,
+            i18n.t("shell:threadTitleStagingFailed", {
+              error: describeError(error),
+            }),
           ),
         );
     if (skillDraft.skills.length > 0) {
       if (archivingThreadIdsRef.current.has(threadId))
-        throw new Error("This Thread is being archived.");
+        throw new Error(i18n.t("shell:thisThreadIsBeingArchived"));
       if (
         (submission.intent === "steer" || submission.intent === "replace") &&
         submission.expectedTurnId === null
       )
-        throw new Error("The active turn changed before sending");
+        throw new Error(i18n.t("shell:theActiveTurnChangedBeforeSending"));
       const input: (
         | import("../../../../../src/item.js").UserInputPart
         | import("../../../../../src/skill-input.js").SkillReference
@@ -1529,7 +1559,7 @@ export function App() {
     if (submission.intent === "start") {
       if (archivingThreadIdsRef.current.has(threadId))
         throw new Error(
-          "This Thread is being archived. Try again if archiving fails.",
+          i18n.t("shell:thisThreadIsBeingArchivedTryAgainIfArchivingFails"),
         );
       await window.zenx.protocol.request("turn/start", {
         threadId,
@@ -1538,7 +1568,7 @@ export function App() {
       });
     } else if (submission.intent === "batch-next") {
       if (archivingThreadIdsRef.current.has(threadId))
-        throw new Error("This Thread is being archived.");
+        throw new Error(i18n.t("shell:thisThreadIsBeingArchived"));
       await window.zenx.protocol.request("zen/turn/send", {
         threadId,
         mode: "batch-next",
@@ -1548,14 +1578,14 @@ export function App() {
             : part.type === "text"
               ? part
               : (() => {
-                  throw new Error("Unsupported batch input part");
+                  throw new Error(i18n.t("shell:unsupportedBatchInputPart"));
                 })(),
         ),
         clientUserMessageId: submission.clientUserMessageId,
       });
     } else if (submission.intent === "queue") {
       if (archivingThreadIdsRef.current.has(threadId))
-        throw new Error("This Thread is being archived.");
+        throw new Error(i18n.t("shell:thisThreadIsBeingArchived"));
       await window.zenx.protocol.request("turn/queue", {
         threadId,
         input,
@@ -1563,10 +1593,10 @@ export function App() {
       });
     } else if (submission.intent === "steer") {
       if (submission.expectedTurnId === null)
-        throw new Error("The active turn changed before steering");
+        throw new Error(i18n.t("shell:theActiveTurnChangedBeforeSteering"));
       if (archivingThreadIdsRef.current.has(threadId))
         throw new Error(
-          "This Thread is being archived. Try again if archiving fails.",
+          i18n.t("shell:thisThreadIsBeingArchivedTryAgainIfArchivingFails"),
         );
       await window.zenx.protocol.request("turn/steer", {
         threadId,
@@ -1576,10 +1606,10 @@ export function App() {
       });
     } else {
       if (submission.expectedTurnId === null)
-        throw new Error("The active turn changed before replacement");
+        throw new Error(i18n.t("shell:theActiveTurnChangedBeforeReplacement"));
       if (archivingThreadIdsRef.current.has(threadId))
         throw new Error(
-          "This Thread is being archived. Try again if archiving fails.",
+          i18n.t("shell:thisThreadIsBeingArchivedTryAgainIfArchivingFails"),
         );
       await window.zenx.protocol.request("turn/replace", {
         threadId,
@@ -1611,7 +1641,7 @@ export function App() {
       return;
     }
     if (current.workspace === null) {
-      setModelUpdateError("Choose a Project before sending.");
+      setModelUpdateError(i18n.t("shell:chooseAProjectBeforeSending"));
       return;
     }
     const project = projectsRef.current.projects.find(
@@ -1620,7 +1650,7 @@ export function App() {
     );
     if (project === undefined) {
       setModelUpdateError(
-        "This Project is no longer available. Choose another Project.",
+        i18n.t("shell:thisProjectIsNoLongerAvailableChooseAnotherProject"),
       );
       return;
     }
@@ -1638,16 +1668,16 @@ export function App() {
       }
     }
     if (draftSettings === null) {
-      setModelUpdateError(modelCatalogError ?? MODEL_CATALOG_LOADING);
+      setModelUpdateError(modelCatalogError ?? modelCatalogLoading());
       return;
     }
     if (!canSendWithModel(models, draftSettings.model)) {
-      setModelUpdateError("Choose an available model before sending.");
+      setModelUpdateError(i18n.t("shell:chooseAnAvailableModelBeforeSending"));
       return;
     }
     if (!hasValidReasoningSelection(models, draftSettings)) {
       setModelUpdateError(
-        "Choose an available reasoning effort before sending.",
+        i18n.t("shell:chooseAnAvailableReasoningEffortBeforeSending"),
       );
       return;
     }
@@ -1740,7 +1770,9 @@ export function App() {
           })
           .catch((error: unknown) =>
             setRequestError(
-              `Thread images could not be loaded: ${describeError(error)}`,
+              i18n.t("shell:threadImagesLoadFailed", {
+                error: describeError(error),
+              }),
             ),
           );
       }
@@ -1775,7 +1807,9 @@ export function App() {
                 message,
               ),
             },
-            message: `New Thread could not be created: ${message}`,
+            message: i18n.t("shell:newThreadCreationFailed", {
+              error: message,
+            }),
           });
         }
       } else {
@@ -1840,7 +1874,7 @@ export function App() {
       }
     }
     if (intent !== "steer" && models.length === 0) {
-      setModelUpdateError(modelCatalogError ?? MODEL_CATALOG_LOADING);
+      setModelUpdateError(modelCatalogError ?? modelCatalogLoading());
       return;
     }
     if (
@@ -1853,7 +1887,7 @@ export function App() {
           models,
           providerProfiles,
           selectedSettings,
-        ) ?? "Choose an available model before sending.",
+        ) ?? i18n.t("shell:chooseAnAvailableModelBeforeSending"),
       );
       return;
     }
@@ -1863,7 +1897,7 @@ export function App() {
       !hasValidReasoningSelection(models, selectedSettings)
     ) {
       setModelUpdateError(
-        "Choose an available reasoning effort before sending.",
+        i18n.t("shell:chooseAnAvailableReasoningEffortBeforeSending"),
       );
       return;
     }
@@ -1895,7 +1929,9 @@ export function App() {
           })
           .catch((error: unknown) =>
             setRequestError(
-              `Thread images could not be loaded: ${describeError(error)}`,
+              i18n.t("shell:threadImagesLoadFailed", {
+                error: describeError(error),
+              }),
             ),
           );
       }
@@ -2016,7 +2052,7 @@ export function App() {
       newThreadDraftRef.current?.settings ?? null,
     );
     if (settings === null) {
-      setModelUpdateError("Choose an available model before sending.");
+      setModelUpdateError(i18n.t("shell:chooseAnAvailableModelBeforeSending"));
       return;
     }
     setModelUpdateError(null);
@@ -2039,7 +2075,7 @@ export function App() {
       )
     ) {
       setModelUpdateError(
-        "Choose an available reasoning effort before sending.",
+        i18n.t("shell:chooseAnAvailableReasoningEffortBeforeSending"),
       );
       return;
     }
@@ -2182,7 +2218,9 @@ export function App() {
     clearSelectedOnArchive = false,
   ) => {
     if (!summary.archived && threadHasActiveTurn(summary, threadDetail)) {
-      throw new Error("Wait for the active Turn to finish before archiving.");
+      throw new Error(
+        i18n.t("shell:waitForTheActiveTurnToFinishBeforeArchiving"),
+      );
     }
     const fenceSelectedArchive =
       !summary.archived &&
@@ -2215,7 +2253,9 @@ export function App() {
         );
       } catch (error) {
         setRequestError(
-          `Thread archived, but its local Pin could not be cleared: ${describeError(error)}`,
+          i18n.t("shell:threadArchivedPinClearFailed", {
+            error: describeError(error),
+          }),
         );
       }
     }
@@ -2344,9 +2384,7 @@ export function App() {
       } catch {
         // A failed read cannot prove the outcome either.
       }
-      throw new Error(
-        "Cancellation is unconfirmed; pending messages were not assumed canceled. Check this Thread before choosing to try again.",
-      );
+      throw new Error(i18n.t("shell:cancellationUnconfirmedDetail"));
     }
   };
 
@@ -2429,8 +2467,10 @@ export function App() {
         ) : page === "settings" ? (
           <PageTitleBar
             onOpenSidebar={openSidebar}
-            subtitle="Account, appearance, models, plugins, and local host"
-            title="Settings"
+            subtitle={i18n.t(
+              "shell:accountAppearanceModelsPluginsAndLocalHost",
+            )}
+            title={i18n.t("shell:settings")}
           />
         ) : genericPluginTarget !== undefined ? (
           <PageTitleBar
@@ -2439,8 +2479,10 @@ export function App() {
               selectedRoom
                 ? selectedRoom.assistant
                   ? "PAW"
-                  : "Shared conversation"
-                : `Provided by ${genericPluginTarget.pluginId}`
+                  : i18n.t("shell:sharedConversation")
+                : i18n.t("shell:providedByPlugin", {
+                    plugin: genericPluginTarget.pluginId,
+                  })
             }
             title={selectedRoom?.name ?? genericPluginTarget.title}
           />
@@ -2456,13 +2498,13 @@ export function App() {
           type="button"
           aria-label={
             browserPanels[selectedSummary.threadId]
-              ? "Close side panel"
-              : "Open side panel"
+              ? i18n.t("shell:closeSidePanel")
+              : i18n.t("shell:openSidePanel")
           }
           title={
             browserPanels[selectedSummary.threadId]
-              ? "Close side panel"
-              : "Open side panel"
+              ? i18n.t("shell:closeSidePanel")
+              : i18n.t("shell:openSidePanel")
           }
           aria-controls="thread-workspace-panel"
           aria-expanded={browserPanels[selectedSummary.threadId] === true}
@@ -2614,7 +2656,7 @@ export function App() {
                 discardRecoverableDraft();
               }}
             >
-              Restore draft
+              {i18n.t("shell:restoreDraft")}
             </button>
           ) : null}
           <button
@@ -2628,7 +2670,7 @@ export function App() {
               setRequestError(null);
             }}
           >
-            Dismiss
+            {i18n.t("shell:dismiss")}
           </button>
         </div>
       ) : null}
@@ -2817,7 +2859,7 @@ export function App() {
               onReadAttachment={readAttachment}
               onInterrupt={async (turnId) => {
                 if (threadDetail === null)
-                  throw new Error("No thread is selected");
+                  throw new Error(i18n.t("shell:noThreadSelected"));
                 await window.zenx.protocol.request("turn/interrupt", {
                   threadId: threadDetail.id,
                   turnId,
@@ -2908,7 +2950,9 @@ export function App() {
                             entry.threadId ===
                             conversationPanels[threadDetail.id],
                         );
-                        return summary ? threadTitle(summary) : "Conversation";
+                        return summary
+                          ? threadTitle(summary)
+                          : i18n.t("shell:conversation");
                       })(),
                       render: renderSideConversation,
                     }
@@ -2927,7 +2971,7 @@ export function App() {
               threadId={threadDetail.id}
               title={
                 selectedSummary === null
-                  ? "Current thread"
+                  ? i18n.t("shell:currentThread")
                   : threadTitle(selectedSummary)
               }
               open={browserPanels[threadDetail.id]}
@@ -3028,16 +3072,27 @@ function WindowTitleBar({
   onToggleSidebar(): void;
 }) {
   return (
-    <header className="window-titlebar" aria-label="ZenX window controls">
+    <header
+      className="window-titlebar"
+      aria-label={i18n.t("shell:zenxWindowControls")}
+    >
       <div className="window-titlebar-product">
         <ZenXBrand />
         <div className="window-titlebar-inbox">
           <button
             className="icon-button inbox-button"
             type="button"
-            aria-label={mode === "inbox" ? "Return to projects" : "Open inbox"}
+            aria-label={
+              mode === "inbox"
+                ? i18n.t("shell:returnToProjects")
+                : i18n.t("shell:openInbox")
+            }
             aria-pressed={mode === "inbox"}
-            title={mode === "inbox" ? "Return to projects" : "Open inbox"}
+            title={
+              mode === "inbox"
+                ? i18n.t("shell:returnToProjects")
+                : i18n.t("shell:openInbox")
+            }
             onClick={onToggleInbox}
           >
             <Icon name="inbox" />
@@ -3053,8 +3108,16 @@ function WindowTitleBar({
           type="button"
           aria-controls="primary-sidebar"
           aria-expanded={!sidebarCollapsed}
-          aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-label={
+            sidebarCollapsed
+              ? i18n.t("shell:expandSidebar")
+              : i18n.t("shell:collapseSidebar")
+          }
+          title={
+            sidebarCollapsed
+              ? i18n.t("shell:expandSidebar")
+              : i18n.t("shell:collapseSidebar")
+          }
           onClick={onToggleSidebar}
         >
           <Icon name="panel-left" />
@@ -3097,7 +3160,7 @@ function ConversationTitleBar({
         <button
           className="icon-button mobile-menu"
           type="button"
-          aria-label="Open sidebar"
+          aria-label={i18n.t("shell:openSidebar")}
           onClick={onOpenSidebar}
         >
           <Icon name="tree" />
@@ -3119,12 +3182,15 @@ function ConversationTitleBar({
           </div>
           <span>
             {selectedSummary.status === "systemError"
-              ? "Unavailable journal"
+              ? i18n.t("shell:unavailableJournal")
               : selectedSummary.currentMetadata.cwd}
             {threadDetail?.forkedFromId === null ||
             threadDetail?.forkedFromId === undefined ? null : sourceSummary ===
               undefined ? (
-              <> · Copied from unavailable source</>
+              <>
+                {" · "}
+                {i18n.t("shell:copiedFromUnavailableSource")}
+              </>
             ) : (
               <>
                 {" · "}
@@ -3133,7 +3199,9 @@ function ConversationTitleBar({
                   type="button"
                   onClick={() => onOpenSource(sourceSummary.threadId)}
                 >
-                  Copied from {threadTitle(sourceSummary)}
+                  {i18n.t("shell:copiedFrom", {
+                    name: threadTitle(sourceSummary),
+                  })}
                 </button>
               </>
             )}
@@ -3159,7 +3227,7 @@ function PageTitleBar({
         <button
           className="icon-button mobile-menu"
           type="button"
-          aria-label="Open sidebar"
+          aria-label={i18n.t("shell:openSidebar")}
           onClick={onOpenSidebar}
         >
           <Icon name="tree" />
@@ -3319,7 +3387,7 @@ function AgentSurface({
     newThreadDraft?.workspace !== null &&
     newThreadDraft !== null &&
     draftProject === undefined
-      ? "This Project is no longer available. Choose another Project."
+      ? i18n.t("shell:thisProjectIsNoLongerAvailableChooseAnotherProject")
       : null;
   return (
     <section
@@ -3334,7 +3402,7 @@ function AgentSurface({
         <button
           className="icon-button mobile-menu new-thread-draft-mobile"
           type="button"
-          aria-label="Open sidebar"
+          aria-label={i18n.t("shell:openSidebar")}
           onClick={onOpenSidebar}
         >
           <Icon name="tree" />
@@ -3344,7 +3412,7 @@ function AgentSurface({
       {serverStatus.type === "error" ? (
         <EmptyState
           error
-          title="Zen App Server stopped"
+          title={i18n.t("shell:zenAppServerStopped")}
           detail={serverStatus.message}
         />
       ) : serverStatus.type !== "ready" ? (
@@ -3355,23 +3423,25 @@ function AgentSurface({
           }
           title={
             serverStatus.type === "starting"
-              ? "Starting Zen App Server"
+              ? i18n.t("shell:startingZenAppServer")
               : serverStatus.type === "reconnecting"
-                ? "Reconnecting to Zen App Server"
-                : "Zen App Server disconnected"
+                ? i18n.t("shell:reconnectingToZenAppServer")
+                : i18n.t("shell:zenAppServerDisconnected")
           }
-          detail="Your draft is preserved while ZenX reconnects to the local runtime."
+          detail={i18n.t(
+            "shell:yourDraftIsPreservedWhileZenxReconnectsToTheLocalRuntime",
+          )}
         />
       ) : threadLoading ? (
         <EmptyState
           loading
-          title="Loading conversation"
-          detail="Reconstructing this Thread from App Server history…"
+          title={i18n.t("shell:loadingConversation")}
+          detail={i18n.t("shell:reconstructingThread")}
         />
       ) : threadError !== null ? (
         <EmptyState
           error
-          title="Could not open conversation"
+          title={i18n.t("shell:couldNotOpenConversation")}
           detail={threadError}
         />
       ) : newThreadDraft !== null ? (
@@ -3400,7 +3470,7 @@ function AgentSurface({
                   role="heading"
                   aria-level={2}
                 >
-                  What should we build in{" "}
+                  {i18n.t("shell:whatShouldWeBuildIn")}{" "}
                   <NewThreadProjectSelector
                     disabled={
                       newThreadDraft.composer.submission?.status === "pending"
@@ -3467,11 +3537,7 @@ function AgentSurface({
               composerSendModeMigration?.acknowledged === false &&
               composerSendMode === "soft" ? (
                 <div className="composer-migration-notice" role="status">
-                  <p>
-                    Your older Queue preference could not distinguish the old
-                    default from a manual choice. Running-turn sends now steer
-                    the current Turn; messages already queued keep their choice.
-                  </p>
+                  <p>{i18n.t("shell:olderQueuePreference")}</p>
                   <button
                     type="button"
                     onClick={() =>
@@ -3480,7 +3546,7 @@ function AgentSurface({
                       )
                     }
                   >
-                    Restore per-message Queue
+                    {i18n.t("shell:restorePerMessageQueue")}
                   </button>
                   <button
                     type="button"
@@ -3490,7 +3556,7 @@ function AgentSurface({
                       )
                     }
                   >
-                    Keep Steer
+                    {i18n.t("shell:keepSteer")}
                   </button>
                 </div>
               ) : null
@@ -3542,8 +3608,8 @@ function AgentSurface({
                 ? null
                 : selectedSettings.permissionMode === "danger-full-access" &&
                     selectedSettings.approvalPolicy === "on-request"
-                  ? "Approval required"
-                  : "File permissions"
+                  ? i18n.t("shell:approvalRequired")
+                  : i18n.t("shell:filePermissions")
             }
             permissionMode={
               selectedSettings?.permissionMode ?? "danger-full-access"
@@ -3612,9 +3678,11 @@ function NewThreadProjectSelector({
   );
   const selectedLabel =
     selectedWorkspace === null
-      ? "Choose a Project"
+      ? i18n.t("shell:chooseAProject")
       : selectedProject === undefined
-        ? `${projectLabel(selectedWorkspace)} unavailable`
+        ? i18n.t("shell:projectUnavailable", {
+            project: projectLabel(selectedWorkspace),
+          })
         : projectDisplayLabel(selectedProject.workspace, projects);
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const filteredProjects = projects.filter((project) => {
@@ -3753,8 +3821,10 @@ function NewThreadProjectSelector({
         aria-haspopup="dialog"
         aria-label={
           selectedWorkspace === null
-            ? "Choose a Project"
-            : `Change Project. Current Project: ${selectedWorkspace}`
+            ? i18n.t("shell:chooseAProject")
+            : i18n.t("shell:changeCurrentProject", {
+                project: selectedWorkspace,
+              })
         }
         disabled={disabled}
         onClick={() => (open ? closeMenu(false) : setOpen(true))}
@@ -3767,7 +3837,7 @@ function NewThreadProjectSelector({
           data-placement={popoverLayout.placement}
           id={popoverId}
           role="dialog"
-          aria-label="Switch Project"
+          aria-label={i18n.t("shell:switchProject")}
           style={{
             maxHeight: `${popoverLayout.maxHeight}px`,
             transform: `translateX(calc(-50% + ${popoverLayout.offsetX}px))`,
@@ -3784,13 +3854,13 @@ function NewThreadProjectSelector({
         >
           <label className="new-thread-project-search">
             <Icon name="search" size={13} />
-            <span className="sr-only">Search projects</span>
+            <span className="sr-only">{i18n.t("shell:searchProjects")}</span>
             <input
               ref={searchRef}
               type="search"
               value={query}
-              placeholder="Search projects"
-              aria-label="Search projects"
+              placeholder={i18n.t("shell:searchProjects")}
+              aria-label={i18n.t("shell:searchProjects")}
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key !== "ArrowDown" && event.key !== "ArrowUp")
@@ -3804,7 +3874,7 @@ function NewThreadProjectSelector({
             ref={menuRef}
             className="new-thread-project-menu"
             role="menu"
-            aria-label="Choose a Project"
+            aria-label={i18n.t("shell:chooseAProject")}
             onKeyDown={(event) => {
               if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key))
                 return;
@@ -3841,7 +3911,7 @@ function NewThreadProjectSelector({
                   type="button"
                   role="menuitemradio"
                   aria-checked={selected}
-                  aria-label={`${selected ? "Selected Project" : "Select Project"}: ${project.workspace}`}
+                  aria-label={`${selected ? i18n.t("shell:selectedProject") : i18n.t("shell:selectProject")}: ${project.workspace}`}
                   title={project.workspace}
                   onClick={() => {
                     onChange(project.workspace);
@@ -3857,7 +3927,9 @@ function NewThreadProjectSelector({
               );
             })}
             {filteredProjects.length === 0 ? (
-              <p className="new-thread-project-empty">No projects found</p>
+              <p className="new-thread-project-empty">
+                {i18n.t("shell:noProjectsFound")}
+              </p>
             ) : null}
           </div>
           <div className="new-thread-project-actions">
@@ -3871,7 +3943,7 @@ function NewThreadProjectSelector({
               }}
             >
               <Icon name="folder-plus" size={13} />
-              <span>Add project</span>
+              <span>{i18n.t("shell:addProject")}</span>
             </button>
           </div>
         </div>
@@ -3892,17 +3964,19 @@ function NewThreadProjectContext({
   );
   const selectedLabel =
     selectedWorkspace === null
-      ? "Choose a Project"
+      ? i18n.t("shell:chooseAProject")
       : selectedProject === undefined
-        ? `${projectLabel(selectedWorkspace)} unavailable`
+        ? i18n.t("shell:projectUnavailable", {
+            project: projectLabel(selectedWorkspace),
+          })
         : projectDisplayLabel(selectedProject.workspace, projects);
   return (
     <div
       className="new-thread-project-context"
       aria-label={
         selectedWorkspace === null
-          ? "No Project selected"
-          : `Selected Project: ${selectedWorkspace}`
+          ? i18n.t("shell:noProjectSelected")
+          : i18n.t("shell:selectedProjectPath", { project: selectedWorkspace })
       }
       title={selectedWorkspace ?? undefined}
     >
@@ -3918,7 +3992,7 @@ function EmptyState({
   action,
   loading = false,
   error = false,
-  actionLabel = "New thread",
+  actionLabel = i18n.t("shell:newThread"),
   actionIcon = "compose",
 }: {
   title: string;
@@ -3989,15 +4063,15 @@ function ThreadTitleEditor({
       >
         <input
           autoFocus
-          aria-label="Thread title"
+          aria-label={i18n.t("shell:threadTitle")}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
         />
         <button type="submit" disabled={busy || !draft.trim()}>
-          Save
+          {i18n.t("shell:save")}
         </button>
         <button type="button" onClick={() => setEditing(false)}>
-          Cancel
+          {i18n.t("shell:cancel")}
         </button>
         {error ? <small role="alert">{error}</small> : null}
       </form>
@@ -4009,18 +4083,18 @@ function ThreadTitleEditor({
       {editable ? (
         <button
           type="button"
-          aria-label="Rename Thread"
+          aria-label={i18n.t("shell:renameThreadTitle")}
           onClick={() => setEditing(true)}
         >
-          Rename
+          {i18n.t("shell:rename")}
         </button>
       ) : null}
       {editable && projection?.status === "generating" ? (
-        <small>Generating title…</small>
+        <small>{i18n.t("shell:generatingTitle")}</small>
       ) : null}
       {editable && projection?.status === "failed" ? (
         <button type="button" onClick={() => void onRetry()}>
-          Retry title
+          {i18n.t("shell:retryTitle")}
         </button>
       ) : null}
     </div>
@@ -4046,8 +4120,12 @@ function unavailableSelectionMessage(
     (candidate) => candidate.providerProfileId === settings.modelProvider,
   );
   return provider === undefined
-    ? `Provider profile “${settings.modelProvider}” was deleted. Choose a model before sending.`
-    : `The configured model from “${provider.displayName}” is hidden or unavailable. Choose another model before sending.`;
+    ? i18n.t("shell:providerProfileDeleted", {
+        provider: settings.modelProvider,
+      })
+    : i18n.t("shell:configuredModelUnavailable", {
+        provider: provider.displayName,
+      });
 }
 
 function defaultDraftSettings(
@@ -4133,7 +4211,7 @@ export function optimisticThreadSummary(
     archived: false,
     createdAt: new Date(result.thread.createdAt * 1_000).toISOString(),
     updatedAt: new Date(result.thread.updatedAt * 1_000).toISOString(),
-    name: result.thread.name ?? "New thread",
+    name: result.thread.name ?? i18n.t("shell:newThread"),
     preview: referenceTitle(draft.text, draft.references),
     status: "idle",
   };

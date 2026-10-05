@@ -1,3 +1,4 @@
+import { i18n } from "./i18n.js";
 import type { ThreadItem, Turn } from "../../protocol-client/index.js";
 import { commandSummary } from "./tool-presentation.js";
 
@@ -222,8 +223,8 @@ export function projectTurn(turn: Turn): TurnDisplayProjection {
         ? null
         : (turn.error?.message ??
           (turn.status === "interrupted"
-            ? "This turn was interrupted before a final response arrived."
-            : "This turn ended without a final response.")),
+            ? i18n.t("shell:thisTurnWasInterruptedBeforeAFinalResponseArrived")
+            : i18n.t("shell:thisTurnEndedWithoutAFinalResponse"))),
   };
 }
 
@@ -241,8 +242,8 @@ export function traceSummary(
     return items.some(
       (item) => item.type === "reasoning" && item.status === "inProgress",
     )
-      ? "Thinking"
-      : "Thoughts";
+      ? i18n.t("shell:thinking")
+      : i18n.t("shell:thoughts");
   }
   // Keep the collapsed preview bounded; the full trace remains in its disclosure.
   return commands.slice(-3).reverse().map(commandSummary).join(" · ");

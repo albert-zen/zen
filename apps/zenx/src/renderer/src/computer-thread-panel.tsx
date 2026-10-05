@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import { Select } from "./ui/controls.js";
 import React, { useEffect, useRef, useState } from "react";
 import { AgentActionPointer } from "./agent-action-pointer.js";
@@ -14,11 +16,12 @@ export function ComputerThreadPanel({
   threadId: string;
   active: boolean;
 }) {
+  useTranslation("panels");
   const [targets, setTargets] = useState<ComputerThreadTarget[]>([]);
   const [targetId, setTargetId] = useState<string>();
   const [status, setStatus] = useState({
     status: "idle",
-    message: "Waiting for the Agent to use a Computer window.",
+    message: "",
   });
   const [frame, setFrame] =
     useState<Extract<ComputerThreadEvent, { type: "frame" }>["frame"]>();
@@ -74,33 +77,38 @@ export function ComputerThreadPanel({
   const selected = targets.find((target) => target.id === targetId);
   const followed = targetId === undefined ? targets.at(-1) : selected;
   return (
-    <section className="computer-thread-panel" aria-label="Computer workspace">
+    <section
+      className="computer-thread-panel"
+      aria-label={i18n.t("panels:computerWorkspace")}
+    >
       <div className="computer-live-toolbar">
         <Select
-          aria-label="Computer window"
+          aria-label={i18n.t("panels:computerWindow")}
           value={targetId ?? "__follow__"}
           onValueChange={(value) =>
             setTargetId(value === "__follow__" ? undefined : value)
           }
           title={
             followed
-              ? `Latest Computer action ${followed.invocationId}`
+              ? i18n.t("panels:latestComputerAction", {
+                  invocationId: followed.invocationId,
+                })
               : undefined
           }
         >
           <option value="__follow__">
             {targets.length === 0
-              ? "Follow Agent"
-              : "Follow Agent · latest window"}
+              ? i18n.t("panels:followAgent")
+              : i18n.t("panels:followAgentLatestWindow")}
           </option>
           {targets.map((target) => (
             <option key={target.id} value={target.id}>
-              {target.target.windowTitle ?? "Window"}
+              {target.target.windowTitle ?? i18n.t("panels:window")}
             </option>
           ))}
         </Select>
         <span role="status" data-status={status.status}>
-          {status.message}
+          {computerStatusMessage(status.message)}
         </span>
       </div>
       {frame ? (
@@ -110,7 +118,11 @@ export function ComputerThreadPanel({
               ref={image}
               className="computer-live-frame"
               src={`data:${frame.mimeType};base64,${frame.data}`}
-              alt={`Live view of ${followed?.target.windowTitle ?? "Computer window"}`}
+              alt={i18n.t("panels:liveViewOf", {
+                name:
+                  followed?.target.windowTitle ??
+                  i18n.t("panels:computerWindow"),
+              })}
             />
             {followed ? (
               <AgentActionPointer
@@ -128,8 +140,11 @@ export function ComputerThreadPanel({
             ) : null}
           </div>
           <figcaption>
-            Captured {new Date(frame.capturedAt).toLocaleTimeString()} · Agent
-            marker shows the action target
+            {i18n.t("panels:captured")}{" "}
+            {new Date(frame.capturedAt).toLocaleTimeString(
+              i18n.resolvedLanguage,
+            )}{" "}
+            · {i18n.t("panels:agentMarkerShowsActionTarget")}
           </figcaption>
         </figure>
       ) : (
@@ -137,4 +152,16 @@ export function ComputerThreadPanel({
       )}
     </section>
   );
+}
+
+function computerStatusMessage(message: string): string {
+  if (!message || message === "Waiting for the Agent to use a Computer window.")
+    return i18n.t("panels:waitingForTheAgentToUseA");
+  if (message === "This Computer provider does not support a live window view.")
+    return i18n.t("panels:computerLiveViewUnsupported");
+  if (message === "Computer observation is unavailable.")
+    return i18n.t("panels:computerObservationUnavailable");
+  if (message === "No Computer window is selected for this thread.")
+    return i18n.t("panels:computerWindowNotSelected");
+  return message;
 }

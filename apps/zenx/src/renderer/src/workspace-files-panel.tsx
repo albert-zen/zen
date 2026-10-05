@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import React, {
   useEffect,
   useRef,
@@ -26,6 +28,7 @@ export function WorkspaceFilesPanel({
   initialPath?: string;
   standalone?: boolean;
 }) {
+  useTranslation("panels");
   const entries = useSyncExternalStore(drafts.subscribe, drafts.snapshot);
   const [directory, setDirectory] = useState(".");
   const [listing, setListing] = useState<WorkspaceFileListing>();
@@ -142,7 +145,7 @@ export function WorkspaceFilesPanel({
   return (
     <section
       className="workspace-files-panel"
-      aria-label="Workspace files"
+      aria-label={i18n.t("panels:workspaceFiles")}
       onKeyDown={(event) => {
         if (
           (event.ctrlKey || event.metaKey) &&
@@ -155,11 +158,12 @@ export function WorkspaceFilesPanel({
     >
       <nav
         className="file-breadcrumbs"
-        aria-label="File path"
+        aria-label={i18n.t("panels:filePath")}
         hidden={standalone || !!file}
       >
         <button type="button" title={workspacePath} onClick={() => browse(".")}>
-          {workspacePath?.split(/[\\/]/).filter(Boolean).at(-1) ?? "Workspace"}
+          {workspacePath?.split(/[\\/]/).filter(Boolean).at(-1) ??
+            i18n.t("panels:workspace")}
         </button>
         {crumbs.map((name, index) => (
           <React.Fragment key={index}>
@@ -185,17 +189,21 @@ export function WorkspaceFilesPanel({
         }}
       >
         <input
-          aria-label="Open workspace-relative file path"
-          placeholder="Open file by relative path…"
+          aria-label={i18n.t("panels:openWorkspaceRelativeFilePath")}
+          placeholder={i18n.t("panels:openFileByRelativePath")}
           value={pathInput}
           onChange={(event) => setPathInput(event.target.value)}
         />
         <button type="submit" disabled={!pathInput.trim()}>
-          Open
+          {i18n.t("panels:open")}
         </button>
       </form>
       {!standalone && opened.length > 0 ? (
-        <div className="file-open-tabs" role="tablist" aria-label="Open files">
+        <div
+          className="file-open-tabs"
+          role="tablist"
+          aria-label={i18n.t("panels:openFiles")}
+        >
           {opened.map(([entryKey, draft], index) => (
             <span className="file-open-tab" key={entryKey}>
               <button
@@ -235,7 +243,9 @@ export function WorkspaceFilesPanel({
               </button>
               <button
                 type="button"
-                aria-label={`Close file ${draft.base.path}`}
+                aria-label={i18n.t("panels:closeFile", {
+                  path: draft.base.path,
+                })}
                 disabled={draft.saving}
                 onClick={() => closeFile(draft.base.path)}
               >
@@ -259,7 +269,7 @@ export function WorkspaceFilesPanel({
                 )
           }
         >
-          {file ? "Files" : "Up"}
+          {file ? i18n.t("panels:files") : i18n.t("panels:up")}
         </button>
         <span title={filePath ?? directory}>{file ? null : directory}</span>
         <button
@@ -273,22 +283,22 @@ export function WorkspaceFilesPanel({
               : setRevision((value) => value + 1)
           }
         >
-          Refresh
+          {i18n.t("panels:refresh")}
         </button>
       </header>
       {closePending ? (
         <div role="alert" className="file-discard">
-          Discard changes and close {closePending}?
+          {i18n.t("panels:discardChangesAndClose")} {closePending}?
           <button type="button" onClick={() => closeFile(closePending, true)}>
-            Discard and close
+            {i18n.t("panels:discardAndClose")}
           </button>
           <button type="button" onClick={() => setClosePending(undefined)}>
-            Keep editing
+            {i18n.t("panels:keepEditing")}
           </button>
         </div>
       ) : null}
       <div className="file-content" aria-busy={loading}>
-        {loading ? <p role="status">Loading…</p> : null}
+        {loading ? <p role="status">{i18n.t("panels:loading")}</p> : null}
         {error ? <p role="alert">{error}</p> : null}
         {!loading && file ? (
           <>
@@ -304,14 +314,14 @@ export function WorkspaceFilesPanel({
               }
             >
               {file.saving
-                ? "Saving…"
+                ? i18n.t("panels:saving")
                 : file.conflict
-                  ? "Save conflict"
+                  ? i18n.t("panels:saveConflict")
                   : file.error
-                    ? "Save failed"
+                    ? i18n.t("panels:saveFailed")
                     : dirty
-                      ? "Waiting to save…"
-                      : "Saved"}{" "}
+                      ? i18n.t("panels:waitingToSave")
+                      : i18n.t("panels:saved")}{" "}
               · UTF-8
             </p>
             {file.error ? (
@@ -322,7 +332,7 @@ export function WorkspaceFilesPanel({
                     type="button"
                     onClick={() => drafts.flush(key!, saver(file.base.path))}
                   >
-                    Retry
+                    {i18n.t("panels:retry")}
                   </button>
                 ) : null}
               </div>
@@ -330,28 +340,28 @@ export function WorkspaceFilesPanel({
             {file.conflict ? (
               <div className="file-conflict">
                 <details>
-                  <summary>Compare disk version</summary>
+                  <summary>{i18n.t("panels:compareDiskVersion")}</summary>
                   <SourcePreview
                     text={file.conflict.text}
                     path={file.base.path}
                   />
                 </details>
                 <button type="button" onClick={() => setDiscardPending(true)}>
-                  Reload disk version
+                  {i18n.t("panels:reloadDiskVersion")}
                 </button>
               </div>
             ) : null}
             {discardPending ? (
               <div role="alert" className="file-discard">
-                Discard your unsaved changes and load the disk version?
+                {i18n.t("panels:discardYourUnsavedChangesAndLoadThe")}
                 <button
                   type="button"
                   onClick={() => void read(file.base.path, true)}
                 >
-                  Discard and reload
+                  {i18n.t("panels:discardAndReload")}
                 </button>
                 <button type="button" onClick={() => setDiscardPending(false)}>
-                  Keep editing
+                  {i18n.t("panels:keepEditing")}
                 </button>
               </div>
             ) : null}
@@ -367,7 +377,7 @@ export function WorkspaceFilesPanel({
             ) : (
               <textarea
                 className="file-editor"
-                aria-label={`Edit ${file.base.path}`}
+                aria-label={i18n.t("panels:editFile", { path: file.base.path })}
                 spellCheck={false}
                 value={file.text}
                 onChange={(event) => {
@@ -405,13 +415,10 @@ export function WorkspaceFilesPanel({
               ))}
             </ul>
             {listing.entries.length === 0 ? (
-              <p>This directory is empty.</p>
+              <p>{i18n.t("panels:thisDirectoryIsEmpty")}</p>
             ) : null}
             {listing.truncated ? (
-              <p role="status">
-                Showing the first 2,000 entries. Open a subdirectory to browse
-                further.
-              </p>
+              <p role="status">{i18n.t("panels:directoryTruncated")}</p>
             ) : null}
           </>
         ) : null}
@@ -422,6 +429,7 @@ export function WorkspaceFilesPanel({
 
 // Highlight only common code tokens; React escapes every token, including HTML source.
 export function SourcePreview({ text, path }: { text: string; path: string }) {
+  useTranslation("panels");
   const code =
     /\.(?:[cm]?[jt]sx?|json|css|py|sh|ya?ml|toml|rs|go|java|c|cpp|h)$/i.test(
       path,
@@ -433,7 +441,11 @@ export function SourcePreview({ text, path }: { text: string; path: string }) {
         )
       : [text];
   return (
-    <pre className="file-source" tabIndex={0} aria-label={`Source of ${path}`}>
+    <pre
+      className="file-source"
+      tabIndex={0}
+      aria-label={i18n.t("panels:sourceOfFile", { path })}
+    >
       <code>
         {parts.map((part, index) =>
           index % 2 ? (

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import type { SkillEntry } from "../../../../cli/src/skills.js";
 import {
   commandCandidates,
@@ -22,7 +24,20 @@ export interface SelectorCandidate {
   detail?: string;
   command?: WorkflowCommandCandidate;
   reference?: Reference;
+  generatedUntitled?: boolean;
+  threadStatus?: "active" | "idle";
+  duplicateThreadId?: string;
 }
+
+type SelectorNote =
+  | { key: "fileSearchPartial" | "workspaceFilesAfterCreation" }
+  | { text: string };
+type SelectorError =
+  | {
+      key: "filesError" | "threadsError" | "couldNotSelectReference";
+      error: string;
+    }
+  | { text: string };
 
 export function useComposerSelector({
   draft,
@@ -39,6 +54,7 @@ export function useComposerSelector({
   onChange(text: string): void;
   textarea: React.RefObject<HTMLTextAreaElement | null>;
 }) {
+  useTranslation("selector");
   const parsed = parseSkillDraft(draft);
   const [selection, setSelection] = useState<{
     text: string;
@@ -65,9 +81,9 @@ export function useComposerSelector({
     scope: string;
     rows: SelectorCandidate[];
     loading: boolean;
-    note: string;
-    error: string;
-  }>({ scope: "", rows: [], loading: false, note: "", error: "" });
+    notes: SelectorNote[];
+    errors: SelectorError[];
+  }>({ scope: "", rows: [], loading: false, notes: [], errors: [] });
   const [choosing, setChoosing] = useState<string | null>(null);
   const referenceMode = trigger?.kind === "reference";
   const open =
@@ -81,12 +97,12 @@ export function useComposerSelector({
   useEffect(() => {
     if (!referenceMode || !open) return;
     let canceled = false;
-    setResult({ scope, rows: [], loading: true, note: "", error: "" });
+    setResult({ scope, rows: [], loading: true, notes: [], errors: [] });
     const timer = setTimeout(() => {
       void (async () => {
         const rows: SelectorCandidate[] = [];
-        const errors: string[] = [];
-        const notes: string[] = [];
+        const errors: SelectorError[] = [];
+        const notes: SelectorNote[] = [];
         const [files, threads] = await Promise.allSettled([
           threadId
             ? window.zenx.workspaceFiles.search(threadId, query)
@@ -109,22 +125,18 @@ export function useComposerSelector({
                 cwd: value.cwd,
               },
             });
-          if (value.truncated)
-            notes.push(
-              "File search is partial (scan or result limit). Try a folder/path query.",
-            );
-          if (value.warnings?.length) errors.push(...value.warnings);
+          if (value.truncated) notes.push({ key: "fileSearchPartial" });
+          if (value.warnings?.length)
+            errors.push(...value.warnings.map((text) => ({ text })));
         } else if (files.status === "rejected")
-          errors.push(`Files: ${String(files.reason)}`);
-        if (!threadId)
-          notes.push(
-            "Workspace files are available after this thread is created.",
-          );
+          errors.push({ key: "filesError", error: String(files.reason) });
+        if (!threadId) notes.push({ key: "workspaceFilesAfterCreation" });
         if (threads.status === "fulfilled") {
           const available = threads.value.filter(
             (thread) => thread.threadId !== threadId,
           );
           for (const thread of available) {
+            const generatedUntitled = !thread.name && !thread.preview;
             const name = thread.name || thread.preview || "Untitled thread";
             const cwd =
               thread.status === "systemError" ? "" : thread.currentMetadata.cwd;
@@ -135,7 +147,7 @@ export function useComposerSelector({
             )
               continue;
             if (thread.status === "systemError") {
-              errors.push(`${name}: ${thread.error}`);
+              errors.push({ text: `${name}: ${thread.error}` });
               continue;
             }
             const duplicate = available.some(
@@ -150,17 +162,22 @@ export function useComposerSelector({
               kind: "thread",
               name,
               description: cwd,
-              detail: `${thread.status === "active" ? "Working" : "Idle"}${duplicate ? ` · ${thread.threadId.slice(0, 8)}` : ""}`,
+              generatedUntitled,
+              threadStatus: thread.status === "active" ? "active" : "idle",
+              duplicateThreadId: duplicate
+                ? thread.threadId.slice(0, 8)
+                : undefined,
               reference: { kind: "thread", id: thread.threadId, name, cwd },
             });
           }
-        } else errors.push(`Threads: ${String(threads.reason)}`);
+        } else
+          errors.push({ key: "threadsError", error: String(threads.reason) });
         setResult({
           scope,
           rows,
           loading: false,
-          note: notes.join(" "),
-          error: errors.join("\n"),
+          notes,
+          errors,
         });
       })().catch((error: unknown) => {
         if (!canceled && current.current === scope)
@@ -168,8 +185,8 @@ export function useComposerSelector({
             scope,
             rows: [],
             loading: false,
-            note: "",
-            error: String(error),
+            notes: [],
+            errors: [{ text: String(error) }],
           });
       });
     }, 120);
@@ -187,7 +204,10 @@ export function useComposerSelector({
               : `${command.kind}:${command.name}`,
           kind: command.kind,
           name: `/${command.name}`,
-          description: command.description,
+          description:
+            command.kind === "built-in" && command.name === "compact"
+              ? i18n.t("selector:compactThisThreadsContext")
+              : command.description,
           detail:
             command.kind === "skill"
               ? `${command.source}${skills.some((other) => other.mode !== "disabled" && other.id !== command.id && other.name === command.name && other.source === command.source) ? ` · ${command.id.slice(0, 8)}` : ""}`
@@ -198,7 +218,17 @@ export function useComposerSelector({
     : [];
   const all = referenceMode
     ? result.scope === scope
-      ? result.rows
+      ? result.rows.map((row) =>
+          row.kind === "thread"
+            ? {
+                ...row,
+                name: row.generatedUntitled
+                  ? i18n.t("selector:untitledThread")
+                  : row.name,
+                detail: `${i18n.t(row.threadStatus === "active" ? "selector:working" : "selector:idle")}${row.duplicateThreadId ? ` · ${row.duplicateThreadId}` : ""}`,
+              }
+            : row,
+        )
       : []
     : commandRows;
   const rows = all.slice(0, limit);
@@ -206,8 +236,8 @@ export function useComposerSelector({
     rows.push({
       key: "more",
       kind: "more",
-      name: `Show more (${all.length - limit})`,
-      description: "Continue through matching results",
+      name: i18n.t("selector:showMore", { count: all.length - limit }),
+      description: i18n.t("selector:continueMatchingResults"),
     });
   const loading = referenceMode && (result.scope !== scope || result.loading);
   const choose = async (index: number) => {
@@ -276,7 +306,7 @@ export function useComposerSelector({
           setResult((previous) => ({
             ...previous,
             scope,
-            error: `Could not select reference: ${String(error)}`,
+            errors: [{ key: "couldNotSelectReference", error: String(error) }],
           }));
         return;
       } finally {
@@ -299,8 +329,24 @@ export function useComposerSelector({
     loading,
     busy: choosing === scope,
     referenceMode,
-    note: referenceMode && result.scope === scope ? result.note : "",
-    error: referenceMode && result.scope === scope ? result.error : "",
+    note:
+      referenceMode && result.scope === scope
+        ? result.notes
+            .map((entry) =>
+              "key" in entry ? i18n.t(`selector:${entry.key}`) : entry.text,
+            )
+            .join(" ")
+        : "",
+    error:
+      referenceMode && result.scope === scope
+        ? result.errors
+            .map((entry) =>
+              "key" in entry
+                ? i18n.t(`selector:${entry.key}`, { error: entry.error })
+                : entry.text,
+            )
+            .join("\n")
+        : "",
     dismiss: () => setDismissed(scope),
     reopen: () => setDismissed(null),
     select: (element: HTMLTextAreaElement) =>
