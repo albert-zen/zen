@@ -242,12 +242,20 @@ export type HostEvent =
     }
   | {
       type: "capability/invoke";
+      /** Host-minted execution-target transport; never tool-argument provenance. */
+      targetRoute?: true;
       invocationId: string;
       generationToken: string;
       invocation: {
         callId: string;
         canonicalToolCallId?: string;
         threadId?: string;
+        task?: {
+          waitForCompletion?: boolean;
+          yieldTimeMs?: number;
+          timeoutMs?: number;
+          previewBytes?: number;
+        };
         name: string;
         arguments: Record<string, unknown>;
         cwd: string;
@@ -412,6 +420,7 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
     message?: unknown;
     invocationId?: unknown;
     invocation?: unknown;
+    targetRoute?: unknown;
     generationToken?: unknown;
     requestId?: unknown;
     summaries?: unknown;
@@ -505,7 +514,10 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
     ((event.type === "capability/invoke" ||
       event.type === "capability/cancel") &&
       typeof event.invocationId === "string" &&
-      typeof event.generationToken === "string")
+      typeof event.generationToken === "string" &&
+      (event.type !== "capability/invoke" ||
+        event.targetRoute === undefined ||
+        event.targetRoute === true))
   );
 }
 
@@ -600,6 +612,20 @@ function isCapabilityHostSnapshot(
     typeof value === "object" &&
     value !== null &&
     Array.isArray((value as { definitions?: unknown }).definitions) &&
+    ((value as { remoteToolNames?: unknown }).remoteToolNames === undefined ||
+      (Array.isArray(
+        (value as { remoteToolNames?: unknown }).remoteToolNames,
+      ) &&
+        (value as { remoteToolNames: unknown[] }).remoteToolNames.every(
+          (name) =>
+            typeof name === "string" &&
+            (value as { definitions: unknown[] }).definitions.some(
+              (definition) =>
+                typeof definition === "object" &&
+                definition !== null &&
+                (definition as { name?: unknown }).name === name,
+            ),
+        ))) &&
     typeof (value as { generationToken?: unknown }).generationToken ===
       "string" &&
     ((value as { plugins?: unknown }).plugins === undefined ||

@@ -14,10 +14,31 @@ export interface RemoteRoomsPort {
     listener: (event: { roomId: string; threadId: string }) => void,
   ): () => void;
 }
+import {
+  REMOTE_TOOL_CAPABILITY,
+  parseRemoteToolCatalogRequest,
+  parseRemoteToolExecuteRequest,
+  parseRemoteToolWaitRequest,
+  parseRemoteToolStatusRequest,
+  parseRemoteToolCancelRequest,
+  type RemoteToolCatalogRequest,
+  type RemoteToolCatalogResult,
+  type RemoteToolExecuteRequest,
+  type RemoteToolWaitRequest,
+  type RemoteToolStatusRequest,
+  type RemoteToolCancelRequest,
+  type RemoteToolResult,
+  type RemoteToolStatusResult,
+} from "./remote-tool-wire.js";
 import { RemoteGrantFile } from "./remote-grants.js";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { realpath } from "node:fs/promises";
-import type { ZenAppServer, ThreadSnapshot } from "../../app-server.js";
+import type {
+  ZenAppServer,
+  ThreadSnapshot,
+  HostOperationLease,
+} from "../../app-server.js";
 import { AppServerError } from "../../app-server.js";
 import type { CanonicalItem } from "../../item.js";
 import {
@@ -260,12 +281,58 @@ export interface RemoteShellPort {
     signal: AbortSignal,
   ): Promise<RemoteShellResult>;
 }
+/** Host-owned root admission and atomic launch under Thread mutation authority. */
+export interface RemoteToolDispatch {
+  beginAdmission(): HostOperationLease;
+  dispatch<T>(
+    expected: ThreadSnapshot,
+    launch: () => Promise<T>,
+  ): Promise<{ result: Promise<T> }>;
+}
+/** Target-owned generic gateway; authenticated identity is never accepted from wire arguments. */
+export interface RemoteToolsPort {
+  catalog(
+    request: RemoteToolCatalogRequest,
+    resolveTarget: () => Promise<ThreadSnapshot>,
+    peerId: string,
+  ): Promise<RemoteToolCatalogResult>;
+  execute(
+    request: RemoteToolExecuteRequest,
+    resolveTarget: () => Promise<ThreadSnapshot>,
+    signal: AbortSignal,
+    peerId: string,
+    dispatch: RemoteToolDispatch,
+  ): Promise<RemoteToolResult>;
+  wait(
+    request: RemoteToolWaitRequest,
+    resolveTarget: () => Promise<ThreadSnapshot>,
+    signal: AbortSignal,
+    peerId: string,
+  ): Promise<RemoteToolResult>;
+  status(
+    request: RemoteToolStatusRequest,
+    resolveTarget: () => Promise<ThreadSnapshot>,
+    peerId: string,
+  ): Promise<RemoteToolStatusResult>;
+  cancel(
+    request: RemoteToolCancelRequest,
+    resolveTarget: () => Promise<ThreadSnapshot>,
+    signal: AbortSignal,
+    peerId: string,
+  ): Promise<RemoteToolResult>;
+  revoke(peerId: string): void;
+}
+export type RemoteToolsFactory = (identity: {
+  hostId: string;
+  processEpoch: string;
+}) => RemoteToolsPort;
 interface Device {
   digest: Buffer;
   revoked: boolean;
   access?: "read" | "control" | undefined;
   workspaceIds: readonly string[] | null;
   shellEnabled?: boolean;
+  toolsEnabled?: boolean;
 }
 /** Host-external grants; an explicit private state file preserves authorization across restarts. */
 export class RemoteHostAccess {
@@ -276,6 +343,8 @@ export class RemoteHostAccess {
   readonly #shell: RemoteShellPort | undefined;
   readonly #shellEnabled: boolean;
   readonly #shellRequests = new Map<AbortController, string>();
+  readonly #tools: RemoteToolsPort | undefined;
+  readonly #toolsEnabled: boolean;
   readonly #hostId: string;
   readonly #workspaces: () =>
     readonly RemoteWorkspace[] | Promise<readonly RemoteWorkspace[]>;
@@ -294,7 +363,9 @@ export class RemoteHostAccess {
     access?: "read" | "control" | undefined;
     rooms?: RemoteRoomsPort;
     shell?: RemoteShellPort;
+    tools?: RemoteToolsPort | RemoteToolsFactory;
     shellEnabled?: boolean;
+    toolsEnabled?: boolean;
     workspaces: () =>
       readonly RemoteWorkspace[] | Promise<readonly RemoteWorkspace[]>;
   }) {
@@ -305,6 +376,7 @@ export class RemoteHostAccess {
     this.#rooms = options.rooms;
     this.#shell = options.shell;
     this.#shellEnabled = options.shellEnabled === true;
+    this.#toolsEnabled = options.toolsEnabled === true;
     this.#grantFile = options.grantFile
       ? new RemoteGrantFile(options.grantFile, options.hostId)
       : undefined;
@@ -315,9 +387,17 @@ export class RemoteHostAccess {
         workspaceIds: grant.workspaceIds,
         access: grant.access,
         shellEnabled: grant.shellEnabled === true,
+        toolsEnabled: grant.toolsEnabled === true,
       });
     this.#workspaces = options.workspaces;
     this.#projection = new NativeRecoveryProjection(options.appServer);
+    this.#tools =
+      typeof options.tools === "function"
+        ? options.tools({
+            hostId: this.#hostId,
+            processEpoch: this.#projection.processEpoch,
+          })
+        : options.tools;
   }
   get hostId() {
     return this.#hostId;
@@ -335,13 +415,26 @@ export class RemoteHostAccess {
   async pair(input: RemotePairRequest): Promise<RemotePairResult> {
     if (input.hostId !== this.#hostId) throw new RemoteHostError("wrong_host");
     if (
+      Object.keys(input).some(
+        (key) =>
+          ![
+            "hostId",
+            "deviceId",
+            "code",
+            "access",
+            "shellEnabled",
+            "toolsEnabled",
+          ].includes(key),
+      ) ||
       !validId(input.deviceId) ||
       !validToken(input.code) ||
       (input.access !== undefined &&
         input.access !== "read" &&
         input.access !== "control") ||
       (input.shellEnabled !== undefined &&
-        typeof input.shellEnabled !== "boolean")
+        typeof input.shellEnabled !== "boolean") ||
+      (input.toolsEnabled !== undefined &&
+        typeof input.toolsEnabled !== "boolean")
     )
       throw new RemoteHostError("invalid_request");
     const pair = this.#pair;
@@ -363,8 +456,23 @@ export class RemoteHostAccess {
         input.shellEnabled === true &&
         input.access !== "read" &&
         this.#accessMode === "control",
+      toolsEnabled:
+        this.#toolsEnabled &&
+        input.toolsEnabled === true &&
+        input.access !== "read" &&
+        this.#accessMode === "control",
     };
     this.#saveGrants(new Map([...this.#devices, [input.deviceId, device]]));
+    const previous = this.#devices.get(input.deviceId);
+    if (previous) {
+      this.#tools?.revoke(
+        `${input.deviceId}:${previous.digest.toString("hex")}`,
+      );
+      for (const [controller, owner] of this.#shellRequests)
+        if (owner === input.deviceId) controller.abort();
+      for (const listener of this.#revocationListeners)
+        listener(input.deviceId);
+    }
     this.#devices.set(input.deviceId, device);
     return { hostId: this.#hostId, deviceId: input.deviceId, token };
   }
@@ -377,6 +485,7 @@ export class RemoteHostAccess {
       device.revoked = true;
       for (const [controller, owner] of this.#shellRequests)
         if (owner === deviceId) controller.abort();
+      this.#tools?.revoke(`${deviceId}:${device.digest.toString("hex")}`);
       for (const listener of this.#revocationListeners) listener(deviceId);
     }
   }
@@ -386,6 +495,7 @@ export class RemoteHostAccess {
     workspaceIds: readonly string[] | null;
     access?: "read" | "control" | undefined;
     shellEnabled: boolean;
+    toolsEnabled: boolean;
   }> {
     return [...this.#devices].map(([deviceId, device]) => ({
       deviceId,
@@ -393,6 +503,7 @@ export class RemoteHostAccess {
       workspaceIds: device.workspaceIds,
       access: device.access,
       shellEnabled: device.shellEnabled === true,
+      toolsEnabled: device.toolsEnabled === true,
     }));
   }
   #saveGrants(devices: Map<string, Device>): void {
@@ -403,6 +514,7 @@ export class RemoteHostAccess {
         revoked: device.revoked,
         access: device.access,
         shellEnabled: device.shellEnabled === true,
+        toolsEnabled: device.toolsEnabled === true,
         workspaceIds:
           device.workspaceIds === null ? null : [...device.workspaceIds],
       })),
@@ -446,6 +558,9 @@ export class RemoteHostAccess {
         REMOTE_UNARCHIVED_SEND_CAPABILITY,
         "interrupt",
         ...(this.#shell && this.#shellAllowed(deviceId) ? ["shell"] : []),
+        ...(this.#tools && this.#toolsAllowed(deviceId)
+          ? [REMOTE_TOOL_CAPABILITY]
+          : []),
       ],
     };
   }
@@ -797,6 +912,247 @@ export class RemoteHostAccess {
       this.#shellRequests.delete(controller);
     }
   }
+  #toolPeerId(deviceId: string, token: string): string {
+    // Grant-generation identity, not a model-supplied source/device identifier.
+    // A fresh grant for the same device cannot recover its predecessor's tasks.
+    return `${deviceId}:${digest(token).toString("hex")}`;
+  }
+  #toolsAllowed(deviceId: string): boolean {
+    return (
+      this.#toolsEnabled &&
+      this.#accessMode === "control" &&
+      this.#devices.get(deviceId)?.access === "control" &&
+      this.#devices.get(deviceId)?.toolsEnabled === true
+    );
+  }
+  #toolRequest<T>(value: unknown, parse: (value: unknown) => T): T {
+    try {
+      return parse(value);
+    } catch {
+      throw new RemoteHostError("invalid_request");
+    }
+  }
+  async #toolTarget(
+    deviceId: string,
+    token: string,
+    request: RemoteToolCatalogRequest,
+  ): Promise<ThreadSnapshot> {
+    this.authenticate(deviceId, token);
+    if (!this.#tools || !this.#toolsAllowed(deviceId))
+      throw new RemoteHostError("operation_forbidden");
+    if (request.hostId !== this.#hostId)
+      throw new RemoteHostError("wrong_host");
+    if (request.processEpoch !== this.#projection.processEpoch)
+      throw new RemoteHostError("resync_required");
+    const thread = await this.#thread(
+      deviceId,
+      token,
+      request.workspaceId,
+      request.targetThreadId,
+    );
+    // Re-fetch the live allowlist after thread IO. Every gateway callback repeats
+    // this fence, including catalog, status, replay and explicit cancellation.
+    const cwd = await this.#workspace(deviceId, token, request.workspaceId);
+    if ((await realpath(thread.cwd)) !== cwd)
+      throw new RemoteHostError("wrong_workspace");
+    this.authenticate(deviceId, token);
+    if (!this.#toolsAllowed(deviceId))
+      throw new RemoteHostError("operation_forbidden");
+    return thread;
+  }
+  /** No asynchronous scope lookup can witness authority at task registration. */
+  #toolWorkspaceFence(
+    deviceId: string,
+    token: string,
+    workspaceId: string,
+    threadCwd: string,
+    expectedRoot?: string,
+  ): string {
+    this.authenticate(deviceId, token);
+    const entries = this.#workspaces();
+    if (!Array.isArray(entries)) {
+      // The provider may already have started IO; handle its rejection without
+      // awaiting it or allowing its eventual result to authorize this launch.
+      void Promise.resolve(entries).catch(() => undefined);
+      throw new RemoteHostError(
+        "operation_forbidden",
+        "Generic tool execution requires a synchronous Host workspace allowlist",
+      );
+    }
+    this.authenticate(deviceId, token);
+    const grant = this.#devices.get(deviceId)?.workspaceIds;
+    const matching = entries.filter(
+      (entry: RemoteWorkspace) =>
+        entry.id === workspaceId &&
+        validId(entry.id) &&
+        (grant === null || grant?.includes(workspaceId)),
+    );
+    if (matching.length !== 1) throw new RemoteHostError("wrong_workspace");
+    try {
+      const root = realpathSync(threadCwd);
+      if (
+        realpathSync(matching[0]!.cwd) !== root ||
+        (expectedRoot !== undefined && root !== expectedRoot)
+      )
+        throw new RemoteHostError("wrong_workspace");
+      return root;
+    } catch {
+      throw new RemoteHostError("wrong_workspace");
+    }
+  }
+  async toolsCatalog(
+    deviceId: string,
+    token: string,
+    value: RemoteToolCatalogRequest,
+  ): Promise<RemoteToolCatalogResult> {
+    const request = this.#toolRequest(value, parseRemoteToolCatalogRequest);
+    const resolveTarget = () => this.#toolTarget(deviceId, token, request);
+    await resolveTarget();
+    const result = await this.#tools!.catalog(
+      request,
+      resolveTarget,
+      this.#toolPeerId(deviceId, token),
+    );
+    await resolveTarget();
+    return result;
+  }
+  async toolsExecute(
+    deviceId: string,
+    token: string,
+    value: RemoteToolExecuteRequest,
+  ): Promise<RemoteToolResult> {
+    const request = this.#toolRequest(value, parseRemoteToolExecuteRequest);
+    const resolveTarget = () => this.#toolTarget(deviceId, token, request);
+    await resolveTarget();
+    // Only explicit cancel/revocation cancels a dispatched generic operation.
+    // A socket disconnect or caller's polling deadline cannot revoke admission.
+    const result = await this.#tools!.execute(
+      request,
+      resolveTarget,
+      new AbortController().signal,
+      this.#toolPeerId(deviceId, token),
+      {
+        beginAdmission: () => {
+          try {
+            return this.#appServer.beginHostOperation(
+              "tool",
+              "fleet/toolsExecute",
+            );
+          } catch (error) {
+            if (
+              error instanceof AppServerError &&
+              error.code === "host_restarting"
+            )
+              throw new RemoteHostError("thread_busy", error.message);
+            throw error;
+          }
+        },
+        dispatch: async (expected, launch) => {
+          try {
+            // Freeze the effective root before dispatch awaits Thread metadata.
+            // Resolving two identical symlink paths only after that IO could
+            // otherwise authorize a remapped root that was never prepared.
+            const expectedRoot = this.#toolWorkspaceFence(
+              deviceId,
+              token,
+              request.workspaceId,
+              expected.cwd,
+            );
+            return await this.#appServer.dispatchHostTool(expected, () => {
+              // Live scope, root and grant checks share the synchronous launch.
+              // No await may separate them from target task registration.
+              this.#toolWorkspaceFence(
+                deviceId,
+                token,
+                request.workspaceId,
+                expected.cwd,
+                expectedRoot,
+              );
+              this.authenticate(deviceId, token);
+              if (!this.#toolsAllowed(deviceId))
+                throw new RemoteHostError("operation_forbidden");
+              return launch();
+            });
+          } catch (error) {
+            if (error instanceof AppServerError) {
+              if (error.code === "host_restarting")
+                throw new RemoteHostError("thread_busy", error.message);
+              if (error.code === "stale_thread")
+                throw new RemoteHostError("stale_thread", error.message);
+              if (error.code === "thread_not_found")
+                throw new RemoteHostError("thread_not_found", error.message);
+            }
+            throw error;
+          }
+        },
+      },
+    );
+    await this.#toolPostObservation(resolveTarget);
+    return result;
+  }
+  async toolsWait(
+    deviceId: string,
+    token: string,
+    value: RemoteToolWaitRequest,
+  ): Promise<RemoteToolResult> {
+    const request = this.#toolRequest(value, parseRemoteToolWaitRequest);
+    const resolveTarget = () => this.#toolTarget(deviceId, token, request);
+    await resolveTarget();
+    const result = await this.#tools!.wait(
+      request,
+      resolveTarget,
+      new AbortController().signal,
+      this.#toolPeerId(deviceId, token),
+    );
+    await this.#toolPostObservation(resolveTarget);
+    return result;
+  }
+  async toolsStatus(
+    deviceId: string,
+    token: string,
+    value: RemoteToolStatusRequest,
+  ): Promise<RemoteToolStatusResult> {
+    const request = this.#toolRequest(value, parseRemoteToolStatusRequest);
+    const resolveTarget = () => this.#toolTarget(deviceId, token, request);
+    await resolveTarget();
+    const result = await this.#tools!.status(
+      request,
+      resolveTarget,
+      this.#toolPeerId(deviceId, token),
+    );
+    await resolveTarget();
+    return result;
+  }
+  async toolsCancel(
+    deviceId: string,
+    token: string,
+    value: RemoteToolCancelRequest,
+  ): Promise<RemoteToolResult> {
+    const request = this.#toolRequest(value, parseRemoteToolCancelRequest);
+    const resolveTarget = () => this.#toolTarget(deviceId, token, request);
+    await resolveTarget();
+    const result = await this.#tools!.cancel(
+      request,
+      resolveTarget,
+      new AbortController().signal,
+      this.#toolPeerId(deviceId, token),
+    );
+    await this.#toolPostObservation(resolveTarget);
+    return result;
+  }
+  async #toolPostObservation(
+    resolveTarget: () => Promise<ThreadSnapshot>,
+  ): Promise<void> {
+    try {
+      await resolveTarget();
+    } catch {
+      // Contents stay withheld; scope loss cannot erase dispatch/drain evidence.
+      throw new RemoteHostError(
+        "operation_unknown",
+        "The target operation may have executed, but its result can no longer be disclosed. Observe the same admission if access is restored; do not rerun the mutation.",
+      );
+    }
+  }
   async roomRequest(
     deviceId: string,
     token: string,
@@ -916,6 +1272,8 @@ export class RemoteHostAccess {
   }
   close(): void {
     this.#closed = true;
+    for (const [deviceId, device] of this.#devices)
+      this.#tools?.revoke(`${deviceId}:${device.digest.toString("hex")}`);
     for (const controller of this.#shellRequests.keys()) controller.abort();
     this.#pair = undefined;
     this.#devices.clear();

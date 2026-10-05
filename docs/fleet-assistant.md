@@ -53,17 +53,33 @@ uninstalled choices are preserved; preparation/configuration and tool permission
 still apply. IM is an optional independent plugin, not owned by the PAW preset.
 
 Use `zenx_plugin` to discover/read `zenx-self-control`, `zenx-rooms` and
-`zenx-triggers` (or the ordinary `zenx-fleet` package) before calling their
-undisclosed tools.
+`zenx-triggers`, and the ordinary `zenx-fleet` package before calling their
+undisclosed tools. Fleet's `mainDocument` owns the remote machine, transport,
+capability and task HOWTO for every Agent. PAW only recommends reading that
+guidance and respecting the user's requested machine; there is no second
+Fleet instruction corpus in the preset.
 
 - `zenx_self_control_devices` lists configured devices
 - `zenx_threads_list`, `zenx_threads_read`, `zenx_threads_create`,
   `zenx_threads_send`, `zenx_threads_status` and
   `zenx_self_control_threads_wait` accept optional `device`; omission stays local
 - Remote agents execute their own tools on their own Hosts
+- Generic direct target tools are discovered lazily with `zenx_fleet_tools` for
+  an explicit device/workspace/target Thread; `zenx_fleet_execute` uses that exact
+  discovered device key, process epoch and selected tool generation
+- Generic catalog/execute/task status need a separate tools grant; shell and
+  existing invitation grants do not confer it. The initial grant uses typed
+  configuration/enrollment rather than the current invitation/settings UI
 - Read-only inspection does not create tasks
 - Unknown delivery is not completion, and lost responses must not cause automatic
   replay of a mutation
+
+For eligible text/JSON results and qualified target-owned tasks, follow
+[the generic Fleet workflow](fleet.md#lazy-target-tool-catalog-and-execution).
+Unsupported result contexts remain excluded from execution/callable projection;
+the catalog reports their ineligible status and reason. Ordinary `wait` and
+`zenx_fleet_tool_status` observe the same target admission; disconnection or Host
+restart must not create a local duplicate or automatically rerun target work.
 
 For a remote Thread completion Trigger, record `sourceDevice`, canonical
 `sourceWorkspace` and the exact watched Thread. The existing Trigger service owns

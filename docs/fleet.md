@@ -13,6 +13,9 @@ Fleet is included in the ordinary first-party startup installation. Every Agent
 can discover its tools through the plugin catalog; a PAW preset has no privileged
 Fleet path. Explicit disable/uninstall choices and normal tool permissions remain
 in effect. Installation alone grants no access to another machine.
+The plugin's `mainDocument` owns machine-selection, transport, capability and task
+HOWTO guidance. The PAW preset recommends reading it and respecting the user's
+machine choice; it does not carry a second Fleet instruction corpus.
 
 1. On the target, ask its Agent to run `zenx_fleet_readiness` and explain missing
    preparation. This read-only tool reports known machines, current hosting and
@@ -92,6 +95,9 @@ The ordinary `@zenx/fleet-plugin` package exposes:
 - `zenx_fleet_workspaces` and `zenx_fleet_models`: target-specific discovery
 - `zenx_fleet_threads_list`, `read`, `create`, `send`, and `status`
 - `zenx_fleet_shell`: the additional HTTPS shell capability described below
+- `zenx_fleet_tools`: a lazy exact-context target tool catalog
+- `zenx_fleet_execute`: exact catalog-generation target tool execution
+- `zenx_fleet_tool_status`: observation of a qualified target task handle
 
 Thread operations delegate to existing self-control/target native Thread tools.
 Use exact target workspace and Thread identities. For read/send/status, `threadId`
@@ -106,6 +112,102 @@ captured route key; changing a route/access/workspace closes stale inspection an
 invalidates its previous reachability check. The omitted device defaults to
 local for the ordinary Thread tools; shell requires an explicit remote device.
 Machine descriptions cannot override either side's permissions.
+
+## Lazy target tool catalog and execution
+
+An ordinary Host-projected routing call without `device`, or with
+`device: "local"`, stays on
+this Host. The optional selector is Host-owned projection/routing metadata; it
+does not rewrite the underlying plugin/external schema. A foreign schema's own
+fields remain foreign arguments. Respect the user's requested machine rather
+than inferring a different destination from a description or a previous task.
+
+For generic remote execution, use this sequence:
+
+1. Read Fleet through `zenx_plugin`. Discover a configured machine with
+   `zenx_fleet_devices`, then its workspace and exact existing target Thread. An
+   authorized `zenx_fleet_threads_create` creates an idle Thread if one is needed;
+   creation itself does not start a task.
+2. Call `zenx_fleet_tools` with all of `device`, `workspace`, `targetThreadId`.
+   Discovery is lazy for this explicit context; it does not eagerly copy all
+   peers' schemas into every Agent's initial tools.
+3. Select an entry with `eligible: true`. Use the disclosure's top-level
+   `deviceKey`, `catalog.processEpoch`, that entry's opaque `generation`, its
+   `definition.name`, and its exact `definition.inputSchema`. Call
+   `zenx_fleet_execute` with those same identities and exact `deviceKey`,
+   `processEpoch`, `toolGeneration: <entry.generation>`, `name`, and schema-valid
+   `arguments`.
+   Facade routing metadata stays outside `arguments`. `deviceKey` binds the
+   discovered configured machine/access/endpoint; changed routes reject before
+   execution. Stale generations and a different Host process epoch also reject;
+   refresh deliberately before a new call.
+4. Inspect the result's target origin and task status. Preserve a returned
+   qualified opaque `task_id` unchanged for ordinary `wait` or
+   `zenx_fleet_tool_status`. `wait` can observe or request cancellation of that
+   same target admission. Acceptance/running is not completion.
+
+Ordinary Host-projected remote calls supply `device` plus `target_context` with
+all of `deviceKey`, `workspace`, `targetThreadId`, `processEpoch`, and
+`toolGeneration` from that exact disclosure. These are routing metadata, removed
+before the target foreign tool receives its own arguments. A lazy target-scoped
+proxy exposes only the exact foreign schema; its Host inserts the bound route
+context, including `deviceKey`. A foreign schema that owns a routing field keeps
+that field unchanged; use its target-scoped proxy or the generic facade instead
+of treating its own field as routing metadata.
+
+Catalog, execute and tool status use the separate `zenx-fleet.tools` permission
+and `zenx.fleet.tools` capability. The configured HTTPS control device, target
+control Host and fresh server-issued client grant must separately opt into
+`toolsEnabled`. Existing shell access, control grants and invitations do not
+expand automatically. This first generic slice supports the grant through typed
+configuration/enrollment; the current desktop invitation/settings UI does not
+request tools access. Do not claim that clicking its shell checkbox enables all
+tools. SSH generic-tool requests reject before bridge launch. The narrow shell
+gateway and its existing grant remain independent.
+
+The catalog reports exact schemas and eligibility. Excluded entries have
+`eligible: false` with a reason and do not become callable remote projections.
+Only tools whose text/JSON results are safely representable with their origin
+can execute remotely. `run_code`, composite/compaction, trusted UI and
+page/media/artifact-bearing tools remain excluded from execution until an
+origin-aware adapter exists. Runtime eligibility is explicit: installed tools
+are not automatically eligible, and Fleet does not promise every tool. Exact target schemas are
+disclosed only for the selected target context. Origin-tagged text/JSON may
+mention paths, but clients must never resolve them against local files.
+
+The target Thread's current ToolEnvironment, cwd, sandbox and approval policy
+remain authoritative. The facade does not spawn a raw process, synthesize a
+target Agent Turn or bypass remembered denials. There is no remote interactive
+approval path; approval-needed calls reject explicitly. Argument JSON is bounded
+to 48 KiB; optional `yield_time_ms` is 1–30000, `timeout_ms` is 1–120000 and
+`max_output_bytes` is 1–65536. Admission IDs and their acceptance timestamps are
+minted by the Host, not supplied by the model.
+New tool tasks capture the target's canonical root before the Thread dispatch
+fence awaits metadata. Immediately before registration, that same synchronous
+launch checks the live workspace mapping, canonical root and device grant.
+Workspace removal or remapping, including symlink changes, rejects before a new
+task starts. A Promise-returning Host workspace provider remains usable for
+catalog and observation reads, but new generic execution rejects
+`operation_forbidden` because it cannot supply synchronous workspace authority.
+
+The target manager resolves ordinary-tool timing using its existing precedence:
+declared domain timing arguments, runtime policy defaults, then configured
+manager defaults. Remote observation/execution budgets are ceilings over those
+resolved values, so a longer facade budget never lengthens a target deadline or
+yield interval. Valid runtime/manager defaults above a remote ceiling are capped.
+Explicit domain values outside the remote supported range still reject before
+execution, as do effective target timings that Core rejects (including zero,
+non-finite and out-of-Core-range values); they are never coerced into defaults.
+
+The target Host owns the actual async task, deadline, cancellation and captured
+output. The calling Host records its ordinary canonical tool result; it does not
+create a duplicate local task or a second remote journal. After a disconnect,
+observation can reconnect to the same admission. Keep the returned opaque handle
+unchanged: it also preserves output and receipt-replay bounds after an interrupted
+observation. It must never replay the mutation or silently switch to local/SSH. Host restart and expired admission/task
+retention can make the outcome unknown; an unavailable observation is not proof
+that execution failed, succeeded or is safe to repeat. Inspect the target's
+authoritative state before deciding whether new work is authorized.
 
 ## Reachability and credentials
 

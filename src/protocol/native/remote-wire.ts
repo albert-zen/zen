@@ -1,3 +1,13 @@
+import type {
+  RemoteToolCatalogRequest,
+  RemoteToolCatalogResult,
+  RemoteToolExecuteRequest,
+  RemoteToolWaitRequest,
+  RemoteToolStatusRequest,
+  RemoteToolCancelRequest,
+  RemoteToolResult,
+  RemoteToolStatusResult,
+} from "./remote-tool-wire.js";
 /** Pure native ZAS mobile wire types: safe to import as types in React Native. */
 export const REMOTE_HOST_VERSION = 1;
 /** send admission checks archival under the canonical Core mutation lock. */
@@ -18,6 +28,11 @@ export const REMOTE_METHODS = {
   interrupt: "zen/remote/interrupt",
   shell: "zen/remote/shell",
   shellCancel: "zen/remote/shell/cancel",
+  toolsCatalog: "zen/remote/tools/catalog",
+  toolsExecute: "zen/remote/tools/execute",
+  toolsWait: "zen/remote/tools/wait",
+  toolsStatus: "zen/remote/tools/status",
+  toolsCancel: "zen/remote/tools/cancel",
   event: "zen/remote/thread/event",
   reset: "zen/remote/thread/reset",
 } as const;
@@ -33,6 +48,8 @@ export interface RemotePairRequest {
   access?: "read" | "control";
   /** Separate explicit shell opt-in; omitted/legacy grants never allow shell. */
   shellEnabled?: boolean;
+  /** Independent generic-tool opt-in; legacy shell/control grants never imply it. */
+  toolsEnabled?: boolean;
 }
 export interface RemotePairResult {
   hostId: string;
@@ -206,6 +223,11 @@ export const REMOTE_SHELL_MAX_COMMAND_BYTES = 32 * 1024;
 export const REMOTE_SHELL_MAX_TIMEOUT_MS = 120_000;
 export const REMOTE_SHELL_MAX_OUTPUT_BYTES = 64 * 1024;
 export interface RemoteRequestParams {
+  [REMOTE_METHODS.toolsCatalog]: RemoteToolCatalogRequest;
+  [REMOTE_METHODS.toolsExecute]: RemoteToolExecuteRequest;
+  [REMOTE_METHODS.toolsWait]: RemoteToolWaitRequest;
+  [REMOTE_METHODS.toolsStatus]: RemoteToolStatusRequest;
+  [REMOTE_METHODS.toolsCancel]: RemoteToolCancelRequest;
   [REMOTE_METHODS.shell]: RemoteShellRequest;
   [REMOTE_METHODS.shellCancel]: { requestId: string };
   [REMOTE_METHODS.models]: Record<string, never>;
@@ -235,6 +257,11 @@ export interface RemoteRequestParams {
   };
 }
 export interface RemoteResponseResults {
+  [REMOTE_METHODS.toolsCatalog]: RemoteToolCatalogResult;
+  [REMOTE_METHODS.toolsExecute]: RemoteToolResult;
+  [REMOTE_METHODS.toolsWait]: RemoteToolResult;
+  [REMOTE_METHODS.toolsStatus]: RemoteToolStatusResult;
+  [REMOTE_METHODS.toolsCancel]: RemoteToolResult;
   [REMOTE_METHODS.shell]: RemoteShellResult;
   [REMOTE_METHODS.shellCancel]: Record<string, never>;
   [REMOTE_METHODS.models]: { models: readonly RemoteModelView[] };

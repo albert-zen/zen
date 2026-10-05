@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { FleetToolGateway } from "../../../../src/protocol/native/remote-tools.js";
 import { FleetShellGateway } from "./fleet-shell.js";
 import type { ToolEnvironment } from "../../../../src/tool.js";
 import { FleetHostService } from "./fleet-host.js";
@@ -123,6 +124,14 @@ async function handleCommand(command: HostCommand): Promise<void> {
         },
         targetToolEnvironment
           ? new FleetShellGateway(targetToolEnvironment)
+          : undefined,
+        targetToolEnvironment
+          ? ({ hostId, processEpoch }) =>
+              new FleetToolGateway({
+                tools: targetToolEnvironment!,
+                hostId,
+                processEpoch,
+              })
           : undefined,
       );
       send({

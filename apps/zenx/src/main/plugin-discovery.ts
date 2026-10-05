@@ -1,4 +1,5 @@
 import type { CanonicalItem } from "../../../../src/item.js";
+import { disclosureCallResults } from "./disclosure-history.js";
 import type { ModelTool } from "../../../../src/model.js";
 import type {
   ToolExecutionResult,
@@ -14,6 +15,8 @@ import type {
 import { pluginReadiness } from "../plugin-readiness.js";
 
 export const ZENX_PLUGIN_TOOL = "zenx_plugin";
+/** Builtin-owned disclosure metadata, never model instructions or a tool index. */
+export const PLUGIN_DISCLOSURE_CONTENT_TYPE = "zen/plugin-disclosure";
 
 export type AvailablePlugin = ZenXAvailablePlugin;
 
@@ -117,6 +120,10 @@ export class PluginDiscoveryToolRuntime implements ToolRuntime {
       throw new Error(`ZenX plugin is not available: ${pluginId}`);
     }
     invocation.signal.throwIfAborted();
+    if (
+      !isPluginDisclosure({ version: 1, operation: "read", pluginId }, pluginId)
+    )
+      throw new Error("Invalid plugin disclosure identity");
     return {
       output: JSON.stringify({
         operation,
@@ -130,6 +137,8 @@ export class PluginDiscoveryToolRuntime implements ToolRuntime {
         },
       }),
       exitCode: 0,
+      contentType: PLUGIN_DISCLOSURE_CONTENT_TYPE,
+      structuredContent: { version: 1, operation: "read", pluginId },
     };
   }
 }
@@ -199,28 +208,33 @@ function currentAvailablePlugins(
 export function disclosedPluginIds(
   items: readonly CanonicalItem[],
 ): ReadonlySet<string> {
-  const pending = new Map<string, string>();
   const disclosed = new Set<string>();
-  for (const item of items) {
-    if (item.type === "tool_call") {
-      pending.delete(item.callId);
-      if (item.name !== ZENX_PLUGIN_TOOL) continue;
-      const pluginId = validReadArguments(item.arguments);
-      if (pluginId !== undefined) pending.set(item.callId, pluginId);
-      continue;
-    }
-    if (item.type !== "tool_result") continue;
-    const pluginId = pending.get(item.callId);
-    pending.delete(item.callId);
+  for (const { call, result: item } of disclosureCallResults(items)) {
+    if (call.name !== ZENX_PLUGIN_TOOL) continue;
+    const pluginId = validReadArguments(call.arguments);
     if (
       pluginId !== undefined &&
       item.exitCode === 0 &&
-      isSuccessfulReadResult(item.output, pluginId)
+      (item.contentType === PLUGIN_DISCLOSURE_CONTENT_TYPE
+        ? isPluginDisclosure(item.structuredContent, pluginId)
+        : isSuccessfulReadResult(item.output, pluginId))
     ) {
       disclosed.add(pluginId);
     }
   }
   return disclosed;
+}
+
+function isPluginDisclosure(value: unknown, pluginId: string): boolean {
+  return (
+    isRecord(value) &&
+    Object.keys(value).length === 3 &&
+    value.version === 1 &&
+    value.operation === "read" &&
+    value.pluginId === pluginId &&
+    pluginId.length <= 128 &&
+    /^[a-z0-9][a-z0-9._-]*$/u.test(pluginId)
+  );
 }
 
 function validReadArguments(

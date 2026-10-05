@@ -183,6 +183,7 @@ const manifest: ZenXPluginManifestV2 = {
   tools: [
     {
       name: "zenx_models_list",
+      remoteExecution: "text-json",
       description:
         "Discover the current model IDs, supported reasoning efforts and defaults from the App Server model catalog.",
       inputSchema: {

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { FleetToolTargetRouter } from "./fleet-tool-router.js";
 import { RtkShellOutputFilter } from "../../../../src/shell-output-filter.js";
 import type {
   ToolBundle,
@@ -49,6 +50,9 @@ export class ZenXHostToolBundle implements ToolBundle {
     this.tools = options.capabilities.definitions.map((definition) => ({
       name: definition.name,
       specification: structuredClone(definition),
+      ...(options.capabilities.remoteToolNames?.includes(definition.name)
+        ? { remoteExecution: "text-json" as const }
+        : {}),
       ...hostedResourcePolicy(
         definition.name,
         options.capabilities.plugins?.find((plugin) =>
@@ -79,9 +83,16 @@ export class ZenXHostToolBundle implements ToolBundle {
     };
   }
 
+  async executeTarget(
+    invocation: ToolInvocation,
+  ): Promise<ToolExecutionResult> {
+    return await this.#execute(invocation.name, invocation, true);
+  }
+
   async #execute(
     toolName: string,
     invocation: ToolInvocation,
+    targetRoute = false,
   ): Promise<ToolExecutionResult> {
     if (invocation.name !== toolName) {
       throw new Error(
@@ -110,6 +121,7 @@ export class ZenXHostToolBundle implements ToolBundle {
       invocation.signal.addEventListener("abort", abort, { once: true });
       this.#send({
         type: "capability/invoke",
+        ...(targetRoute ? { targetRoute: true as const } : {}),
         invocationId,
         generationToken: this.#generationToken,
         invocation: {
@@ -119,6 +131,24 @@ export class ZenXHostToolBundle implements ToolBundle {
             : { canonicalToolCallId: invocation.canonicalToolCallId }),
           name: invocation.name,
           arguments: invocation.arguments,
+          ...(targetRoute && invocation.task !== undefined
+            ? {
+                task: {
+                  ...(invocation.task.waitForCompletion === undefined
+                    ? {}
+                    : { waitForCompletion: invocation.task.waitForCompletion }),
+                  ...(invocation.task.yieldTimeMs === undefined
+                    ? {}
+                    : { yieldTimeMs: invocation.task.yieldTimeMs }),
+                  ...(invocation.task.timeoutMs === undefined
+                    ? {}
+                    : { timeoutMs: invocation.task.timeoutMs }),
+                  ...(invocation.task.previewBytes === undefined
+                    ? {}
+                    : { previewBytes: invocation.task.previewBytes }),
+                },
+              }
+            : {}),
           cwd: invocation.cwd,
           ...(invocation.threadId === undefined
             ? {}
@@ -298,6 +328,10 @@ export function createZenXHostToolEnvironment(options: {
     toolOutputSpool: options.toolOutputSpool,
     bundles: [capabilityBundle],
   });
+  const targetRouter = new FleetToolTargetRouter((invocation) =>
+    currentBundle.executeTarget(invocation),
+  );
+  toolEnvironment.setTargetRouter(targetRouter);
   let capabilities = structuredClone(options.capabilities);
   const catalog = {
     availablePlugins: () => structuredClone(capabilities.plugins ?? []),
@@ -336,7 +370,12 @@ export function createZenXHostToolEnvironment(options: {
   return {
     capabilityBundle,
     toolEnvironment,
-    toolDefinitionProjection: (items) => projection.definitions(items),
+    toolDefinitionProjection: (items) =>
+      targetRouter.definitions(
+        items,
+        projection.definitions(items),
+        toolEnvironment.remoteDefinitions,
+      ),
     replaceCapabilities: (replacement) => {
       const nextBundle = new ZenXHostToolBundle({
         capabilities: replacement,

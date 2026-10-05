@@ -777,6 +777,44 @@ export class ZenAppServer {
     return await this.#snapshot(thread);
   }
 
+  /** Host-only launch fence; the existing task manager registers before unlock. */
+  async dispatchHostTool<T>(
+    expected: Pick<
+      ThreadSnapshot,
+      "id" | "cwd" | "sandbox" | "approvalPolicy" | "archived"
+    >,
+    launch: () => Promise<T>,
+  ): Promise<{ result: Promise<T> }> {
+    return await this.#withThreadMutation(expected.id, async () => {
+      if (!this.#acceptingRootOperations)
+        throw new AppServerError(
+          "host_restarting",
+          "The Zen host is restarting",
+        );
+      const thread = await this.#requireThread(expected.id);
+      const metadata = await this.#threadMetadata.read(expected.id);
+      const current = thread.effectiveConfiguration();
+      if (
+        current.cwd !== expected.cwd ||
+        current.sandbox !== expected.sandbox ||
+        current.approvalPolicy !== expected.approvalPolicy ||
+        (metadata.archived ?? false) !== expected.archived ||
+        expected.archived
+      )
+        throw new AppServerError(
+          "stale_thread",
+          "Target execution permissions or archival changed before dispatch",
+        );
+      if (!this.#acceptingRootOperations)
+        throw new AppServerError(
+          "host_restarting",
+          "The Zen host is restarting",
+        );
+      // Do not await (or async-flatten) the execution body under this lock.
+      return { result: launch() };
+    });
+  }
+
   async updateThreadSettings(
     threadId: string,
     input: UpdateThreadSettingsInput,
