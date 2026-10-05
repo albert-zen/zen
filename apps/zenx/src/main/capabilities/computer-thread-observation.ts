@@ -193,7 +193,9 @@ function validPointer(pointer: ComputerActionPointer | undefined): boolean {
     Number.isFinite(pointer.windowWidth) &&
     pointer.windowWidth > 0 &&
     Number.isFinite(pointer.windowHeight) &&
-    pointer.windowHeight > 0
+    pointer.windowHeight > 0 &&
+    (pointer.windowId === undefined ||
+      (Number.isSafeInteger(pointer.windowId) && pointer.windowId > 0))
   );
 }
 

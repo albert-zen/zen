@@ -4,6 +4,38 @@ import test from "node:test";
 import { observeComputerWindow } from "../src/main/capabilities/computer-electron-observation.js";
 import type { ComputerLiveObservationEvent } from "../src/main/capabilities/computer-provider.js";
 
+test("a capture already in flight retains its acquisition-start timestamp", async () => {
+  let release!: () => void;
+  let captureStartedAt = 0;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const events: ComputerLiveObservationEvent[] = [];
+  const stop = observeComputerWindow(
+    async () => {
+      captureStartedAt = Date.now();
+      await pending;
+      return fakeImage() as never;
+    },
+    (event) => events.push(event),
+  );
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const actionStartedAt = Date.now();
+    release();
+    await new Promise((resolve) => setImmediate(resolve));
+    const frame = events.find((event) => event.type === "frame");
+    assert.ok(frame && frame.type === "frame");
+    assert.ok(Date.parse(frame.frame.capturedAt) <= captureStartedAt);
+    assert.ok(
+      Date.parse(frame.frame.capturedAt) < actionStartedAt,
+      "an action during capture must not paint on pre-action pixels",
+    );
+  } finally {
+    stop();
+  }
+});
+
 test("Computer live capture is serial, bounded, cancellable, and announces live once", async () => {
   const events: ComputerLiveObservationEvent[] = [];
   let captures = 0;
@@ -48,6 +80,7 @@ test("Computer live frame carries exact window geometry separately from scaled i
       image: fakeImage() as never,
       windowWidth: 3200,
       windowHeight: 1800,
+      windowId: 193,
     }),
     (event) => events.push(event),
   );
@@ -58,6 +91,7 @@ test("Computer live frame carries exact window geometry separately from scaled i
   assert.equal(frame.frame.width, 1600);
   assert.equal(frame.frame.windowWidth, 3200);
   assert.equal(frame.frame.windowHeight, 1800);
+  assert.equal(frame.frame.windowId, 193);
 });
 
 function fakeImage() {

@@ -105,6 +105,29 @@ test("Computer pointer rejects stale and invalid geometry and does not replay on
   );
 });
 
+test("Computer observation accepts only a positive native window identity", () => {
+  const { implementation } = backend();
+  const observation = new ComputerThreadObservation(implementation);
+  const events: Array<{
+    type: string;
+    targets?: Array<{ pointer?: ComputerActionPointer }>;
+  }> = [];
+  observation.observe({ threadId: "a", frames: false }, (event) =>
+    events.push(event),
+  );
+  observation.publish("a", "invalid", target, { ...pointer(), windowId: -1 });
+  assert.equal(
+    events.findLast((event) => event.type === "targets")?.targets?.[0]?.pointer,
+    undefined,
+  );
+  observation.publish("a", "valid", target, { ...pointer(), windowId: 193 });
+  assert.equal(
+    events.findLast((event) => event.type === "targets")?.targets?.[0]?.pointer
+      ?.windowId,
+    193,
+  );
+});
+
 test("Computer action pointer is observable but omitted from the canonical tool result", async () => {
   const { implementation } = backend();
   implementation.press = async () => ({

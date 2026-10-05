@@ -10,6 +10,7 @@ export function observeComputerWindow(
         image: NativeImage;
         windowWidth: number;
         windowHeight: number;
+        windowId?: number;
       }
   >,
   listener: ComputerLiveObservationListener,
@@ -38,6 +39,9 @@ export function observeComputerWindow(
   const next = async () => {
     if (stopped) return;
     try {
+      // Fence against actions delivered while acquisition/encoding is in flight.
+      // A completion timestamp could make pre-action pixels look fresh.
+      const capturedAt = new Date().toISOString();
       const captured = await capture();
       let image = "image" in captured ? captured.image : captured;
       const geometry =
@@ -45,6 +49,9 @@ export function observeComputerWindow(
           ? {
               windowWidth: captured.windowWidth,
               windowHeight: captured.windowHeight,
+              ...(captured.windowId === undefined
+                ? {}
+                : { windowId: captured.windowId }),
             }
           : undefined;
       if (stopped) return;
@@ -53,7 +60,10 @@ export function observeComputerWindow(
         (!Number.isFinite(geometry.windowWidth) ||
           geometry.windowWidth <= 0 ||
           !Number.isFinite(geometry.windowHeight) ||
-          geometry.windowHeight <= 0)
+          geometry.windowHeight <= 0 ||
+          (geometry.windowId !== undefined &&
+            (!Number.isSafeInteger(geometry.windowId) ||
+              geometry.windowId <= 0)))
       ) {
         throw new Error("The selected Computer window has invalid bounds");
       }
@@ -69,7 +79,6 @@ export function observeComputerWindow(
       const data = image.toJPEG(70);
       if (data.byteLength > 4 * 1024 * 1024)
         throw new Error("Computer preview exceeds the frame size limit.");
-      const capturedAt = new Date().toISOString();
       if (!live) {
         live = true;
         send({

@@ -123,6 +123,7 @@ export function ComputerThreadPanel({
                 capturedAt={frame.capturedAt}
                 windowWidth={frame.windowWidth}
                 windowHeight={frame.windowHeight}
+                windowId={frame.windowId}
               />
             ) : null}
           </div>

@@ -44,6 +44,7 @@ export interface ComputerActionPointer {
   capturedAt: string;
   windowWidth: number;
   windowHeight: number;
+  windowId?: number;
 }
 
 export interface ComputerInspection {
@@ -95,6 +96,7 @@ export interface ComputerLiveObservationFrame {
   capturedAt: string;
   windowWidth?: number;
   windowHeight?: number;
+  windowId?: number;
 }
 
 export type ComputerLiveObservationEvent =
@@ -927,6 +929,7 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
         image: await this.#captureWindowId(resolved.windowId),
         windowWidth: current.windowWidth,
         windowHeight: current.windowHeight,
+        windowId: current.windowId,
       };
     }, listener);
   }
@@ -1258,11 +1261,15 @@ func actionPointer(_ element: AXUIElement, _ window: AXUIElement?, _ action: Str
   guard x.isFinite, y.isFinite, x >= 0, x <= 1, y >= 0, y <= 1 else { return nil }
   let timestamp = ISO8601DateFormatter()
   timestamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-  return [
+  var pointer: [String: Any] = [
     "x": x, "y": y, "action": action,
     "capturedAt": timestamp.string(from: Date()),
     "windowWidth": windowFrame.width, "windowHeight": windowFrame.height
   ]
+  if let windowId = uniqueActionWindowId(window, windowFrame) {
+    pointer["windowId"] = windowId
+  }
+  return pointer
 }
 
 func frameFingerprint(_ element: AXUIElement) -> String {
@@ -1487,6 +1494,25 @@ func windowBoundsMatch(_ candidate: CGRect, _ expected: CGRect, tolerance: CGFlo
     abs(candidate.origin.y - expected.origin.y) <= tolerance &&
     abs(candidate.size.width - expected.size.width) <= tolerance &&
     abs(candidate.size.height - expected.size.height) <= tolerance
+}
+
+func uniqueActionWindowId(_ window: AXUIElement, _ bounds: CGRect) -> Int? {
+  let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+  let geometryMatches = info.filter { entry in
+    guard (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == running.processIdentifier,
+          (entry[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+          let candidate = cgWindowBounds(entry) else { return false }
+    return windowBoundsMatch(candidate, bounds)
+  }
+  let title = textAttribute(window, kAXTitleAttribute)
+  let titleMatches = title.isEmpty ? [] : geometryMatches.filter {
+    ($0[kCGWindowName as String] as? String ?? "") == title
+  }
+  let candidates = titleMatches.isEmpty ? geometryMatches : titleMatches
+  guard candidates.count == 1,
+        let id = (candidates[0][kCGWindowNumber as String] as? NSNumber)?.intValue,
+        id > 0 else { return nil }
+  return id
 }
 
 func findControl(_ wanted: [String: Any]) -> AXUIElement {

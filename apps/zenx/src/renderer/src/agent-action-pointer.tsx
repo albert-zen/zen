@@ -13,6 +13,7 @@ export function AgentActionPointer({
   capturedAt,
   windowWidth,
   windowHeight,
+  windowId,
 }: {
   targetKey: string;
   actionId: string;
@@ -22,6 +23,7 @@ export function AgentActionPointer({
   capturedAt: string;
   windowWidth?: number;
   windowHeight?: number;
+  windowId?: number;
 }) {
   const [trail, setTrail] = useState<
     Array<ComputerActionPointer & { actionId: string }>
@@ -40,6 +42,7 @@ export function AgentActionPointer({
       const current = previous.filter(
         (point) =>
           validPointer(point, Date.now()) &&
+          point.windowId === pointer.windowId &&
           point.windowWidth === pointer.windowWidth &&
           point.windowHeight === pointer.windowHeight,
       );
@@ -64,15 +67,28 @@ export function AgentActionPointer({
   }, [trail]);
 
   const latest = trail.at(-1);
+  const frameIsCurrent =
+    latest !== undefined &&
+    Number.isFinite(Date.parse(capturedAt)) &&
+    Date.parse(capturedAt) >= Date.parse(latest.capturedAt);
   const geometryMatches =
     !latest ||
-    ((windowWidth === undefined || windowWidth === latest.windowWidth) &&
+    !frameIsCurrent ||
+    ((windowId === undefined || windowId === latest.windowId) &&
+      (windowWidth === undefined || windowWidth === latest.windowWidth) &&
       (windowHeight === undefined || windowHeight === latest.windowHeight) &&
       Math.abs(width / height - latest.windowWidth / latest.windowHeight) <=
         0.02);
   useEffect(() => {
     if (!geometryMatches) setTrail([]);
   }, [geometryMatches]);
+  const canDraw =
+    latest !== undefined &&
+    validPointer(latest, Date.now()) &&
+    width > 0 &&
+    height > 0 &&
+    frameIsCurrent &&
+    geometryMatches;
   useEffect(() => {
     const element = svg.current;
     if (!element || typeof ResizeObserver === "undefined") return;
@@ -85,16 +101,8 @@ export function AgentActionPointer({
     observer.observe(element);
     update();
     return () => observer.disconnect();
-  }, [width, height, Boolean(latest)]);
-  if (
-    !latest ||
-    !validPointer(latest, Date.now()) ||
-    width <= 0 ||
-    height <= 0 ||
-    Date.parse(capturedAt) < Date.parse(latest.capturedAt) ||
-    !geometryMatches
-  )
-    return null;
+  }, [width, height, canDraw]);
+  if (!latest || !canDraw) return null;
   const x = latest.x * width;
   const y = latest.y * height;
   // SVG and the contained screenshot share the same viewport/letterboxing.

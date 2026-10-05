@@ -69,9 +69,7 @@ async function inspect(
   return await browser.inspect("pointer-smoke-session", tabId);
 }
 
-async function pointerState(
-  view: WebContentsView,
-): Promise<{
+async function pointerState(view: WebContentsView): Promise<{
   points: number[][];
   hostCount: number;
   shadowClosed: boolean;
