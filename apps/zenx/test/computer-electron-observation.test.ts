@@ -41,6 +41,25 @@ test("Computer live capture is serial, bounded, cancellable, and announces live 
   assert.ok(frames[0]?.frame.capturedAt);
 });
 
+test("Computer live frame carries exact window geometry separately from scaled image size", async () => {
+  const events: ComputerLiveObservationEvent[] = [];
+  const stop = observeComputerWindow(
+    async () => ({
+      image: fakeImage() as never,
+      windowWidth: 3200,
+      windowHeight: 1800,
+    }),
+    (event) => events.push(event),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  stop();
+  const frame = events.find((event) => event.type === "frame");
+  assert(frame?.type === "frame");
+  assert.equal(frame.frame.width, 1600);
+  assert.equal(frame.frame.windowWidth, 3200);
+  assert.equal(frame.frame.windowHeight, 1800);
+});
+
 function fakeImage() {
   return {
     isEmpty: () => false,

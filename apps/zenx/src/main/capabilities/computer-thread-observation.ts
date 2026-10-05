@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type {
+  ComputerActionPointer,
   ComputerLiveObservationEvent,
   ComputerLiveObservationListener,
   ComputerTarget,
@@ -12,6 +13,7 @@ export interface ComputerThreadTarget {
   invocationId: string;
   target: ComputerTarget;
   mode: "live" | "snapshot";
+  pointer?: ComputerActionPointer;
 }
 export interface ComputerThreadRequest {
   threadId: string;
@@ -32,7 +34,10 @@ interface Observer {
   listener: ComputerThreadListener;
   generation: number;
   stop?: () => void;
+  activeTargetId?: string;
 }
+
+const POINTER_TTL_MS = 3_000;
 
 /** Host-local Computer view projection; never durable Thread state. */
 export class ComputerThreadObservation {
@@ -49,6 +54,7 @@ export class ComputerThreadObservation {
     threadId: string,
     invocationId: string,
     target: ComputerTarget,
+    pointer?: ComputerActionPointer,
   ): void {
     if (this.#closed || !target.windowTitle) return;
     const key = targetKey(target);
@@ -61,6 +67,7 @@ export class ComputerThreadObservation {
       invocationId,
       target: { ...target },
       mode: this.#backend.observeWindow ? "live" : "snapshot",
+      ...(pointer && validPointer(pointer) ? { pointer: { ...pointer } } : {}),
     };
     const targets = [
       ...prior.filter((candidate) => targetKey(candidate.target) !== key),
@@ -100,6 +107,7 @@ export class ComputerThreadObservation {
   #stop(observer: Observer): void {
     const stop = observer.stop;
     observer.stop = undefined;
+    observer.activeTargetId = undefined;
     try {
       stop?.();
     } catch {
@@ -108,8 +116,25 @@ export class ComputerThreadObservation {
   }
 
   #render(observer: Observer): void {
-    const generation = ++observer.generation;
-    this.#stop(observer);
+    const targets = (this.#targets.get(observer.request.threadId) ?? []).map(
+      (target) => ({
+        ...target,
+        ...(validPointer(target.pointer) ? {} : { pointer: undefined }),
+      }),
+    );
+    const selected =
+      targets.find((target) => target.id === observer.request.targetId) ??
+      (observer.request.targetId === undefined ? targets.at(-1) : undefined);
+    const continuing =
+      observer.stop !== undefined &&
+      observer.activeTargetId === selected?.id &&
+      observer.request.frames &&
+      !this.#closed;
+    if (!continuing) {
+      observer.generation += 1;
+      this.#stop(observer);
+    }
+    const generation = observer.generation;
     const send: ComputerThreadListener = (event) => {
       if (observer.generation !== generation || !this.#observers.has(observer))
         return;
@@ -121,15 +146,12 @@ export class ComputerThreadObservation {
         this.#stop(observer);
       }
     };
-    const targets = this.#targets.get(observer.request.threadId) ?? [];
-    const selected =
-      targets.find((target) => target.id === observer.request.targetId) ??
-      (observer.request.targetId === undefined ? targets.at(-1) : undefined);
     send({
       type: "targets",
       targets,
       ...(selected ? { selectedId: selected.id } : {}),
     });
+    if (continuing) return;
     if (!selected || !observer.request.frames || this.#closed) {
       send({
         type: "status",
@@ -149,8 +171,30 @@ export class ComputerThreadObservation {
       return;
     }
     observer.stop = this.#backend.observeWindow(selected.target, send);
+    observer.activeTargetId = selected.id;
     if (!this.#observers.has(observer)) this.#stop(observer);
   }
+}
+
+function validPointer(pointer: ComputerActionPointer | undefined): boolean {
+  if (!pointer) return false;
+  const timestamp = Date.parse(pointer.capturedAt);
+  return (
+    Number.isFinite(timestamp) &&
+    timestamp <= Date.now() &&
+    Date.now() - timestamp <= POINTER_TTL_MS &&
+    (pointer.action === "press" || pointer.action === "set_value") &&
+    Number.isFinite(pointer.x) &&
+    pointer.x >= 0 &&
+    pointer.x <= 1 &&
+    Number.isFinite(pointer.y) &&
+    pointer.y >= 0 &&
+    pointer.y <= 1 &&
+    Number.isFinite(pointer.windowWidth) &&
+    pointer.windowWidth > 0 &&
+    Number.isFinite(pointer.windowHeight) &&
+    pointer.windowHeight > 0
+  );
 }
 
 function targetKey(target: ComputerTarget): string {

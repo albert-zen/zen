@@ -4,7 +4,14 @@ import type { ComputerLiveObservationListener } from "./computer-provider.js";
 
 /** One cancellable capture at a time; frames are bounded and never persisted. */
 export function observeComputerWindow(
-  capture: () => Promise<NativeImage>,
+  capture: () => Promise<
+    | NativeImage
+    | {
+        image: NativeImage;
+        windowWidth: number;
+        windowHeight: number;
+      }
+  >,
   listener: ComputerLiveObservationListener,
 ): () => void {
   let stopped = false;
@@ -31,8 +38,25 @@ export function observeComputerWindow(
   const next = async () => {
     if (stopped) return;
     try {
-      let image = await capture();
+      const captured = await capture();
+      let image = "image" in captured ? captured.image : captured;
+      const geometry =
+        "image" in captured
+          ? {
+              windowWidth: captured.windowWidth,
+              windowHeight: captured.windowHeight,
+            }
+          : undefined;
       if (stopped) return;
+      if (
+        geometry &&
+        (!Number.isFinite(geometry.windowWidth) ||
+          geometry.windowWidth <= 0 ||
+          !Number.isFinite(geometry.windowHeight) ||
+          geometry.windowHeight <= 0)
+      ) {
+        throw new Error("The selected Computer window has invalid bounds");
+      }
       if (image.isEmpty())
         throw new Error("The selected Computer window has no visible frame.");
       const size = image.getSize();
@@ -62,6 +86,7 @@ export function observeComputerWindow(
           data: data.toString("base64"),
           ...image.getSize(),
           capturedAt,
+          ...(geometry ?? {}),
         },
       });
       if (!stopped) {
