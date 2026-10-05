@@ -191,6 +191,7 @@ const preparedConfig = {
 };
 const ready = {
   ready: true,
+  configurationRevision: "test-selected-config-revision",
   checks: [
     { id: "runtime", status: "ready", message: "Local setup is ready." },
   ],
@@ -438,7 +439,15 @@ test("IM connect requires fresh saved preparation and explicit single-consumer c
     });
     assert.deepEqual(
       harness.calls.filter((call) => call.command === "connect"),
-      [{ command: "connect", input: { singleConsumerConfirmed: true } }],
+      [
+        {
+          command: "connect",
+          input: {
+            singleConsumerConfirmed: true,
+            expectedConfigurationRevision: ready.configurationRevision,
+          },
+        },
+      ],
     );
     assert.equal(document.querySelector('[role="dialog"]'), null);
     connection.resolve({
@@ -554,10 +563,19 @@ test("IM readiness results cannot authorize an edited configuration", async () =
 
 test("IM readiness may inspect an unsaved draft but connection waits for save-only preparation", async () => {
   let configuration: unknown = preparedConfig;
+  let configurationRevision = "initial-revision";
   const harness = await mountImPage(async (command, input) => {
-    if (command === "readiness") return ready;
-    if (command === "prepare") configuration = input;
-    return { state: "prepared", configuration, activeConfiguration: null };
+    if (command === "readiness") return { ...ready, configurationRevision };
+    if (command === "prepare") {
+      configuration = input;
+      configurationRevision = "saved-revision";
+    }
+    return {
+      state: "prepared",
+      configuration,
+      configurationRevision,
+      activeConfiguration: null,
+    };
   });
   try {
     await changeInput(harness.dom, "工作目录", "/chosen-work");
@@ -568,10 +586,13 @@ test("IM readiness may inspect an unsaved draft but connection waits for save-on
     );
     assert.equal(button("确认连接…").disabled, true);
     await click(button("保存准备"));
+    assert.equal(button("确认连接…").disabled, true);
+    assert.equal(document.querySelector(".imzenx-checks"), null);
+    await click(button("检查准备情况"));
     assert.equal(button("确认连接…").disabled, false);
     assert.deepEqual(
       harness.calls.map((call) => call.command),
-      ["status", "readiness", "prepare"],
+      ["status", "readiness", "prepare", "readiness"],
     );
     await changeInput(harness.dom, "工作目录", "/another-work");
     assert.equal(button("确认连接…").disabled, true);
@@ -1049,5 +1070,137 @@ test("same-path managed IM edits show the explicit pending gate while the old co
     );
   } finally {
     await harness.close();
+  }
+});
+
+test("IM ready paths without a server revision cannot authorize connection", async () => {
+  const harness = await mountImPage(async (command) => {
+    if (command === "readiness") return { ...ready, configurationRevision: "" };
+    return { state: "prepared", configuration: preparedConfig };
+  });
+  try {
+    await click(button("检查准备情况"));
+    assert.equal(button("确认连接…").disabled, true);
+    assert.equal(
+      harness.calls.some((call) => call.command === "connect"),
+      false,
+    );
+  } finally {
+    await harness.close();
+  }
+});
+
+test("IM stale server revision rejection clears consent and requires a fresh check and confirmation", async () => {
+  let revision = "bot-111-revision";
+  let connections = 0;
+  const harness = await mountImPage(async (command) => {
+    if (command === "readiness")
+      return { ...ready, configurationRevision: revision };
+    if (command === "connect" && ++connections === 1) {
+      revision = "bot-222-revision";
+      throw new Error(
+        "IM settings changed after readiness was reviewed. Check readiness, confirm other bot consumers are stopped, then Connect again.",
+      );
+    }
+    return {
+      state: "prepared",
+      configuration: preparedConfig,
+      configurationRevision: revision,
+    };
+  });
+  try {
+    await click(button("检查准备情况"));
+    await click(button("确认连接…"));
+    let dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    await click(
+      dialog.querySelector<HTMLInputElement>('input[type="checkbox"]')!,
+    );
+    await click(button("连接", dialog));
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(document.querySelector(".imzenx-checks"), null);
+    assert.equal(button("确认连接…").disabled, true);
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /IM settings changed after readiness was reviewed/,
+    );
+    await click(button("检查准备情况"));
+    await click(button("确认连接…"));
+    dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    assert.equal(
+      dialog.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked,
+      false,
+    );
+    assert.equal(button("连接", dialog).disabled, true);
+    await click(
+      dialog.querySelector<HTMLInputElement>('input[type="checkbox"]')!,
+    );
+    await click(button("连接", dialog));
+    assert.deepEqual(
+      harness.calls
+        .filter((call) => call.command === "connect")
+        .map((call) => call.input),
+      [
+        {
+          singleConsumerConfirmed: true,
+          expectedConfigurationRevision: "bot-111-revision",
+        },
+        {
+          singleConsumerConfirmed: true,
+          expectedConfigurationRevision: "bot-222-revision",
+        },
+      ],
+    );
+  } finally {
+    await harness.close();
+  }
+});
+
+test("IM background status revision changes invalidate an open same-path consent", async () => {
+  const beforeInterval = globalThis.setInterval;
+  const beforeClearInterval = globalThis.clearInterval;
+  let poll!: () => void;
+  globalThis.setInterval = ((callback: () => void) => {
+    poll = callback;
+    return 1 as unknown as ReturnType<typeof setInterval>;
+  }) as typeof setInterval;
+  globalThis.clearInterval = (() => {}) as typeof clearInterval;
+  let revision = "original-revision";
+  const harness = await mountImPage(async (command) =>
+    command === "readiness"
+      ? { ...ready, configurationRevision: revision }
+      : {
+          state: "prepared",
+          configuration: preparedConfig,
+          configurationRevision: revision,
+        },
+  );
+  try {
+    await click(button("检查准备情况"));
+    await click(button("确认连接…"));
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    await click(
+      dialog.querySelector<HTMLInputElement>('input[type="checkbox"]')!,
+    );
+    revision = "externally-edited-revision";
+    await act(async () => poll());
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(document.querySelector(".imzenx-checks"), null);
+    assert.equal(button("确认连接…").disabled, true);
+    assert.equal(
+      harness.calls.some((call) => call.command === "connect"),
+      false,
+    );
+    await click(button("检查准备情况"));
+    await click(button("确认连接…"));
+    assert.equal(
+      document.querySelector<HTMLInputElement>(
+        '[role="dialog"] input[type="checkbox"]',
+      )!.checked,
+      false,
+    );
+  } finally {
+    await harness.close();
+    globalThis.setInterval = beforeInterval;
+    globalThis.clearInterval = beforeClearInterval;
   }
 });

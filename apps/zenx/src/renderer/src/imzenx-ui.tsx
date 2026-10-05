@@ -37,6 +37,7 @@ export const ImZenXDraftContext = createContext<RefObject<
 > | null>(null);
 interface Status {
   state: string;
+  configurationRevision?: string;
   error?: string;
   configuration: Partial<Configuration> | null;
   activeConfiguration?: Partial<Configuration> | null;
@@ -44,6 +45,7 @@ interface Status {
 }
 interface Readiness {
   ready: boolean;
+  configurationRevision: string;
   checks: Array<{
     id: string;
     status: "ready" | "blocked" | "warning";
@@ -690,6 +692,21 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
       clearInterval(timer);
     };
   }, [sdk.pluginId, busy]);
+  useEffect(() => {
+    // A fresh readiness response may supersede an older status snapshot. Compare
+    // only when a new authoritative status arrives (including background polls).
+    if (
+      !status?.configurationRevision ||
+      !readiness ||
+      !sameConfiguration(configRef.current, status.configuration) ||
+      status.configurationRevision === readiness.value.configurationRevision
+    )
+      return;
+    setReadiness(null);
+    setConnectOpen(false);
+    setSingleConsumerConfirmed(false);
+    setNotice("配置已修改，请重新检查准备情况");
+  }, [status]);
   const run = async (
     command: "status" | "readiness" | "prepare" | "connect",
   ) => {
@@ -708,7 +725,11 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
         command === "prepare" || command === "readiness"
           ? selectedConfig
           : command === "connect"
-            ? { singleConsumerConfirmed: true }
+            ? {
+                singleConsumerConfirmed: true,
+                expectedConfigurationRevision:
+                  currentReadiness?.configurationRevision,
+              }
             : undefined,
       );
       if (!mounted.current) return;
@@ -719,6 +740,9 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
       } else {
         if (request === statusVersion.current) setStatus(value as Status);
         if (command === "prepare") {
+          setReadiness(null);
+          setConnectOpen(false);
+          setSingleConsumerConfirmed(false);
           setNotice("准备已保存。完成本机私有凭证设置后，检查并明确连接。");
           if (revision.current === savedRevision) {
             dirtyRef.current = false;
@@ -731,7 +755,11 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
     } catch (reason) {
       if (!mounted.current) return;
       setError(reason instanceof Error ? reason.message : String(reason));
-      if (command === "readiness") setReadiness(null);
+      if (command === "readiness" || command === "connect") setReadiness(null);
+      if (command === "connect") {
+        setConnectOpen(false);
+        setSingleConsumerConfirmed(false);
+      }
     } finally {
       busyRef.current = false;
       if (mounted.current) setOperation(null);
@@ -747,7 +775,11 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
   const currentReadiness =
     readiness?.revision === revision.current ? readiness.value : null;
   const canConnect =
-    saved && !nativeDirty && !nativeBusy && currentReadiness?.ready === true;
+    saved &&
+    !nativeDirty &&
+    !nativeBusy &&
+    currentReadiness?.ready === true &&
+    Boolean(currentReadiness.configurationRevision?.trim());
   const pendingConnection =
     (status?.state === "connected" &&
       status.explicitConnectRequired === true) ||

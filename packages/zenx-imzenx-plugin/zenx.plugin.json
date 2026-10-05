@@ -95,7 +95,7 @@
     },
     {
       "name": "imzenx_readiness",
-      "description": "Read-only readiness of saved or explicitly supplied complete nonsecret settings. Checks selected Python/version/pinned SDK, own declared channel config/access restriction, workspace and Host server. Starts no IM transport; extracts no secrets. Empty input checks saved settings.",
+      "description": "Read-only readiness of saved or explicitly supplied complete nonsecret settings. Checks selected Python/version/pinned SDK, own declared channel config/access restriction, workspace and Host server. Starts no IM transport; extracts no secrets. Empty input checks saved settings. Returns a nonsecret configurationRevision to bind a later explicit connection acknowledgement.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -164,6 +164,10 @@
           "singleConsumerConfirmed": {
             "type": "boolean",
             "description": "User/coordinator confirmed that other consumers of this bot are stopped. Required after save-only preparation."
+          },
+          "expectedConfigurationRevision": {
+            "type": "string",
+            "description": "Exact nonsecret configurationRevision from the reviewed readiness result. Required for prepared single-consumer confirmation; stale settings reject before connecting."
           }
         },
         "required": ["pythonExecutable", "channelsConfigFile", "cwd"],
@@ -183,6 +187,10 @@
           "singleConsumerConfirmed": {
             "type": "boolean",
             "description": "User/coordinator confirmed that other consumers of this bot are stopped. Required after save-only preparation."
+          },
+          "expectedConfigurationRevision": {
+            "type": "string",
+            "description": "Exact nonsecret configurationRevision from the reviewed readiness result. Required for prepared single-consumer confirmation; stale settings reject before connecting."
           }
         },
         "required": [],

@@ -173,6 +173,7 @@ test(
     assert.deepEqual(await f.events(), []);
     const connected = await invoke(f.runtime, "imzenx_connect", {
       singleConsumerConfirmed: true,
+      expectedConfigurationRevision: f.runtime.status().configurationRevision,
     });
     assert.equal(connected.state, "connected");
     assert.equal(connected.explicitConnectRequired, false);
@@ -228,6 +229,7 @@ test(
     );
     const connected = await invoke(f.runtime, "imzenx_connect", {
       singleConsumerConfirmed: true,
+      expectedConfigurationRevision: f.runtime.status().configurationRevision,
     });
     assert.equal(
       connected.activeConfiguration.channelsConfigFile,
@@ -244,7 +246,11 @@ test(
     await invoke(f.runtime, "imzenx_prepare", f.config);
     await Promise.all(
       Array.from({ length: 3 }, () =>
-        invoke(f.runtime, "imzenx_connect", { singleConsumerConfirmed: true }),
+        invoke(f.runtime, "imzenx_connect", {
+          singleConsumerConfirmed: true,
+          expectedConfigurationRevision:
+            f.runtime.status().configurationRevision,
+        }),
       ),
     );
     const events = await f.events();
@@ -503,6 +509,7 @@ test(
     assert.equal(secretReads, 0);
     await invoke(f.runtime, "imzenx_connect", {
       singleConsumerConfirmed: true,
+      expectedConfigurationRevision: f.runtime.status().configurationRevision,
     });
     assert.equal(secretReads, 1);
     assert.deepEqual(
@@ -602,6 +609,7 @@ test(
     let connectSettled = false;
     const connect = invoke(f.runtime, "imzenx_connect", {
       singleConsumerConfirmed: true,
+      expectedConfigurationRevision: f.runtime.status().configurationRevision,
     }).then(
       (value) => {
         connectSettled = true;
@@ -635,6 +643,8 @@ test(
       (
         await invoke(f.runtime, "imzenx_connect", {
           singleConsumerConfirmed: true,
+          expectedConfigurationRevision:
+            f.runtime.status().configurationRevision,
         })
       ).state,
       "connected",
@@ -779,6 +789,7 @@ test(
     const prepare = invoke(f.runtime, "imzenx_prepare", f.config);
     const connect = invoke(f.runtime, "imzenx_connect", {
       singleConsumerConfirmed: true,
+      expectedConfigurationRevision: f.runtime.status().configurationRevision,
     });
     await prepare;
     await assert.rejects(connect, /settings changed.*Review.*Connect again/);
@@ -822,7 +833,10 @@ test(
     const saveRejected = assert.rejects(save, /partial-save/);
     await enteredPromise;
     const connectRejected = assert.rejects(
-      invoke(f.runtime, "imzenx_connect", { singleConsumerConfirmed: true }),
+      invoke(f.runtime, "imzenx_connect", {
+        singleConsumerConfirmed: true,
+        expectedConfigurationRevision: f.runtime.status().configurationRevision,
+      }),
       /settings changed.*Review.*Connect again/,
     );
     release();
@@ -944,6 +958,7 @@ test(
     await enteredPromise;
     const connect = invoke(f.runtime, "imzenx_connect", {
       singleConsumerConfirmed: true,
+      expectedConfigurationRevision: f.runtime.status().configurationRevision,
     });
     release();
     await save;
@@ -957,5 +972,83 @@ test(
       (await f.events()).map(({ event }) => event),
       ["start", "stop", "start"],
     );
+  },
+);
+
+test(
+  "reviewed acknowledgement rejects a completed same-path managed edit before Connect invocation",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const f = await fixture(t);
+    let edit;
+    f.host.registerManagedEdit = (callback) => {
+      edit = callback;
+      return () => {};
+    };
+    await f.runtime.close();
+    await f.runtime.start(f.sdk);
+    f.runtime.activate(Promise.resolve());
+    await waitFor(() => edit !== undefined);
+    await invoke(f.runtime, "imzenx_prepare", f.config);
+    const reviewed = await invoke(f.runtime, "imzenx_readiness");
+    assert.equal(typeof reviewed.configurationRevision, "string");
+    assert.equal(
+      reviewed.configurationRevision,
+      f.runtime.status().configurationRevision,
+    );
+    const priorConfiguration = f.runtime.status().configuration;
+    await edit(f.config.channelsConfigFile, async () => "edited synthetic bot");
+    assert.deepEqual(f.runtime.status().configuration, priorConfiguration);
+    assert.notEqual(
+      f.runtime.status().configurationRevision,
+      reviewed.configurationRevision,
+    );
+    await assert.rejects(
+      invoke(f.runtime, "imzenx_connect", {
+        singleConsumerConfirmed: true,
+        expectedConfigurationRevision: reviewed.configurationRevision,
+      }),
+      /settings changed after readiness/,
+    );
+    assert.equal(f.descriptorReads(), 0);
+    assert.deepEqual(await f.events(), [
+      { event: "probe", pid: (await f.events())[0].pid },
+    ]);
+    const refreshed = await invoke(f.runtime, "imzenx_readiness");
+    const connected = await invoke(f.runtime, "imzenx_connect", {
+      singleConsumerConfirmed: true,
+      expectedConfigurationRevision: refreshed.configurationRevision,
+    });
+    assert.equal(connected.state, "connected");
+    assert.equal(
+      (await f.events()).filter(({ event }) => event === "start").length,
+      1,
+    );
+  },
+);
+
+test(
+  "prepared Connect rejects boolean-only acknowledgements and revisions from an earlier runtime generation",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const f = await fixture(t);
+    await invoke(f.runtime, "imzenx_prepare", f.config);
+    const reviewed = await invoke(f.runtime, "imzenx_readiness");
+    await assert.rejects(
+      invoke(f.runtime, "imzenx_connect", { singleConsumerConfirmed: true }),
+      /settings changed after readiness/,
+    );
+    await f.runtime.close();
+    await f.runtime.start(f.sdk);
+    f.runtime.activate(Promise.resolve());
+    await waitFor(() => f.runtime.status().state === "prepared");
+    await assert.rejects(
+      invoke(f.runtime, "imzenx_connect", {
+        singleConsumerConfirmed: true,
+        expectedConfigurationRevision: reviewed.configurationRevision,
+      }),
+      /settings changed after readiness/,
+    );
+    assert.equal(f.descriptorReads(), 0);
   },
 );

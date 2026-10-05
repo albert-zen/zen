@@ -3,6 +3,7 @@ import { configuration, type Configuration } from "./configuration.js";
 import type { ManagedChannelInspection } from "./channel-schema.js";
 import { inspectReadiness, type ReadinessCheck } from "./readiness.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,8 +68,10 @@ export class ImZenXRuntime {
   #activated = false;
   #generation = 0;
   // Transient admission fence only; persisted configuration remains authoritative.
+  readonly #revisionNamespace = randomUUID();
   #configurationEpoch = 0;
   #managedEditEpoch = 0;
+  readonly #managedContentEpochs = new Map<string, number>();
   #state: State = "unconfigured";
   #error: string | undefined;
 
@@ -131,6 +134,11 @@ export class ImZenXRuntime {
                 // Configure can select this marker for the first time, so edits
                 // also invalidate pending Configure admissions before selection.
                 this.#managedEditEpoch += 1;
+                const marker = path.resolve(configFile);
+                this.#managedContentEpochs.set(
+                  marker,
+                  (this.#managedContentEpochs.get(marker) ?? 0) + 1,
+                );
               }
             }),
         );
@@ -233,6 +241,7 @@ export class ImZenXRuntime {
           },
         ];
         return {
+          configurationRevision: this.#configurationRevision(selected),
           ready: checks.every((check) => check.status !== "blocked"),
           checks,
           enabledChannels: inspected.enabledChannels,
@@ -252,45 +261,62 @@ export class ImZenXRuntime {
         throw new Error(`Unknown IMZenX tool: ${name}`);
       if (typeof input !== "object" || input === null || Array.isArray(input))
         throw new Error("IMZenX connection arguments must be an object");
-      const { singleConsumerConfirmed, ...fields } = input as Record<
-        string,
-        unknown
-      >;
+      const {
+        singleConsumerConfirmed,
+        expectedConfigurationRevision,
+        ...fields
+      } = input as Record<string, unknown>;
       if (
         singleConsumerConfirmed !== undefined &&
         typeof singleConsumerConfirmed !== "boolean"
       )
         throw new Error("singleConsumerConfirmed must be boolean");
-      if (
-        this.#singleConsumerConfirmationRequired &&
-        singleConsumerConfirmed !== true
-      )
+      const reviewedConfiguration =
+        name === "imzenx_configure" ? configuration(fields) : this.#config;
+      const managedSelection =
+        reviewedConfiguration === undefined
+          ? undefined
+          : await this.#host.inspectManagedChannels?.(
+              reviewedConfiguration.channelsConfigFile,
+            );
+      const confirmationRequired =
+        this.#singleConsumerConfirmationRequired ||
+        managedSelection !== undefined;
+      if (confirmationRequired && singleConsumerConfirmed !== true)
         throw new Error(
           "Confirm that other consumers of this bot are stopped, then Connect with singleConsumerConfirmed=true.",
         );
+      if (
+        (confirmationRequired || expectedConfigurationRevision !== undefined) &&
+        (typeof expectedConfigurationRevision !== "string" ||
+          expectedConfigurationRevision !==
+            this.#configurationRevision(reviewedConfiguration))
+      )
+        throw new Error(
+          "IM settings changed after readiness was reviewed. Check readiness, confirm other bot consumers are stopped, then Connect again.",
+        );
       if (name === "imzenx_configure") {
-        const next = configuration(fields);
+        const next = reviewedConfiguration!;
         await this.#sdk.storage.set({
           configuration: next,
           explicitConnectRequired: false,
-          singleConsumerConfirmationRequired:
-            this.#singleConsumerConfirmationRequired,
+          singleConsumerConfirmationRequired: confirmationRequired,
         });
         this.#config = next;
         this.#configurationEpoch += 1;
       } else {
         if (Object.keys(fields).length > 0)
           throw new Error(
-            "IMZenX Connect accepts only singleConsumerConfirmed",
+            "IMZenX Connect accepts only singleConsumerConfirmed and expectedConfigurationRevision",
           );
         if (this.#config !== undefined)
           await this.#sdk.storage.set({
             configuration: this.#config,
             explicitConnectRequired: false,
-            singleConsumerConfirmationRequired:
-              this.#singleConsumerConfirmationRequired,
+            singleConsumerConfirmationRequired: confirmationRequired,
           });
       }
+      this.#singleConsumerConfirmationRequired = confirmationRequired;
       this.#explicitConnectRequired = false;
       await this.#stop();
       invocation.signal.throwIfAborted();
@@ -302,6 +328,7 @@ export class ImZenXRuntime {
   status() {
     return {
       state: this.#state,
+      configurationRevision: this.#configurationRevision(this.#config),
       ...(this.#error === undefined ? {} : { error: this.#error }),
       configuration: this.#config ?? null,
       activeConfiguration: this.#activeConfig ?? null,
@@ -345,6 +372,26 @@ export class ImZenXRuntime {
       this.#state = "prepared";
       this.#error = undefined;
     }
+  }
+
+  /** Opaque, nonsecret acknowledgement revision; never a credential or durable state. */
+  #configurationRevision(selected: Configuration | undefined): string {
+    return createHash("sha256")
+      .update(
+        JSON.stringify({
+          namespace: this.#revisionNamespace,
+          generation: this.#generation,
+          configuration: this.#configurationEpoch,
+          managedEdit:
+            selected === undefined
+              ? 0
+              : (this.#managedContentEpochs.get(
+                  path.resolve(selected.channelsConfigFile),
+                ) ?? 0),
+          selected: selected ?? null,
+        }),
+      )
+      .digest("hex");
   }
 
   #serialize<T>(action: () => Promise<T>): Promise<T> {

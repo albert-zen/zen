@@ -84,12 +84,18 @@ timeout/shutdown until terminal closure, preventing overlapping retries.
   `channelsConfigFile`, `cwd`, optional `sharedFilesystemRoot`, `permissionMode`,
   and `allowUnrestrictedFullAccess`. Preparation stores an explicit-connect gate
 - `imzenx_connect` uses `imzenx.connect`; configurations prepared with the new flow
-  require `singleConsumerConfirmed: true` after a user/coordinator acknowledges
-  that other bot consumers are stopped. Successful explicit Connect enables the
+  require `singleConsumerConfirmed: true` and `expectedConfigurationRevision`
+  from the reviewed readiness result after a user/coordinator acknowledges that
+  other bot consumers are stopped. Preparation and managed-channel edits change
+  the nonsecret revision; stale confirmations reject before starting any consumer.
+  Check readiness again after saving preparation or changing channel settings.
+  Successful explicit Connect enables the
   existing Host restart/reconnection behavior. This is not delivery verification
 - Existing `imzenx_configure` remains a save-and-connect compatibility tool using
   `imzenx.connect`. It cannot bypass a prepared configuration's single-consumer
-  acknowledgement and requires the same field when the new flow has been used
+  acknowledgement and requires both fields when the new flow has been used
+  or a native managed configuration is selected. Unmanaged legacy setups retain
+  their existing behavior
 
 For advanced file configuration, readiness reads only the selected own
 IMZen-format file and its explicit QQ `credentials_file` reference, including
