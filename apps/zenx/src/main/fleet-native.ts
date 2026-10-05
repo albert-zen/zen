@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { WebSocket } from "ws";
 import {
   REMOTE_HOST_VERSION,
+  REMOTE_UNARCHIVED_SEND_CAPABILITY,
   REMOTE_METHODS,
   REMOTE_SHELL_MAX_COMMAND_BYTES,
   REMOTE_SHELL_MAX_TIMEOUT_MS,
@@ -1208,6 +1209,13 @@ export class NativeFleetClient implements NativeFleetPort {
         };
       const threadId = candidates[0]!.threadId;
       if (request.name === "zenx_threads_send") {
+        if (
+          args.threadId !== undefined &&
+          !session.capabilities.includes(REMOTE_UNARCHIVED_SEND_CAPABILITY)
+        )
+          throw new Error(
+            "Target Zen Host does not support archive-fenced Thread sends. Update the target Host before retrying.",
+          );
         const messageType = args.messageType ?? "guidance";
         if (
           !["guidance", "follow_up", "replacement"].includes(

@@ -904,6 +904,12 @@ claim，不得被称为 Codex extension 或因固定 CAS schema 缺失而删除�
 - **强制握手**：每个连接先 `initialize` → `initialized`，之后才接受其他方法。
   原生 `zen/turn/send` 复用该就绪状态或显式 `zen/initialize`；既有原生 resume
   读取不授予发送就绪状态，发送本身不得隐式初始化连接。
+- **原生 active-thread 接纳**：`zen/turn/send-unarchived` 固定传递既有 `requireUnarchived` 条件，
+  exact-ID Fleet SSH / self-control 的 start、steer、queue、replace 及确定性接纳重试
+  都在 Core 既有 mutation lock 下核验；旧 Host 对未知方法拒绝，不回退到无 fence 的发送。
+  exact-ID SSH 发送使用 bridge request v2，让旧版 bridge 在执行前拒绝；HTTPS 发送要求
+  当前 hello 的 `send-unarchived` capability，缺失时明确要求升级，不持久化 capability。
+  普通发送与 fuzzy selector 保留旧语义，不扩展固定 CAS 的参数 shape。
 - **WebSocket 访问控制在宿主侧**：loopback listener 拒绝浏览器 `Origin`，可选
   bearer credential 仅用于 transport 握手，不进入 Zen Core、Thread 或 journal。
 - **远程 Host 单一可信对外 Origin 是显式部署配置**：仅为直连 TLS WebSocket 握手核验配置证书 SAN、HTTP Host 和严格 Origin，不是设备身份或会话权威，缺省仍拒 Origin。

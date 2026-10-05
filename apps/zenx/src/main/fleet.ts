@@ -80,7 +80,7 @@ export interface NativeFleetPort {
   ): Promise<unknown>;
 }
 export interface FleetRequest {
-  version: 1;
+  version: 1 | 2;
   name: string;
   arguments: Record<string, unknown>;
   callId: string;
@@ -351,7 +351,14 @@ export class FleetRouter {
       throw new Error(`Fleet device ${deviceId} is read-only`);
     const { device: _device, ...args } = invocation.arguments;
     const request: FleetRequest = {
-      version: 1,
+      // Old bridges strictly reject v2 before executing their unfenced sends.
+      version:
+        device.transport !== "https" &&
+        invocation.name === "zenx_threads_send" &&
+        typeof args.threadId === "string" &&
+        args.target === undefined
+          ? 2
+          : 1,
       name: invocation.name,
       arguments: args,
       callId: invocation.callId,
@@ -480,7 +487,10 @@ export function runFleetProcess(
         if (!response.ok)
           finish(
             new Error(
-              `Fleet remote error: ${response.error ?? "request failed"}`,
+              request.version === 2 &&
+                response.error === "Invalid Fleet request"
+                ? "Target Fleet bridge does not support archive-fenced Thread sends. Update the target bridge and Host before retrying."
+                : `Fleet remote error: ${response.error ?? "request failed"}`,
             ),
           );
         else finish(undefined, response.result);

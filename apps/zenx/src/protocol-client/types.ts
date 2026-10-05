@@ -132,16 +132,8 @@ export type UserInputPart =
   | { type: "attachment"; attachment: AttachmentRef };
 
 export interface ClientRequestParams {
-  "zen/turn/send": {
-    threadId: string;
-    mode: "start" | "queue" | "batch-next" | "steer" | "replace";
-    expectedTurnId?: string;
-    clientUserMessageId: string;
-    input: readonly (
-      | import("../../../../src/item.js").UserInputPart
-      | import("../../../../src/skill-input.js").SkillReference
-    )[];
-  };
+  "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendParams;
+  "zen/turn/send-unarchived": import("../../../../src/protocol/native/wire.js").NativeTurnSendParams;
   "zen/thread/queue/cancel": {
     threadId: string;
     items: readonly { queuedItemId: string; clientId: string }[];
@@ -228,7 +220,8 @@ export interface ClientRequestParams {
 }
 
 export interface ClientRequestResults {
-  "zen/turn/send": { turnId?: string };
+  "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendResult;
+  "zen/turn/send-unarchived": import("../../../../src/protocol/native/wire.js").NativeTurnSendResult;
   "zen/thread/queue/cancel": {
     results: import("../../../../src/app-server.js").QueuedCancellationResult[];
   };

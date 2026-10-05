@@ -18,6 +18,7 @@ import type {
 import type { ZenXPluginManifestV2, ZenXCapabilityPackage } from "./types.js";
 import { ZenXProjectProjection } from "../project-projection.js";
 import type { WorkflowCommand } from "../workflow-configuration.js";
+import { ZenXProtocolError } from "../../protocol-client/index.js";
 
 export const ZENX_SELF_CONTROL_CAPABILITY_ID = "zenx-self-control";
 export const ZENX_SELF_CONTROL_WORKSPACE_PERMISSION =
@@ -29,6 +30,7 @@ type SelfControlRequestMethod = Extract<
   ClientRequestMethod,
   | "zen/thread/read"
   | "zen/thread/create-child"
+  | "zen/turn/send-unarchived"
   | "model/list"
   | "thread/settings/update"
   | "turn/queue"
@@ -577,6 +579,18 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       this.#sending.set(key, { args, result });
       try {
         return await result;
+      } catch (error) {
+        if (
+          invocation.arguments.threadId !== undefined &&
+          invocation.arguments.target === undefined &&
+          error instanceof ZenXProtocolError &&
+          error.code === -32601
+        )
+          throw new Error(
+            "Target Zen Host does not support archive-fenced Thread sends. Update the target Host before retrying.",
+            { cause: error },
+          );
+        throw error;
       } finally {
         this.#sending.delete(key);
       }
@@ -1144,12 +1158,21 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
         // Reuse the original canonical fence, including an interrupted replacement
         // whose successor has not yet been accepted. The server owns that retry.
         invocation.signal.throwIfAborted();
-        const result = await this.#appServer.request("turn/replace", {
+        const params = {
           threadId,
           expectedTurnId: previous.turnId,
           clientUserMessageId,
           input: [{ type: "text", text }],
-        });
+        } as const;
+        const result = requireActive
+          ? await this.#appServer.request("zen/turn/send-unarchived", {
+              ...params,
+              mode: "replace",
+            })
+          : await this.#appServer.request("turn/replace", {
+              ...params,
+              input: [...params.input],
+            });
         return {
           source: SOURCE,
           threadId,
@@ -1193,29 +1216,47 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
           clientUserMessageId,
         },
         invocation.signal,
+        requireActive ? { requireUnarchived: true } : {},
       );
       return { source: SOURCE, threadId, clientUserMessageId, ...result };
     }
     if (active === undefined) {
-      const result = await this.#appServer.request("turn/start", {
+      const params = {
         threadId,
         input,
         clientUserMessageId,
-      });
+      };
+      const turnId = requireActive
+        ? requiredString(
+            (
+              await this.#appServer.request("zen/turn/send-unarchived", {
+                ...params,
+                mode: "start",
+              })
+            ).turnId,
+            "accepted turnId",
+          )
+        : (await this.#appServer.request("turn/start", params)).turn.id;
       return {
         source: SOURCE,
         threadId,
         mode: "start",
         clientUserMessageId,
-        turnId: result.turn.id,
+        turnId,
       };
     }
     if (preference === "queue") {
-      await this.#appServer.request("turn/queue", {
+      const params = {
         threadId,
         input,
         clientUserMessageId,
-      });
+      };
+      if (requireActive)
+        await this.#appServer.request("zen/turn/send-unarchived", {
+          ...params,
+          mode: "queue",
+        });
+      else await this.#appServer.request("turn/queue", params);
       return {
         source: SOURCE,
         threadId,
@@ -1226,12 +1267,18 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       };
     }
     const expectedTurnId = active.id;
-    const result = await this.#appServer.request("turn/replace", {
+    const params = {
       threadId,
       input,
       clientUserMessageId,
       expectedTurnId,
-    });
+    };
+    const result = requireActive
+      ? await this.#appServer.request("zen/turn/send-unarchived", {
+          ...params,
+          mode: "replace",
+        })
+      : await this.#appServer.request("turn/replace", params);
     return {
       source: SOURCE,
       threadId,

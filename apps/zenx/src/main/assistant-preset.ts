@@ -20,7 +20,7 @@ export interface AssistantInputPort {
   request<
     M extends Extract<
       ClientRequestMethod,
-      "thread/read" | "turn/start" | "turn/steer"
+      "thread/read" | "turn/start" | "turn/steer" | "zen/turn/send-unarchived"
     >,
   >(
     method: M,
@@ -31,6 +31,7 @@ export async function deliverAssistantInput(
   port: AssistantInputPort,
   params: ClientRequestParams["turn/queue"],
   signal?: AbortSignal,
+  admission: { requireUnarchived?: true } = {},
 ): Promise<{
   turnId: string;
   mode: "start" | "steer";
@@ -47,6 +48,27 @@ export async function deliverAssistantInput(
     signal?.throwIfAborted();
     const active = thread.turns.find((turn) => turn.status === "inProgress");
     try {
+      if (admission.requireUnarchived === true) {
+        const input = params.input.map((part) => {
+          if (part.type === "text") return part;
+          throw new Error("Archive-fenced assistant input requires text");
+        });
+        const result = await port.request("zen/turn/send-unarchived", {
+          ...params,
+          input,
+          mode: active ? "steer" : "start",
+          ...(active ? { expectedTurnId: active.id } : {}),
+        });
+        if (typeof result.turnId !== "string" || !result.turnId)
+          throw new Error(
+            "Native assistant input outcome is unconfirmed; read the Thread before retrying",
+          );
+        return {
+          turnId: result.turnId,
+          mode: active ? "steer" : "start",
+          ...(active ? { expectedTurnId: active.id } : {}),
+        };
+      }
       if (active) {
         const result = await port.request("turn/steer", {
           ...params,
@@ -59,7 +81,8 @@ export async function deliverAssistantInput(
     } catch (error) {
       const code =
         error instanceof ZenXProtocolError &&
-        error.code === -32000 &&
+        (error.code === -32000 ||
+          (admission.requireUnarchived === true && error.code === -32602)) &&
         error.data &&
         typeof error.data === "object"
           ? (error.data as { zenCode?: unknown }).zenCode

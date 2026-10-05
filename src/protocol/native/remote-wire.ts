@@ -1,5 +1,7 @@
 /** Pure native ZAS mobile wire types: safe to import as types in React Native. */
 export const REMOTE_HOST_VERSION = 1;
+/** send admission checks archival under the canonical Core mutation lock. */
+export const REMOTE_UNARCHIVED_SEND_CAPABILITY = "send-unarchived";
 export const REMOTE_METHODS = {
   hello: "zen/remote/hello",
   models: "zen/remote/models",

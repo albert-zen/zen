@@ -22,6 +22,7 @@ import { AppServerError } from "../../app-server.js";
 import type { CanonicalItem } from "../../item.js";
 import {
   REMOTE_HOST_VERSION,
+  REMOTE_UNARCHIVED_SEND_CAPABILITY,
   REMOTE_SHELL_MAX_COMMAND_BYTES,
   REMOTE_SHELL_MAX_TIMEOUT_MS,
   REMOTE_SHELL_MAX_OUTPUT_BYTES,
@@ -442,6 +443,7 @@ export class RemoteHostAccess {
         "resume",
         "resumePage",
         "send",
+        REMOTE_UNARCHIVED_SEND_CAPABILITY,
         "interrupt",
         ...(this.#shell && this.#shellAllowed(deviceId) ? ["shell"] : []),
       ],
