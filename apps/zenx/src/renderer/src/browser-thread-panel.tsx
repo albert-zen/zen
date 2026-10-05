@@ -45,9 +45,7 @@ export function BrowserThreadPanel({
             i18n.resolvedLanguage,
           ),
         })
-      : status.status === "idle"
-        ? i18n.t("panels:askTheAgentToOpenOrInspect")
-        : status.message;
+      : browserStatusMessage(status.message);
   const [hasFrame, setHasFrame] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [visible, setVisible] = useState(
@@ -157,7 +155,7 @@ export function BrowserThreadPanel({
   return (
     <aside
       className={`browser-thread-panel${embedded ? " embedded" : ""}`}
-      aria-label={`Browser for ${title}`}
+      aria-label={i18n.t("panels:browserFor", { title })}
       data-expanded={expanded}
       style={{ "--browser-panel-width": `${width}px` } as React.CSSProperties}
     >
@@ -305,7 +303,7 @@ export function BrowserThreadPanel({
             <span>
               <strong>
                 {status.status === "live"
-                  ? "Live"
+                  ? i18n.t("panels:live")
                   : status.status === "snapshot"
                     ? i18n.t("panels:snapshot")
                     : status.status === "connecting"
@@ -339,11 +337,7 @@ export function BrowserThreadPanel({
                     ? i18n.t("panels:waitingForABrowserImage")
                     : i18n.t("panels:noPageForThisThread")}
                 </strong>
-                <small>
-                  {status.status === "idle"
-                    ? i18n.t("panels:askTheAgentToOpenOrInspect")
-                    : status.message}
-                </small>
+                <small>{browserStatusMessage(status.message)}</small>
               </span>
             </div>
           )}
@@ -351,4 +345,39 @@ export function BrowserThreadPanel({
       </div>
     </aside>
   );
+}
+
+function browserStatusMessage(message: string): string {
+  if (
+    !message ||
+    message === "Ask the Agent to open or inspect a browser page."
+  )
+    return i18n.t("panels:askTheAgentToOpenOrInspect");
+  if (
+    message ===
+    "Waiting for the Agent to inspect this page. This provider shows snapshots."
+  )
+    return i18n.t("panels:waitingForSnapshotInspection");
+  if (message === "The Browser provider is no longer available.")
+    return i18n.t("panels:browserProviderUnavailable");
+  if (message === "No browser page is selected for this thread.")
+    return i18n.t("panels:browserPageNotSelected");
+  if (
+    message ===
+    "This browser page is no longer available. Ask the Agent to inspect it again."
+  )
+    return i18n.t("panels:browserPageUnavailable");
+  if (message === "Showing the latest Agent screenshot, not a live stream.")
+    return i18n.t("panels:browserLatestSnapshotOnly");
+  if (
+    message ===
+    "The last screenshot expired. Ask the Agent to inspect this page again."
+  )
+    return i18n.t("panels:browserScreenshotExpired");
+  if (
+    message ===
+    "The last screenshot is no longer available. Ask the Agent to inspect this page again."
+  )
+    return i18n.t("panels:browserScreenshotUnavailable");
+  return message;
 }

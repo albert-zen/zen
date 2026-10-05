@@ -269,7 +269,7 @@ export function WorkspaceFilesPanel({
                 )
           }
         >
-          {file ? i18n.t("panels:files") : "Up"}
+          {file ? i18n.t("panels:files") : i18n.t("panels:up")}
         </button>
         <span title={filePath ?? directory}>{file ? null : directory}</span>
         <button

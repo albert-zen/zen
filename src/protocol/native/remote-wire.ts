@@ -1,5 +1,7 @@
 /** Pure native ZAS mobile wire types: safe to import as types in React Native. */
 export const REMOTE_HOST_VERSION = 1;
+/** send admission checks archival under the canonical Core mutation lock. */
+export const REMOTE_UNARCHIVED_SEND_CAPABILITY = "send-unarchived";
 export const REMOTE_METHODS = {
   hello: "zen/remote/hello",
   models: "zen/remote/models",
@@ -14,6 +16,8 @@ export const REMOTE_METHODS = {
   resumePage: "zen/remote/resume/page",
   send: "zen/remote/send",
   interrupt: "zen/remote/interrupt",
+  shell: "zen/remote/shell",
+  shellCancel: "zen/remote/shell/cancel",
   event: "zen/remote/thread/event",
   reset: "zen/remote/thread/reset",
 } as const;
@@ -27,6 +31,8 @@ export interface RemotePairRequest {
   code: string;
   /** May only narrow the Host-granted access; omission preserves Host policy. */
   access?: "read" | "control";
+  /** Separate explicit shell opt-in; omitted/legacy grants never allow shell. */
+  shellEnabled?: boolean;
 }
 export interface RemotePairResult {
   hostId: string;
@@ -119,7 +125,9 @@ export type RemoteErrorCode =
   | "stale_cursor"
   | "resync_required"
   | "entry_too_large"
-  | "operation_unknown";
+  | "operation_unknown"
+  | "approval_required"
+  | "stale_thread";
 
 /** Only known pre-admission rejections permit clearing an uncertain-send fence. */
 export function isConfirmedRemoteRejection(code: unknown): boolean {
@@ -141,6 +149,8 @@ export function isConfirmedRemoteRejection(code: unknown): boolean {
       "stale_cursor",
       "resync_required",
       "entry_too_large",
+      "approval_required",
+      "stale_thread",
     ].includes(code)
   );
 }
@@ -178,7 +188,26 @@ export interface RemoteRoomPostResult {
   threadId: string;
   turnId?: string;
 }
+/** Explicit target binding; caller cwd, sandbox and approval policy are never accepted. */
+export interface RemoteShellRequest {
+  workspaceId: string;
+  targetThreadId: string;
+  command: string;
+  timeoutMs: number;
+  maxOutputBytes: number;
+}
+export interface RemoteShellResult {
+  output: string;
+  exitCode: number;
+  status: "completed" | "timed_out" | "cancelled";
+  sourceTruncated: boolean;
+}
+export const REMOTE_SHELL_MAX_COMMAND_BYTES = 32 * 1024;
+export const REMOTE_SHELL_MAX_TIMEOUT_MS = 120_000;
+export const REMOTE_SHELL_MAX_OUTPUT_BYTES = 64 * 1024;
 export interface RemoteRequestParams {
+  [REMOTE_METHODS.shell]: RemoteShellRequest;
+  [REMOTE_METHODS.shellCancel]: { requestId: string };
   [REMOTE_METHODS.models]: Record<string, never>;
   [REMOTE_METHODS.rooms]: { workspaceId: string };
   [REMOTE_METHODS.roomsRead]: { workspaceId: string; roomId: string };
@@ -206,6 +235,8 @@ export interface RemoteRequestParams {
   };
 }
 export interface RemoteResponseResults {
+  [REMOTE_METHODS.shell]: RemoteShellResult;
+  [REMOTE_METHODS.shellCancel]: Record<string, never>;
   [REMOTE_METHODS.models]: { models: readonly RemoteModelView[] };
   [REMOTE_METHODS.rooms]: { rooms: RemoteRoomSummary[] };
   [REMOTE_METHODS.roomsRead]: RemoteRoomView;

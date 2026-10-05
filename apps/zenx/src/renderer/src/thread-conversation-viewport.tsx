@@ -326,7 +326,7 @@ export function ThreadConversationViewport({
       <div className="conversation-viewport-status" role="alert">
         {error ?? i18n.t("shell:conversationUnavailable")}
         <button type="button" onClick={reload}>
-          Retry
+          {i18n.t("panels:retry")}
         </button>
       </div>
     );

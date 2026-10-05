@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from imagent.channels import NativeTransportChannelAdapter, channel_from_config
+from imagent.channels.native.access import ChannelAccessPolicy
 
 from .config import ConfigurationError, PermissionMode
 
@@ -17,10 +18,16 @@ def build_channels(
     factory: Any = channel_from_config,
     permission_mode: PermissionMode = "full-access",
     allow_unrestricted_full_access: bool = False,
+    channel_config: dict[str, Any] | None = None,
 ) -> list[NativeTransportChannelAdapter]:
-    if config_file is None:
+    if channel_config is not None:
+        if not isinstance(channel_config, dict):
+            raise ConfigurationError("channel config must be a JSON object")
+        config = channel_config
+    elif config_file is None:
         return []
-    config = _load_config(config_file)
+    else:
+        config = _load_config(config_file)
     supported = {"qq", "telegram", "feishu", "weixin"}
     unknown = sorted(set(config) - supported)
     if unknown:
@@ -43,7 +50,7 @@ def build_channels(
         resolved_config = _resolve_channel_config(
             channel_id,
             channel_config,
-            config_directory=config_file.parent,
+            config_directory=config_file.parent if config_file is not None else Path.cwd(),
         )
         adapters.append(
             factory(
@@ -56,19 +63,9 @@ def build_channels(
 
 
 def _has_access_restriction(config: dict[str, Any]) -> bool:
-    for key in ("allowed_user_ids", "allowed_conversation_ids"):
-        value = config.get(key)
-        if isinstance(value, str):
-            candidates = value.replace("\n", ",").split(",")
-        elif isinstance(value, (list, tuple, set, frozenset)):
-            candidates = value
-        elif value is None:
-            candidates = ()
-        else:
-            candidates = (value,)
-        if any(str(candidate).strip() not in {"", "*"} for candidate in candidates):
-            return True
-    return False
+    # Use the pinned SDK's actual any/all and wildcard-dimension semantics.
+    # A real ID alongside '*' within one dimension does not restrict access.
+    return ChannelAccessPolicy.from_config(config).mode != "platform"
 
 
 def _load_config(path: Path) -> dict[str, Any]:

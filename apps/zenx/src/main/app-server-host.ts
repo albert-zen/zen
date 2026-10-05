@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { FleetShellGateway } from "./fleet-shell.js";
+import type { ToolEnvironment } from "../../../../src/tool.js";
 import { FleetHostService } from "./fleet-host.js";
 import {
   createHostedAppServer,
@@ -41,6 +43,7 @@ const roomRequests = new Map<
 let server: CodexWebSocketServer | undefined;
 let appServer: HostedZenAppServer | undefined;
 let tools: ZenXHostToolBundle | undefined;
+let targetToolEnvironment: ToolEnvironment | undefined;
 let replaceCapabilities:
   ((capabilities: ZenXCapabilityGenerationSnapshot) => void) | undefined;
 let currentCapabilityGeneration: (() => string) | undefined;
@@ -91,26 +94,37 @@ async function handleCommand(command: HostCommand): Promise<void> {
   if (command.type === "fleet/control") {
     try {
       if (!appServer) throw new Error("Host unavailable");
-      fleetHost ??= new FleetHostService(appServer, {
-        request: (operation, params) =>
-          new Promise((resolve, reject) => {
-            if (roomRequests.size >= 32) {
-              reject(new Error("Too many Room requests"));
-              return;
-            }
-            const requestId = randomUUID();
-            const timer = setTimeout(() => {
-              roomRequests.delete(requestId);
-              reject(new Error("Room result unknown"));
-            }, 15000);
-            roomRequests.set(requestId, { resolve, reject, timer });
-            send({ type: "fleet/room-request", requestId, operation, params });
-          }),
-        subscribe: (listener) => {
-          roomListeners.add(listener);
-          return () => roomListeners.delete(listener);
+      fleetHost ??= new FleetHostService(
+        appServer,
+        {
+          request: (operation, params) =>
+            new Promise((resolve, reject) => {
+              if (roomRequests.size >= 32) {
+                reject(new Error("Too many Room requests"));
+                return;
+              }
+              const requestId = randomUUID();
+              const timer = setTimeout(() => {
+                roomRequests.delete(requestId);
+                reject(new Error("Room result unknown"));
+              }, 15000);
+              roomRequests.set(requestId, { resolve, reject, timer });
+              send({
+                type: "fleet/room-request",
+                requestId,
+                operation,
+                params,
+              });
+            }),
+          subscribe: (listener) => {
+            roomListeners.add(listener);
+            return () => roomListeners.delete(listener);
+          },
         },
-      });
+        targetToolEnvironment
+          ? new FleetShellGateway(targetToolEnvironment)
+          : undefined,
+      );
       send({
         type: "fleet/result",
         requestId: command.requestId,
@@ -446,6 +460,7 @@ async function handleCommand(command: HostCommand): Promise<void> {
     toolOutputSpool,
   });
   tools = toolComposition.capabilityBundle;
+  targetToolEnvironment = toolComposition.toolEnvironment;
   replaceCapabilities = toolComposition.replaceCapabilities;
   currentCapabilityGeneration = toolComposition.currentGenerationToken;
   closeToolComposition = toolComposition.close;
@@ -502,6 +517,7 @@ async function shutdown(): Promise<void> {
   appServer = undefined;
   toolOutputSpool = undefined;
   tools = undefined;
+  targetToolEnvironment = undefined;
   replaceCapabilities = undefined;
   currentCapabilityGeneration = undefined;
   maintenance = undefined;

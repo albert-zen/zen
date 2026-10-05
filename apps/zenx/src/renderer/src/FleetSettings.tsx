@@ -2,11 +2,23 @@ import { i18n } from "./i18n.js";
 import { useTranslation } from "react-i18next";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Select } from "./ui/controls.js";
+import { FleetHistory } from "./FleetHistory.js";
+import {
+  FleetConnectionSetup,
+  FleetInvitationIssuer,
+} from "./FleetOnboarding.js";
+import type {
+  FleetInvitation,
+  FleetInvitationConsent,
+  FleetReadiness,
+} from "../../fleet-invitation.js";
 
 type Access = "read" | "control";
 type Device = {
   id: string;
   label: string;
+  description?: string;
+  shellEnabled?: boolean;
   access: Access;
   workspace?: string;
 } & (
@@ -22,12 +34,23 @@ type Hosting = {
   access: Access;
   relayEndpoint?: string;
   originEndpoint?: string;
+  shellEnabled?: boolean;
 };
 
 /** Public configuration only. Peer tokens and TLS key contents stay in main. */
 export interface FleetSettingsSnapshot {
   revision: number;
   config: { version: 1; devices: Device[]; hosting?: Hosting };
+  devices?: Array<{
+    id: string;
+    key?: string;
+    check: {
+      state: "not_checked" | "checking" | "reachable" | "failed";
+      live: false;
+      checkedAt?: number;
+      detail?: string;
+    };
+  }>;
   host: {
     enabled: boolean;
     hostId: string;
@@ -36,6 +59,7 @@ export interface FleetSettingsSnapshot {
       deviceId: string;
       label?: string;
       access?: Access;
+      shellEnabled?: boolean;
       revoked: boolean;
     }>;
     error?: string;
@@ -46,6 +70,13 @@ export interface FleetSettingsSnapshot {
 
 export interface FleetSettingsApi {
   status(): Promise<FleetSettingsSnapshot>;
+  readiness?(): Promise<FleetReadiness>;
+  hostInvitation?(input: {
+    endpoint: string;
+    label: string;
+    confirmed: true;
+    expected: FleetInvitationConsent;
+  }): Promise<{ invitation: FleetInvitation; serialized: string }>;
   save(
     config: Omit<FleetSettingsSnapshot["config"], "hosting"> & {
       hosting?: Hosting & { relayRegistrationToken?: string };
@@ -55,6 +86,8 @@ export interface FleetSettingsApi {
   pair(input: {
     id: string;
     label: string;
+    description?: string;
+    shellEnabled?: boolean;
     endpoint: string;
     hostId: string;
     code: string;
@@ -65,6 +98,7 @@ export interface FleetSettingsApi {
   test(id: string): Promise<unknown>;
   invoke(input: {
     device: string;
+    expectedDeviceKey?: string;
     name: string;
     arguments: Record<string, unknown>;
   }): Promise<unknown>;
@@ -77,6 +111,8 @@ interface DeviceDraft {
   transport: "ssh" | "https";
   id: string;
   label: string;
+  description: string;
+  shellEnabled: boolean;
   sshHost: string;
   command: string;
   endpoint: string;
@@ -97,6 +133,7 @@ interface RemoteThread {
 }
 interface Inspection {
   device: Device;
+  deviceKey: string;
   projects: Project[];
   workspace: string;
   threads: RemoteThread[];
@@ -131,8 +168,18 @@ export function FleetSettings() {
   const [pairCode, setPairCode] = useState<Awaited<
     ReturnType<FleetSettingsApi["hostPair"]>
   > | null>(null);
-  const [connections, setConnections] = useState<Record<string, string>>({});
+  const [connections, setConnections] = useState<
+    Record<
+      string,
+      {
+        key: string;
+        state: "checking" | "reachable" | "failed";
+        checkedAt?: number;
+      }
+    >
+  >({});
   const [busy, setBusy] = useState<string | null>(null);
+  const [onboardingBusy, setOnboardingBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const mounted = useRef(false);
@@ -164,6 +211,17 @@ export function FleetSettings() {
       inspectionVersion.current++;
     };
   }, [api]);
+  useEffect(() => {
+    if (!inspection || !snapshot) return;
+    const key = snapshot.devices?.find(
+      (device) => device.id === inspection.device.id,
+    )?.key;
+    if (key !== inspection.deviceKey) {
+      inspectionVersion.current++;
+      setInspection(null);
+      setError(i18n.t("settings:fleetSettings.routeChanged"));
+    }
+  }, [snapshot, inspection]);
   useEffect(() => {
     if (editor)
       editorRegion.current?.querySelector<HTMLInputElement>("input")?.focus();
@@ -248,6 +306,8 @@ export function FleetSettings() {
       transport: device?.transport === "https" ? "https" : "ssh",
       id: device?.id ?? "",
       label: device?.label ?? "",
+      description: device?.description ?? "",
+      shellEnabled: device?.shellEnabled === true,
       access: device?.access ?? "read",
       sshHost: device && device.transport !== "https" ? device.sshHost : "",
       command:
@@ -304,6 +364,9 @@ export function FleetSettings() {
         transport: "ssh",
         id: current.id,
         label: current.label.trim(),
+        ...(current.description.trim()
+          ? { description: current.description.trim() }
+          : {}),
         sshHost: current.sshHost.trim(),
         command,
         access: current.access,
@@ -336,10 +399,14 @@ export function FleetSettings() {
         await api.pair({
           id: current.id,
           label: current.label.trim(),
+          ...(current.description.trim()
+            ? { description: current.description.trim() }
+            : {}),
           endpoint: current.endpoint.trim(),
           hostId: current.hostId.trim(),
           code: current.code.trim(),
           access: current.access,
+          ...(current.shellEnabled ? { shellEnabled: true } : {}),
         });
         await refresh();
         if (mounted.current) {
@@ -356,9 +423,13 @@ export function FleetSettings() {
         transport: "https",
         id: current.id,
         label: current.label.trim(),
+        ...(current.description.trim()
+          ? { description: current.description.trim() }
+          : {}),
         endpoint: current.endpoint.trim(),
         hostId: current.hostId.trim(),
         access: current.access,
+        ...(current.shellEnabled ? { shellEnabled: true } : {}),
         ...(current.workspace ? { workspace: current.workspace } : {}),
       };
     }
@@ -377,6 +448,7 @@ export function FleetSettings() {
 
   const invoke = async (
     device: string,
+    deviceKey: string,
     name: string,
     args: Record<string, unknown>,
   ) => {
@@ -384,7 +456,17 @@ export function FleetSettings() {
       throw new Error(
         i18n.t("settings:fleetSettings.fleetConnectionIsUnavailable"),
       );
-    const value = await api.invoke({ device, name, arguments: args });
+    if (!deviceKey)
+      throw new Error(i18n.t("settings:fleetSettings.routeIdentityMissing"));
+    const value = await api.invoke({
+      device,
+      expectedDeviceKey: deviceKey,
+      name,
+      arguments: args,
+    });
+    const result = record(unwrap(value));
+    if (result.status === "not_found" || result.status === "ambiguous")
+      throw new Error(i18n.t("settings:fleetSettings.exactThreadUnavailable"));
     return unwrap(value);
   };
   const listThreads = async (
@@ -392,9 +474,11 @@ export function FleetSettings() {
     workspace: string,
     cursor?: string,
   ) => {
+    if (!workspace)
+      throw new Error(i18n.t("settings:fleetSettings.chooseTargetWorkspace"));
     const version = inspectionVersion.current;
     const result = record(
-      await invoke(current.device.id, "zenx_threads_list", {
+      await invoke(current.device.id, current.deviceKey, "zenx_threads_list", {
         ...(workspace ? { workspace } : {}),
         ...(cursor ? { cursor } : {}),
         limit: 50,
@@ -427,8 +511,13 @@ export function FleetSettings() {
   const browse = async (device: Device, trigger: HTMLButtonElement) => {
     inspectorTrigger.current = trigger;
     const version = ++inspectionVersion.current;
+    const deviceKey = snapshot?.devices?.find(
+      (entry) => entry.id === device.id,
+    )?.key;
+    if (!deviceKey)
+      throw new Error(i18n.t("settings:fleetSettings.routeIdentityMissing"));
     const result = record(
-      await invoke(device.id, "zenx_projects_list", { limit: 100 }),
+      await invoke(device.id, deviceKey, "zenx_projects_list", { limit: 100 }),
     );
     const projects = array(result.projects)
       .map((entry) => {
@@ -443,12 +532,10 @@ export function FleetSettings() {
       .filter((project) => project.id);
     if (!mounted.current || version !== inspectionVersion.current) return;
     const workspace =
-      device.workspace ??
-      (device.transport === "https" && projects.length === 1
-        ? projects[0]!.id
-        : "");
+      device.workspace ?? (projects.length === 1 ? projects[0]!.id : "");
     const current: Inspection = {
       device,
+      deviceKey,
       projects,
       workspace,
       threads: [],
@@ -458,7 +545,7 @@ export function FleetSettings() {
       historyCursor: null,
     };
     setInspection(current);
-    if (device.transport === "https" && !workspace) return;
+    if (!workspace) return;
     await listThreads(current, current.workspace);
   };
   const closeInspection = () => {
@@ -474,15 +561,18 @@ export function FleetSettings() {
     cursor?: string,
   ) => {
     const version = inspectionVersion.current;
-    const result = await invoke(current.device.id, "zenx_threads_read", {
-      target: thread.id,
-      ...(current.device.transport === "https" && current.workspace
-        ? { workspace: current.workspace }
-        : {}),
-      granularity: "items",
-      maxItemsPerTurn: 25,
-      ...(cursor ? { cursor } : {}),
-    });
+    const result = await invoke(
+      current.device.id,
+      current.deviceKey,
+      "zenx_threads_read",
+      {
+        threadId: thread.id,
+        ...(current.workspace ? { workspace: current.workspace } : {}),
+        granularity: "items",
+        maxItemsPerTurn: 25,
+        ...(cursor ? { cursor } : {}),
+      },
+    );
     if (!mounted.current || version !== inspectionVersion.current) return;
     const value = record(result);
     const history = cursor
@@ -530,7 +620,7 @@ export function FleetSettings() {
         ) : null}
       </div>
     );
-  const disabled = busy !== null;
+  const disabled = busy !== null || onboardingBusy;
   const hostingDirty =
     JSON.stringify(hosting) !==
       JSON.stringify(snapshot.config.hosting ?? defaultHosting) ||
@@ -573,11 +663,23 @@ export function FleetSettings() {
           {t("fleetSettings.refreshFleet")}
         </button>
       </header>
+      {error && !editor ? (
+        <div className="settings-error" role="alert">
+          {error}
+        </div>
+      ) : null}
+      <FleetConnectionSetup
+        api={api}
+        snapshot={snapshot}
+        disabled={disabled || editor !== null}
+        onBusy={setOnboardingBusy}
+        onChanged={() => refresh()}
+      />
       <div className="page-card settings-card">
         <div className="settings-card-head">
           <div>
             <h3>{t("fleetSettings.devices")}</h3>
-            <p>{t("fleetSettings.sshUsesYourExistingSshSetupHttpsUsesA")}</p>
+            <p>{t("fleetSettings.routeHelp")}</p>
           </div>
           <button
             ref={addButton}
@@ -598,6 +700,11 @@ export function FleetSettings() {
             <div className="settings-row" key={device.id}>
               <div>
                 <strong>{device.label}</strong>
+                {device.description ? (
+                  <span className="fleet-history-text">
+                    {device.description}
+                  </span>
+                ) : null}
                 <span>
                   {device.id} · {device.transport === "https" ? "HTTPS" : "SSH"}{" "}
                   ·{" "}
@@ -605,19 +712,20 @@ export function FleetSettings() {
                     ? t("fleetSettings.threadControl")
                     : t("fleetSettings.readOnly")}
                 </span>
-                <span style={{ overflowWrap: "anywhere" }}>
+                <span className="fleet-wrap">
                   {device.transport === "https"
                     ? device.endpoint
                     : device.sshHost}
                 </span>
                 <span role="status">
-                  {connections[device.id] ?? t("fleetSettings.notChecked")}
+                  {connections[device.id]?.key ===
+                  (snapshot.devices?.find((entry) => entry.id === device.id)
+                    ?.key ?? JSON.stringify(device))
+                    ? connectionCheckLabel(connections[device.id]!)
+                    : deviceCheckLabel(snapshot, device.id)}
                 </span>
               </div>
-              <div
-                className="settings-actions"
-                style={{ display: "flex", flexWrap: "wrap" }}
-              >
+              <div className="settings-actions fleet-actions">
                 <button
                   type="button"
                   className="quiet-button"
@@ -629,7 +737,13 @@ export function FleetSettings() {
                     void run(`test:${device.id}`, async () => {
                       setConnections((value) => ({
                         ...value,
-                        [device.id]: t("fleetSettings.checking"),
+                        [device.id]: {
+                          key:
+                            snapshot.devices?.find(
+                              (entry) => entry.id === device.id,
+                            )?.key ?? JSON.stringify(device),
+                          state: "checking",
+                        },
                       }));
                       try {
                         const result = record(await api.test(device.id));
@@ -641,13 +755,26 @@ export function FleetSettings() {
                         if (mounted.current)
                           setConnections((value) => ({
                             ...value,
-                            [device.id]: t("fleetSettings.connected"),
+                            [device.id]: {
+                              key:
+                                snapshot.devices?.find(
+                                  (entry) => entry.id === device.id,
+                                )?.key ?? JSON.stringify(device),
+                              state: "reachable",
+                              checkedAt: Date.now(),
+                            },
                           }));
                       } catch (reason) {
                         if (mounted.current)
                           setConnections((value) => ({
                             ...value,
-                            [device.id]: t("fleetSettings.connectionFailed"),
+                            [device.id]: {
+                              key:
+                                snapshot.devices?.find(
+                                  (entry) => entry.id === device.id,
+                                )?.key ?? JSON.stringify(device),
+                              state: "failed",
+                            },
                           }));
                         throw reason;
                       }
@@ -727,10 +854,7 @@ export function FleetSettings() {
               void run("save-device", saveDevice);
             }}
           >
-            <fieldset
-              disabled={disabled}
-              style={{ border: 0, padding: 0, margin: 0 }}
-            >
+            <fieldset disabled={disabled} className="fleet-fieldset">
               <div className="form-grid">
                 <Field
                   label={t("fleetSettings.deviceId")}
@@ -743,6 +867,16 @@ export function FleetSettings() {
                   value={editor.label}
                   onChange={(label) => edit({ label })}
                 />
+                <Field
+                  label={t("fleetSettings.machineDescription")}
+                  value={editor.description}
+                  onChange={(description) => edit({ description })}
+                  multiline
+                  wide
+                />
+                <p className="settings-note field wide">
+                  {t("fleetSettings.machineDescriptionHelp")}
+                </p>
                 <label className="field">
                   <span>{t("fleetSettings.connection")}</span>
                   <Select
@@ -765,7 +899,11 @@ export function FleetSettings() {
                   value={editor.access}
                   disabled={disabled}
                   onChange={(access) =>
-                    edit({ access, controlConfirmed: false })
+                    edit({
+                      access,
+                      controlConfirmed: false,
+                      ...(access === "read" ? { shellEnabled: false } : {}),
+                    })
                   }
                 />
                 {editor.transport === "ssh" ? (
@@ -833,6 +971,23 @@ export function FleetSettings() {
                         "fleetSettings.checkTheHostIdDirectlyOnTheRemoteDevice",
                       )}
                     </p>
+                    <Confirmation
+                      checked={editor.shellEnabled}
+                      disabled={
+                        disabled ||
+                        editor.access !== "control" ||
+                        (!!editor.originalId &&
+                          snapshot.config.devices.find(
+                            (device) => device.id === editor.originalId,
+                          )?.shellEnabled !== true)
+                      }
+                      onChange={(shellEnabled) => edit({ shellEnabled })}
+                    >
+                      {t("fleetSettings.requestShell")}
+                    </Confirmation>
+                    <p className="settings-note field wide">
+                      {t("fleetSettings.shellHelp")}
+                    </p>
                   </>
                 )}
               </div>
@@ -845,10 +1000,12 @@ export function FleetSettings() {
                 </Confirmation>
               ) : null}
             </fieldset>
-            <div
-              className="settings-actions"
-              style={{ display: "flex", flexWrap: "wrap" }}
-            >
+            {error ? (
+              <div className="settings-error" role="alert">
+                {error}
+              </div>
+            ) : null}
+            <div className="settings-actions fleet-actions">
               <button
                 className="primary-button"
                 type="submit"
@@ -889,7 +1046,7 @@ export function FleetSettings() {
           <p id="fleet-remove-detail">
             {t("fleetSettings.thisRemovesTheSavedConnectionFromThisAppRemote")}
           </p>
-          <div className="settings-actions" style={{ display: "flex" }}>
+          <div className="settings-actions fleet-actions">
             <button
               className="danger-button"
               type="button"
@@ -976,10 +1133,7 @@ export function FleetSettings() {
                 );
               }}
             >
-              <option
-                value=""
-                disabled={inspection.device.transport === "https"}
-              >
+              <option value="" disabled>
                 {inspection.device.transport === "https"
                   ? t("fleetSettings.chooseAWorkspace")
                   : t("fleetSettings.allWorkspaces")}
@@ -999,10 +1153,7 @@ export function FleetSettings() {
               ))}
             </Select>
           </label>
-          <div
-            className="settings-actions"
-            style={{ display: "flex", flexWrap: "wrap", marginBlock: 12 }}
-          >
+          <div className="settings-actions fleet-actions fleet-block-space">
             <button
               className="secondary-button"
               type="button"
@@ -1042,9 +1193,12 @@ export function FleetSettings() {
                     );
                     await refresh();
                     if (mounted.current) {
-                      setInspection({ ...inspection, device });
+                      inspectionVersion.current++;
+                      setInspection(null);
                       setNotice(
-                        t("fleetSettings.workspaceSelectedForThisDevice"),
+                        i18n.t(
+                          "settings:fleetSettings.workspaceSelectedReopen",
+                        ),
                       );
                     }
                   })
@@ -1065,7 +1219,7 @@ export function FleetSettings() {
               <div className="settings-row" key={thread.id}>
                 <div>
                   <strong>{thread.name || thread.id}</strong>
-                  <span style={{ overflowWrap: "anywhere" }}>
+                  <span className="fleet-wrap">
                     {thread.id} · {thread.status}
                   </span>
                 </div>
@@ -1107,7 +1261,7 @@ export function FleetSettings() {
           {inspection.thread ? (
             <section
               aria-label={t("fleetSettings.remoteThread")}
-              style={{ marginTop: 20 }}
+              className="fleet-section-space"
             >
               <h3>{inspection.thread.name || inspection.thread.id}</h3>
               <History value={inspection.history} />
@@ -1134,15 +1288,19 @@ export function FleetSettings() {
                   onSubmit={(event) => {
                     event.preventDefault();
                     void run("send", async () => {
-                      await invoke(inspection.device.id, "zenx_threads_send", {
-                        target: inspection.thread!.id,
-                        ...(inspection.device.transport === "https" &&
-                        inspection.workspace
-                          ? { workspace: inspection.workspace }
-                          : {}),
-                        text: message,
-                        messageType,
-                      });
+                      await invoke(
+                        inspection.device.id,
+                        inspection.deviceKey,
+                        "zenx_threads_send",
+                        {
+                          threadId: inspection.thread!.id,
+                          ...(inspection.workspace
+                            ? { workspace: inspection.workspace }
+                            : {}),
+                          text: message,
+                          messageType,
+                        },
+                      );
                       if (mounted.current) {
                         setMessage("");
                         setNotice(
@@ -1220,11 +1378,11 @@ export function FleetSettings() {
               : t("fleetSettings.hostingDisabled")}
           </span>
         </div>
-        <p style={{ overflowWrap: "anywhere" }}>
+        <p className="fleet-wrap">
           {t("fleetSettings.hostId")} {snapshot.host.hostId}
         </p>
         {snapshot.host.url ? (
-          <p style={{ overflowWrap: "anywhere" }}>
+          <p className="fleet-wrap">
             {t("fleetSettings.endpoint")} {snapshot.host.url}
           </p>
         ) : null}
@@ -1252,7 +1410,7 @@ export function FleetSettings() {
         </Confirmation>
         <fieldset
           disabled={disabled || !hosting.enabled}
-          style={{ border: 0, padding: 0, margin: "12px 0" }}
+          className="fleet-fieldset fleet-block-space"
         >
           <div className="form-grid">
             <Field
@@ -1280,7 +1438,7 @@ export function FleetSettings() {
               wide
             />
             <Field
-              label={t("fleetSettings.androidFacingHttpsEndpoint")}
+              label={t("fleetSettings.clientHttpsEndpoint")}
               value={hosting.originEndpoint ?? ""}
               placeholder="https://device.example:3940"
               onChange={(originEndpoint) =>
@@ -1324,10 +1482,25 @@ export function FleetSettings() {
               label={t("fleetSettings.maximumClientAccess")}
               value={hosting.access}
               disabled={disabled || !hosting.enabled}
-              onChange={(access) => changeHosting({ access })}
+              onChange={(access) =>
+                changeHosting({
+                  access,
+                  ...(access === "read" ? { shellEnabled: false } : {}),
+                })
+              }
             />
           </div>
         </fieldset>
+        <Confirmation
+          checked={hosting.shellEnabled === true}
+          disabled={
+            disabled || !hosting.enabled || hosting.access !== "control"
+          }
+          onChange={(shellEnabled) => changeHosting({ shellEnabled })}
+        >
+          {t("fleetSettings.allowShell")}
+        </Confirmation>
+        <p className="settings-note">{t("fleetSettings.hostShellHelp")}</p>
         <p className="settings-note">
           {t("fleetSettings.anOptionalSelfHostedRelayTerminatesTlsAndCan")}
         </p>
@@ -1343,6 +1516,9 @@ export function FleetSettings() {
             {t("fleetSettings.iAllowThisHostToListenOn")} {hosting.bindAddress}:
             {hosting.port}{" "}
             {t("fleetSettings.andExposeItsWorkspacesAndThreadsToPairedClients")}
+            {hosting.shellEnabled
+              ? i18n.t("settings:fleetSettings.includingShell")
+              : ""}
             {hosting.originEndpoint
               ? t("fleetSettings.androidConnectionsFrom", {
                   endpoint: hosting.originEndpoint,
@@ -1364,10 +1540,7 @@ export function FleetSettings() {
             {t("fleetSettings.iAllowPairedClientsWithControlAccessToCreate")}
           </Confirmation>
         ) : null}
-        <div
-          className="settings-actions"
-          style={{ display: "flex", flexWrap: "wrap", marginTop: 12 }}
-        >
+        <div className="settings-actions fleet-actions fleet-top-space">
           <button
             className="primary-button"
             type="button"
@@ -1466,6 +1639,27 @@ export function FleetSettings() {
               {t("fleetSettings.discardChanges")}
             </button>
           ) : null}
+        </div>
+        <FleetInvitationIssuer
+          api={api}
+          snapshot={snapshot}
+          disabled={disabled || editor !== null}
+          hostingDirty={hostingDirty}
+          onBusy={setOnboardingBusy}
+          onChanged={() => refresh()}
+          onHostStatus={(value) => {
+            try {
+              const latest = normalizeFleetSnapshot(value);
+              setSnapshot((current) =>
+                current ? { ...current, host: latest.host } : current,
+              );
+            } catch {
+              setError(i18n.t("settings:fleetSettings.hostRefreshFailed"));
+            }
+          }}
+        />
+        <details className="fleet-section-space">
+          <summary>{t("fleetSettings.advancedPairingCode")}</summary>
           <button
             className="secondary-button"
             type="button"
@@ -1479,36 +1673,38 @@ export function FleetSettings() {
           >
             {t("fleetSettings.createPairingCode")}
           </button>
-        </div>
-        {pairCode ? (
-          <div role="status" style={{ marginTop: 12 }}>
-            <p>
-              {t("fleetSettings.oneTimePairingCode")}{" "}
-              <strong>{pairCode.code}</strong>
-            </p>
-            <p>
-              {t("fleetSettings.hostId2")} {pairCode.hostId}
-              {pairCode.expiresAt
-                ? t("fleetSettings.codeExpires", {
-                    time: new Date(pairCode.expiresAt).toLocaleString(
-                      i18n.resolvedLanguage,
-                    ),
-                  })
-                : t("fleetSettings.shortLivedCode")}
-            </p>
-            <p className="settings-note">
-              {t("fleetSettings.enterThisCodeAndTheHttpsEndpointOnThe")}
-            </p>
-            <button
-              type="button"
-              className="quiet-button"
-              onClick={() => setPairCode(null)}
-            >
-              {t("fleetSettings.hideCode")}
-            </button>
-          </div>
-        ) : null}
-        <h3 style={{ marginTop: 20 }}>{t("fleetSettings.pairedClients")}</h3>
+          {pairCode ? (
+            <div role="status" className="fleet-top-space">
+              <p>
+                {t("fleetSettings.oneTimePairingCode")}{" "}
+                <strong>{pairCode.code}</strong>
+              </p>
+              <p>
+                {t("fleetSettings.hostId2")} {pairCode.hostId}
+                {pairCode.expiresAt
+                  ? t("fleetSettings.codeExpires", {
+                      time: new Date(pairCode.expiresAt).toLocaleString(
+                        i18n.resolvedLanguage,
+                      ),
+                    })
+                  : t("fleetSettings.shortLivedCode")}
+              </p>
+              <p className="settings-note">
+                {t("fleetSettings.enterThisCodeAndTheHttpsEndpointOnThe")}
+              </p>
+              <button
+                type="button"
+                className="quiet-button"
+                onClick={() => setPairCode(null)}
+              >
+                {t("fleetSettings.hideCode")}
+              </button>
+            </div>
+          ) : null}
+        </details>
+        <h3 className="fleet-section-space">
+          {t("fleetSettings.pairedClients")}
+        </h3>
         {snapshot.host.clients.length === 0 ? (
           <p>{t("fleetSettings.noPairedClients")}</p>
         ) : (
@@ -1524,6 +1720,9 @@ export function FleetSettings() {
                   {client.revoked
                     ? t("fleetSettings.revoked")
                     : t("fleetSettings.paired")}
+                  {client.shellEnabled
+                    ? i18n.t("settings:fleetSettings.shellGranted")
+                    : i18n.t("settings:fleetSettings.noShellGrant")}
                 </span>
               </div>
               <button
@@ -1553,7 +1752,7 @@ export function FleetSettings() {
               ?
             </h3>
             <p>{t("fleetSettings.thisEndsThisClientSAccessToThisHost")}</p>
-            <div className="settings-actions" style={{ display: "flex" }}>
+            <div className="settings-actions fleet-actions">
               <button
                 className="danger-button"
                 type="button"
@@ -1583,11 +1782,7 @@ export function FleetSettings() {
           </div>
         ) : null}
       </div>
-      {error ? (
-        <div className="settings-error" role="alert">
-          {error}
-        </div>
-      ) : null}
+
       {notice ? (
         <div className="settings-note" role="status">
           {notice}
@@ -1681,15 +1876,7 @@ function Confirmation({
   children: ReactNode;
 }) {
   return (
-    <label
-      className="settings-note"
-      style={{
-        display: "flex",
-        alignItems: "flex-start",
-        gap: 8,
-        marginBlock: 12,
-      }}
-    >
+    <label className="settings-note fleet-confirmation">
       <input
         type="checkbox"
         checked={checked}
@@ -1702,38 +1889,45 @@ function Confirmation({
 }
 function History({ value }: { value: unknown }) {
   const { t } = useTranslation("settings");
-  const items = array(record(value).items);
   return (
-    <div aria-label={t("fleetSettings.remoteHistory")}>
-      {items.length ? (
-        items.map((entry, index) => {
-          const item = record(entry);
-          const text = string(
-            item.text ?? record(item.item).text ?? item.preview,
-          );
-          return (
-            <div
-              key={string(item.id ?? item.itemId) || index}
-              style={{
-                marginBlock: 12,
-                whiteSpace: "pre-wrap",
-                overflowWrap: "anywhere",
-              }}
-            >
-              <strong>{string(item.type) || t("fleetSettings.item")}</strong>
-              <p>{text || JSON.stringify(item, null, 2)}</p>
-              {item.truncated || item.textTruncated ? (
-                <small className="settings-note">
-                  {t("fleetSettings.excerptShown")}
-                </small>
-              ) : null}
-            </div>
-          );
-        })
-      ) : (
-        <p>{t("fleetSettings.noHistoryItemsReturned")}</p>
-      )}
+    <div
+      className="fleet-remote-history"
+      aria-label={t("fleetSettings.remoteHistory")}
+    >
+      <FleetHistory value={value} />
     </div>
+  );
+}
+
+function connectionCheckLabel(check: {
+  state: "not_checked" | "checking" | "reachable" | "failed";
+  checkedAt?: number;
+  detail?: string;
+}): string {
+  const time = check.checkedAt
+    ? i18n.t("settings:fleetSettings.checkedTime", {
+        time: new Date(check.checkedAt).toLocaleString(i18n.resolvedLanguage),
+      })
+    : "";
+  if (check.state === "not_checked")
+    return i18n.t("settings:fleetSettings.notChecked");
+  if (check.state === "checking")
+    return i18n.t("settings:fleetSettings.checking");
+  if (check.state === "reachable")
+    return i18n.t("settings:fleetSettings.reachable") + time;
+  return (
+    (check.checkedAt
+      ? i18n.t("settings:fleetSettings.lastCheckFailed")
+      : i18n.t("settings:fleetSettings.connectionFailed")) +
+    time +
+    (check.detail ? ` · ${check.detail}` : "")
+  );
+}
+function deviceCheckLabel(snapshot: FleetSettingsSnapshot, id: string): string {
+  return connectionCheckLabel(
+    snapshot.devices?.find((device) => device.id === id)?.check ?? {
+      state: "not_checked",
+    },
   );
 }
 function describeError(error: unknown) {

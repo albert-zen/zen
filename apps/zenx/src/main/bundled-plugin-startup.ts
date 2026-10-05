@@ -53,6 +53,7 @@ export async function installZenXBundledPluginsAtStartup(
     FIRST_PARTY_PLUGIN_PACKAGES.computer,
     FIRST_PARTY_PLUGIN_PACKAGES.selfControl,
     FIRST_PARTY_PLUGIN_PACKAGES.subagents,
+    FIRST_PARTY_PLUGIN_PACKAGES.fleet,
     FIRST_PARTY_PLUGIN_PACKAGES.triggers,
   ]) {
     await isolateBundledPluginInstall(

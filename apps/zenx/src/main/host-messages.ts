@@ -603,7 +603,30 @@ function isCapabilityHostSnapshot(
     typeof (value as { generationToken?: unknown }).generationToken ===
       "string" &&
     ((value as { plugins?: unknown }).plugins === undefined ||
-      Array.isArray((value as { plugins?: unknown }).plugins))
+      Array.isArray((value as { plugins?: unknown }).plugins)) &&
+    ((value as { pluginCatalogAvailable?: unknown }).pluginCatalogAvailable ===
+      undefined ||
+      typeof (value as { pluginCatalogAvailable?: unknown })
+        .pluginCatalogAvailable === "boolean") &&
+    ((value as { pluginReadiness?: unknown }).pluginReadiness === undefined ||
+      (Array.isArray(
+        (value as { pluginReadiness?: unknown }).pluginReadiness,
+      ) &&
+        (value as { pluginReadiness: unknown[] }).pluginReadiness.every(
+          (entry) => {
+            if (typeof entry !== "object" || entry === null) return false;
+            const summary = entry as Record<string, unknown>;
+            return (
+              typeof summary.id === "string" &&
+              typeof summary.displayName === "string" &&
+              ["installed", "enabled", "uninstalled"].includes(
+                String(summary.lifecycle),
+              ) &&
+              typeof summary.enabled === "boolean" &&
+              typeof summary.available === "boolean"
+            );
+          },
+        )))
   );
 }
 

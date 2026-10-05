@@ -318,7 +318,15 @@ export interface ZenXCapabilityHostSnapshot {
   definitions: ModelTool[];
   /** Current v2 discovery catalog projected into the hosted App Server. */
   plugins?: ZenXAvailablePlugin[];
+  /** Nonsecret lifecycle projection, including disabled/uninstalled plugins. */
+  pluginReadiness?: ZenXPluginReadinessSummary[];
+  pluginCatalogAvailable?: boolean;
 }
+
+export type ZenXPluginReadinessSummary = Pick<
+  ZenXPluginSummary,
+  "id" | "displayName" | "lifecycle" | "enabled" | "available"
+>;
 
 /** Host-only snapshot identity; never projected into model-visible tool specs. */
 export interface ZenXCapabilityGenerationSnapshot extends ZenXCapabilityHostSnapshot {

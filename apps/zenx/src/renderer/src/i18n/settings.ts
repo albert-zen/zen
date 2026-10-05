@@ -1,5 +1,266 @@
 // Settings UI copy. Keep keys stable across locales; product data and user content stay unchanged.
 export const en = {
+  "fleetComposer.catalogFailedPreserved":
+    "{{error}} Your text is preserved; no local machine was substituted.",
+  "fleetComposer.snapshotChecked": "Snapshot checked {{time}}",
+  "fleetComposer.operationFailedInspect":
+    "{{error}} Inspect the selected remote machine before trying again. No operation was automatically retried.",
+  "fleetComposer.earlierOperationUncertain":
+    "Earlier Fleet operation on {{deviceId}} has an uncertain outcome: {{error}}. Inspect that machine before retrying.",
+  "fleetComposer.acceptedAfterLeaving":
+    "Message accepted on machine {{deviceId}}, Thread {{threadId}}, after leaving its view. Acceptance is not completion.",
+  "fleetComposer.messageAccepted":
+    "Message accepted on {{deviceId}}; the target may still be running",
+  "fleetComposer.acceptedSnapshotUnavailable":
+    "Message accepted on {{deviceId}}, but its latest snapshot is unavailable: {{error}}. Refresh to inspect; the message was not retried.",
+  "fleetComposer.machineLocked":
+    "Machine locked · {{deviceId}} · Thread {{threadId}}",
+  "fleetComposer.localCatalogUnavailable":
+    "Fleet catalog unavailable: {{error}}",
+  "fleetComposer.newConversationOn": "New conversation on {{name}}",
+  "fleetComposer.modelDefault": "{{name}} · Default",
+  "fleetComposer.snapshotScope":
+    "{{deviceId}} · {{route}} · {{workspace}} · {{status}}. This is a checked public snapshot, not a full local copy of remote history.",
+  "fleetComposer.verifiedSshRoute": "Verified SSH route",
+  "fleetComposer.notChecked": "Not checked",
+  "fleetComposer.snapshotUnavailable":
+    "Unavailable · last snapshot may be stale",
+  "fleetComposer.unknownStatus": "Unknown",
+  "fleetComposer.createDescription":
+    "Create uses this target’s current defaults and selected Zen model. It creates an idle Thread first; sending starts work.",
+  "fleetComposer.attachmentWarning":
+    "This remote entry supports text only. Remove local images/attachments or return to This machine before sending; nothing was discarded.",
+  "fleetComposer.createdAfterLeaving":
+    "Remote Thread {{threadId}} was created on {{deviceId}} after leaving its draft; inspect it before creating another. No message was sent.",
+  "fleetComposer.inspectOutcome":
+    "Outcome needs inspection. Refresh the remote Thread or reopen this machine’s catalog; automatic retry is disabled.",
+  "fleetComposer.machine": "Machine",
+  "fleetComposer.thisMachine": "This machine",
+  "fleetComposer.machineOwnsThread":
+    "The selected machine owns the Thread and its permissions",
+  "fleetComposer.remoteConversation": "Remote conversation",
+  "fleetComposer.targetPermissions":
+    "Target permissions and models apply. Your local Thread is unchanged.",
+  "fleetComposer.reloadCatalog": "Reload target catalog",
+  "fleetComposer.loadingCatalog":
+    "Loading this machine’s workspaces and models…",
+  "fleetComposer.targetWorkspace": "Target workspace",
+  "fleetComposer.chooseWorkspace": "Choose a target workspace",
+  "fleetComposer.newThreadModel": "Model for new Threads",
+  "fleetComposer.chooseModel": "Choose a target model",
+  "fleetComposer.targetReasoning": "Target reasoning",
+  "fleetComposer.targetDefault": "Target default",
+  "fleetComposer.openExistingThread": "Open an existing remote Thread",
+  "fleetComposer.createOrChooseThread":
+    "Create new, or choose an existing Thread",
+  "fleetComposer.refreshThread": "Refresh remote Thread",
+  "fleetComposer.history": "Remote conversation history",
+  "fleetComposer.readOnly":
+    "This machine is read-only; you can inspect existing Threads.",
+  "fleetComposer.messageToThread": "Message to remote Thread",
+  "fleetComposer.taskForMachine": "Task for the remote machine",
+  "fleetComposer.messageBehavior": "Remote message behavior",
+  "fleetComposer.guidance": "Add guidance",
+  "fleetComposer.followUp": "Queue next work",
+  "fleetComposer.replacement": "Interrupt and replace",
+  "fleetComposer.sending": "Sending to target…",
+  "fleetComposer.send": "Send to remote Thread",
+  "fleetComposer.start": "Start on selected machine",
+  "fleetComposer.newDraft": "New draft on this machine",
+  "fleetComposer.returnLocal": "Return to This machine",
+  "fleetOnboarding.invitationExpired":
+    "This invitation expired. Ask the target user for a fresh invitation.",
+  "fleetOnboarding.invitationExpiredRetry":
+    "This invitation expired. Ask for a fresh invitation.",
+  "fleetOnboarding.invalidMachineId":
+    "Use a machine ID with letters, numbers, dashes or underscores.",
+  "fleetOnboarding.duplicateMachineId":
+    "This machine ID is already configured. Choose another ID or review the existing device.",
+  "fleetOnboarding.machineNameRequired": "Enter a machine name.",
+  "fleetOnboarding.pairedChecking": "Paired. Checking this machine…",
+  "fleetOnboarding.pairedCheckFailed":
+    "Paired, but the connection check failed. The saved trust remains; use Test on the device after addressing the error.",
+  "fleetOnboarding.issuerExpired":
+    "Invitation expired. Create a fresh one when the other user is ready.",
+  "fleetOnboarding.clientsRefreshFailed":
+    "Could not refresh paired clients. Check Fleet status before sharing again.",
+  "fleetOnboarding.sharingScopeChanged":
+    "Fleet Host or sharing scope changed. Refresh, review and confirm before sharing a new invitation.",
+  "fleetOnboarding.clipboardUnavailable":
+    "Clipboard unavailable. Select the invitation field and copy it using the system Copy action.",
+  "fleetOnboarding.pairedReachable":
+    "Paired and reachable: {{name}}. This was a connection check, not a permanent live session.",
+  "fleetOnboarding.setupDescription":
+    "Ask the Agent on that machine to check Fleet readiness. Its user creates an invitation, then you review and pair here.",
+  "fleetOnboarding.endpointRequirement":
+    "The target must already have a trusted, reachable HTTPS endpoint or a configured relay. Machines on unrelated networks cannot find each other automatically. Invitations stay in this Settings screen; do not paste them into an Agent conversation.",
+  "fleetOnboarding.preparePrompt":
+    "Ask: “Check Fleet readiness on this machine and explain what is missing. Prepare nonsecret settings only. Let me approve hosting and pairing.”",
+  "fleetOnboarding.readinessDescription":
+    "The Fleet plugin is bundled for any Agent. Existing disabled choices and normal tool permissions remain in effect. The read-only readiness tool reports known devices and preparation steps; it cannot install certificates, configure networks or create trust.",
+  "fleetOnboarding.loopbackWarning":
+    "This is a loopback address. It reaches only the receiving computer; use a configured network endpoint to connect another machine.",
+  "fleetOnboarding.verifyHostDescription":
+    "Confirm this Host ID directly on the target or through a trusted channel. HTTPS certificate checks still apply. Descriptions guide the Agent’s use of the machine and cannot grant access. A server-issued read grant needs fresh pairing before it can be upgraded.",
+  "fleetOnboarding.shellConsent":
+    "Allow explicit bounded remote shell using the target Thread’s existing sandbox and approvals",
+  "fleetOnboarding.issuerDescription":
+    "Share one invitation through a private, trusted channel. It includes the endpoint and Host ID, expires in five minutes, and can be used once. Creating another replaces the previous code. Keep it out of Agent conversations and logs.",
+  "fleetOnboarding.issuerEndpointDescription":
+    "Use the configured client-facing endpoint, the connected relay, or this Host’s listener address. DNS, network reachability and trusted TLS must already be ready. A loopback listener works only on the same computer.",
+  "fleetOnboarding.connectMachine": "Connect another machine",
+  "fleetOnboarding.useInvitation": "Use invitation",
+  "fleetOnboarding.prepareWithAgent": "Prepare with an Agent",
+  "fleetOnboarding.checkSetup": "Check this machine’s setup",
+  "fleetOnboarding.invitation": "Invitation",
+  "fleetOnboarding.reviewInvitation": "Review invitation",
+  "fleetOnboarding.cancelInvitation": "Cancel invitation",
+  "fleetOnboarding.reviewMachineInvitation": "Review machine invitation",
+  "fleetOnboarding.machineId": "Machine ID",
+  "fleetOnboarding.machineName": "Machine name",
+  "fleetOnboarding.machineDescription": "Machine description",
+  "fleetOnboarding.access": "Access",
+  "fleetOnboarding.invitationAccess": "Invitation access",
+  "fleetOnboarding.readOnly": "Read only",
+  "fleetOnboarding.threadControl": "Thread control",
+  "fleetOnboarding.pairing": "Pairing…",
+  "fleetOnboarding.pairAndCheck": "Pair and check",
+  "fleetOnboarding.inviteClient": "Invite a client",
+  "fleetOnboarding.invitationEndpoint": "Invitation endpoint",
+  "fleetOnboarding.invitationMachineName": "Invitation machine name",
+  "fleetOnboarding.creating": "Creating…",
+  "fleetOnboarding.createInvitation": "Create invitation",
+  "fleetOnboarding.shareInvitation": "Share invitation",
+  "fleetOnboarding.copied": "Copied",
+  "fleetOnboarding.copyInvitation": "Copy invitation",
+  "fleetOnboarding.hideInvitation": "Hide invitation",
+  "fleetOnboarding.readinessSummary":
+    "Credential store: {{credentialStore}} · Hosting: {{hosting}} · Trusted endpoint: {{endpoint}}",
+  "fleetOnboarding.credentialsReady": "ready",
+  "fleetOnboarding.credentialsNeedEncryption":
+    "needs operating-system encryption",
+  "fleetOnboarding.hostRunning": "running",
+  "fleetOnboarding.hostNotRunning": "not running",
+  "fleetOnboarding.endpointConfigured": "configured",
+  "fleetOnboarding.endpointNeedsConfiguration": "needs configuration",
+  "fleetOnboarding.hostId": "Host ID: {{hostId}}",
+  "fleetOnboarding.endpoint": "Endpoint: {{endpoint}}",
+  "fleetOnboarding.expiresAt": "Expires: {{time}}",
+  "fleetOnboarding.shareExpiryWarning":
+    "Expires {{time}}. Anyone holding this invitation can request access. Hiding it clears this screen; the one-use code remains valid until consumed, replaced or expired.",
+  "fleetOnboarding.trustRead":
+    "I verified this Host and allow this app to save a revocable read-only connection",
+  "fleetOnboarding.trustReadShell":
+    "I verified this Host and allow this app to save a revocable read-only connection with explicit remote shell",
+  "fleetOnboarding.trustControl":
+    "I verified this Host and allow this app to save a revocable Thread control connection",
+  "fleetOnboarding.trustControlShell":
+    "I verified this Host and allow this app to save a revocable Thread control connection with explicit remote shell",
+  "fleetOnboarding.shareRead":
+    "I allow one client holding this invitation to request read-only access",
+  "fleetOnboarding.shareReadRelay":
+    "I allow one client holding this invitation to request read-only access through my trusted relay operator",
+  "fleetOnboarding.shareReadShell":
+    "I allow one client holding this invitation to request read-only access and explicitly opt in to remote shell",
+  "fleetOnboarding.shareReadShellRelay":
+    "I allow one client holding this invitation to request read-only access and explicitly opt in to remote shell through my trusted relay operator",
+  "fleetOnboarding.shareControl":
+    "I allow one client holding this invitation to request Thread control access",
+  "fleetOnboarding.shareControlRelay":
+    "I allow one client holding this invitation to request Thread control access through my trusted relay operator",
+  "fleetOnboarding.shareControlShell":
+    "I allow one client holding this invitation to request Thread control access and explicitly opt in to remote shell",
+  "fleetOnboarding.shareControlShellRelay":
+    "I allow one client holding this invitation to request Thread control access and explicitly opt in to remote shell through my trusted relay operator",
+  "fleetOnboarding.thisMachine": "This machine",
+  "fleetOnboarding.invalidInvitation": "Invalid Fleet invitation",
+  "fleetOnboarding.invalidInvitationExpiry": "Invalid Fleet invitation expiry",
+  "fleetOnboarding.parsedInvitationExpired":
+    "Fleet invitation expired; request a fresh invitation",
+  "fleetOnboarding.invalidInvitationEndpoint":
+    "Invalid Fleet invitation endpoint; use one HTTPS origin",
+  "fleetOnboarding.configuredPeersOnly":
+    "Only user-configured peers are discovered; no automatic network scan, rendezvous or pairing.",
+  "fleetOnboarding.httpsReachability":
+    "Direct HTTPS needs a certificate trusted by the client and a route to the Host. Listener state and timestamped checks do not prove current client reachability.",
+  "fleetOnboarding.networkPreparation":
+    "Different networks need routing or a VPN arranged by the user, or an already configured reachable relay. Fleet does not set up routers, VPNs, certificates or relays.",
+  "fleetOnboarding.relayTrust":
+    "A relay is a trusted TLS termination point that can see pairing, requests and events; relay transport is not end-to-end encrypted.",
+  "fleetOnboarding.invitationLimits":
+    "Invitations are human-only bearer secrets, expire within five minutes and can pair once. Host and client grants still bound control and shell access.",
+  "fleetHistory.readPrompt":
+    "Read the remote Thread to view its public history",
+  "fleetHistory.emptyHistory": "No history items returned",
+  "fleetHistory.privateReasoning": "Private reasoning is not displayed",
+  "fleetHistory.you": "You",
+  "fleetHistory.agent": "Agent",
+  "fleetHistory.item": "Item",
+  "fleetHistory.remoteAttachment": "Remote attachment",
+  "fleetHistory.boundedExcerpt": "Bounded excerpt",
+  "fleetHistory.remoteImage": "[Remote image attachment]",
+  "fleetHistory.completed": "completed",
+  "fleetHistory.turnStatus": "Turn {{status}}",
+  "fleetHistory.modelUsage":
+    "Usage · {{inputTokens}} input / {{outputTokens}} output tokens",
+  "fleetHistory.threadMetadata": "thread metadata",
+  "fleetHistory.threadForked": "thread forked",
+  "fleetHistory.threadInstruction": "thread instruction",
+  "fleetHistory.threadConfigurationChanged": "thread configuration changed",
+  "fleetHistory.contextCompaction": "context compaction",
+  "fleetHistory.turnStarted": "turn started",
+  "fleetHistory.turnAborted": "turn aborted",
+  "fleetHistory.turnReplacementRequested": "turn replacement requested",
+  "fleetHistory.userMessageQueued": "user message queued",
+  "fleetHistory.userMessageQueueCancelled": "user message queue cancelled",
+  "fleetHistory.reasoning": "reasoning",
+  "fleetHistory.toolCall": "tool call",
+  "fleetHistory.toolResult": "tool result",
+  "fleetHistory.codeState": "code state",
+  "fleetHistory.failure": "failure",
+  "fleetComposer.statusActive": "active",
+  "fleetComposer.statusIdle": "idle",
+  "fleetHistory.statusCompleted": "completed",
+  "fleetHistory.statusFailed": "failed",
+  "fleetHistory.statusInterrupted": "interrupted",
+  "fleetHistory.statusInProgress": "inProgress",
+
+  "pluginSettings.namedActions": "{{name}} actions",
+
+  "fleetSettings.routeIdentityMissing":
+    "Fleet route identity is missing. Refresh Fleet before browsing this device.",
+  "fleetSettings.exactThreadUnavailable":
+    "The exact remote Thread is unavailable; no other Thread was selected.",
+  "fleetSettings.chooseTargetWorkspace":
+    "Choose this target's workspace before listing Threads.",
+  "fleetSettings.routeChanged":
+    "This device route or access changed. Reopen Browse before sending; the old remote Thread was not retargeted.",
+  "fleetSettings.workspaceSelectedReopen":
+    "Workspace selected. Reopen Browse to inspect this route before sending.",
+  "fleetSettings.hostRefreshFailed": "Could not refresh Fleet hosting status.",
+  "fleetSettings.routeHelp":
+    "SSH uses your existing SSH setup. HTTPS uses a pinned Host ID and a one-time pairing code. Reachability is a timestamped check; test connections close afterwards and do not imply a live session.",
+  "fleetSettings.machineDescription": "Machine description",
+  "fleetSettings.machineDescriptionHelp":
+    "Describe what this machine is for and when the Agent should use it. This is guidance only; it cannot grant permissions or change commands.",
+  "fleetSettings.requestShell":
+    "Request target-owned remote shell execution for this HTTPS device",
+  "fleetSettings.shellHelp":
+    "Shell is a separate opt-in on this client and the remote Host. It uses an existing target Thread’s current sandbox and remembered approvals, not local permissions. Unknown interactive approvals cannot be answered remotely and reject. Enabling a server-issued shell grant requires fresh pairing; changing this saved request flag alone cannot expand it.",
+  "fleetSettings.clientHttpsEndpoint": "Client-facing HTTPS endpoint",
+  "fleetSettings.allowShell":
+    "Allow separately paired shell clients to request bounded commands on this Host",
+  "fleetSettings.hostShellHelp":
+    "Remote shell requires a fresh separate client grant and an explicit authorized workspace/target Thread. That Thread’s current sandbox and approvals apply; existing read-only or legacy grants never gain shell access. Interactive remote approval is not available.",
+  "fleetSettings.includingShell":
+    ", including separately authorized target-owned shell execution",
+  "fleetSettings.advancedPairingCode": "Advanced: separate pairing code",
+  "fleetSettings.shellGranted": " · Shell granted",
+  "fleetSettings.noShellGrant": " · No shell grant",
+  "fleetSettings.checkedTime": " · checked {{time}}",
+  "fleetSettings.reachable": "Reachable",
+  "fleetSettings.lastCheckFailed": "Last check failed",
+
   "settingsView.zenxSettings": "ZenX settings",
   "settingsView.openSidebar": "Open sidebar",
   "settingsView.settings": "Settings",
@@ -968,6 +1229,254 @@ export const en = {
 } as const;
 
 export const zhCN: Record<keyof typeof en, string> = {
+  "fleetComposer.catalogFailedPreserved":
+    "{{error}} 你的文字已保留，没有改用本机。",
+  "fleetComposer.snapshotChecked": "快照检查时间：{{time}}",
+  "fleetComposer.operationFailedInspect":
+    "{{error}} 请先检查所选远程机器，再尝试操作。没有自动重试任何操作。",
+  "fleetComposer.earlierOperationUncertain":
+    "先前在 {{deviceId}} 上执行的 Fleet 操作结果尚不确定：{{error}}。请先检查该机器，再重试。",
+  "fleetComposer.acceptedAfterLeaving":
+    "离开该视图后，机器 {{deviceId}} 上的会话 {{threadId}} 已接收消息。接收消息不代表任务已完成。",
+  "fleetComposer.messageAccepted":
+    "{{deviceId}} 已接收消息；目标机器可能仍在运行任务",
+  "fleetComposer.acceptedSnapshotUnavailable":
+    "{{deviceId}} 已接收消息，但无法获取最新快照：{{error}}。请刷新查看；没有重试发送消息。",
+  "fleetComposer.machineLocked":
+    "机器已锁定 · {{deviceId}} · 会话 {{threadId}}",
+  "fleetComposer.localCatalogUnavailable": "Fleet 目录不可用：{{error}}",
+  "fleetComposer.newConversationOn": "在 {{name}} 上创建新会话",
+  "fleetComposer.modelDefault": "{{name}} · 默认",
+  "fleetComposer.snapshotScope":
+    "{{deviceId}} · {{route}} · {{workspace}} · {{status}}。这是经检查的公开快照，并非远程历史的完整本地副本。",
+  "fleetComposer.verifiedSshRoute": "已验证的 SSH 路由",
+  "fleetComposer.notChecked": "尚未检查",
+  "fleetComposer.snapshotUnavailable": "不可用 · 上次快照可能已过时",
+  "fleetComposer.unknownStatus": "未知",
+  "fleetComposer.createDescription":
+    "创建会话会使用目标机器当前的默认设置和所选 Zen 模型。首先创建空闲会话；发送消息才会开始任务。",
+  "fleetComposer.attachmentWarning":
+    "此远程入口仅支持文字。发送前请移除本地图片或附件，或返回“本机”；没有丢弃任何内容。",
+  "fleetComposer.createdAfterLeaving":
+    "离开草稿后，已在 {{deviceId}} 上创建远程会话 {{threadId}}；请先检查该会话，再创建其他会话。没有发送任何消息。",
+  "fleetComposer.inspectOutcome":
+    "需要检查操作结果。请刷新远程会话，或重新打开该机器的目录；自动重试已禁用。",
+  "fleetComposer.machine": "机器",
+  "fleetComposer.thisMachine": "本机",
+  "fleetComposer.machineOwnsThread": "会话及其权限由所选机器管理",
+  "fleetComposer.remoteConversation": "远程会话",
+  "fleetComposer.targetPermissions":
+    "使用目标机器的权限和模型。本地会话保持不变。",
+  "fleetComposer.reloadCatalog": "重新加载目标目录",
+  "fleetComposer.loadingCatalog": "正在加载该机器的工作区和模型…",
+  "fleetComposer.targetWorkspace": "目标工作区",
+  "fleetComposer.chooseWorkspace": "选择目标工作区",
+  "fleetComposer.newThreadModel": "新会话使用的模型",
+  "fleetComposer.chooseModel": "选择目标模型",
+  "fleetComposer.targetReasoning": "目标推理强度",
+  "fleetComposer.targetDefault": "目标默认设置",
+  "fleetComposer.openExistingThread": "打开已有远程会话",
+  "fleetComposer.createOrChooseThread": "创建新会话，或选择已有会话",
+  "fleetComposer.refreshThread": "刷新远程会话",
+  "fleetComposer.history": "远程会话历史",
+  "fleetComposer.readOnly": "此机器为只读；你可以查看已有会话。",
+  "fleetComposer.messageToThread": "发送给远程会话的消息",
+  "fleetComposer.taskForMachine": "远程机器的任务",
+  "fleetComposer.messageBehavior": "远程消息行为",
+  "fleetComposer.guidance": "添加指导",
+  "fleetComposer.followUp": "将后续任务加入队列",
+  "fleetComposer.replacement": "中断并替换",
+  "fleetComposer.sending": "正在发送至目标…",
+  "fleetComposer.send": "发送至远程会话",
+  "fleetComposer.start": "在所选机器上开始",
+  "fleetComposer.newDraft": "在此机器上创建新草稿",
+  "fleetComposer.returnLocal": "返回本机",
+  "fleetOnboarding.invitationExpired":
+    "此邀请已过期。请向目标机器的用户索取新邀请。",
+  "fleetOnboarding.invitationExpiredRetry": "此邀请已过期。请索取新邀请。",
+  "fleetOnboarding.invalidMachineId":
+    "机器 ID 只能使用字母、数字、连字符或下划线。",
+  "fleetOnboarding.duplicateMachineId":
+    "此机器 ID 已配置。请选择其他 ID，或检查已有设备。",
+  "fleetOnboarding.machineNameRequired": "请输入机器名称。",
+  "fleetOnboarding.pairedChecking": "已配对。正在检查该机器…",
+  "fleetOnboarding.pairedCheckFailed":
+    "已配对，但连接检查失败。已保存的信任关系仍然保留；解决错误后，请对该设备执行“测试”。",
+  "fleetOnboarding.issuerExpired":
+    "邀请已过期。请在另一位用户准备好后创建新邀请。",
+  "fleetOnboarding.clientsRefreshFailed":
+    "无法刷新已配对客户端。再次分享前，请检查 Fleet 状态。",
+  "fleetOnboarding.sharingScopeChanged":
+    "Fleet 主机或分享范围已变更。分享新邀请前，请刷新、检查并重新确认。",
+  "fleetOnboarding.clipboardUnavailable":
+    "剪贴板不可用。请选择邀请字段，再使用系统的“复制”操作。",
+  "fleetOnboarding.pairedReachable":
+    "已配对且可访问：{{name}}。这只是一次连接检查，并非持续的在线会话。",
+  "fleetOnboarding.setupDescription":
+    "请让那台机器上的 Agent 检查 Fleet 是否已就绪。由该机器的用户创建邀请，然后在这里检查并配对。",
+  "fleetOnboarding.endpointRequirement":
+    "目标机器必须已有可信且可访问的 HTTPS 端点，或已配置中继。处于无关联网络的机器无法自动发现彼此。邀请只能在此设置页面中使用；请勿粘贴到 Agent 会话中。",
+  "fleetOnboarding.preparePrompt":
+    "可以这样询问：“检查这台机器的 Fleet 是否已就绪，并说明缺少什么。仅准备不含秘密信息的设置。托管和配对须由我批准。”",
+  "fleetOnboarding.readinessDescription":
+    "所有 Agent 都可使用内置 Fleet 插件。已有的禁用设置和常规工具权限仍然有效。只读的就绪检查工具会报告已知设备和准备步骤；它不能安装证书、配置网络或建立信任关系。",
+  "fleetOnboarding.loopbackWarning":
+    "这是回环地址，只能访问接收邀请的这台计算机；连接另一台机器时，请使用已配置的网络端点。",
+  "fleetOnboarding.verifyHostDescription":
+    "请直接在目标机器上或通过可信渠道核实此主机 ID。HTTPS 证书检查仍然生效。描述仅用于指导 Agent 使用机器，不能授予访问权限。服务器授予的只读权限必须重新配对后才能升级。",
+  "fleetOnboarding.shellConsent":
+    "允许明确授权、范围受限的远程 Shell，沿用目标会话现有的沙盒和审批",
+  "fleetOnboarding.issuerDescription":
+    "请通过私密且可信的渠道分享邀请。邀请包含端点和主机 ID，五分钟后过期，且只能使用一次。创建新邀请会替换原有配对码。请勿将邀请放入 Agent 会话或日志。",
+  "fleetOnboarding.issuerEndpointDescription":
+    "请使用已配置的客户端端点、已连接的中继，或此主机的监听地址。DNS、网络连通性和可信 TLS 必须已就绪。回环监听地址只能在同一台计算机上使用。",
+  "fleetOnboarding.connectMachine": "连接另一台机器",
+  "fleetOnboarding.useInvitation": "使用邀请",
+  "fleetOnboarding.prepareWithAgent": "与 Agent 一起准备",
+  "fleetOnboarding.checkSetup": "检查本机设置",
+  "fleetOnboarding.invitation": "邀请",
+  "fleetOnboarding.reviewInvitation": "检查邀请",
+  "fleetOnboarding.cancelInvitation": "取消邀请",
+  "fleetOnboarding.reviewMachineInvitation": "检查机器邀请",
+  "fleetOnboarding.machineId": "机器 ID",
+  "fleetOnboarding.machineName": "机器名称",
+  "fleetOnboarding.machineDescription": "机器描述",
+  "fleetOnboarding.access": "访问权限",
+  "fleetOnboarding.invitationAccess": "邀请访问权限",
+  "fleetOnboarding.readOnly": "只读",
+  "fleetOnboarding.threadControl": "会话控制",
+  "fleetOnboarding.pairing": "正在配对…",
+  "fleetOnboarding.pairAndCheck": "配对并检查",
+  "fleetOnboarding.inviteClient": "邀请客户端",
+  "fleetOnboarding.invitationEndpoint": "邀请端点",
+  "fleetOnboarding.invitationMachineName": "邀请中的机器名称",
+  "fleetOnboarding.creating": "正在创建…",
+  "fleetOnboarding.createInvitation": "创建邀请",
+  "fleetOnboarding.shareInvitation": "分享邀请",
+  "fleetOnboarding.copied": "已复制",
+  "fleetOnboarding.copyInvitation": "复制邀请",
+  "fleetOnboarding.hideInvitation": "隐藏邀请",
+  "fleetOnboarding.readinessSummary":
+    "凭证存储：{{credentialStore}} · 托管：{{hosting}} · 可信端点：{{endpoint}}",
+  "fleetOnboarding.credentialsReady": "就绪",
+  "fleetOnboarding.credentialsNeedEncryption": "需要操作系统加密",
+  "fleetOnboarding.hostRunning": "运行中",
+  "fleetOnboarding.hostNotRunning": "未运行",
+  "fleetOnboarding.endpointConfigured": "已配置",
+  "fleetOnboarding.endpointNeedsConfiguration": "需要配置",
+  "fleetOnboarding.hostId": "主机 ID：{{hostId}}",
+  "fleetOnboarding.endpoint": "端点：{{endpoint}}",
+  "fleetOnboarding.expiresAt": "到期时间：{{time}}",
+  "fleetOnboarding.shareExpiryWarning":
+    "{{time}} 到期。任何持有此邀请的人都能请求访问。隐藏邀请会清除此页面上的内容；一次性配对码在使用、替换或到期前仍然有效。",
+  "fleetOnboarding.trustRead":
+    "我已核实此主机，并允许此应用保存可撤销的只读连接",
+  "fleetOnboarding.trustReadShell":
+    "我已核实此主机，并允许此应用保存可撤销的只读连接，包含明确授权的远程 Shell",
+  "fleetOnboarding.trustControl":
+    "我已核实此主机，并允许此应用保存可撤销的会话控制连接",
+  "fleetOnboarding.trustControlShell":
+    "我已核实此主机，并允许此应用保存可撤销的会话控制连接，包含明确授权的远程 Shell",
+  "fleetOnboarding.shareRead": "我允许一个持有此邀请的客户端请求只读访问权限",
+  "fleetOnboarding.shareReadRelay":
+    "我允许一个持有此邀请的客户端通过我信任的中继运营者请求只读访问权限",
+  "fleetOnboarding.shareReadShell":
+    "我允许一个持有此邀请的客户端请求只读访问权限，并明确选择启用远程 Shell",
+  "fleetOnboarding.shareReadShellRelay":
+    "我允许一个持有此邀请的客户端通过我信任的中继运营者请求只读访问权限，并明确选择启用远程 Shell",
+  "fleetOnboarding.shareControl":
+    "我允许一个持有此邀请的客户端请求会话控制访问权限",
+  "fleetOnboarding.shareControlRelay":
+    "我允许一个持有此邀请的客户端通过我信任的中继运营者请求会话控制访问权限",
+  "fleetOnboarding.shareControlShell":
+    "我允许一个持有此邀请的客户端请求会话控制访问权限，并明确选择启用远程 Shell",
+  "fleetOnboarding.shareControlShellRelay":
+    "我允许一个持有此邀请的客户端通过我信任的中继运营者请求会话控制访问权限，并明确选择启用远程 Shell",
+  "fleetOnboarding.thisMachine": "本机",
+  "fleetOnboarding.invalidInvitation": "Fleet 邀请无效",
+  "fleetOnboarding.invalidInvitationExpiry": "Fleet 邀请的到期时间无效",
+  "fleetOnboarding.parsedInvitationExpired": "Fleet 邀请已过期；请索取新邀请",
+  "fleetOnboarding.invalidInvitationEndpoint":
+    "Fleet 邀请端点无效；请使用单一 HTTPS 源地址",
+  "fleetOnboarding.configuredPeersOnly":
+    "仅发现用户已配置的对等端；不会自动扫描网络、寻找连接端或配对。",
+  "fleetOnboarding.httpsReachability":
+    "直接 HTTPS 连接需要客户端信任的证书，以及到主机的网络路由。监听状态和带时间戳的检查不能证明客户端当前可访问。",
+  "fleetOnboarding.networkPreparation":
+    "不同网络之间需要用户安排路由或 VPN，或使用已配置且可访问的中继。Fleet 不会配置路由器、VPN、证书或中继。",
+  "fleetOnboarding.relayTrust":
+    "中继是受信任的 TLS 终止点，可看到配对、请求和事件；中继传输并非端到端加密。",
+  "fleetOnboarding.invitationLimits":
+    "邀请是仅供人工使用的持有者秘密，五分钟内过期，且只能配对一次。控制和 Shell 访问仍受主机与客户端授权范围限制。",
+  "fleetHistory.readPrompt": "读取远程会话以查看其公开历史",
+  "fleetHistory.emptyHistory": "未返回历史记录",
+  "fleetHistory.privateReasoning": "不显示私有推理内容",
+  "fleetHistory.you": "你",
+  "fleetHistory.agent": "Agent",
+  "fleetHistory.item": "记录项",
+  "fleetHistory.remoteAttachment": "远程附件",
+  "fleetHistory.boundedExcerpt": "截取的片段",
+  "fleetHistory.remoteImage": "[远程图片附件]",
+  "fleetHistory.completed": "已完成",
+  "fleetHistory.turnStatus": "轮次 {{status}}",
+  "fleetHistory.modelUsage":
+    "用量 · 输入 {{inputTokens}} / 输出 {{outputTokens}} token",
+  "fleetHistory.threadMetadata": "会话元数据",
+  "fleetHistory.threadForked": "会话已分支",
+  "fleetHistory.threadInstruction": "会话指令",
+  "fleetHistory.threadConfigurationChanged": "会话配置已变更",
+  "fleetHistory.contextCompaction": "上下文压缩",
+  "fleetHistory.turnStarted": "轮次已开始",
+  "fleetHistory.turnAborted": "轮次已中止",
+  "fleetHistory.turnReplacementRequested": "已请求替换轮次",
+  "fleetHistory.userMessageQueued": "用户消息已加入队列",
+  "fleetHistory.userMessageQueueCancelled": "排队的用户消息已取消",
+  "fleetHistory.reasoning": "推理",
+  "fleetHistory.toolCall": "工具调用",
+  "fleetHistory.toolResult": "工具结果",
+  "fleetHistory.codeState": "代码状态",
+  "fleetHistory.failure": "失败",
+  "fleetComposer.statusActive": "运行中",
+  "fleetComposer.statusIdle": "空闲",
+  "fleetHistory.statusCompleted": "已完成",
+  "fleetHistory.statusFailed": "失败",
+  "fleetHistory.statusInterrupted": "已中断",
+  "fleetHistory.statusInProgress": "进行中",
+
+  "pluginSettings.namedActions": "{{name}} 操作",
+
+  "fleetSettings.routeIdentityMissing":
+    "缺少 Fleet 路由标识。请刷新 Fleet 后再浏览此设备。",
+  "fleetSettings.exactThreadUnavailable":
+    "目标远端会话不可用；未选择任何其他会话。",
+  "fleetSettings.chooseTargetWorkspace": "列出会话前，请先选择此目标的工作区。",
+  "fleetSettings.routeChanged":
+    "此设备的路由或访问权限已变更。请重新打开浏览后再发送；原远端会话未被重定向。",
+  "fleetSettings.workspaceSelectedReopen":
+    "工作区已选择。请重新打开浏览并检查此路由后再发送。",
+  "fleetSettings.hostRefreshFailed": "无法刷新 Fleet 托管状态。",
+  "fleetSettings.routeHelp":
+    "SSH 使用现有 SSH 配置。HTTPS 使用固定 Host ID 和一次性配对码。可达性是带时间戳的检查；测试连接随后关闭，不代表持续会话。",
+  "fleetSettings.machineDescription": "机器说明",
+  "fleetSettings.machineDescriptionHelp":
+    "描述此机器的用途以及 Agent 应在何时使用它。这仅作为指引，不会授予权限或更改命令。",
+  "fleetSettings.requestShell":
+    "为此 HTTPS 设备请求由目标管理的远端 Shell 执行",
+  "fleetSettings.shellHelp":
+    "Shell 需在此客户端及远端 Host 上分别明确启用。它使用现有目标会话的当前沙箱和已记录的批准，不使用本地权限。未知的交互批准无法远端处理，请求将被拒绝。启用服务器授予的 Shell 权限需重新配对；仅更改此已保存的请求选项不能扩大权限。",
+  "fleetSettings.clientHttpsEndpoint": "客户端访问的 HTTPS 端点",
+  "fleetSettings.allowShell":
+    "允许单独配对的 Shell 客户端在此 Host 上请求有范围限制的命令",
+  "fleetSettings.hostShellHelp":
+    "远端 Shell 需要新的独立客户端授权，并需明确授权工作区和目标会话。适用该会话的当前沙箱和批准；现有只读或旧授权不会获得 Shell 权限。不支持远端交互批准。",
+  "fleetSettings.includingShell": "，包括单独授权的目标管理 Shell 执行",
+  "fleetSettings.advancedPairingCode": "高级：单独配对码",
+  "fleetSettings.shellGranted": " · 已授予 Shell 权限",
+  "fleetSettings.noShellGrant": " · 未授予 Shell 权限",
+  "fleetSettings.checkedTime": " · 检查时间 {{time}}",
+  "fleetSettings.reachable": "可达",
+  "fleetSettings.lastCheckFailed": "上次检查失败",
+
   "settingsView.zenxSettings": "ZenX 设置",
   "settingsView.openSidebar": "打开侧边栏",
   "settingsView.settings": "设置",

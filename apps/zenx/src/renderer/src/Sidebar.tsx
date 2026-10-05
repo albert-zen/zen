@@ -2081,7 +2081,7 @@ export function ThreadItemMenu({
                 ? i18n.t("shell:unpinning")
                 : pinned
                   ? i18n.t("shell:unpin")
-                  : "Pin"}
+                  : i18n.t("shell:pin")}
           </button>
           <button
             type="button"

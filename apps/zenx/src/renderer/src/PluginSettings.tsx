@@ -557,14 +557,17 @@ function MarketplaceInventoryCard({
           </div>
         )}
       </div>
-      <div className="plugin-actions" aria-label={`${entry.name} actions`}>
+      <div
+        className="plugin-actions"
+        aria-label={t("pluginSettings.namedActions", { name: entry.name })}
+      >
         {entry.source === "catalog" && entry.versions.length > 0 ? (
           <label className="marketplace-version">
             <span className="sr-only">
               {entry.name} {t("pluginSettings.version")}
             </span>
             <Select
-              aria-label={`${entry.name} version`}
+              aria-label={`${entry.name} ${t("pluginSettings.version")}`}
               value={selectedVersion}
               disabled={busy !== null}
               onValueChange={(value) => setSelectedVersion(value)}

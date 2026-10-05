@@ -256,7 +256,7 @@ function CodeBlock({
       <div className="markdown-code-header">
         <span>{block.language || "text"}</span>
         <button type="button" onClick={() => void copy()}>
-          {copied ? i18n.t("panels:copied") : "Copy"}
+          {copied ? i18n.t("panels:copied") : i18n.t("panels:copy")}
         </button>
       </div>
       <pre>

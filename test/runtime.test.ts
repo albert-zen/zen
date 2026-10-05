@@ -614,6 +614,220 @@ test("rejects archiving a Thread while its Turn is active", async () => {
   );
 });
 
+for (const operation of ["start", "queue", "steer", "replace"] as const) {
+  test(`unarchived admission rejects ${operation} after an archive wins the mutation lock`, async () => {
+    const archiveEntered = testDeferred<void>();
+    const releaseArchive = testDeferred<void>();
+    const backingMetadata = new InMemoryThreadMetadataStore();
+    const threadMetadata: ThreadMetadataStore = {
+      read: async (threadId) => await backingMetadata.read(threadId),
+      setName: async (threadId, name) =>
+        await backingMetadata.setName(threadId, name),
+      setArchived: async (threadId, archived) => {
+        archiveEntered.resolve();
+        await releaseArchive.promise;
+        return await backingMetadata.setArchived(threadId, archived);
+      },
+    };
+    const journal = new InMemoryThreadJournal();
+    let samples = 0;
+    const model: ModelAdapter = {
+      provider: "archive-admission-test",
+      async *stream(): AsyncIterable<ModelEvent> {
+        samples += 1;
+        yield { type: "text_delta", delta: "must not execute" };
+      },
+    };
+    const server = createServer({ journal, model, threadMetadata });
+    const thread = await server.startThread();
+    const before = await journal.read(thread.id);
+    const events: AppServerEvent[] = [];
+    server.subscribe((event) => events.push(event));
+
+    const archive = server.setThreadArchived(thread.id, true);
+    await archiveEntered.promise;
+    const admitted =
+      operation === "start"
+        ? server.startTurn(thread.id, "must not persist", {
+            clientId: "blocked-start",
+            model: "fake",
+            requireUnarchived: true,
+          })
+        : operation === "queue"
+          ? server.queueMessage(
+              thread.id,
+              "must not persist",
+              "blocked-queue",
+              {
+                requireUnarchived: true,
+              },
+            )
+          : operation === "steer"
+            ? server.steerTurn(thread.id, "not-running", "must not persist", {
+                clientId: "blocked-steer",
+                requireUnarchived: true,
+              })
+            : server.replaceTurn(thread.id, "not-running", "must not persist", {
+                clientId: "blocked-replace",
+                requireUnarchived: true,
+              });
+    const rejection = assert.rejects(
+      admitted,
+      (error: unknown) =>
+        error instanceof AppServerError &&
+        error.code === "operation_forbidden" &&
+        error.message.includes(thread.id) &&
+        /archived.*unarchive/iu.test(error.message),
+    );
+    releaseArchive.resolve();
+    await archive;
+    await rejection;
+
+    assert.equal((await server.readThread(thread.id)).archived, true);
+    assert.deepEqual(await journal.read(thread.id), before);
+    assert.equal(samples, 0);
+    assert.deepEqual(
+      events.map((event) => event.type),
+      ["thread_archived_updated"],
+    );
+  });
+}
+
+for (const archived of [false, true]) {
+  test(`${archived ? "default archived" : "unarchived"} admission allows start, queue, steer and replacement without changing permissions`, async () => {
+    const entered = testDeferred<void>();
+    let samples = 0;
+    const model: ModelAdapter = {
+      provider: "unarchived-admission-test",
+      async *stream(request): AsyncIterable<ModelEvent> {
+        samples += 1;
+        if (samples === 1) {
+          entered.resolve();
+          await new Promise<void>((_resolve, reject) => {
+            request.signal.addEventListener(
+              "abort",
+              () => reject(request.signal.reason),
+              { once: true },
+            );
+          });
+          return;
+        }
+        yield { type: "text_delta", delta: "done" };
+      },
+    };
+    const server = createServer({ model });
+    const thread = await server.startThread();
+    if (archived) await server.setThreadArchived(thread.id, true);
+    await server.setThreadPermissions(thread.id, "read-only");
+    const admission = archived ? {} : { requireUnarchived: true };
+    const active = await server.startTurn(thread.id, "first", {
+      ...admission,
+    });
+    await entered.promise;
+    const steered = await server.steerTurn(thread.id, active.id, "correction", {
+      clientId: "allowed-steer",
+      ...admission,
+    });
+    assert.equal(steered.id, active.id);
+    await server.queueMessage(thread.id, "next", "allowed-queue", {
+      ...admission,
+    });
+    const queued = (await server.readThread(thread.id)).items.find(
+      (item) => item.type === "user_message_queued",
+    );
+    assert(queued?.type === "user_message_queued");
+    await server.cancelQueuedMessages(thread.id, [
+      { queuedItemId: queued.id, clientId: queued.clientId },
+    ]);
+    const replaced = await server.replaceTurn(
+      thread.id,
+      active.id,
+      "new work",
+      {
+        clientId: "allowed-replacement",
+        ...admission,
+      },
+    );
+    await replaced.turn.done;
+    const snapshot = await server.readThread(thread.id);
+    assert.equal(snapshot.archived, archived);
+    assert.equal(snapshot.sandbox, "read-only");
+    assert.equal(snapshot.approvalPolicy, "always");
+    assert.equal(snapshot.turns.length, 2);
+    assert.equal(snapshot.turns[0]?.status, "interrupted");
+    assert.equal(snapshot.turns[1]?.status, "completed");
+    assert.equal(samples, 2);
+  });
+}
+
+test("unarchived admission checks queued delivery again when archive wins after enqueue", async () => {
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "queued-archive-admission-test",
+    async *stream(): AsyncIterable<ModelEvent> {
+      samples += 1;
+      yield { type: "text_delta", delta: "must not execute" };
+    },
+  };
+  const journal = new InMemoryThreadJournal();
+  const server = createServer({ model, journal });
+  const thread = await server.startThread();
+  const before = await journal.read(thread.id);
+  let archive: Promise<unknown> | undefined;
+  const failures: Extract<AppServerEvent, { type: "queue_failed" }>[] = [];
+  server.subscribe((event) => {
+    if (event.type === "queue_failed") failures.push(event);
+    if (
+      event.type === "item_completed" &&
+      event.item.type === "user_message_queued"
+    ) {
+      // Reserve archive's lock while enqueue still owns it. Launch must wait.
+      archive = server.setThreadArchived(thread.id, true);
+    }
+  });
+  await assert.rejects(
+    server.queueMessage(thread.id, "accepted before archive", "queue-race", {
+      requireUnarchived: true,
+    }),
+    (error: unknown) =>
+      error instanceof AppServerError &&
+      error.code === "operation_forbidden" &&
+      /archived.*unarchive/iu.test(error.message),
+  );
+  assert(archive !== undefined);
+  await archive;
+  const items = await journal.read(thread.id);
+  assert.deepEqual(items.slice(0, -1), before);
+  assert.equal(items.at(-1)?.type, "user_message_queued");
+  assert.equal((await server.readThread(thread.id)).archived, true);
+  assert.equal(samples, 0);
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0]?.code, "operation_forbidden");
+  assert.equal(failures[0]?.clientId, "queue-race");
+});
+
+test("archived start and queue preserve default behavior when the admission fence is omitted", async () => {
+  const server = createServer();
+  const thread = await server.startThread();
+  await server.setThreadArchived(thread.id, true);
+  const first = await server.startTurn(thread.id, "existing caller");
+  await first.done;
+  const completed = testDeferred<void>();
+  server.subscribe((event) => {
+    if (event.type === "turn_completed") completed.resolve();
+  });
+  await server.queueMessage(
+    thread.id,
+    "existing queued caller",
+    "default-queue",
+  );
+  await completed.promise;
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(snapshot.archived, true);
+  assert.equal(snapshot.turns.length, 2);
+  assert(snapshot.turns.every((turn) => turn.status === "completed"));
+});
+
 test("persists user-facing names outside the canonical ItemList", async () => {
   const temporaryDirectory = await mkdtemp(
     path.join(os.tmpdir(), "zen-thread-metadata-test-"),

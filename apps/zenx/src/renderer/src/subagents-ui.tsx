@@ -162,7 +162,7 @@ function CreateSideChat({
         mode: "side-chat",
       })) as { thread?: { id?: string }; threadId?: string };
       const id = result.thread?.id ?? result.threadId;
-      if (!id) throw new Error("The new conversation could not be identified.");
+      if (!id) throw new Error(i18n.t("panels:newConversationUnidentified"));
       if (mounted.current && epoch.current === requestEpoch) {
         onCreated();
         sdk.navigation.navigate(
@@ -188,7 +188,9 @@ function CreateSideChat({
         onClick={() => void create()}
       >
         <Icon name="plus" />
-        <span>{busy ? "Creating…" : "Side chat"}</span>
+        <span>
+          {busy ? i18n.t("panels:creating") : i18n.t("panels:sideChat")}
+        </span>
       </button>
       {error ? (
         <p className="subagent-create-error" role="alert">
@@ -219,7 +221,7 @@ export function ThreadBreadcrumbAncestors({
     const parent = byId.get(parentId);
     ancestors.unshift({
       threadId: parentId,
-      title: parent ? threadTitle(parent) : "Parent conversation",
+      title: parent ? threadTitle(parent) : i18n.t("panels:parentConversation"),
     });
     parentId = parent?.parentThreadId;
   }
@@ -279,12 +281,12 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
               <span className="subagent-tree-title">{threadTitle(child)}</span>
               <span className="subagent-tree-status">
                 {child.archived
-                  ? "Archived"
+                  ? i18n.t("panels:archivedStatus")
                   : child.status === "active"
-                    ? "Working"
+                    ? i18n.t("shell:working")
                     : child.status === "systemError"
                       ? i18n.t("panels:unavailable")
-                      : "Idle"}
+                      : i18n.t("panels:idleStatus")}
               </span>
             </button>
             {visited.size < 32

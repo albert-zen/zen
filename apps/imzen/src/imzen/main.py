@@ -58,6 +58,7 @@ def create_gateway(
     *,
     client=None,
     channels=None,
+    channel_config=None,
     persistent_subscriptions: bool = False,
     controller_factory=None,
     delivery_authorizer=None,
@@ -86,6 +87,7 @@ def create_gateway(
         if channels is not None
         else build_channels(
             resolved.channels_config_file,
+            channel_config=channel_config,
             permission_mode=resolved.permission_mode,
             allow_unrestricted_full_access=resolved.allow_unrestricted_full_access,
         )

@@ -179,3 +179,58 @@ def test_qq_credentials_file_uses_platform_permission_evidence(tmp_path):
 
 def test_no_config_creates_no_channels():
     assert build_channels(None, factory=factory) == []
+
+
+def test_host_owned_in_memory_config_bypasses_file_read_and_uses_sdk_factory(tmp_path, monkeypatch):
+    def unexpected_read(_path):
+        raise AssertionError("Managed configuration must not read the marker file")
+
+    monkeypatch.setattr("imzen.channels._load_config", unexpected_read)
+    channels = build_channels(
+        tmp_path / "owned-managed-reference.json",
+        channel_config={
+            "qq": {
+                "enabled": True,
+                "app_id": "12345",
+                "client_secret": "host-private-value",
+                "allowed_user_ids": ["trusted"],
+            }
+        },
+        factory=factory,
+    )
+    assert len(channels) == 1
+    assert channels[0].config["client_secret"] == "host-private-value"
+    assert channels[0].channel_instance_id == "qq"
+
+
+def test_managed_config_keeps_existing_full_access_guard(tmp_path):
+    with pytest.raises(ConfigurationError, match="unrestricted channel"):
+        build_channels(
+            tmp_path / "marker.json",
+            channel_config={"qq": {"enabled": True, "app_id": "123", "client_secret": "secret"}},
+            factory=factory,
+        )
+
+
+def test_wildcard_with_real_ids_in_one_dimension_is_still_unrestricted(tmp_path):
+    config = tmp_path / "channels.json"
+    config.write_text(json.dumps({"qq": {"enabled": True, "allowed_user_ids": ["*", "trusted"]}}))
+    with pytest.raises(ConfigurationError, match="unrestricted channel"):
+        build_channels(config, factory=factory)
+
+
+def test_wildcard_user_dimension_does_not_remove_conversation_restriction(tmp_path):
+    config = tmp_path / "channels.json"
+    config.write_text(
+        json.dumps(
+            {
+                "qq": {
+                    "enabled": True,
+                    "allowed_user_ids": ["*"],
+                    "allowed_conversation_ids": ["chat:1"],
+                    "access_match": "any",
+                }
+            }
+        )
+    )
+    assert len(build_channels(config, factory=factory)) == 1

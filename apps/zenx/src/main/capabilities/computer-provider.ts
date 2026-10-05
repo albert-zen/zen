@@ -36,6 +36,17 @@ export const COMPUTER_ACTION_SET_VALUE = "set_value";
 export type ComputerControlAction =
   typeof COMPUTER_ACTION_PRESS | typeof COMPUTER_ACTION_SET_VALUE;
 
+/** Ephemeral position of a successful semantic action in its exact window. */
+export interface ComputerActionPointer {
+  x: number;
+  y: number;
+  action: ComputerControlAction;
+  capturedAt: string;
+  windowWidth: number;
+  windowHeight: number;
+  windowId?: number;
+}
+
 export interface ComputerInspection {
   platform: NodeJS.Platform;
   observationId: string;
@@ -83,6 +94,9 @@ export interface ComputerLiveObservationFrame {
   width: number;
   height: number;
   capturedAt: string;
+  windowWidth?: number;
+  windowHeight?: number;
+  windowId?: number;
 }
 
 export type ComputerLiveObservationEvent =
@@ -117,6 +131,7 @@ export interface ZenXComputerBackend {
   ): Promise<{
     target: ComputerInspection["target"];
     control: ComputerControlSelector;
+    pointer?: ComputerActionPointer;
   }>;
   setValue(
     target: ComputerTarget,
@@ -127,6 +142,7 @@ export interface ZenXComputerBackend {
     target: ComputerInspection["target"];
     control: ComputerControlSelector;
     characterCount: number;
+    pointer?: ComputerActionPointer;
   }>;
   screenshot(
     target: ComputerTarget,
@@ -427,7 +443,22 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
         invocation.threadId,
         invocation.callId,
         resolved,
+        toolName === "computer_press" || toolName === "computer_set_value"
+          ? (result as { pointer?: ComputerActionPointer }).pointer
+          : undefined,
       );
+    }
+    // The cursor belongs to the transient observation, never the canonical tool result.
+    if (
+      (toolName === "computer_press" || toolName === "computer_set_value") &&
+      result &&
+      typeof result === "object"
+    ) {
+      const { pointer: _pointer, ...canonical } = result as Record<
+        string,
+        unknown
+      >;
+      return canonical;
     }
     return result;
   }
@@ -794,6 +825,7 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
   ): Promise<{
     target: ComputerInspection["target"];
     control: ComputerControlSelector;
+    pointer?: ComputerActionPointer;
   }> {
     requireMacOs();
     const fingerprint = this.#observations.consume(
@@ -805,8 +837,15 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
       operation: "press",
       target,
       control: semanticControlSelector(fingerprint),
-    })) as { target: ComputerInspection["target"] };
-    return { target: response.target, control };
+    })) as {
+      target: ComputerInspection["target"];
+      pointer?: ComputerActionPointer;
+    };
+    return {
+      target: response.target,
+      control,
+      ...(response.pointer ? { pointer: response.pointer } : {}),
+    };
   }
 
   async setValue(
@@ -817,6 +856,7 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     target: ComputerInspection["target"];
     control: ComputerControlSelector;
     characterCount: number;
+    pointer?: ComputerActionPointer;
   }> {
     requireMacOs();
     const fingerprint = this.#observations.consume(
@@ -832,6 +872,7 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     })) as {
       target: ComputerInspection["target"];
       characterCount: number;
+      pointer?: ComputerActionPointer;
     };
     return { ...response, control };
   }
@@ -878,7 +919,18 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     const exactWindow = this.#resolveWindow(target);
     return observeComputerWindow(async () => {
       const resolved = await exactWindow;
-      return await this.#captureWindowId(resolved.windowId);
+      const current = await this.#resolveWindow(target);
+      if (current.windowId !== resolved.windowId) {
+        throw new Error(
+          "The selected Computer window changed; inspect the target again",
+        );
+      }
+      return {
+        image: await this.#captureWindowId(resolved.windowId),
+        windowWidth: current.windowWidth,
+        windowHeight: current.windowHeight,
+        windowId: current.windowId,
+      };
     }, listener);
   }
 
@@ -894,7 +946,12 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     return (await this.#accessibility.run({
       operation: "resolveWindow",
       target,
-    })) as { target: ComputerInspection["target"]; windowId: number };
+    })) as {
+      target: ComputerInspection["target"];
+      windowId: number;
+      windowWidth: number;
+      windowHeight: number;
+    };
   }
 
   async #captureWindowId(windowId: number) {
@@ -1193,6 +1250,28 @@ func elementFrame(_ element: AXUIElement) -> CGRect? {
   return CGRect(origin: position, size: size)
 }
 
+func actionPointer(_ element: AXUIElement, _ window: AXUIElement?, _ action: String) -> [String: Any]? {
+  guard let window,
+        let controlFrame = elementFrame(element),
+        let windowFrame = elementFrame(window) else { return nil }
+  let center = CGPoint(x: controlFrame.midX, y: controlFrame.midY)
+  guard windowFrame.contains(center) else { return nil }
+  let x = (center.x - windowFrame.minX) / windowFrame.width
+  let y = (center.y - windowFrame.minY) / windowFrame.height
+  guard x.isFinite, y.isFinite, x >= 0, x <= 1, y >= 0, y <= 1 else { return nil }
+  let timestamp = ISO8601DateFormatter()
+  timestamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+  var pointer: [String: Any] = [
+    "x": x, "y": y, "action": action,
+    "capturedAt": timestamp.string(from: Date()),
+    "windowWidth": windowFrame.width, "windowHeight": windowFrame.height
+  ]
+  if let windowId = uniqueActionWindowId(window, windowFrame) {
+    pointer["windowId"] = windowId
+  }
+  return pointer
+}
+
 func frameFingerprint(_ element: AXUIElement) -> String {
   guard let frame = elementFrame(element) else { return "" }
   return String(format: "%.1f,%.1f,%.1f,%.1f", frame.origin.x, frame.origin.y, frame.size.width, frame.size.height)
@@ -1417,6 +1496,25 @@ func windowBoundsMatch(_ candidate: CGRect, _ expected: CGRect, tolerance: CGFlo
     abs(candidate.size.height - expected.size.height) <= tolerance
 }
 
+func uniqueActionWindowId(_ window: AXUIElement, _ bounds: CGRect) -> Int? {
+  let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+  let geometryMatches = info.filter { entry in
+    guard (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == running.processIdentifier,
+          (entry[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+          let candidate = cgWindowBounds(entry) else { return false }
+    return windowBoundsMatch(candidate, bounds)
+  }
+  let title = textAttribute(window, kAXTitleAttribute)
+  let titleMatches = title.isEmpty ? [] : geometryMatches.filter {
+    ($0[kCGWindowName as String] as? String ?? "") == title
+  }
+  let candidates = titleMatches.isEmpty ? geometryMatches : titleMatches
+  guard candidates.count == 1,
+        let id = (candidates[0][kCGWindowNumber as String] as? NSNumber)?.intValue,
+        id > 0 else { return nil }
+  return id
+}
+
 func findControl(_ wanted: [String: Any]) -> AXUIElement {
   let traversal = walk(root)
   let found = traversal.elements.filter { matches($0, wanted) }
@@ -1491,9 +1589,11 @@ case "press":
   let wanted = dictionary(request["control"], "control")
   let element = findControl(wanted)
   guard actions(element).contains(kAXPressAction) else { fail("control does not support background-safe AXPress; foreground_required") }
+  let pointer = actionPointer(element, selectedWindow, "press")
   let error = AXUIElementPerformAction(element, kAXPressAction as CFString)
   guard error == .success else { fail("AXPress failed with error " + String(error.rawValue)) }
   response = ["target": resolvedTarget, "control": selector(element)]
+  if let pointer { response["pointer"] = pointer }
 case "setValue":
   let wanted = dictionary(request["control"], "control")
   guard let value = request["value"] as? String else { fail("value must be a string") }
@@ -1501,9 +1601,11 @@ case "setValue":
   guard supportsTextValue(element) else {
     fail("control does not support background-safe AXValue; foreground_required")
   }
+  let pointer = actionPointer(element, selectedWindow, "set_value")
   let error = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFTypeRef)
   guard error == .success else { fail("AXValue failed with error " + String(error.rawValue)) }
   response = ["target": resolvedTarget, "control": selector(element), "characterCount": value.count]
+  if let pointer { response["pointer"] = pointer }
 case "resolveWindow":
   guard let title = requestedWindowTitle else { fail("windowTitle is required") }
   guard let selectedWindow, let selectedBounds = elementFrame(selectedWindow) else {
@@ -1538,7 +1640,10 @@ case "resolveWindow":
   guard let number = window[kCGWindowNumber as String] as? NSNumber else {
     fail("target window has no CGWindow identifier for scoped capture")
   }
-  response = ["target": resolvedTarget, "windowId": number]
+  response = [
+    "target": resolvedTarget, "windowId": number,
+    "windowWidth": selectedBounds.width, "windowHeight": selectedBounds.height
+  ]
 default:
   fail("unsupported accessibility operation")
 }

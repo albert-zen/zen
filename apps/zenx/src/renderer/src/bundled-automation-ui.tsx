@@ -22,6 +22,8 @@ import {
   handleComposerSuggestionKey,
 } from "./ComposerSuggestions.js";
 import { useRoomComposerSelector } from "./use-room-composer-selector.js";
+import { PluginRequirementsPreview } from "./PluginRequirementsPreview.js";
+import { PAW_PLUGIN_REQUIREMENTS } from "../../assistant-preset-requirements.js";
 
 import type {
   TriggerKind,
@@ -1525,6 +1527,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     };
   }, [sdk.context?.route]);
   const [assistantMode, setAssistantMode] = useState(false);
+  const [assistantPluginsReady, setAssistantPluginsReady] = useState(false);
   const [data, setData] = useState<RoomListResult>({ rooms: [] });
   const [selected, setSelected] = useState<string | null>(initialRoomId);
   const [panel, setPanel] = useState<"create" | "manage" | "rename" | null>(
@@ -2568,7 +2571,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     {message.author === roomRoleLabel(message.kind) ? null : (
                       <span
                         className={`room-role room-role-${message.kind}`}
-                        aria-label={`Message role: ${roomRoleLabel(message.kind)}`}
+                        aria-label={i18n.t("panels:messageRole", {
+                          role: roomRoleLabel(message.kind),
+                        })}
                       >
                         {roomRoleLabel(message.kind)}
                       </span>
@@ -2831,7 +2836,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                           ? i18n.t(
                               "panels:repliesPausedMessagesAreSavedOnlyResuming",
                             )
-                          : "@mention an agent to request a reply"}
+                          : i18n.t("panels:mentionAgentForReply")}
                       </small>
                     ) : null}
                   </div>
@@ -2911,7 +2916,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     : i18n.t("panels:newRoom")
                   : panel === "rename"
                     ? i18n.t("panels:renameConversation")
-                    : `${room?.name} settings`}
+                    : i18n.t("panels:roomSettingsTitle", {
+                        name: room?.name ?? "",
+                      })}
               </h2>
               <button ref={dialogClose} type="button" onClick={closeDialog}>
                 {panel === "rename"
@@ -2920,9 +2927,27 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               </button>
             </header>
             {panel === "create" && assistantMode ? (
-              <p className="room-assistant-disclosure">
-                {i18n.t("panels:pawPresetDisclosure")}
-              </p>
+              <>
+                <p className="room-assistant-disclosure">
+                  {i18n.t("panels:pawWorkingConversationDisclosure")}
+                </p>
+                <PluginRequirementsPreview
+                  requirements={PAW_PLUGIN_REQUIREMENTS}
+                  purposeLabels={{
+                    "zenx-rooms": i18n.t("panels:pawChatAndMemory"),
+                    "zenx-triggers": i18n.t("panels:pawReplyToMessages"),
+                    "zenx-self-control": i18n.t(
+                      "panels:pawWorkWithConversations",
+                    ),
+                    "zenx-subagents": i18n.t("panels:pawDelegateWork"),
+                  }}
+                  onReady={setAssistantPluginsReady}
+                  openSettings={() => {
+                    closeDialog();
+                    sdk.navigation.navigate("settings");
+                  }}
+                />
+              </>
             ) : null}
             <Field
               label={
@@ -2951,15 +2976,25 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             ) : null}
             {panel === "create" || (panel === "manage" && !room?.assistant) ? (
               <>
-                <Field
-                  label={i18n.t("panels:memberName")}
-                  value={memberName}
-                  onChange={setMemberName}
-                />
+                {!assistantMode ? (
+                  <Field
+                    label={i18n.t("panels:memberName")}
+                    value={memberName}
+                    onChange={setMemberName}
+                  />
+                ) : null}
                 <label className="field">
-                  <span>{i18n.t("panels:memberConversation")}</span>
+                  <span>
+                    {assistantMode
+                      ? i18n.t("panels:pawWorkingConversation")
+                      : i18n.t("panels:memberConversation")}
+                  </span>
                   <Combobox
-                    label={i18n.t("panels:memberConversation")}
+                    label={
+                      assistantMode
+                        ? i18n.t("panels:pawWorkingConversation")
+                        : i18n.t("panels:memberConversation")
+                    }
                     value={threadId}
                     onValueChange={setThreadId}
                   >
@@ -2988,12 +3023,18 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 type="button"
                 className="primary-button"
                 disabled={
-                  busy || !name.trim() || !memberName.trim() || !threadId
+                  busy ||
+                  !name.trim() ||
+                  (!assistantMode && !memberName.trim()) ||
+                  !threadId ||
+                  (assistantMode && !assistantPluginsReady)
                 }
                 onClick={() =>
                   void run(assistantMode ? "create-assistant" : "create", {
                     name,
-                    members: [{ name: memberName, threadId }],
+                    members: [
+                      { name: assistantMode ? name : memberName, threadId },
+                    ],
                   }).then((ok) => {
                     if (ok) setPanel(null);
                   })

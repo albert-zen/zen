@@ -219,6 +219,23 @@ for (const entry of ["primary route", "plugin button"] as const) {
     });
     Object.assign(window, {
       zenx: {
+        plugins: {
+          get: async () => ({
+            plugins: [
+              "zenx-rooms",
+              "zenx-triggers",
+              "zenx-self-control",
+              "zenx-subagents",
+            ].map((id) => ({
+              id,
+              displayName: id,
+              lifecycle: "enabled",
+              enabled: true,
+              available: true,
+            })),
+          }),
+          onChange: () => () => {},
+        },
         threads: {
           list: async () => [
             {
@@ -284,14 +301,23 @@ for (const entry of ["primary route", "plugin button"] as const) {
       );
       assert.equal(input("Name").value, "PAW");
       assert.match(document.body.textContent ?? "", /New PAW conversation/);
-      assert.match(document.body.textContent ?? "", /for the PAW preset/);
+      assert.match(
+        document.body.textContent ?? "",
+        /working conversation for your assistant/,
+      );
+      assert.match(document.body.textContent ?? "", /Chat and memory: Ready/);
       assert.ok(calls.every((call) => call.id === "list"));
       await fill("Name", "Daily Companion");
-      await fill("Member name", "Chief");
+      assert.equal(
+        [...document.querySelectorAll("label")].some(
+          (node) => node.textContent === "Member name",
+        ),
+        false,
+      );
       await act(async () =>
         document
           .querySelector<HTMLButtonElement>(
-            '[aria-label="Member conversation"]',
+            '[aria-label="Working conversation"]',
           )!
           .click(),
       );
@@ -315,7 +341,9 @@ for (const entry of ["primary route", "plugin button"] as const) {
             id: "create-assistant",
             input: {
               name: "Daily Companion",
-              members: [{ name: "Chief", threadId: "existing-thread" }],
+              members: [
+                { name: "Daily Companion", threadId: "existing-thread" },
+              ],
             },
           },
         ],

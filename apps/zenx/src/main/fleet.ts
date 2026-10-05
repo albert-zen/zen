@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 import { spawn } from "node:child_process";
 import type { ToolInvocation } from "../../../../src/tool.js";
@@ -8,6 +9,9 @@ import { originAuthority } from "../../../../src/protocol/native/remote-transpor
 interface FleetDeviceBase {
   id: string;
   label: string;
+  /** User-authored usage guidance, never an authorization or execution input. */
+  description?: string;
+  shellEnabled?: boolean;
   access: "read" | "control";
 }
 export interface SshFleetDevice extends FleetDeviceBase {
@@ -22,6 +26,35 @@ export interface NativeFleetDevice extends FleetDeviceBase {
   workspace?: string;
 }
 export type FleetDevice = SshFleetDevice | NativeFleetDevice;
+export function fleetDeviceKey(peer: FleetDevice): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify(
+        peer.transport === "https"
+          ? [
+              peer.id,
+              peer.transport,
+              peer.hostId,
+              peer.endpoint,
+              peer.workspace ?? null,
+              peer.access,
+              peer.shellEnabled === true,
+            ]
+          : [peer.id, "ssh", peer.sshHost, peer.command, peer.access],
+      ),
+    )
+    .digest("hex");
+}
+export interface FleetDeviceDiscovery {
+  id: string;
+  label: string;
+  description?: string;
+  key?: string;
+  shellEnabled?: boolean;
+  transport: "local" | "ssh" | "https";
+  access: "read" | "control";
+  status: "local" | "not_checked";
+}
 export interface FleetHostingConfig {
   enabled: boolean;
   bindAddress: string;
@@ -30,6 +63,7 @@ export interface FleetHostingConfig {
   tlsKeyFile: string;
   relayEndpoint?: string;
   originEndpoint?: string;
+  shellEnabled?: boolean;
   access: "read" | "control";
 }
 export interface FleetConfig {
@@ -46,7 +80,7 @@ export interface NativeFleetPort {
   ): Promise<unknown>;
 }
 export interface FleetRequest {
-  version: 1;
+  version: 1 | 2;
   name: string;
   arguments: Record<string, unknown>;
   callId: string;
@@ -65,6 +99,7 @@ export const fleetTools = new Set([
   ...fleetReadTools,
   "zenx_threads_create",
   "zenx_threads_send",
+  "zenx_fleet_shell",
 ]);
 export type FleetTransport = (
   device: FleetDevice,
@@ -138,6 +173,13 @@ export function parseFleetConfig(value: unknown): FleetConfig {
       device.id === "local" ||
       ids.has(device.id) ||
       !fleetString(device.label, 120) ||
+      (device.shellEnabled !== undefined &&
+        (typeof device.shellEnabled !== "boolean" ||
+          (device.shellEnabled && device.access !== "control"))) ||
+      (device.description !== undefined &&
+        (typeof device.description !== "string" ||
+          device.description.length > 4000 ||
+          device.description.includes("\0"))) ||
       (device.access !== "read" && device.access !== "control")
     )
       throw new Error("Invalid Fleet device configuration");
@@ -147,6 +189,8 @@ export function parseFleetConfig(value: unknown): FleetConfig {
         !fleetKeys(device, [
           "id",
           "label",
+          "description",
+          "shellEnabled",
           "transport",
           "endpoint",
           "hostId",
@@ -167,6 +211,8 @@ export function parseFleetConfig(value: unknown): FleetConfig {
       !fleetKeys(device, [
         "id",
         "label",
+        "description",
+        "shellEnabled",
         "transport",
         "sshHost",
         "command",
@@ -194,9 +240,13 @@ export function parseFleetConfig(value: unknown): FleetConfig {
         "tlsKeyFile",
         "relayEndpoint",
         "originEndpoint",
+        "shellEnabled",
         "access",
       ]) ||
       typeof hosting.enabled !== "boolean" ||
+      (hosting.shellEnabled !== undefined &&
+        (typeof hosting.shellEnabled !== "boolean" ||
+          (hosting.shellEnabled && hosting.access !== "control"))) ||
       typeof hosting.bindAddress !== "string" ||
       !/^[a-zA-Z0-9_.:[\]-]{1,253}$/u.test(hosting.bindAddress) ||
       !Number.isInteger(hosting.port) ||
@@ -243,8 +293,8 @@ export class FleetRouter {
     readonly transport: FleetTransport = sshFleetTransport,
     readonly native?: NativeFleetPort,
   ) {}
-  async devices() {
-    const config = await this.config();
+  async devices(snapshot?: FleetConfig): Promise<FleetDeviceDiscovery[]> {
+    const config = snapshot ?? (await this.config());
     return [
       {
         id: "local",
@@ -253,28 +303,62 @@ export class FleetRouter {
         access: "control",
         status: "local",
       },
-      ...config.devices.map(({ id, label, access, transport }) => ({
-        id,
-        label,
-        access,
-        transport: transport ?? "ssh",
-        status: "not_checked",
-      })),
+      ...config.devices.map(
+        ({ id, label, description, access, transport }) => ({
+          id,
+          key: fleetDeviceKey(config.devices.find((peer) => peer.id === id)!),
+          label,
+          ...(description === undefined ? {} : { description }),
+          access,
+          transport: transport ?? "ssh",
+          status: "not_checked" as const,
+          shellEnabled:
+            transport === "https" &&
+            access === "control" &&
+            config.devices.find((entry) => entry.id === id)?.shellEnabled ===
+              true,
+        }),
+      ),
     ];
   }
-  async invoke(deviceId: string, invocation: ToolInvocation): Promise<unknown> {
+  async invoke(
+    deviceId: string,
+    invocation: ToolInvocation,
+    expectedDeviceKey?: string,
+  ): Promise<unknown> {
     invocation.signal.throwIfAborted();
     const device = (await this.config()).devices.find(
       (device) => device.id === deviceId,
     );
     if (!device) throw new Error(`Unknown Fleet device: ${deviceId}`);
+    if (expectedDeviceKey && fleetDeviceKey(device) !== expectedDeviceKey)
+      throw new Error(
+        "Fleet machine changed before request admission; no operation was sent or locally substituted. Reopen the target catalog.",
+      );
+    if (invocation.name === "zenx_fleet_shell") {
+      if (device.transport !== "https")
+        throw new Error(
+          "This SSH device does not expose target-owned Fleet shell admission. Use an explicitly paired HTTPS Host with shell capability; raw SSH shell fallback is not supported.",
+        );
+      if (device.access !== "control" || device.shellEnabled !== true)
+        throw new Error(
+          "Fleet shell requires separate remote shell opt-in and a fresh control grant. Review the device and pair again with shell enabled.",
+        );
+    }
     if (!fleetTools.has(invocation.name))
       throw new Error("This tool does not support Fleet");
     if (device.access !== "control" && !fleetReadTools.has(invocation.name))
       throw new Error(`Fleet device ${deviceId} is read-only`);
     const { device: _device, ...args } = invocation.arguments;
     const request: FleetRequest = {
-      version: 1,
+      // Old bridges strictly reject v2 before executing their unfenced sends.
+      version:
+        device.transport !== "https" &&
+        invocation.name === "zenx_threads_send" &&
+        typeof args.threadId === "string" &&
+        args.target === undefined
+          ? 2
+          : 1,
       name: invocation.name,
       arguments: args,
       callId: invocation.callId,
@@ -403,7 +487,10 @@ export function runFleetProcess(
         if (!response.ok)
           finish(
             new Error(
-              `Fleet remote error: ${response.error ?? "request failed"}`,
+              request.version === 2 &&
+                response.error === "Invalid Fleet request"
+                ? "Target Fleet bridge does not support archive-fenced Thread sends. Update the target bridge and Host before retrying."
+                : `Fleet remote error: ${response.error ?? "request failed"}`,
             ),
           );
         else finish(undefined, response.result);

@@ -1,4 +1,8 @@
 import type { SubscriptionUsage } from "../../main/subscription-usage.js";
+import type {
+  ImZenXSetupView,
+  ImZenXChannelSave,
+} from "../../main/imzenx-setup-service.js";
 import type { AppServerHostStatus } from "../../main/app-server-manager.js";
 import type {
   ApprovalDecision,
@@ -63,6 +67,11 @@ import type {
 declare global {
   interface Window {
     zenx: {
+      imzenx: {
+        inspect(): Promise<ImZenXSetupView>;
+        saveChannel(input: ImZenXChannelSave): Promise<ImZenXSetupView>;
+        prepareRuntime(): Promise<ImZenXSetupView>;
+      };
       platform: NodeJS.Platform;
       locale: {
         getSystemLanguages(): Promise<string[]>;

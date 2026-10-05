@@ -551,7 +551,7 @@ export function AuxiliaryPanel({
       data-open={open === true}
       inert={!open}
       data-expanded={expanded}
-      aria-label={`Side panel for ${title}`}
+      aria-label={i18n.t("panels:sidePanelFor", { title })}
       style={{ "--auxiliary-width": `${width}px` } as React.CSSProperties}
       onKeyDown={(event) => {
         if (event.key === "Escape" && !event.defaultPrevented) {
@@ -665,8 +665,10 @@ export function AuxiliaryPanel({
                 <button
                   type="button"
                   className="workspace-tab-close"
-                  aria-label={`Close tab ${tab.title}`}
-                  title={`Close tab ${tab.title}`}
+                  aria-label={i18n.t("panels:closeTabNamed", {
+                    title: tab.title,
+                  })}
+                  title={i18n.t("panels:closeTabNamed", { title: tab.title })}
                   disabled={
                     tab.path && threadId !== undefined
                       ? entries.get(fileDraftKey(threadId, tab.path))

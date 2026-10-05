@@ -11,7 +11,7 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "IMZenX connects explicitly configured IM channels to this ZenX Host. Use status to inspect it. Configure only with user-supplied private channel configuration and a Python executable with the pinned SDK. In IM, /threads lists titles and numbers; /pick <number> selects one shared Thread and receives its replies in this conversation. Numbers refer to this conversation's last displayed list; refresh replaces it and after restart run /threads again. /new clears selection; the next ordinary message starts a new Thread. /subscribe and /unsubscribe remain select/clear aliases. Desktop replies on a subscribed Thread are delivered to IM. Never put bot credentials in tool arguments. PAW mode: /paws lists assistant Rooms in the configured workspace; /paw selects one. Only explicit Room agent posts return to IM, keeping direct working Thread output separate. /new clears PAW selection. Text only; platform-native receipts, quotes and reactions are not mapped.",
+  "mainDocument": "IMZenX is an ordinary plugin available to any Agent. Read status, then readiness to inspect only explicitly selected own IMZen configuration and declared credential files with the selected Python runtime; it never launches IM or searches another app or legacy files. Prepare saves only nonsecret path/settings and disables automatic connection until explicit Connect. Prepare does not restart a running consumer; status distinguishes saved and active configuration. Before connecting a prepared configuration, obtain the user/coordinator acknowledgement that other consumers of this bot are stopped and set singleConsumerConfirmed=true. This acknowledgement is not a delivery test. Normal plugin permissions and Host confirmation policy apply; these tools grant no other plugins or PAWs permission. Never put credentials in tool arguments, results or logs. Missing private SDK requires user-controlled trusted setup, not automatic installation. Connected means the SDK Gateway started, not verified bot delivery. IMZenX connects explicitly configured IM channels to this ZenX Host. Use status to inspect it. Configure only with user-supplied private channel configuration and a Python executable with the pinned SDK. In IM, /threads lists titles and numbers; /pick <number> selects one shared Thread and receives its replies in this conversation. Numbers refer to this conversation's last displayed list; refresh replaces it and after restart run /threads again. /new clears selection; the next ordinary message starts a new Thread. /subscribe and /unsubscribe remain select/clear aliases. Desktop replies on a subscribed Thread are delivered to IM. Never put bot credentials in tool arguments. PAW mode: /paws lists assistant Rooms in the configured workspace; /paw selects one. Only explicit Room agent posts return to IM, keeping direct working Thread output separate. /new clears PAW selection. Text only; platform-native receipts, quotes and reactions are not mapped.",
   "storageVersion": 1,
   "provider": {
     "id": "imzenx-sdk",
@@ -24,6 +24,18 @@
       "id": "imzenx.connect",
       "title": "Connect IM channels",
       "description": "Start the configured IM channels and submit their admitted messages to local ZenX.",
+      "scope": "local-device"
+    },
+    {
+      "id": "imzenx.configure",
+      "title": "Prepare IM configuration",
+      "description": "Save only explicitly supplied nonsecret Python, own channel-config and workspace paths without connecting IM.",
+      "scope": "local-device"
+    },
+    {
+      "id": "imzenx.inspect",
+      "title": "Check IM setup readiness",
+      "description": "Run a bounded read-only check using the explicitly selected Python runtime and own IMZen deployment files; no IM transport is launched.",
       "scope": "local-device"
     }
   ],
@@ -38,6 +50,84 @@
         "additionalProperties": false
       },
       "permissions": [],
+      "interactionMode": "background_safe",
+      "capabilities": ["imzenx.bridge"],
+      "maxOutputBytes": 16000
+    },
+    {
+      "name": "imzenx_prepare",
+      "description": "Save only nonsecret IMZenX settings. Never connect, restart a consumer, discover other applications or extract secrets. New preparation requires explicit Connect after a single-consumer acknowledgement.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pythonExecutable": {
+            "type": "string",
+            "description": "Absolute path of Python 3.13+ with the pinned IM Agent SDK installed."
+          },
+          "channelsConfigFile": {
+            "type": "string",
+            "description": "Absolute path to the private IMZen-format channel configuration."
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Default directory for new IM Threads."
+          },
+          "sharedFilesystemRoot": {
+            "type": "string",
+            "description": "Optional shared local directory containing downloaded images."
+          },
+          "permissionMode": {
+            "type": "string",
+            "enum": ["full-access", "approval-required"],
+            "description": "New preparation defaults to approval-required; normal tool confirmation policy still applies."
+          },
+          "allowUnrestrictedFullAccess": {
+            "type": "boolean"
+          }
+        },
+        "required": ["pythonExecutable", "channelsConfigFile", "cwd"],
+        "additionalProperties": false
+      },
+      "permissions": ["imzenx.configure"],
+      "interactionMode": "background_safe",
+      "capabilities": ["imzenx.bridge"],
+      "maxOutputBytes": 16000
+    },
+    {
+      "name": "imzenx_readiness",
+      "description": "Read-only readiness of saved or explicitly supplied complete nonsecret settings. Checks selected Python/version/pinned SDK, own declared channel config/access restriction, workspace and Host server. Starts no IM transport; extracts no secrets. Empty input checks saved settings. Returns a nonsecret configurationRevision to bind a later explicit connection acknowledgement.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pythonExecutable": {
+            "type": "string",
+            "description": "Absolute path of Python 3.13+ with the pinned IM Agent SDK installed."
+          },
+          "channelsConfigFile": {
+            "type": "string",
+            "description": "Absolute path to the private IMZen-format channel configuration."
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Default directory for new IM Threads."
+          },
+          "sharedFilesystemRoot": {
+            "type": "string",
+            "description": "Optional shared local directory containing downloaded images."
+          },
+          "permissionMode": {
+            "type": "string",
+            "enum": ["full-access", "approval-required"],
+            "description": "New preparation defaults to approval-required; normal tool confirmation policy still applies."
+          },
+          "allowUnrestrictedFullAccess": {
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": ["imzenx.inspect"],
       "interactionMode": "background_safe",
       "capabilities": ["imzenx.bridge"],
       "maxOutputBytes": 16000
@@ -70,6 +160,14 @@
           },
           "allowUnrestrictedFullAccess": {
             "type": "boolean"
+          },
+          "singleConsumerConfirmed": {
+            "type": "boolean",
+            "description": "User/coordinator confirmed that other consumers of this bot are stopped. Required after save-only preparation."
+          },
+          "expectedConfigurationRevision": {
+            "type": "string",
+            "description": "Exact nonsecret configurationRevision from the reviewed readiness result. Required for prepared single-consumer confirmation; stale settings reject before connecting."
           }
         },
         "required": ["pythonExecutable", "channelsConfigFile", "cwd"],
@@ -82,10 +180,19 @@
     },
     {
       "name": "imzenx_connect",
-      "description": "Explicitly reconnect IMZenX after checking its configuration.",
+      "description": "Explicitly connect or reconnect saved IMZenX settings. Prepared configurations require singleConsumerConfirmed=true after user/coordinator acknowledgement that other consumers of this bot are stopped. Gateway startup is not delivery proof.",
       "inputSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "singleConsumerConfirmed": {
+            "type": "boolean",
+            "description": "User/coordinator confirmed that other consumers of this bot are stopped. Required after save-only preparation."
+          },
+          "expectedConfigurationRevision": {
+            "type": "string",
+            "description": "Exact nonsecret configurationRevision from the reviewed readiness result. Required for prepared single-consumer confirmation; stale settings reject before connecting."
+          }
+        },
         "required": [],
         "additionalProperties": false
       },
@@ -135,6 +242,16 @@
         "id": "status",
         "title": "Status",
         "tool": "imzenx_status"
+      },
+      {
+        "id": "prepare",
+        "title": "Prepare settings",
+        "tool": "imzenx_prepare"
+      },
+      {
+        "id": "readiness",
+        "title": "Check readiness",
+        "tool": "imzenx_readiness"
       },
       {
         "id": "configure",

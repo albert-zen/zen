@@ -1,4 +1,6 @@
 export const en = {
+  pin: "Pin",
+
   accessibility: "Accessibility",
   accountAppearanceModelsPluginsAndLocalHost:
     "Account, appearance, models, plugins, and local host",
@@ -511,6 +513,8 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  pin: "固定",
+
   accessibility: "辅助功能",
   accountAppearanceModelsPluginsAndLocalHost:
     "账户、外观、模型、插件和本地主机",

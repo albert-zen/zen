@@ -729,7 +729,7 @@ export function ThreadView({
             textarea={composerTextareaRef}
           />
           <label className="sr-only" htmlFor={composerId}>
-            Message ZenX
+            {i18n.t("panels:messageZenx")}
           </label>
           {composer.draft.images.length === 0 ? null : (
             <div
@@ -1052,7 +1052,7 @@ function ContextCompactionProgress({
                 onClick={onDismiss}
                 aria-label={i18n.t("shell:dismissCompactionError")}
               >
-                Dismiss
+                {i18n.t("shell:dismiss")}
               </button>
             ) : null}
           </div>

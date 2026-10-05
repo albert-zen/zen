@@ -1,6 +1,6 @@
 # ZenX UI/UX decisions
 
-更新日期：2026-10-03
+更新日期：2026-10-05
 
 New thread 打开临时本地编辑页；选择或添加 Project 不创建 Thread，第一条有效 Send 才配置所选 Project、创建真实 Thread，并在 Sidebar、usage 等辅助元数据独立刷新时立即启动 Turn。全局入口使用最近 Project，Project 内入口使用该精确 Project；失败以明确、可恢复且不遮盖会话的通知呈现。
 
@@ -78,6 +78,13 @@ Thread
 - Thread row 不显示 Provider 文本、内部 `modelProvider`、API/订阅标签或 Fake 品牌。
 - Provider 类型、账户、订阅状态、API key 和 endpoint 配置只在 Settings / onboarding 中出现，不进入 Thread 或 canonical Items。
 - Default model 影响新 Thread；已有 Thread 的当前模型以 ZAS Thread settings 为权威。Title model 与 Thread ModelCatalog 分离。
+
+### 2.5 Fleet 就绪与人工配对
+
+- Fleet 是任意 Agent 可发现的普通插件能力；PAW 只消费相同工具，预设不拥有设备、权限或特殊连接流程。默认安装保留用户显式 Disable / Uninstall 与既有工具权限。
+- Setup 的只读就绪检查只报告已知设备和当前准备条件，不扫描网络、不创建信任；不同网络之间必须已经有可达的可信 HTTPS 路径或已配置 relay。
+- 人工邀请只为已启用 Host 的既有 endpoint 创建五分钟单用配对码。接收端先核对 Host ID / endpoint，默认 Read Only、shell 关闭；明确确认后才配对并另行检查可达性。已配对与检查成功是分别呈现的事实。
+- 邀请和配对码只存在于人工界面的易失交互与用户明确选择的复制动作中；不进入模型发现、保存的草稿或公共配置。取消、过期、离开页面或提交尝试清除输入；隐藏已发出的邀请不伪装成撤销远端授权。
 
 ## 3. Product shell 与导航
 
@@ -410,6 +417,7 @@ ThreadView
 
 - Thread 顶栏只有一个工作区入口；文件、共享浏览器页面、Computer 与已注册插件 panel 都是平级内容 Tab。加号提供类型选择，不增加 Browser / Files 分类层或旧 Workspace 抽屉；即使 Browser 插件未启用，文件与人工内置浏览器仍可用。
 - 默认 Browser 工具与用户共用内置真实页面，页面直接作为顶层 Tab。显式配置外部 provider 时，Attached browser 可跟随或固定当前 Thread 的 Agent 目标；CDP 展示观察画面，isolated Playwright 展示最近一次 inspect 截图。观察面隐藏时停止订阅，不通过展示触发 inspect 或改变模型 observationId。Computer 按明确窗口目标持续观察，隐藏或 provider 停用、替换后停止；不支持该能力时明确显示状态。
+- Browser 与 Computer 的 Agent 指针是短时的语义动作位置提示，系统鼠标和键盘焦点不用于制作动效。Browser 的共享页面、独立 Electron 和连接 Chrome 展示已执行 click/type/select 的目标；macOS bundled Computer 在有准确窗口几何的实时预览中展示 press/set_value 目标。无几何、过期、窗口尺寸变化或切换目标时不画猜测位置；Playwright、Windows 与 Peekaboo 尚不提供轨迹。减少动态效果时保留静态目标提示，取消移动效果；轨迹不拦截输入，也不是操作完成的权威凭据。全局桌面输入仍走现有显式前台接管设置，不能承诺任意原生应用完全后台运行。
 - 宽窗口可以调整右栏宽度或展开；窄窗口打开右栏时使用工作区全宽，关闭返回聊天。Tab 支持左右方向键、Home/End；Escape 还原展开或关闭右栏。
 - 文件选择器从当前 Thread 的 cwd 浏览现有 UTF-8 文本，上限 1 MiB；目录最多显示 2,000 项并提示截断，不显示符号链接，拒绝解析时位于 cwd 外的路径。路径检查界定普通浏览范围，不构成防御本机进程并发替换文件树的 OS 沙箱。每个文件直接占一个顶层 Tab，Markdown 使用连续编辑与光标附近语法展开，其他文本直接编辑；自动保存，无常规 Edit / Preview / Save 按钮，Ctrl/Cmd+S 可立即提交待保存内容。保留 BOM 与未修改区域的混合换行。保存前校验读取版本，冲突保留草稿并可查看磁盘版本；不提供无提示强制覆盖。保存使用临时文件替换，并串行化 Host 内同一路径的保存，外部编辑采用乐观检查而非跨进程文件锁。草稿跨面板和 Thread 切换保留在窗口内；关闭文件先完成保存，失败保留文件和输入；丢弃冲突草稿重新读磁盘需要明确操作，窗口关闭仍有未保存内容时提示。文件不自动监视，也不缓存为会话历史。
 - 插件 `contributions.panels` 按 order 排列在加号选择器中，打开后与文件、浏览器并列。内容继续使用 Generic UI Host：可信模块或隔离 iframe，不在聊天底部重复挂载；context 包含当前 threadId。插件卸载或停用后移除其 tab。

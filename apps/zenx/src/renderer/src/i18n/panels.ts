@@ -1,4 +1,163 @@
 export const en = {
+  imPreparedWaitingToConnect: "Preparation saved; waiting to connect",
+  imLocalConsumerRunning: "Local connection process is running",
+  imRuntimePreparedNotice:
+    "Runtime prepared. Save the channel, then check connection readiness.",
+  imChannelSavedNotice:
+    "Channel settings saved securely; the connection has not started",
+  imConfigurationEditedNotice: "Configuration changed; check readiness again",
+  imPreparationSavedNotice:
+    "Preparation saved. Finish setting up private local credentials, then check readiness and explicitly connect.",
+  imReadSettingsFailed: "Could not read local IM settings. Try again.",
+  imRuntimePreparationIncomplete:
+    "Runtime preparation is incomplete. Check the trusted project and private repository access, then try again.",
+  imChannelSaveFailed:
+    "Channel settings were not saved. Check local secure storage and required fields, then try again; re-enter new credentials.",
+  imRuntimePreparationFailed:
+    "Runtime preparation is incomplete. Check the trusted project and private repository access, then try again.",
+  imOwnSetup: "Set up your own IM",
+  imCredentialStorageNotice:
+    "This local form sends credentials directly to the system secure storage. They do not enter Agent tools or chat.",
+  imRuntimeInstallNotice:
+    "This installs locked dependencies from the trusted IMZen project and requires the current user’s existing private repository access.",
+  imUvInstallationGuide: "Official uv installation guide",
+  imSecureStorageUnavailable:
+    "System secure storage is unavailable, so channel credentials cannot be saved. Restore secure storage, then reload settings.",
+  imChannel: "IM channel",
+  imCancelChanges: "Cancel changes",
+  imSaveChannel: "Save channel",
+  imDeclaredFieldsNotice:
+    "Prepare the runtime to read the SDK-declared fields. Channels without declared fields cannot be configured in this form.",
+  imReloadSettings: "Reload settings",
+  imSetupDescription:
+    "Choose the local runtime, working directory and your own private channel configuration.",
+  imPendingConfigurationNotice:
+    "The current connection still uses the previous runtime configuration. Newly saved preparation or channel settings take effect after an explicit connection.",
+  imDeliveryVerificationNotice:
+    "Local process status does not prove actual message delivery on channels such as QQ",
+  imWorkspaceDescription:
+    "New conversations and PAW lists in IM use this directory.",
+  imConnectionConfiguration: "Connection configuration",
+  imPrivatePathNotice:
+    "Use absolute paths and your own IMZen-format configuration. Enter only paths here; set credential values in the private local file.",
+  imPreparationDoesNotConnect:
+    "Saving preparation does not start or restart a connection",
+  imSavePreparationBeforeConnect:
+    "Save the current preparation configuration before confirming connection",
+  imSaveChannelBeforeReadiness:
+    "Save or cancel changes in the channel form before checking connection readiness",
+  imSavePreparation: "Save preparation",
+  imVerifyActualDelivery:
+    "After connecting, send and receive an actual message in the bot chat to verify the channel works.",
+  imSingleConsumerInstruction:
+    "Choose only one process to consume this bot’s messages. Before connecting, stop other processes using the same bot account.",
+  imSingleConsumerConfirmation:
+    "I confirm ZenX is the sole selected consumer for this bot and other bot consumer processes have stopped",
+  imSingleConsumerVerificationLimit:
+    "This is your confirmation; the readiness check cannot verify whether other processes have stopped.",
+  imRuntimePrepared: "Runtime prepared",
+  imPreparingRuntime: "Preparing runtime…",
+  imRuntimePreparationRequired: "Runtime preparation required",
+  imPreparing: "Preparing…",
+  imPrepareRuntime: "Prepare runtime",
+  imSecretWillClear: "Will clear when saved",
+  imSecretStored: "Stored securely",
+  imSecretNotSet: "Not set",
+  imReadingSettings: "Reading local IM settings…",
+  imSettingsUnavailable: "Local IM settings are unavailable",
+  imChooseWorkingDirectory: "Choose working directory",
+  imWorkingDirectory: "Working directory",
+  imNotSelected: "Not selected",
+  imUnsavedChanges: "Unsaved changes",
+  imPreparationConfigurationSaved: "Preparation configuration saved",
+  imChooseRuntimeAndChannelFile: "Choose the runtime and channel file",
+  imPrivateChannelConfigurationFile:
+    "Your own private channel configuration file",
+  imConnectionReadiness: "Connection readiness",
+  imNativePreparationSteps:
+    "After saving the channel and choosing a working directory, save preparation, check readiness, then explicitly confirm connection.",
+  imManualPreparationSteps:
+    "Check the selected paths, save preparation, then set up private local credentials. If the SDK is missing, follow the check result to prepare the runtime from the trusted IMZen project, then check again.",
+  imReadinessPassed:
+    "Local readiness checks passed; you can confirm connection",
+  imReadinessIncomplete: "More preparation steps are required",
+  imCheckReady: "Ready",
+  imCheckBlocked: "Action required",
+  imCheckWarning: "Warning",
+  imReadinessDoesNotConnect:
+    "Checks only read the explicitly selected configuration; they do not start channel connections",
+  imPrepareNativeBeforeReadiness:
+    "First prepare the runtime, save your own channel and choose a working directory",
+  imFillPathsBeforeReadiness:
+    "First open connection configuration and enter the runtime, working directory and private channel file paths",
+  imCheckingReadiness: "Checking…",
+  imCheckReadiness: "Check readiness",
+  imConnecting: "Connecting…",
+  imConfirmConnection: "Confirm connection…",
+  imSingleConsumerTitle: "Confirm sole bot connection",
+  imUnsupportedChannel: "{{channel}} (this SDK does not support the form)",
+  imReplaceCredential: "Replace {{field}}",
+  imClearCredential: "Clear {{field}}",
+  imEnabledChannels: "Enabled channels: {{channels}}",
+  pawWorkingConversationDisclosure:
+    "Choose the working conversation for your assistant. Its model and permissions stay the same. New messages wake it up; recurring checks are optional and can use model quota.",
+  pawWorkingConversation: "Working conversation",
+  imConnectButton: "Connect",
+  pluginReadinessLabel: "Plugin readiness",
+  pluginReadinessUnavailable:
+    "Plugin status is unavailable. Open Settings to check it.",
+  pluginReadinessReady: "Ready",
+  pluginReadinessEnable: "Enable plugin",
+  pluginReadinessInstall: "Install plugin",
+  pluginReadinessCheck: "Check plugin",
+  pluginReadinessOptional: " (optional)",
+  pluginReadinessChecking: "Checking plugins…",
+  pluginReadinessOpenSettings: "Open Settings → Plugins",
+  pluginReadinessPermissionNotice:
+    "Tool permissions are checked when used. Device and IM connections are configured in their own plugins.",
+  pawChatAndMemory: "Chat and memory",
+  pawReplyToMessages: "Reply to new messages",
+  pawWorkWithConversations: "Work with conversations",
+  pawDelegateWork: "Delegate work",
+  imReadinessChanged:
+    "IM settings changed after readiness was reviewed. Check readiness, confirm other bot consumers are stopped, then Connect again.",
+  mentionAgentForReply: "@mention an agent to request a reply",
+  roomSettingsTitle: "{{name}} settings",
+  messageRole: "Message role: {{role}}",
+  sidePanelFor: "Side panel for {{title}}",
+  closeTabNamed: "Close tab {{title}}",
+  browserFor: "Browser for {{title}}",
+  latestComputerAction: "Latest Computer action {{invocationId}}",
+
+  computerObservationUnavailable: "Computer observation is unavailable.",
+  computerWindowNotSelected: "No Computer window is selected for this thread.",
+  browserProviderUnavailable: "The Browser provider is no longer available.",
+  browserPageNotSelected: "No browser page is selected for this thread.",
+  browserPageUnavailable:
+    "This browser page is no longer available. Ask the Agent to inspect it again.",
+  browserLatestSnapshotOnly:
+    "Showing the latest Agent screenshot, not a live stream.",
+  browserScreenshotExpired:
+    "The last screenshot expired. Ask the Agent to inspect this page again.",
+  browserScreenshotUnavailable:
+    "The last screenshot is no longer available. Ask the Agent to inspect this page again.",
+
+  creating: "Creating…",
+  archivedStatus: "Archived",
+  idleStatus: "Idle",
+
+  computerLiveViewUnsupported:
+    "This Computer provider does not support a live window view.",
+  agentMarkerShowsActionTarget: "Agent marker shows the action target",
+  waitingForSnapshotInspection:
+    "Waiting for the Agent to inspect this page. This provider shows snapshots.",
+  messageZenx: "Message ZenX",
+  newConversationUnidentified: "The new conversation could not be identified.",
+  sideChat: "Side chat",
+  parentConversation: "Parent conversation",
+  browserPageInstructions:
+    "Open a thread and use its Browser panel to view that thread's pages.",
+
   waitingForTheAgentToUseA: "Waiting for the Agent to use a Computer window.",
   computerWorkspace: "Computer workspace",
   computerWindow: "Computer window",
@@ -559,6 +718,148 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  imPreparedWaitingToConnect: "准备已保存，等待连接",
+  imLocalConsumerRunning: "本机连接进程运行中",
+  imRuntimePreparedNotice: "运行环境已准备。保存频道后再检查连接准备情况。",
+  imChannelSavedNotice: "频道设置已安全保存，连接尚未启动",
+  imConfigurationEditedNotice: "配置已修改，请重新检查准备情况",
+  imPreparationSavedNotice:
+    "准备已保存。完成本机私有凭证设置后，检查并明确连接。",
+  imReadSettingsFailed: "无法读取本机 IM 设置，请重试",
+  imRuntimePreparationIncomplete:
+    "运行环境未准备完成，请检查可信项目与私有仓库访问后重试",
+  imChannelSaveFailed:
+    "频道设置未保存。检查本机安全存储与必填项后重试；新凭证需要重新输入。",
+  imRuntimePreparationFailed:
+    "运行环境未准备完成。检查可信项目与私有仓库访问后重试。",
+  imOwnSetup: "设置自己的 IM",
+  imCredentialStorageNotice:
+    "凭证由这个本机表单直接交给系统安全存储，不进入 Agent 工具或聊天。",
+  imRuntimeInstallNotice:
+    "此操作会从可信的 IMZen项目安装锁定依赖，需要当前用户已有的私有仓库访问权限。",
+  imUvInstallationGuide: "uv 官方安装说明",
+  imSecureStorageUnavailable:
+    "系统安全存储不可用，无法保存频道凭证。恢复安全存储后重新读取设置。",
+  imChannel: "IM 渠道",
+  imCancelChanges: "取消修改",
+  imSaveChannel: "保存频道",
+  imDeclaredFieldsNotice:
+    "准备运行环境后读取 SDK声明的字段；未声明字段的渠道不能在此表单配置。",
+  imReloadSettings: "重新读取设置",
+  imSetupDescription: "选择本机运行环境、工作目录与自己的私有频道配置。",
+  imPendingConfigurationNotice:
+    "当前连接仍使用此前的运行配置。新保存的准备配置或频道设置会在明确连接后使用。",
+  imDeliveryVerificationNotice:
+    "本机进程状态不能证明 QQ 等渠道已完成真实消息投递",
+  imWorkspaceDescription: "IM 中的新会话与 PAW 列表使用这个目录。",
+  imConnectionConfiguration: "连接配置",
+  imPrivatePathNotice:
+    "使用绝对路径和自己的 IMZen格式配置。这里只填写路径；凭证值在本机私有文件中设置。",
+  imPreparationDoesNotConnect: "保存准备不会启动或重启连接",
+  imSavePreparationBeforeConnect: "先保存当前准备配置，再确认连接",
+  imSaveChannelBeforeReadiness:
+    "先保存或取消频道表单中的修改，再检查连接准备情况",
+  imSavePreparation: "保存准备",
+  imVerifyActualDelivery:
+    "连接后，在机器人聊天中实际收发一条消息，确认渠道可用。",
+  imSingleConsumerInstruction:
+    "请只选择一个进程消费这个机器人的消息。连接前，停止其他使用同一机器人账号的进程。",
+  imSingleConsumerConfirmation:
+    "我确认 ZenX 是这个机器人唯一选定的消费进程，其他机器人消费进程已停止",
+  imSingleConsumerVerificationLimit:
+    "这是你的确认；准备检查无法验证其他进程是否已停止。",
+  imRuntimePrepared: "运行环境已准备",
+  imPreparingRuntime: "正在准备运行环境…",
+  imRuntimePreparationRequired: "需要准备运行环境",
+  imPreparing: "准备中…",
+  imPrepareRuntime: "准备运行环境",
+  imSecretWillClear: "保存后清除",
+  imSecretStored: "已安全保存",
+  imSecretNotSet: "尚未设置",
+  imReadingSettings: "正在读取本机 IM 设置…",
+  imSettingsUnavailable: "本机 IM 设置暂不可用",
+  imChooseWorkingDirectory: "选择工作目录",
+  imWorkingDirectory: "工作目录",
+  imNotSelected: "尚未选择",
+  imUnsavedChanges: "有未保存的修改",
+  imPreparationConfigurationSaved: "准备配置已保存",
+  imChooseRuntimeAndChannelFile: "选择运行环境与频道文件",
+  imPrivateChannelConfigurationFile: "自己的私有频道配置文件",
+  imConnectionReadiness: "连接前准备",
+  imNativePreparationSteps:
+    "保存频道并选择工作目录后，保存准备、检查，再明确确认连接。",
+  imManualPreparationSteps:
+    "检查所选路径，保存准备，再在本机完成私有凭证设置。缺少 SDK 时，按检查结果从可信的 IMZen 项目准备环境，再重新检查。",
+  imReadinessPassed: "本机准备检查通过，可以确认连接",
+  imReadinessIncomplete: "还有准备步骤需要完成",
+  imCheckReady: "就绪",
+  imCheckBlocked: "需处理",
+  imCheckWarning: "注意",
+  imReadinessDoesNotConnect: "检查只读取明确选择的配置，不启动渠道连接",
+  imPrepareNativeBeforeReadiness:
+    "先准备运行环境、保存自己的频道，并选择工作目录",
+  imFillPathsBeforeReadiness:
+    "先展开连接配置，填写运行环境、工作目录与私有频道文件路径",
+  imCheckingReadiness: "检查中…",
+  imCheckReadiness: "检查准备情况",
+  imConnecting: "连接中…",
+  imConfirmConnection: "确认连接…",
+  imSingleConsumerTitle: "确认唯一机器人连接",
+  imUnsupportedChannel: "{{channel}}（当前 SDK 不支持表单）",
+  imReplaceCredential: "更换 {{field}}",
+  imClearCredential: "清除 {{field}}",
+  imEnabledChannels: "启用的渠道：{{channels}}",
+  pawWorkingConversationDisclosure:
+    "为助手选择工作会话。模型和权限保持不变。新消息会唤醒它；定期检查是可选的，可能消耗模型额度。",
+  pawWorkingConversation: "工作会话",
+  imConnectButton: "连接",
+  pluginReadinessLabel: "插件准备情况",
+  pluginReadinessUnavailable: "插件状态暂不可用。打开设置进行检查。",
+  pluginReadinessReady: "就绪",
+  pluginReadinessEnable: "启用插件",
+  pluginReadinessInstall: "安装插件",
+  pluginReadinessCheck: "检查插件",
+  pluginReadinessOptional: "（可选）",
+  pluginReadinessChecking: "正在检查插件…",
+  pluginReadinessOpenSettings: "打开设置 → 插件",
+  pluginReadinessPermissionNotice:
+    "工具权限在使用时检查。设备与 IM 连接在各自插件中配置。",
+  pawChatAndMemory: "聊天与记忆",
+  pawReplyToMessages: "回复新消息",
+  pawWorkWithConversations: "处理会话",
+  pawDelegateWork: "委派工作",
+  imReadinessChanged:
+    "检查准备情况后，IM 设置发生了变化。请重新检查准备情况，确认其他机器人消费进程已停止，再连接。",
+  mentionAgentForReply: "@提及 Agent 来请求回复",
+  roomSettingsTitle: "{{name}} 设置",
+  messageRole: "消息角色：{{role}}",
+  sidePanelFor: "{{title}} 的侧边面板",
+  closeTabNamed: "关闭标签页 {{title}}",
+  browserFor: "{{title}} 的浏览器",
+  latestComputerAction: "最新计算机操作 {{invocationId}}",
+
+  computerObservationUnavailable: "计算机窗口观察不可用。",
+  computerWindowNotSelected: "此会话尚未选择计算机窗口。",
+  browserProviderUnavailable: "Browser 服务商已不可用。",
+  browserPageNotSelected: "此会话尚未选择浏览器页面。",
+  browserPageUnavailable: "此浏览器页面已不可用。请让 Agent 再次检查。",
+  browserLatestSnapshotOnly: "显示 Agent 的最新截图，并非实时流。",
+  browserScreenshotExpired: "上次截图已过期。请让 Agent 再次检查此页面。",
+  browserScreenshotUnavailable: "上次截图已不可用。请让 Agent 再次检查此页面。",
+
+  creating: "创建中…",
+  archivedStatus: "已归档",
+  idleStatus: "空闲",
+
+  computerLiveViewUnsupported: "此 Computer 服务商不支持实时窗口预览。",
+  agentMarkerShowsActionTarget: "Agent 标记显示操作目标",
+  waitingForSnapshotInspection: "等待 Agent 检查此页面。此服务商仅显示快照。",
+  messageZenx: "向 ZenX 发送消息",
+  newConversationUnidentified: "无法识别新会话。",
+  sideChat: "旁聊",
+  parentConversation: "上级会话",
+  browserPageInstructions: "打开会话并使用其 Browser 面板查看该会话的页面。",
+
   waitingForTheAgentToUseA: "等待 Agent 使用计算机窗口。",
   computerWorkspace: "计算机工作区",
   computerWindow: "计算机窗口",

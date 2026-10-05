@@ -91,6 +91,113 @@ test("Computer observation moves one resolved window forward instead of duplicat
   assert.equal(targets.targets[0]?.invocationId, "call-2");
 });
 
+for (const status of ["unavailable", "failed"] as const) {
+  test(`Computer observation fences synchronous ${status} and restarts only on explicit publication`, () => {
+    const backend = fakeBackend();
+    const listeners: ComputerLiveObservationListener[] = [];
+    backend.observeWindow = (target, listener) => {
+      backend.liveTargets.push(target);
+      listeners.push(listener);
+      listener({
+        type: "status",
+        status: listeners.length === 1 ? status : "live",
+        message: "Fixture capture status.",
+      });
+      return () => {
+        backend.stops += 1;
+        listener({ type: "status", status: "live", message: "Late cleanup" });
+      };
+    };
+    const observation = new ComputerThreadObservation(backend);
+    const events: ComputerThreadEvent[] = [];
+    observation.observe({ threadId: "thread-a", frames: true }, (event) =>
+      events.push(event),
+    );
+
+    observation.publish("thread-a", "first-action", windowTarget);
+    assert.equal(backend.liveTargets.length, 1, "failure must not retry");
+    assert.equal(backend.stops, 1, "synchronous failure cleans up its capture");
+    assert.equal(events.at(-1)?.type, "status");
+    assert.ok(
+      events.some(
+        (event) => event.type === "status" && event.status === status,
+      ),
+    );
+
+    const countAfterFailure = events.length;
+    listeners[0]!({ type: "status", status: "live", message: "Late live" });
+    listeners[0]!(fixtureFrame());
+    assert.equal(events.length, countAfterFailure);
+
+    observation.publish("thread-a", "fresh-inspection", windowTarget);
+    assert.equal(backend.liveTargets.length, 2);
+    assert.equal(backend.stops, 1);
+    const countAfterRestart = events.length;
+    listeners[0]!({ type: "status", status, message: "Late terminal" });
+    listeners[0]!(fixtureFrame());
+    assert.equal(events.length, countAfterRestart);
+    assert.equal(
+      backend.stops,
+      1,
+      "stale terminal cannot stop the new capture",
+    );
+    listeners[1]!(fixtureFrame());
+    assert.equal(events.at(-1)?.type, "frame");
+
+    observation.publish("thread-a", "continuing-action", windowTarget);
+    assert.equal(backend.liveTargets.length, 2, "healthy capture stays live");
+    observation.close();
+    assert.equal(backend.stops, 2);
+  });
+}
+
+test("a synchronous terminal callback cannot overwrite an explicit replacement capture", () => {
+  const backend = fakeBackend();
+  const stopped: number[] = [];
+  backend.observeWindow = (target, listener) => {
+    const capture = backend.liveTargets.length;
+    backend.liveTargets.push(target);
+    listener({
+      type: "status",
+      status: capture === 0 ? "unavailable" : "live",
+      message: "Fixture capture status.",
+    });
+    return () => stopped.push(capture);
+  };
+  const observation = new ComputerThreadObservation(backend);
+  observation.observe({ threadId: "thread-a", frames: true }, (event) => {
+    if (event.type === "status" && event.status === "unavailable") {
+      observation.publish("thread-a", "fresh-inspection", windowTarget);
+    }
+  });
+
+  observation.publish("thread-a", "first-action", windowTarget);
+  assert.equal(backend.liveTargets.length, 2);
+  assert.deepEqual(stopped, [0], "only the terminated capture is cleaned up");
+  observation.publish("thread-a", "continuing-action", windowTarget);
+  assert.equal(backend.liveTargets.length, 2);
+  observation.close();
+  assert.deepEqual(
+    stopped,
+    [0, 1],
+    "the replacement retains its own stop handle",
+  );
+});
+
+function fixtureFrame(): ComputerThreadEvent & { type: "frame" } {
+  return {
+    type: "frame",
+    frame: {
+      sequence: 1,
+      mimeType: "image/jpeg",
+      data: "ZmFrZQ==",
+      width: 800,
+      height: 600,
+      capturedAt: new Date(0).toISOString(),
+    },
+  };
+}
+
 function fakeBackend(): ZenXComputerBackend & {
   liveTargets: ComputerTarget[];
   liveListener?: ComputerLiveObservationListener;

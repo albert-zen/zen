@@ -131,6 +131,7 @@ test("startup repairs unavailable bundled content at the same path and version t
           { id: "zenx-rooms", lifecycle: "uninstalled" },
           { id: "zenx-triggers", lifecycle: "uninstalled" },
           { id: "zenx-subagents", lifecycle: "uninstalled" },
+          { id: "zenx-fleet", lifecycle: "uninstalled" },
         ],
       }),
       bundledPluginPackageCurrent: (
