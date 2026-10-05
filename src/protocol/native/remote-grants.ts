@@ -18,6 +18,7 @@ export interface RemoteDeviceGrant {
   revoked: boolean;
   access?: "read" | "control" | undefined;
   shellEnabled?: boolean;
+  toolsEnabled?: boolean;
   workspaceIds: string[] | null;
 }
 /** Host-owned authorization configuration, never a conversation journal. */
@@ -37,6 +38,12 @@ export class RemoteGrantFile {
         throw new Error("Remote grants require a private regular file");
       const data = JSON.parse(readFileSync(this.file, "utf8"));
       if (
+        !data ||
+        typeof data !== "object" ||
+        Array.isArray(data) ||
+        Object.keys(data).some(
+          (key) => !["version", "hostId", "devices"].includes(key),
+        ) ||
         data.version !== 1 ||
         data.hostId !== this.hostId ||
         !Array.isArray(data.devices) ||
@@ -47,6 +54,20 @@ export class RemoteGrantFile {
       for (const grant of data.devices) {
         if (
           !grant ||
+          typeof grant !== "object" ||
+          Array.isArray(grant) ||
+          Object.keys(grant).some(
+            (key) =>
+              ![
+                "deviceId",
+                "digest",
+                "revoked",
+                "access",
+                "workspaceIds",
+                "shellEnabled",
+                "toolsEnabled",
+              ].includes(key),
+          ) ||
           typeof grant.deviceId !== "string" ||
           !grant.deviceId ||
           grant.deviceId.length > 512 ||
@@ -59,6 +80,9 @@ export class RemoteGrantFile {
             grant.access !== "control") ||
           (grant.shellEnabled !== undefined &&
             typeof grant.shellEnabled !== "boolean") ||
+          (grant.toolsEnabled !== undefined &&
+            (typeof grant.toolsEnabled !== "boolean" ||
+              (grant.toolsEnabled && grant.access !== "control"))) ||
           (grant.workspaceIds !== null &&
             (!Array.isArray(grant.workspaceIds) ||
               grant.workspaceIds.length > 32 ||

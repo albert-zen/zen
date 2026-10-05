@@ -12,14 +12,22 @@
 - **Fleet 就绪与邀请** — 普通插件的只读就绪检查只披露当前配置的准备步骤与已知设备；人工界面为已有可信 HTTPS 路径创建短时单用邀请，发送确认绑定所见 Host、配置 revision 与授权范围，接收方核对目标并明确确认后复用既有配对授权，秘密不进入模型发现、配置或会话状态。
 - **OS 凭证保护适配** — 复用既有 credential vault 的加解密接口，Linux 仅接受已知 OS secret-store backend，拒绝 Electron basic_text / unknown fallback；该判断不配置 keychain 或更改系统安全设置。
 - **Fleet 新线程目标** — 新稿显式选择 machine、目标工作空间和该目标的 Zen 模型；创建后机器/Host/工作空间/Thread 定位不可被本机同 ID 替代，界面只保留定位与易失显示投影，默认仍是本机。 远端消息可要求目标未归档，该条件在既有 Thread mutation lock 下核对，默认调用行为不变。
-- **Fleet Shell** — 独立 opt-in 的目标 Host shell capability 与设备 grant，仅在授权工作空间和已有 targetThreadId 的当前权限下复用目标 ToolEnvironment/ShellToolRuntime；没有审批通路时拒绝未知审批，不代理任意工具、不新增目标 Agent Turn，结果进入调用者已有 canonical 工具结果。
+- **Fleet Shell** — 既有独立 shell opt-in 保持窄授权；它不因新增通用工具能力而扩张。
+- **Fleet Tool Gateway** — 独立 Host/client/device 通用工具授权按精确 Host epoch、工具 generation 和已有 targetThreadId 的当前权限复用目标 ToolEnvironment；执行、资源、期限与任务均由目标拥有，远端 timing 预算只收紧同一目标任务管理器解析的领域参数、runtime policy 或 manager 默认值，不创建目标 Agent Turn 或第二份 journal。
+- **Tool Target Router** — Host 在同一 ToolEnvironment 为可表达的普通工具投影可选 device 和目标上下文，默认本机；已路由的调用与 qualified wait 只消耗有界传输预算，不另建本机执行任务，明确远端失败不回退本机或任意 SSH。
+- **Fleet Tool Receipt** — 目标对有界 admission ID 和增量 receipt/cursor ACK 保留易失去重与重放，终态 receipt 在 ACK 或过期前可观察；授权在 destructive wait 开始前失败时保留同一 ACK 的重试能力，开始后即使结果未知也不重复 drain。它不是持久执行账本，断连不自动重跑副作用，epoch 改变后明确报告未知或失效。
+- **Fleet Tool Eligibility** — 首个通用传输只接受显式 text-json 普通 runtime；组合/run_code、compaction、可信 UI 和尚无 origin-aware transfer 的媒体/page/artifact 工具不参与，远端文本/JSON 路径始终保留所属 Host。
+- **Target Tool Dispatch Fence** — 目标 Host 用已有 root-operation admission 和 Thread mutation lock 核对最新上下文、权限、归档与注册，在异步 Thread 读取前固定 canonical cwd，并在同一同步 launch fence 内重新核对当前 workspace 映射、真实目录与设备 scope 后注册已有目标工具任务；无法同步提供 workspace 权威的 provider 对新通用执行 fail closed，短 admission lease 随后释放，不等待工具 body、不创建 Turn 或 Item。
+- **Target Result Envelope** — 可信 external target route 只对已验证的工具任务 envelope 分别计量原始 1 MiB JSON payload 与有界 16 KiB Host 控制字段；普通 plugin 结果的 namespace 与大小规则保持原样。
+- **Capability Discovery Receipt** — builtin 的 zen/plugin-disclosure 只保存 version/read/pluginId，Host 的 zen/fleet-tool-catalog-disclosure 保存严格解析的 catalog/binding；它们复用既有普通 tool_result 的有界 structuredContent，不另注入模型指令，原始文本仍由 spool 展示且不成为 capability projection 权威。
+- **Disclosure History Matching** — Host 请求投影按 canonical call/result 的时间顺序、Thread/Turn 与根调用的 model response 边界匹配披露；未结算嵌套调用跨 response 保留，重叠复用的 callId 在全部结算前不授予能力，不保存第二份历史。
 - **Fleet 无界面 Host** — 显式生产进程入口沿用现有 provider/model 配置及受保护 durable grants；配对授权可跨进程重启保留，监听和执行只在该进程存活时存在，不安装服务或自动启动。
 - **Fleet Settings / Host** — 桌面设置保存设备定位与加密凭证，App Server 所在 Host 子进程持有原生 TLS gateway；授权摘要持久化且可撤销，进程重启不自动撤销配对，关闭进程停止服务。
 - **Fleet Relay** — 可选自托管 TLS relay 按预授权 Host 身份转发出站连接中的原生配对、请求与事件；relay 是可见消息与 grant 的受信任 TLS 终止端，不提供端到端加密、不拥有会话状态。
 - **Fleet Rooms** — Host 对已授权 workspace 内的助手 Room 投影有限消息与原生 Room 操作，客户端沿用 operation epoch 和幂等键，不复制 Room 状态机。
 - **Fleet Stream Watch** — HTTPS 原生订阅或 SSH bridge 的易失事件流恢复 canonical Thread 状态，只向既有 Trigger 交付有身份的终态，不建立第二份 journal。
 
-- **Android RemoteHostTransport** — Android 客户端用共享 ZAS 原生 wire、Host ID 与安全存储 grant 建立 TLS 连接，把公开快照/事件映射到可撤销的临时视图；epoch/watermark 恢复不改变 Host 的 canonical authority。
+- **Android RemoteHostTransport** — Android 客户端用共享 ZAS 原生 wire、Host ID 与安全存储 grant 建立 TLS 连接，把公开快照/事件映射到可撤销的临时视图；epoch/watermark 恢复不改变 Host 的 canonical authority。共享工具 ownership identity 定义于无 runtime 依赖的纯类型模块，原生 wire 的 TypeScript import graph 不进入 Node/Host 工具实现。
 - **ZenX Android 控制端** — Android 只保存本地连接偏好并显示选定 Host 的 ZAS 读模型；设备、workspace 或 Thread 切换按发起身份隔离易失输入与命令回执，草稿编辑/视图选择世代避免相同文字的新稿被旧回执清除，而同归属命令结算与旧恢复视图各自核验身份；断线/失权不保留公开页面投影但未知送达围栏仍归属原 Thread，请求准入与 Host canonical Turn 终态分别呈现，不保存 Agent、Turn、Provider key 或第二份 ItemList。
 
 - **ZenX Provider Logo 资源** — Host 将用户选择的有界位图复制为受管的内容寻址资源，Provider profile 只保存资源引用并向 Renderer 投影可显示图片；缺失或损坏时展示默认标识，不进入 Thread ItemList。

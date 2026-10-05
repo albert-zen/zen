@@ -12,6 +12,7 @@ interface FleetDeviceBase {
   /** User-authored usage guidance, never an authorization or execution input. */
   description?: string;
   shellEnabled?: boolean;
+  toolsEnabled?: boolean;
   access: "read" | "control";
 }
 export interface SshFleetDevice extends FleetDeviceBase {
@@ -39,6 +40,7 @@ export function fleetDeviceKey(peer: FleetDevice): string {
               peer.workspace ?? null,
               peer.access,
               peer.shellEnabled === true,
+              peer.toolsEnabled === true,
             ]
           : [peer.id, "ssh", peer.sshHost, peer.command, peer.access],
       ),
@@ -51,6 +53,7 @@ export interface FleetDeviceDiscovery {
   description?: string;
   key?: string;
   shellEnabled?: boolean;
+  toolsEnabled?: boolean;
   transport: "local" | "ssh" | "https";
   access: "read" | "control";
   status: "local" | "not_checked";
@@ -64,6 +67,7 @@ export interface FleetHostingConfig {
   relayEndpoint?: string;
   originEndpoint?: string;
   shellEnabled?: boolean;
+  toolsEnabled?: boolean;
   access: "read" | "control";
 }
 export interface FleetConfig {
@@ -176,6 +180,10 @@ export function parseFleetConfig(value: unknown): FleetConfig {
       (device.shellEnabled !== undefined &&
         (typeof device.shellEnabled !== "boolean" ||
           (device.shellEnabled && device.access !== "control"))) ||
+      (device.toolsEnabled !== undefined &&
+        (typeof device.toolsEnabled !== "boolean" ||
+          (device.toolsEnabled &&
+            (device.access !== "control" || device.transport !== "https")))) ||
       (device.description !== undefined &&
         (typeof device.description !== "string" ||
           device.description.length > 4000 ||
@@ -191,6 +199,7 @@ export function parseFleetConfig(value: unknown): FleetConfig {
           "label",
           "description",
           "shellEnabled",
+          "toolsEnabled",
           "transport",
           "endpoint",
           "hostId",
@@ -213,6 +222,7 @@ export function parseFleetConfig(value: unknown): FleetConfig {
         "label",
         "description",
         "shellEnabled",
+        "toolsEnabled",
         "transport",
         "sshHost",
         "command",
@@ -241,12 +251,16 @@ export function parseFleetConfig(value: unknown): FleetConfig {
         "relayEndpoint",
         "originEndpoint",
         "shellEnabled",
+        "toolsEnabled",
         "access",
       ]) ||
       typeof hosting.enabled !== "boolean" ||
       (hosting.shellEnabled !== undefined &&
         (typeof hosting.shellEnabled !== "boolean" ||
           (hosting.shellEnabled && hosting.access !== "control"))) ||
+      (hosting.toolsEnabled !== undefined &&
+        (typeof hosting.toolsEnabled !== "boolean" ||
+          (hosting.toolsEnabled && hosting.access !== "control"))) ||
       typeof hosting.bindAddress !== "string" ||
       !/^[a-zA-Z0-9_.:[\]-]{1,253}$/u.test(hosting.bindAddress) ||
       !Number.isInteger(hosting.port) ||
@@ -316,6 +330,11 @@ export class FleetRouter {
             transport === "https" &&
             access === "control" &&
             config.devices.find((entry) => entry.id === id)?.shellEnabled ===
+              true,
+          toolsEnabled:
+            transport === "https" &&
+            access === "control" &&
+            config.devices.find((entry) => entry.id === id)?.toolsEnabled ===
               true,
         }),
       ),

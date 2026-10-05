@@ -3,6 +3,7 @@ import { createFleetRoomsHandler } from "./fleet-rooms.js";
 import { deliverAssistantInput } from "./assistant-preset.js";
 import { FleetSettingsService } from "./fleet-settings.js";
 import { ZenXFleetCapabilityPackage } from "./capabilities/fleet-package.js";
+import { FleetToolTransportAdapter } from "./fleet-tool-router.js";
 import { FleetProductService } from "./fleet-product.js";
 import { realpath } from "node:fs/promises";
 import { ZenXSubagentsCapabilityPackage } from "./capabilities/subagents-package.js";
@@ -571,7 +572,13 @@ async function bootstrapZenX(): Promise<void> {
       process.env,
       savedBrowserMode,
     );
+    const fleetToolTransport = new FleetToolTransportAdapter(
+      fleetSettingsService,
+      () => {},
+    );
     capabilityService = new ZenXCapabilityService({
+      toolTargetTransport: (invocation) =>
+        fleetToolTransport.invoke(invocation),
       userDataDirectory,
       ...(useSharedWorkspaceBrowser
         ? {

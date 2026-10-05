@@ -17,7 +17,11 @@ import {
   writeFile,
 } from "node:fs/promises";
 
-import { ToolEnvironment, type ToolInvocation } from "../../../../src/tool.js";
+import {
+  ToolEnvironment,
+  type ToolExecutionResult,
+  type ToolInvocation,
+} from "../../../../src/tool.js";
 import {
   BrowserZenXCapabilityPackage,
   type ZenXBrowserBackend,
@@ -98,6 +102,8 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     };
   }
   readonly #pluginToolEnvironment: ToolEnvironment;
+  readonly #toolTargetTransport:
+    ((invocation: ToolInvocation) => Promise<ToolExecutionResult>) | undefined;
   readonly #pluginRuntimeSupervisor: PluginRuntimeSupervisor;
   readonly #userDataDirectory: string;
   readonly #browserBackend?: ZenXBrowserBackend;
@@ -151,6 +157,9 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
 
   constructor(options: {
     userDataDirectory: string;
+    toolTargetTransport?: (
+      invocation: ToolInvocation,
+    ) => Promise<ToolExecutionResult>;
     catalogStore?: ZenXPluginCatalogStore;
     browserBackend?: ZenXBrowserBackend;
     browserBackendAuthoritative?: boolean;
@@ -178,6 +187,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     projectProjection?: ZenXProjectProjection;
     appServerPort?: AppServerRequestPort & PluginHostAppServerPort;
   }) {
+    this.#toolTargetTransport = options.toolTargetTransport;
     this.#foregroundRequiredAllowed = options.allowForegroundRequired ?? false;
     this.#pluginToolEnvironment = new ToolEnvironment();
     this.#pluginRuntimeSupervisor = new PluginRuntimeSupervisor(
@@ -1425,6 +1435,27 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     }
     this.#registry.setForegroundRequiredAllowed(allowed);
     return true;
+  }
+
+  async executeTarget(
+    invocation: ToolInvocation,
+  ): Promise<ToolExecutionResult> {
+    const required =
+      invocation.name === "zenx_fleet_tools"
+        ? "zenx_fleet_tools"
+        : "zenx_fleet_execute";
+    if (
+      !this.#registry
+        .hostSnapshot()
+        .definitions.some((tool) => tool.name === required)
+    )
+      throw new Error(
+        "Fleet generic tool plugin is unavailable or its tools permission is not granted",
+      );
+    this.#registry.assertToolExposed(required);
+    if (!this.#toolTargetTransport)
+      throw new Error("Fleet execution-target transport is unavailable");
+    return await this.#toolTargetTransport(invocation);
   }
 
   async execute(invocation: ToolInvocation, generationToken?: string) {

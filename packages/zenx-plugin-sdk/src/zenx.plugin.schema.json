@@ -81,13 +81,24 @@
             "items": { "type": "string", "minLength": 1 }
           },
           "interactionMode": { "$ref": "#/$defs/interactionMode" },
+          "remoteExecution": { "const": "text-json" },
           "capabilities": { "$ref": "#/$defs/nonEmptyStringArray" },
           "maxOutputBytes": {
             "type": "integer",
             "minimum": 1024,
             "maximum": 1048576
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": { "required": ["remoteExecution"] },
+            "then": {
+              "properties": {
+                "interactionMode": { "const": "background_safe" }
+              }
+            }
+          }
+        ]
       }
     },
     "runtime": {

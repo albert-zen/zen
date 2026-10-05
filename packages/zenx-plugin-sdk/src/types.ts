@@ -130,6 +130,8 @@ export interface ZenXPluginTool {
   interactionMode: ZenXPluginInteractionMode;
   capabilities: string[];
   maxOutputBytes?: number;
+  /** Explicit ordinary text/JSON target execution; background-safe tools only. */
+  remoteExecution?: "text-json";
 }
 
 export interface ZenXPluginUiBundle {

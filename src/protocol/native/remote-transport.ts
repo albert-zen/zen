@@ -12,7 +12,14 @@ import {
   type RemoteRecoveryBoundary,
   type RemoteRecoveryPosition,
 } from "./remote-host.js";
-import type { RemoteRecoveryPage } from "./remote-wire.js";
+import { REMOTE_METHODS, type RemoteRecoveryPage } from "./remote-wire.js";
+import {
+  parseRemoteToolCatalogRequest,
+  parseRemoteToolExecuteRequest,
+  parseRemoteToolWaitRequest,
+  parseRemoteToolStatusRequest,
+  parseRemoteToolCancelRequest,
+} from "./remote-tool-wire.js";
 
 export interface RemoteTransportOptions {
   /** Explicit administrator opt-in; no implicit listener or fallback to plaintext. */
@@ -164,6 +171,17 @@ export async function serveRemoteHost(
             const data = JSON.parse(payload) as unknown;
             if (
               !isRecord(data) ||
+              Object.keys(data).some(
+                (key) =>
+                  ![
+                    "hostId",
+                    "deviceId",
+                    "code",
+                    "access",
+                    "shellEnabled",
+                    "toolsEnabled",
+                  ].includes(key),
+              ) ||
               typeof data.hostId !== "string" ||
               typeof data.deviceId !== "string" ||
               typeof data.code !== "string" ||
@@ -171,7 +189,9 @@ export async function serveRemoteHost(
                 data.access !== "read" &&
                 data.access !== "control") ||
               (data.shellEnabled !== undefined &&
-                typeof data.shellEnabled !== "boolean")
+                typeof data.shellEnabled !== "boolean") ||
+              (data.toolsEnabled !== undefined &&
+                typeof data.toolsEnabled !== "boolean")
             )
               throw new RemoteHostError("invalid_request");
             const result = await options.access.pair({
@@ -181,6 +201,9 @@ export async function serveRemoteHost(
               ...(data.shellEnabled === undefined
                 ? {}
                 : { shellEnabled: data.shellEnabled as boolean }),
+              ...(data.toolsEnabled === undefined
+                ? {}
+                : { toolsEnabled: data.toolsEnabled as boolean }),
               ...(data.access === "read" || data.access === "control"
                 ? { access: data.access }
                 : {}),
@@ -359,6 +382,7 @@ function attach(
   let recovery: RecoverySession | undefined;
   let pageBusyGeneration: number | null = null;
   let activeRequests = 0;
+  let activeToolRequests = 0;
   const shellRequests = new Map<string, AbortController>();
   const invalidateRecovery = (state: RecoverySession) => {
     // An older in-flight page may finish after another resume has installed a
@@ -407,11 +431,30 @@ function attach(
       socket.close(1003, "JSON text only");
       return;
     }
-    if (activeRequests >= 4) {
+    // Generic tool polling has its own bounded budget. It cannot starve the
+    // legacy recovery/control channel, and connection loss never cancels tasks.
+    let toolRequest = false;
+    try {
+      const envelope: unknown = JSON.parse(raw.toString());
+      toolRequest =
+        isRecord(envelope) &&
+        typeof envelope.method === "string" &&
+        [
+          REMOTE_METHODS.toolsCatalog,
+          REMOTE_METHODS.toolsExecute,
+          REMOTE_METHODS.toolsWait,
+          REMOTE_METHODS.toolsStatus,
+          REMOTE_METHODS.toolsCancel,
+        ].includes(envelope.method as typeof REMOTE_METHODS.toolsCatalog);
+    } catch {
+      /* The request validator below returns the bounded error. */
+    }
+    if ((toolRequest ? activeToolRequests : activeRequests) >= 4) {
       socket.close(1013, "Too many concurrent requests");
       return;
     }
-    activeRequests += 1;
+    if (toolRequest) activeToolRequests += 1;
+    else activeRequests += 1;
     void (async () => {
       let id: string | number | null = null;
       try {
@@ -424,6 +467,18 @@ function attach(
         )
           throw new RemoteHostError("invalid_request");
         id = request.id;
+        if (
+          toolRequest &&
+          (Object.keys(request).some(
+            (key) => !["id", "method", "params"].includes(key),
+          ) ||
+            (typeof id === "string"
+              ? !id.trim() ||
+                Buffer.byteLength(id) > 256 ||
+                /[\x00-\x1f\x7f]/u.test(id)
+              : !Number.isSafeInteger(id)))
+        )
+          throw new RemoteHostError("invalid_request");
         const p = request.params;
         if (request.method !== "zen/remote/hello" && !initialized)
           throw new RemoteHostError("unauthorized");
@@ -438,6 +493,13 @@ function attach(
           if (typeof value !== "string" || value.length > 32768)
             throw new RemoteHostError("invalid_request");
           return value;
+        };
+        const toolParams = <T>(parse: (value: unknown) => T): T => {
+          try {
+            return parse(p);
+          } catch {
+            throw new RemoteHostError("invalid_request");
+          }
         };
         let result: unknown;
         switch (request.method) {
@@ -686,6 +748,41 @@ function attach(
             }
             return;
           }
+          case REMOTE_METHODS.toolsCatalog:
+            result = await access.toolsCatalog(
+              deviceId,
+              token,
+              toolParams(parseRemoteToolCatalogRequest),
+            );
+            break;
+          case REMOTE_METHODS.toolsExecute:
+            result = await access.toolsExecute(
+              deviceId,
+              token,
+              toolParams(parseRemoteToolExecuteRequest),
+            );
+            break;
+          case REMOTE_METHODS.toolsWait:
+            result = await access.toolsWait(
+              deviceId,
+              token,
+              toolParams(parseRemoteToolWaitRequest),
+            );
+            break;
+          case REMOTE_METHODS.toolsStatus:
+            result = await access.toolsStatus(
+              deviceId,
+              token,
+              toolParams(parseRemoteToolStatusRequest),
+            );
+            break;
+          case REMOTE_METHODS.toolsCancel:
+            result = await access.toolsCancel(
+              deviceId,
+              token,
+              toolParams(parseRemoteToolCancelRequest),
+            );
+            break;
           case "zen/remote/shell": {
             if (
               typeof id !== "string" ||
@@ -763,7 +860,8 @@ function attach(
           error instanceof RemoteHostError ? error.code : "operation_unknown";
         send({ id, error: { code: -32000, message: code, data: { code } } });
       } finally {
-        activeRequests -= 1;
+        if (toolRequest) activeToolRequests -= 1;
+        else activeRequests -= 1;
       }
     })();
   });

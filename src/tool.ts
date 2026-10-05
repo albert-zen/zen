@@ -11,7 +11,7 @@ export type {
   ToolTaskOptions,
   ToolTaskPolicy,
 } from "./tool-task.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { open, readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { sandboxCommand } from "./sandbox.js";
@@ -25,6 +25,8 @@ import {
   type UserInput,
 } from "./item.js";
 import type { ModelTool } from "./model.js";
+import type { ToolBundleIdentity } from "./tool-identity.js";
+export type { ToolBundleKind, ToolBundleIdentity } from "./tool-identity.js";
 import {
   DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES,
   renderToolOutput,
@@ -33,6 +35,11 @@ import {
   type ToolOutputSpool,
 } from "./tool-output-spool.js";
 import type { ShellOutputFilter } from "./shell-output-filter.js";
+import {
+  MAX_TOOL_TASK_CONTROL_BYTES,
+  TOOL_TASK_CONTENT_TYPE,
+  validateTargetToolTaskEnvelope,
+} from "./tool-task-content.js";
 
 const TOOL_OUTPUT_CAPTURE = Symbol("tool-output-capture");
 const TOOL_OUTPUT_SUFFIX = Symbol("tool-output-suffix");
@@ -82,13 +89,6 @@ export interface ToolExecutionResult {
 
 export const MAX_STRUCTURED_TOOL_RESULT_BYTES = 1024 * 1024;
 
-export type ToolBundleKind = "builtin" | "plugin" | "external";
-
-export interface ToolBundleIdentity {
-  kind: ToolBundleKind;
-  id: string;
-}
-
 export type ToolExecutionMode = "parallel_safe" | "exclusive";
 
 /** One exact model-visible tool and its execution body. */
@@ -99,6 +99,8 @@ export interface ToolRuntime {
   readonly executionMode?: ToolExecutionMode;
   /** Host builtin enforces invocation.sandbox before producing file effects. */
   readonly enforcesSandbox?: boolean;
+  /** Explicit target-side opt-in for ordinary text/JSON remote execution. */
+  readonly remoteExecution?: "text-json";
   readonly taskPolicy?: ToolTaskPolicy;
   /** Invocation-specific Host resource claims, acquired atomically before execute. */
   resourceClaims?(invocation: ToolInvocation): readonly ToolResourceClaim[];
@@ -232,6 +234,7 @@ export interface ToolAdmissionOptions {
 interface RuntimeRegistration {
   runtime: ToolRuntime;
   definition: ModelTool;
+  generation: string;
 }
 
 interface BundleRegistration {
@@ -251,8 +254,35 @@ export interface ToolDefinitionEntry {
   definition: ModelTool;
 }
 
+export interface ToolRemoteDefinitionEntry extends ToolDefinitionEntry {
+  generation: string;
+  eligible: boolean;
+  reason?: string;
+}
+
+/** Host-owned transport boundary; Core retains caller admission and append. */
+export interface ToolTargetRoute {
+  readonly owner: ToolBundleIdentity;
+  readonly definition: ModelTool;
+  readonly executionMode: ToolExecutionMode;
+  readonly requiredModelInputModalities?: readonly string[];
+  /** Qualified task observation remains exempt from ordinary tool admission. */
+  readonly waitPolicyExempt?: boolean;
+  /** Host-only opt-in for a separately bounded, exact target-owned task receipt. */
+  readonly resultEnvelope?: "tool-task";
+  execute(): Promise<ToolExecutionResult>;
+}
+
+export interface ToolTargetRouter {
+  prepare(
+    invocation: ToolInvocation,
+    local?: ToolRemoteDefinitionEntry,
+  ): ToolTargetRoute | undefined;
+}
+
 interface PreparedRuntimeRegistration {
-  runtime: ToolRuntime;
+  runtime?: ToolRuntime;
+  route?: ToolTargetRoute;
   release: (() => void) | undefined;
   released: boolean;
 }
@@ -275,6 +305,7 @@ export class ToolEnvironment {
   readonly #unsandboxedAdmissions = new WeakSet<PreparedToolInvocation>();
   readonly #policyStore: ToolPolicyStore;
   readonly #pendingAdmissions = new Map<string, Promise<void>>();
+  #targetRouter: ToolTargetRouter | undefined;
 
   constructor(
     options: {
@@ -285,6 +316,7 @@ export class ToolEnvironment {
       policyStore?: ToolPolicyStore;
       approvedTools?: Set<string>;
       deniedTools?: Set<string>;
+      targetRouter?: ToolTargetRouter;
     } = {},
   ) {
     if (
@@ -303,6 +335,7 @@ export class ToolEnvironment {
             deniedTools: options.deniedTools ?? new Set<string>(),
           })
         : new InMemoryToolPolicyStore());
+    this.#targetRouter = options.targetRouter;
     this.taskManager = new ToolTaskManager({
       ...options.taskOptions,
       ...(options.toolOutputSpool === undefined
@@ -335,6 +368,50 @@ export class ToolEnvironment {
         definition: structuredClone(definition),
       })),
     );
+  }
+
+  /** Exact target registrations; replacements invalidate old generations. */
+  get remoteDefinitions(): ToolRemoteDefinitionEntry[] {
+    return [...this.#bundles.values()].flatMap((registration) =>
+      registration.runtimes.map(({ runtime, definition, generation }) => ({
+        owner: { ...registration.identity },
+        definition: structuredClone(definition),
+        generation,
+        ...remoteEligibility(runtime),
+      })),
+    );
+  }
+
+  /** Target Host timing semantics; never projected into foreign tool schemas. */
+  taskTimingArguments(
+    name: string,
+  ): ToolTaskPolicy["timingArguments"] | undefined {
+    const mapping = this.#tools.get(name)?.runtime.taskPolicy?.timingArguments;
+    return mapping === undefined
+      ? undefined
+      : {
+          ...(mapping.yieldTimeMs === undefined
+            ? {}
+            : { yieldTimeMs: mapping.yieldTimeMs }),
+          ...(mapping.timeoutMs === undefined
+            ? {}
+            : { timeoutMs: mapping.timeoutMs }),
+        };
+  }
+
+  /** Target-owned timing, including this Environment's configured defaults. */
+  resolveTaskTiming(
+    invocation: Pick<ToolInvocation, "name" | "arguments" | "task">,
+  ): { yieldTimeMs: number; timeoutMs: number } {
+    const runtime = this.#tools.get(invocation.name)?.runtime;
+    if (runtime === undefined)
+      throw new Error(`Unsupported tool: ${invocation.name}`);
+    return this.taskManager.resolveTiming(runtime, invocation);
+  }
+
+  /** Host composition may attach its routing service after registry creation. */
+  setTargetRouter(router: ToolTargetRouter | undefined): void {
+    this.#targetRouter = router;
   }
 
   registerBundle(bundle: ToolBundle): () => void {
@@ -383,7 +460,7 @@ export class ToolEnvironment {
       if (executionModeFor(runtime) === "parallel_safe") {
         definition.description = `[parallel_safe] ${definition.description}`;
       }
-      return { runtime, definition };
+      return { runtime, definition, generation: randomUUID() };
     });
     const localNames = new Set<string>();
     for (const { runtime } of runtimes) {
@@ -461,10 +538,97 @@ export class ToolEnvironment {
     return true;
   }
 
-  prepare(invocation: ToolInvocation): PreparedToolInvocation {
+  prepare(
+    invocation: ToolInvocation,
+    /** A target gateway has already selected this Host; domain execution stays local. */
+    options: { targetRouting?: boolean } = {},
+  ): PreparedToolInvocation {
     const registration = this.#tools.get(invocation.name);
+    const frozenInvocation: ToolInvocation = Object.freeze({
+      ...invocation,
+      arguments: Object.freeze(structuredClone(invocation.arguments)),
+    });
+    const local =
+      registration === undefined
+        ? undefined
+        : {
+            owner: { ...registration.identity },
+            definition: structuredClone(registration.definition),
+            generation: registration.generation,
+            ...remoteEligibility(registration.runtime),
+          };
+    const explicitRemote = requestsRemoteTarget(
+      frozenInvocation,
+      local?.definition,
+    );
+    const route =
+      options.targetRouting === false
+        ? undefined
+        : this.#targetRouter?.prepare(frozenInvocation, local);
+    if (route !== undefined) {
+      deepFreeze(frozenInvocation.arguments);
+      const capturedRoute: ToolTargetRoute = Object.freeze({
+        owner: Object.freeze({ ...route.owner }),
+        definition: deepFreeze(structuredClone(route.definition)),
+        executionMode: route.executionMode,
+        requiredModelInputModalities: Object.freeze([
+          ...(route.requiredModelInputModalities ?? []),
+        ]),
+        ...(route.waitPolicyExempt === undefined
+          ? {}
+          : { waitPolicyExempt: route.waitPolicyExempt }),
+        ...(route.resultEnvelope === undefined
+          ? {}
+          : { resultEnvelope: route.resultEnvelope }),
+        execute: route.execute.bind(route),
+      });
+      const prepared: PreparedToolInvocation = Object.freeze({
+        owner: capturedRoute.owner,
+        definition: capturedRoute.definition,
+        executionMode: capturedRoute.executionMode,
+        requiredModelInputModalities:
+          capturedRoute.requiredModelInputModalities!,
+        invocation: frozenInvocation,
+      });
+      this.#preparedRuntimes.set(prepared, {
+        route: capturedRoute,
+        release: undefined,
+        released: false,
+      });
+      return prepared;
+    }
+    if (
+      explicitRemote &&
+      local?.eligible === false &&
+      registration?.runtime !== this.waitRuntime
+    )
+      throw new Error(
+        `Tool ${invocation.name} is not eligible for remote execution: ${local.reason ?? "unsupported runtime"}`,
+      );
+    if (explicitRemote)
+      throw new Error(
+        `Remote execution target is unavailable for ${invocation.name}`,
+      );
     if (registration === undefined) {
       throw new Error(`Unsupported tool: ${invocation.name}`);
+    }
+    let localInvocation = frozenInvocation;
+    if (
+      local?.eligible === true &&
+      !ownsRoutingField(local.definition, "device") &&
+      !ownsRoutingField(local.definition, "target_context") &&
+      (Object.hasOwn(frozenInvocation.arguments, "device") ||
+        Object.hasOwn(frozenInvocation.arguments, "target_context"))
+    ) {
+      const {
+        device: _device,
+        target_context: _context,
+        ...arguments_
+      } = frozenInvocation.arguments;
+      localInvocation = Object.freeze({
+        ...frozenInvocation,
+        arguments: Object.freeze(arguments_),
+      });
     }
     const prepared: PreparedToolInvocation = Object.freeze({
       owner: registration.identity,
@@ -473,10 +637,7 @@ export class ToolEnvironment {
       requiredModelInputModalities: Object.freeze([
         ...(registration.runtime.requiredModelInputModalities ?? []),
       ]),
-      invocation: Object.freeze({
-        ...invocation,
-        arguments: Object.freeze(structuredClone(invocation.arguments)),
-      }),
+      invocation: localInvocation,
     });
     this.#preparedRuntimes.set(prepared, {
       runtime: registration.runtime,
@@ -490,15 +651,20 @@ export class ToolEnvironment {
     prepared: PreparedToolInvocation,
     options: ToolAdmissionOptions,
   ): Promise<ApprovalDecision> {
-    const runtime = this.#requirePrepared(prepared).runtime;
+    const registration = this.#requirePrepared(prepared);
+    const runtime = registration.runtime;
     const sandbox = prepared.invocation.sandbox ?? "danger-full-access";
-    if (sandbox !== "danger-full-access" && runtime !== this.waitRuntime) {
+    if (
+      sandbox !== "danger-full-access" &&
+      runtime !== this.waitRuntime &&
+      registration.route === undefined
+    ) {
       const escalation =
         prepared.invocation.arguments.sandbox_permissions ===
         "require_escalated";
       if (
         prepared.owner.kind === "builtin" &&
-        runtime.enforcesSandbox === true &&
+        runtime?.enforcesSandbox === true &&
         !escalation
       )
         return "accept";
@@ -529,7 +695,8 @@ export class ToolEnvironment {
       }
     }
     if (
-      this.#requirePrepared(prepared).runtime === this.waitRuntime ||
+      runtime === this.waitRuntime ||
+      registration.route?.waitPolicyExempt === true ||
       options.policy === "full_access"
     )
       return "accept";
@@ -590,7 +757,11 @@ export class ToolEnvironment {
   async admitInherited(
     prepared: PreparedToolInvocation,
   ): Promise<ApprovalDecision> {
-    if (this.#requirePrepared(prepared).runtime === this.waitRuntime)
+    const registration = this.#requirePrepared(prepared);
+    if (
+      registration.runtime === this.waitRuntime ||
+      registration.route?.waitPolicyExempt === true
+    )
       return "accept";
     try {
       const stored = await this.#policyStore.get(prepared.invocation.name);
@@ -610,7 +781,8 @@ export class ToolEnvironment {
     nested?: NestedToolInvocationPort,
     modelInputModalities?: readonly string[] | null,
   ): Promise<ToolExecutionResult> {
-    const runtime = this.#requirePrepared(prepared).runtime;
+    const registration = this.#requirePrepared(prepared);
+    const runtime = registration.runtime;
     let retained = false;
     try {
       prepared.invocation.signal.throwIfAborted();
@@ -627,6 +799,22 @@ export class ToolEnvironment {
           )} input required by ${prepared.invocation.name}`,
         );
       }
+      if (registration.route !== undefined) {
+        const result = await registration.route.execute();
+        if (result.modelContent !== undefined)
+          throw new ToolResultNormalizationError(
+            "Remote execution supports text/JSON results only",
+          );
+        try {
+          return registration.route.resultEnvelope === "tool-task"
+            ? normalizeTargetToolTaskResult(result, prepared.owner)
+            : normalizeToolExecutionResult(result, prepared.owner);
+        } catch (error) {
+          throw new ToolResultNormalizationError(error);
+        }
+      }
+      if (runtime === undefined)
+        throw new Error("Prepared tool invocation has no execution body");
       // The manager owns this envelope; its nested tool payload was already
       // normalized at the original execution boundary. Do not charge the
       // fixed control envelope against the tool's original JSON byte budget.
@@ -692,6 +880,11 @@ export class ToolEnvironment {
     await this.taskManager.close();
   }
 
+  /** Release a prepared-call lease when its body will not execute. */
+  discard(prepared: PreparedToolInvocation): void {
+    this.#releasePrepared(prepared);
+  }
+
   #requirePrepared(
     prepared: PreparedToolInvocation,
   ): PreparedRuntimeRegistration {
@@ -717,6 +910,51 @@ function executionModeFor(runtime: ToolRuntime): ToolExecutionMode {
     : "exclusive";
 }
 
+function remoteEligibility(
+  runtime: ToolRuntime,
+): Pick<ToolRemoteDefinitionEntry, "eligible" | "reason"> {
+  if (runtime instanceof ToolWaitRuntime)
+    return { eligible: false, reason: "Task observation is Host-owned" };
+  if (isCompositeToolRuntime(runtime))
+    return { eligible: false, reason: "Composite tools execute locally" };
+  if ((runtime.requiredModelInputModalities?.length ?? 0) !== 0)
+    return {
+      eligible: false,
+      reason: "Remote execution supports text/JSON only",
+    };
+  return runtime.remoteExecution === "text-json"
+    ? { eligible: true }
+    : {
+        eligible: false,
+        reason: "Runtime has not opted in to remote execution",
+      };
+}
+
+function requestsRemoteTarget(
+  invocation: ToolInvocation,
+  definition: ModelTool | undefined,
+): boolean {
+  return (
+    (!ownsRoutingField(definition, "device") &&
+      invocation.arguments.device !== undefined &&
+      invocation.arguments.device !== "local") ||
+    (!ownsRoutingField(definition, "target_context") &&
+      invocation.arguments.target_context !== undefined)
+  );
+}
+
+function ownsRoutingField(
+  definition: ModelTool | undefined,
+  field: string,
+): boolean {
+  const properties = definition?.inputSchema.properties;
+  return (
+    properties !== null &&
+    typeof properties === "object" &&
+    Object.hasOwn(properties, field)
+  );
+}
+
 function isCompositeToolRuntime(
   runtime: ToolRuntime,
 ): runtime is CompositeToolRuntime {
@@ -736,6 +974,54 @@ export class ToolResultNormalizationError extends Error {
 export function normalizeToolExecutionResult(
   result: ToolExecutionResult,
   owner: ToolBundleIdentity,
+): ToolExecutionResult {
+  return normalizeToolResultWithBudget(
+    result,
+    owner,
+    MAX_STRUCTURED_TOOL_RESULT_BYTES,
+  );
+}
+
+function normalizeTargetToolTaskResult(
+  result: ToolExecutionResult,
+  owner: ToolBundleIdentity,
+): ToolExecutionResult {
+  if (owner.kind !== "external")
+    throw new Error(
+      "Only external-owned Host routes may return task envelopes",
+    );
+  if (result.contentType !== TOOL_TASK_CONTENT_TYPE)
+    throw new Error("Target task envelope has an unsupported contentType");
+  assertJsonValue(result.structuredContent, "$structuredContent");
+  const { control, payload } = validateTargetToolTaskEnvelope(
+    result.structuredContent,
+    result.exitCode,
+  );
+  const normalizedControl = normalizeToolResultWithBudget(
+    { ...result, structuredContent: control },
+    owner,
+    MAX_TOOL_TASK_CONTROL_BYTES,
+  );
+  if (payload === undefined) return normalizedControl;
+  const normalizedPayload = normalizeToolExecutionResult(
+    { output: "", exitCode: result.exitCode, ...payload },
+    owner,
+  );
+  return {
+    ...normalizedControl,
+    structuredContent: deepFreeze({
+      ...(normalizedControl.structuredContent as Record<string, JsonValue>),
+      result: normalizedPayload.structuredContent!,
+      result_content_type: normalizedPayload.contentType!,
+    }),
+  };
+}
+
+/** Private budgets are selected by validated Host boundaries, never result metadata. */
+function normalizeToolResultWithBudget(
+  result: ToolExecutionResult,
+  owner: ToolBundleIdentity,
+  maxStructuredBytes: number,
 ): ToolExecutionResult {
   if (
     typeof result.output !== "string" ||
@@ -786,9 +1072,9 @@ export function normalizeToolExecutionResult(
   }
   assertJsonValue(result.structuredContent, "$structuredContent");
   const encoded = JSON.stringify(result.structuredContent);
-  if (Buffer.byteLength(encoded, "utf8") > MAX_STRUCTURED_TOOL_RESULT_BYTES) {
+  if (Buffer.byteLength(encoded, "utf8") > maxStructuredBytes) {
     throw new Error(
-      `Structured tool result exceeded its ${String(MAX_STRUCTURED_TOOL_RESULT_BYTES)} byte limit`,
+      `Structured tool result exceeded its ${String(maxStructuredBytes)} byte limit`,
     );
   }
   return {
@@ -861,11 +1147,12 @@ function assertJsonValue(
   seen.delete(value);
 }
 
-function deepFreeze<T extends JsonValue>(value: T): T {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value))
+function deepFreeze<T>(value: T, seen = new Set<object>()): T {
+  if (typeof value !== "object" || value === null || seen.has(value))
     return value;
+  seen.add(value);
   for (const entry of Array.isArray(value) ? value : Object.values(value))
-    deepFreeze(entry);
+    deepFreeze(entry, seen);
   return Object.freeze(value);
 }
 
@@ -889,6 +1176,7 @@ export type ApprovalHandler = (
 /** Concrete process execution only; the environment owns waiting and deadlines. */
 export class ShellToolRuntime implements ToolRuntime {
   readonly enforcesSandbox = true;
+  readonly remoteExecution = "text-json";
   readonly name = "shell";
   readonly executionMode = "parallel_safe";
   readonly taskPolicy: ToolTaskPolicy = {
