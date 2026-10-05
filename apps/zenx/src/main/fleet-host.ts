@@ -1,4 +1,5 @@
 import { X509Certificate } from "node:crypto";
+import { isIP } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { connectFleetRelayHost } from "./fleet-relay.js";
 import { RemoteGrantFile } from "../../../../src/protocol/native/remote-grants.js";
@@ -16,6 +17,12 @@ import {
   type RemoteHostTransport,
 } from "../../../../src/protocol/native/remote-transport.js";
 import type { ZenAppServer } from "../../../../src/app-server.js";
+import {
+  FLEET_INVITATION_LIFETIME_MS,
+  normalizeFleetInvitationEndpoint,
+  parseFleetInvitationHostConsent,
+  type FleetInvitation,
+} from "../fleet-invitation.js";
 export interface FleetHostConfig {
   enabled: boolean;
   hostId: string;
@@ -30,6 +37,30 @@ export interface FleetHostConfig {
   originEndpoint?: string;
   relayRegistrationToken?: string;
   workspaces: Array<{ id: string; label: string; cwd: string }>;
+}
+/** Current configured authorities only; this never tests network reachability. */
+export function fleetInvitationEndpoints(
+  config: { originEndpoint?: string; relayEndpoint?: string },
+  status: { enabled?: unknown; url?: unknown; relayConnected?: unknown },
+): string[] {
+  if (status.enabled !== true) return [];
+  const values = [
+    status.url,
+    config.originEndpoint,
+    ...(status.relayConnected === true ? [config.relayEndpoint] : []),
+  ];
+  const endpoints = new Set<string>();
+  for (const value of values) {
+    if (value === undefined) continue;
+    try {
+      const normalized = normalizeFleetInvitationEndpoint(value);
+      const hostname = new URL(normalized).hostname;
+      if (!["0.0.0.0", "[::]"].includes(hostname)) endpoints.add(normalized);
+    } catch {
+      // Unsupported/currently invalid endpoints are not invitation candidates.
+    }
+  }
+  return [...endpoints];
 }
 function validateWorkspaces(value: unknown): FleetHostConfig["workspaces"] {
   if (
@@ -86,6 +117,7 @@ export function validateFleetHostConfig(value: unknown): FleetHostConfig {
 export class FleetHostService {
   #access: RemoteHostAccess | undefined;
   #server: RemoteHostTransport | undefined;
+  #certificate: X509Certificate | undefined;
   #config: FleetHostConfig | undefined;
   #error: string | undefined;
   #workspaceError: string | undefined;
@@ -136,6 +168,87 @@ export class FleetHostService {
           hostId: this.#config.hostId,
           code: this.#access.createPairingCode(),
         };
+      }
+      if (action === "invitation") {
+        const data = input as Record<string, unknown>;
+        if (
+          !data ||
+          typeof data !== "object" ||
+          Array.isArray(data) ||
+          data.confirmed !== true ||
+          Object.keys(data).some(
+            (key) =>
+              !["endpoint", "label", "confirmed", "expected"].includes(key),
+          )
+        )
+          throw new Error(
+            "Explicit human confirmation is required to share an invitation",
+          );
+        const endpoint = normalizeFleetInvitationEndpoint(data.endpoint);
+        const expected = parseFleetInvitationHostConsent(data.expected);
+        if (
+          typeof data.label !== "string" ||
+          !data.label.trim() ||
+          data.label.length > 120 ||
+          /[\x00-\x1f\x7f]/u.test(data.label)
+        )
+          throw new Error(
+            "A Fleet invitation label is required (at most 120 characters)",
+          );
+        if (!this.#access || !this.#server || !this.#config?.enabled)
+          throw new Error(
+            "Enable configured Fleet hosting before sharing an invitation",
+          );
+        if (
+          expected.hostId !== this.#config.hostId ||
+          expected.access !== this.#config.access ||
+          expected.shellEnabled !==
+            (this.#config.access === "control" &&
+              this.#config.shellEnabled === true) ||
+          expected.relayEndpoint !== (this.#config.relayEndpoint ?? null)
+        )
+          throw new Error(
+            "Fleet invitation scope changed; refresh settings and review sharing again",
+          );
+        if (
+          !fleetInvitationEndpoints(this.#config, this.status()).includes(
+            endpoint,
+          )
+        )
+          throw new Error(
+            "Invitation endpoint must match an existing configured direct Host or connected relay",
+          );
+        const listenerOrigin = new URL(
+          this.#server.url.replace(/^wss:/u, "https:"),
+        ).origin;
+        if (endpoint === listenerOrigin) {
+          const hostname = new URL(endpoint).hostname.replace(/^\[|\]$/gu, "");
+          const match = isIP(hostname)
+            ? this.#certificate?.checkIP(hostname)
+            : this.#certificate?.checkHost(hostname, {
+                subject: "never",
+                wildcards: false,
+              });
+          if (!match)
+            throw new Error(
+              "Direct invitation endpoint must match the running TLS certificate SAN",
+            );
+        }
+        // The canonical RemoteHostAccess grant keeps its existing one-use five
+        // minute authority. This preview expires no later than that grant.
+        const expiresAt = Date.now() + FLEET_INVITATION_LIFETIME_MS;
+        return {
+          version: 1,
+          hostId: this.#config.hostId,
+          endpoint,
+          label: data.label,
+          expiresAt,
+          access: this.#config.access,
+          shellEnabled:
+            this.#config.access === "control" &&
+            this.#config.shellEnabled === true,
+          code: this.#access.createPairingCode(),
+        } satisfies FleetInvitation;
       }
       if (action === "revoke") {
         if (!this.#config || typeof input !== "string" || !input)
@@ -214,12 +327,14 @@ export class FleetHostService {
         shellEnabled: config.shellEnabled === true,
         ...(this.shell ? { shell: this.shell } : {}),
       });
+      const cert = await readFile(config.tlsCertificateFile);
+      this.#certificate = new X509Certificate(cert);
       this.#server = await serveRemoteHost({
         enabled: true,
         listen: config.bindAddress,
         port: config.port,
         tls: {
-          cert: await readFile(config.tlsCertificateFile),
+          cert,
           key: await readFile(config.tlsKeyFile),
         },
         access: this.#access,
@@ -242,8 +357,7 @@ export class FleetHostService {
         if (url.hostname === "0.0.0.0") url.hostname = "127.0.0.1";
         if (url.hostname === "[::]") url.hostname = "[::1]";
         url.pathname = "/";
-        const cert = await readFile(config.tlsCertificateFile);
-        const dns = new X509Certificate(cert).subjectAltName?.match(
+        const dns = this.#certificate.subjectAltName?.match(
           /(?:^|, )DNS:([a-zA-Z0-9.-]+)/,
         )?.[1];
         const controller = new AbortController();
@@ -310,6 +424,7 @@ export class FleetHostService {
     this.#relayError = undefined;
     await this.#server?.close();
     this.#server = undefined;
+    this.#certificate = undefined;
     this.#access?.close();
     this.#access = undefined;
   }

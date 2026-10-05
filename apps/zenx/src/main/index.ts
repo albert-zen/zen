@@ -35,6 +35,7 @@ import { ipcChannels } from "../preload/ipc.js";
 import { AppServerManager } from "./app-server-manager.js";
 import type { ApprovalDecision } from "./app-server-manager.js";
 import { ZenXCredentialVault } from "./credential-vault.js";
+import { secureLocalEncryption } from "./secure-local-encryption.js";
 import type {
   PublicHostSettings,
   ZenXProviderDeleteReplacements,
@@ -426,7 +427,7 @@ async function bootstrapZenX(): Promise<void> {
     }
     fleetSettingsService = new FleetSettingsService({
       directory: userDataDirectory,
-      encryption: safeStorage,
+      encryption: secureLocalEncryption(safeStorage),
       manager: () => {
         if (!appServerManager) throw new Error("Host unavailable");
         return appServerManager;
@@ -457,6 +458,7 @@ async function bootstrapZenX(): Promise<void> {
       async (_event, action: unknown, input: unknown, revision?: number) => {
         const fleet = fleetSettingsService!;
         if (action === "status") return await fleet.status();
+        if (action === "readiness") return await fleet.readiness();
         if (action === "catalog" && typeof input === "string")
           return await fleetProduct.catalog(input);
         if (action === "listThreads")
@@ -490,6 +492,8 @@ async function bootstrapZenX(): Promise<void> {
             input as Parameters<typeof fleet.invoke>[0],
           );
         if (action === "hostPair") return await fleet.hostPair();
+        if (action === "hostInvitation")
+          return await fleet.hostInvitation(input);
         if (action === "revoke" && typeof input === "string")
           return await fleet.revoke(input);
         throw new Error("Unsupported Fleet operation");

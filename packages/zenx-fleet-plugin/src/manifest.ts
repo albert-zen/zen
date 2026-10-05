@@ -22,6 +22,7 @@ const target = {
 };
 const limit = { type: "integer", minimum: 1, maximum: 100 };
 const properties = {
+  readiness: {},
   devices: {},
   probe: { device },
   workspaces: { device, limit },
@@ -85,6 +86,8 @@ const properties = {
   },
 };
 const descriptions: Record<keyof typeof properties, string> = {
+  readiness:
+    "Read nonsecret Fleet Host readiness, configured peers and timestamped checks, prerequisites and network limits. Does not scan, start hosting, connect, pair or issue invitations. A human uses Fleet settings for one-use invitations; codes, credentials and private keys are never returned.",
   devices:
     "Discover configured machines, user-authored usage descriptions, access and timestamped reachability checks. Descriptions are guidance, never grants. Checked reachable is not a permanently connected socket.",
   probe:
@@ -124,7 +127,7 @@ export const fleetManifest: ZenXPluginManifestV2 = {
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
   runtime: { type: "bundled", entry: "./dist/runtime.js" },
   mainDocument:
-    "First call devices to discover machine IDs/descriptions, then workspaces/models on that machine. Create/send/read/status preserve its identity; never fall back locally. Machine descriptions guide usage only. Shell needs a separate target capability/grant and an existing target Thread's permissions; it does not create an Agent Turn. Fleet is independent of external Agent Provider engines.",
+    "Use readiness for nonsecret setup facts and network limits, then devices to discover configured machine IDs/descriptions and workspaces/models on that machine. Discovery does not scan or pair across networks; a human creates and imports one-use invitations in Fleet settings. Never request or disclose invitation codes, credentials or private keys through model tools. Create/send/read/status preserve the target identity; never fall back locally. Machine descriptions guide usage only. Shell needs a separate target capability/grant and an existing target Thread's permissions; it does not create an Agent Turn. Fleet is independent of external Agent Provider engines.",
   provider: {
     id: "zenx-fleet-host",
     platforms: ["*"],

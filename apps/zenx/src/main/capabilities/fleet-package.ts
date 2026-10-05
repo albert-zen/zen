@@ -35,6 +35,8 @@ export class ZenXFleetCapabilityPackage implements ZenXCapabilityPackage {
     for (const key of Object.keys(args))
       if (!allowed.includes(key))
         throw new Error(`Unexpected Fleet argument: ${key}`);
+    if (name === "zenx_fleet_readiness")
+      return await this.options.fleet.readiness();
     if (name === "zenx_fleet_devices")
       return {
         source: "zenx.fleet",

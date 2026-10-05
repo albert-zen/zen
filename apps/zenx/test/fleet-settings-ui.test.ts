@@ -337,7 +337,7 @@ test("Android-facing endpoint requires explicit hosting consent and survives con
   });
   try {
     await fill(
-      view.input("Android-facing HTTPS endpoint"),
+      view.input("Client-facing HTTPS endpoint"),
       "https://device.example:9443",
     );
     assert.match(
@@ -360,7 +360,7 @@ test("Android-facing endpoint requires explicit hosting consent and survives con
     );
     await click(view.button("Refresh Fleet"));
     assert.equal(
-      view.input("Android-facing HTTPS endpoint").value,
+      view.input("Client-facing HTTPS endpoint").value,
       "https://device.example:9443",
     );
   } finally {

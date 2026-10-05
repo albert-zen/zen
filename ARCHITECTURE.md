@@ -4,6 +4,8 @@
 
 - **Fleet** — 用户配置的 SSH/HTTPS 设备目录将既有线程工具按可选 device 路由到远端同一工具实现；远端 Host 持有唯一会话权威，Fleet 不同步 journal、不新建调度器。
 - **Fleet 产品插件** — 独立的一方插件通过目标限定的 Fleet port 发现机器、用途描述、当前检查事实、工作空间和 Zen 模型目录，并调用已有线程能力；机器描述只是用户写的用途指导，不授予权限、不成为执行命令。
+- **Fleet 就绪与邀请** — 普通插件的只读就绪检查只披露当前配置的准备步骤与已知设备；人工界面为已有可信 HTTPS 路径创建短时单用邀请，发送确认绑定所见 Host、配置 revision 与授权范围，接收方核对目标并明确确认后复用既有配对授权，秘密不进入模型发现、配置或会话状态。
+- **OS 凭证保护适配** — 复用既有 credential vault 的加解密接口，Linux 仅接受已知 OS secret-store backend，拒绝 Electron basic_text / unknown fallback；该判断不配置 keychain 或更改系统安全设置。
 - **Fleet 新线程目标** — 新稿显式选择 machine、目标工作空间和该目标的 Zen 模型；创建后机器/Host/工作空间/Thread 定位不可被本机同 ID 替代，界面只保留定位与易失显示投影，默认仍是本机。 远端消息可要求目标未归档，该条件在既有 Thread mutation lock 下核对，默认调用行为不变。
 - **Fleet Shell** — 独立 opt-in 的目标 Host shell capability 与设备 grant，仅在授权工作空间和已有 targetThreadId 的当前权限下复用目标 ToolEnvironment/ShellToolRuntime；没有审批通路时拒绝未知审批，不代理任意工具、不新增目标 Agent Turn，结果进入调用者已有 canonical 工具结果。
 - **Fleet 无界面 Host** — 显式生产进程入口沿用现有 provider/model 配置及受保护 durable grants；配对授权可跨进程重启保留，监听和执行只在该进程存活时存在，不安装服务或自动启动。

@@ -1,22 +1,29 @@
 # Fleet and Always On Assistant
 
-Fleet lets the same thread tools work across configured desktop Hosts. The
-Always On Assistant preset combines Rooms, Triggers and self-control. It has no
-private workspace convention or personal workflow dependency.
+Fleet lets ordinary plugin tools work across configured desktop Hosts for any
+Agent. The PAW (Always On Assistant) preset supplies default behavior and a memory
+location; Rooms own messages, Triggers own wakeups, and Fleet owns device routing.
+It has no privileged capability, private workspace convention or personal workflow
+dependency.
 
 ## Desktop connection setup
 
 Open Settings → Fleet. Use this UI for live changes; restart ZenX after manual
 edits to fleet.json. Add an SSH device with an existing trusted SSH alias and
 the remote packaged `fleet-bridge.js` command, or pair a native HTTPS Host using
-its endpoint, Host ID and one-time code. Test the device and inspect its available
+the target user's reviewed single-use invitation. The invitation fills in its
+endpoint and Host ID; the receiving user confirms trust and requested access.
+Agents use `zenx_fleet_readiness` for nonsecret preparation checks and known-device
+discovery. They never receive invitations, permanent tokens or authorization to
+change trust silently. See [the invitation flow](fleet.md#connect-with-an-invitation).
+Test the device and inspect its available
 workspaces before choosing one. The remote workspace identity is returned by the
 Host; a local path is not a remote workspace ID.
 
 To expose this desktop, enable Fleet hosting, choose the bind address and port,
 and supply a certificate and private key. Certificates must be trusted by the
 connecting device; there is no certificate-warning bypass. For Android direct
-connections, set the Android-facing HTTPS endpoint with an explicit port matching
+connections, set the client-facing HTTPS endpoint with an explicit port matching
 the listener and a hostname in the certificate SAN. This narrowly admits the
 Origin emitted by React Native; it does not enable pairing CORS. Prefer a loopback
 listener unless remote network access is intended. Read-only hosting cannot
@@ -40,8 +47,14 @@ forwarded grants and messages. No public relay service/account is required.
 
 ## Agent tools
 
+Fresh desktop profiles install the ordinary Rooms, Triggers, self-control,
+Subagents and Fleet packages through the same startup path. Explicit disabled or
+uninstalled choices are preserved; preparation/configuration and tool permissions
+still apply. IM is an optional independent plugin, not owned by the PAW preset.
+
 Use `zenx_plugin` to discover/read `zenx-self-control`, `zenx-rooms` and
-`zenx-triggers` before calling their undisclosed tools.
+`zenx-triggers` (or the ordinary `zenx-fleet` package) before calling their
+undisclosed tools.
 
 - `zenx_self_control_devices` lists configured devices
 - `zenx_threads_list`, `zenx_threads_read`, `zenx_threads_create`,

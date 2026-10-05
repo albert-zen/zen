@@ -7,6 +7,50 @@ pinned HTTPS peers. Add a label and an optional machine description explaining
 what the machine is for and when an Agent should use it. The description is
 user-authored guidance, not a permission grant or executable command.
 
+## Connect with an invitation
+
+Fleet is included in the ordinary first-party startup installation. Every Agent
+can discover its tools through the plugin catalog; a PAW preset has no privileged
+Fleet path. Explicit disable/uninstall choices and normal tool permissions remain
+in effect. Installation alone grants no access to another machine.
+
+1. On the target, ask its Agent to run `zenx_fleet_readiness` and explain missing
+   preparation. This read-only tool reports known machines, current hosting and
+   nonsecret prerequisites. It does not connect, change settings or issue trust.
+2. The target user opens Settings → Fleet and approves hosting through the
+   existing controls. A trusted certificate, workspace scope and reachable
+   direct HTTPS endpoint or trusted relay must already be configured. Agents may
+   help prepare nonsecret settings; certificate/network/credential authorization
+   remains with the user and their organization's policy.
+3. In **Invite a client**, choose the configured endpoint and machine name,
+   acknowledge the access offered, then choose **Create invitation**. Share it
+   privately with the intended person. The invitation contains a five-minute,
+   single-use code, endpoint and stable Host ID. Creating another replaces the
+   previous code. Hiding clears the screen without cancelling the target code.
+   Sharing confirmation is bound to the displayed Host and access/shell scope;
+   changed configuration requires a refresh and fresh acknowledgment.
+4. On the receiving machine, choose **Use invitation**. Review the Host ID with
+   the target user or another trusted channel. Pairing defaults to read-only and
+   shell off. After explicitly acknowledging the selected access, choose
+   **Pair and check**. Saved tokens remain in the existing OS-encrypted vault;
+   the invitation is cleared after this attempt, cancellation or expiry.
+5. The receiving Agent can now discover the configured machine and its exact
+   workspace/model catalog. Humans can choose it in New Thread or inspect it
+   from Settings. A failed reachability check does not undo a successful pair;
+   its outcome is shown separately.
+
+Invitation encoding is for copying, not encryption or proof of identity. Keep it
+out of Agent conversations and logs. Readiness/discovery tools never return its
+code or permanent credentials. Neither side enrolls automatically. Access remains
+individually revocable at the target, and read/shell upgrades require fresh pairing.
+
+Fleet discovers configured devices, not arbitrary computers. Machines on unrelated
+networks need an already reachable endpoint or configured relay; there is no
+automatic public rendezvous, network scan, port forwarding or certificate setup.
+Loopback endpoints reach only the receiving computer. SSH with existing trusted
+access remains available through the device editor, and separate pairing codes
+remain in the advanced hosting controls.
+
 ## Start and inspect work
 
 New thread defaults to **This machine** and keeps the ordinary local Composer.
@@ -43,6 +87,7 @@ by the target Host.
 The ordinary `@zenx/fleet-plugin` package exposes:
 
 - `zenx_fleet_devices`: local/remote IDs, labels, descriptions, access and check facts
+- `zenx_fleet_readiness`: read-only hosting/prerequisite facts and honest setup limits
 - `zenx_fleet_probe`: an explicit bounded reachability check
 - `zenx_fleet_workspaces` and `zenx_fleet_models`: target-specific discovery
 - `zenx_fleet_threads_list`, `read`, `create`, `send`, and `status`
@@ -73,15 +118,18 @@ revision-bound edits. Rebase conflicted configuration explicitly before saving.
 HTTPS pairing checks the configured endpoint's normal TLS trust and pinned stable
 Host ID. Tokens are stored only through the operating-system encrypted credential
 store, never in renderer state or public Fleet JSON. If OS encryption is
-unavailable, pairing rejects before requesting a grant; enable/unlock the target
-platform's normal credential store before pairing. Pair codes are one-use and
-short-lived. Changing a local access/shell request cannot expand an existing
+unavailable, pairing rejects before requesting a grant; enable/unlock the receiving
+platform's normal credential store before pairing.
+On Linux, Electron's `basic_text` or unknown backend is unavailable for Fleet
+credentials even if its generic encryption flag is true; a normal OS secret store
+is required. See [Electron's storage semantics](https://www.electronjs.org/docs/latest/api/safe-storage#synchronous-api).
+Pair codes are one-use and short-lived. Changing a local access/shell request cannot expand an existing
 server-issued grant; remove that peer and enroll afresh under target-approved scope.
 
 Hosting continues to require explicit exposure/control consent, operator-provided
 TLS files, scoped workspaces and individually revocable clients. This feature does
 not create keys, alter SSH trust, open firewalls or install services. Android direct
-connections require the explicit Android-facing HTTPS endpoint matching the
+connections require the explicit client-facing HTTPS endpoint matching the
 certificate SAN and listener port. An optional trusted self-hosted relay terminates
 TLS and can see relayed pairing/messages/credentials; it is not end-to-end encrypted.
 

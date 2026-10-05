@@ -1,6 +1,15 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Select } from "./ui/controls.js";
 import { FleetHistory } from "./FleetHistory.js";
+import {
+  FleetConnectionSetup,
+  FleetInvitationIssuer,
+} from "./FleetOnboarding.js";
+import type {
+  FleetInvitation,
+  FleetInvitationConsent,
+  FleetReadiness,
+} from "../../fleet-invitation.js";
 
 type Access = "read" | "control";
 type Device = {
@@ -59,6 +68,13 @@ export interface FleetSettingsSnapshot {
 
 export interface FleetSettingsApi {
   status(): Promise<FleetSettingsSnapshot>;
+  readiness?(): Promise<FleetReadiness>;
+  hostInvitation?(input: {
+    endpoint: string;
+    label: string;
+    confirmed: true;
+    expected: FleetInvitationConsent;
+  }): Promise<{ invitation: FleetInvitation; serialized: string }>;
   save(
     config: Omit<FleetSettingsSnapshot["config"], "hosting"> & {
       hosting?: Hosting & { relayRegistrationToken?: string };
@@ -153,6 +169,7 @@ export function FleetSettings() {
     Record<string, { key: string; label: string }>
   >({});
   const [busy, setBusy] = useState<string | null>(null);
+  const [onboardingBusy, setOnboardingBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const mounted = useRef(false);
@@ -572,7 +589,7 @@ export function FleetSettings() {
         ) : null}
       </div>
     );
-  const disabled = busy !== null;
+  const disabled = busy !== null || onboardingBusy;
   const hostingDirty =
     JSON.stringify(hosting) !==
       JSON.stringify(snapshot.config.hosting ?? defaultHosting) ||
@@ -621,6 +638,13 @@ export function FleetSettings() {
           {error}
         </div>
       ) : null}
+      <FleetConnectionSetup
+        api={api}
+        snapshot={snapshot}
+        disabled={disabled || editor !== null}
+        onBusy={setOnboardingBusy}
+        onChanged={() => refresh()}
+      />
       <div className="page-card settings-card">
         <div className="settings-card-head">
           <div>
@@ -1361,7 +1385,7 @@ export function FleetSettings() {
               wide
             />
             <Field
-              label="Android-facing HTTPS endpoint"
+              label="Client-facing HTTPS endpoint"
               value={hosting.originEndpoint ?? ""}
               placeholder="https://device.example:3940"
               onChange={(originEndpoint) =>
@@ -1569,6 +1593,27 @@ export function FleetSettings() {
               Discard changes
             </button>
           ) : null}
+        </div>
+        <FleetInvitationIssuer
+          api={api}
+          snapshot={snapshot}
+          disabled={disabled || editor !== null}
+          hostingDirty={hostingDirty}
+          onBusy={setOnboardingBusy}
+          onChanged={() => refresh()}
+          onHostStatus={(value) => {
+            try {
+              const latest = normalizeFleetSnapshot(value);
+              setSnapshot((current) =>
+                current ? { ...current, host: latest.host } : current,
+              );
+            } catch {
+              setError("Could not refresh Fleet hosting status.");
+            }
+          }}
+        />
+        <details className="fleet-section-space">
+          <summary>Advanced: separate pairing code</summary>
           <button
             className="secondary-button"
             type="button"
@@ -1582,32 +1627,32 @@ export function FleetSettings() {
           >
             Create pairing code
           </button>
-        </div>
-        {pairCode ? (
-          <div role="status" className="fleet-top-space">
-            <p>
-              One-time pairing code: <strong>{pairCode.code}</strong>
-            </p>
-            <p>
-              Host ID: {pairCode.hostId}
-              {pairCode.expiresAt
-                ? ` · Expires ${new Date(pairCode.expiresAt).toLocaleString()}`
-                : " · Short-lived; use it now"}
-            </p>
-            <p className="settings-note">
-              Enter this code and the HTTPS endpoint on the client you want to
-              pair. Anyone with this code can request access until it expires or
-              is used.
-            </p>
-            <button
-              type="button"
-              className="quiet-button"
-              onClick={() => setPairCode(null)}
-            >
-              Hide code
-            </button>
-          </div>
-        ) : null}
+          {pairCode ? (
+            <div role="status" className="fleet-top-space">
+              <p>
+                One-time pairing code: <strong>{pairCode.code}</strong>
+              </p>
+              <p>
+                Host ID: {pairCode.hostId}
+                {pairCode.expiresAt
+                  ? ` · Expires ${new Date(pairCode.expiresAt).toLocaleString()}`
+                  : " · Short-lived; use it now"}
+              </p>
+              <p className="settings-note">
+                Enter this code and the HTTPS endpoint on the client you want to
+                pair. Anyone with this code can request access until it expires
+                or is used.
+              </p>
+              <button
+                type="button"
+                className="quiet-button"
+                onClick={() => setPairCode(null)}
+              >
+                Hide code
+              </button>
+            </div>
+          ) : null}
+        </details>
         <h3 className="fleet-section-space">Paired clients</h3>
         {snapshot.host.clients.length === 0 ? (
           <p>No paired clients</p>

@@ -107,3 +107,8 @@
   gap: 8px;
   margin-block: 12px;
 }
+.fleet-invitation-review {
+  padding-top: 12px;
+  border-top: 1px solid var(--border-soft);
+  outline-offset: 4px;
+}

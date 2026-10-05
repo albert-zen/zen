@@ -16,7 +16,18 @@ import {
   type LocalEncryption,
 } from "./credential-vault.js";
 import type { AppServerManager } from "./app-server-manager.js";
-import type { FleetHostConfig } from "./fleet-host.js";
+import {
+  fleetInvitationEndpoints,
+  type FleetHostConfig,
+} from "./fleet-host.js";
+import {
+  encodeFleetInvitation,
+  normalizeFleetInvitationEndpoint,
+  parseFleetInvitationConsent,
+  type FleetInvitation,
+  type FleetInvitationConsent,
+  type FleetReadiness,
+} from "../fleet-invitation.js";
 import { subscribeSshFleetThread } from "./fleet-ssh-watch.js";
 import type { ZenXTriggerAppServerPort } from "./trigger-service.js";
 
@@ -90,7 +101,7 @@ export class FleetSettingsService {
   #relayKey(endpoint: string): string {
     return `relay:${createHash("sha256").update(endpoint).digest("hex")}`;
   }
-  async #identity(): Promise<string> {
+  async #existingIdentity(): Promise<string | undefined> {
     if (this.#hostId) return this.#hostId;
     const file = path.join(this.options.directory, "fleet-host-id");
     try {
@@ -101,6 +112,12 @@ export class FleetSettingsService {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+    return undefined;
+  }
+  async #identity(): Promise<string> {
+    const existing = await this.#existingIdentity();
+    if (existing) return existing;
+    const file = path.join(this.options.directory, "fleet-host-id");
     const id = randomUUID();
     await mkdir(this.options.directory, { recursive: true });
     try {
@@ -158,6 +175,128 @@ export class FleetSettingsService {
         ),
         ...(this.#error ? { error: this.#error } : {}),
       },
+    };
+  }
+  /** Public discovery facts only; no listener, probe, pairing or identity write. */
+  async readiness(): Promise<FleetReadiness> {
+    let config: FleetConfig;
+    try {
+      config = await this.config();
+    } catch {
+      // JSON/filesystem errors can quote credential-bearing malformed input.
+      throw new Error(
+        "Fleet configuration could not be read; open Fleet settings for details",
+      );
+    }
+    let current: Record<string, unknown> = {};
+    let hostUnavailable = false;
+    try {
+      const value = await this.options.manager().fleetControl("status");
+      if (fleetRecord(value)) current = value;
+      else hostUnavailable = true;
+    } catch {
+      hostUnavailable = true;
+    }
+    let hostId: string | null = null;
+    try {
+      hostId = (await this.#existingIdentity()) ?? null;
+    } catch {
+      hostUnavailable = true;
+    }
+    if (
+      typeof current.hostId === "string" &&
+      /^[a-zA-Z0-9-]{1,128}$/u.test(current.hostId)
+    )
+      hostId = current.hostId;
+    const hosting = config.hosting;
+    let relayConfigured = false;
+    let vaultUnavailable = false;
+    if (hosting?.relayEndpoint) {
+      try {
+        relayConfigured = await this.#vault.hasApiKey(
+          this.#relayKey(hosting.relayEndpoint),
+        );
+      } catch {
+        vaultUnavailable = true;
+      }
+    }
+    let url: string | undefined;
+    if (typeof current.url === "string") {
+      try {
+        url = normalizeFleetInvitationEndpoint(current.url);
+      } catch {
+        hostUnavailable = true;
+      }
+    }
+    const enabled = current.enabled === true;
+    const endpoints = fleetInvitationEndpoints(hosting ?? {}, {
+      enabled,
+      ...(url ? { url } : {}),
+      relayConnected: current.relayConnected === true,
+    });
+    const devices = (await this.devices(config)).map(
+      ({ check, ...device }) => ({
+        ...device,
+        check: {
+          state: check.state,
+          live: false as const,
+          ...(check.checkedAt === undefined
+            ? {}
+            : { checkedAt: check.checkedAt }),
+          ...(check.state === "failed"
+            ? {
+                detail:
+                  "Last check failed; open Fleet settings or run an explicit probe for details",
+              }
+            : {}),
+        },
+      }),
+    );
+    return {
+      source: "zenx.fleet",
+      revision: config.revision ?? 0,
+      host: {
+        configured: hosting !== undefined,
+        enabled,
+        hostId,
+        access: hosting?.access ?? "read",
+        shellEnabled:
+          hosting?.access === "control" && hosting.shellEnabled === true,
+        ...(url ? { url } : {}),
+        ...(hosting?.originEndpoint
+          ? { originEndpoint: hosting.originEndpoint }
+          : {}),
+        ...(hosting?.relayEndpoint
+          ? { relayEndpoint: hosting.relayEndpoint }
+          : {}),
+        relayConnected: current.relayConnected === true,
+        relayConfigured,
+        ...(hostUnavailable ||
+        current.error ||
+        current.relayError ||
+        this.#error ||
+        vaultUnavailable
+          ? {
+              error:
+                "Fleet Host or credentials need attention; open Fleet settings for details",
+            }
+          : {}),
+      },
+      devices,
+      prerequisites: {
+        credentialEncryption: this.options.encryption.isEncryptionAvailable(),
+        tlsConfigured: !!(hosting?.tlsCertificateFile && hosting.tlsKeyFile),
+        hostEnabled: enabled,
+        trustedEndpointConfigured: endpoints.length > 0,
+        relayCredentialConfigured: relayConfigured,
+      },
+      limits: [
+        "Only user-configured peers are discovered; no automatic network scan, rendezvous or pairing.",
+        "Direct HTTPS needs a certificate trusted by the client and a route to the Host. Listener state and timestamped checks do not prove current client reachability.",
+        "Different networks need routing or a VPN arranged by the user, or an already configured reachable relay. Fleet does not set up routers, VPNs, certificates or relays.",
+        "A relay is a trusted TLS termination point that can see pairing, requests and events; relay transport is not end-to-end encrypted.",
+        "Invitations are human-only bearer secrets, expire within five minutes and can pair once. Host and client grants still bound control and shell access.",
+      ],
     };
   }
   async #write(config: FleetConfig) {
@@ -555,6 +694,90 @@ export class FleetSettingsService {
   async hostPair() {
     return await this.options.manager().fleetControl("pair");
   }
+  /** Human renderer entry only. No model tool or persistent invitation state. */
+  async hostInvitation(input: unknown): Promise<{
+    invitation: FleetInvitation;
+    serialized: string;
+  }> {
+    if (
+      !fleetRecord(input) ||
+      input.confirmed !== true ||
+      Object.keys(input).some(
+        (key) => !["endpoint", "label", "confirmed", "expected"].includes(key),
+      )
+    )
+      throw new Error(
+        "Explicit human confirmation is required to share an invitation",
+      );
+    const endpoint = normalizeFleetInvitationEndpoint(input.endpoint);
+    if (
+      typeof input.label !== "string" ||
+      !input.label.trim() ||
+      input.label.length > 120 ||
+      /[\x00-\x1f\x7f]/u.test(input.label)
+    )
+      throw new Error(
+        "A Fleet invitation label is required (at most 120 characters)",
+      );
+    const label = input.label;
+    const expected = parseFleetInvitationConsent(input.expected);
+    return await this.#queue(async () => {
+      const config = await this.config();
+      if (!config.hosting?.enabled)
+        throw new Error(
+          "Enable configured Fleet hosting before sharing an invitation",
+        );
+      const manager = this.options.manager();
+      const hostId = await this.#existingIdentity();
+      assertFleetInvitationConsent(config, hostId, expected);
+      const current = await manager.fleetControl("status");
+      if (
+        !fleetRecord(current) ||
+        current.enabled !== true ||
+        !hostId ||
+        current.hostId !== hostId
+      )
+        throw new Error(
+          "Fleet Host changed; refresh settings and review sharing again",
+        );
+      const candidates = fleetInvitationEndpoints(config.hosting, current);
+      if (!candidates.includes(endpoint))
+        throw new Error(
+          "Invitation endpoint must match an existing configured direct Host or connected relay",
+        );
+      if (this.options.manager() !== manager)
+        throw new Error(
+          "Fleet Host changed; refresh before creating an invitation",
+        );
+      assertFleetInvitationConsent(await this.config(), hostId, expected);
+      const issued = await manager.fleetControl("invitation", {
+        endpoint,
+        label,
+        confirmed: true,
+        expected: {
+          hostId: expected.hostId,
+          access: expected.access,
+          shellEnabled: expected.shellEnabled,
+          relayEndpoint: expected.relayEndpoint,
+        },
+      });
+      if (
+        !fleetRecord(issued) ||
+        issued.hostId !== hostId ||
+        issued.endpoint !== endpoint ||
+        issued.label !== label ||
+        issued.access !== expected.access ||
+        issued.shellEnabled !== expected.shellEnabled ||
+        this.options.manager() !== manager
+      )
+        throw new Error(
+          "Fleet invitation scope changed; refresh settings and review sharing again",
+        );
+      const invitation = issued as unknown as FleetInvitation;
+      const serialized = encodeFleetInvitation(invitation);
+      return { invitation, serialized };
+    });
+  }
   async revoke(deviceId: string) {
     if (typeof deviceId !== "string" || !deviceId)
       throw new Error("Device required");
@@ -849,6 +1072,24 @@ function fleetObservationIdentity(peer: FleetDevice): string {
 }
 function fleetRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function assertFleetInvitationConsent(
+  config: FleetConfig,
+  hostId: string | undefined,
+  expected: FleetInvitationConsent,
+): void {
+  if (
+    expected.revision !== (config.revision ?? 0) ||
+    expected.hostId !== hostId ||
+    expected.access !== config.hosting?.access ||
+    expected.shellEnabled !==
+      (config.hosting?.access === "control" &&
+        config.hosting.shellEnabled === true) ||
+    expected.relayEndpoint !== (config.hosting?.relayEndpoint ?? null)
+  )
+    throw new Error(
+      "Fleet Host or invitation scope changed; refresh settings and review sharing again",
+    );
 }
 function fleetSourceString(value: unknown, field: string): string {
   if (
