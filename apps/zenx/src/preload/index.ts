@@ -272,7 +272,20 @@ contextBridge.exposeInMainWorld("zenx", {
       ),
   },
   fleet: {
+    catalog: (id: string) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "catalog", id),
+    listThreads: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "listThreads", input),
+    createThread: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "createThread", input),
+    readThread: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "readThread", input),
+    threadStatus: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "threadStatus", input),
+    sendThread: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "sendThread", input),
     status: () => ipcRenderer.invoke(ipcChannels.fleetControl, "status"),
+    readiness: () => ipcRenderer.invoke(ipcChannels.fleetControl, "readiness"),
     save: (config: unknown, revision?: number) =>
       ipcRenderer.invoke(ipcChannels.fleetControl, "save", config, revision),
     pair: (input: unknown) =>
@@ -284,6 +297,8 @@ contextBridge.exposeInMainWorld("zenx", {
     invoke: (input: unknown) =>
       ipcRenderer.invoke(ipcChannels.fleetControl, "invoke", input),
     hostPair: () => ipcRenderer.invoke(ipcChannels.fleetControl, "hostPair"),
+    hostInvitation: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "hostInvitation", input),
     revoke: (id: string) =>
       ipcRenderer.invoke(ipcChannels.fleetControl, "revoke", id),
   },

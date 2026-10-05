@@ -4,7 +4,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import { WebSocket } from "ws";
 import {
   REMOTE_HOST_VERSION,
+  REMOTE_UNARCHIVED_SEND_CAPABILITY,
   REMOTE_METHODS,
+  REMOTE_SHELL_MAX_COMMAND_BYTES,
+  REMOTE_SHELL_MAX_TIMEOUT_MS,
+  REMOTE_SHELL_MAX_OUTPUT_BYTES,
   isConfirmedRemoteRejection,
   type RemoteEventView,
   type RemoteItemView,
@@ -43,7 +47,11 @@ export interface NativeFleetClientOptions {
 export class NativeFleetRejectedError extends Error {
   readonly confirmedRejection = true;
   constructor(readonly code: string) {
-    super(`Fleet remote error: ${code}`);
+    super(
+      code === "approval_required"
+        ? "Fleet shell approval is required on the target Host. Approve shell there before retrying; remote shell cannot answer target approval requests."
+        : `Fleet remote error: ${code}`,
+    );
   }
 }
 class NativeFleetCancelledError extends Error {
@@ -417,6 +425,7 @@ class NativeSession {
     params: Record<string, unknown>,
     signal: AbortSignal,
     mutation = false,
+    options: { timeoutMs?: number; cancelShellOnAbort?: boolean } = {},
   ): Promise<unknown> {
     signal.throwIfAborted();
     if (this.#closed || this.socket.readyState !== WebSocket.OPEN)
@@ -438,21 +447,46 @@ class NativeSession {
       const uncertain = mutation
         ? "; remote admission may be unknown. Inspect the target before retrying. No automatic retry."
         : "";
-      const abort = () =>
+      const abort = () => {
+        if (
+          options.cancelShellOnAbort &&
+          this.socket.readyState === WebSocket.OPEN
+        ) {
+          this.socket.send(
+            JSON.stringify({
+              id: `cancel:${id}`,
+              method: REMOTE_METHODS.shellCancel,
+              params: { requestId: id },
+            }),
+          );
+          clearTimeout(timer);
+          timer = setTimeout(
+            () =>
+              finish(
+                new NativeFleetCancelledError(
+                  `Fleet shell cancellation could not be confirmed${uncertain}`,
+                  signal.reason,
+                ),
+              ),
+            5_000,
+          );
+          return;
+        }
         finish(
           new NativeFleetCancelledError(
             `Fleet request cancelled${uncertain}`,
             signal.reason,
           ),
         );
-      const timer = setTimeout(
+      };
+      let timer = setTimeout(
         () =>
           finish(
             mutation
               ? new Error(`Fleet request timed out${uncertain}`)
               : new NativeFleetConnectionError("Fleet request timed out", true),
           ),
-        10_000,
+        options.timeoutMs ?? 10_000,
       );
       const dispose = () => {
         clearTimeout(timer);
@@ -684,6 +718,7 @@ export class NativeFleetClient implements NativeFleetPort {
       deviceId,
       code: string(code, "pair code", 256).trim(),
       access: peer.access,
+      shellEnabled: peer.shellEnabled === true,
     });
     const raw: unknown = await new Promise((resolve, reject) => {
       signal.throwIfAborted();
@@ -905,6 +940,13 @@ export class NativeFleetClient implements NativeFleetPort {
     const args = request.arguments;
     // Validate before connecting or admitting any mutation.
     const supported: Record<string, string[]> = {
+      zenx_fleet_shell: [
+        "workspace",
+        "targetThreadId",
+        "command",
+        "timeout_ms",
+        "max_output_bytes",
+      ],
       zenx_projects_list: ["limit"],
       zenx_models_list: [],
       zenx_threads_list: [
@@ -944,6 +986,38 @@ export class NativeFleetClient implements NativeFleetPort {
       ],
     };
     only(args, supported[request.name] ?? []);
+    const shell =
+      request.name === "zenx_fleet_shell"
+        ? {
+            workspaceId: string(args.workspace, "explicit workspace ID", 128),
+            targetThreadId: string(
+              args.targetThreadId,
+              "explicit target Thread ID",
+            ),
+            command: text(args.command),
+            timeoutMs: integer(
+              args.timeout_ms,
+              "timeout_ms",
+              30_000,
+              REMOTE_SHELL_MAX_TIMEOUT_MS,
+            ),
+            maxOutputBytes: integer(
+              args.max_output_bytes,
+              "max_output_bytes",
+              16_384,
+              REMOTE_SHELL_MAX_OUTPUT_BYTES,
+            ),
+          }
+        : undefined;
+    if (
+      shell &&
+      (peer.shellEnabled !== true ||
+        shell.command.includes("\0") ||
+        Buffer.byteLength(shell.command) > REMOTE_SHELL_MAX_COMMAND_BYTES)
+    )
+      throw new Error(
+        "Fleet shell requires explicit shell permission and a bounded command",
+      );
     const waitDeadline =
       request.name === "zenx_self_control_threads_wait"
         ? AbortSignal.timeout(
@@ -956,6 +1030,41 @@ export class NativeFleetClient implements NativeFleetPort {
     requestSignal.throwIfAborted();
     const session = await this.#connect(peer, requestSignal);
     try {
+      if (shell) {
+        if (!session.capabilities.includes("shell"))
+          throw new Error(
+            "Fleet target shell is disabled or this pairing has no shell permission. Enable shell on the target Host and pair again with shell permission.",
+          );
+        const result = await session.request(
+          REMOTE_METHODS.shell,
+          shell,
+          requestSignal,
+          true,
+          {
+            timeoutMs: shell.timeoutMs + 10_000,
+            cancelShellOnAbort: true,
+          },
+        );
+        if (
+          !record(result) ||
+          typeof result.output !== "string" ||
+          Buffer.byteLength(result.output) > shell.maxOutputBytes ||
+          !Number.isSafeInteger(result.exitCode) ||
+          !["completed", "timed_out", "cancelled"].includes(
+            String(result.status),
+          ) ||
+          typeof result.sourceTruncated !== "boolean"
+        )
+          throw new Error(
+            "Invalid Fleet shell result; remote admission may be unknown. No automatic retry.",
+          );
+        return {
+          source: SOURCE,
+          workspace: shell.workspaceId,
+          targetThreadId: shell.targetThreadId,
+          ...result,
+        };
+      }
       if (request.name === "zenx_projects_list") {
         const limit = integer(args.limit, "limit", 50, 100);
         const workspaces = await this.#workspaces(session, requestSignal);
@@ -1078,11 +1187,16 @@ export class NativeFleetClient implements NativeFleetPort {
         throw new Error("Specify only target");
       const target = string(args.target ?? args.threadId, "Thread target");
       const exact = threads.find((view) => view.threadId === target);
+      // `threadId` is an exact locator; only the explicit `target` selector
+      // permits title/prefix resolution. A missing exact ID must never retarget.
       const candidates = exact
         ? [exact]
-        : threads.filter(
-            (view) => view.threadId.startsWith(target) || view.name === target,
-          );
+        : args.threadId !== undefined
+          ? []
+          : threads.filter(
+              (view) =>
+                view.threadId.startsWith(target) || view.name === target,
+            );
       if (candidates.length !== 1)
         return {
           source: SOURCE,
@@ -1095,6 +1209,13 @@ export class NativeFleetClient implements NativeFleetPort {
         };
       const threadId = candidates[0]!.threadId;
       if (request.name === "zenx_threads_send") {
+        if (
+          args.threadId !== undefined &&
+          !session.capabilities.includes(REMOTE_UNARCHIVED_SEND_CAPABILITY)
+        )
+          throw new Error(
+            "Target Zen Host does not support archive-fenced Thread sends. Update the target Host before retrying.",
+          );
         const messageType = args.messageType ?? "guidance";
         if (
           !["guidance", "follow_up", "replacement"].includes(

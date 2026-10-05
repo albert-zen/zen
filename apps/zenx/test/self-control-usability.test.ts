@@ -134,6 +134,124 @@ test("self-control accepts readable targets and ambiguous mutations leave both T
   }
 });
 
+test("explicit threadId stays exact when a missing or archived Thread has title and prefix collisions", async () => {
+  const f = await fixture();
+  try {
+    const selected = (await f.client.request("thread/start", {})).thread;
+    const collision = (await f.client.request("thread/start", {})).thread;
+    await f.client.request("thread/name/set", {
+      threadId: collision.id,
+      name: selected.id,
+    });
+    for (const [name, args] of [
+      ["zenx_threads_read", {}],
+      ["zenx_threads_status", {}],
+      ["zenx_threads_send", { text: "wrong task" }],
+      ["zenx_self_control_threads_wait", { turnId: "missing-turn" }],
+    ] as const) {
+      const missing = await f.invoke(name, {
+        threadId: selected.id.slice(0, 12),
+        ...args,
+      });
+      assert.equal(missing.status, "not_found", name);
+    }
+    const completed = await f.app.startTurn(selected.id, "selected work");
+    await completed.done;
+    await f.client.request("thread/archive", { threadId: selected.id });
+    for (const [name, args] of [
+      ["zenx_threads_read", {}],
+      ["zenx_threads_status", {}],
+      ["zenx_threads_send", { text: "wrong task" }],
+      ["zenx_self_control_threads_wait", { turnId: completed.id }],
+    ] as const)
+      await assert.rejects(
+        f.invoke(name, { threadId: selected.id, ...args }),
+        /archived|inactive/i,
+        name,
+      );
+    assert.equal((await f.app.readThread(collision.id)).turns.length, 0);
+    assert.equal(
+      (await f.invoke("zenx_threads_read", { target: selected.id })).threadId,
+      selected.id,
+    );
+    const restored = await f.invoke("zenx_threads_unarchive", {
+      threadId: selected.id,
+    });
+    assert.equal(restored.archived, false);
+    assert.equal(
+      (await f.invoke("zenx_threads_status", { threadId: selected.id }))
+        .threadId,
+      selected.id,
+    );
+    await f.client.request("thread/name/set", {
+      threadId: collision.id,
+      name: "missing-full-id",
+    });
+    assert.equal(
+      (
+        await f.invoke("zenx_threads_send", {
+          threadId: "missing-full-id",
+          text: "must not be sent",
+        })
+      ).status,
+      "not_found",
+    );
+    assert.equal((await f.app.readThread(collision.id)).turns.length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("exact Thread operations reject archive after selector listing without retargeting", async () => {
+  const f = await fixture();
+  try {
+    const collision = (await f.client.request("thread/start", {})).thread;
+    for (const name of [
+      "zenx_threads_read",
+      "zenx_threads_status",
+      "zenx_threads_send",
+      "zenx_self_control_threads_wait",
+    ]) {
+      const selected = (await f.client.request("thread/start", {})).thread;
+      const completed = await f.app.startTurn(selected.id, "old work");
+      await completed.done;
+      await f.client.request("thread/name/set", {
+        threadId: collision.id,
+        name: selected.id,
+      });
+      let raced = false;
+      await f.port.attach({
+        request: async (method, params) => {
+          const result = await f.client.request(method, params);
+          if (
+            method === "thread/list" &&
+            "archived" in params &&
+            params.archived === true &&
+            !raced
+          ) {
+            raced = true;
+            await f.client.request("thread/archive", { threadId: selected.id });
+          }
+          return result;
+        },
+      });
+      const args = {
+        threadId: selected.id,
+        ...(name === "zenx_threads_send" ? { text: "new work" } : {}),
+        ...(name === "zenx_self_control_threads_wait"
+          ? { turnId: completed.id }
+          : {}),
+      };
+      await assert.rejects(f.invoke(name, args), /archived|inactive/i, name);
+      assert.equal(raced, true);
+      assert.equal((await f.app.readThread(selected.id)).turns.length, 1);
+      assert.equal((await f.app.readThread(collision.id)).turns.length, 0);
+    }
+  } finally {
+    await f.close();
+  }
+});
+
 test("sending needs only a target and text, and retrying the same invocation never creates another message", async () => {
   const f = await fixture();
   try {

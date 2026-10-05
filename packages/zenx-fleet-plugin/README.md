@@ -1,0 +1,13 @@
+# Fleet
+
+An ordinary first-party plugin that discovers user-configured machines and their usage descriptions, inspects each target's Zen workspaces/models/Threads, and creates/sends explicit work without changing the execution authority.
+
+Descriptions are guidance only. Discovery reports last-checked reachability, never an implied permanent live connection. Use machine-scoped workspace and Thread IDs; a failed target operation does not fall back to this machine.
+
+`zenx_fleet_readiness` reads nonsecret Host state, configured peers and their existing checks, credential-encryption/TLS prerequisites, and network limits. It does not start hosting, probe machines, scan networks, pair devices or return configuration credentials, invitation codes, certificate contents or private keys. This ordinary read tool works through the same Fleet permission for any Agent.
+
+A human can create a one-use invitation in Fleet settings after enabling the Host and confirming sharing. Consent binds the displayed settings revision, Host identity, access, effective shell scope and relay endpoint. Changed facts require a refresh and another review; the live Host checks its own scope atomically before issuing or replacing a code. The endpoint must already match the current direct listener, the configured client-facing HTTPS endpoint, or the configured connected relay. Invitations carry Host identity, endpoint, a label, current access/shell policy and a five-minute pairing code. The opaque paste value is a bearer secret, not encryption or proof of trust. The recipient must independently verify Host identity and trusted HTTPS certificate/address before pairing; imported policy does not grant additional authority. The existing target grant remains the one-use authority, and issuing a new code replaces the previous one. Invitations are not persisted or available through model tools.
+
+Only configured peers are discovered. Across networks, the user must arrange a reachable trusted HTTPS route/VPN or an already configured relay; Fleet does not set up routers, certificates, VPNs or public rendezvous. A relay terminates TLS and can see pairing, requests and events; it is not end-to-end encryption. Listener state, invitation creation and an earlier successful check do not prove reachability from another client. Loopback endpoints are for clients on the same machine.
+
+Shell is a separate permission. A target Host and fresh device grant must opt in; target Thread sandbox/tool approvals remain authoritative. No remote interactive approval route is claimed. Unsupported SSH shell targets reject explicitly. Unknown mutation outcomes are not retried automatically.

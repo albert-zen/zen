@@ -169,13 +169,18 @@ export async function serveRemoteHost(
               typeof data.code !== "string" ||
               (data.access !== undefined &&
                 data.access !== "read" &&
-                data.access !== "control")
+                data.access !== "control") ||
+              (data.shellEnabled !== undefined &&
+                typeof data.shellEnabled !== "boolean")
             )
               throw new RemoteHostError("invalid_request");
             const result = await options.access.pair({
               hostId: data.hostId,
               deviceId: data.deviceId,
               code: data.code,
+              ...(data.shellEnabled === undefined
+                ? {}
+                : { shellEnabled: data.shellEnabled as boolean }),
               ...(data.access === "read" || data.access === "control"
                 ? { access: data.access }
                 : {}),
@@ -354,6 +359,7 @@ function attach(
   let recovery: RecoverySession | undefined;
   let pageBusyGeneration: number | null = null;
   let activeRequests = 0;
+  const shellRequests = new Map<string, AbortController>();
   const invalidateRecovery = (state: RecoverySession) => {
     // An older in-flight page may finish after another resume has installed a
     // new subscription. It must neither clear nor reply with that newer state.
@@ -390,6 +396,7 @@ function attach(
     socket.send(json);
   };
   socket.once("close", () => {
+    for (const controller of shellRequests.values()) controller.abort();
     dispose();
     for (const release of roomSubscriptions.values()) release();
     roomSubscriptions.clear();
@@ -678,6 +685,51 @@ function attach(
                 pageBusyGeneration = null;
             }
             return;
+          }
+          case "zen/remote/shell": {
+            if (
+              typeof id !== "string" ||
+              shellRequests.has(id) ||
+              Object.keys(p).some(
+                (key) =>
+                  ![
+                    "workspaceId",
+                    "targetThreadId",
+                    "command",
+                    "timeoutMs",
+                    "maxOutputBytes",
+                  ].includes(key),
+              )
+            )
+              throw new RemoteHostError("invalid_request");
+            const controller = new AbortController();
+            shellRequests.set(id, controller);
+            try {
+              result = await access.shell(
+                deviceId,
+                token,
+                {
+                  workspaceId: str("workspaceId"),
+                  targetThreadId: str("targetThreadId"),
+                  command: str("command"),
+                  timeoutMs: p.timeoutMs as number,
+                  maxOutputBytes: p.maxOutputBytes as number,
+                },
+                controller.signal,
+              );
+            } finally {
+              shellRequests.delete(id);
+            }
+            break;
+          }
+          case "zen/remote/shell/cancel": {
+            if (Object.keys(p).some((key) => key !== "requestId"))
+              throw new RemoteHostError("invalid_request");
+            // Request IDs and cancellation are scoped to this authenticated
+            // connection; another device/session cannot cancel a shell task.
+            shellRequests.get(str("requestId"))?.abort();
+            result = {};
+            break;
           }
           case "zen/remote/send":
             result = await access.send(deviceId, token, {

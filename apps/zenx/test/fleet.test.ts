@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FleetRouter, parseFleetConfig } from "../src/main/fleet.js";
+import {
+  FleetRouter,
+  parseFleetConfig,
+  runFleetProcess,
+} from "../src/main/fleet.js";
 import type { ToolInvocation } from "../../../src/tool.js";
 const invocation = {
   name: "zenx_threads_send",
@@ -70,6 +74,86 @@ test("Fleet configuration rejects duplicate/reserved devices and SSH option inje
     [{ ...config.devices[0], sshHost: "-oProxyCommand=bad" }],
   ])
     assert.throws(() => parseFleetConfig({ version: 1, devices }));
+});
+
+test("only exact-ID SSH sends require the guarded bridge version", async () => {
+  const versions: number[] = [];
+  const fleet = new FleetRouter(
+    async () =>
+      parseFleetConfig({
+        ...config,
+        devices: [
+          ...config.devices,
+          {
+            id: "https-peer",
+            label: "HTTPS fixture",
+            transport: "https",
+            endpoint: "https://example.test",
+            hostId: "host",
+            access: "control",
+          },
+        ],
+      }),
+    async (_device, request) => {
+      versions.push(request.version);
+    },
+    {
+      invoke: async (_device, request) => {
+        versions.push(request.version);
+      },
+    },
+  );
+  await fleet.invoke("workstation", {
+    ...invocation,
+    arguments: { threadId: "exact", text: "hello" },
+  });
+  await fleet.invoke("workstation", invocation);
+  await fleet.invoke("workstation", {
+    ...invocation,
+    name: "zenx_threads_read",
+    arguments: { threadId: "exact" },
+  });
+  await fleet.invoke("https-peer", {
+    ...invocation,
+    arguments: { threadId: "exact", text: "hello" },
+  });
+  assert.deepEqual(versions, [2, 1, 1, 1]);
+});
+
+test("an old strict-v1 SSH bridge rejects an exact send without executing or replaying", async () => {
+  let attempts = 0;
+  const fleet = new FleetRouter(
+    async () => parseFleetConfig(config),
+    async (_device, request, signal) => {
+      attempts++;
+      return await runFleetProcess(
+        process.execPath,
+        [
+          "-e",
+          `
+        let body = "";
+        process.stdin.on("data", part => body += part);
+        process.stdin.on("end", () => {
+          const request = JSON.parse(body);
+          if (request.version !== 1)
+            process.stdout.write(JSON.stringify({version:1,ok:false,error:"Invalid Fleet request"}));
+          else process.stdout.write(JSON.stringify({version:1,ok:true,result:"UNGUARDED_EXECUTION"}));
+        });
+      `,
+        ],
+        request,
+        signal,
+      );
+    },
+  );
+  await assert.rejects(
+    fleet.invoke("workstation", {
+      ...invocation,
+      arguments: { threadId: "exact", text: "must not execute" },
+    }),
+    /bridge does not support archive-fenced.*Update the target bridge and Host/u,
+  );
+  assert.equal(attempts, 1);
 });
 
 test("an uncertain assistant response is never retried", async () => {

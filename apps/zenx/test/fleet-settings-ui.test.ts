@@ -28,6 +28,36 @@ const sshDevice = {
   access: "read" as const,
 };
 
+test("Fleet editor persists machine descriptions and cancels unpublished changes", async () => {
+  const view = await mount();
+  try {
+    await click(view.button("Edit Build machine"));
+    await fill(
+      view.input("Machine description"),
+      "Use this Linux machine for builds and tests",
+    );
+    await click(view.button("Save device"));
+    assert.equal(
+      view.saved[0]!.devices[0]!.description,
+      "Use this Linux machine for builds and tests",
+    );
+    await click(view.button("Edit Build machine"));
+    assert.equal(
+      view.input("Machine description").value,
+      "Use this Linux machine for builds and tests",
+    );
+    await fill(view.input("Machine description"), "Discard this change");
+    await click(view.button("Cancel"));
+    assert.equal(view.saved.length, 1);
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /Discard this change/u,
+    );
+  } finally {
+    await view.close();
+  }
+});
+
 async function mount(
   overrides: Partial<Api> = {},
   devices: Snapshot["config"]["devices"] = [sshDevice],
@@ -107,6 +137,20 @@ async function mount(
     revoke: async () => {},
     ...overrides,
   };
+  const originalStatus = api.status;
+  api.status = async () => {
+    const value = await originalStatus();
+    return {
+      ...value,
+      devices:
+        value.devices ??
+        value.config.devices.map((device) => ({
+          id: device.id,
+          key: routeKey(device),
+          check: { state: "not_checked" as const, live: false as const },
+        })),
+    };
+  };
   Object.defineProperty(dom.window, "zenx", { value: { fleet: api } });
   beforeRender?.(dom);
   const root = createRoot(dom.window.document.getElementById("root")!);
@@ -147,6 +191,61 @@ async function mount(
     getSnapshot: () => snapshot,
   };
 }
+
+test("shell setup requires separate client opt-in and explicit Host exposure consent", async () => {
+  const view = await mount({}, [sshDevice], {
+    config: {
+      version: 1,
+      devices: [sshDevice],
+      hosting: {
+        enabled: true,
+        bindAddress: "127.0.0.1",
+        port: 9443,
+        tlsCertificateFile: "/tls/cert.pem",
+        tlsKeyFile: "/tls/key.pem",
+        access: "control",
+      },
+    },
+  });
+  const check = (text: string) => {
+    const node = [...document.querySelectorAll("label")]
+      .find((entry) => entry.textContent?.includes(text))
+      ?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    assert.ok(node, text);
+    return node;
+  };
+  try {
+    await click(check("Allow separately paired shell clients"));
+    assert.equal(view.button("Apply hosting").disabled, true);
+    assert.match(
+      document.body.textContent ?? "",
+      /including separately authorized target-owned shell execution/u,
+    );
+    await click(check("I allow this Host to listen"));
+    await click(view.button("Apply hosting"));
+    assert.equal(view.saved[0]!.hosting!.shellEnabled, true);
+    await click(view.button("Add device"));
+    await choose("Connection", "https");
+    assert.equal(
+      check("Request target-owned remote shell execution").disabled,
+      true,
+    );
+    await choose("Access", "control");
+    await fill(view.input("Device ID"), "shell-target");
+    await fill(view.input("Label"), "Shell target");
+    await fill(view.input("HTTPS endpoint"), "https://target.example:9443");
+    await fill(view.input("Remote Host ID"), "host-target");
+    await fill(view.input("One-time pairing code"), "FIXTURE-CODE");
+    await click(check("Request target-owned remote shell execution"));
+    assert.equal(view.button("Pair device").disabled, true);
+    await click(check("I allow ZenX to create Threads"));
+    await click(view.button("Pair device"));
+    assert.equal(view.paired[0]!.shellEnabled, true);
+    assert.doesNotMatch(JSON.stringify(view.getSnapshot()), /FIXTURE-CODE/u);
+  } finally {
+    await view.close();
+  }
+});
 
 async function click(node: HTMLElement) {
   await act(async () => {
@@ -238,7 +337,7 @@ test("Android-facing endpoint requires explicit hosting consent and survives con
   });
   try {
     await fill(
-      view.input("Android-facing HTTPS endpoint"),
+      view.input("Client-facing HTTPS endpoint"),
       "https://device.example:9443",
     );
     assert.match(
@@ -261,7 +360,7 @@ test("Android-facing endpoint requires explicit hosting consent and survives con
     );
     await click(view.button("Refresh Fleet"));
     assert.equal(
-      view.input("Android-facing HTTPS endpoint").value,
+      view.input("Client-facing HTTPS endpoint").value,
       "https://device.example:9443",
     );
   } finally {
@@ -336,10 +435,10 @@ test("Failed connection is visible and can be retried without changing a device"
     await click(view.button("Test Build machine"));
     assert.match(
       document.body.textContent ?? "",
-      /Connection failed.*SSH host unreachable/su,
+      /SSH host unreachable.*Connection failed/su,
     );
     await click(view.button("Test Build machine"));
-    assert.match(document.body.textContent ?? "", /Connected/u);
+    assert.match(document.body.textContent ?? "", /Reachable · checked/u);
     assert.equal(document.querySelector('[role="alert"]'), null);
     assert.equal(view.saved.length, 0);
   } finally {
@@ -579,6 +678,7 @@ test("Remote browser uses workspace IDs, reads bounded history, and sends an exp
     await choose("Remote workspace", "workspace-1");
     assert.deepEqual(calls.at(-1), {
       device: "desktop",
+      expectedDeviceKey: routeKey(device),
       name: "zenx_threads_list",
       arguments: { workspace: "workspace-1", limit: 50 },
     });
@@ -586,9 +686,10 @@ test("Remote browser uses workspace IDs, reads bounded history, and sends an exp
     assert.match(document.body.textContent ?? "", /Remote reply/u);
     assert.deepEqual(calls.at(-1), {
       device: "desktop",
+      expectedDeviceKey: routeKey(device),
       name: "zenx_threads_read",
       arguments: {
-        target: "thread-1",
+        threadId: "thread-1",
         workspace: "workspace-1",
         granularity: "items",
         maxItemsPerTurn: 25,
@@ -599,9 +700,10 @@ test("Remote browser uses workspace IDs, reads bounded history, and sends an exp
     await click(view.button("Send to remote Thread"));
     assert.deepEqual(calls.at(-1), {
       device: "desktop",
+      expectedDeviceKey: routeKey(device),
       name: "zenx_threads_send",
       arguments: {
-        target: "thread-1",
+        threadId: "thread-1",
         workspace: "workspace-1",
         text: "Continue the task",
         messageType: "follow_up",
@@ -613,8 +715,8 @@ test("Remote browser uses workspace IDs, reads bounded history, and sends an exp
     );
     await click(view.button("Use selected workspace"));
     assert.equal(view.saved[0]!.devices[0]!.workspace, "workspace-1");
-    await click(view.button("Close browser"));
-    assert.equal(document.activeElement, view.button("Browse Home desktop"));
+    assert.equal(document.querySelector('[aria-label="Remote Thread"]'), null);
+    assert.match(document.body.textContent ?? "", /Reopen Browse/u);
     assert.equal(document.querySelector('[aria-label="Remote Thread"]'), null);
   } finally {
     await view.close();
@@ -692,6 +794,7 @@ test("Fresh HTTPS peers with multiple workspaces wait for explicit workspace sel
     await choose("Remote workspace", "two");
     assert.deepEqual(calls.at(-1), {
       device: "desktop",
+      expectedDeviceKey: routeKey(view.getSnapshot().config.devices[0]!),
       name: "zenx_threads_list",
       arguments: { workspace: "two", limit: 50 },
     });
@@ -895,6 +998,122 @@ test("Relay registration sends its token only on Apply and clears it after save 
     await click(view.button("Discard changes"));
     assert.equal(view.input("Relay registration token").value, "");
     assert.equal(view.saved.length, 1);
+  } finally {
+    await view.close();
+  }
+});
+
+test("device action failure appears beside its submit action without CSP inline styles", async () => {
+  const view = await mount({
+    save: async () => {
+      throw new Error("Operating-system credential encryption is unavailable");
+    },
+  });
+  try {
+    await click(view.button("Edit Build machine"));
+    await click(view.button("Save device"));
+    const editor = document.querySelector('[aria-label="Device editor"]');
+    assert.match(
+      editor?.querySelector('[role="alert"]')?.textContent ?? "",
+      /credential encryption is unavailable/u,
+    );
+    assert.equal(
+      document.querySelectorAll(
+        ".fleet-fieldset[style], .fleet-confirmation[style], .fleet-actions[style], .fleet-history-text[style]",
+      ).length,
+      0,
+    );
+    await click(view.button("Cancel"));
+    assert.equal(document.querySelector('[role="alert"]'), null);
+  } finally {
+    await view.close();
+  }
+});
+
+function routeKey(device: Snapshot["config"]["devices"][number]): string {
+  return JSON.stringify(
+    device.transport === "https"
+      ? [
+          device.id,
+          device.transport,
+          device.endpoint,
+          device.hostId,
+          device.workspace,
+          device.access,
+          device.shellEnabled,
+        ]
+      : [device.id, device.sshHost, device.command, device.access],
+  );
+}
+
+test("an inspected SSH route edit closes stale history, invalidates its check, and never sends to the replacement", async () => {
+  const effects: Parameters<Api["invoke"]>[0][] = [];
+  const device = { ...sshDevice, access: "control" as const };
+  const view = await mount(
+    {
+      invoke: async (input) => {
+        effects.push(input);
+        const result =
+          input.name === "zenx_projects_list"
+            ? { projects: [{ project: "/work", name: "Work" }] }
+            : input.name === "zenx_threads_list"
+              ? {
+                  threads: [
+                    {
+                      threadId: "shared-thread-id",
+                      name: "Original task",
+                      status: "idle",
+                    },
+                  ],
+                }
+              : input.name === "zenx_threads_read"
+                ? {
+                    threadId: "shared-thread-id",
+                    items: [
+                      { type: "agent_message", text: "Original host reply" },
+                    ],
+                  }
+                : { threadId: "shared-thread-id" };
+        return { device: input.device, result };
+      },
+    },
+    [device],
+  );
+  try {
+    await click(view.button("Test Build machine"));
+    await click(view.button("Browse Build machine"));
+    await click(view.button("Read Original task"));
+    const inspected = effects.at(-1)!;
+    assert.equal(inspected.expectedDeviceKey, routeKey(device));
+    assert.deepEqual(inspected.arguments, {
+      threadId: "shared-thread-id",
+      workspace: "/work",
+      granularity: "items",
+      maxItemsPerTurn: 25,
+    });
+    assert.match(document.body.textContent ?? "", /Original host reply/u);
+    await fill(view.input("Message to remote Thread"), "Unsent inspected task");
+    await click(view.button("Edit Build machine"));
+    await fill(view.input("SSH host"), "other.example");
+    await click(
+      document.querySelector<HTMLInputElement>(
+        '[aria-label="Device editor"] input[type="checkbox"]',
+      )!,
+    );
+    await click(view.button("Save device"));
+    assert.equal(document.querySelector('[aria-label="Remote Thread"]'), null);
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /Original host reply|Reachable · checked/u,
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /route or access changed.*old remote Thread was not retargeted/su,
+    );
+    assert.equal(
+      effects.some((effect) => effect.name === "zenx_threads_send"),
+      false,
+    );
   } finally {
     await view.close();
   }

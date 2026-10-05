@@ -44,6 +44,125 @@ async function makeHost(dir: string) {
   await manager.start();
   return { manager, descriptorFile };
 }
+
+test(
+  "mock SSH bridge preserves exact Thread IDs after archive or removal and never starts a collision Turn",
+  { timeout: 60000 },
+  async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "zenx-fleet-exact-"));
+    const local = await makeHost(path.join(dir, "local"));
+    const remote = await makeHost(path.join(dir, "remote"));
+    try {
+      const port = new MutableAppServerRequestPort();
+      await port.attach(local.manager, path.join(dir, "local"));
+      const fleet = new FleetRouter(
+        async () => ({
+          version: 1,
+          devices: [
+            {
+              id: "remote",
+              label: "Remote fixture",
+              sshHost: "fixture-only",
+              command: ["bridge"],
+              access: "control",
+            },
+          ],
+        }),
+        // Replace only SSH process launch, retaining the real bridge and Host wire.
+        (_device, request, signal) =>
+          runFleetProcess(
+            process.execPath,
+            ["--import", "tsx", bridge, remote.descriptorFile],
+            request,
+            signal,
+          ),
+      );
+      const pkg = new ZenXSelfControlCapabilityPackage({
+        appServer: port,
+        fleet,
+      });
+      const invoke = async (name: string, args: Record<string, unknown>) =>
+        (await pkg.invoke(name, {
+          name,
+          arguments: { device: "remote", ...args },
+          callId: randomUUID(),
+          canonicalToolCallId: randomUUID(),
+          threadId: "local-source",
+          cwd: path.join(dir, "local"),
+          signal: AbortSignal.timeout(20000),
+        })) as { result: Record<string, any> };
+      const selected = (await remote.manager.request("thread/start", {}))
+        .thread;
+      const collision = (await remote.manager.request("thread/start", {}))
+        .thread;
+      await remote.manager.request("thread/name/set", {
+        threadId: collision.id,
+        name: selected.id,
+      });
+      for (const name of ["zenx_threads_read", "zenx_threads_status"])
+        assert.equal(
+          (await invoke(name, { threadId: selected.id })).result.threadId,
+          selected.id,
+        );
+      const sent = await invoke("zenx_threads_send", {
+        threadId: selected.id,
+        text: "selected fixture work",
+      });
+      assert.equal(sent.result.threadId, selected.id);
+      const waited = await invoke("zenx_self_control_threads_wait", {
+        threadId: selected.id,
+        turnId: sent.result.turnId,
+      });
+      assert.equal(waited.result.status, "completed");
+      await remote.manager.request("thread/archive", { threadId: selected.id });
+      const operations = [
+        ["zenx_threads_read", {}],
+        ["zenx_threads_status", {}],
+        ["zenx_threads_send", { text: "must never reach collision" }],
+        ["zenx_self_control_threads_wait", { turnId: sent.result.turnId }],
+      ] as const;
+      for (const [name, args] of operations)
+        await assert.rejects(
+          invoke(name, { threadId: selected.id, ...args }),
+          /archived|inactive/i,
+          name,
+        );
+      await remote.manager.request("thread/unarchive", {
+        threadId: selected.id,
+      });
+      await remote.manager.stop();
+      // Remove only this throwaway fixture journal, then load a fresh Host catalog.
+      await rm(
+        path.join(dir, "remote", "data", "threads", `${selected.id}.jsonl`),
+      );
+      await remote.manager.start();
+      for (const threadId of [selected.id, collision.id.slice(0, 12)])
+        for (const [name, args] of operations) {
+          const missing = await invoke(name, { threadId, ...args });
+          assert.equal(missing.result.status, "not_found", name);
+        }
+      assert.equal(
+        (await invoke("zenx_threads_status", { target: selected.id })).result
+          .threadId,
+        collision.id,
+      );
+      const untouched = await remote.manager.request("thread/read", {
+        threadId: collision.id,
+        includeTurns: true,
+      });
+      assert.equal(untouched.thread.turns.length, 0);
+      assert.equal(
+        (await local.manager.request("thread/list", {})).data.length,
+        0,
+      );
+    } finally {
+      await local.manager.stop();
+      await remote.manager.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
+
 test(
   "two Hosts: natural tools list/read/create/send/steer/wait remotely; reconnect after Host restart",
   { timeout: 60000 },

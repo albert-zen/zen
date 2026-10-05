@@ -23,6 +23,11 @@ export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
     packageName: "@zenx/subagents-plugin",
     tarball: "zenx-subagents-plugin-1.0.0.tgz",
   },
+  fleet: {
+    pluginId: "zenx-fleet",
+    packageName: "@zenx/fleet-plugin",
+    tarball: "zenx-fleet-plugin-1.0.0.tgz",
+  },
   selfControl: {
     pluginId: "zenx-self-control",
     packageName: "@zenx/self-control-plugin",
@@ -36,6 +41,14 @@ export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
 });
 
 export const FIRST_PARTY_MARKETPLACE_ENTRIES = Object.freeze([
+  {
+    pluginId: "zenx-fleet",
+    packageName: FIRST_PARTY_PLUGIN_PACKAGES.fleet.packageName,
+    name: "Fleet",
+    description:
+      "Discover your machines and run explicit target-scoped Zen work.",
+    icon: "terminal",
+  },
   {
     pluginId: "zenx-subagents",
     packageName: FIRST_PARTY_PLUGIN_PACKAGES.subagents.packageName,

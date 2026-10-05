@@ -3,6 +3,24 @@ import type {
   CreateChildThreadInput,
   ThreadSnapshot,
 } from "../../app-server.js";
+import type { UserInputPart } from "../../item.js";
+import type { SkillReference } from "../../skill-input.js";
+
+export interface NativeTurnSendParams {
+  threadId: string;
+  mode: "start" | "queue" | "batch-next" | "steer" | "replace";
+  expectedTurnId?: string;
+  clientUserMessageId: string;
+  input: readonly (UserInputPart | SkillReference)[];
+  /** Native-only canonical admission requirement; omitted preserves defaults. */
+  requireUnarchived?: boolean;
+}
+export interface NativeTurnSendResult {
+  turnId?: string;
+  interruptedTurnId?: string;
+}
+/** Older Hosts reject this method instead of ignoring a new admission field. */
+export const NATIVE_TURN_SEND_UNARCHIVED_METHOD = "zen/turn/send-unarchived";
 
 export const NATIVE_INITIALIZE_METHOD = "zen/initialize";
 export const NATIVE_THREAD_READ_METHOD = "zen/thread/read";

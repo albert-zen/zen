@@ -1,6 +1,6 @@
 # ZenX UI/UX decisions
 
-更新日期：2026-10-03
+更新日期：2026-10-05
 
 New thread 打开临时本地编辑页；选择或添加 Project 不创建 Thread，第一条有效 Send 才配置所选 Project、创建真实 Thread，并在 Sidebar、usage 等辅助元数据独立刷新时立即启动 Turn。全局入口使用最近 Project，Project 内入口使用该精确 Project；失败以明确、可恢复且不遮盖会话的通知呈现。
 
@@ -78,6 +78,13 @@ Thread
 - Thread row 不显示 Provider 文本、内部 `modelProvider`、API/订阅标签或 Fake 品牌。
 - Provider 类型、账户、订阅状态、API key 和 endpoint 配置只在 Settings / onboarding 中出现，不进入 Thread 或 canonical Items。
 - Default model 影响新 Thread；已有 Thread 的当前模型以 ZAS Thread settings 为权威。Title model 与 Thread ModelCatalog 分离。
+
+### 2.5 Fleet 就绪与人工配对
+
+- Fleet 是任意 Agent 可发现的普通插件能力；PAW 只消费相同工具，预设不拥有设备、权限或特殊连接流程。默认安装保留用户显式 Disable / Uninstall 与既有工具权限。
+- Setup 的只读就绪检查只报告已知设备和当前准备条件，不扫描网络、不创建信任；不同网络之间必须已经有可达的可信 HTTPS 路径或已配置 relay。
+- 人工邀请只为已启用 Host 的既有 endpoint 创建五分钟单用配对码。接收端先核对 Host ID / endpoint，默认 Read Only、shell 关闭；明确确认后才配对并另行检查可达性。已配对与检查成功是分别呈现的事实。
+- 邀请和配对码只存在于人工界面的易失交互与用户明确选择的复制动作中；不进入模型发现、保存的草稿或公共配置。取消、过期、离开页面或提交尝试清除输入；隐藏已发出的邀请不伪装成撤销远端授权。
 
 ## 3. Product shell 与导航
 

@@ -10,6 +10,7 @@
     "packages/zenx-computer-plugin",
     "packages/zenx-rooms-plugin",
     "packages/zenx-self-control-plugin",
+    "packages/zenx-fleet-plugin",
     "packages/zenx-triggers-plugin",
     "packages/zenx-imzenx-plugin",
     "packages/zenx-subagents-plugin"

@@ -19,6 +19,7 @@ import {
 import { useWorkspaceFileDrafts } from "./workspace-file-drafts.js";
 import { AuxiliaryPanel } from "./auxiliary-panel.js";
 import { AgentReadinessNotice } from "./AgentReadinessNotice.js";
+import { FleetComposerSurface } from "./FleetComposerSurface.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
 import {
   default as React,
@@ -3374,73 +3375,83 @@ function AgentSurface({
           detail={threadError}
         />
       ) : newThreadDraft !== null ? (
-        <ThreadView
-          approvals={[]}
-          composer={newThreadDraft.composer}
-          composerSendMode={composerSendMode}
-          onComposerSendModeChange={onComposerSendModeChange}
-          composerContext={
-            <NewThreadProjectContext
-              projects={configuredProjects}
-              selectedWorkspace={newThreadDraft.workspace}
-            />
-          }
-          emptyContent={
-            <div className="thread-empty new-thread-draft-empty">
-              <div
-                className="new-thread-draft-heading"
-                role="heading"
-                aria-level={2}
-              >
-                What should we build in{" "}
-                <NewThreadProjectSelector
-                  disabled={
-                    newThreadDraft.composer.submission?.status === "pending"
-                  }
-                  onAddProject={onAddNewThreadProject}
-                  onChange={onNewThreadProjectChange}
-                  projects={configuredProjects}
-                  selectedWorkspace={newThreadDraft.workspace}
-                />
-                ?
+        <FleetComposerSurface
+          key={newThreadDraft.id}
+          text={newThreadDraft.composer.draft.text}
+          onTextChange={onNewThreadDraftChange}
+          attachmentCount={newThreadDraft.composer.draft.images.length}
+          onNotice={onNoticeError}
+        >
+          <ThreadView
+            approvals={[]}
+            composer={newThreadDraft.composer}
+            composerSendMode={composerSendMode}
+            onComposerSendModeChange={onComposerSendModeChange}
+            composerContext={
+              <NewThreadProjectContext
+                projects={configuredProjects}
+                selectedWorkspace={newThreadDraft.workspace}
+              />
+            }
+            emptyContent={
+              <div className="thread-empty new-thread-draft-empty">
+                <div
+                  className="new-thread-draft-heading"
+                  role="heading"
+                  aria-level={2}
+                >
+                  What should we build in{" "}
+                  <NewThreadProjectSelector
+                    disabled={
+                      newThreadDraft.composer.submission?.status === "pending"
+                    }
+                    onAddProject={onAddNewThreadProject}
+                    onChange={onNewThreadProjectChange}
+                    projects={configuredProjects}
+                    selectedWorkspace={newThreadDraft.workspace}
+                  />
+                  ?
+                </div>
               </div>
-            </div>
-          }
-          imageCapabilityError={imageCapabilityMessage(
-            providerProfiles,
-            draftSettings,
-            models,
-          )}
-          imageCapabilityNotice={imageCapabilityNotice(
-            providerProfiles,
-            draftSettings,
-            models,
-          )}
-          modelDisabled={
-            newThreadDraft.composer.submission?.status === "pending"
-          }
-          modelError={
-            draftProjectError ?? modelUpdateError ?? modelCatalogError
-          }
-          models={models}
-          providerProfiles={providerProfiles}
-          permissionMode={newThreadDraft.permissionMode ?? "danger-full-access"}
-          onPermissionChange={onNewThreadPermissionChange}
-          selectedModel={draftSettings?.model}
-          selectedReasoningEffort={draftSettings?.reasoningEffort}
-          thread={null}
-          workflowCommands={workflowCommands}
-          onDraftChange={onNewThreadDraftChange}
-          onImportImages={onImportNewThreadImages}
-          onPickImages={onPickNewThreadImages}
-          onReadAttachment={onReadAttachment}
-          onRemoveImage={onRemoveNewThreadImage}
-          onInterrupt={async () => undefined}
-          onModelChange={onNewThreadModelChange}
-          onReasoningChange={onNewThreadReasoningChange}
-          onRespondToApproval={onRespondToApproval}
-          onSubmit={onSubmitNewThread}
-        />
+            }
+            imageCapabilityError={imageCapabilityMessage(
+              providerProfiles,
+              draftSettings,
+              models,
+            )}
+            imageCapabilityNotice={imageCapabilityNotice(
+              providerProfiles,
+              draftSettings,
+              models,
+            )}
+            modelDisabled={
+              newThreadDraft.composer.submission?.status === "pending"
+            }
+            modelError={
+              draftProjectError ?? modelUpdateError ?? modelCatalogError
+            }
+            models={models}
+            providerProfiles={providerProfiles}
+            permissionMode={
+              newThreadDraft.permissionMode ?? "danger-full-access"
+            }
+            onPermissionChange={onNewThreadPermissionChange}
+            selectedModel={draftSettings?.model}
+            selectedReasoningEffort={draftSettings?.reasoningEffort}
+            thread={null}
+            workflowCommands={workflowCommands}
+            onDraftChange={onNewThreadDraftChange}
+            onImportImages={onImportNewThreadImages}
+            onPickImages={onPickNewThreadImages}
+            onReadAttachment={onReadAttachment}
+            onRemoveImage={onRemoveNewThreadImage}
+            onInterrupt={async () => undefined}
+            onModelChange={onNewThreadModelChange}
+            onReasoningChange={onNewThreadReasoningChange}
+            onRespondToApproval={onRespondToApproval}
+            onSubmit={onSubmitNewThread}
+          />
+        </FleetComposerSurface>
       ) : selectedSummary === null || threadDetail === null ? null : (
         <>
           <ThreadView

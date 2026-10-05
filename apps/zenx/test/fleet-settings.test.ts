@@ -5,8 +5,10 @@ import path from "node:path";
 import test from "node:test";
 import { FleetSettingsService } from "../src/main/fleet-settings.js";
 import type { AppServerManager } from "../src/main/app-server-manager.js";
+import { secureLocalEncryption } from "../src/main/secure-local-encryption.js";
+import type { LocalEncryption } from "../src/main/credential-vault.js";
 
-async function fixture(t: test.TestContext) {
+async function fixture(t: test.TestContext, encryption?: LocalEncryption) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "fleet-settings-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const calls: Array<{ action: string; input: any }> = [];
@@ -21,7 +23,7 @@ async function fixture(t: test.TestContext) {
   } as unknown as AppServerManager;
   const service = new FleetSettingsService({
     directory,
-    encryption: {
+    encryption: encryption ?? {
       isEncryptionAvailable: () => true,
       encryptString: (s) => Buffer.from([...s].reverse().join("")),
       decryptString: (s) => [...s.toString()].reverse().join(""),
@@ -117,3 +119,82 @@ test("Fleet host identity persists and same-epoch restore refreshes without rest
     3,
   );
 });
+
+test("Fleet pairing fails before consuming a code when OS encrypted storage is unavailable", async (t) => {
+  const { service } = await fixture(t);
+  service.options.encryption.isEncryptionAvailable = () => false;
+  let requests = 0;
+  service.native.pair = async () => {
+    requests++;
+    throw new Error("Unexpected pairing request");
+  };
+  await assert.rejects(
+    service.pair({
+      id: "peer",
+      label: "Peer",
+      endpoint: "https://peer.example:9443",
+      hostId: "host",
+      code: "throwaway",
+      access: "read",
+    }),
+    /requires operating-system credential encryption.*no remote grant was requested/u,
+  );
+  assert.equal(requests, 0);
+  assert.equal((await service.config()).devices.length, 0);
+});
+
+for (const backend of ["basic_text", "unknown"] as const) {
+  test(`Fleet blocks ${backend} Linux storage before pairing or relay token persistence`, async (t) => {
+    let encryptionCalls = 0;
+    const encryption = secureLocalEncryption(
+      {
+        isEncryptionAvailable: () => true,
+        getSelectedStorageBackend: () => backend,
+        encryptString: () => {
+          encryptionCalls++;
+          throw new Error("Should not encrypt");
+        },
+        decryptString: () => {
+          encryptionCalls++;
+          throw new Error("Should not decrypt");
+        },
+      },
+      "linux",
+    );
+    const { service } = await fixture(t, encryption);
+    let pairingRequests = 0;
+    service.native.pair = async () => {
+      pairingRequests++;
+      throw new Error("Should not request a grant");
+    };
+    assert.equal(
+      (await service.readiness()).prerequisites.credentialEncryption,
+      false,
+    );
+    await assert.rejects(
+      service.pair({
+        id: "peer",
+        label: "Peer",
+        endpoint: "https://peer.example:9443",
+        hostId: "host",
+        code: "fixture-one-use",
+        access: "read",
+      }),
+      /no remote grant was requested/u,
+    );
+    const input = {
+      ...config(),
+      hosting: {
+        ...config().hosting,
+        relayRegistrationToken: "fixture-relay-token",
+      },
+    };
+    await assert.rejects(
+      service.save(input, 0),
+      /encryption|encrypted|credential/iu,
+    );
+    assert.equal(pairingRequests, 0);
+    assert.equal(encryptionCalls, 0);
+    assert.equal((await service.config()).devices.length, 0);
+  });
+}
