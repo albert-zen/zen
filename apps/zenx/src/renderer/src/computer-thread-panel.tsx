@@ -1,5 +1,6 @@
 import { Select } from "./ui/controls.js";
 import React, { useEffect, useRef, useState } from "react";
+import { AgentActionPointer } from "./agent-action-pointer.js";
 
 import type {
   ComputerThreadEvent,
@@ -25,6 +26,7 @@ export function ComputerThreadPanel({
     document.visibilityState === "visible",
   );
   const image = useRef<HTMLImageElement>(null);
+  const frameTarget = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     const update = () => setVisible(document.visibilityState === "visible");
@@ -33,13 +35,22 @@ export function ComputerThreadPanel({
   }, []);
 
   useEffect(() => {
+    let listening = true;
     setFrame(undefined);
+    setTargets([]);
+    frameTarget.current = undefined;
     image.current?.removeAttribute("src");
     if (!active || !visible) return;
-    return window.zenx.computerObservation.subscribe(
+    const stop = window.zenx.computerObservation.subscribe(
       { threadId, targetId, frames: true },
       (event) => {
+        if (!listening) return;
         if (event.type === "targets") {
+          if (frameTarget.current !== event.selectedId) {
+            frameTarget.current = event.selectedId;
+            setFrame(undefined);
+            image.current?.removeAttribute("src");
+          }
           setTargets(event.targets);
           return;
         }
@@ -54,6 +65,10 @@ export function ComputerThreadPanel({
         setFrame(event.frame);
       },
     );
+    return () => {
+      listening = false;
+      stop();
+    };
   }, [active, targetId, threadId, visible]);
 
   const selected = targets.find((target) => target.id === targetId);
@@ -90,14 +105,31 @@ export function ComputerThreadPanel({
       </div>
       {frame ? (
         <figure className="computer-live-stage">
-          <img
-            ref={image}
-            className="computer-live-frame"
-            src={`data:${frame.mimeType};base64,${frame.data}`}
-            alt={`Live view of ${followed?.target.windowTitle ?? "Computer window"}`}
-          />
+          <div className="computer-live-image">
+            <img
+              ref={image}
+              className="computer-live-frame"
+              src={`data:${frame.mimeType};base64,${frame.data}`}
+              alt={`Live view of ${followed?.target.windowTitle ?? "Computer window"}`}
+            />
+            {followed ? (
+              <AgentActionPointer
+                key={`${threadId}:${followed.id}`}
+                targetKey={`${threadId}:${followed.id}`}
+                actionId={followed.invocationId}
+                pointer={followed.pointer}
+                width={frame.width}
+                height={frame.height}
+                capturedAt={frame.capturedAt}
+                windowWidth={frame.windowWidth}
+                windowHeight={frame.windowHeight}
+                windowId={frame.windowId}
+              />
+            ) : null}
+          </div>
           <figcaption>
-            Captured {new Date(frame.capturedAt).toLocaleTimeString()}
+            Captured {new Date(frame.capturedAt).toLocaleTimeString()} · Agent
+            marker shows the action target
           </figcaption>
         </figure>
       ) : (

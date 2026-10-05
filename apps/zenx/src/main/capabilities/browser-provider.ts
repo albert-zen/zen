@@ -1450,8 +1450,71 @@ export function browserScrollScript(
   const left =
     direction === "left" ? -pixels : direction === "right" ? pixels : 0;
   const top = direction === "up" ? -pixels : direction === "down" ? pixels : 0;
-  return `(() => { window.scrollBy({ left: ${left}, top: ${top}, behavior: "instant" }); return { ok: true }; })()`;
+  return `(() => { window.scrollBy({ left: ${left}, top: ${top}, behavior: "instant" }); try { document.querySelector('[data-zenx-agent-pointer]')?.__zenxCleanup?.(); } catch { /* Visual cleanup cannot change a completed scroll. */ } return { ok: true }; })()`;
 }
+
+// A page-local visual only: no real pointer, focus, or input events.
+// The closed shadow root keeps the drawing and label out of inspected content.
+export const browserAgentPointerScript = `(point) => {
+  try {
+    if (location.href !== point.url || scrollX !== point.scrollX || scrollY !== point.scrollY || innerWidth !== point.width || innerHeight !== point.height) return;
+    const { x, y } = point;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    const old = document.querySelector('[data-zenx-agent-pointer]');
+    const prior = old ? JSON.parse(old.getAttribute('data-points') || '[]') : [];
+    if (old) old.__zenxCleanup?.();
+    const points = [...prior, [x, y]].slice(-4);
+    const host = document.createElement('div');
+    host.setAttribute('data-zenx-agent-pointer', '');
+    host.setAttribute('data-points', JSON.stringify(points));
+    host.setAttribute('aria-hidden', 'true');
+    host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:none!important;overflow:hidden;contain:layout style paint';
+    const shadow = host.attachShadow({ mode: 'closed' });
+    const style = document.createElement('style');
+    style.textContent = ':host{pointer-events:none!important} .point{position:absolute;box-sizing:border-box;border-radius:50%;background:#4e88ff;box-shadow:0 0 0 2px #fff,0 2px 8px #16274dcc;transform:translate(-50%,-50%);animation:zenx-in .15s ease-out both}.cursor{position:absolute;width:18px;height:18px;transform:translate(-2px,-2px);filter:drop-shadow(0 1px 2px #16274d);transition:left .2s ease-out,top .2s ease-out;animation:zenx-in .15s ease-out both}.cursor path{fill:#4e88ff;stroke:#fff;stroke-width:1.7;stroke-linejoin:round}.label{position:absolute;padding:2px 5px;border-radius:4px;background:#315fc7;color:#fff;font:600 11px/15px system-ui,sans-serif;white-space:nowrap;box-shadow:0 1px 4px #16274d66}@keyframes zenx-in{from{opacity:0;scale:.6}to{opacity:1;scale:1}}@media(prefers-reduced-motion:reduce){.point,.cursor{animation:none}.cursor{transition:none}}';
+    shadow.appendChild(style);
+    points.forEach(([px, py], index) => {
+      const dot = document.createElement('div');
+      dot.className = 'point';
+      const size = index === points.length - 1 ? 11 : 4 + index;
+      dot.style.cssText = 'left:' + px + 'px;top:' + py + 'px;width:' + size + 'px;height:' + size + 'px;opacity:' + ((index + 1) / points.length) * .7;
+      shadow.appendChild(dot);
+    });
+    const cursor = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    cursor.setAttribute('class', 'cursor');
+    cursor.setAttribute('viewBox', '0 0 18 18');
+    const previous = prior.at(-1);
+    cursor.style.left = (previous ? previous[0] : x) + 'px';
+    cursor.style.top = (previous ? previous[1] : y) + 'px';
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', 'M2 1.5v13.3l3.8-3.5 2.7 5.2 2.7-1.4-2.7-5.1 5.1-.3z');
+    cursor.appendChild(path);
+    shadow.appendChild(cursor);
+    const label = document.createElement('div');
+    label.className = 'label';
+    label.textContent = 'Agent';
+    label.style.left = Math.min(x + 16, innerWidth - 44) + 'px';
+    label.style.top = Math.min(y + 17, innerHeight - 20) + 'px';
+    shadow.appendChild(label);
+    document.documentElement.appendChild(host);
+    const frame = window.requestAnimationFrame?.(() => { cursor.style.left = x + 'px'; cursor.style.top = y + 'px'; });
+    if (frame === undefined) { cursor.style.left = x + 'px'; cursor.style.top = y + 'px'; }
+    const route = location.href;
+    const clear = () => {
+      host.remove();
+      window.removeEventListener('scroll', clear, true);
+      window.removeEventListener('resize', clear);
+      window.clearTimeout(timer);
+      window.clearInterval(routeTimer);
+      if (frame !== undefined) window.cancelAnimationFrame?.(frame);
+    };
+    const timer = window.setTimeout(clear, 3000);
+    const routeTimer = window.setInterval(() => { if (location.href !== route) clear(); }, 100);
+    Object.defineProperty(host, '__zenxCleanup', { value: clear });
+    window.addEventListener('scroll', clear, { capture: true });
+    window.addEventListener('resize', clear);
+  } catch { /* Visual feedback must never change the action result. */ }
+}`;
 
 // Both observation and action use the same name so relabelled controls fail closed.
 const browserElementNameScript = `(element) => {
@@ -1556,6 +1619,7 @@ export function browserActionScript(
     const selector = ${JSON.stringify(target.selector)};
     const action = ${JSON.stringify(action)};
     const nextValue = ${JSON.stringify(text)};
+    const showAgentPointer = ${browserAgentPointerScript};
   const shouldSubmit = ${JSON.stringify(submit)};
   const expectedOptions = ${JSON.stringify(target.options ?? null)};
   const expectedOptionsTruncated = ${JSON.stringify(target.optionsTruncated ?? false)};
@@ -1577,16 +1641,22 @@ export function browserActionScript(
       href: element instanceof HTMLAnchorElement ? element.getAttribute("href") ?? "" : "",
     };
     if (JSON.stringify(actual) !== JSON.stringify(expected)) return { ok: false, reason: "identity-changed" };
+    const point = {
+      x: (Math.max(0, rect.left) + Math.min(innerWidth, rect.right)) / 2,
+      y: (Math.max(0, rect.top) + Math.min(innerHeight, rect.bottom)) / 2,
+      url: location.href, scrollX, scrollY, width: innerWidth, height: innerHeight,
+    };
     if (action === "click") {
       if (style.pointerEvents === "none" || element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true" || !element.matches("a[href],button,input:not([type=hidden]),select,[role=button],[tabindex]")) return { ok: false, reason: "not-clickable" };
       element.click();
+      showAgentPointer(point);
       return { ok: true };
     }
     if (action === "select") {
       if (!(element instanceof HTMLSelectElement) || element.disabled) return { ok: false, reason: "not-selectable" };
       if (expectedOptions === null || expectedOptionsTruncated || element.options.length > 100) return { ok: false, reason: "options-unobserved" };
       const currentOptions = [...element.options].map(option => ({ value: option.value.slice(0, 512), label: (option.textContent ?? "").replace(/\\s+/g, " ").trim().slice(0, 512), selected: option.selected, disabled: option.disabled }));
-      if (JSON.stringify(currentOptions) !== JSON.stringify(expectedOptions)) return { ok: false, reason: "options-changed" };
+      if (currentOptions.length !== expectedOptions.length || currentOptions.some((option, index) => option.value !== expectedOptions[index].value || option.label !== expectedOptions[index].label || option.selected !== expectedOptions[index].selected || option.disabled !== expectedOptions[index].disabled)) return { ok: false, reason: "options-changed" };
       const byValue = currentOptions.filter(option => option.value === nextValue && !option.disabled);
       const byLabel = currentOptions.filter(option => option.label === nextValue && !option.disabled);
       const matches = byValue.length > 0 ? byValue : byLabel;
@@ -1596,6 +1666,7 @@ export function browserActionScript(
       setter.call(element, matches[0].value);
       element.dispatchEvent(new Event("input", { bubbles: true }));
       element.dispatchEvent(new Event("change", { bubbles: true }));
+      showAgentPointer(point);
       return { ok: true };
     }
     if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || (element instanceof HTMLElement && element.matches('[contenteditable]:not([contenteditable="false"])'))) || element.hasAttribute("disabled") || element.hasAttribute("readonly")) return { ok: false, reason: "not-typeable" };
@@ -1605,6 +1676,7 @@ export function browserActionScript(
       element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: nextValue }));
       element.dispatchEvent(new Event("change", { bubbles: true }));
       if (shouldSubmit) element.closest("form")?.requestSubmit();
+      showAgentPointer(point);
       return { ok: true };
     }
     const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -1614,6 +1686,7 @@ export function browserActionScript(
     element.dispatchEvent(new Event("input", { bubbles: true }));
     element.dispatchEvent(new Event("change", { bubbles: true }));
     if (shouldSubmit) element.form?.requestSubmit();
+    showAgentPointer(point);
     return { ok: true };
   })()`;
 }
