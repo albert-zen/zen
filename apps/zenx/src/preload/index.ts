@@ -1,4 +1,8 @@
 import type { SubscriptionUsage } from "../main/subscription-usage.js";
+import type {
+  ImZenXSetupView,
+  ImZenXChannelSave,
+} from "../main/imzenx-setup-service.js";
 import { contextBridge, ipcRenderer } from "electron";
 
 import type { AppServerHostStatus } from "../main/app-server-manager.js";
@@ -69,6 +73,14 @@ import type { ChromeBridgeSettingsSnapshot } from "../main/chrome-extension-brid
 import type { ZenXComputerReadinessSnapshot } from "../main/computer-readiness.js";
 
 contextBridge.exposeInMainWorld("zenx", {
+  imzenx: {
+    inspect: async (): Promise<ImZenXSetupView> =>
+      ipcRenderer.invoke(ipcChannels.imzenxSetupInspect),
+    saveChannel: async (input: ImZenXChannelSave): Promise<ImZenXSetupView> =>
+      ipcRenderer.invoke(ipcChannels.imzenxSetupSaveChannel, input),
+    prepareRuntime: async (): Promise<ImZenXSetupView> =>
+      ipcRenderer.invoke(ipcChannels.imzenxSetupPrepareRuntime),
+  },
   platform: process.platform,
   skills: {
     list: () => ipcRenderer.invoke(ipcChannels.skillsList),

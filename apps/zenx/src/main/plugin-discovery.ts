@@ -6,7 +6,12 @@ import type {
   ToolRuntime,
 } from "../../../../src/tool.js";
 import { ToolEnvironment } from "../../../../src/tool.js";
-import type { ZenXAvailablePlugin } from "./capabilities/types.js";
+import type {
+  ZenXAvailablePlugin,
+  ZenXPluginSnapshot,
+  ZenXPluginReadinessSummary,
+} from "./capabilities/types.js";
+import { pluginReadiness } from "../plugin-readiness.js";
 
 export const ZENX_PLUGIN_TOOL = "zenx_plugin";
 
@@ -15,6 +20,9 @@ export type AvailablePlugin = ZenXAvailablePlugin;
 /** Current Host-owned catalog view; lifecycle state stays outside the Thread. */
 export interface PluginDiscoveryCatalog {
   availablePlugins(): readonly AvailablePlugin[];
+  pluginSnapshot?(): ZenXPluginSnapshot;
+  pluginSummaries?(): readonly ZenXPluginReadinessSummary[];
+  pluginCatalogAvailable?(): boolean;
 }
 
 /** Persistent meta-tool whose ordinary result is the durable disclosure fact. */
@@ -23,9 +31,23 @@ export class PluginDiscoveryToolRuntime implements ToolRuntime {
   readonly specification: ModelTool = {
     name: this.name,
     description:
-      "Discover available ZenX plugins or read one plugin's main document and tool index.",
+      "Discover available ZenX plugins, inspect selected plugin readiness, or read one plugin's main document and tool index. Readiness never enables a plugin or approves tool permissions.",
     inputSchema: {
       oneOf: [
+        {
+          type: "object",
+          properties: {
+            operation: { const: "readiness" },
+            pluginIds: {
+              type: "array",
+              items: { type: "string", minLength: 1, maxLength: 128 },
+              minItems: 1,
+              maxItems: 32,
+            },
+          },
+          required: ["operation", "pluginIds"],
+          additionalProperties: false,
+        },
         {
           type: "object",
           properties: { operation: { const: "discover" } },
@@ -57,6 +79,25 @@ export class PluginDiscoveryToolRuntime implements ToolRuntime {
       throw new Error(`Unsupported tool: ${invocation.name}`);
     }
     invocation.signal.throwIfAborted();
+    if (invocation.arguments.operation === "readiness") {
+      const pluginIds = readReadinessPluginIds(invocation.arguments);
+      const summaries =
+        this.#catalog.pluginSummaries?.() ??
+        this.#catalog.pluginSnapshot?.().plugins;
+      if (!summaries || this.#catalog.pluginCatalogAvailable?.() === false)
+        throw new Error("Plugin readiness catalog is unavailable");
+      return {
+        output: JSON.stringify({
+          operation: "readiness",
+          plugins: pluginReadiness(summaries, pluginIds),
+          nextStep:
+            "Open Settings, then Plugins, for missing or disabled plugins. Read the enabled plugin's main document for its own configuration and readiness tools.",
+          permissionChecks:
+            "Tool permissions are checked on use. Ready does not mean approved, configured, or end-to-end verified.",
+        }),
+        exitCode: 0,
+      };
+    }
     const plugins = currentAvailablePlugins(this.#catalog, this.#environment)
       .map(cloneAvailablePlugin)
       .sort((left, right) => left.id.localeCompare(right.id));
@@ -235,6 +276,22 @@ function readOperation(
   }
   if (validReadArguments(arguments_) !== undefined) return "read";
   throw new Error("zenx_plugin arguments must select discover or read");
+}
+
+function readReadinessPluginIds(arguments_: Record<string, unknown>): string[] {
+  const ids = arguments_.pluginIds;
+  if (
+    Object.keys(arguments_).length !== 2 ||
+    !Array.isArray(ids) ||
+    ids.length < 1 ||
+    ids.length > 32 ||
+    ids.some(
+      (id) =>
+        typeof id !== "string" || !/^[a-z0-9][a-z0-9._-]{0,127}$/u.test(id),
+    )
+  )
+    throw new Error("zenx_plugin.readiness requires 1–32 valid plugin IDs");
+  return ids as string[];
 }
 
 function readPluginId(arguments_: Record<string, unknown>): string {

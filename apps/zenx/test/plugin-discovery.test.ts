@@ -34,6 +34,50 @@ import {
 
 const exactOutput = 'plugin bytes: sk-fixture\n<raw-json>{"x":1}</raw-json>';
 
+test("readiness reports lifecycle without granting, disclosing or invoking plugin tools", async () => {
+  const fixture = await fixtureEnvironment();
+  const inspect = async (pluginIds = ["fixture", "not-installed"]) =>
+    JSON.parse(
+      (
+        await fixture.discovery.execute({
+          callId: "readiness",
+          name: "zenx_plugin",
+          arguments: { operation: "readiness", pluginIds },
+          cwd: process.cwd(),
+          signal: new AbortController().signal,
+        })
+      ).output,
+    );
+  try {
+    const first = await inspect();
+    assert.deepEqual(first.plugins, [
+      { pluginId: "fixture", name: "Fixture", state: "ready", action: "none" },
+      {
+        pluginId: "not-installed",
+        name: "not-installed",
+        state: "missing",
+        action: "install",
+      },
+    ]);
+    assert.match(first.permissionChecks, /does not mean approved/);
+    assert.equal(fixture.invocations, 0);
+    assert.deepEqual(
+      fixture.projection.definitions([]).map((tool) => tool.name),
+      ["wait", "shell", "zenx_plugin"],
+    );
+    await fixture.registry.setEnabled("fixture", false);
+    const before = fixture.registry.pluginSnapshot();
+    assert.equal((await inspect()).plugins[0].state, "disabled");
+    assert.deepEqual(fixture.registry.pluginSnapshot(), before);
+    await fixture.registry.uninstall("fixture");
+    assert.equal((await inspect()).plugins[0].state, "missing");
+    await assert.rejects(inspect(["../../secrets"]), /valid plugin IDs/);
+    await assert.rejects(inspect([]), /valid plugin IDs/);
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("ordinary discovery history progressively exposes one plugin and routes its exact result", async () => {
   const fixture = await fixtureEnvironment();
   const model = new DiscoveryFlowModel();

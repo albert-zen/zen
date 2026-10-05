@@ -224,3 +224,43 @@ async def test_zenx_prefixes_use_product_and_common_namespace(tmp_path: Path):
     finally:
         await gateway.stop()
         await state.close()
+
+
+@pytest.mark.asyncio
+async def test_host_private_channel_map_enters_existing_gateway_composition_without_marker_read(
+    tmp_path, monkeypatch
+):
+    private_config = {
+        "qq": {
+            "enabled": True,
+            "app_id": "123",
+            "client_secret": "private-pipe-only",
+            "allowed_user_ids": ["trusted"],
+        }
+    }
+    channel = FakeChannelAdapter("qq")
+    seen = []
+
+    def build(config_file, *, channel_config, **_kwargs):
+        seen.append((config_file, channel_config))
+        return [channel]
+
+    monkeypatch.setattr("imzen.main.build_channels", build)
+    gateway, state = create_gateway(
+        Settings(
+            app_server_url="ws://127.0.0.1:4500",
+            cwd=tmp_path,
+            gateway_state_file=tmp_path / "gateway.sqlite3",
+            channels_config_file=tmp_path / "owned-marker.json",
+        ),
+        client=FakeAppServer(),
+        channel_config=private_config,
+        persistent_subscriptions=True,
+    )
+    try:
+        assert seen == [(tmp_path / "owned-marker.json", private_config)]
+        assert not (tmp_path / "owned-marker.json").exists()
+        assert not channel.started
+        assert channel.sent == []
+    finally:
+        await state.close()

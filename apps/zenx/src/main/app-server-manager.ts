@@ -1973,6 +1973,10 @@ function assertTargetOnlyCapabilityChange(
     plugins: (snapshot.plugins ?? [])
       .filter((plugin) => plugin.id !== targetPluginId)
       .toSorted((left, right) => left.id.localeCompare(right.id)),
+    pluginReadiness: (snapshot.pluginReadiness ?? [])
+      .filter((plugin) => plugin.id !== targetPluginId)
+      .toSorted((left, right) => left.id.localeCompare(right.id)),
+    pluginCatalogAvailable: snapshot.pluginCatalogAvailable,
   });
   if (
     JSON.stringify(withoutTarget(previous)) !==

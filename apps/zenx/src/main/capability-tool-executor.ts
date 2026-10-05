@@ -301,6 +301,12 @@ export function createZenXHostToolEnvironment(options: {
   let capabilities = structuredClone(options.capabilities);
   const catalog = {
     availablePlugins: () => structuredClone(capabilities.plugins ?? []),
+    pluginSummaries: () => {
+      if (capabilities.pluginReadiness === undefined)
+        throw new Error("Plugin readiness catalog is unavailable");
+      return structuredClone(capabilities.pluginReadiness);
+    },
+    pluginCatalogAvailable: () => capabilities.pluginCatalogAvailable !== false,
   };
   toolEnvironment.registerRuntime(
     new PluginDiscoveryToolRuntime(catalog, toolEnvironment),

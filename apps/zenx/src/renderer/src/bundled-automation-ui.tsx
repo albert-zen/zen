@@ -20,6 +20,8 @@ import {
   handleComposerSuggestionKey,
 } from "./ComposerSuggestions.js";
 import { useRoomComposerSelector } from "./use-room-composer-selector.js";
+import { PluginRequirementsPreview } from "./PluginRequirementsPreview.js";
+import { PAW_PLUGIN_REQUIREMENTS } from "../../assistant-preset-requirements.js";
 
 import type {
   TriggerKind,
@@ -1420,6 +1422,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     };
   }, [sdk.context?.route]);
   const [assistantMode, setAssistantMode] = useState(false);
+  const [assistantPluginsReady, setAssistantPluginsReady] = useState(false);
   const [data, setData] = useState<RoomListResult>({ rooms: [] });
   const [selected, setSelected] = useState<string | null>(initialRoomId);
   const [panel, setPanel] = useState<"create" | "manage" | "rename" | null>(
@@ -2771,13 +2774,21 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               </button>
             </header>
             {panel === "create" && assistantMode ? (
-              <p className="room-assistant-disclosure">
-                Choose an existing Thread for the PAW preset. Messages join its
-                ongoing work. It uses Rooms to communicate, Triggers to continue
-                after waits, and Fleet-enabled self-control to work with
-                configured devices. Enable Rooms, Triggers and self-control
-                first. Existing model and permissions are preserved.
-              </p>
+              <>
+                <p className="room-assistant-disclosure">
+                  Choose the working conversation for your assistant. Its model
+                  and permissions stay the same. New messages wake it up;
+                  recurring checks are optional and can use model quota.
+                </p>
+                <PluginRequirementsPreview
+                  requirements={PAW_PLUGIN_REQUIREMENTS}
+                  onReady={setAssistantPluginsReady}
+                  openSettings={() => {
+                    closeDialog();
+                    sdk.navigation.navigate("settings");
+                  }}
+                />
+              </>
             ) : null}
             <Field
               label={room?.assistant || assistantMode ? "Name" : "Room name"}
@@ -2800,13 +2811,19 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             ) : null}
             {panel === "create" || (panel === "manage" && !room?.assistant) ? (
               <>
-                <Field
-                  label="Member name"
-                  value={memberName}
-                  onChange={setMemberName}
-                />
+                {!assistantMode ? (
+                  <Field
+                    label="Member name"
+                    value={memberName}
+                    onChange={setMemberName}
+                  />
+                ) : null}
                 <label className="field">
-                  <span>Member conversation</span>
+                  <span>
+                    {assistantMode
+                      ? "Working conversation"
+                      : "Member conversation"}
+                  </span>
                   <Combobox
                     label="Member conversation"
                     value={threadId}
@@ -2837,12 +2854,18 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 type="button"
                 className="primary-button"
                 disabled={
-                  busy || !name.trim() || !memberName.trim() || !threadId
+                  busy ||
+                  !name.trim() ||
+                  (!assistantMode && !memberName.trim()) ||
+                  !threadId ||
+                  (assistantMode && !assistantPluginsReady)
                 }
                 onClick={() =>
                   void run(assistantMode ? "create-assistant" : "create", {
                     name,
-                    members: [{ name: memberName, threadId }],
+                    members: [
+                      { name: assistantMode ? name : memberName, threadId },
+                    ],
                   }).then((ok) => {
                     if (ok) setPanel(null);
                   })
