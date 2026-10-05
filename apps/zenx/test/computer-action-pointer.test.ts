@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ComputerThreadObservation } from "../src/main/capabilities/computer-thread-observation.js";
+import { observeComputerWindow } from "../src/main/capabilities/computer-electron-observation.js";
 import { ComputerZenXCapabilityPackage } from "../src/main/capabilities/computer-provider.js";
+import type { ComputerThreadEvent } from "../src/main/capabilities/computer-thread-observation.js";
 import type {
   ComputerActionPointer,
   ComputerTarget,
@@ -75,6 +77,68 @@ test("Computer pointer stays in its thread and target, and repeated actions reta
   assert.equal(state.stops, 1);
   stop();
   assert.equal(state.stops, 2);
+});
+
+test("a successful Computer action explicitly restarts a failed same-window capture", async () => {
+  const { implementation } = backend();
+  let starts = 0;
+  let captures = 0;
+  implementation.observeWindow = (_target, listener) => {
+    const fails = ++starts === 1;
+    return observeComputerWindow(async () => {
+      captures += 1;
+      if (fails) throw new Error("The selected Computer window changed");
+      return {
+        isEmpty: () => false,
+        getSize: () => ({ width: 800, height: 600 }),
+        toJPEG: () => Buffer.from("fresh frame"),
+      } as never;
+    }, listener);
+  };
+  implementation.press = async () => ({
+    target: { pid: 42, applicationName: "Fixture", windowTitle: "Fixture" },
+    control: { observationId: "observed", targetId: "button" },
+    pointer: pointer(),
+  });
+  const capability = new ComputerZenXCapabilityPackage(implementation);
+  const events: ComputerThreadEvent[] = [];
+  capability.observeThread({ threadId: "a", frames: true }, (event) =>
+    events.push(event),
+  );
+  const press = (callId: string) =>
+    capability.invoke("computer_press", {
+      callId,
+      threadId: "a",
+      name: "computer_press",
+      arguments: {
+        target,
+        control: { observationId: "observed", targetId: "button" },
+      },
+      cwd: "/workspace",
+      signal: new AbortController().signal,
+    });
+  try {
+    await press("first-action");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(
+      events.some(
+        (event) => event.type === "status" && event.status === "unavailable",
+      ),
+    );
+    assert.equal(starts, 1, "a terminal failure must not automatically retry");
+    assert.equal(captures, 1);
+
+    await press("fresh-action");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(starts, 2, "an explicit successful action restarts capture");
+    assert.equal(captures, 2);
+    assert.equal(events.at(-1)?.type, "frame");
+
+    await press("continuing-action");
+    assert.equal(starts, 2, "healthy same-window capture stays continuous");
+  } finally {
+    await capability.close();
+  }
 });
 
 test("Computer pointer rejects stale and invalid geometry and does not replay on a later action", () => {

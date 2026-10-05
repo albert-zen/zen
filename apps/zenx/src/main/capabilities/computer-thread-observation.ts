@@ -138,6 +138,14 @@ export class ComputerThreadObservation {
     const send: ComputerThreadListener = (event) => {
       if (observer.generation !== generation || !this.#observers.has(observer))
         return;
+      if (
+        event.type === "status" &&
+        (event.status === "unavailable" || event.status === "failed")
+      ) {
+        // A terminal capture can only resume after an explicit observation/action.
+        observer.generation += 1;
+        this.#stop(observer);
+      }
       try {
         observer.listener(event);
       } catch {
@@ -170,9 +178,18 @@ export class ComputerThreadObservation {
       });
       return;
     }
-    observer.stop = this.#backend.observeWindow(selected.target, send);
+    const stop = this.#backend.observeWindow(selected.target, send);
+    // Subscription creation may synchronously terminate or replace this generation.
+    if (observer.generation !== generation || !this.#observers.has(observer)) {
+      try {
+        stop();
+      } catch {
+        // Observation cleanup must not fail a Computer action.
+      }
+      return;
+    }
+    observer.stop = stop;
     observer.activeTargetId = selected.id;
-    if (!this.#observers.has(observer)) this.#stop(observer);
   }
 }
 
