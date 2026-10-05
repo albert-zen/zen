@@ -16,32 +16,120 @@ No bot message is copied into a second transcript or Agent runtime.
 
 1. Use a ZenX build containing IMZenX, open Plugins, and install the built-in
    **IMZenX** entry. It is optional and is not auto-installed at startup.
-2. Prepare Python 3.13+ with the pinned SDK. From a source checkout:
-   `uv sync --project apps/imzen --extra feishu`. For a distributed plugin,
-   extract its ordinary npm tarball and run `uv sync --project package/python
---extra feishu`. Omit the Feishu extra when unused. This requires read access
-   to the private SDK repository and does not run automatically at installation.
-3. Prepare a private IMZen-format channel configuration (see
-   `python/README.md` in the tarball or `apps/imzen/README.md` in the checkout).
-   Each channel must use this deployment's credentials. Do not share a bot with
-   another running consumer. Use `allowed_user_ids` or
-   `allowed_conversation_ids` to restrict access.
-4. Open **IMZenX** in the sidebar. Set the absolute Python executable path
-   (`.venv/bin/python`, or `.venv/Scripts/python.exe` on Windows), private channel
-   configuration path, and default workspace; choose **Save and connect**.
-   Bot secrets stay in private files. ZAS URL and bearer-token file come from
-   this Host, not from an independently configured server.
+2. Use the explicit **Prepare runtime** action to prepare Python 3.13 and the
+   pinned SDK from this plugin's locked project. The Host copies the admitted
+   project's source and lock into a private writable, lock-hash-addressed runtime
+   directory; it does not write into signed application resources or alter a
+   running consumer's environment. This requires official `uv` and read access
+   to the private SDK repository. No install runs during plugin startup,
+   preparation of settings, or readiness checking. Source-checkout alternative:
+   `uv sync --project apps/imzen --locked --extra feishu` and select that
+   environment's Python. Omit the Feishu extra when unused.
+3. Use the native channel form for QQ, Telegram or Feishu/Lark. Only the fields
+   declared by IMZenX's versioned provider schema are shown, verified against the
+   pinned SDK's `from_config` contracts. Secret fields are local, write-only inputs
+   saved through the Host's IM-owned encrypted credential vault; they are never
+   Agent tool arguments. Saving an incomplete form is permitted and readiness
+   reports missing required fields. Weixin needs this deployment's own existing
+   SDK consumer-enrolled state directory, selected through the advanced private
+   IMZen-format file flow. There is no cross-application or legacy import.
+   Each deployment must use its own credentials and stop other bot consumers
+   before connecting. Use `allowed_user_ids` or `allowed_conversation_ids` to
+   restrict access.
+4. Successful native runtime/channel preparation fills their nonsecret
+   references automatically. Choose the working workspace, then **Check
+   readiness**. Advanced settings also accept an explicitly selected Python
+   executable and your own private IMZen-format channel file. Readiness inspects
+   only that selection without saving or launching an IM transport. Missing SDK
+   access remains an explicit prerequisite; nothing installs during inspection.
+5. **Save settings** prepares only nonsecret paths and settings. New preparation
+   defaults to `approval-required`. It does not connect, stop or restart a running
+   consumer. Prepared settings cannot connect on Host restart or a ZAS status
+   change until you explicitly connect. Before **Connect**, confirm that any other
+   consumer using this bot has stopped. Native form credentials remain in the
+   OS-encrypted IM-owned vault; advanced credentials remain in your private files.
+   ZAS URL and bearer-token file come only from this Host.
 
 Replacement preparation never connects to IM. After publication, activation waits
 for all outstanding predecessor consumers to finish; failed or rolled-back
 candidates do not consume messages. Each admitted Host generation captures an
 isolated runtime instance. Disable → enable reloads the persisted configuration.
 
-The page shows waiting for activation, unconfigured, waiting for ZAS, starting, connected or failed.
+The page shows waiting for activation, unconfigured, prepared, waiting for ZAS, starting, connected or failed.
 Connected means the SDK Gateway started, not that a real bot delivery has been
 verified. Channel transport errors remain subject to the SDK's diagnostics and
 native API delivery limits. After a failure, fix the configuration and use
 **Reconnect**. No plugin-owned retry or recovery queue is created.
+
+## Ordinary plugin tools
+
+These tools are available through the normal plugin catalog to any Agent. PAW is
+one preset using ordinary plugins; it has no separate IM setup tool or grants.
+Normal Host permission and confirmation rules apply to every call:
+
+The trusted native form rejects unavailable OS encryption and Electron's Linux
+`basic_text`/unknown fallback rather than storing plaintext. Native setup IPC
+requires the owned ZenX window's exact renderer page, not an iframe or a
+navigated remote page. Explicit runtime setup retains its owned process through
+timeout/shutdown until terminal closure, preventing overlapping retries.
+
+- `imzenx_status` reads nonsecret saved and active settings plus connection state
+- `imzenx_readiness` uses the `imzenx.inspect` permission for a bounded subprocess
+  with the explicitly selected Python executable. Empty arguments inspect saved
+  settings; a complete set of nonsecret configuration fields inspects an unsaved
+  selection. It checks Python 3.13+, the SDK's pinned Git revision, the selected
+  workspace and optional shared root, the Host server, and the existing IMZen
+  channel/allowlist contract. It never constructs a Gateway or starts transport
+- `imzenx_prepare` uses `imzenx.configure` to save only `pythonExecutable`,
+  `channelsConfigFile`, `cwd`, optional `sharedFilesystemRoot`, `permissionMode`,
+  and `allowUnrestrictedFullAccess`. Preparation stores an explicit-connect gate
+- `imzenx_connect` uses `imzenx.connect`; configurations prepared with the new flow
+  require `singleConsumerConfirmed: true` and `expectedConfigurationRevision`
+  from the reviewed readiness result after a user/coordinator acknowledges that
+  other bot consumers are stopped. Preparation and managed-channel edits change
+  the nonsecret revision; stale confirmations reject before starting any consumer.
+  Check readiness again after saving preparation or changing channel settings.
+  Successful explicit Connect enables the
+  existing Host restart/reconnection behavior. This is not delivery verification
+- Existing `imzenx_configure` remains a save-and-connect compatibility tool using
+  `imzenx.connect`. It cannot bypass a prepared configuration's single-consumer
+  acknowledgement and requires both fields when the new flow has been used
+  or a native managed configuration is selected. Unmanaged legacy setups retain
+  their existing behavior
+
+For advanced file configuration, readiness reads only the selected own
+IMZen-format file and its explicit QQ `credentials_file` reference, including
+existing absolute and relative paths. For the native managed form, the Host
+returns only supported channel IDs and safe configured/access flags; the Python
+probe checks runtime/workspace without reading the managed marker or credentials.
+The exact Host-owned marker is only a nonsecret selector. On explicit Connect,
+the Host supplies the managed channel map to the Gateway through the existing
+private child stdin, never process arguments, environment variables or tool
+results. Trusted native channel edits acquire the runtime's same serialization queue,
+persist the explicit-connect gate before changing the encrypted configuration, and
+hold the queue until the write completes. Connect cannot interleave with a pending
+save. A queued Connect acknowledgement becomes stale if selected settings change
+or a managed edit finishes before it executes; a fresh review and explicit Connect
+are required. This is only an in-memory admission fence, with no new persisted
+coordination state. This registration exists only after predecessor retirement and is withdrawn
+on close; an unpublished replacement cannot change the trusted runtime source.
+
+It does not search other applications, home directories, or legacy configurations.
+QQ's existing file contract is checked internally: user-owned private regular
+non-symlink file, only `appid` and `appsecret`, decimal App ID, nonempty secret.
+Existing SDK-native QQ configuration fields remain supported. Credential values,
+allowlist values, raw parser errors and child diagnostics never enter tool results
+or logs. Other channel credential schemas remain SDK-owned and are validated only
+on explicit connection; readiness states that limit instead of guessing schemas.
+The managed form reuses the existing Host credential vault with a separate
+IM-owned file; it introduces no shared credential store or recovery mechanism.
+
+Readiness returns `ready`, fixed `checks` with `id`, `status`, `message` and optional
+`action`, supported `enabledChannels`, `singleConsumerConfirmationRequired`, and
+`connectionState`. A ready local setup cannot prove bot exclusivity or real network
+delivery. Status additionally reports `explicitConnectRequired`,
+`singleConsumerConfirmationRequired`, `activeConfiguration`, and the Gateway-only
+meaning of connected. Neither prepare nor readiness accepts bot secrets.
 
 ## Subscribe and continue
 
@@ -68,6 +156,11 @@ The SDK performs bounded authoritative catch-up; this is not an unlimited
 history archive. Channel/provider restrictions on unsolicited output still
 apply (particularly bot reply windows and destination types).
 
+The Gateway launches Python in isolated mode with a constant bootstrap that adds
+only this admitted plugin's source directory. The selected workspace remains the
+working directory, but a workspace `imzen` package, user site path or `PYTHONPATH`
+cannot shadow the trusted Gateway and receive its private configuration.
+
 Closing windows keeps the Host and plugin alive. Disable/uninstall/Quit closes
 the child stdin and joins shutdown; a bounded timeout kills a stuck child.
 ZAS lifecycle changes reconnect the bridge to the Host's new descriptor. An
@@ -93,8 +186,10 @@ without deleting ZAS Threads. Restore the prior ZenX application to revert the
 Host integration; private plugin configuration and bridge SQLite are retained.
 
 The management page shows connection state while open and keeps configured paths
-under Connection settings. Saving preserves a visible result; failed connections
-can be retried explicitly. Desktop discovery subscribes to new external Threads
+under Connection settings. Saving preserves a visible result; a connected Gateway keeps its original active
+settings until explicit Connect. The saved configuration and active configuration
+are reported separately so pending paths never appear to describe the running
+consumer. Failed connections can be retried explicitly. Desktop discovery subscribes to new external Threads
 without changing the selected Thread and feeds their first canonical input into
 ZenX's existing automatic naming coordinator. Opening an older unnamed Thread
 also supplies its first input; native and manually assigned names are preserved.

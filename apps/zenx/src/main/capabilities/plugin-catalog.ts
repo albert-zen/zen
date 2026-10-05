@@ -1017,7 +1017,20 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
         }
       }
     }
-    return { definitions, plugins: this.availablePlugins() };
+    return {
+      definitions,
+      plugins: this.availablePlugins(),
+      pluginCatalogAvailable: this.#catalogAvailable,
+      pluginReadiness: this.pluginSnapshot().plugins.map(
+        ({ id, displayName, lifecycle, enabled, available }) => ({
+          id,
+          displayName,
+          lifecycle,
+          enabled,
+          available,
+        }),
+      ),
+    };
   }
 
   setForegroundRequiredAllowed(allowed: boolean): void {

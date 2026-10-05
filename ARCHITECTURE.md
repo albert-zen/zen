@@ -2,6 +2,9 @@
 
 ## 核心概念
 
+- **Plugin configuration readiness** — Host catalog readiness is a read-only lifecycle projection shared by any Agent and preset; each plugin owns its nonsecret configuration and bounded readiness checks, while IMZenX save-only preparation retains an explicit-connect gate outside Thread history and never launches a channel consumer or grants permission.
+- **IMZenX managed configuration** — Its trusted local form uses provider-declared pinned field contracts and the existing OS-encrypted vault to save write-only channel credentials; model tools see only nonsecret references/readiness, explicit connection validates a transient nonsecret reviewed-configuration revision under the runtime queue before decrypting the chosen configuration into the existing private child pipe, and explicit runtime preparation copies the locked packaged project to an IM-owned runtime directory without modifying App Resources or enrolling credentials.
+
 - **Fleet** — 用户配置的 SSH/HTTPS 设备目录将既有线程工具按可选 device 路由到远端同一工具实现；远端 Host 持有唯一会话权威，Fleet 不同步 journal、不新建调度器。
 - **Fleet 产品插件** — 独立的一方插件通过目标限定的 Fleet port 发现机器、用途描述、当前检查事实、工作空间和 Zen 模型目录，并调用已有线程能力；机器描述只是用户写的用途指导，不授予权限、不成为执行命令。
 - **Fleet 就绪与邀请** — 普通插件的只读就绪检查只披露当前配置的准备步骤与已知设备；人工界面为已有可信 HTTPS 路径创建短时单用邀请，发送确认绑定所见 Host、配置 revision 与授权范围，接收方核对目标并明确确认后复用既有配对授权，秘密不进入模型发现、配置或会话状态。

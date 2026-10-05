@@ -6287,6 +6287,113 @@ button:disabled {
   color: var(--text-accent);
 }
 
+.imzenx-active-note {
+  margin: 0 24px 16px;
+  font-size: 12px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.imzenx-checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.imzenx-checks > li {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border-soft);
+  overflow-wrap: anywhere;
+}
+.imzenx-check-status {
+  font-size: 12px;
+  color: var(--text-2);
+}
+.imzenx-checks > li[data-status="blocked"] .imzenx-check-status {
+  color: var(--danger);
+}
+.imzenx-checks .imzenx-check-action {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: pre-wrap;
+}
+.imzenx-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.imzenx-checkbox > input {
+  flex: none;
+  margin-top: 3px;
+}
+.imzenx-readiness .imzenx-actions {
+  flex-wrap: wrap;
+}
+.imzenx-connect-dialog {
+  display: grid;
+  gap: 16px;
+  max-width: min(480px, calc(100vw - 32px));
+  overflow-wrap: anywhere;
+}
+.imzenx-connect-dialog h3,
+.imzenx-connect-dialog p {
+  margin: 0;
+}
+.imzenx-connect-dialog .imzenx-hint {
+  font-size: 12px;
+  color: var(--text-2);
+}
+.imzenx-connect-dialog .imzenx-actions {
+  justify-content: flex-end;
+}
+
+.imzenx-runtime-setup,
+.imzenx-workspace-choice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.imzenx-workspace-choice > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-2);
+}
+.imzenx-own-setup > .field {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+.imzenx-own-setup .imzenx-form-grid {
+  gap: 12px;
+  margin-top: 8px;
+}
+.imzenx-own-setup .imzenx-error {
+  margin: 0 !important;
+}
+.imzenx-secret-field .imzenx-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.imzenx-storage-warning {
+  color: var(--danger);
+  background: var(--surface-danger);
+  padding: 10px 12px;
+  border-radius: 6px;
+}
+@media (max-width: 680px) {
+  .imzenx-own-setup > .field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+}
+
 /* Browser belongs beside the selected Thread; other Workspace views stay intact. */
 .workspace:has(> .browser-thread-panel) {
   display: flex;
