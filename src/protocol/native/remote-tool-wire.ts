@@ -1,7 +1,7 @@
 /** Native generic-tool wire. No Host runtime or Node imports, including on mobile. */
 import type { ModelTool } from "../../model.js";
 import type { JsonValue } from "../../item.js";
-import type { ToolBundleIdentity } from "../../tool.js";
+import type { ToolBundleIdentity } from "../../tool-identity.js";
 
 export const REMOTE_TOOL_VERSION = 1;
 export const REMOTE_TOOL_CAPABILITY = "tools-v1";

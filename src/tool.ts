@@ -25,6 +25,8 @@ import {
   type UserInput,
 } from "./item.js";
 import type { ModelTool } from "./model.js";
+import type { ToolBundleIdentity } from "./tool-identity.js";
+export type { ToolBundleKind, ToolBundleIdentity } from "./tool-identity.js";
 import {
   DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES,
   renderToolOutput,
@@ -86,13 +88,6 @@ export interface ToolExecutionResult {
 }
 
 export const MAX_STRUCTURED_TOOL_RESULT_BYTES = 1024 * 1024;
-
-export type ToolBundleKind = "builtin" | "plugin" | "external";
-
-export interface ToolBundleIdentity {
-  kind: ToolBundleKind;
-  id: string;
-}
 
 export type ToolExecutionMode = "parallel_safe" | "exclusive";
 
