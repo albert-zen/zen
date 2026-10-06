@@ -1108,8 +1108,15 @@ ZenX 的 `/compact --no-reference` 仅将关闭原文定位符作为 `thread/com
 
 ### Always On Assistant preset
 
-An assistant Room binds one existing Thread to an owned roomMention Trigger.
-Trusted setup creates both atomically in the existing automation store. It adds
+An assistant Room binds one real Thread to an owned roomMention Trigger.
+Trusted setup defaults to creating an idle Thread through the existing Host
+Project/thread-start boundary with confirmed settings; explicit existing-Thread
+binding remains available. The Room and its Trigger commit atomically in the
+existing automation store, after the Thread exists. A bounded Host-lifetime
+setup receipt joins duplicate requests and retains attempted creation failures;
+it is ephemeral request idempotency, not an execution ledger or automatic recovery
+workflow. A partial failure identifies a known created Thread for explicit binding
+and never silently starts another. Setup adds
 no Runtime, Thread authority, scheduler or journal. The reusable preset composes
 Rooms, Triggers and Fleet-enabled self-control; it has no personal Work dependency.
 Human Room posts wake the assistant; event/timer Triggers targeting its Thread

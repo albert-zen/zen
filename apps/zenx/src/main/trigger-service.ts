@@ -609,13 +609,26 @@ export class ZenXTriggerService {
     return structuredClone(room);
   }
 
-  async createAssistantRoom(input: CreateRoomInput): Promise<ZenXRoom> {
+  /** Validate setup before the Host creates an optional underlying Thread. */
+  validateAssistantRoom(input: CreateRoomInput): CreateRoomInput {
     const generation = this.#runningGeneration();
     if (!generation.wakeupAdmission)
       throw new Error("Enable Triggers before creating an assistant");
+    const name = required(input.name, "room name", MAX_ROOM_NAME_BYTES);
     const members = validateMembers(input.members);
     if (members.length !== 1)
-      throw new Error("An assistant needs exactly one existing Thread");
+      throw new Error("An assistant needs exactly one Thread");
+    if (
+      this.#snapshot.rooms.length >= MAX_ROOM_COUNT ||
+      this.#snapshot.triggers.length >= MAX_TRIGGER_COUNT
+    )
+      throw new Error("Room or Trigger limit reached");
+    return { name, members };
+  }
+
+  async createAssistantRoom(input: CreateRoomInput): Promise<ZenXRoom> {
+    const generation = this.#runningGeneration();
+    const { name, members } = this.validateAssistantRoom(input);
     return await this.#mutate(generation, async (snapshot) => {
       if (!generation.wakeupAdmission)
         throw new Error("Triggers are not enabled");
@@ -642,7 +655,7 @@ export class ZenXTriggerService {
       );
       const room: ZenXRoom = {
         id,
-        name: required(input.name, "room name", MAX_ROOM_NAME_BYTES),
+        name,
         members,
         assistant: { threadId: member.threadId, triggerId: trigger.id },
         messages: [],

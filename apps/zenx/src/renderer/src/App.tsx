@@ -6,6 +6,7 @@ import {
   ROOM_ROUTE,
   useRoomConversations,
   roomConversationRoute,
+  roomConversationAdmissionRevision,
 } from "./room-conversations.js";
 import {
   CompanionWorkspace,
@@ -1365,7 +1366,10 @@ export function App() {
     pluginSnapshot?.pages.some(
       (p) => p.pluginId === "zenx-rooms" && p.route === ROOM_ROUTE,
     ) ?? false;
-  const roomConversations = useRoomConversations(roomsAdmitted, pluginSnapshot);
+  const roomConversations = useRoomConversations(
+    roomsAdmitted,
+    roomConversationAdmissionRevision(pluginSnapshot),
+  );
   const roomQuery = new URLSearchParams(page.split("?")[1] ?? "");
   const selectedRoomId =
     roomsAdmitted && pluginRoutePath(page) === ROOM_ROUTE
