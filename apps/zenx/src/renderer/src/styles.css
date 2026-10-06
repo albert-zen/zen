@@ -3316,6 +3316,7 @@ button:disabled {
 .settings-panel {
   min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: 20px;
 }
@@ -4263,8 +4264,12 @@ button:disabled {
 }
 .marketplace-section,
 .marketplace-list {
+  min-width: 0;
   display: grid;
   gap: 9px;
+}
+.marketplace-section {
+  container-type: inline-size;
 }
 .marketplace-intro {
   display: grid;
@@ -4592,6 +4597,8 @@ button:disabled {
   margin-left: auto;
 }
 .plugin-confirm {
+  grid-column: 1 / -1;
+  min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -4604,6 +4611,62 @@ button:disabled {
   color: var(--text-2);
   font-size: var(--font-size-caption);
   line-height: 1.5;
+}
+/* The advanced source form needs more room than an ordinary inventory card. */
+@container (max-width: 900px) {
+  .plugin-source-install {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  }
+  .plugin-source-copy,
+  .plugin-source-actions {
+    grid-column: 1 / -1;
+  }
+  .plugin-source-install label,
+  .plugin-source-install input {
+    min-width: 0;
+  }
+  .plugin-source-actions {
+    flex-wrap: wrap;
+  }
+}
+/* Plugin inventory responds to the Settings content column, which can be
+   narrow even while the window still has desktop navigation. */
+@container (max-width: 640px) {
+  .marketplace-rail,
+  .plugin-source-install,
+  .plugin-confirm {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .marketplace-rail {
+    align-items: stretch;
+  }
+  .marketplace-filters button {
+    flex: 1;
+  }
+  .marketplace-source-toggle {
+    white-space: normal;
+    border-top: 1px solid var(--border-soft);
+    border-left: 0;
+  }
+  .marketplace-card {
+    grid-template-columns: 38px minmax(0, 1fr);
+  }
+  .marketplace-card .plugin-actions {
+    grid-column: 1 / -1;
+    justify-self: start;
+    justify-content: flex-start;
+  }
+  .plugin-title-line,
+  .plugin-source-actions,
+  .plugin-access-actions {
+    flex-wrap: wrap;
+  }
+  .plugin-confirm > div {
+    justify-content: flex-start;
+  }
+  .plugin-lifecycle-copy small {
+    overflow-wrap: anywhere;
+  }
 }
 .plugin-access-wrap {
   grid-column: 1 / -1;
