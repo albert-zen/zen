@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "imzenx",
   "name": "IMZenX",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Use IM and ZenX with the same local Agent and Thread.",
   "compatibility": {
     "zenx": ">=0.1.0 <0.2.0"
