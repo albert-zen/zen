@@ -736,6 +736,8 @@ telemetry。`inputTokens` 始终是包含 cached 部分的 total input，uncache
 重放旧的重复 response usage 时 projection 也按 journal 顺序取最后一份，避免重复计数。即使 usage
 之后 request 失败，已经报告的最后一份 usage 仍须先落盘。Turn/Thread cache hit rate 只对报告
 cached 数据的 response 做 token-weighted 归约：`sum(cachedInputTokens) / sum(inputTokens)`。
+ZenX 的压缩摘要来自已提交的 canonical Item；即时事件或分页展示历史缺少压缩边界或保留条目时，保留摘要并明确显示上下文快照不可用，不以不完整历史编造模型投影，也不让诊断编译异常终止 Renderer。后续完整 canonical 读取恢复精确诊断；Core 的完整性校验保持不变。
+
 ZenX 的上下文占比读模型不能使用 Thread 累计 input tokens；它用最新未被 compaction 覆盖的
 Provider `inputTokens`，若 compaction 已经使该样本代表旧上下文，则用当前 `compileModelMessages`
 的固定轻量估算并在展示中标记 estimated。同一估算也为 compaction v2 提供保守且确定的

@@ -393,6 +393,169 @@ test("compaction progress is a transcript item and completed items reveal exact 
   });
 });
 
+for (const provenance of ["human", "automatic", "agent"] as const) {
+  test(`${provenance} compaction arriving before canonical hydration keeps the conversation usable`, async () => {
+    await withDom(async (root) => {
+      const history = compactionHistory();
+      const generated = history.at(-1)!;
+      assert.equal(generated.type, "context_compaction");
+      const compact: CanonicalItem =
+        provenance === "agent"
+          ? {
+              id: generated.id,
+              type: "context_compaction",
+              threadId: generated.threadId,
+              turnId: "turn-1",
+              callId: "compact-call",
+              sourceModelResponseId: "response-1",
+              createdAt: generated.createdAt,
+              provenance: "agentic",
+              initiator: "agent",
+              coveredThroughItemId: generated.coveredThroughItemId,
+              summary: generated.summary,
+              retainedItemIds: generated.retainedItemIds,
+              algorithmVersion: generated.algorithmVersion,
+            }
+          : { ...generated, initiator: provenance };
+      const original = thread([
+        turnWithItems("completed", [
+          user("Keep this request"),
+          agent("Kept answer"),
+        ]),
+      ]);
+      const composer = editComposer(emptyComposerState(), "Unsent draft");
+      const renderView = (value: Thread) =>
+        act(async () =>
+          root.render(
+            createElement(ThreadView, {
+              approvals: [],
+              composer,
+              thread: value,
+              onDraftChange: () => undefined,
+              onInterrupt: noop,
+              onRespondToApproval: noop,
+              onSubmit: noop,
+            }),
+          ),
+        );
+      await renderView(original);
+      const partial = applyNativeThreadEvent(original, {
+        type: "item_completed",
+        item: compact,
+      });
+      await renderView(partial);
+      assert.equal(
+        document.querySelectorAll(".context-compaction-event").length,
+        1,
+      );
+      await act(async () =>
+        requiredButton(".context-compaction-toggle").click(),
+      );
+      assert.match(
+        requiredElement(".compaction-summary").textContent ?? "",
+        /Continue with the accepted plan/u,
+      );
+      const diagnostics = requiredElement(".compaction-projection");
+      assert.match(diagnostics.textContent ?? "", /unavailable/u);
+      assert.match(diagnostics.textContent ?? "", /boundary does not exist/u);
+      assert.equal(diagnostics.querySelector("ol"), null);
+      assert.equal(
+        requiredElement<HTMLTextAreaElement>("textarea").value,
+        "Unsent draft",
+      );
+
+      // Duplicate delivery and a status update must not remove the committed summary.
+      const duplicate = applyNativeThreadEvent(partial, {
+        type: "item_completed",
+        item: compact,
+      });
+      await renderView({ ...duplicate, status: { type: "idle" } });
+      assert.equal(
+        document.querySelectorAll(".context-compaction-event").length,
+        1,
+      );
+      assert.equal(
+        requiredElement(".compaction-projection").querySelector("ol"),
+        null,
+      );
+      const unrelated = {
+        ...original,
+        id: "other-thread",
+        sessionId: "other-thread",
+      };
+      await renderView(unrelated);
+      assert.equal(document.querySelector(".context-compaction-event"), null);
+      await renderView(partial);
+      await act(async () =>
+        requiredButton(".context-compaction-toggle").click(),
+      );
+
+      // A later authoritative read restores exact diagnostics, with no invented context while waiting.
+      const hydrated = {
+        ...partial,
+        canonicalItems: [...history.slice(0, -1), compact],
+      };
+      await renderView(hydrated);
+      assert.doesNotMatch(
+        requiredElement(".compaction-projection").textContent ?? "",
+        /unavailable/u,
+      );
+      assert.match(
+        requiredElement(".compaction-projection").textContent ?? "",
+        /Keep this request/u,
+      );
+      assert.match(
+        requiredElement(".compaction-projection").textContent ?? "",
+        /Kept answer/u,
+      );
+      assert.ok(requiredElement(".compaction-projection").querySelector("ol"));
+      assert.equal(
+        requiredElement<HTMLTextAreaElement>("textarea").value,
+        "Unsent draft",
+      );
+    });
+  });
+}
+
+test("compaction with a present boundary but missing retained items keeps its summary", async () => {
+  await withDom(async (root) => {
+    const history = compactionHistory();
+    const partial = {
+      ...thread([]),
+      canonicalItems: history.filter(
+        (item) =>
+          item.type === "turn_completed" || item.type === "context_compaction",
+      ),
+    };
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: emptyComposerState(),
+          thread: partial,
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      ),
+    );
+    await act(async () => requiredButton(".context-compaction-toggle").click());
+    assert.match(
+      requiredElement(".compaction-summary").textContent ?? "",
+      /Continue with the accepted plan/u,
+    );
+    assert.match(
+      requiredElement(".compaction-projection").textContent ?? "",
+      /Retained context Item does not exist/u,
+    );
+    assert.equal(
+      requiredElement(".compaction-projection").querySelector("ol"),
+      null,
+    );
+  });
+});
+
 test("compaction error is a keyboard-reachable context notice with plain details and explicit dismiss", async () => {
   await withDom(async (root) => {
     let composer: ComposerState = {
