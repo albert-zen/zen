@@ -8,9 +8,11 @@ import { Sidebar } from "../src/renderer/src/Sidebar.js";
 import {
   ROOM_ROUTE,
   roomConversationRoute,
+  roomConversationAdmissionRevision,
   useRoomConversations,
   type RoomConversationState,
 } from "../src/renderer/src/room-conversations.js";
+import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 import type { LoadedPluginContribution } from "../src/renderer/src/plugin-contributions.js";
 
 const noop = () => undefined;
@@ -114,6 +116,159 @@ test("disabled discovery has no conversation section and preserves generic plugi
     );
     assert.equal(document.querySelector(".room-conversations"), null);
     assert.ok(document.querySelector('.plugin-space-link[title="Rooms"]'));
+  });
+});
+
+test("PAW and Room disclosures persist independently across navigation and remount while their add actions stay available", async () => {
+  await withDom(async (root) => {
+    const props = sidebarProps({
+      roomConversations: {
+        rooms: [room, companion],
+        error: null,
+        loading: false,
+      },
+    });
+    await act(async () => root.render(React.createElement(Sidebar, props)));
+    const pawToggle = document.querySelector<HTMLButtonElement>(
+      '[aria-controls="sidebar-paw-conversations"]',
+    );
+    const roomsToggle = document.querySelector<HTMLButtonElement>(
+      '[aria-controls="sidebar-room-conversations"]',
+    );
+    assert.ok(pawToggle);
+    assert.ok(roomsToggle);
+    await act(async () => pawToggle.click());
+    assert.equal(pawToggle.getAttribute("aria-expanded"), "false");
+    assert.equal(
+      document.querySelector('[aria-label="Open PAW Daily companion"]'),
+      null,
+    );
+    assert.ok(button("Open room Design team"));
+    assert.ok(button("New PAW"));
+    assert.ok(button("New room"));
+    await act(async () =>
+      root.render(
+        React.createElement(Sidebar, { ...props, selectedPage: ROOM_ROUTE }),
+      ),
+    );
+    assert.equal(pawToggle.getAttribute("aria-expanded"), "false");
+    await act(async () =>
+      root.render(React.createElement("p", null, "Other page")),
+    );
+    await act(async () => root.render(React.createElement(Sidebar, props)));
+    assert.equal(
+      document
+        .querySelector('[aria-controls="sidebar-paw-conversations"]')
+        ?.getAttribute("aria-expanded"),
+      "false",
+    );
+    assert.equal(
+      document
+        .querySelector('[aria-controls="sidebar-room-conversations"]')
+        ?.getAttribute("aria-expanded"),
+      "true",
+    );
+    assert.equal(
+      document
+        .querySelector("#sidebar-thread-list-heading")
+        ?.getAttribute("aria-expanded"),
+      "true",
+    );
+  });
+});
+
+test("background polling preserves the published loading state for empty conversations", async () => {
+  await withDom(async (root) => {
+    const timers = controlledTimers();
+    const next = deferred<unknown>();
+    let calls = 0;
+    setExecute(async () =>
+      ++calls === 1 ? { rooms: [], nextCursor: null } : await next.promise,
+    );
+    await act(async () => root.render(React.createElement(Discovery)));
+    assert.equal(discoveryState().loading, false);
+    await act(async () => timers.fire());
+    assert.equal(
+      discoveryState().loading,
+      false,
+      "a background refresh must not hide empty-section text and shift Projects",
+    );
+    await act(async () => next.resolve({ rooms: [], nextCursor: null }));
+  });
+});
+
+test("unrelated catalog subscriptions preserve Room rows, focus and disclosure without restarting discovery", async () => {
+  await withDom(async (root) => {
+    const timers = controlledTimers();
+    let calls = 0;
+    setExecute(async () => {
+      calls += 1;
+      return { rooms: [storedRoom("one")], nextCursor: null };
+    });
+    const base = {
+      plugins: [
+        {
+          id: "zenx-rooms",
+          enabled: true,
+          available: true,
+          lifecycle: "enabled",
+          version: "1.0.6",
+        },
+      ],
+      pages: [{ pluginId: "zenx-rooms", route: ROOM_ROUTE }],
+      sidebar: [],
+    } as unknown as ZenXPluginSnapshot;
+    function Observe({ snapshot }: { snapshot: ZenXPluginSnapshot }) {
+      const state = useRoomConversations(
+        true,
+        roomConversationAdmissionRevision(snapshot),
+      );
+      return React.createElement(
+        Sidebar,
+        sidebarProps({ roomConversations: state }),
+      );
+    }
+    await act(async () =>
+      root.render(React.createElement(Observe, { snapshot: base })),
+    );
+    const row = button("Open room one");
+    row.focus();
+    const toggle = document.querySelector<HTMLButtonElement>(
+      '[aria-controls="sidebar-paw-conversations"]',
+    )!;
+    await act(async () => toggle.click());
+    for (let i = 0; i < 10; i++)
+      await act(async () =>
+        root.render(
+          React.createElement(Observe, {
+            snapshot: {
+              ...structuredClone(base),
+              sidebar: [
+                { pluginId: "browser", label: String(i) },
+              ] as ZenXPluginSnapshot["sidebar"],
+            },
+          }),
+        ),
+      );
+    assert.equal(calls, 1);
+    assert.equal(
+      button("Open room one"),
+      row,
+      "catalog noise must not unmount conversation rows",
+    );
+    assert.equal(document.activeElement, row);
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    assert.equal(timers.pending.size, 1);
+    assert.notEqual(
+      roomConversationAdmissionRevision(base),
+      roomConversationAdmissionRevision({
+        ...base,
+        plugins: base.plugins.map((plugin) => ({
+          ...plugin,
+          version: "1.0.7",
+        })),
+      }),
+    );
   });
 });
 

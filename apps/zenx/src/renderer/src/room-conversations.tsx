@@ -2,6 +2,8 @@ import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "./icons.js";
+import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
+import { useSidebarExpansion } from "./sidebar-expansion.js";
 
 export const ROOM_ROUTE = "/plugins/zenx-rooms/rooms";
 const MAX_ROOMS = 128;
@@ -24,6 +26,18 @@ export interface RoomConversationState {
 
 export function roomConversationRoute(id: string): string {
   return `${ROOM_ROUTE}?${new URLSearchParams({ roomId: id })}`;
+}
+
+/** Only Rooms admission changes retire its projection, not unrelated catalog notifications. */
+export function roomConversationAdmissionRevision(
+  snapshot: ZenXPluginSnapshot | null,
+): string {
+  return JSON.stringify({
+    plugin: snapshot?.plugins.find((plugin) => plugin.id === "zenx-rooms"),
+    page: snapshot?.pages.find(
+      (page) => page.pluginId === "zenx-rooms" && page.route === ROOM_ROUTE,
+    ),
+  });
 }
 
 /** A bounded navigation projection; the Rooms plugin remains its sole authority. */
@@ -67,7 +81,9 @@ export function useRoomConversations(enabled: boolean, revision?: unknown) {
         .then(async () => {
           if (previous !== null) await previous;
           if (!active) return;
-          setState((current) => ({ ...current, loading: true }));
+          // Background reads keep the last published navigation visible. In
+          // particular an empty list must not alternate its placeholders with
+          // a loading row and shift every section below it on each poll.
           try {
             const rooms = await readRoomConversations(() => active);
             if (active)
@@ -244,60 +260,15 @@ export function RoomConversationNavigation({
       aria-busy={loading}
     >
       {groups.map((group) => (
-        <section
-          className="room-conversation-group"
-          aria-label={group.label}
+        <ConversationGroup
           key={group.kind}
-        >
-          <div className="room-conversation-heading">
-            <h2>{group.label}</h2>
-            <button
-              type="button"
-              className="room-conversation-create"
-              aria-label={`New ${group.displayKind}`}
-              title={`New ${group.displayKind}`}
-              onClick={() => onOpen(`${ROOM_ROUTE}?create=${group.kind}`)}
-            >
-              <Icon name="plus" size={13} />
-            </button>
-          </div>
-          {group.rooms.map((room) => (
-            <button
-              type="button"
-              className="room-conversation-row"
-              key={room.id}
-              aria-label={`Open ${group.displayKind} ${room.name}`}
-              aria-current={
-                selectedRoomId === room.id &&
-                selectedPage.split(/[?#]/u, 1)[0] === ROOM_ROUTE
-                  ? "page"
-                  : undefined
-              }
-              title={room.name}
-              onClick={() => onOpen(roomConversationRoute(room.id))}
-            >
-              <Icon name={group.icon} size={14} />
-              <span className="room-conversation-label">
-                <strong>{room.name}</strong>
-                <small>
-                  {room.messagePreview ||
-                    (room.assistant
-                      ? i18n.t("panels:personalConversation")
-                      : i18n.t("panels:memberCount", {
-                          count: room.memberCount,
-                        }))}
-                </small>
-              </span>
-            </button>
-          ))}
-          {group.rooms.length === 0 && !loading && error === null ? (
-            <p className="room-conversation-empty">
-              {group.kind === "companion"
-                ? i18n.t("panels:yourPawConversations")
-                : i18n.t("panels:yourSharedConversations")}
-            </p>
-          ) : null}
-        </section>
+          group={group}
+          loading={loading}
+          error={error}
+          selectedRoomId={selectedRoomId}
+          selectedPage={selectedPage}
+          onOpen={onOpen}
+        />
       ))}
       {loading && rooms.length === 0 ? (
         <p className="room-conversation-empty" role="status">
@@ -315,5 +286,107 @@ export function RoomConversationNavigation({
         </div>
       ) : null}
     </nav>
+  );
+}
+
+function ConversationGroup({
+  group,
+  loading,
+  error,
+  selectedRoomId,
+  selectedPage,
+  onOpen,
+}: {
+  group: {
+    label: string;
+    displayKind: string;
+    kind: string;
+    rooms: readonly RoomConversation[];
+    icon: "conversation" | "users";
+  };
+  loading: boolean;
+  error: string | null;
+  selectedRoomId?: string | null;
+  selectedPage: string;
+  onOpen(route: string): void;
+}) {
+  const identity = group.kind === "companion" ? "paw" : "rooms";
+  const [expanded, toggle, expansionError] = useSidebarExpansion(identity);
+  const contentId = `sidebar-${group.kind === "companion" ? "paw" : "room"}-conversations`;
+  return (
+    <section className="room-conversation-group" aria-label={group.label}>
+      <div className="room-conversation-heading sidebar-view-head">
+        <button
+          className="projects-section-toggle"
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={contentId}
+          onClick={toggle}
+        >
+          <Icon
+            className={expanded ? "expanded" : undefined}
+            name="chevron-down"
+            size={13}
+          />
+          <strong>{group.label}</strong>
+        </button>
+        <button
+          type="button"
+          className="sidebar-inline-action room-conversation-create"
+          aria-label={`New ${group.displayKind}`}
+          title={`New ${group.displayKind}`}
+          onClick={() => onOpen(`${ROOM_ROUTE}?create=${group.kind}`)}
+        >
+          <Icon name="plus" size={14} />
+        </button>
+      </div>
+      {expansionError !== null ? (
+        <p className="room-conversation-error" role="alert">
+          {expansionError}
+        </p>
+      ) : null}
+      <div id={contentId} hidden={!expanded}>
+        {expanded ? (
+          <>
+            {group.rooms.map((room) => (
+              <button
+                type="button"
+                className="room-conversation-row"
+                key={room.id}
+                aria-label={`Open ${group.displayKind} ${room.name}`}
+                aria-current={
+                  selectedRoomId === room.id &&
+                  selectedPage.split(/[?#]/u, 1)[0] === ROOM_ROUTE
+                    ? "page"
+                    : undefined
+                }
+                title={room.name}
+                onClick={() => onOpen(roomConversationRoute(room.id))}
+              >
+                <Icon name={group.icon} size={14} />
+                <span className="room-conversation-label">
+                  <strong>{room.name}</strong>
+                  <small>
+                    {room.messagePreview ||
+                      (room.assistant
+                        ? i18n.t("panels:personalConversation")
+                        : i18n.t("panels:memberCount", {
+                            count: room.memberCount,
+                          }))}
+                  </small>
+                </span>
+              </button>
+            ))}
+            {group.rooms.length === 0 && !loading && error === null ? (
+              <p className="room-conversation-empty">
+                {group.kind === "companion"
+                  ? i18n.t("panels:yourPawConversations")
+                  : i18n.t("panels:yourSharedConversations")}
+              </p>
+            ) : null}
+          </>
+        ) : null}
+      </div>
+    </section>
   );
 }

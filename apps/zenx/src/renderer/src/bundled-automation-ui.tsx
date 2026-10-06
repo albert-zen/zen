@@ -1516,6 +1516,10 @@ function memberConversationContext(
 
 export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   useTranslation("panels");
+  const setupSdk = useRef(sdk);
+  useLayoutEffect(() => {
+    setupSdk.current = sdk;
+  }, [sdk]);
   const initialRoomId = routeQuery(sdk.context?.route).get("roomId");
   const primaryNavigation = sdk.context?.primaryNavigation === true;
   const createIntent = routeQuery(sdk.context?.route).get("create");
@@ -1536,6 +1540,29 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const [name, setName] = useState("");
   const [memberName, setMemberName] = useState("");
   const [threadId, setThreadId] = useState("");
+  const [assistantTarget, setAssistantTarget] = useState<"new" | "existing">(
+    "new",
+  );
+  const [assistantWorkspaces, setAssistantWorkspaces] = useState<string[]>([]);
+  const [assistantWorkspacesLoaded, setAssistantWorkspacesLoaded] =
+    useState(false);
+  const [assistantSetupSession, setAssistantSetupSession] = useState(0);
+  const [assistantProjectNames, setAssistantProjectNames] = useState<
+    Record<string, string>
+  >({});
+  const [assistantWorkspace, setAssistantWorkspace] = useState("");
+  const [assistantTargetPreview, setAssistantTargetPreview] =
+    useState<AutomationTargetPreview | null>(null);
+  const [assistantSetupError, setAssistantSetupError] = useState<string | null>(
+    null,
+  );
+  const assistantCreation = useRef<{
+    operationId: string;
+    input: unknown;
+  } | null>(null);
+  const [assistantCreationFailed, setAssistantCreationFailed] = useState(false);
+  const assistantNameTooLong =
+    new TextEncoder().encode(name.trim()).length > 128;
   const [localDrafts, setLocalDrafts] = useState<Record<string, string>>({});
   const [localReplies, setLocalReplies] = useState<
     Record<string, ZenXRoom["messages"][number]["replyTo"]>
@@ -1602,9 +1629,90 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       setName(createIntent === "companion" ? "PAW" : "");
       setMemberName(createIntent === "companion" ? "Assistant" : "");
       setThreadId("");
+      setAssistantTarget("new");
+      setAssistantSetupSession((session) => session + 1);
+      setAssistantWorkspace("");
+      setAssistantTargetPreview(null);
+      setAssistantSetupError(null);
+      assistantCreation.current = null;
+      setAssistantCreationFailed(false);
       setPanel("create");
     }
   }, [initialRoomId, primaryNavigation, createIntent]);
+  // SDK wrappers change on ordinary parent polling, without a new setup intent.
+  useEffect(() => {
+    if (panel !== "create" || !assistantMode) return;
+    let active = true;
+    setAssistantWorkspaces([]);
+    setAssistantWorkspacesLoaded(false);
+    void Promise.all([
+      setupSdk.current.commands.execute("workspaces"),
+      window.zenx.projects?.get?.().catch(() => null) ?? Promise.resolve(null),
+    ])
+      .then(([result, projects]) => {
+        if (!active) return;
+        if (
+          !Array.isArray(result) ||
+          result.some((value) => typeof value !== "string")
+        )
+          throw new Error("Invalid configured Projects");
+        setAssistantWorkspaces(result);
+        setAssistantWorkspacesLoaded(true);
+        setAssistantProjectNames(
+          Object.fromEntries(
+            projects?.projects
+              .filter((project) => project.configured && project.name)
+              .map((project) => [project.workspace, project.name!]) ?? [],
+          ),
+        );
+        setAssistantWorkspace((current) =>
+          result.includes(current)
+            ? current
+            : projects?.lastUsedWorkspace &&
+                result.includes(projects.lastUsedWorkspace)
+              ? projects.lastUsedWorkspace
+              : (result[0] ?? ""),
+        );
+      })
+      .catch(
+        (reason: unknown) =>
+          active && setAssistantSetupError(describeError(reason)),
+      );
+    return () => {
+      active = false;
+    };
+  }, [panel, assistantMode, assistantSetupSession]);
+  useEffect(() => {
+    setAssistantTargetPreview(null);
+    if (
+      panel !== "create" ||
+      !assistantMode ||
+      assistantTarget !== "new" ||
+      !assistantWorkspace
+    )
+      return;
+    let active = true;
+    setAssistantSetupError(null);
+    void setupSdk.current.commands
+      .execute("preview-target", { workspace: assistantWorkspace })
+      .then((result) => {
+        if (active)
+          setAssistantTargetPreview(result as AutomationTargetPreview);
+      })
+      .catch(
+        (reason: unknown) =>
+          active && setAssistantSetupError(describeError(reason)),
+      );
+    return () => {
+      active = false;
+    };
+  }, [
+    panel,
+    assistantMode,
+    assistantTarget,
+    assistantWorkspace,
+    assistantSetupSession,
+  ]);
   const feed = useRef<HTMLDivElement>(null);
   const lastMessage = useRef<string | null>(null);
   const lastRoom = useRef<string | null>(null);
@@ -1842,6 +1950,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     else if (panel !== null) dialogClose.current?.focus();
   }, [panel]);
   const closeDialog = () => {
+    dialogEpoch.current += 1;
     setPanel(null);
     if (primaryNavigation && createIntent)
       sdk.navigation.navigate(
@@ -1892,16 +2001,28 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const run = async (command: string, input: unknown) => {
     if (actionBusy.current) return false;
     const epoch = viewEpoch.current;
+    const creation = command === "create" || command === "create-assistant";
+    const dialogToken = dialogEpoch.current;
+    const current = () =>
+      epoch === viewEpoch.current &&
+      (!creation || dialogToken === dialogEpoch.current);
     actionBusy.current = true;
     setBusy(true);
     setError(null);
     try {
       const result = await sdk.commands.execute(command, input);
-      if (epoch !== viewEpoch.current) return false;
-      await refresh();
-      if (epoch !== viewEpoch.current) return false;
+      if (!current()) return false;
+      try {
+        await refresh();
+      } catch (reason) {
+        if (current())
+          setError(
+            `Saved, but refresh failed: ${describeError(reason)}. Reopen the conversation to refresh.`,
+          );
+      }
+      if (!current()) return false;
       if (
-        (command === "create" || command === "create-assistant") &&
+        creation &&
         result &&
         typeof result === "object" &&
         "id" in result &&
@@ -1915,9 +2036,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       }
       return true;
     } catch (reason) {
-      if (epoch !== viewEpoch.current) return false;
+      if (!current()) return false;
+      if (command === "create-assistant") setAssistantCreationFailed(true);
       setError(
-        `Result unknown; refresh before repeating. ${describeError(reason)}`,
+        command === "create-assistant"
+          ? `${describeError(reason)}. Close and reopen to edit setup; inspect any reported Thread before creating another.`
+          : `Result unknown; refresh before repeating. ${describeError(reason)}`,
       );
       void refresh().catch(() => {});
       return false;
@@ -2255,6 +2379,13 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 setName("PAW");
                 setMemberName("Assistant");
                 setThreadId("");
+                setAssistantTarget("new");
+                setAssistantSetupSession((session) => session + 1);
+                setAssistantWorkspace("");
+                setAssistantTargetPreview(null);
+                setAssistantSetupError(null);
+                assistantCreation.current = null;
+                setAssistantCreationFailed(false);
                 setPanel("create");
               }}
             >
@@ -2957,7 +3088,17 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               }
               value={name}
               onChange={setName}
+              disabled={
+                panel === "create" &&
+                assistantMode &&
+                (busy ||
+                  (assistantCreation.current !== null &&
+                    assistantCreationFailed))
+              }
             />
+            {panel === "create" && assistantMode && assistantNameTooLong ? (
+              <p role="alert">{i18n.t("panels:pawNameTooLong")}</p>
+            ) : null}
             {panel !== "create" ? (
               <button
                 type="button"
@@ -2983,39 +3124,152 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     onChange={setMemberName}
                   />
                 ) : null}
-                <label className="field">
-                  <span>
-                    {assistantMode
-                      ? i18n.t("panels:pawWorkingConversation")
-                      : i18n.t("panels:memberConversation")}
-                  </span>
-                  <Combobox
-                    label={
-                      assistantMode
-                        ? i18n.t("panels:pawWorkingConversation")
-                        : i18n.t("panels:memberConversation")
-                    }
-                    value={threadId}
-                    onValueChange={setThreadId}
-                  >
-                    {threads.map((thread) => (
-                      <option
-                        key={thread.threadId}
-                        value={thread.threadId}
-                        title={`${threadTitle(thread)} · ${thread.threadId} · ${"currentMetadata" in thread ? thread.currentMetadata.cwd : i18n.t("panels:unavailableWorkspace")}`}
+                {assistantMode ? (
+                  <>
+                    <label className="field">
+                      <span>{i18n.t("panels:pawWorkingConversation")}</span>
+                      <Select
+                        aria-label={i18n.t("panels:pawWorkingConversation")}
+                        value={assistantTarget}
+                        onValueChange={(value) => {
+                          setAssistantTarget(value as "new" | "existing");
+                          if (value === "existing") {
+                            assistantCreation.current = null;
+                          }
+                        }}
+                        disabled={busy}
                       >
-                        <span className="room-member-choice">
-                          <span className="room-member-choice-title">
-                            {threadTitle(thread)}
-                          </span>{" "}
-                          <small>
-                            {memberConversationContext(thread, threads)}
-                          </small>
-                        </span>
-                      </option>
-                    ))}
-                  </Combobox>
-                </label>
+                        <option value="new">
+                          {i18n.t("panels:pawNewWorkingConversation")}
+                        </option>
+                        <option value="existing">
+                          {i18n.t("panels:pawExistingWorkingConversation")}
+                        </option>
+                      </Select>
+                    </label>
+                    {assistantTarget === "new" ? (
+                      <>
+                        <label className="field">
+                          <span>{i18n.t("panels:pawProject")}</span>
+                          <Select
+                            aria-label={i18n.t("panels:pawProject")}
+                            value={assistantWorkspace}
+                            onValueChange={setAssistantWorkspace}
+                            disabled={
+                              busy ||
+                              assistantCreationFailed ||
+                              !assistantWorkspacesLoaded
+                            }
+                          >
+                            <option value="">
+                              {i18n.t("panels:selectAConfiguredWorkspace")}
+                            </option>
+                            {assistantWorkspaces.map((workspace) => (
+                              <option
+                                key={workspace}
+                                value={workspace}
+                                title={workspace}
+                              >
+                                {assistantProjectNames[workspace] ?? workspace}
+                              </option>
+                            ))}
+                          </Select>
+                        </label>
+                        {assistantTargetPreview?.workspace ===
+                        assistantWorkspace ? (
+                          <p
+                            className="room-assistant-disclosure"
+                            role="status"
+                          >
+                            {i18n.t("panels:modelProfileEffort", {
+                              model: assistantTargetPreview.modelId,
+                              profile: assistantTargetPreview.providerProfileId,
+                              effort:
+                                assistantTargetPreview.reasoningEffort ??
+                                i18n.t("panels:defaultEffort"),
+                            })}
+                            <br />
+                            {i18n.t("panels:pawNewThreadPermissions", {
+                              access:
+                                assistantTargetPreview.sandbox ===
+                                "danger-full-access"
+                                  ? i18n.t("shell:fullAccess")
+                                  : assistantTargetPreview.sandbox ===
+                                      "read-only"
+                                    ? i18n.t("shell:readOnly")
+                                    : i18n.t("shell:workspaceWrite"),
+                              approval:
+                                assistantTargetPreview.approvalPolicy ===
+                                "never"
+                                  ? i18n.t(
+                                      "panels:neverActionsMayProceedWithoutAskingYou",
+                                    )
+                                  : i18n.t("panels:onRequest"),
+                            })}
+                          </p>
+                        ) : assistantWorkspace &&
+                          assistantSetupError === null ? (
+                          <p role="status">
+                            {i18n.t("panels:pawReviewingSettings")}
+                          </p>
+                        ) : null}
+                        {assistantWorkspacesLoaded &&
+                        assistantWorkspaces.length === 0 &&
+                        assistantSetupError === null ? (
+                          <p className="room-assistant-disclosure">
+                            {i18n.t("panels:pawAddProjectFirst")}
+                          </p>
+                        ) : null}
+                      </>
+                    ) : null}
+                    {assistantSetupError !== null &&
+                    assistantTarget === "new" ? (
+                      <p role="alert">{assistantSetupError}</p>
+                    ) : null}
+                  </>
+                ) : null}
+                {!assistantMode || assistantTarget === "existing" ? (
+                  <label className="field">
+                    <span>
+                      {assistantMode
+                        ? i18n.t("panels:pawExistingConversation")
+                        : i18n.t("panels:memberConversation")}
+                    </span>
+                    <Combobox
+                      label={
+                        assistantMode
+                          ? i18n.t("panels:pawExistingConversation")
+                          : i18n.t("panels:memberConversation")
+                      }
+                      value={threadId}
+                      onValueChange={setThreadId}
+                      disabled={
+                        panel === "create" &&
+                        assistantMode &&
+                        (busy ||
+                          (assistantCreation.current !== null &&
+                            assistantCreationFailed))
+                      }
+                    >
+                      {threads.map((thread) => (
+                        <option
+                          key={thread.threadId}
+                          value={thread.threadId}
+                          title={`${threadTitle(thread)} · ${thread.threadId} · ${"currentMetadata" in thread ? thread.currentMetadata.cwd : i18n.t("panels:unavailableWorkspace")}`}
+                        >
+                          <span className="room-member-choice">
+                            <span className="room-member-choice-title">
+                              {threadTitle(thread)}
+                            </span>{" "}
+                            <small>
+                              {memberConversationContext(thread, threads)}
+                            </small>
+                          </span>
+                        </option>
+                      ))}
+                    </Combobox>
+                  </label>
+                ) : null}
               </>
             ) : null}
             {panel === "create" ? (
@@ -3025,20 +3279,64 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 disabled={
                   busy ||
                   !name.trim() ||
+                  (assistantMode && assistantNameTooLong) ||
                   (!assistantMode && !memberName.trim()) ||
-                  !threadId ||
+                  (assistantMode
+                    ? assistantTarget === "new"
+                      ? !assistantTargetPreview ||
+                        assistantTargetPreview.workspace !== assistantWorkspace
+                      : !threadId
+                    : !threadId) ||
+                  (assistantMode &&
+                    assistantTarget === "new" &&
+                    assistantCreationFailed) ||
                   (assistantMode && !assistantPluginsReady)
                 }
-                onClick={() =>
-                  void run(assistantMode ? "create-assistant" : "create", {
+                onClick={() => {
+                  const creationDialogToken = dialogEpoch.current;
+                  const creationViewToken = viewEpoch.current;
+                  let input: unknown = {
                     name,
                     members: [
                       { name: assistantMode ? name : memberName, threadId },
                     ],
-                  }).then((ok) => {
-                    if (ok) setPanel(null);
-                  })
-                }
+                  };
+                  if (assistantMode) {
+                    assistantCreation.current ??= {
+                      operationId: crypto.randomUUID(),
+                      input: {
+                        name,
+                        memberName: name,
+                        target:
+                          assistantTarget === "new"
+                            ? {
+                                kind: "new",
+                                workspace: assistantWorkspace,
+                                expected: assistantTargetPreview,
+                              }
+                            : { kind: "existing", threadId },
+                      },
+                    };
+                    input = {
+                      ...(assistantCreation.current.input as Record<
+                        string,
+                        unknown
+                      >),
+                      operationId: assistantCreation.current.operationId,
+                    };
+                  }
+                  void run(
+                    assistantMode ? "create-assistant" : "create",
+                    input,
+                  ).then((ok) => {
+                    if (
+                      ok &&
+                      creationDialogToken === dialogEpoch.current &&
+                      creationViewToken === viewEpoch.current
+                    )
+                      setPanel(null);
+                  });
+                }}
               >
                 {assistantMode
                   ? i18n.t("panels:createPaw")
@@ -3147,16 +3445,22 @@ function Field({
   label,
   value,
   onChange,
+  disabled = false,
 }: {
   label: string;
   value: string;
   onChange(value: string): void;
+  disabled?: boolean;
 }) {
   useTranslation("panels");
   return (
     <label className="field">
       <span>{label}</span>
-      <input value={value} onChange={(event) => onChange(event.target.value)} />
+      <input
+        disabled={disabled}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
     </label>
   );
 }

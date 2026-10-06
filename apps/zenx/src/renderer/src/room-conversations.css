@@ -13,24 +13,7 @@
   justify-content: space-between;
   min-height: 32px;
   padding: 0 8px;
-}
-.room-conversation-heading h2 {
-  margin: 0;
-  color: var(--text-2);
-  font-size: 13px;
-  font-weight: 500;
-}
-.room-conversation-create {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 0;
-  border-radius: 5px;
-  color: var(--text-3);
-  background: transparent;
-  cursor: pointer;
+  margin-top: 0;
 }
 .room-conversation-row {
   display: flex;

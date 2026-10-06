@@ -81,15 +81,37 @@ export interface UpdateAssistantWorkspaceInput {
   memory: AssistantMemory[];
 }
 
+export interface AutomationTargetPreview {
+  workspace: string;
+  resolvedWorkspace: string;
+  model: string;
+  providerProfileId: string;
+  modelId: string;
+  reasoningEffort: string | null;
+  sandbox: "read-only" | "workspace-write" | "danger-full-access";
+  approvalPolicy: "on-request" | "never";
+  processEpoch: string;
+  revision: number;
+}
+export interface CreateAssistantRoomInput {
+  name: string;
+  memberName: string;
+  operationId: string;
+  target:
+    | { kind: "new"; workspace: string; expected: AutomationTargetPreview }
+    | { kind: "existing"; threadId: string };
+}
+
 export interface ZenXRoomsTrustedService {
   assistantWorkspace?(roomId: string): AssistantWorkspace;
   updateAssistantWorkspace?(
     input: UpdateAssistantWorkspaceInput,
   ): Promise<AssistantWorkspace>;
-  createAssistantRoom?(input: {
-    name: string;
-    members: RoomMember[];
-  }): Promise<Room>;
+  workspaces?(): Promise<string[]>;
+  previewTarget?(workspace: string): Promise<AutomationTargetPreview>;
+  createAssistantRoom?(
+    input: CreateAssistantRoomInput | { name: string; members: RoomMember[] },
+  ): Promise<Room>;
   setAssistantReplies?(roomId: string, enabled: boolean): Promise<void>;
   createRoom(input: { name: string; members: RoomMember[] }): Promise<Room>;
   renameRoom(roomId: string, name: string): Promise<void>;
@@ -372,13 +394,51 @@ export function createZenXTrustedPlugin(
             string(args, "operationId", MAX_ID_BYTES),
           );
           return { acknowledged: true };
-        case "zenx_rooms_create_assistant":
+        case "zenx_rooms_workspaces":
+          if (uiInput === null || !service.workspaces)
+            throw new Error("Trusted Room UI required");
+          fields(args, []);
+          return await service.workspaces();
+        case "zenx_rooms_preview_target":
+          if (uiInput === null || !service.previewTarget)
+            throw new Error("Trusted Room UI required");
+          fields(args, ["workspace"]);
+          return await service.previewTarget(string(args, "workspace", 4096));
+        case "zenx_rooms_create_assistant": {
           if (uiInput === null || !service.createAssistantRoom)
             throw new Error("Trusted Room UI required");
+          if (args["members"] !== undefined) {
+            fields(args, ["name", "members"]);
+            return await service.createAssistantRoom({
+              name: string(args, "name", MAX_ROOM_NAME_BYTES),
+              members: members(args["members"]),
+            });
+          }
+          fields(args, ["name", "memberName", "operationId", "target"]);
+          const target = record(args["target"]);
+          if (target === null) throw Error("PAW Thread target is required");
+          let selected: CreateAssistantRoomInput["target"];
+          if (target["kind"] === "new") {
+            fields(target, ["kind", "workspace", "expected"]);
+            selected = {
+              kind: "new",
+              workspace: string(target, "workspace", 4096),
+              expected: targetPreview(target["expected"]),
+            };
+          } else if (target["kind"] === "existing") {
+            fields(target, ["kind", "threadId"]);
+            selected = {
+              kind: "existing",
+              threadId: string(target, "threadId", MAX_ID_BYTES),
+            };
+          } else throw Error("Choose a new or existing PAW Thread");
           return await service.createAssistantRoom({
             name: string(args, "name", MAX_ROOM_NAME_BYTES),
-            members: members(args["members"]),
+            memberName: string(args, "memberName", MAX_MEMBER_NAME_BYTES),
+            operationId: string(args, "operationId", MAX_ID_BYTES),
+            target: selected,
           });
+        }
         case "zenx_rooms_assistant_replies":
           if (uiInput === null || !service.setAssistantReplies)
             throw new Error("Trusted Room UI required");
@@ -451,6 +511,44 @@ export function createZenXTrustedPlugin(
       runtimeSdk = undefined;
     },
   };
+}
+
+function targetPreview(value: unknown): AutomationTargetPreview {
+  const preview = record(value);
+  if (preview === null) throw Error("PAW target preview is required");
+  fields(preview, [
+    "workspace",
+    "resolvedWorkspace",
+    "model",
+    "providerProfileId",
+    "modelId",
+    "reasoningEffort",
+    "sandbox",
+    "approvalPolicy",
+    "processEpoch",
+    "revision",
+  ]);
+  for (const [key, maximum] of [
+    ["workspace", 4096],
+    ["resolvedWorkspace", 4096],
+    ["model", 1024],
+    ["providerProfileId", 256],
+    ["modelId", 256],
+    ["processEpoch", 128],
+  ] as const)
+    string(preview, key, maximum);
+  if (preview["reasoningEffort"] !== null)
+    string(preview, "reasoningEffort", 128);
+  if (
+    !["read-only", "workspace-write", "danger-full-access"].includes(
+      String(preview["sandbox"]),
+    ) ||
+    !["never", "on-request"].includes(String(preview["approvalPolicy"])) ||
+    !Number.isSafeInteger(preview["revision"]) ||
+    Number(preview["revision"]) < 0
+  )
+    throw Error("PAW target preview is invalid");
+  return preview as unknown as AutomationTargetPreview;
 }
 
 function members(value: unknown): RoomMember[] {
