@@ -399,6 +399,8 @@
   gap: 3px;
 }
 .settings-view .fleet-settings .fleet-machine-row {
+  flex-direction: row;
+  align-items: center;
   gap: 12px;
   margin-top: 0;
   padding-block: 14px;
