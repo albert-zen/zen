@@ -1,14 +1,42 @@
 .composer-send-control {
   display: flex;
-  border-radius: 50%;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 0;
+  border-radius: 22px;
+}
+/* One treatment for every sending intent; Stop keeps its existing semantic color. */
+.composer-send-control .action-orb:not(:disabled):hover::before,
+.composer-send-control .action-orb:not(:disabled):focus-visible::before {
+  filter: brightness(1.08);
+}
+.composer-send-control .action-orb:not(:disabled):active::before {
+  filter: brightness(0.96);
+}
+.composer-send-disclosure {
+  width: 28px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--color-text-muted);
+}
+.composer-send-disclosure:hover,
+.composer-send-disclosure[aria-expanded="true"] {
+  color: var(--color-text-primary);
+  background: var(--color-surface-hover);
 }
 .ui-popover.composer-send-popover {
-  width: 264px;
+  width: 324px;
   max-width: calc(100vw - 24px);
-  padding: 6px;
+  padding: 0;
   overflow: visible;
+  border-radius: var(--radius-popover);
 }
-/* Keep the path between the button and panel inside the hover target. */
+/* A real hover bridge covers the eight-pixel offset, including flipped placement. */
 .composer-send-popover::after {
   content: "";
   position: absolute;
@@ -21,59 +49,180 @@
 .composer-send-popover[data-side="bottom"]::after {
   bottom: 100%;
 }
-.composer-send-options {
-  display: grid;
-  max-height: min(
-    240px,
-    calc(var(--radix-popover-content-available-height, 400px) - 110px)
+.composer-send-summary {
+  padding: 13px 14px 11px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.composer-send-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.composer-send-heading strong {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-label);
+  font-weight: 600;
+}
+.composer-send-heading > span {
+  flex: 0 0 auto;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.composer-send-description {
+  display: block;
+  margin: 5px 0 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
+}
+.composer-send-body {
+  max-height: max(
+    100px,
+    calc(var(--radix-popover-content-available-height, 500px) - 96px)
   );
   overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 5px;
+}
+.composer-send-options {
+  display: grid;
+  gap: 2px;
 }
 .composer-send-options button {
+  width: 100%;
+  min-height: 44px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  min-height: 34px;
-  padding: 7px 10px;
+  gap: 10px;
+  padding: 9px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 7px;
   background: transparent;
   color: var(--color-text-primary);
   text-align: left;
   font: inherit;
-  font-size: 12px;
 }
-.composer-send-options button:hover:not(:disabled) {
+.composer-send-options button > svg {
+  flex: 0 0 auto;
+  color: var(--color-text-secondary);
+}
+.composer-send-options button > span {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.composer-send-options strong {
+  font-size: var(--font-size-caption);
+  font-weight: 550;
+}
+.composer-send-options small {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.composer-send-options button[data-primary="true"] {
+  background: var(--color-accent-soft);
+}
+.composer-send-options button[data-primary="true"] > svg {
+  color: var(--color-text-accent);
+}
+.composer-send-options button:hover:not(:disabled),
+.composer-send-options button:focus-visible {
   background: var(--color-surface-hover);
 }
+.composer-send-options button:focus-visible {
+  outline-offset: -2px;
+}
 .composer-send-options kbd {
+  flex: 0 0 auto;
+  padding: 3px 5px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 4px;
   color: var(--color-text-secondary);
   font: inherit;
-  font-size: 11px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.composer-send-options .composer-send-stop {
+  margin-top: 4px;
+  border-top: 1px solid var(--color-border-subtle);
+  border-radius: 0 0 7px 7px;
+}
+.composer-send-stop > svg {
+  color: var(--color-status-danger) !important;
 }
 .composer-send-default {
   display: grid;
-  gap: 7px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 10px;
   margin-top: 5px;
-  padding: 10px;
+  padding: 11px 9px 7px;
   border-top: 1px solid var(--color-border-subtle);
   color: var(--color-text-secondary);
   font-size: 11px;
 }
-.composer-send-default select {
-  width: 100%;
+.composer-send-default .ui-select {
   min-height: 30px;
-  padding: 4px 8px;
-  border: 1px solid var(--color-border-control);
-  border-radius: 6px;
-  background: var(--color-surface-control);
-  color: var(--color-text-primary);
-  font: inherit;
-  font-size: 12px;
+  max-width: 168px;
+  font-size: 11px;
+}
+.composer-send-default > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--color-text-muted);
+  line-height: 1.5;
 }
 .composer-send-error {
-  margin: 4px 10px 8px;
+  margin: 4px 9px 8px;
   color: var(--color-status-danger);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
+}
+@media (pointer: coarse), (max-width: 480px) {
+  .composer-send-disclosure {
+    width: 44px;
+  }
+  .composer-send-default {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .composer-send-default .ui-select {
+    min-height: 44px;
+    max-width: none;
+  }
+}
+.composer-send-summary {
+  width: 100%;
+  min-height: 64px;
+  display: block;
+  border: 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-popover) var(--radius-popover) 0 0;
+  background: var(--color-accent-soft);
+  text-align: left;
+}
+.composer-send-summary:hover:not(:disabled),
+.composer-send-summary:focus-visible {
+  background: var(--color-surface-hover);
+}
+.composer-send-summary:focus-visible {
+  outline-offset: -3px;
+}
+.composer-send-heading > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.composer-send-heading kbd {
+  padding: 2px 4px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 10px;
+}
+
+.composer-send-summary[data-action="stop"] {
+  background: var(--color-surface-danger);
 }

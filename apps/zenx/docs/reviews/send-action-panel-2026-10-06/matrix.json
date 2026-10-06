@@ -1,0 +1,1294 @@
+{
+  "nativeCaptureSource": "9d164c3b9b2deb31c4cc49d6585cf908d081e94e",
+  "reviewedHead": "e484b9d830da990c902e8be3cc5ec96263c56bae",
+  "scenarioCount": 36,
+  "rendererOnly": true,
+  "liveProviderCalls": false,
+  "assertionsPassed": true,
+  "cases": [
+    {
+      "name": "idle",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "focus": "",
+      "focusTag": "BODY",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "308f115f1649099a96b594fa386808c86bd9e8237bd08115628e2c3b182a8888",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "idle-hover",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 572,
+        "width": 324,
+        "height": 153.5,
+        "top": 572,
+        "right": 971,
+        "bottom": 725.5,
+        "left": 647
+      },
+      "focus": "",
+      "focusTag": "BODY",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "37de4e1cd86547762213e89a864c65eacd08a76e8f98cf73d767e3ccc3c2508e",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "running",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "focus": "",
+      "focusTag": "BODY",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "cc85dc9fefa9c3ca3016312280850739c4b5aaa1b0fe04468b2be08361ab42d5",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "running-hover",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 344,
+        "width": 324,
+        "height": 381.453125,
+        "top": 344,
+        "right": 971,
+        "bottom": 725.453125,
+        "left": 647
+      },
+      "focus": "",
+      "focusTag": "BODY",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "6a919de0c19cac411916ca0baa0c0a39ad2295a6e1a48bfe7516dd08beb6049b",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "pointer-disclosure-first",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "focus": "",
+      "focusTag": "BODY",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "c20dcaf9bfa7ec5c645fc6b28ea5ee3a0642719adb4a2e01cef49cfb08383ac0",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "pointer-disclosure-second",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 344,
+        "width": 324,
+        "height": 381.453125,
+        "top": 344,
+        "right": 971,
+        "bottom": 725.453125,
+        "left": 647
+      },
+      "focus": "composer-send-summary",
+      "focusTag": "BUTTON",
+      "focusLabel": "Steer now",
+      "overflow": false,
+      "screenshotSha256": "a34632315768c47e5ab067eabbb3eff29086670977ac2e863c00aee4375c2339",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "pointer-disclosure-third",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "focus": "composer-send-disclosure",
+      "focusTag": "BUTTON",
+      "focusLabel": "Send options",
+      "overflow": false,
+      "screenshotSha256": "fd39abcc4b877655991d7b10dee523b86de88a128dee83a9040a9339d4ce4406",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "pointer-closed-first",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 344,
+        "width": 324,
+        "height": 381.453125,
+        "top": 344,
+        "right": 971,
+        "bottom": 725.453125,
+        "left": 647
+      },
+      "focus": "composer-send-summary",
+      "focusTag": "BUTTON",
+      "focusLabel": "Steer now",
+      "overflow": false,
+      "screenshotSha256": "0767435ebbb124255bb0289f71832b604452ee78cdd9b05dde15f0f430d557dc",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "pointer-closed-second",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "focus": "composer-send-disclosure",
+      "focusTag": "BUTTON",
+      "focusLabel": "Send options",
+      "overflow": false,
+      "screenshotSha256": "fad5bc9171f2b7e3e3ec4b466eac8765c5ce71e190a8fae4d2730974a6a471a4",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "hover-gap",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 344,
+        "width": 324,
+        "height": 381.453125,
+        "top": 344,
+        "right": 971,
+        "bottom": 725.453125,
+        "left": 647
+      },
+      "focus": "",
+      "focusTag": "BODY",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "d2b85cc86ecd04d111e4e4b8419323376b1591bd2a6b68f3b136f20c65955c6d",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "running-batch",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 344,
+        "width": 324,
+        "height": 381.453125,
+        "top": 344,
+        "right": 971,
+        "bottom": 725.453125,
+        "left": 647
+      },
+      "focus": "",
+      "focusTag": "BODY",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "80de9d8d398a8f53669e1fe5e180ce535f67b845703f78b900767a956565c7ff",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "running-queue",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 344,
+        "width": 324,
+        "height": 381.453125,
+        "top": 344,
+        "right": 971,
+        "bottom": 725.453125,
+        "left": 647
+      },
+      "focus": "",
+      "focusTag": "BODY",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "678052fe78cb8f91f7405769fac55b5512aa95eae1b9b717d5206eaf0dfb1192",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "running-hard",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 344,
+        "width": 324,
+        "height": 381.453125,
+        "top": 344,
+        "right": 971,
+        "bottom": 725.453125,
+        "left": 647
+      },
+      "focus": "",
+      "focusTag": "BODY",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "13877ea4a41a5a344bcbfe265a6b328275cf9435538158102bcccd8e1a85aeb6",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "idle-empty",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 572,
+        "width": 324,
+        "height": 153.5,
+        "top": 572,
+        "right": 971,
+        "bottom": 725.5,
+        "left": 647
+      },
+      "focus": "",
+      "focusTag": "BODY",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "b0221316d0ea6a34a4b9406fb3406b0fa5219e4ae4f3b95cd97561d724b04d15",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "running-empty",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 334,
+        "width": 324,
+        "height": 390.84375,
+        "top": 334,
+        "right": 971,
+        "bottom": 724.84375,
+        "left": 647
+      },
+      "focus": "",
+      "focusTag": "BODY",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "f2bde6a7a288401c745558a4711e4fa625ce64302b8bda99d2425ee48be07ac6",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "pending",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 572,
+        "width": 324,
+        "height": 153.5,
+        "top": 572,
+        "right": 971,
+        "bottom": 725.5,
+        "left": 647
+      },
+      "focus": "",
+      "focusTag": "BODY",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "4c6a8719ecbf9db093219aa3db46745ef743a34b0b2b5e2d101eb2eed604b507",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "disabled",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 572,
+        "width": 324,
+        "height": 153.5,
+        "top": 572,
+        "right": 971,
+        "bottom": 725.5,
+        "left": 647
+      },
+      "focus": "",
+      "focusTag": "BODY",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "4c6a8719ecbf9db093219aa3db46745ef743a34b0b2b5e2d101eb2eed604b507",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "send-error",
+      "button": {
+        "x": 899,
+        "y": 711,
+        "width": 44,
+        "height": 44,
+        "top": 711,
+        "right": 943,
+        "bottom": 755,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 711,
+        "width": 28,
+        "height": 44,
+        "top": 711,
+        "right": 971,
+        "bottom": 755,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 550,
+        "width": 324,
+        "height": 153.5,
+        "top": 550,
+        "right": 971,
+        "bottom": 703.5,
+        "left": 647
+      },
+      "focus": "",
+      "focusTag": "BODY",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "a82b4c1bc8aa5c8c87cb53e09b193ecfad0b37164a1e795e8fdbce40fd5adaa8",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "compact",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 554,
+        "width": 324,
+        "height": 171.5,
+        "top": 554,
+        "right": 971,
+        "bottom": 725.5,
+        "left": 647
+      },
+      "focus": "",
+      "focusTag": "BODY",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "cd3cc039ddcc85f68e097ffd6abaa22c1e1b0ae242c83dd31937f4c556145ec0",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "running-light",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 344,
+        "width": 324,
+        "height": 381.453125,
+        "top": 344,
+        "right": 971,
+        "bottom": 725.453125,
+        "left": 647
+      },
+      "focus": "",
+      "focusTag": "BODY",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "6d851a973a0dea852d3658642e826fabf4bac26cc40f12ed7befee36a90926c8",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "running-chinese",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 345,
+        "width": 324,
+        "height": 380.0625,
+        "top": 345,
+        "right": 971,
+        "bottom": 725.0625,
+        "left": 647
+      },
+      "focus": "",
+      "focusTag": "BODY",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "bf1cc4ada2967a3da104d29fefde49eadcadae8eea934d4e26cea170be941df1",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "narrow-running",
+      "button": {
+        "x": 249,
+        "y": 583,
+        "width": 44,
+        "height": 44,
+        "top": 583,
+        "right": 293,
+        "bottom": 627,
+        "left": 249
+      },
+      "disclosure": {
+        "x": 293,
+        "y": 583,
+        "width": 44,
+        "height": 44,
+        "top": 583,
+        "right": 337,
+        "bottom": 627,
+        "left": 293
+      },
+      "panel": {
+        "x": 13,
+        "y": 162,
+        "width": 324,
+        "height": 413.453125,
+        "top": 162,
+        "right": 337,
+        "bottom": 575.453125,
+        "left": 13
+      },
+      "focus": "composer-send-summary",
+      "focusTag": "BUTTON",
+      "focusLabel": "Steer now",
+      "overflow": false,
+      "screenshotSha256": "5eb56b3019d3f69e3301c938cbad67621de579470d49892a4fb4f9f3146912d5",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "narrow-idle",
+      "button": {
+        "x": 249,
+        "y": 583,
+        "width": 44,
+        "height": 44,
+        "top": 583,
+        "right": 293,
+        "bottom": 627,
+        "left": 249
+      },
+      "disclosure": {
+        "x": 293,
+        "y": 583,
+        "width": 44,
+        "height": 44,
+        "top": 583,
+        "right": 337,
+        "bottom": 627,
+        "left": 293
+      },
+      "panel": {
+        "x": 13,
+        "y": 390,
+        "width": 324,
+        "height": 185.5,
+        "top": 390,
+        "right": 337,
+        "bottom": 575.5,
+        "left": 13
+      },
+      "focus": "composer-send-summary",
+      "focusTag": "BUTTON",
+      "focusLabel": "Send",
+      "overflow": false,
+      "screenshotSha256": "c83a032eba28fd702fdaf9a907251c9201be3594461c83feb913ef3719b8f793",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "short-running",
+      "button": {
+        "x": 525,
+        "y": 363,
+        "width": 44,
+        "height": 44,
+        "top": 363,
+        "right": 569,
+        "bottom": 407,
+        "left": 525
+      },
+      "disclosure": {
+        "x": 569,
+        "y": 363,
+        "width": 28,
+        "height": 44,
+        "top": 363,
+        "right": 597,
+        "bottom": 407,
+        "left": 569
+      },
+      "panel": {
+        "x": 273,
+        "y": 39,
+        "width": 324,
+        "height": 316,
+        "top": 39,
+        "right": 597,
+        "bottom": 355,
+        "left": 273
+      },
+      "focus": "composer-send-summary",
+      "focusTag": "BUTTON",
+      "focusLabel": "Steer now",
+      "overflow": false,
+      "screenshotSha256": "999e78da8ce71b822fee64b9c38f8ecc8ef3fb8e83b5f49adc4d7479a7daeb52",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "keyboard-open",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 344,
+        "width": 324,
+        "height": 381.453125,
+        "top": 344,
+        "right": 971,
+        "bottom": 725.453125,
+        "left": 647
+      },
+      "focus": "composer-send-summary",
+      "focusTag": "BUTTON",
+      "focusLabel": "Steer now",
+      "overflow": false,
+      "screenshotSha256": "3b6befa361ea5041c1ace89ef9485d43f0f03db65c3bddd95b81e806979fa879",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "keyboard-escape",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "focus": "composer-send-disclosure",
+      "focusTag": "BUTTON",
+      "focusLabel": "Send options",
+      "overflow": false,
+      "screenshotSha256": "c94130b547c67be30eefd4aaef7d3e88e417bc362cdd9f102fb829926f919e3b",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "preference-menu",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 344,
+        "width": 324,
+        "height": 381.453125,
+        "top": 344,
+        "right": 971,
+        "bottom": 725.453125,
+        "left": 647
+      },
+      "focus": "ui-select-option",
+      "focusTag": "DIV",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "11a43b09dfc5eb0c1e4dac893953cb93c9afe8c338a69fda15313eadd73ea7b7",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "preference-changed",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 344,
+        "width": 324,
+        "height": 381.453125,
+        "top": 344,
+        "right": 971,
+        "bottom": 725.453125,
+        "left": 647
+      },
+      "focus": "ui-select ",
+      "focusTag": "BUTTON",
+      "focusLabel": "Default send mode",
+      "overflow": false,
+      "screenshotSha256": "5d193f22f8bf011dfcccaca7b32f315b858de159ee48226a8df599b9b47cc458",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "preference-error",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 542,
+        "width": 324,
+        "height": 183.5,
+        "top": 542,
+        "right": 971,
+        "bottom": 725.5,
+        "left": 647
+      },
+      "focus": "ui-select ",
+      "focusTag": "BUTTON",
+      "focusLabel": "Default send mode",
+      "overflow": false,
+      "screenshotSha256": "78b266e72265d2c4bf87a1693770e158a4d78ec90075ee1cd152155e8a009ff4",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "transition-running-observed",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "panel": {
+        "x": 647,
+        "y": 344,
+        "width": 324,
+        "height": 381.453125,
+        "top": 344,
+        "right": 971,
+        "bottom": 725.453125,
+        "left": 647
+      },
+      "focus": "",
+      "focusTag": "BODY",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "c57167a398d4175890c63e4b676cd063b11254fcc80c72ab9b8dfc10cdf9e3cb",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "transition-current-steer",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "focus": "",
+      "focusTag": "BODY",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "bcd06a328d8fe4d96dd7215abc7a7dd533fea28fc4156a622c9d211bbc59b356",
+      "mockCallbackStatus": "steer:running-turn"
+    },
+    {
+      "name": "transition-current-send",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "focus": "",
+      "focusTag": "BODY",
+      "focusLabel": null,
+      "overflow": false,
+      "screenshotSha256": "22bef2add5f1c873ca5e59eaf9e35ab42fc648318cf58dce3bb13232ae5bda21",
+      "mockCallbackStatus": "start:idle"
+    },
+    {
+      "name": "turn-ends-focused",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "focus": "composer-send-disclosure",
+      "focusTag": "BUTTON",
+      "focusLabel": "Send options",
+      "overflow": false,
+      "screenshotSha256": "ab17e2e37fcecb9cc04aed4240c0e0a27d5e69f971851216f71b8a82c731129b",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "transition-editor-focus",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "focus": "",
+      "focusTag": "TEXTAREA",
+      "focusLabel": "Message",
+      "overflow": false,
+      "screenshotSha256": "5384081edcc43710c179a4d9b9669a4665a99d9eabed4a0fa8ab28bd6a997671",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "turn-ends-preference-focus",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "focus": "composer-send-disclosure",
+      "focusTag": "BUTTON",
+      "focusLabel": "Send options",
+      "overflow": false,
+      "screenshotSha256": "508b4a3956fbe398ebe252e3ee80e8b9257e8b5cb8838f638998efb9955f3210",
+      "mockCallbackStatus": "No action"
+    },
+    {
+      "name": "alternate-action",
+      "button": {
+        "x": 899,
+        "y": 733,
+        "width": 44,
+        "height": 44,
+        "top": 733,
+        "right": 943,
+        "bottom": 777,
+        "left": 899
+      },
+      "disclosure": {
+        "x": 943,
+        "y": 733,
+        "width": 28,
+        "height": 44,
+        "top": 733,
+        "right": 971,
+        "bottom": 777,
+        "left": 943
+      },
+      "focus": "composer-send-disclosure",
+      "focusTag": "BUTTON",
+      "focusLabel": "Send options",
+      "overflow": false,
+      "screenshotSha256": "6dab3d2fe38e828dd92831e11bf4c09bc7f0d9b53752bbdae85783269bad1140",
+      "mockCallbackStatus": "batch-next:running-turn"
+    }
+  ]
+}
