@@ -1,5 +1,40 @@
 // Settings UI copy. Keep keys stable across locales; product data and user content stay unchanged.
 export const en = {
+  "fleetConnection.verifyHostIdentity":
+    "Check this Host ID directly on the other machine before pairing.",
+  "fleetConnection.accessHelp": "About access & remote shell",
+  "fleetConnection.done": "Done",
+  "fleetConnection.connectAnother": "Connect another machine",
+  "fleetConnection.invitationDescription":
+    "Paste the invitation from the other machine, then review its identity and access.",
+  "fleetConnection.machineName": "Machine name",
+  "fleetConnection.machineDetails": "Machine details (optional)",
+  "fleetConnection.pageDescription":
+    "Use your other computers from ZenX. Each machine keeps its own work and permissions.",
+  "fleetConnection.machines": "Machines",
+  "fleetConnection.machineListHelp":
+    "Choose a machine to browse its work, or connect another one.",
+  "fleetConnection.connectMachine": "Connect machine",
+  "fleetConnection.emptyTitle": "Your machines, together",
+  "fleetConnection.emptyDescription":
+    "Connect a computer to browse its projects and continue work from here.",
+  "fleetConnection.machineActions": "{{name}} actions",
+  "fleetConnection.connectionHelp": "About connections",
+  "fleetConnection.connectDescription":
+    "Choose how to connect. You’ll review access before anything is saved.",
+  "fleetConnection.closeConnection": "Close connection",
+  "fleetConnection.connectionMethod": "Connection method",
+  "fleetConnection.method.invitation": "Invitation",
+  "fleetConnection.methodHelp.invitation":
+    "Paste an invitation from the other machine",
+  "fleetConnection.method.ssh": "SSH",
+  "fleetConnection.methodHelp.ssh": "Use your existing SSH connection",
+  "fleetConnection.method.https": "Manual pairing",
+  "fleetConnection.methodHelp.https": "Enter an address and pairing code",
+  "fleetConnection.thisMachine": "This machine",
+  "fleetConnection.hostingOff": "Sharing is off",
+  "fleetConnection.manageHosting": "Hosting & access",
+
   "fleetComposer.catalogFailedPreserved":
     "{{error}} Your text is preserved; no local machine was substituted.",
   "fleetComposer.snapshotChecked": "Snapshot checked {{time}}",
@@ -1229,6 +1264,39 @@ export const en = {
 } as const;
 
 export const zhCN: Record<keyof typeof en, string> = {
+  "fleetConnection.verifyHostIdentity":
+    "配对前，请在另一台机器上直接核对这个主机 ID。",
+  "fleetConnection.accessHelp": "访问权限与远程命令说明",
+  "fleetConnection.done": "完成",
+  "fleetConnection.connectAnother": "连接另一台机器",
+  "fleetConnection.invitationDescription":
+    "粘贴另一台机器的邀请，然后核对机器身份和访问权限。",
+  "fleetConnection.machineName": "机器名称",
+  "fleetConnection.machineDetails": "机器详情（可选）",
+  "fleetConnection.pageDescription":
+    "从 ZenX 使用你的其他电脑。每台机器保留自己的工作和权限。",
+  "fleetConnection.machines": "机器",
+  "fleetConnection.machineListHelp": "选择一台机器查看工作，或连接另一台电脑。",
+  "fleetConnection.connectMachine": "连接机器",
+  "fleetConnection.emptyTitle": "把你的机器连起来",
+  "fleetConnection.emptyDescription":
+    "连接一台电脑，即可在这里浏览项目、继续工作。",
+  "fleetConnection.machineActions": "{{name}} 的操作",
+  "fleetConnection.connectionHelp": "连接说明",
+  "fleetConnection.connectDescription":
+    "选择连接方式。保存之前，你会先确认访问权限。",
+  "fleetConnection.closeConnection": "关闭连接",
+  "fleetConnection.connectionMethod": "连接方式",
+  "fleetConnection.method.invitation": "邀请",
+  "fleetConnection.methodHelp.invitation": "粘贴另一台机器发出的邀请",
+  "fleetConnection.method.ssh": "SSH",
+  "fleetConnection.methodHelp.ssh": "使用已配置的 SSH 连接",
+  "fleetConnection.method.https": "手动配对",
+  "fleetConnection.methodHelp.https": "输入地址和配对码",
+  "fleetConnection.thisMachine": "本机",
+  "fleetConnection.hostingOff": "共享已关闭",
+  "fleetConnection.manageHosting": "托管与访问",
+
   "fleetComposer.catalogFailedPreserved":
     "{{error}} 你的文字已保留，没有改用本机。",
   "fleetComposer.snapshotChecked": "快照检查时间：{{time}}",
