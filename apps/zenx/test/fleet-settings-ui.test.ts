@@ -1293,3 +1293,56 @@ test("editing an existing machine does not clear the separate unfinished new con
     await view.close();
   }
 });
+
+test("Escape dismisses the nested Access choice before the connection dialog", async () => {
+  const view = await mount();
+  try {
+    await click(view.button("Connect machine"));
+    await click(view.button("SSH"));
+    await fill(view.input("Machine name"), "Unfinished SSH");
+    const access = [...document.querySelectorAll("label")]
+      .find(
+        (label) =>
+          label.querySelector("span")?.textContent?.trim() === "Access",
+      )
+      ?.querySelector<HTMLButtonElement>("button.ui-select");
+    assert.ok(access);
+    await act(async () => {
+      access.focus();
+      access.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "ArrowDown",
+          bubbles: true,
+        }),
+      );
+    });
+    const option = document.querySelector<HTMLElement>('[role="option"]');
+    assert.ok(option);
+    await act(async () => {
+      option.focus();
+      option.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    assert.equal(document.querySelector('[role="listbox"]'), null);
+    assert.ok(document.querySelector('[role="dialog"]'));
+    assert.equal(view.input("Machine name").value, "Unfinished SSH");
+    await act(async () =>
+      access.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(view.saved.length, 0);
+  } finally {
+    await view.close();
+  }
+});

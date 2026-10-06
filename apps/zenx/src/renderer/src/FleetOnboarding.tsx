@@ -230,7 +230,12 @@ export function FleetConnectionSetup({
             }
           }}
           onKeyDown={(event) => {
-            if (event.key === "Escape" && !busy) {
+            if (
+              event.key === "Escape" &&
+              !busy &&
+              !embedded &&
+              !event.defaultPrevented
+            ) {
               event.preventDefault();
               clear();
               onClose?.();
@@ -323,7 +328,12 @@ export function FleetConnectionSetup({
           aria-label={t("fleetOnboarding.reviewMachineInvitation")}
           className="fleet-invitation-review"
           onKeyDown={(event) => {
-            if (event.key === "Escape" && !busy) {
+            if (
+              event.key === "Escape" &&
+              !busy &&
+              !embedded &&
+              !event.defaultPrevented
+            ) {
               event.preventDefault();
               clear();
               onClose?.();

@@ -966,12 +966,6 @@ export function FleetSettings() {
             ref={editorRegion}
             className="fleet-device-editor"
             aria-label={t("fleetSettings.deviceEditor")}
-            onKeyDown={(event) => {
-              if (event.key === "Escape" && !disabled) {
-                event.preventDefault();
-                closeEditor();
-              }
-            }}
           >
             <form
               onSubmit={(event) => {
