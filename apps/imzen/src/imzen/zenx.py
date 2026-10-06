@@ -8,11 +8,44 @@ import json
 import os
 import sys
 import urllib.request
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from .config import Settings
 from .main import create_gateway
 from .paw import PawController, PawRoutingError, PawState
 from .paw_pipe import MAX_LINE_BYTES, PawHostClient, ThreadedPipeReader
+
+
+@contextmanager
+def isolate_child_stdin() -> Iterator[None]:
+    """Keep the private pipe in this process; give Windows children NUL stdin.
+
+    A blocked read on the inherited synchronous pipe can stall Windows child
+    initialization. Preserve sys.stdin for PAW, changing only the Win32 standard
+    handle slot used by subprocesses. No interactive child stdin is supported.
+    """
+    if sys.platform != "win32":
+        yield
+        return
+    import ctypes
+    import msvcrt
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetStdHandle.argtypes = [ctypes.c_ulong]
+    kernel.GetStdHandle.restype = ctypes.c_void_p
+    kernel.SetStdHandle.argtypes = [ctypes.c_ulong, ctypes.c_void_p]
+    kernel.SetStdHandle.restype = ctypes.c_int
+    stdin_id = -10 & 0xFFFFFFFF
+    previous = kernel.GetStdHandle(stdin_id)
+    with open(os.devnull, "rb") as sink:
+        if not kernel.SetStdHandle(stdin_id, msvcrt.get_osfhandle(sink.fileno())):
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            yield
+        finally:
+            if not kernel.SetStdHandle(stdin_id, previous):
+                raise ctypes.WinError(ctypes.get_last_error())
 
 
 def normalize_proxy_exclusions() -> None:
@@ -99,7 +132,8 @@ async def run() -> None:
 
 if __name__ == "__main__":
     try:
-        asyncio.run(run())
+        with isolate_child_stdin():
+            asyncio.run(run())
     except PawRoutingError as error:
         print(json.dumps({"type": "failed", "message": str(error)}), flush=True)
         sys.exit(1)
