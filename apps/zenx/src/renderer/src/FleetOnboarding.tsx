@@ -17,6 +17,8 @@ interface SetupProps {
   disabled: boolean;
   onBusy(busy: boolean): void;
   onChanged(): Promise<unknown>;
+  embedded?: boolean;
+  onClose?(): void;
 }
 
 /** Invitations live only in this human interaction, never in a model or draft. */
@@ -26,11 +28,13 @@ export function FleetConnectionSetup({
   disabled,
   onBusy,
   onChanged,
+  embedded = false,
+  onClose,
 }: SetupProps) {
   const { t, i18n } = useTranslation("settings");
   const translateMessage = (value: FleetOnboardingMessage) =>
     typeof value === "string" ? value : t(value.key, value.values);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(embedded);
   const [raw, setRaw] = useState("");
   const [invitation, setInvitation] = useState<FleetInvitation | null>(null);
   const [id, setId] = useState("");
@@ -42,6 +46,7 @@ export function FleetConnectionSetup({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<FleetOnboardingMessage | null>(null);
   const [notice, setNotice] = useState<FleetOnboardingMessage | null>(null);
+  const [completed, setCompleted] = useState(false);
   const [readiness, setReadiness] = useState<FleetReadiness | null>(null);
   const mounted = useRef(false);
   const flight = useRef(false);
@@ -74,7 +79,7 @@ export function FleetConnectionSetup({
     return () => window.clearTimeout(timer);
   }, [invitation]);
   const clear = () => {
-    setOpen(false);
+    setOpen(embedded);
     setRaw("");
     setInvitation(null);
     setTrusted(false);
@@ -127,7 +132,10 @@ export function FleetConnectionSetup({
       access,
       shellEnabled: access === "control" && shell,
     });
-    if (mounted.current) setNotice({ key: "fleetOnboarding.pairedChecking" });
+    if (mounted.current) {
+      setCompleted(true);
+      setNotice({ key: "fleetOnboarding.pairedChecking" });
+    }
     try {
       await onChanged();
       await api.test(id);
@@ -146,32 +154,127 @@ export function FleetConnectionSetup({
   };
   return (
     <section
-      className="page-card settings-card"
+      className={
+        embedded ? "fleet-invitation-setup" : "page-card settings-card"
+      }
       aria-label={t("fleetOnboarding.connectMachine")}
     >
-      <div className="settings-card-head">
-        <div>
-          <h3>{t("fleetOnboarding.connectMachine")}</h3>
-          <p>{t("fleetOnboarding.setupDescription")}</p>
+      {!embedded ? (
+        <div className="settings-card-head">
+          <div>
+            <h3>{t("fleetOnboarding.connectMachine")}</h3>
+            <p>{t("fleetOnboarding.setupDescription")}</p>
+          </div>
+          <button
+            ref={trigger}
+            className="secondary-button"
+            disabled={disabled || busy}
+            onClick={() => {
+              setOpen(true);
+              setError(null);
+              setNotice(null);
+            }}
+          >
+            {t("fleetOnboarding.useInvitation")}
+          </button>
         </div>
-        <button
-          ref={trigger}
-          className="secondary-button"
-          disabled={disabled || busy}
-          onClick={() => {
-            setOpen(true);
+      ) : null}
+      <p className="settings-note">
+        {embedded
+          ? t("fleetConnection.invitationDescription")
+          : t("fleetOnboarding.endpointRequirement")}
+      </p>
+
+      {error ? (
+        <p className="settings-error" role="alert">
+          {translateMessage(error)}
+        </p>
+      ) : null}
+      {notice ? <p role="status">{translateMessage(notice)}</p> : null}
+      {embedded && completed ? (
+        <div className="fleet-actions settings-actions">
+          <button className="primary-button" disabled={busy} onClick={onClose}>
+            {t("fleetConnection.done")}
+          </button>
+          <button
+            className="quiet-button"
+            disabled={busy}
+            onClick={() => {
+              setCompleted(false);
+              setNotice(null);
+              setError(null);
+            }}
+          >
+            {t("fleetConnection.connectAnother")}
+          </button>
+        </div>
+      ) : null}
+      {open && !invitation && (!embedded || !completed) ? (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
             setError(null);
-            setNotice(null);
+            try {
+              const value = parseFleetInvitation(raw);
+              setInvitation(value);
+              setRaw("");
+              setLabel(value.label);
+              setId(uniqueMachineId(value.hostId, snapshot));
+              setDescription("");
+              setAccess("read");
+              setShell(false);
+              setTrusted(false);
+            } catch (reason) {
+              setError(message(reason));
+              setRaw("");
+            }
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && !busy) {
+              event.preventDefault();
+              clear();
+              onClose?.();
+            }
           }}
         >
-          {t("fleetOnboarding.useInvitation")}
-        </button>
-      </div>
-      <p className="settings-note">
-        {t("fleetOnboarding.endpointRequirement")}
-      </p>
+          <label className="field">
+            <span>{t("fleetOnboarding.invitation")}</span>
+            <input
+              ref={input}
+              aria-label={t("fleetOnboarding.invitation")}
+              type="password"
+              autoComplete="off"
+              value={raw}
+              maxLength={8192}
+              onChange={(event) => setRaw(event.target.value)}
+              disabled={busy}
+            />
+          </label>
+          <div className="settings-actions fleet-actions">
+            <button
+              className="primary-button"
+              type="submit"
+              disabled={busy || !raw.trim()}
+            >
+              {t("fleetOnboarding.reviewInvitation")}
+            </button>
+            <button
+              className="quiet-button"
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                clear();
+                onClose?.();
+              }}
+            >
+              {t("fleetOnboarding.cancelInvitation")}
+            </button>
+          </div>
+        </form>
+      ) : null}
       <details className="fleet-block-space">
         <summary>{t("fleetOnboarding.prepareWithAgent")}</summary>
+        {embedded ? <p>{t("fleetOnboarding.endpointRequirement")}</p> : null}
         <p>{t("fleetOnboarding.preparePrompt")}</p>
         <p>{t("fleetOnboarding.readinessDescription")}</p>
         <button
@@ -213,71 +316,6 @@ export function FleetConnectionSetup({
           </div>
         ) : null}
       </details>
-      {error ? (
-        <p className="settings-error" role="alert">
-          {translateMessage(error)}
-        </p>
-      ) : null}
-      {notice ? <p role="status">{translateMessage(notice)}</p> : null}
-      {open && !invitation ? (
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            setError(null);
-            try {
-              const value = parseFleetInvitation(raw);
-              setInvitation(value);
-              setRaw("");
-              setLabel(value.label);
-              setId(uniqueMachineId(value.hostId, snapshot));
-              setDescription("");
-              setAccess("read");
-              setShell(false);
-              setTrusted(false);
-            } catch (reason) {
-              setError(message(reason));
-              setRaw("");
-            }
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Escape" && !busy) {
-              event.preventDefault();
-              clear();
-            }
-          }}
-        >
-          <label className="field">
-            <span>{t("fleetOnboarding.invitation")}</span>
-            <input
-              ref={input}
-              aria-label={t("fleetOnboarding.invitation")}
-              type="password"
-              autoComplete="off"
-              value={raw}
-              maxLength={8192}
-              onChange={(event) => setRaw(event.target.value)}
-              disabled={busy}
-            />
-          </label>
-          <div className="settings-actions fleet-actions">
-            <button
-              className="primary-button"
-              type="submit"
-              disabled={busy || !raw.trim()}
-            >
-              {t("fleetOnboarding.reviewInvitation")}
-            </button>
-            <button
-              className="quiet-button"
-              type="button"
-              disabled={busy}
-              onClick={clear}
-            >
-              {t("fleetOnboarding.cancelInvitation")}
-            </button>
-          </div>
-        </form>
-      ) : null}
       {invitation ? (
         <div
           ref={review}
@@ -288,6 +326,7 @@ export function FleetConnectionSetup({
             if (event.key === "Escape" && !busy) {
               event.preventDefault();
               clear();
+              onClose?.();
             }
           }}
         >
@@ -405,7 +444,14 @@ export function FleetConnectionSetup({
                 ? t("fleetOnboarding.pairing")
                 : t("fleetOnboarding.pairAndCheck")}
             </button>
-            <button className="quiet-button" disabled={busy} onClick={clear}>
+            <button
+              className="quiet-button"
+              disabled={busy}
+              onClick={() => {
+                clear();
+                onClose?.();
+              }}
+            >
               {t("fleetOnboarding.cancelInvitation")}
             </button>
           </div>

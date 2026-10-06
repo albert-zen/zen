@@ -177,14 +177,16 @@ export function PopoverContent({
 export function ActionMenu({
   label,
   items,
+  compact = false,
 }: {
   label: string;
+  compact?: boolean;
   items: Array<{
     label: string;
     disabled?: boolean;
     danger?: boolean;
     description?: string;
-    onSelect(): void;
+    onSelect(trigger: HTMLButtonElement | null): void;
   }>;
 }) {
   useTranslation("panels");
@@ -208,8 +210,14 @@ export function ActionMenu({
             }
           }}
         >
-          {i18n.t("panels:moreActions")}
-          <Icon name="chevron-down" size={12} />
+          {compact ? (
+            <Icon name="more" size={16} />
+          ) : (
+            <>
+              {i18n.t("panels:moreActions")}
+              <Icon name="chevron-down" size={12} />
+            </>
+          )}
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -270,7 +278,7 @@ export function ActionMenu({
             onClick={() => {
               selected.current = true;
               setOpen(false);
-              item.onSelect();
+              item.onSelect(trigger.current);
             }}
           >
             <strong>{item.label}</strong>

@@ -112,3 +112,311 @@
   border-top: 1px solid var(--border-soft);
   outline-offset: 4px;
 }
+
+/* Machine-first connections: one list, a focused setup, and on-demand hosting. */
+.fleet-settings {
+  display: grid;
+  gap: 24px;
+  color: var(--color-text-primary);
+}
+.fleet-page-header,
+.fleet-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.fleet-page-header h2,
+.fleet-dialog-head h3 {
+  margin: 0 0 6px;
+}
+.fleet-page-header p,
+.fleet-dialog-head p,
+.fleet-machines .settings-card-head p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  max-width: 65ch;
+}
+.fleet-machines > .settings-card-head {
+  margin-bottom: 16px;
+  align-items: center;
+}
+.fleet-machines h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+.fleet-machines .primary-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.fleet-empty {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  padding: 44px 24px;
+  border: 1px dashed var(--color-border);
+  border-radius: 10px;
+  color: var(--color-text-secondary);
+}
+.fleet-empty h4 {
+  margin: 14px 0 6px;
+  font-size: 15px;
+  color: var(--color-text-primary);
+}
+.fleet-empty p {
+  margin: 0;
+  font-size: 13px;
+  max-width: 42ch;
+  line-height: 1.6;
+}
+.settings-view .fleet-machine-row,
+.fleet-machine-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 0;
+}
+.fleet-machine-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  background: var(--color-surface-hover);
+  color: var(--color-text-secondary);
+  border-radius: 8px;
+}
+.fleet-machine-info {
+  display: grid;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.fleet-machine-info strong {
+  font-size: 14px;
+}
+.fleet-machine-info span {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.fleet-machine-info .fleet-history-text {
+  font-size: 13px;
+}
+.fleet-machine-row .fleet-actions {
+  flex-shrink: 0;
+  gap: 4px;
+}
+.fleet-connection-help {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+.fleet-connection-help summary,
+.fleet-hosting summary {
+  cursor: pointer;
+}
+.fleet-connection-help p {
+  line-height: 1.6;
+}
+.fleet-hosting {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+}
+.fleet-hosting > summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  list-style: none;
+}
+.fleet-hosting > summary::-webkit-details-marker {
+  display: none;
+}
+.fleet-hosting summary > span:first-of-type {
+  display: grid;
+  gap: 4px;
+}
+.fleet-hosting summary strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+.fleet-hosting summary small {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.fleet-hosting-action {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.fleet-hosting[open] .fleet-hosting-action svg {
+  rotate: 180deg;
+}
+.fleet-hosting-body {
+  padding: 20px;
+  border-top: 1px solid var(--color-border);
+}
+.fleet-hosting-body h3 {
+  font-size: 15px;
+}
+.fleet-hosting-body p {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.ui-dialog.fleet-connect-dialog {
+  width: min(680px, calc(100vw - 32px));
+  padding: 24px;
+}
+.fleet-dialog-head h3 {
+  font-size: 19px;
+}
+.fleet-close {
+  font-size: 22px;
+  min-width: 32px;
+}
+.fleet-methods {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 20px 0;
+}
+.fleet-methods > button {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  text-align: left;
+  padding: 12px;
+  color: var(--color-text-secondary);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.fleet-methods > button[aria-pressed="true"] {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  color: var(--color-text-primary);
+}
+.fleet-methods span {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.fleet-methods strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+.fleet-methods small {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+.fleet-connect-dialog :is(input:not([type="checkbox"]), textarea, .ui-select) {
+  width: 100%;
+  box-sizing: border-box;
+}
+.fleet-connect-dialog .form-grid {
+  gap: 16px;
+}
+.fleet-connect-dialog .fleet-actions {
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+.fleet-invitation-setup > .settings-note {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+.fleet-invitation-setup > details {
+  margin-bottom: 16px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.fleet-invitation-setup form {
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+.fleet-invitation-setup :is(p, li) {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.fleet-methods > button:focus-visible,
+.fleet-hosting > summary:focus-visible,
+.fleet-connection-help > summary:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 3px;
+}
+@media (max-width: 640px) {
+  .ui-dialog.fleet-connect-dialog {
+    padding: 18px;
+  }
+  .fleet-methods {
+    grid-template-columns: 1fr;
+  }
+  .fleet-methods > button {
+    align-items: center;
+  }
+  .fleet-methods span {
+    gap: 2px;
+  }
+  .fleet-page-header {
+    flex-wrap: wrap;
+  }
+  .settings-view .fleet-machines > .settings-card-head {
+    align-items: stretch;
+  }
+  .fleet-machine-row {
+    flex-wrap: wrap;
+  }
+  .fleet-machine-row .fleet-actions {
+    margin-left: 48px;
+    flex: 1 1 100%;
+  }
+  .fleet-hosting-action {
+    max-width: 40%;
+  }
+}
+
+.fleet-advanced-fields .form-grid {
+  margin-top: 16px;
+}
+.fleet-machine-row button[aria-haspopup="menu"] {
+  min-width: 32px;
+  padding-inline: 8px;
+}
+.fleet-settings .fleet-machine-row > .fleet-machine-info {
+  gap: 3px;
+}
+.settings-view .fleet-settings .fleet-machine-row {
+  gap: 12px;
+  margin-top: 0;
+  padding-block: 14px;
+}
+
+.fleet-connect-dialog input[type="checkbox"] {
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  min-height: 16px;
+  padding: 0;
+  margin: 2px 0 0;
+  flex: 0 0 16px;
+}
+.fleet-access-help {
+  grid-column: 1 / -1;
+}
+.fleet-access-help p {
+  font-size: 13px;
+  line-height: 1.6;
+}
