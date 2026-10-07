@@ -277,7 +277,7 @@ test("mounted Fleet surfaces switch language without changing drafts, user names
     });
   const chooseMachine = async () => {
     const field = document.querySelector(
-      ".fleet-machine-strip button.ui-select",
+      ".fleet-machine-context button.ui-select",
     );
     await act(async () => {
       field.focus();

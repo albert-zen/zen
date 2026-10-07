@@ -9486,6 +9486,19 @@ button:disabled {
   grid-row: 1;
   pointer-events: auto;
 }
+/* The native caption row has one seam across sidebar, main pane and controls. */
+:root:is([data-platform="linux"], [data-platform="win32"])
+  .window-titlebar::after {
+  content: "";
+  position: absolute;
+  z-index: 4;
+  top: calc(var(--native-titlebar-height) - 1px);
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: var(--color-border-subtle);
+  pointer-events: none;
+}
 :root:is([data-platform="linux"], [data-platform="win32"])
   .window-titlebar-native-actions {
   pointer-events: auto;

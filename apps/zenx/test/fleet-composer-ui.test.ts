@@ -1,6 +1,7 @@
 import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 import { JSDOM } from "jsdom";
 import React, { act, useState } from "react";
 import type { FleetProductApi } from "../src/renderer/src/FleetComposerSurface.js";
@@ -52,7 +53,10 @@ const catalog = (id: string): FleetTargetCatalog => ({
   ],
 });
 
-async function mount(overrides: Partial<FleetProductApi> = {}) {
+async function mount(
+  overrides: Partial<FleetProductApi> = {},
+  disabled = false,
+) {
   const dom = new JSDOM('<div id="root"></div>', {
     url: "https://zenx.local/",
     pretendToBeVisual: true,
@@ -117,11 +121,14 @@ async function mount(overrides: Partial<FleetProductApi> = {}) {
       text,
       onTextChange: setText,
       onNotice: (notice) => notices.push(notice),
-      children: React.createElement(
-        "div",
-        { "data-local": "true" },
-        `Local composer: ${text}`,
-      ),
+      disabled,
+      children: (machineControl: React.ReactNode) =>
+        React.createElement(
+          "div",
+          { "data-local": "true", className: "new-thread-composer-context" },
+          machineControl,
+          `Local composer: ${text}`,
+        ),
     });
   }
   await act(async () => root.render(React.createElement(Host)));
@@ -208,7 +215,7 @@ test("New Thread defaults local; selected machine owns catalog/create/send/read 
       /Local composer: Original task/u,
     );
     assert.equal(view.creates.length, 0);
-    await view.choose("Machine", "b");
+    await view.choose("Run on", "b");
     assert.equal(document.querySelector("textarea")!.value, "Original task");
     assert.equal(
       view.select("Model for new Threads").dataset.value,
@@ -228,12 +235,97 @@ test("New Thread defaults local; selected machine owns catalog/create/send/read 
     assert.equal(view.sends[0]!.locator.threadId, "same-thread-id");
     assert.equal(view.sends[0]!.text, "Original task");
     assert.ok(view.reads.every((locator) => locator.deviceId === "b"));
-    assert.equal(view.select("Machine").disabled, true);
+    assert.equal(view.select("Run on").disabled, true);
     assert.match(document.body.textContent ?? "", /b remote reply/u);
     assert.equal(document.querySelector("textarea")!.value, "");
   } finally {
     await view.close();
   }
+});
+
+test("machine selection is a compact composer-context control rather than a page-wide settings strip", async () => {
+  const view = await mount();
+  try {
+    assert.equal(document.querySelector(".fleet-machine-strip"), null);
+    const control = document.querySelector(".fleet-machine-context");
+    assert.ok(control);
+    assert.ok(control.closest(".new-thread-composer-context"));
+    assert.equal(
+      control
+        .querySelector('button[aria-label="Run on"]')
+        ?.getAttribute("data-value"),
+      "local",
+    );
+  } finally {
+    await view.close();
+  }
+});
+
+test("Run on supports keyboard dismissal and returns focus after the draft changes targets", async () => {
+  const view = await mount();
+  try {
+    const trigger = view.select("Run on");
+    await act(async () => {
+      trigger.focus();
+      trigger.dispatchEvent(
+        new view.dom.window.KeyboardEvent("keydown", {
+          key: "ArrowDown",
+          bubbles: true,
+        }),
+      );
+    });
+    assert.ok(document.querySelector('[role="listbox"]'));
+    await act(async () => {
+      document.activeElement!.dispatchEvent(
+        new view.dom.window.KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+        }),
+      );
+    });
+    assert.equal(document.querySelector('[role="listbox"]'), null);
+    assert.equal(document.activeElement, trigger);
+    await view.choose("Run on", "b");
+    assert.equal(document.activeElement, view.select("Run on"));
+    assert.equal(view.select("Run on").dataset.value, "b");
+    assert.equal(document.querySelector("textarea")!.value, "Original task");
+    await view.choose("Run on", "local");
+    assert.equal(document.activeElement, view.select("Run on"));
+    assert.equal(view.creates.length, 0);
+    assert.equal(view.sends.length, 0);
+  } finally {
+    await view.close();
+  }
+});
+
+test("pending local submission keeps the draft's machine fixed", async () => {
+  const view = await mount({}, true);
+  try {
+    assert.equal(view.select("Run on").disabled, true);
+    assert.equal(view.select("Run on").dataset.value, "local");
+    assert.equal(view.creates.length, 0);
+  } finally {
+    await view.close();
+  }
+});
+
+test("long machine names truncate only in the trigger; menu names retain distinguishing suffixes", async () => {
+  const css = await readFile(
+    new URL("../src/renderer/src/fleet-ui.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    css,
+    /\.fleet-machine-trigger \.fleet-machine-choice > span\s*\{[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/su,
+  );
+  assert.doesNotMatch(
+    css,
+    /(?:^|\n)\.fleet-machine-choice > span\s*\{[^}]*white-space:\s*nowrap;/su,
+  );
+  assert.match(
+    css,
+    /\.ui-select-option:has\(\.fleet-machine-choice\) > span:first-child\s*\{[^}]*min-width:\s*0;/su,
+  );
 });
 
 test("a late machine catalog cannot overwrite a newer target and switching preserves text", async () => {
@@ -245,15 +337,15 @@ test("a late machine catalog cannot overwrite a newer target and switching prese
     catalog: async (id) => (id === "a" ? pendingA : catalog(id)),
   });
   try {
-    await view.choose("Machine", "a");
-    await view.choose("Machine", "b");
+    await view.choose("Run on", "a");
+    await view.choose("Run on", "b");
     await act(async () => resolveA(catalog("a")));
     assert.equal(
       view.select("Model for new Threads").dataset.value,
       "b::model",
     );
     assert.equal(view.select("Target workspace").dataset.value, "work-b");
-    await view.choose("Machine", "local");
+    await view.choose("Run on", "local");
     assert.match(
       document.body.textContent ?? "",
       /Local composer: Original task/u,
@@ -276,7 +368,7 @@ test("same-loop Start is single-flight and an edit-away-and-back draft is not cl
     },
   });
   try {
-    await view.choose("Machine", "a");
+    await view.choose("Run on", "a");
     await act(async () => {
       const start = view.button("Start on selected machine");
       start.click();
@@ -303,7 +395,7 @@ test("failed remote catalog leaves the local path untouched and can reload witho
     },
   });
   try {
-    await view.choose("Machine", "a");
+    await view.choose("Run on", "a");
     assert.match(
       document.querySelector('[role="alert"]')?.textContent ?? "",
       /grant revoked.*no local machine was substituted/su,
@@ -373,7 +465,7 @@ test("SSH canonical message content stays readable without raw metadata or opaqu
     }),
   });
   try {
-    await view.choose("Machine", "b");
+    await view.choose("Run on", "b");
     await view.click("Start on selected machine");
     assert.match(
       document.body.textContent ?? "",
@@ -421,7 +513,7 @@ test("revoked active reads stop automatic polling; acknowledged messages do not 
     cleared = true;
   }) as typeof view.dom.window.clearInterval;
   try {
-    await view.choose("Machine", "b");
+    await view.choose("Run on", "b");
     await view.click("Start on selected machine");
     assert.ok(tick);
     await view.fill("Preserved later task");

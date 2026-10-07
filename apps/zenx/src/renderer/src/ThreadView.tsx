@@ -100,6 +100,7 @@ interface ThreadViewProps {
   approvals: readonly ApprovalCardState[];
   composer: ComposerState;
   composerContext?: ReactNode;
+  composerContextPosition?: "before" | "after";
   composerDisabled?: boolean;
   emptyContent?: ReactNode;
   modelDisabled?: boolean;
@@ -155,6 +156,7 @@ export function ThreadView({
   approvals,
   composer,
   composerContext = null,
+  composerContextPosition = "before",
   composerDisabled = false,
   emptyContent = null,
   modelDisabled = false,
@@ -525,7 +527,7 @@ export function ThreadView({
       )}
 
       <div className="bottom-zone" ref={bottomZoneRef}>
-        {composerContext}
+        {composerContextPosition === "before" ? composerContext : null}
         {pendingApprovals.map((approval) => (
           <ApprovalBar
             composerId={composerId}
@@ -914,6 +916,7 @@ export function ThreadView({
             </p>
           ) : null}
         </ComposerShell>
+        {composerContextPosition === "after" ? composerContext : null}
       </div>
       {cancelConfirmation === null ? null : (
         <Dialog

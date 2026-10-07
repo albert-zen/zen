@@ -3455,76 +3455,83 @@ function AgentSurface({
           onTextChange={onNewThreadDraftChange}
           attachmentCount={newThreadDraft.composer.draft.images.length}
           onNotice={onNoticeError}
+          disabled={newThreadDraft.composer.submission?.status === "pending"}
         >
-          <ThreadView
-            approvals={[]}
-            composer={newThreadDraft.composer}
-            composerSendMode={composerSendMode}
-            onComposerSendModeChange={onComposerSendModeChange}
-            composerContext={
-              <NewThreadProjectContext
-                projects={configuredProjects}
-                selectedWorkspace={newThreadDraft.workspace}
-              />
-            }
-            emptyContent={
-              <div className="thread-empty new-thread-draft-empty">
-                <div
-                  className="new-thread-draft-heading"
-                  role="heading"
-                  aria-level={2}
-                >
-                  {i18n.t("shell:whatShouldWeBuildIn")}{" "}
-                  <NewThreadProjectSelector
-                    disabled={
-                      newThreadDraft.composer.submission?.status === "pending"
-                    }
-                    onAddProject={onAddNewThreadProject}
-                    onChange={onNewThreadProjectChange}
+          {(machineControl) => (
+            <ThreadView
+              approvals={[]}
+              composerContextPosition="after"
+              composer={newThreadDraft.composer}
+              composerSendMode={composerSendMode}
+              onComposerSendModeChange={onComposerSendModeChange}
+              composerContext={
+                <div className="new-thread-composer-context">
+                  {machineControl}
+                  <NewThreadProjectContext
                     projects={configuredProjects}
                     selectedWorkspace={newThreadDraft.workspace}
                   />
-                  ?
                 </div>
-              </div>
-            }
-            imageCapabilityError={imageCapabilityMessage(
-              providerProfiles,
-              draftSettings,
-              models,
-            )}
-            imageCapabilityNotice={imageCapabilityNotice(
-              providerProfiles,
-              draftSettings,
-              models,
-            )}
-            modelDisabled={
-              newThreadDraft.composer.submission?.status === "pending"
-            }
-            modelError={
-              draftProjectError ?? modelUpdateError ?? modelCatalogError
-            }
-            models={models}
-            providerProfiles={providerProfiles}
-            permissionMode={
-              newThreadDraft.permissionMode ?? "danger-full-access"
-            }
-            onPermissionChange={onNewThreadPermissionChange}
-            selectedModel={draftSettings?.model}
-            selectedReasoningEffort={draftSettings?.reasoningEffort}
-            thread={null}
-            workflowCommands={workflowCommands}
-            onDraftChange={onNewThreadDraftChange}
-            onImportImages={onImportNewThreadImages}
-            onPickImages={onPickNewThreadImages}
-            onReadAttachment={onReadAttachment}
-            onRemoveImage={onRemoveNewThreadImage}
-            onInterrupt={async () => undefined}
-            onModelChange={onNewThreadModelChange}
-            onReasoningChange={onNewThreadReasoningChange}
-            onRespondToApproval={onRespondToApproval}
-            onSubmit={onSubmitNewThread}
-          />
+              }
+              emptyContent={
+                <div className="thread-empty new-thread-draft-empty">
+                  <div
+                    className="new-thread-draft-heading"
+                    role="heading"
+                    aria-level={2}
+                  >
+                    {i18n.t("shell:whatShouldWeBuildIn")}{" "}
+                    <NewThreadProjectSelector
+                      disabled={
+                        newThreadDraft.composer.submission?.status === "pending"
+                      }
+                      onAddProject={onAddNewThreadProject}
+                      onChange={onNewThreadProjectChange}
+                      projects={configuredProjects}
+                      selectedWorkspace={newThreadDraft.workspace}
+                    />
+                    ?
+                  </div>
+                </div>
+              }
+              imageCapabilityError={imageCapabilityMessage(
+                providerProfiles,
+                draftSettings,
+                models,
+              )}
+              imageCapabilityNotice={imageCapabilityNotice(
+                providerProfiles,
+                draftSettings,
+                models,
+              )}
+              modelDisabled={
+                newThreadDraft.composer.submission?.status === "pending"
+              }
+              modelError={
+                draftProjectError ?? modelUpdateError ?? modelCatalogError
+              }
+              models={models}
+              providerProfiles={providerProfiles}
+              permissionMode={
+                newThreadDraft.permissionMode ?? "danger-full-access"
+              }
+              onPermissionChange={onNewThreadPermissionChange}
+              selectedModel={draftSettings?.model}
+              selectedReasoningEffort={draftSettings?.reasoningEffort}
+              thread={null}
+              workflowCommands={workflowCommands}
+              onDraftChange={onNewThreadDraftChange}
+              onImportImages={onImportNewThreadImages}
+              onPickImages={onPickNewThreadImages}
+              onReadAttachment={onReadAttachment}
+              onRemoveImage={onRemoveNewThreadImage}
+              onInterrupt={async () => undefined}
+              onModelChange={onNewThreadModelChange}
+              onReasoningChange={onNewThreadReasoningChange}
+              onRespondToApproval={onRespondToApproval}
+              onSubmit={onSubmitNewThread}
+            />
+          )}
         </FleetComposerSurface>
       ) : selectedSummary === null || threadDetail === null ? null : (
         <>

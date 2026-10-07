@@ -69,10 +69,8 @@ export const en = {
     "Remote Thread {{threadId}} was created on {{deviceId}} after leaving its draft; inspect it before creating another. No message was sent.",
   "fleetComposer.inspectOutcome":
     "Outcome needs inspection. Refresh the remote Thread or reopen this machine’s catalog; automatic retry is disabled.",
-  "fleetComposer.machine": "Machine",
+  "fleetComposer.runOn": "Run on",
   "fleetComposer.thisMachine": "This machine",
-  "fleetComposer.machineOwnsThread":
-    "The selected machine owns the Thread and its permissions",
   "fleetComposer.remoteConversation": "Remote conversation",
   "fleetComposer.targetPermissions":
     "Target permissions and models apply. Your local Thread is unchanged.",
@@ -1329,9 +1327,8 @@ export const zhCN: Record<keyof typeof en, string> = {
     "离开草稿后，已在 {{deviceId}} 上创建远程会话 {{threadId}}；请先检查该会话，再创建其他会话。没有发送任何消息。",
   "fleetComposer.inspectOutcome":
     "需要检查操作结果。请刷新远程会话，或重新打开该机器的目录；自动重试已禁用。",
-  "fleetComposer.machine": "机器",
+  "fleetComposer.runOn": "运行于",
   "fleetComposer.thisMachine": "本机",
-  "fleetComposer.machineOwnsThread": "会话及其权限由所选机器管理",
   "fleetComposer.remoteConversation": "远程会话",
   "fleetComposer.targetPermissions":
     "使用目标机器的权限和模型。本地会话保持不变。",

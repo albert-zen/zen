@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Select } from "./ui/controls.js";
 import { FleetHistory } from "./FleetHistory.js";
+import { Icon } from "./icons.js";
 import type {
   FleetTargetCatalog,
   FleetThreadLocator,
@@ -41,12 +42,14 @@ export function FleetComposerSurface({
   onTextChange,
   attachmentCount = 0,
   onNotice,
+  disabled = false,
 }: {
-  children: ReactNode;
+  children: ReactNode | ((machineControl: ReactNode) => ReactNode);
   text: string;
   onTextChange(text: string): void;
   attachmentCount?: number;
   onNotice?(notice: string): void;
+  disabled?: boolean;
 }) {
   const { t, i18n } = useTranslation("settings");
   const translateStatus = (value: string) =>
@@ -94,6 +97,8 @@ export function FleetComposerSurface({
   const scope = useRef(0);
   const reading = useRef(0);
   const mutation = useRef(false);
+  const machineTrigger = useRef<HTMLButtonElement>(null);
+  const restoreMachineFocus = useRef(false);
   const textRef = useRef(text);
   const editVersion = useRef(0);
   if (textRef.current !== text) {
@@ -232,7 +237,8 @@ export function FleetComposerSurface({
     return () => window.clearInterval(timer);
   }, [api, locator, status]);
   const changeMachine = (id: string) => {
-    if (locator || mutation.current) return;
+    if (disabled || locator || mutation.current) return;
+    restoreMachineFocus.current = true;
     scope.current++;
     setDeviceId(id);
     setCatalog(null);
@@ -245,6 +251,11 @@ export function FleetComposerSurface({
     setUnknown(false);
     setNotice(null);
   };
+  useEffect(() => {
+    if (!restoreMachineFocus.current || machineTrigger.current === null) return;
+    restoreMachineFocus.current = false;
+    machineTrigger.current.focus();
+  }, [deviceId, catalog]);
   const run = async (
     operation: () => Promise<void>,
     uncertainOnError = true,
@@ -311,42 +322,57 @@ export function FleetComposerSurface({
         });
     });
   };
-  if (!api) return <>{children}</>;
+  const localContent = (control: ReactNode) =>
+    typeof children === "function" ? children(control) : children;
+  if (!api) return <>{localContent(null)}</>;
   const remote = deviceId !== "local";
   const control = catalog?.machine.access === "control";
   const selectedModel = catalog?.models.find((entry) => entry.id === model);
-  return (
-    <div className="fleet-composer-surface">
-      <div className="fleet-machine-strip">
-        <label className="field">
-          <span>{t("fleetComposer.machine")}</span>
-          <Select
-            value={deviceId}
-            disabled={busy || locator !== null}
-            onValueChange={changeMachine}
-          >
-            <option value="local">{t("fleetComposer.thisMachine")}</option>
-            {machines.map((machine) => (
+  const machineLabel = remote
+    ? (machines.find((machine) => machine.id === deviceId)?.label ?? deviceId)
+    : t("fleetComposer.thisMachine");
+  const machineControl = (
+    <label className="fleet-machine-context" data-machine-id={deviceId}>
+      <span className="fleet-machine-label">{t("fleetComposer.runOn")}</span>
+      <Select
+        ref={machineTrigger}
+        aria-label={t("fleetComposer.runOn")}
+        className="fleet-machine-trigger"
+        value={deviceId}
+        disabled={disabled || busy || locator !== null}
+        title={
+          locator
+            ? t("fleetComposer.machineLocked", {
+                deviceId: locator.deviceId,
+                threadId: locator.threadId,
+              })
+            : `${t("fleetComposer.runOn")} ${machineLabel}`
+        }
+        onValueChange={changeMachine}
+      >
+        <optgroup label={t("fleetComposer.runOn")}>
+          <option value="local">
+            <span className="fleet-machine-choice">
+              <Icon name="computer" size={14} />
+              <span>{t("fleetComposer.thisMachine")}</span>
+            </span>
+          </option>
+          {[...machines]
+            .sort((a, b) => a.label.localeCompare(b.label))
+            .map((machine) => (
               <option value={machine.id} key={machine.id}>
-                {machine.label}
+                <span className="fleet-machine-choice">
+                  <Icon name="computer" size={14} />
+                  <span>{machine.label}</span>
+                </span>
               </option>
             ))}
-          </Select>
-        </label>
-        {locator ? (
-          <span>
-            {t("fleetComposer.machineLocked", {
-              deviceId: locator.deviceId,
-              threadId: locator.threadId,
-            })}
-          </span>
-        ) : (
-          <span>
-            {machines.find((machine) => machine.id === deviceId)?.description ??
-              t("fleetComposer.machineOwnsThread")}
-          </span>
-        )}
-      </div>
+        </optgroup>
+      </Select>
+    </label>
+  );
+  return (
+    <div className="fleet-composer-surface">
       {!remote ? (
         <>
           {error ? (
@@ -356,7 +382,14 @@ export function FleetComposerSurface({
               })}
             </p>
           ) : null}
-          {children}
+          {typeof children === "function" ? (
+            localContent(machineControl)
+          ) : (
+            <>
+              {machineControl}
+              {children}
+            </>
+          )}
         </>
       ) : (
         <div className="fleet-remote-conversation">
@@ -677,6 +710,7 @@ export function FleetComposerSurface({
               {t("fleetComposer.returnLocal")}
             </button>
           ) : null}
+          <div className="fleet-remote-context">{machineControl}</div>
         </div>
       )}
     </div>
