@@ -850,6 +850,80 @@ test("running empty composer exposes Stop without locking the editor", () => {
   assert.match(html, /aria-label="Stop"/u);
 });
 
+test("one running orb switches between Stop and send without losing attachment-only drafts", async () => {
+  await withDom(async (root) => {
+    const calls: string[] = [];
+    let composer = emptyComposerState();
+    let running = true;
+    const show = () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer,
+          thread: thread(running ? [turn()] : []),
+          onDraftChange: () => undefined,
+          onInterrupt: async (id) => {
+            calls.push(`stop:${id}`);
+          },
+          onRespondToApproval: noop,
+          onSubmit: async (intent, id) => {
+            calls.push(`${intent}:${id ?? "idle"}`);
+          },
+        }),
+      );
+    await act(async () => show());
+    const orb = requiredButton(".action-orb");
+    for (const text of ["", " \n\t "]) {
+      composer = editComposer(composer, text);
+      await act(async () => show());
+      assert.equal(requiredButton(".action-orb"), orb);
+      assert.equal(orb.getAttribute("aria-label"), "Stop");
+      assert.ok(orb.classList.contains("stop"));
+      await act(async () => orb.click());
+    }
+    composer = editComposer(composer, "new direction");
+    await act(async () => show());
+    assert.equal(orb.getAttribute("aria-label"), "Steer now");
+    await act(async () => orb.click());
+    composer = addComposerImages(editComposer(composer, ""), [
+      {
+        id: "attachment-only",
+        name: "fixture.png",
+        attachment: {
+          type: "attachment",
+          sha256: "a".repeat(64),
+          mediaType: "image/png",
+          byteLength: 4,
+          width: 1,
+          height: 1,
+        },
+      },
+    ]);
+    await act(async () => show());
+    assert.equal(requiredButton(".action-orb"), orb);
+    assert.equal(orb.getAttribute("aria-label"), "Steer now");
+    await act(async () => orb.click());
+    assert.equal(composer.draft.images.length, 1);
+    running = false;
+    await act(async () => show());
+    assert.equal(requiredButton(".action-orb"), orb);
+    assert.equal(orb.getAttribute("aria-label"), "Send");
+    await act(async () => orb.click());
+    assert.deepEqual(calls, [
+      "stop:turn-1",
+      "stop:turn-1",
+      "steer:turn-1",
+      "steer:turn-1",
+      "start:idle",
+    ]);
+    assert.equal(
+      requiredElement(".composer-send-control").querySelectorAll("button")
+        .length,
+      1,
+    );
+  });
+});
+
 test("running draft keeps one send action and hides alternate choices until hover", () => {
   const composer = editComposer(emptyComposerState(), "change direction");
   const html = render(true, [], composer);
@@ -3041,23 +3115,25 @@ test("send hover options preserve actual shortcuts and changing defaults never s
         .querySelector("kbd"),
       null,
     );
-    const select = requiredElement<HTMLSelectElement>(
-      '[aria-label="Default send mode"]',
+    await act(async () =>
+      requiredButton('[aria-label="Default send mode"]').click(),
     );
-    await act(async () => {
-      select.value = "queue";
-      select.dispatchEvent(new window.Event("change", { bubbles: true }));
-    });
+    await act(async () =>
+      requiredElement('[role="option"][data-value="queue"]').click(),
+    );
     assert.equal(mode, "queue");
     assert.deepEqual(sends, []);
     assert.equal(
-      requiredElement<HTMLSelectElement>('[aria-label="Default send mode"]')
-        .value,
+      requiredButton('[aria-label="Default send mode"]').getAttribute(
+        "data-value",
+      ),
       "queue",
     );
     const nextButton = [
       ...panel.querySelectorAll<HTMLButtonElement>("button"),
-    ].find((button) => button.textContent === "Next turn")!;
+    ].find(
+      (button) => button.querySelector("strong")?.textContent === "Next turn",
+    )!;
     await act(async () => nextButton.click());
     assert.deepEqual(sends, ["batch-next"]);
     assert.equal(document.querySelector('[role="dialog"]'), null);
@@ -3088,17 +3164,19 @@ test("send preferences keep the current choice on a failed save and expose the e
         }),
       ),
     );
+    await act(async () => openSendOptions());
     await act(async () =>
-      requiredElement<HTMLDivElement>(".composer-send-control").focus(),
+      requiredButton('[aria-label="Default send mode"]').click(),
     );
-    const select = requiredElement<HTMLSelectElement>(
-      '[aria-label="Default send mode"]',
+    await act(async () =>
+      requiredElement('[role="option"][data-value="hard"]').click(),
     );
-    await act(async () => {
-      select.value = "hard";
-      select.dispatchEvent(new window.Event("change", { bubbles: true }));
-    });
-    assert.equal(select.value, "soft");
+    assert.equal(
+      requiredButton('[aria-label="Default send mode"]').getAttribute(
+        "data-value",
+      ),
+      "soft",
+    );
     assert.equal(
       requiredElement('[role="alert"]').textContent,
       "Settings changed elsewhere",
@@ -3159,10 +3237,326 @@ test("send panel Stop follows interrupt availability independently of send avail
         ...document.querySelectorAll<HTMLButtonElement>(
           ".composer-send-options button",
         ),
-      ].find((button) => button.textContent === "Stop")!;
+      ].find(
+        (button) => button.querySelector("strong")?.textContent === "Stop",
+      )!;
       assert.equal(stop.disabled, stopDisabled);
       await act(async () => stop.click());
       assert.equal(stops, stopDisabled ? 0 : 1);
     }
   });
 });
+
+test("send hover keeps one visible orb and primary click still submits once", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    const calls: string[] = [];
+    await act(async () =>
+      root.render(
+        createElement(ComposerSendControl, {
+          mode: "soft",
+          running: true,
+          hasDraft: true,
+          disabled: false,
+          sendDisabled: false,
+          primaryMode: "steer",
+          primaryLabel: "Steer now",
+          compact: false,
+          onPrimary: () => calls.push("primary"),
+          onSend: (intent) => calls.push(intent),
+          onStop: () => calls.push("stop"),
+        }),
+      ),
+    );
+    const primary = requiredButton(".action-orb");
+    assert.equal(primary.getAttribute("aria-haspopup"), null);
+    assert.ok(
+      !document.querySelector(".composer-send-disclosure"),
+      "no adjacent disclosure is rendered",
+    );
+    assert.equal(
+      requiredElement(".composer-send-control").querySelectorAll("button")
+        .length,
+      1,
+    );
+    await act(async () =>
+      requiredElement(".composer-send-control").dispatchEvent(
+        new window.MouseEvent("pointerover", { bubbles: true }),
+      ),
+    );
+    assert.deepEqual(calls, []);
+    assert.match(
+      requiredElement(".composer-send-heading").textContent!,
+      /Steer now/,
+    );
+    assert.match(
+      requiredElement(".composer-send-description").textContent!,
+      /current turn/,
+    );
+    await act(async () => primary.click());
+    assert.deepEqual(calls, ["primary"]);
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+  });
+});
+
+test("send orb supports keyboard focus and Escape without reopening", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    await act(async () =>
+      root.render(
+        createElement(ComposerSendControl, {
+          mode: "soft",
+          running: true,
+          hasDraft: true,
+          disabled: false,
+          sendDisabled: false,
+          primaryMode: "steer",
+          primaryLabel: "Steer now",
+          compact: false,
+          onPrimary: () => assert.fail("must not submit"),
+          onSend: () => assert.fail("must not submit"),
+          onStop: () => assert.fail("must not stop"),
+        }),
+      ),
+    );
+    const primary = requiredButton(".action-orb");
+    await act(async () => {
+      primary.focus();
+      primary.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "ArrowDown",
+          bubbles: true,
+        }),
+      );
+    });
+    assert.equal(
+      document.activeElement?.matches(
+        ".composer-send-popover button:not(:disabled)",
+      ),
+      true,
+    );
+    await act(async () =>
+      document.activeElement!.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    await waitForSendFocus("Steer now");
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+  });
+});
+
+test("touch sends once without hover and disabled orb keeps keyboard options access", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    let calls = 0;
+    const renderControl = (disabled: boolean) =>
+      root.render(
+        createElement(ComposerSendControl, {
+          mode: "soft",
+          running: false,
+          hasDraft: true,
+          disabled,
+          sendDisabled: disabled,
+          primaryMode: "send",
+          primaryLabel: "Send",
+          compact: false,
+          onPrimary: () => calls++,
+          onSend: () => calls++,
+          onStop: () => calls++,
+        }),
+      );
+    await act(async () => renderControl(false));
+    const touch = (type: string) => {
+      const event = new window.MouseEvent(type, { bubbles: true });
+      Object.defineProperty(event, "pointerType", { value: "touch" });
+      return event;
+    };
+    await act(async () => {
+      requiredElement(".composer-send-control").dispatchEvent(
+        touch("pointerover"),
+      );
+      requiredButton(".action-orb").dispatchEvent(touch("pointerdown"));
+      requiredButton(".action-orb").focus();
+    });
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+    await act(async () => requiredButton(".action-orb").click());
+    assert.equal(calls, 1);
+    await act(async () => renderControl(true));
+    await act(async () => openSendOptions());
+    assert.equal(requiredButton(".composer-send-summary").disabled, true);
+    assert.equal(requiredElement(".composer-send-control").tabIndex, 0);
+    assert.equal(
+      requiredElement(".composer-send-control").querySelectorAll("button")
+        .length,
+      1,
+    );
+    assert.equal(calls, 1);
+  });
+});
+
+test("an open send panel closes when the running turn ends without sending the draft", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    const renderControl = (running: boolean) =>
+      root.render(
+        createElement(ComposerSendControl, {
+          mode: "soft",
+          running,
+          hasDraft: true,
+          disabled: false,
+          sendDisabled: false,
+          primaryMode: running ? "steer" : "send",
+          primaryLabel: running ? "Steer now" : "Send",
+          compact: false,
+          onPrimary: () => assert.fail("must not send"),
+          onSend: () => assert.fail("must not send"),
+          onStop: () => assert.fail("must not stop"),
+        }),
+      );
+    await act(async () => renderControl(true));
+    await act(async () => openSendOptions());
+    assert.ok(document.querySelector(".composer-send-popover"));
+    await act(async () => renderControl(false));
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+    await waitForSendFocus("Send");
+    assert.equal(
+      requiredButton(".action-orb").getAttribute("aria-label"),
+      "Send",
+    );
+  });
+});
+
+test("panel action returns keyboard focus while hover Escape preserves the editor focus", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    const calls: string[] = [];
+    await act(async () =>
+      root.render(
+        createElement(
+          React.Fragment,
+          {},
+          createElement("textarea", { "aria-label": "Outside editor" }),
+          createElement(ComposerSendControl, {
+            mode: "soft",
+            running: true,
+            hasDraft: true,
+            disabled: false,
+            sendDisabled: false,
+            primaryMode: "steer",
+            primaryLabel: "Steer now",
+            compact: false,
+            onPrimary: () => calls.push("primary"),
+            onSend: (intent) => calls.push(intent),
+            onStop: () => calls.push("stop"),
+          }),
+        ),
+      ),
+    );
+    await act(async () => openSendOptions());
+    await act(async () =>
+      requiredButton(".composer-send-options button").click(),
+    );
+    assert.deepEqual(calls, ["batch-next"]);
+    await waitForSendFocus("Steer now");
+    const editor = requiredElement<HTMLTextAreaElement>(
+      '[aria-label="Outside editor"]',
+    );
+    await act(async () => editor.focus());
+    await act(async () =>
+      requiredElement(".composer-send-control").dispatchEvent(
+        new window.MouseEvent("pointerover", { bubbles: true }),
+      ),
+    );
+    assert.ok(document.querySelector(".composer-send-popover"));
+    await act(async () =>
+      editor.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+    assert.equal(
+      document.activeElement?.getAttribute("aria-label"),
+      "Outside editor",
+    );
+    assert.deepEqual(calls, ["batch-next"]);
+  });
+});
+
+test("turn transition restores nested preference focus without stealing outside focus", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    const renderControl = (running: boolean) =>
+      root.render(
+        createElement(
+          React.Fragment,
+          {},
+          createElement("input", { "aria-label": "Outside control" }),
+          createElement(ComposerSendControl, {
+            mode: "soft",
+            running,
+            hasDraft: true,
+            disabled: false,
+            sendDisabled: false,
+            primaryMode: running ? "steer" : "send",
+            primaryLabel: running ? "Steer now" : "Send",
+            compact: false,
+            onPrimary: () => assert.fail("must not send"),
+            onSend: () => assert.fail("must not send"),
+            onStop: () => assert.fail("must not stop"),
+            onModeChange: async () => {},
+          }),
+        ),
+      );
+    await act(async () => renderControl(true));
+    await act(async () => openSendOptions());
+    await act(async () =>
+      requiredButton('[aria-label="Default send mode"]').click(),
+    );
+    assert.equal(document.activeElement?.getAttribute("role"), "option");
+    await act(async () => renderControl(false));
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+    await waitForSendFocus("Send");
+    await act(async () =>
+      requiredElement<HTMLInputElement>(
+        '[aria-label="Outside control"]',
+      ).focus(),
+    );
+    await act(async () => renderControl(true));
+    assert.equal(
+      document.activeElement?.getAttribute("aria-label"),
+      "Outside control",
+    );
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+  });
+});
+
+// Radix restores focus after its closing FocusScope has unmounted.
+async function waitForSendFocus(label: string): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (
+    document.activeElement?.getAttribute("aria-label") !== label &&
+    Date.now() < deadline
+  ) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+  }
+  assert.equal(document.activeElement?.getAttribute("aria-label"), label);
+}
+
+function openSendOptions(): void {
+  const orb = requiredButton(".action-orb");
+  const target = orb.disabled
+    ? requiredElement<HTMLElement>(".composer-send-control")
+    : orb;
+  target.focus();
+  target.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+  );
+}

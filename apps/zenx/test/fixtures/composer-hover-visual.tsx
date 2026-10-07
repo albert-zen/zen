@@ -1,18 +1,22 @@
 // Production controls in an isolated renderer; no Host or user data is connected.
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Thread } from "../../src/protocol-client/index.js";
 import { ThreadView } from "../../src/renderer/src/ThreadView.js";
 import {
   emptyComposerState,
+  beginComposerSubmission,
+  failComposerSubmission,
   editComposer,
   type ComposerSendMode,
 } from "../../src/renderer/src/composer-state.js";
+import { i18n } from "../../src/renderer/src/i18n.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
 const params = new URLSearchParams(location.search);
 document.documentElement.dataset.appearance = params.get("theme") ?? "light";
 document.documentElement.dataset.platform = "darwin";
+void i18n.changeLanguage(params.get("language") ?? "en");
 const running = params.get("running") === "1";
 const thread: Thread = {
   id: "synthetic-thread",
@@ -75,15 +79,71 @@ const thread: Thread = {
   ],
 };
 function Fixture() {
-  const [composer, setComposer] = useState(() =>
-    editComposer(emptyComposerState(), "Draft stays here"),
+  const [composer, setComposer] = useState(() => {
+    let state = editComposer(
+      emptyComposerState(),
+      params.get("draft") ?? "Draft stays here",
+    );
+    if (params.has("pending") || params.has("sendError")) {
+      state = beginComposerSubmission(
+        state,
+        running ? "steer" : "start",
+        running ? "running-turn" : null,
+        () => "fixture-message",
+      );
+      if (params.has("sendError"))
+        state = failComposerSubmission(
+          state,
+          "fixture-message",
+          "Synthetic send failure; your draft is retained",
+        );
+    }
+    return state;
+  });
+  const [isRunning, setRunning] = useState(running);
+  const [startedAt] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    const receive = (event: Event) =>
+      setRunning((event as CustomEvent<{ running: boolean }>).detail.running);
+    window.addEventListener("fixture-turn-state", receive);
+    return () => window.removeEventListener("fixture-turn-state", receive);
+  }, []);
+  const [sendMode, setSendMode] = useState<ComposerSendMode>(
+    (params.get("mode") ?? "soft") as ComposerSendMode,
   );
-  const [sendMode, setSendMode] = useState<ComposerSendMode>("soft");
+  const viewThread: Thread = {
+    ...thread,
+    status: isRunning ? { type: "active", activeFlags: [] } : { type: "idle" },
+    turns: [
+      thread.turns[0]!,
+      ...(isRunning
+        ? [
+            {
+              id: "running-turn",
+              itemsView: "full" as const,
+              items: [],
+              status: "inProgress" as const,
+              error: null,
+              startedAt,
+              completedAt: null,
+              durationMs: null,
+            },
+          ]
+        : []),
+    ],
+  };
   const [action, setAction] = useState("No action");
+  const [actionCount, setActionCount] = useState(0);
+  const recordAction = (value: string) => {
+    setAction(value);
+    setActionCount((count) => count + 1);
+  };
   return (
     <div className="app-shell sidebar-collapsed">
       <div className="window-titlebar" style={{ height: 44 }}>
-        <span role="status">{action}</span>
+        <span role="status" data-action-count={actionCount}>
+          {action}
+        </span>
       </div>
       <aside className="sidebar" aria-hidden="true" />
       <main className="workspace">
@@ -91,9 +151,14 @@ function Fixture() {
           <ThreadView
             approvals={[]}
             composer={composer}
-            thread={thread}
+            thread={viewThread}
+            composerDisabled={params.has("disabled")}
             composerSendMode={sendMode}
-            onComposerSendModeChange={async (mode) => setSendMode(mode)}
+            onComposerSendModeChange={async (mode) => {
+              if (params.has("saveError"))
+                throw new Error("Synthetic settings save failure");
+              setSendMode(mode);
+            }}
             threadUsage={{
               thread: {
                 responseCount: 1,
@@ -109,13 +174,15 @@ function Fixture() {
                 ratio: 51300 / 272000,
               },
             }}
-            onCompact={async () => setAction("Compacted")}
+            onCompact={async () => recordAction("Compacted")}
             onDraftChange={(text) =>
               setComposer((current) => editComposer(current, text))
             }
-            onInterrupt={async () => setAction("Stopped")}
+            onInterrupt={async () => recordAction("Stopped")}
             onRespondToApproval={async () => {}}
-            onSubmit={async (intent) => setAction(intent)}
+            onSubmit={async (intent, expectedTurnId) =>
+              recordAction(`${intent}:${expectedTurnId ?? "idle"}`)
+            }
           />
         </section>
       </main>

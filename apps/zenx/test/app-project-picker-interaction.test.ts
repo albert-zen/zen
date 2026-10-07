@@ -4459,25 +4459,28 @@ test("composer default save cannot roll back a newer settings notification", asy
         .dispatchEvent(new window.MouseEvent("pointerover", { bubbles: true })),
     );
     const select = await waitFor(() =>
-      document.querySelector<HTMLSelectElement>(
+      document.querySelector<HTMLButtonElement>(
         '[aria-label="Default send mode"]',
       ),
     );
-    await act(async () => {
-      select.value = "queue";
-      select.dispatchEvent(new window.Event("change", { bubbles: true }));
-    });
+    await act(async () => select.click());
+    const queueOption = await waitFor(() =>
+      document.querySelector<HTMLElement>(
+        '[role="option"][data-value="queue"]',
+      ),
+    );
+    await act(async () => queueOption.click());
     assert.equal(writes.length, 1);
     assert.equal(writes[0]?.baseRevision, 1);
     assert.equal(writes[0]?.composerSendModeExplicit, true);
     const latest = publicSettings([]);
     Object.assign(latest.profile, { revision: 3, composerSendMode: "hard" });
     await act(async () => notify?.(latest));
-    assert.equal(select.value, "hard");
+    assert.equal(select.getAttribute("data-value"), "hard");
     const old = publicSettings([]);
     Object.assign(old.profile, { revision: 2, composerSendMode: "queue" });
     await act(async () => reply.resolve(old));
-    assert.equal(select.value, "hard");
+    assert.equal(select.getAttribute("data-value"), "hard");
     assert.equal(
       document.querySelector<HTMLTextAreaElement>("textarea")?.value,
       "",

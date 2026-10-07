@@ -207,15 +207,20 @@ ItemList replay，Renderer 不保存另一份 transcript authority。
 
 Composer 保持一个位置、几何和命中区域稳定的 primary action，只改变语义：
 
-| Run 状态 | Draft     | Primary action   |
-| -------- | --------- | ---------------- |
-| Running  | Empty     | Stop             |
-| Running  | Non-empty | Interrupt & Send |
-| Idle     | Non-empty | Send             |
-| Idle     | Empty     | Send disabled    |
+| Run 状态 | Draft     | Primary action     |
+| -------- | --------- | ------------------ |
+| Running  | Empty     | Stop               |
+| Running  | Non-empty | 当前配置的发送方式 |
+| Idle     | Non-empty | Send               |
+| Idle     | Empty     | Send disabled      |
 
 - 不拆成常驻 Stop、Steer 和 Send 三个按钮。
-- 运行中有草稿时，**Steer** 是保留当前 Turn 的显式次要动作；稳定 primary action 同时切换为 **Interrupt & Send**，用于中断当前路径并发送草稿。两者不得静默互相降级，也不得隐藏用户选择的是 soft steer 还是 hard steer。
+- 运行中有草稿时，primary action 与 Enter 使用现有全局发送偏好：Steer now 保留当前 Turn 并追加指导；Next turn 将排队消息一起交给下一轮；Each turn 让每条排队消息各自占用一轮；Interrupt & Send 中断当前路径后开始新轮。偏好未另行选择时沿用既有 soft steer 默认；UI 不改变已排队消息的分组或交付语义。
+- 第一层只显示既有 primary orb，不新增常驻展开按钮。orb 位于 Composer 最右侧，与右下圆角保持既有关系；hover 与 keyboard focus 打开同一个主题化非模态面板。primary 点击始终直接发送或中断，面板顶部只出现一次当前动作与后果说明，运行中其他动作只显示真实 modifier-Enter shortcut，不发明 modifier-click 或新的发送行为。
+- primary orb 保持 44px hit target 与既有较小可见圆。触摸点击直接执行当前 Send / Stop，不拦截为展开，也不添加常驻触摸选项按钮。面板内所有动作的 hit target 至少 44px 高。
+- 面板不冒充 tooltip 或纯 ARIA menu：它包含可聚焦的命令与已有全局偏好 Select，使用 nonmodal dialog。Arrow Up/Down 从 orb 进入面板，Tab 按普通控件顺序导航；primary disabled 时同一命中区域保留键盘可达性以编辑偏好。Escape 关闭并把面板拥有的焦点还给 orb（disabled 时为同位置的焦点区），普通 hover/focus 不抢焦点。真实 hover bridge 与短离开延迟覆盖 pointer gap；在面板内聚焦后保持可用，outside interaction 或 Escape 可关闭。Turn/context 变化丢弃旧动作，保留草稿；持续 hover 可以显示新的当前动作，但不得保留或执行旧 Turn 的动作。
+- Running 且无内容时 primary 保持红色 Stop / interrupt；纯空白文字按 Empty 处理。沿用既有 draft 判定：附件也是内容，因此只有附件时仍为发送动作，不能为了显示 Stop 丢弃附件。
+- Default while running 只在面板 footer 中编辑，复用共享 Select、主题、键盘与失败反馈；选择偏好从不发送消息，保存失败保留权威旧值，晚到回复不能覆盖更新的 Settings notification。
 - 状态切换不引发 Composer 几何跳动；按钮保持清晰图标、准确 `aria-label` / tooltip 和适合当前输入方式的 hit target。
 - Composer toolbar 只显示一个组合 **Model** 控件，按钮将当前模型与 effort 并列显示（例如 `5.6 Sol High`）；同一可达的键盘菜单分别进入 Model 与 Reasoning 选择，Reasoning 只列当前 `(providerProfileId, modelId)` 在 `model/list` 中明确支持的 effort。没有已配置 reasoning 控制的纯文本模型显示 **Text only**，并保持可运行；当前模型不在可运行目录时才显示 Unknown / unavailable，且不根据名称猜测选项。两项配置都只影响下一次 Turn，运行中的 Turn 保持启动时 selection。
 - 模型切换复用 App Server 的原子 Thread settings 更新；当前 effort 被目标支持时保留，否则使用目标模型的 default effort。运行中的 Turn 保持启动时冻结的 selection，变更从下一 Turn 生效。
