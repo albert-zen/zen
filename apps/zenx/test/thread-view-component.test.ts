@@ -28,6 +28,44 @@ const { requestContextCompaction } =
 
 const noop = async () => undefined;
 
+test("new-thread execution context can sit beneath input while existing conversations keep their context before it", () => {
+  for (const position of ["before", "after"] as const) {
+    const html = renderToStaticMarkup(
+      createElement(ThreadView, {
+        approvals: [],
+        composer: emptyComposerState(),
+        composerContext: createElement(
+          "div",
+          { "data-context": "target" },
+          "Run on This machine",
+        ),
+        composerContextPosition: position,
+        thread: null,
+        onDraftChange: () => {},
+        onInterrupt: noop,
+        onRespondToApproval: noop,
+        onSubmit: noop,
+      }),
+    );
+    const dom = new JSDOM(html);
+    const children = [
+      ...dom.window.document.querySelector(".bottom-zone")!.children,
+    ];
+    const formIndex = children.findIndex((child) =>
+      child.classList.contains("composer"),
+    );
+    const contextIndex = children.findIndex((child) =>
+      child.hasAttribute("data-context"),
+    );
+    assert.ok(
+      position === "before"
+        ? contextIndex < formIndex
+        : contextIndex > formIndex,
+    );
+    dom.window.close();
+  }
+});
+
 test("manual Skills are slash candidates and selection stays removable without sending", async () => {
   await withDom(async (root) => {
     let composer = editComposer(emptyComposerState(), "/sample");

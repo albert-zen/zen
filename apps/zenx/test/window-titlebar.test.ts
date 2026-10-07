@@ -4,6 +4,14 @@ import test from "node:test";
 
 const rendererRoot = new URL("../src/renderer/src/", import.meta.url);
 
+test("Windows and Linux share one full-width separator beneath the native caption row", async () => {
+  const styles = await readFile(new URL("styles.css", rendererRoot), "utf8");
+  assert.match(
+    styles,
+    /:root:is\(\[data-platform="linux"\], \[data-platform="win32"\]\)\s*\.window-titlebar::after\s*\{[^}]*top:\s*calc\(var\(--native-titlebar-height\) - 1px\);[^}]*right:\s*0;[^}]*left:\s*0;[^}]*height:\s*1px;[^}]*background:\s*var\(--color-border-subtle\);[^}]*pointer-events:\s*none;/su,
+  );
+});
+
 test("integrated title bar aligns the product controls and conversation row around native chrome", async () => {
   const [app, sidebar, styles, main] = await Promise.all([
     readFile(new URL("App.tsx", rendererRoot), "utf8"),
