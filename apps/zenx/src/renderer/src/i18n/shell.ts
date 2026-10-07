@@ -396,6 +396,8 @@ export const en = {
   summaryCharacters: "{{count}} summary characters · Full input size unknown",
   retainedItemsDetail:
     "{{count}} original items retained alongside the summary. This snapshot is from the time of compaction; later conversation adds to it.",
+  retainedContextUnavailable:
+    "Retained context snapshot is unavailable in this view.",
   projectedHistoryDetail:
     "{{count}} projected history messages, not tokens. This includes the summary and retained conversation. Rules, tool definitions and other request inputs may be added separately. Full model input size was not recorded. The summary generation usage is not the post-compaction context size.",
   executionItems_one: "{{count}} item",
@@ -903,6 +905,7 @@ export const zhCN = {
   summaryCharacters: "{{count}} 个摘要字符 · 完整输入大小未知",
   retainedItemsDetail:
     "摘要旁保留了 {{count}} 个原始条目。此快照取自压缩时，之后的会话会继续增加。",
+  retainedContextUnavailable: "此视图中暂时无法显示保留的上下文快照。",
   projectedHistoryDetail:
     "投影历史中有 {{count}} 条消息，数量并非 token。这包括摘要和保留的会话。规则、工具定义和其他请求输入可能单独加入。未记录完整模型输入大小。摘要生成用量也不是压缩后的上下文大小。",
   executionItems_one: "{{count}} 个条目",

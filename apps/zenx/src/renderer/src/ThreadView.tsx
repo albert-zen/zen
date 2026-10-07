@@ -1128,19 +1128,30 @@ export function ContextCompactionEvent({
           </p>
           <details className="compaction-projection">
             <summary>{i18n.t("shell:retainedContextAndDiagnostics")}</summary>
-            <p>
-              {i18n.t("shell:projectedHistoryDetail", {
-                count: effectiveMessages.length,
-              })}
-            </p>
-            <ol>
-              {effectiveMessages.map((message, index) => (
-                <li key={`${item.id}:${String(index)}`}>
-                  <span>{modelMessageRole(message)}</span>
-                  <pre>{formatModelMessage(message)}</pre>
-                </li>
-              ))}
-            </ol>
+            {effectiveMessages === null ? (
+              <p role="status">
+                {i18n.t("shell:retainedContextUnavailable")}
+                {projection.snapshotError
+                  ? ` ${projection.snapshotError}`
+                  : null}
+              </p>
+            ) : (
+              <>
+                <p>
+                  {i18n.t("shell:projectedHistoryDetail", {
+                    count: effectiveMessages.length,
+                  })}
+                </p>
+                <ol>
+                  {effectiveMessages.map((message, index) => (
+                    <li key={`${item.id}:${String(index)}`}>
+                      <span>{modelMessageRole(message)}</span>
+                      <pre>{formatModelMessage(message)}</pre>
+                    </li>
+                  ))}
+                </ol>
+              </>
+            )}
           </details>
         </div>
       ) : null}
