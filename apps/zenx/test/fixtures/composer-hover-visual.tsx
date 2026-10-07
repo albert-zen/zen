@@ -133,10 +133,17 @@ function Fixture() {
     ],
   };
   const [action, setAction] = useState("No action");
+  const [actionCount, setActionCount] = useState(0);
+  const recordAction = (value: string) => {
+    setAction(value);
+    setActionCount((count) => count + 1);
+  };
   return (
     <div className="app-shell sidebar-collapsed">
       <div className="window-titlebar" style={{ height: 44 }}>
-        <span role="status">{action}</span>
+        <span role="status" data-action-count={actionCount}>
+          {action}
+        </span>
       </div>
       <aside className="sidebar" aria-hidden="true" />
       <main className="workspace">
@@ -167,14 +174,14 @@ function Fixture() {
                 ratio: 51300 / 272000,
               },
             }}
-            onCompact={async () => setAction("Compacted")}
+            onCompact={async () => recordAction("Compacted")}
             onDraftChange={(text) =>
               setComposer((current) => editComposer(current, text))
             }
-            onInterrupt={async () => setAction("Stopped")}
+            onInterrupt={async () => recordAction("Stopped")}
             onRespondToApproval={async () => {}}
             onSubmit={async (intent, expectedTurnId) =>
-              setAction(`${intent}:${expectedTurnId ?? "idle"}`)
+              recordAction(`${intent}:${expectedTurnId ?? "idle"}`)
             }
           />
         </section>

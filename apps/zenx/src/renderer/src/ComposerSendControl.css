@@ -13,22 +13,6 @@
 .composer-send-control .action-orb:not(:disabled):active::before {
   filter: brightness(0.96);
 }
-.composer-send-disclosure {
-  width: 28px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 9px;
-  background: transparent;
-  color: var(--color-text-muted);
-}
-.composer-send-disclosure:hover,
-.composer-send-disclosure[aria-expanded="true"] {
-  color: var(--color-text-primary);
-  background: var(--color-surface-hover);
-}
 .ui-popover.composer-send-popover {
   width: 324px;
   max-width: calc(100vw - 24px);
@@ -182,9 +166,6 @@
   line-height: 1.5;
 }
 @media (pointer: coarse), (max-width: 480px) {
-  .composer-send-disclosure {
-    width: 44px;
-  }
   .composer-send-default {
     grid-template-columns: minmax(0, 1fr);
   }

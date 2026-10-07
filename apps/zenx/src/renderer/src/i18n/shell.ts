@@ -115,7 +115,7 @@ export const en = {
     "Summarize this thread’s context; keep the conversation",
   sendDraftHint: "Write a message to send",
   sendUnavailableHint: "This action is unavailable right now",
-  sendOptionsHint: "Use Send options or the arrow keys for other actions",
+  sendOptionsHint: "Use the Up or Down arrow key for other actions",
   sendClickHint: "Click the button",
   sendDefaultHint: "Applies to the button and Enter while a turn is running",
 
@@ -640,7 +640,7 @@ export const zhCN = {
   sendDescriptionCompact: "总结会话上下文，保留对话",
   sendDraftHint: "输入消息后即可发送",
   sendUnavailableHint: "当前暂时无法执行此操作",
-  sendOptionsHint: "通过发送选项或方向键选择其他操作",
+  sendOptionsHint: "按上或下方向键选择其他操作",
   sendClickHint: "点击按钮",
   sendDefaultHint: "轮次运行时，适用于发送按钮和 Enter 键",
 

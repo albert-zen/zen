@@ -90,7 +90,7 @@ export function ComposerSendControl({
   const [error, setError] = useState<string | null>(null);
   const anchor = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
-  const disclosure = useRef<HTMLButtonElement>(null);
+  const primary = useRef<HTMLButtonElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const focusRequest = useRef<"open" | "return" | null>(null);
   // React focus events include the shared Select's nested portal.
@@ -194,6 +194,11 @@ export function ComposerSendControl({
         <div
           className="composer-send-control"
           ref={anchor}
+          tabIndex={disabled ? 0 : undefined}
+          role={disabled ? "group" : undefined}
+          aria-label={disabled ? i18n.t("shell:sendOptions") : undefined}
+          aria-describedby={disabled ? `${id}-hint` : undefined}
+          aria-keyshortcuts={disabled ? "ArrowUp ArrowDown" : undefined}
           onPointerEnter={(event) => {
             if (event.pointerType === "touch") return;
             touchActivation.current = false;
@@ -232,30 +237,17 @@ export function ComposerSendControl({
             {description} {i18n.t("shell:sendOptionsHint")}
           </span>
           <ComposerAction
+            ref={primary}
             mode={primaryMode}
             label={primaryLabel}
             aria-describedby={`${id}-hint`}
+            aria-keyshortcuts="ArrowUp ArrowDown"
             disabled={disabled}
             onClick={() => {
               close();
               onPrimary();
             }}
           />
-          <button
-            ref={disclosure}
-            className="composer-send-disclosure"
-            type="button"
-            aria-label={i18n.t("shell:sendOptions")}
-            aria-haspopup="dialog"
-            aria-expanded={open}
-            aria-controls={open ? `${id}-panel` : undefined}
-            onClick={() => {
-              if (open && pinned.current) close();
-              else openForInteraction();
-            }}
-          >
-            <Icon name="chevron-down" size={12} />
-          </button>
         </div>
       </PopoverAnchor>
       <PopoverContent
@@ -292,7 +284,10 @@ export function ComposerSendControl({
           event.preventDefault();
           panelOwnsFocus.current = false;
           if (focusRequest.current === "return") {
-            disclosure.current?.focus();
+            (primary.current?.disabled
+              ? anchor.current
+              : primary.current
+            )?.focus();
             focusRequest.current = null;
           }
         }}
