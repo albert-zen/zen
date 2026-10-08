@@ -29,6 +29,11 @@ import type {
   ZenXBrowserBackend,
 } from "../src/main/capabilities/browser-provider.js";
 import type { UserBrowserLiveImageDecoder } from "../src/main/capabilities/user-browser-live-frame.js";
+import {
+  MAX_OBSERVATION_CAPTURE_ITEMS,
+  MAX_OBSERVATION_CAPTURE_TEXT,
+  OBSERVATION_CAPTURE,
+} from "../src/main/capabilities/observation-capture.js";
 
 const decodeTestLiveImage: UserBrowserLiveImageDecoder = async (encoded) => ({
   isEmpty: () => false,
@@ -683,6 +688,235 @@ test("user browser projects current control state and dispatches native select",
     "Express",
   );
   assert.equal(client.actionCount, 1);
+});
+
+test("user browser retains a bounded hidden capture with actionable targets beyond the direct projection", async () => {
+  const client = new FakeUserBrowserClient();
+  const text = "x".repeat(MAX_OBSERVATION_CAPTURE_TEXT + 1);
+  client.inspectionResult = {
+    documentIdentity: "dom-a",
+    visibleText: text,
+    targets: Array.from({ length: 600 }, (_, index) => ({
+      ...client.inspectionTarget,
+      documentIdentity: "dom-a",
+      nodeIdentity: `dom-a:${String(index + 1)}`,
+      selector: `#button-${String(index + 1)}`,
+      name: `Button ${String(index + 1)}`,
+    })),
+    itemTotal: 600,
+    textTotal: text.length,
+  };
+  const backend = new UserBrowserCdpBackend(client);
+  try {
+    await backend.listTabs("work");
+    const inspection = await backend.inspect("work", "target-1");
+    const capture = inspection[OBSERVATION_CAPTURE];
+    assert.ok(capture);
+    assert.equal(inspection.targets.length, 80);
+    assert.equal(inspection.visibleText.length, 8_000);
+    assert.equal(capture.entries.length, MAX_OBSERVATION_CAPTURE_ITEMS);
+    assert.equal(capture.text?.length, MAX_OBSERVATION_CAPTURE_TEXT);
+    assert.equal(capture.coverage.sourceComplete, false);
+    assert.equal(capture.coverage.itemTotal, 600);
+    assert.equal(capture.coverage.textTotal, text.length);
+    assert.match(capture.coverage.reasons.join(" "), /iframe|frame/iu);
+    assert.match(capture.coverage.reasons.join(" "), /shadow/iu);
+    assert.match(capture.coverage.reasons.join(" "), /target|item/iu);
+    assert.match(capture.coverage.reasons.join(" "), /text/iu);
+    assert.doesNotThrow(() => capture.assertCurrent?.());
+    assert.equal(capture.entries[511]?.identity, "dom-a:512");
+    const hidden = capture.entries[511]!.value;
+    assert.equal(hidden.name, "Button 512");
+    assert.equal(
+      inspection.targets.some((target) => target.targetId === hidden.targetId),
+      false,
+    );
+    assert.doesNotMatch(JSON.stringify(inspection), /dom-a|Button 512/u);
+    await backend.click(
+      "work",
+      "target-1",
+      inspection.observationId,
+      hidden.targetId,
+    );
+    assert.equal(client.actionCount, 1);
+    assert.match(
+      client.lastActionExpression!,
+      /const expectedDocumentIdentity = "dom-a"/u,
+    );
+    assert.match(
+      client.lastActionExpression!,
+      /const expectedNodeIdentity = "dom-a:512"/u,
+    );
+    assert.throws(() => capture.assertCurrent?.(), /expired|stale/iu);
+    const next = await backend.inspect("work", "target-1");
+    const nextCapture = next[OBSERVATION_CAPTURE]!;
+    assert.notEqual(next.documentVersion, inspection.documentVersion);
+    assert.equal(nextCapture.scopeKey, capture.scopeKey);
+    assert.equal(nextCapture.entries[511]?.identity, "dom-a:512");
+    assert.notEqual(nextCapture.entries[511]?.value.targetId, hidden.targetId);
+    assert.doesNotThrow(() => nextCapture.assertCurrent?.());
+  } finally {
+    await backend.close();
+  }
+});
+
+test("user browser capture scope follows native document and logical session incarnations", async () => {
+  const client = new FakeUserBrowserClient();
+  client.inspectionResult = {
+    documentIdentity: "dom-a",
+    visibleText: "Continue",
+    targets: [
+      {
+        ...client.inspectionTarget,
+        documentIdentity: "dom-a",
+        nodeIdentity: "dom-a:1",
+      },
+    ],
+    itemTotal: 1,
+    textTotal: 8,
+  };
+  const backend = new UserBrowserCdpBackend(client);
+  try {
+    await backend.listTabs("work");
+    const first = (await backend.inspect("work", "target-1"))[
+      OBSERVATION_CAPTURE
+    ]!;
+    const second = (await backend.inspect("work", "target-1"))[
+      OBSERVATION_CAPTURE
+    ]!;
+    assert.equal(first.scopeKey, second.scopeKey);
+    assert.throws(() => first.assertCurrent?.(), /expired|stale/iu);
+    client.documentToken = "document-b";
+    const nativeChanged = (await backend.inspect("work", "target-1"))[
+      OBSERVATION_CAPTURE
+    ]!;
+    assert.notEqual(second.scopeKey, nativeChanged.scopeKey);
+    client.inspectionResult = {
+      documentIdentity: "dom-b",
+      visibleText: "Continue",
+      targets: [],
+      itemTotal: 0,
+      textTotal: 8,
+    };
+    const domChanged = (await backend.inspect("work", "target-1"))[
+      OBSERVATION_CAPTURE
+    ]!;
+    assert.notEqual(nativeChanged.scopeKey, domChanged.scopeKey);
+    await backend.closeSession("work");
+    assert.throws(() => domChanged.assertCurrent?.(), /detaching|closed/iu);
+    await backend.listTabs("work");
+    const reopened = (await backend.inspect("work", "target-1"))[
+      OBSERVATION_CAPTURE
+    ]!;
+    assert.notEqual(domChanged.scopeKey, reopened.scopeKey);
+  } finally {
+    await backend.close();
+  }
+});
+
+test("legacy user browser inspection data reports unknown coverage and no invented node identity", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  try {
+    await backend.listTabs("work");
+    const inspected = await backend.inspect("work", "target-1");
+    const capture = inspected[OBSERVATION_CAPTURE];
+    assert.ok(capture);
+    assert.equal(capture.coverage.sourceComplete, null);
+    assert.equal(capture.coverage.itemTotal, undefined);
+    assert.equal(capture.coverage.textTotal, undefined);
+    assert.equal(capture.entries[0]?.identity, undefined);
+    client.inspectionResult = {
+      visibleText: "Continue",
+      targets: [client.inspectionTarget],
+      itemTotal: 1,
+      textTotal: 8,
+    };
+    const totalsOnly = (await backend.inspect("work", "target-1"))[
+      OBSERVATION_CAPTURE
+    ]!;
+    assert.equal(totalsOnly.coverage.sourceComplete, null);
+    assert.equal(totalsOnly.entries[0]?.identity, undefined);
+    assert.ok(
+      totalsOnly.coverage.reasons.includes(
+        "native-document-identity-unavailable",
+      ),
+    );
+  } finally {
+    await backend.close();
+  }
+});
+
+test("user browser capture rejects malformed or overlong document and node identities", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  try {
+    await backend.listTabs("work");
+    for (const identity of ["", "x".repeat(16_385), 1, null]) {
+      client.inspectionResult = {
+        visibleText: "Continue",
+        targets: [client.inspectionTarget],
+        documentIdentity: identity,
+      };
+      await assert.rejects(
+        backend.inspect("work", "target-1"),
+        /unsupported shape/u,
+      );
+      for (const field of ["documentIdentity", "nodeIdentity"]) {
+        client.inspectionResult = {
+          visibleText: "Continue",
+          targets: [{ ...client.inspectionTarget, [field]: identity }],
+        };
+        await assert.rejects(
+          backend.inspect("work", "target-1"),
+          /target is invalid/u,
+        );
+      }
+    }
+    client.inspectionResult = {
+      documentIdentity: "x".repeat(8_000),
+      visibleText: "Continue",
+      targets: [
+        {
+          ...client.inspectionTarget,
+          documentIdentity: "x".repeat(8_000),
+          nodeIdentity: "x".repeat(257),
+        },
+      ],
+    };
+    await assert.rejects(
+      backend.inspect("work", "target-1"),
+      /target is invalid/u,
+    );
+  } finally {
+    await backend.close();
+  }
+});
+
+test("attached native lifecycle expires hidden captures without a new inspection or CDP request", async () => {
+  const cdp = await createFakeCdpServer();
+  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  try {
+    await connection.backend.listTabs("work");
+    const inspected = await connection.backend.inspect("work", "target-1");
+    const capture = inspected[OBSERVATION_CAPTURE]!;
+    assert.doesNotThrow(() => capture.assertCurrent?.());
+    const count = cdp.methods().length;
+    cdp.emitMainDocumentChange();
+    await waitUntil(() => {
+      try {
+        capture.assertCurrent?.();
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    assert.throws(() => capture.assertCurrent?.(), /document changed/iu);
+    assert.equal(cdp.methods().length, count);
+  } finally {
+    await connection.backend.close();
+    await cdp.close();
+  }
 });
 
 test("attached browser rejects malformed screenshot data explicitly", async () => {
@@ -2553,6 +2787,8 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
   nextCreatedTarget = 2;
   identityChangePhase?: "during-evaluate" | "post-confirmation";
   invalidateInspection = false;
+  inspectionResult?: unknown;
+  lastActionExpression?: string;
   inspectionTarget: BrowserTargetFingerprint = {
     selector: "#continue",
     tag: "button",
@@ -2807,7 +3043,7 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
         this.holdInspections = false;
       }
       const result = {
-        value: {
+        value: this.inspectionResult ?? {
           visibleText: "Signed in as Alice",
           targets: [this.inspectionTarget],
         },
@@ -2819,6 +3055,7 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
       }
       return result;
     }
+    this.lastActionExpression = expression;
     onDispatched?.();
     this.actionCount += 1;
     if (this.actionUnknownSettlement !== undefined) {
@@ -2857,6 +3094,19 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
 
   async getDocumentIdentity() {
     return this.documentToken;
+  }
+
+  assertDocumentCurrent(
+    _targetId: string,
+    _owner: {
+      logicalSessionId: string;
+      logicalSessionIncarnation: number;
+    },
+    expectedDocumentIdentity: string,
+  ): void {
+    if (this.documentToken !== expectedDocumentIdentity) {
+      throw new UserBrowserDocumentChangedBeforeDispatchError();
+    }
   }
 
   async close() {

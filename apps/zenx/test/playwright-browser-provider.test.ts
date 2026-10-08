@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import vm from "node:vm";
 import { JSDOM } from "jsdom";
 
 import type {
@@ -11,6 +12,8 @@ import {
   PlaywrightCliBrowserBackend,
   playwrightSelectActionCode,
 } from "../src/main/capabilities/playwright-browser-provider.js";
+
+import { OBSERVATION_CAPTURE } from "../src/main/capabilities/observation-capture.js";
 
 const ONE_PIXEL_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
@@ -69,7 +72,7 @@ test("Playwright page scroll rejects stale observations and dispatches one bound
     );
     assert.equal(dispatched.length, 1);
     assert.match(dispatched[0]![3]!, /top: 600/);
-    assert.match(dispatched[0]![3]!, /__zenx_document_key/);
+    assert.match(dispatched[0]![3]!, /state.documentKey/);
   } finally {
     await backend.close();
   }
@@ -129,7 +132,7 @@ test("Playwright provider runs an isolated JSON-only observe/action slice", asyn
     browserPath,
   );
   assert.ok(runner.calls.some((args) => args.includes("snapshot")));
-  assert.ok(runner.calls.some((args) => args.includes("click")));
+  assert.ok(runner.calls.some((args) => isAction(args, "click")));
 });
 
 test("Playwright tab summaries redact URL credentials and values", async () => {
@@ -208,7 +211,7 @@ test("Playwright provider revalidates DOM identity and dispatches password fill 
     "ordinary argument",
     false,
   );
-  assert.equal(runner.calls.filter((args) => args.includes("fill")).length, 1);
+  assert.equal(runner.calls.filter((args) => isAction(args, "fill")).length, 1);
   const refreshed = await backend.inspect("research", opened.tabId);
   assert.equal(
     inspected.targets.some(({ name }) => name === "Hidden"),
@@ -226,7 +229,10 @@ test("Playwright provider revalidates DOM identity and dispatches password fill 
     ),
     /identity, visibility, or actions changed/u,
   );
-  assert.equal(runner.calls.filter((args) => args.includes("click")).length, 0);
+  assert.equal(
+    runner.calls.filter((args) => isAction(args, "click")).length,
+    0,
+  );
 });
 
 test("Playwright inspection only advertises type for editable comboboxes", async () => {
@@ -667,6 +673,7 @@ function dom(
 ) {
   return {
     ref,
+    identity: `native-${ref}`,
     count: 1,
     visible: options.visible ?? true,
     tag: options.tag,
@@ -706,7 +713,7 @@ test("Playwright inspection finds and operates buttons after 128 static referenc
       inspection.observationId,
       button.targetId,
     );
-    assert.ok(runner.calls.some((args) => args[2] === "click"));
+    assert.ok(runner.calls.some((args) => isAction(args, "click")));
   } finally {
     await backend.close();
   }
@@ -766,8 +773,9 @@ for (const action of ["click", "type"] as const) {
         /stale|inspect again/u,
       );
       assert.equal(
-        runner.calls.filter((args) => args[2] === "click" || args[2] === "fill")
-          .length,
+        runner.calls.filter(
+          (args) => isAction(args, "click") || isAction(args, "fill"),
+        ).length,
         0,
       );
     } finally {
@@ -807,3 +815,465 @@ for (const phase of ["snapshot", "screenshot"] as const) {
     }
   });
 }
+
+function isAction(args: readonly string[], action: "click" | "fill"): boolean {
+  return (
+    args[2] === action ||
+    (args[2] === "run-code" &&
+      args[3]?.includes(`await handle.${action}(`) === true)
+  );
+}
+
+class NativeHandle {
+  disposed = false;
+  constructor(
+    readonly page: NativePage,
+    readonly node: Node,
+  ) {}
+  async evaluate(callback: Function, argument?: unknown): Promise<any> {
+    if (this.disposed) throw new Error("Handle disposed");
+    const evaluate = this.page.dom.window.eval(`(${callback.toString()})`) as (
+      node: Node,
+      argument: unknown,
+    ) => unknown;
+    return evaluate(this.node, unwrapHandles(argument));
+  }
+  async isVisible(): Promise<boolean> {
+    return this.node.isConnected && !(this.node as HTMLElement).hidden;
+  }
+  async dispose(): Promise<void> {
+    this.disposed = true;
+  }
+  async click(): Promise<void> {
+    if (!this.node.isConnected) throw new Error("Element is not attached");
+    (this.node as HTMLElement).click();
+  }
+  async fill(value: string): Promise<void> {
+    if (!this.node.isConnected) throw new Error("Element is not attached");
+    (this.node as HTMLInputElement).value = value;
+  }
+}
+
+function unwrapHandles(value: unknown): any {
+  if (value instanceof NativeHandle) {
+    if (value.disposed) throw new Error("Handle disposed");
+    return value.node;
+  }
+  if (Array.isArray(value)) return value.map(unwrapHandles);
+  if (value !== null && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, unwrapHandles(entry)]),
+    );
+  return value;
+}
+
+class NativePage {
+  dom: JSDOM;
+  beforeEvaluate?: (source: string) => void;
+  constructor(html: string) {
+    this.dom = new JSDOM(html, {
+      runScripts: "outside-only",
+      url: "https://example.com/",
+    });
+  }
+  context() {
+    return { pages: () => [this] };
+  }
+  async title() {
+    return "Fixture";
+  }
+  url() {
+    return "https://example.com/";
+  }
+  async evaluate(callback: Function, argument?: unknown) {
+    this.beforeEvaluate?.(callback.toString());
+    const evaluate = this.dom.window.eval(`(${callback.toString()})`) as (
+      argument: unknown,
+    ) => Node;
+    return evaluate(unwrapHandles(argument));
+  }
+  async evaluateHandle(callback: Function) {
+    return new NativeHandle(this, await this.evaluate(callback));
+  }
+  locator(selector: string) {
+    const resolve = () =>
+      this.dom.window.document.querySelector(
+        `[data-ref="${selector.slice("aria-ref=".length)}"]`,
+      );
+    return {
+      count: async () => (resolve() ? 1 : 0),
+      elementHandle: async () =>
+        resolve() ? new NativeHandle(this, resolve()!) : null,
+    };
+  }
+  getByRole(role: string, options: { name: string }) {
+    return {
+      and: (locator: ReturnType<NativePage["locator"]>) => {
+        const matching = async () => {
+          const handle = await locator.elementHandle();
+          if (!handle) return null;
+          const element = handle.node as Element;
+          const actualRole =
+            element.getAttribute("role") ||
+            (element.tagName === "INPUT" ? "textbox" : "button");
+          const name =
+            element.getAttribute("aria-label") || element.textContent || "";
+          if (actualRole === role && name === options.name) return handle;
+          await handle.dispose();
+          return null;
+        };
+        return {
+          count: async () => {
+            const handle = await matching();
+            if (handle) await handle.dispose();
+            return handle ? 1 : 0;
+          },
+          elementHandle: matching,
+        };
+      },
+    };
+  }
+  async run(code: string): Promise<any> {
+    // Like playwright-cli, each call has a fresh VM with the same native Page.
+    return await vm.runInNewContext(`(${code})(page)`, { page: this });
+  }
+  navigate(html: string) {
+    this.dom.window.close();
+    this.dom = new JSDOM(html, {
+      runScripts: "outside-only",
+      url: "https://example.com/",
+    });
+  }
+}
+
+class NativeIdentityRunner extends FakePlaywrightRunner {
+  readonly page: NativePage;
+  beforeAction?: () => void;
+  constructor(html: string) {
+    super();
+    this.page = new NativePage(html);
+  }
+  override async run(
+    executable: string,
+    args: readonly string[],
+    options: Parameters<FakePlaywrightRunner["run"]>[2],
+  ) {
+    const fallback = await super.run(executable, args, options);
+    if (args[2] === "snapshot") {
+      const snapshot = [
+        ...this.page.dom.window.document.querySelectorAll("[data-ref]"),
+      ].map((element) => ({
+        role:
+          element.getAttribute("role") ||
+          (element.tagName === "INPUT" ? "textbox" : "button"),
+        name: element.getAttribute("aria-label") || element.textContent || "",
+        ref: element.getAttribute("data-ref")!,
+      }));
+      return { stdout: JSON.stringify({ snapshot }), stderr: "" };
+    }
+    if (args[2] === "run-code" && args[3]?.includes("Symbol.for")) {
+      if (isAction(args, "click") || isAction(args, "fill"))
+        this.beforeAction?.();
+      return {
+        stdout: JSON.stringify({
+          result: JSON.stringify(await this.page.run(args[3])),
+        }),
+        stderr: "",
+      };
+    }
+    return fallback;
+  }
+}
+
+function nativeBackend(runner: NativeIdentityRunner) {
+  return new PlaywrightCliBrowserBackend({
+    executable: "/opt/playwright-cli",
+    runner,
+    cwd: "/tmp/zenx-playwright",
+  });
+}
+
+test("Playwright hidden captures preserve actual node identity across rename, reorder and changed ARIA refs", async () => {
+  const runner = new NativeIdentityRunner(
+    '<button data-ref="a">Run</button><input data-ref="b" value="before">',
+  );
+  const backend = nativeBackend(runner);
+  try {
+    const tab = await backend.open("native", "https://example.com/");
+    const first = await backend.inspect("native", tab.tabId);
+    const firstCapture = first[OBSERVATION_CAPTURE]!;
+    const button = runner.page.dom.window.document.querySelector("button")!;
+    button.textContent = "Renamed";
+    button.setAttribute("data-ref", "new-ref");
+    button.parentElement!.append(button);
+    (
+      runner.page.dom.window.document.querySelector("input") as HTMLInputElement
+    ).value = "after";
+    const second = await backend.inspect("native", tab.tabId);
+    const secondCapture = second[OBSERVATION_CAPTURE]!;
+    assert.equal(secondCapture.scopeKey, firstCapture.scopeKey);
+    assert.equal(
+      secondCapture.entries[1]!.identity,
+      firstCapture.entries[0]!.identity,
+    );
+    assert.equal(
+      secondCapture.entries[0]!.identity,
+      firstCapture.entries[1]!.identity,
+    );
+    assert.equal(secondCapture.entries[0]!.value.value, "after");
+    assert.notEqual(
+      secondCapture.entries[1]!.value.targetId,
+      firstCapture.entries[0]!.value.targetId,
+    );
+    await assert.rejects(
+      async () => await firstCapture.assertCurrent!(),
+      /stale/,
+    );
+    assert.equal(secondCapture.coverage.sourceComplete, null);
+    assert.deepEqual(secondCapture.coverage.reasons, [
+      "native-aria-depth-limit-12",
+    ]);
+    assert.equal(JSON.stringify(second).includes("scopeKey"), false);
+    button.replaceWith(button.cloneNode(true));
+    const third = await backend.inspect("native", tab.tabId);
+    assert.notEqual(
+      third[OBSERVATION_CAPTURE]!.entries[1]!.identity,
+      secondCapture.entries[1]!.identity,
+    );
+    assert.equal(third[OBSERVATION_CAPTURE]!.scopeKey, secondCapture.scopeKey);
+  } finally {
+    await backend.close();
+    runner.page.dom.window.close();
+  }
+});
+
+test("Playwright rejects a clone under an unchanged ARIA ref and changed fingerprint on the same node", async () => {
+  for (const mutation of ["clone", "name", "value", "checked"] as const) {
+    const runner = new NativeIdentityRunner(
+      '<input data-ref="a" aria-label="Query" value="before">',
+    );
+    const backend = nativeBackend(runner);
+    try {
+      const tab = await backend.open("native", "https://example.com/");
+      const observed = await backend.inspect("native", tab.tabId);
+      const input = runner.page.dom.window.document.querySelector("input")!;
+      if (mutation === "clone") input.replaceWith(input.cloneNode(true));
+      if (mutation === "name") input.setAttribute("aria-label", "Changed");
+      if (mutation === "value") input.value = "changed";
+      if (mutation === "checked") input.checked = true;
+      await assert.rejects(
+        backend.click(
+          "native",
+          tab.tabId,
+          observed.observationId,
+          observed.targets[0]!.targetId,
+        ),
+        /identity, visibility, or actions changed/,
+      );
+      assert.equal(
+        runner.calls.some((args) => isAction(args, "click")),
+        false,
+      );
+    } finally {
+      await backend.close();
+      runner.page.dom.window.close();
+    }
+  }
+});
+
+test("Playwright actions bind actual retained handles when a lookalike replaces the ref after revalidation", async () => {
+  const runner = new NativeIdentityRunner('<button data-ref="a">Run</button>');
+  const backend = nativeBackend(runner);
+  try {
+    const tab = await backend.open("native", "https://example.com/");
+    const observed = await backend.inspect("native", tab.tabId);
+    let clicked = false;
+    runner.beforeAction = () => {
+      const button = runner.page.dom.window.document.querySelector("button")!;
+      const clone = button.cloneNode(true);
+      clone.addEventListener("click", () => {
+        clicked = true;
+      });
+      button.replaceWith(clone);
+    };
+    await assert.rejects(
+      backend.click(
+        "native",
+        tab.tabId,
+        observed.observationId,
+        observed.targets[0]!.targetId,
+      ),
+      /target identity changed/,
+    );
+    assert.equal(clicked, false);
+  } finally {
+    await backend.close();
+    runner.page.dom.window.close();
+  }
+});
+
+test("Playwright document incarnations ignore page-controlled keys and remain stable across actions", async () => {
+  const runner = new NativeIdentityRunner('<button data-ref="a">Run</button>');
+  const backend = nativeBackend(runner);
+  try {
+    const tab = await backend.open("native", "https://example.com/");
+    const first = await backend.inspect("native", tab.tabId);
+    const scope = first[OBSERVATION_CAPTURE]!.scopeKey;
+    await backend.click(
+      "native",
+      tab.tabId,
+      first.observationId,
+      first.targets[0]!.targetId,
+    );
+    await assert.rejects(
+      async () => await first[OBSERVATION_CAPTURE]!.assertCurrent!(),
+      /stale/,
+    );
+    const second = await backend.inspect("native", tab.tabId);
+    assert.equal(second[OBSERVATION_CAPTURE]!.scopeKey, scope);
+    assert.ok(second.documentVersion > first.documentVersion);
+    runner.page.navigate('<button data-ref="a">Run</button>');
+    runner.page.dom.window.name = "__zenx_tab_fixture";
+    runner.page.dom.window.eval(
+      "globalThis.__zenx_document_key = 'document-fixture'",
+    );
+    const probesBefore = runner.calls.length;
+    await assert.rejects(
+      async () => await second[OBSERVATION_CAPTURE]!.assertCurrent!(),
+      /stale/,
+    );
+    assert.equal(
+      runner.calls.length,
+      probesBefore + 1,
+      "external navigation probe must not recapture ARIA or screenshot",
+    );
+    const third = await backend.inspect("native", tab.tabId);
+    assert.notEqual(third[OBSERVATION_CAPTURE]!.scopeKey, scope);
+    assert.notEqual(
+      third[OBSERVATION_CAPTURE]!.entries[0]!.identity,
+      second[OBSERVATION_CAPTURE]!.entries[0]!.identity,
+    );
+  } finally {
+    await backend.close();
+    runner.page.dom.window.close();
+  }
+});
+
+test("Playwright captures more than direct target/text limits and allocates actionable hidden targets", async () => {
+  const runner = new NativeIdentityRunner(
+    Array.from(
+      { length: 150 },
+      (_, index) =>
+        `<button data-ref="b${index}">${index}:${"x".repeat(100)}</button>`,
+    ).join(""),
+  );
+  const backend = nativeBackend(runner);
+  try {
+    const tab = await backend.open("native", "https://example.com/");
+    const result = await backend.inspect("native", tab.tabId);
+    const capture = result[OBSERVATION_CAPTURE]!;
+    assert.equal(result.targets.length, 128);
+    assert.equal(result.visibleText.length, 8000);
+    assert.equal(capture.entries.length, 150);
+    assert.ok(capture.text!.length > 8000);
+    let clicked = false;
+    runner.page.dom.window.document
+      .querySelector('[data-ref="b149"]')!
+      .addEventListener("click", () => {
+        clicked = true;
+      });
+    await backend.click(
+      "native",
+      tab.tabId,
+      result.observationId,
+      capture.entries[149]!.value.targetId,
+    );
+    assert.equal(clicked, true);
+  } finally {
+    await backend.close();
+    runner.page.dom.window.close();
+  }
+});
+
+test("Playwright capture declares bounded omissions beyond 512 targets and 128k text", async () => {
+  const runner = new NativeIdentityRunner(
+    Array.from(
+      { length: 514 },
+      (_, index) => `<button data-ref="b${index}">${"x".repeat(300)}</button>`,
+    ).join(""),
+  );
+  const backend = nativeBackend(runner);
+  try {
+    const tab = await backend.open("native", "https://example.com/");
+    const result = await backend.inspect("native", tab.tabId);
+    const capture = result[OBSERVATION_CAPTURE]!;
+    assert.equal(capture.entries.length, 512);
+    assert.equal(capture.coverage.itemTotal, 514);
+    assert.equal(capture.coverage.textTotal, 514 * 300 + 513);
+    assert.equal(capture.text!.length, 128000);
+    assert.deepEqual(capture.coverage.reasons, [
+      "native-aria-depth-limit-12",
+      "capture-item-limit",
+      "capture-text-limit",
+    ]);
+  } finally {
+    await backend.close();
+    runner.page.dom.window.close();
+  }
+});
+
+for (const mutation of ["name", "value"] as const) {
+  test(`Playwright final dispatch rejects same-node ${mutation} change after revalidation`, async () => {
+    const runner = new NativeIdentityRunner(
+      '<input data-ref="a" aria-label="Query" value="before">',
+    );
+    const backend = nativeBackend(runner);
+    try {
+      const tab = await backend.open("native", "https://example.com/");
+      const observed = await backend.inspect("native", tab.tabId);
+      runner.beforeAction = () => {
+        const input = runner.page.dom.window.document.querySelector("input")!;
+        if (mutation === "name") input.setAttribute("aria-label", "Changed");
+        else input.value = "changed";
+      };
+      await assert.rejects(
+        backend.click(
+          "native",
+          tab.tabId,
+          observed.observationId,
+          observed.targets[0]!.targetId,
+        ),
+        /semantics changed|fingerprint changed/,
+      );
+    } finally {
+      await backend.close();
+      runner.page.dom.window.close();
+    }
+  });
+}
+
+test("Playwright scroll rejects navigation between document probe and mutation callback", async () => {
+  const runner = new NativeIdentityRunner('<button data-ref="a">Run</button>');
+  const backend = nativeBackend(runner);
+  try {
+    const tab = await backend.open("native", "https://example.com/");
+    const observed = await backend.inspect("native", tab.tabId);
+    let scrolled = false;
+    runner.page.beforeEvaluate = (source) => {
+      if (!source.includes("window.scrollBy")) return;
+      runner.page.beforeEvaluate = undefined;
+      runner.page.navigate('<button data-ref="a">Run</button>');
+      runner.page.dom.window.scrollBy = () => {
+        scrolled = true;
+      };
+    };
+    await assert.rejects(
+      backend.scroll("native", tab.tabId, observed.observationId, "down", 600),
+      /document changed/,
+    );
+    assert.equal(scrolled, false);
+  } finally {
+    await backend.close();
+    runner.page.dom.window.close();
+  }
+});

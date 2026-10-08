@@ -18,10 +18,12 @@ import {
   MAX_COMPUTER_INSPECTION_CONTROLS,
   selectComputerInspectionControls,
   selectComputerWindows,
+  uniqueComputerCaptureEntries,
   type ComputerWindowList,
   type ZenXComputerBackend,
 } from "./computer-provider.js";
 import type { ZenXPluginManifestV2 } from "./types.js";
+import { OBSERVATION_CAPTURE } from "./observation-capture.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_WINAPP_STDOUT_BYTES = 2 * 1024 * 1024;
@@ -32,7 +34,7 @@ export const MINIMUM_WINAPP_CLI_VERSION = "0.3.1";
 
 export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
   ...structuredClone(computerCapabilityManifest),
-  version: "1.1.1",
+  version: "1.1.2",
   description:
     "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and WGC capture stay background-safe; unsupported global input never silently substitutes for them.",
   provider: {
@@ -76,8 +78,7 @@ export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
         case "computer_inspect":
           return {
             ...tool,
-            description:
-              "Inspect at most 32 semantic UI Automation controls in one exact Windows HWND without activating it or reading sibling windows. target.windowTitle is required.",
+            description: `${tool.description} Windows reads are scoped to one exact HWND through UI Automation.`,
             capabilities: ["uia.inspect", "app_targeted", "no_global_input"],
           };
         case "computer_press":
@@ -219,6 +220,7 @@ export class SpawnWinAppCliRunner implements WinAppCliRunner {
 }
 
 export class WinAppCliComputerBackend implements ZenXComputerBackend {
+  readonly #captureScope = randomUUID();
   readonly #artifactDirectory: string;
   readonly #command: string;
   readonly #expiryTimers = new Set<NodeJS.Timeout>();
@@ -363,30 +365,80 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     this.#requireWindows();
     const window = await this.#resolveWindow(target, signal);
     const inspectedWindow = await this.#inspectWindow(window, signal);
-    const flattened = flattenElements(inspectedWindow.elements ?? []);
+    const traversal = flattenElementCapture(inspectedWindow.elements ?? []);
+    const flattened = traversal.elements;
+    const candidates = flattened.filter((element) =>
+      usableSelector(element.selector),
+    );
     const controls = selectComputerInspectionControls(
-      flattened.filter((element) => usableSelector(element.selector)),
+      candidates,
       (element) =>
         element.isEnabled !== false &&
         element.isOffscreen !== true &&
         winAppFingerprint(element).actions.length > 0,
     );
-    const fingerprints = controls.map(winAppFingerprint);
+    const selected = new Set(controls);
+    const capturedControls = [
+      ...controls,
+      ...candidates.filter((element) => !selected.has(element)),
+    ];
+    const fingerprints = capturedControls.map(winAppFingerprint);
     const observation = this.#observations.observe(
       computerTargetKey(target),
       fingerprints,
+      winAppWindowIdentity(window),
     );
+    const publicControls = capturedControls.map((control, index) => ({
+      selector: observation.selectors[index]!,
+      role: boundedText(winAppControlType(control) ?? "Control", 80),
+      title: boundedText(control.name ?? control.automationId ?? "", 256),
+      enabled: control.isEnabled !== false,
+      actions: fingerprints[index]!.actions,
+    }));
+    const reasons = [
+      ...(traversal.truncated ? ["visit_limit"] : []),
+      ...(flattened.some((element) => element.hasMoreChildren === true)
+        ? ["native_depth_limit"]
+        : []),
+      ...((inspectedWindow.elementCount ?? flattened.length) > flattened.length
+        ? ["native_element_omissions"]
+        : []),
+    ];
+    const nativeComplete =
+      reasons.length === 0 &&
+      (flattened.length > 0 || inspectedWindow.elementCount === 0) &&
+      flattened.every((element) => element.hasMoreChildren === false);
+    const sourceComplete =
+      reasons.length > 0 ? false : nativeComplete ? true : null;
+    if (sourceComplete === null) reasons.push("native_completeness_unknown");
     return {
       platform: "win32",
       observationId: observation.observationId,
       target: resolvedTarget(window),
-      controls: controls.map((control, index) => ({
-        selector: observation.selectors[index]!,
-        role: boundedText(winAppControlType(control) ?? "Control", 80),
-        title: boundedText(control.name ?? control.automationId ?? "", 256),
-        enabled: control.isEnabled !== false,
-        actions: fingerprints[index]!.actions,
-      })),
+      controls: publicControls.slice(0, controls.length),
+      [OBSERVATION_CAPTURE]: {
+        assertCurrent: () =>
+          this.#observations.assertCurrent(
+            computerTargetKey(target),
+            observation.observationId,
+          ),
+        scopeKey: JSON.stringify([
+          this.#captureScope,
+          winAppWindowIdentity(window),
+        ]),
+        entries: uniqueComputerCaptureEntries(
+          publicControls,
+          capturedControls.map(winAppCaptureIdentity),
+        ),
+        coverage: {
+          scope: "scoped_window_selectable_enabled_onscreen_uia_capture",
+          sourceComplete,
+          reasons,
+          ...(sourceComplete === true
+            ? { itemTotal: publicControls.length }
+            : {}),
+        },
+      },
       truncated:
         flattened.length > MAX_COMPUTER_INSPECTION_CONTROLS ||
         flattened.some((element) => element.hasMoreChildren === true) ||
@@ -403,13 +455,14 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     control: ComputerControlSelector;
   }> {
     this.#requireWindows();
+    const window = await this.#resolveWindow(target, signal);
     const fingerprint = this.#observations.consume(
       computerTargetKey(target),
       control,
       "press",
+      winAppWindowIdentity(window),
     );
     const selector = requiredProviderSelector(fingerprint);
-    const window = await this.#resolveWindow(target, signal);
     await this.#revalidateControl(window, fingerprint, "press", signal);
     const result = await this.#json<{ hwnd?: unknown }>(
       ["ui", "invoke", selector, "--window", String(window.hwnd), "--json"],
@@ -431,13 +484,14 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     characterCount: number;
   }> {
     this.#requireWindows();
+    const window = await this.#resolveWindow(target, signal);
     const fingerprint = this.#observations.consume(
       computerTargetKey(target),
       control,
       "set_value",
+      winAppWindowIdentity(window),
     );
     const selector = requiredProviderSelector(fingerprint);
-    const window = await this.#resolveWindow(target, signal);
     await this.#revalidateControl(window, fingerprint, "set_value", signal);
     const result = await this.#json<{ hwnd?: unknown }>(
       [
@@ -895,18 +949,42 @@ export async function runBoundedProcess(
 }
 
 function flattenElements(roots: readonly WinAppElement[]): WinAppElement[] {
+  return flattenElementCapture(roots).elements;
+}
+
+function flattenElementCapture(roots: readonly WinAppElement[]): {
+  elements: WinAppElement[];
+  truncated: boolean;
+} {
   const result: WinAppElement[] = [];
   const stack = [...roots].reverse();
-  while (stack.length > 0) {
+  while (stack.length > 0 && result.length < 512) {
     const element = stack.pop()!;
     result.push(element);
-    if (result.length >= 512) break;
     const children = element.children ?? [];
     for (let index = children.length - 1; index >= 0; index -= 1) {
       stack.push(children[index]!);
     }
   }
-  return result;
+  return { elements: result, truncated: stack.length > 0 };
+}
+
+function winAppWindowIdentity(window: WinAppWindow): string {
+  return JSON.stringify([window.processId, window.hwnd]);
+}
+
+function winAppCaptureIdentity(element: WinAppElement): string {
+  return JSON.stringify({
+    selector: element.selector ?? null,
+    role: winAppControlType(element) ?? null,
+    title: element.name ?? null,
+    automationId: element.automationId ?? null,
+    className: element.className ?? null,
+    enabled: element.isEnabled ?? null,
+    offscreen: element.isOffscreen ?? null,
+    frame: [element.x, element.y, element.width, element.height],
+    actions: winAppFingerprint(element).actions,
+  });
 }
 
 function winAppFingerprint(element: WinAppElement): ComputerControlFingerprint {

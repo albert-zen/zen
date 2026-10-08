@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { WorkspaceBrowser } from "../src/main/workspace-browser.js";
+import { OBSERVATION_CAPTURE } from "../src/main/capabilities/observation-capture.js";
 
 test("Workspace Browser human view and Agent backend operate the exact same target", async () => {
   const directory = await mkdtemp(
@@ -350,6 +351,89 @@ test("detaching an Agent session cannot deliver an in-flight live frame", async 
   }
 });
 
+test("Workspace hidden capture retains fresh action IDs beyond the public cap and expires on mutation", async () => {
+  const fixture = await sharedFixture();
+  try {
+    fixture.browser.bindThreadSession("agent-session", "thread-a");
+    const tab = await fixture.browser.open(
+      "agent-session",
+      "https://example.test/start",
+    );
+    const web = fixture.views[0]!.webContents;
+    const raw = {
+      documentIdentity: "native-incarnation",
+      visibleText: "x".repeat(20_000),
+      itemTotal: 150,
+      textTotal: 20_000,
+      targets: Array.from({ length: 150 }, (_, index) => ({
+        documentIdentity: "native-incarnation",
+        nodeIdentity: `node-${index}`,
+        selector: `#b${index}`,
+        tag: "button",
+        role: "button",
+        name: `Button ${index}`,
+        type: "",
+        id: `b${index}`,
+        fieldName: "",
+        autocomplete: "",
+        href: "",
+        actions: ["click"],
+      })),
+    };
+    web.debuggerApi.defaultValue = raw;
+    const first = await fixture.browser.inspect("agent-session", tab.tabId);
+    assert.equal(first.targets.length, 80);
+    assert.equal(first.visibleText.length, 8_000);
+    const capture = first[OBSERVATION_CAPTURE]!;
+    assert.equal(capture.entries.length, 150);
+    assert.equal(capture.text!.length, 20_000);
+    assert.equal(capture.coverage.sourceComplete, true);
+    assert.equal(capture.entries[100]!.identity, "node-100");
+    assert.equal(JSON.stringify(first).includes("node-100"), false);
+    capture.assertCurrent!();
+    web.debuggerApi.defaultValue = { ok: true };
+    await fixture.browser.click(
+      "agent-session",
+      tab.tabId,
+      first.observationId,
+      capture.entries[100]!.value.targetId,
+    );
+    assert.throws(() => capture.assertCurrent!(), /stale/);
+    web.debuggerApi.defaultValue = raw;
+    const second = await fixture.browser.inspect("agent-session", tab.tabId);
+    assert.equal(second[OBSERVATION_CAPTURE]!.scopeKey, capture.scopeKey);
+    assert.notEqual(
+      second[OBSERVATION_CAPTURE]!.entries[100]!.value.targetId,
+      capture.entries[100]!.value.targetId,
+    );
+    const third = await fixture.browser.inspect("agent-session", tab.tabId);
+    assert.throws(() => second[OBSERVATION_CAPTURE]!.assertCurrent!(), /stale/);
+    await fixture.browser.navigate(
+      "agent-session",
+      tab.tabId,
+      "https://example.test/next",
+    );
+    assert.throws(
+      () => third[OBSERVATION_CAPTURE]!.assertCurrent!(),
+      /changed|stale/,
+    );
+    const current = await fixture.browser.inspect("agent-session", tab.tabId);
+    fixture.browser.closeSession("agent-session");
+    fixture.browser.bindThreadSession("agent-session", "thread-a");
+    assert.throws(
+      () => current[OBSERVATION_CAPTURE]!.assertCurrent!(),
+      /stale/,
+    );
+    const rebound = await fixture.browser.inspect("agent-session", tab.tabId);
+    assert.notEqual(
+      rebound[OBSERVATION_CAPTURE]!.scopeKey,
+      current[OBSERVATION_CAPTURE]!.scopeKey,
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
 async function sharedFixture() {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-shared-browser-race-"),
@@ -400,8 +484,20 @@ class FakeDebugger {
   attach() {
     this.attached = true;
   }
-  async sendCommand(method: string) {
+  async sendCommand(method: string, params?: Record<string, unknown>) {
+    if (method === "Page.getFrameTree")
+      return { frameTree: { frame: { id: "main-frame" } } };
+    if (method === "Page.createIsolatedWorld") {
+      assert.equal(params?.worldName, "zenx-browser-observation-v1");
+      assert.equal(params?.grantUniveralAccess, false);
+      return { executionContextId: 42 };
+    }
     assert.equal(method, "Runtime.evaluate");
+    assert.equal(
+      params?.contextId,
+      42,
+      "all page code must run in the isolated world",
+    );
     this.evaluations += 1;
     const next = this.nextEvaluation;
     this.nextEvaluation = undefined;

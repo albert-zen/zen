@@ -22,6 +22,12 @@ import {
   parseExternalJson,
 } from "./external-provider.js";
 
+import {
+  OBSERVATION_CAPTURE,
+  MAX_OBSERVATION_CAPTURE_ITEMS,
+  MAX_OBSERVATION_CAPTURE_TEXT,
+} from "./observation-capture.js";
+
 const PLAYWRIGHT_PROVIDER_TIMEOUT_MS = 30_000;
 const PLAYWRIGHT_CLOSE_TIMEOUT_MS = 10_000;
 const MAX_PLAYWRIGHT_VISIBLE_TEXT = 8_000;
@@ -54,10 +60,14 @@ interface PlaywrightSessionState {
 interface PlaywrightObservation {
   id: string;
   documentVersion: number;
-  targets: Map<
-    string,
-    BrowserTargetFingerprint & { ref: string; disabled: boolean }
-  >;
+  targets: Map<string, PlaywrightObservedTarget>;
+}
+
+interface PlaywrightObservedTarget extends BrowserTargetFingerprint {
+  ref: string;
+  identity: string;
+  domAttributes: string;
+  disabled: boolean;
 }
 
 interface PlaywrightPageState {
@@ -83,6 +93,7 @@ interface PlaywrightAriaNode {
 
 interface PlaywrightDomMetadata {
   ref: string;
+  identity: string;
   count: 1;
   visible: boolean;
   tag: string;
@@ -227,25 +238,22 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
       const observationDocumentVersion = tab.documentVersion;
       const snapshot = await this.#snapshot(session, signal);
       const observationId = randomUUID();
-      const targets = new Map<
-        string,
-        BrowserTargetFingerprint & { ref: string; disabled: boolean }
-      >();
-      const visible: string[] = [];
+      const targets = new Map<string, PlaywrightObservedTarget>();
+      const visible = { text: "", total: 0 };
+      let candidateCount = 0;
       const nodes: PlaywrightAriaNode[] = [];
       walkAriaSnapshot(snapshot, (node) => {
         appendVisibleText(visible, node);
-        if (
-          node.ref !== undefined &&
-          playwrightNodeCanClick(node) &&
-          nodes.length < MAX_PLAYWRIGHT_TARGETS
-        ) {
-          nodes.push(node);
+        if (node.ref !== undefined && playwrightNodeCanClick(node)) {
+          candidateCount += 1;
+          if (nodes.length < MAX_OBSERVATION_CAPTURE_ITEMS) nodes.push(node);
         }
       });
       const metadata = await this.#domMetadata(
         session,
         nodes.flatMap((node) => (node.ref === undefined ? [] : [node.ref])),
+        tab.documentKey,
+        true,
         signal,
       );
       for (const node of nodes) {
@@ -258,6 +266,15 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
         const targetId = randomUUID();
         targets.set(targetId, {
           ref: node.ref,
+          identity: dom.identity,
+          domAttributes: JSON.stringify(
+            Object.fromEntries(
+              Object.entries(dom).filter(
+                ([key]) =>
+                  !["ref", "identity", "count", "visible"].includes(key),
+              ),
+            ),
+          ),
           ...fingerprint,
           disabled: node.disabled === true,
         });
@@ -305,29 +322,79 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
         documentVersion: observationDocumentVersion,
         targets,
       };
+      const capturedText = visible.text;
+      const capturedTargets = [...targets].map(([targetId, target]) => ({
+        targetId,
+        role: target.role,
+        name: target.name,
+        actions: [...target.actions],
+        ...(target.value === undefined ? {} : { value: target.value }),
+        ...(target.checked === undefined ? {} : { checked: target.checked }),
+        ...(target.selected === undefined ? {} : { selected: target.selected }),
+        ...(target.options === undefined
+          ? {}
+          : { options: target.options.map((option) => ({ ...option })) }),
+        ...(target.optionsTruncated === undefined
+          ? {}
+          : { optionsTruncated: target.optionsTruncated }),
+      }));
+      const documentKey = tab.documentKey;
       return {
         ...pageSummary(sessionId, tab.tabId, afterScreenshot),
         observationId,
         documentVersion: observationDocumentVersion,
-        visibleText: visible.join("\n").slice(0, MAX_PLAYWRIGHT_VISIBLE_TEXT),
-        targets: [...targets].map(([targetId, target]) => ({
-          targetId,
-          role: target.role,
-          name: target.name,
-          actions: [...target.actions],
-          ...(target.value === undefined ? {} : { value: target.value }),
-          ...(target.checked === undefined ? {} : { checked: target.checked }),
-          ...(target.selected === undefined
-            ? {}
-            : { selected: target.selected }),
-          ...(target.options === undefined
-            ? {}
-            : { options: target.options.map((option) => ({ ...option })) }),
-          ...(target.optionsTruncated === undefined
-            ? {}
-            : { optionsTruncated: target.optionsTruncated }),
-        })),
+        visibleText: capturedText.slice(0, MAX_PLAYWRIGHT_VISIBLE_TEXT),
+        targets: capturedTargets.slice(0, MAX_PLAYWRIGHT_TARGETS),
         screenshot,
+        [OBSERVATION_CAPTURE]: {
+          scopeKey: `${session.cliSessionName}/${tab.tabKey}/${documentKey}`,
+          entries: capturedTargets.map((value) => ({
+            value,
+            identity: targets.get(value.targetId)!.identity,
+          })),
+          text: capturedText.slice(0, MAX_OBSERVATION_CAPTURE_TEXT),
+          coverage: {
+            scope: "playwright-aria-depth-12",
+            sourceComplete: null,
+            itemTotal: candidateCount,
+            textTotal: visible.total,
+            reasons: [
+              "native-aria-depth-limit-12",
+              ...(candidateCount > nodes.length ? ["capture-item-limit"] : []),
+              ...(visible.total > MAX_OBSERVATION_CAPTURE_TEXT
+                ? ["capture-text-limit"]
+                : []),
+            ],
+          },
+          assertCurrent: async (currentSignal) => {
+            await this.#enqueue(session, currentSignal, async () => {
+              const assertCurrent = (): void => {
+                this.#assertSession(session, revision, currentSignal);
+                if (
+                  session.tabs.get(tab.tabKey) !== tab ||
+                  tab.documentKey !== documentKey ||
+                  tab.observation?.id !== observationId
+                )
+                  throw new Error(
+                    "Browser observation is stale or unknown; inspect again",
+                  );
+              };
+              assertCurrent();
+              // A read-only document probe detects external navigation without
+              // silently replacing this immutable ARIA/screenshot capture.
+              const pages = await this.#pageStates(session, currentSignal);
+              this.#reconcileTabs(session, pages);
+              assertCurrent();
+              const current = pages.find((page) => page.tabKey === tab.tabKey);
+              if (!current?.current || current.url !== afterScreenshot.url) {
+                this.#invalidate(tab);
+                throw new Error(
+                  "Browser observation scope changed; inspect again",
+                );
+              }
+            });
+          },
+        },
       };
     });
   }
@@ -348,9 +415,20 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
         targetId,
         "click",
       );
-      await this.#revalidateTarget(session, target, "click", signal);
+      await this.#revalidateTarget(session, tab, target, "click", signal);
       this.#invalidate(tab);
-      await this.#run(session, ["click", target.ref], signal);
+      await this.#run(
+        session,
+        [
+          "run-code",
+          playwrightHandleActionCode(
+            tab.documentKey,
+            target,
+            "await handle.click();",
+          ),
+        ],
+        signal,
+      );
       this.#assertSession(session, revision, signal);
       return await this.#summary(sessionId, session, tab, signal);
     });
@@ -374,10 +452,20 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
         targetId,
         "type",
       );
-      await this.#revalidateTarget(session, target, "type", signal);
+      await this.#revalidateTarget(session, tab, target, "type", signal);
       this.#invalidate(tab);
-      await this.#run(session, ["fill", target.ref, text], signal);
-      if (submit) await this.#run(session, ["press", "Enter"], signal);
+      await this.#run(
+        session,
+        [
+          "run-code",
+          playwrightHandleActionCode(
+            tab.documentKey,
+            target,
+            `await handle.fill(${JSON.stringify(text)});${submit ? ' await handle.press("Enter");' : ""}`,
+          ),
+        ],
+        signal,
+      );
       this.#assertSession(session, revision, signal);
       return await this.#summary(sessionId, session, tab, signal);
     });
@@ -400,9 +488,9 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
         targetId,
         "select",
       );
-      await this.#revalidateTarget(session, target, "select", signal);
+      await this.#revalidateTarget(session, tab, target, "select", signal);
       this.#invalidate(tab);
-      const code = playwrightSelectActionCode(target, option);
+      const code = playwrightSelectActionCode(target, option, tab.documentKey);
       await this.#run(session, ["run-code", code], signal);
       this.#assertSession(session, revision, signal);
       return await this.#summary(sessionId, session, tab, signal);
@@ -432,7 +520,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
         session,
         [
           "run-code",
-          `async page => await page.evaluate(() => { if (globalThis.__zenx_document_key !== ${JSON.stringify(documentKey)}) throw new Error("Browser document changed; inspect again"); return ${expression}; })`,
+          `async page => { ${playwrightRequireDocumentCode(documentKey)} return await page.evaluate(previous => { if (document !== previous) throw new Error("Browser document changed; inspect again"); return ${expression}; }, state.document); }`,
         ],
         signal,
       );
@@ -638,10 +726,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     if (!session.opened) return [];
     const response = await this.#run(
       session,
-      [
-        "run-code",
-        "async page => await Promise.all(page.context().pages().map(async (candidate, index) => ({ index, title: (await candidate.title()).slice(0, 256), url: candidate.url(), current: candidate === page, tabKey: await candidate.evaluate(() => { const key = '__zenx_tab_key'; if (typeof window.name === 'string' && window.name.startsWith('__zenx_tab_')) return window.name; const value = '__zenx_tab_' + crypto.randomUUID(); window.name = value; return value; }), documentKey: await candidate.evaluate(() => { const key = '__zenx_document_key'; const current = globalThis[key]; if (typeof current === 'string') return current; const value = crypto.randomUUID(); Object.defineProperty(globalThis, key, { value, writable: false, configurable: false }); return value; }) })))",
-      ],
+      ["run-code", playwrightPageStatesCode(randomUUID())],
       signal,
     );
     if (typeof response.result !== "string") {
@@ -708,10 +793,8 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
 
   async #revalidateTarget(
     session: PlaywrightSessionState,
-    target: BrowserTargetFingerprint & {
-      ref: string;
-      disabled: boolean;
-    },
+    tab: PlaywrightTabState,
+    target: PlaywrightObservedTarget,
     action: BrowserTargetFingerprint["actions"][number],
     signal?: AbortSignal,
   ): Promise<void> {
@@ -726,7 +809,13 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
       );
     }
     const node = matches[0]!;
-    const metadata = await this.#domMetadata(session, [target.ref], signal);
+    const metadata = await this.#domMetadata(
+      session,
+      [target.ref],
+      tab.documentKey,
+      false,
+      signal,
+    );
     const dom = metadata.get(target.ref);
     if (dom === undefined || !dom.visible) {
       throw new Error(
@@ -735,6 +824,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     }
     const fingerprint = playwrightTargetFingerprint(node, dom);
     if (
+      dom.identity !== target.identity ||
       fingerprint.selector !== target.selector ||
       fingerprint.tag !== target.tag ||
       fingerprint.role !== target.role ||
@@ -744,6 +834,11 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
       fingerprint.fieldName !== target.fieldName ||
       fingerprint.autocomplete !== target.autocomplete ||
       fingerprint.href !== target.href ||
+      fingerprint.value !== target.value ||
+      fingerprint.checked !== target.checked ||
+      fingerprint.selected !== target.selected ||
+      fingerprint.optionsTruncated !== target.optionsTruncated ||
+      JSON.stringify(fingerprint.options) !== JSON.stringify(target.options) ||
       (node.disabled === true) !== target.disabled ||
       fingerprint.actions.length !== target.actions.length ||
       !fingerprint.actions.every((candidate) =>
@@ -752,9 +847,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
       !fingerprint.actions.includes(action) ||
       (action === "select" &&
         (target.optionsTruncated === true ||
-          fingerprint.optionsTruncated === true ||
-          JSON.stringify(fingerprint.options) !==
-            JSON.stringify(target.options)))
+          fingerprint.optionsTruncated === true))
     ) {
       throw new Error(
         "Playwright target identity, visibility, or actions changed; inspect again",
@@ -765,28 +858,12 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
   async #domMetadata(
     session: PlaywrightSessionState,
     refs: readonly string[],
+    documentKey: string,
+    retain: boolean,
     signal?: AbortSignal,
   ): Promise<Map<string, PlaywrightDomMetadata>> {
     if (refs.length === 0) return new Map();
-    const code = `async page => await Promise.all(${JSON.stringify(refs)}.map(async ref => {
-      const locator = page.locator('aria-ref=' + ref);
-      const count = await locator.count();
-      if (count !== 1) return { ref, count };
-      const visible = await locator.isVisible();
-      const attributes = await locator.evaluate(element => ({
-        tag: element.tagName.toLowerCase(),
-        type: element.getAttribute('type') || '',
-        id: element.id || '',
-        fieldName: element.getAttribute('name') || '',
-        autocomplete: element.getAttribute('autocomplete') || '',
-        href: element.getAttribute('href') || '',
-        ...((element instanceof HTMLInputElement && element.type.toLowerCase() === 'password') ? {} : ('value' in element && typeof element.value === 'string') ? { value: element.value.slice(0, 512) } : element instanceof HTMLElement && element.matches('[contenteditable]:not([contenteditable="false"])') ? { value: (element.textContent || '').slice(0, 512) } : {}),
-        ...(('checked' in element && typeof element.checked === 'boolean') ? { checked: element.checked } : element.getAttribute('aria-checked') === 'true' ? { checked: true } : element.getAttribute('aria-checked') === 'false' ? { checked: false } : {}),
-        ...(element.getAttribute('aria-selected') === 'true' ? { selected: true } : element.getAttribute('aria-selected') === 'false' ? { selected: false } : {}),
-        ...(element instanceof HTMLSelectElement ? { options: [...element.options].slice(0, 100).map(option => ({ value: option.value.slice(0, 512), label: (option.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 512), selected: option.selected, disabled: option.disabled })), optionsTruncated: element.options.length > 100 } : {})
-      }));
-      return { ref, count, visible, ...attributes };
-    }))`;
+    const code = playwrightDomMetadataCode(refs, documentKey, retain);
     const response = await this.#run(session, ["run-code", code], signal);
     if (typeof response.result !== "string") {
       throw new Error(
@@ -1057,17 +1134,167 @@ function walkAriaSnapshot(
   }
 }
 
-function appendVisibleText(target: string[], node: PlaywrightAriaNode): void {
-  if (target.join("\n").length >= MAX_PLAYWRIGHT_VISIBLE_TEXT) return;
-  const text = node.text ?? node.name;
-  if (typeof text === "string" && text.trim().length > 0) {
-    target.push(text.trim().slice(0, 512));
-  }
+function appendVisibleText(
+  target: { text: string; total: number },
+  node: PlaywrightAriaNode,
+): void {
+  const append = (value: string | undefined): void => {
+    if (value === undefined || value.trim().length === 0) return;
+    const text = `${target.total > 0 ? "\n" : ""}${value.trim()}`;
+    target.total += text.length;
+    target.text += text.slice(
+      0,
+      MAX_OBSERVATION_CAPTURE_TEXT - target.text.length,
+    );
+  };
+  append(node.text ?? node.name);
   for (const child of node.children ?? []) {
-    if (typeof child === "string" && child.trim().length > 0) {
-      target.push(child.trim().slice(0, 512));
-    }
+    if (typeof child === "string") append(child);
   }
+}
+
+// These properties belong to the CLI's Node-side Playwright Page, never the
+// page's Window. The pinned CLI run-code handler supplies the same tab.page
+// to each fresh Node VM. Retained handles compare actual DOM objects with ===; names,
+// selectors, ARIA refs, and page-written properties cannot mint identities.
+const PLAYWRIGHT_IDENTITY_STATE = "zenx.playwright.observation.handles.v1";
+
+export function playwrightPageStatesCode(seed: string): string {
+  return `async page => await Promise.all(page.context().pages().map(async (candidate, index) => {
+    const key = Symbol.for(${JSON.stringify(PLAYWRIGHT_IDENTITY_STATE)});
+    let state = candidate[key];
+    const sameDocument = state && await candidate.evaluate(previous => document === previous, state.document).catch(() => false);
+    if (!sameDocument) {
+      if (state) await Promise.all([state.document, ...state.nodes.map(node => node.handle)].map(handle => handle.dispose().catch(() => {})));
+      state = candidate[key] = {
+        tabKey: state ? state.tabKey : ${JSON.stringify(seed)} + ':tab:' + index,
+        documentKey: ${JSON.stringify(seed)} + ':document:' + index,
+        document: await candidate.evaluateHandle(() => document),
+        nodes: [],
+        nextIdentity: 0,
+      };
+    }
+    return { index, title: (await candidate.title()).slice(0, 256), url: candidate.url(), current: candidate === page, tabKey: state.tabKey, documentKey: state.documentKey };
+  }))`;
+}
+
+function playwrightRequireDocumentCode(documentKey: string): string {
+  return `const state = page[Symbol.for(${JSON.stringify(PLAYWRIGHT_IDENTITY_STATE)})];
+    if (!state || state.documentKey !== ${JSON.stringify(documentKey)} || !await page.evaluate(previous => document === previous, state.document).catch(() => false)) throw new Error('Browser document changed; inspect again');`;
+}
+
+function playwrightDomAttributesCode(): string {
+  return `element => ({
+        tag: element.tagName.toLowerCase(),
+        type: element.getAttribute('type') || '',
+        id: element.id || '',
+        fieldName: element.getAttribute('name') || '',
+        autocomplete: element.getAttribute('autocomplete') || '',
+        href: element.getAttribute('href') || '',
+        ...((element instanceof HTMLInputElement && element.type.toLowerCase() === 'password') ? {} : ('value' in element && typeof element.value === 'string') ? { value: element.value.slice(0, 512) } : element instanceof HTMLElement && element.matches('[contenteditable]:not([contenteditable="false"])') ? { value: (element.textContent || '').slice(0, 512) } : {}),
+        ...(('checked' in element && typeof element.checked === 'boolean') ? { checked: element.checked } : element.getAttribute('aria-checked') === 'true' ? { checked: true } : element.getAttribute('aria-checked') === 'false' ? { checked: false } : {}),
+        ...(element.getAttribute('aria-selected') === 'true' ? { selected: true } : element.getAttribute('aria-selected') === 'false' ? { selected: false } : {}),
+        ...(element instanceof HTMLSelectElement ? { options: [...element.options].slice(0, 100).map(option => ({ value: option.value.slice(0, 512), label: (option.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 512), selected: option.selected, disabled: option.disabled })), optionsTruncated: element.options.length > 100 } : {})
+      })`;
+}
+
+function playwrightRequireHandleCode(
+  documentKey: string,
+  target: Pick<
+    PlaywrightObservedTarget,
+    "identity" | "ref" | "role" | "name" | "domAttributes"
+  >,
+): string {
+  return `${playwrightRequireDocumentCode(documentKey)}
+    const handle = state.nodes.find(node => node.identity === ${JSON.stringify(target.identity)})?.handle;
+    if (!handle || !await handle.evaluate(element => element.isConnected).catch(() => false)) throw new Error('Browser target identity changed; inspect again');
+    const semantic = page.getByRole(${JSON.stringify(target.role)}, { name: ${JSON.stringify(target.name)}, exact: true }).and(page.locator('aria-ref=' + ${JSON.stringify(target.ref)}));
+    if (await semantic.count() !== 1) throw new Error('Browser target semantics changed; inspect again');
+    const current = await semantic.elementHandle();
+    try {
+      if (!current || !await handle.evaluate((element, current) => element === current, current)) throw new Error('Browser target identity changed; inspect again');
+    } finally { if (current) await current.dispose(); }
+    const attributes = await handle.evaluate(${playwrightDomAttributesCode()});
+    if (JSON.stringify(attributes) !== ${JSON.stringify(target.domAttributes)}) throw new Error('Browser target fingerprint changed; inspect again');`;
+}
+
+function playwrightHandleActionCode(
+  documentKey: string,
+  target: PlaywrightObservedTarget,
+  action: string,
+): string {
+  return `async page => { ${playwrightRequireHandleCode(documentKey, target)} ${action} }`;
+}
+
+export function playwrightDomMetadataCode(
+  refs: readonly string[],
+  documentKey: string,
+  retain: boolean,
+): string {
+  return `async page => {
+    ${playwrightRequireDocumentCode(documentKey)}
+    const previous = state.nodes;
+    const acquired = [];
+    let committed = false;
+    const parallel = async (values, visit) => {
+      const results = new Array(values.length);
+      let next = 0;
+      const workers = Array.from({ length: Math.min(8, values.length) }, async () => {
+        while (next < values.length) {
+          const index = next++;
+          results[index] = await visit(values[index], index);
+        }
+      });
+      const settled = await Promise.allSettled(workers);
+      const failed = settled.find(result => result.status === 'rejected');
+      if (failed) throw failed.reason;
+      return results;
+    };
+    try {
+      const candidates = await parallel(${JSON.stringify(refs)}, async ref => {
+        const locator = page.locator('aria-ref=' + ref);
+        const count = await locator.count();
+        if (count !== 1) return { ref, count };
+        const handle = await locator.elementHandle();
+        if (!handle) return { ref, count: 0 };
+        acquired.push(handle);
+        return { ref, count, handle };
+      });
+      // Transfer each handle once. Strict equality is evaluated in one batch;
+      // it never reads a page-written identity or calls page array methods.
+      const matchText = await page.evaluate(({ current, previous }) => {
+        let result = '';
+        for (let index = 0; index < current.length; index++) {
+          let match = -1;
+          if (current[index] !== null) {
+            for (let old = 0; old < previous.length; old++) {
+              if (current[index] === previous[old]) { match = old; break; }
+            }
+          }
+          result += (index > 0 ? ',' : '') + match;
+        }
+        return result;
+      }, { current: candidates.map(candidate => candidate.handle || null), previous: previous.map(node => node.handle) });
+      const matches = matchText.split(',').map(Number);
+      const result = await parallel(candidates, async ({ ref, count, handle }, index) => {
+        if (!handle) return { ref, count };
+        const match = matches[index];
+        const identity = match < 0 ? state.documentKey + ':node:' + (++state.nextIdentity) : previous[match].identity;
+        const visible = await handle.isVisible();
+      const attributes = await handle.evaluate(${playwrightDomAttributesCode()});
+        return { ref, identity, count, visible, ...attributes };
+      });
+      if (${retain}) {
+        state.nodes = candidates.flatMap((candidate, index) => result[index].visible ? [{ handle: candidate.handle, identity: result[index].identity }] : []);
+        committed = true;
+        await Promise.all(previous.map(node => node.handle.dispose().catch(() => {})));
+      }
+      return result;
+    } finally {
+      const retained = committed ? new Set(state.nodes.map(node => node.handle)) : new Set();
+      await Promise.all(acquired.filter(handle => !retained.has(handle)).map(handle => handle.dispose().catch(() => {})));
+    }
+  }`;
 }
 
 function playwrightTargetFingerprint(
@@ -1160,6 +1387,9 @@ function isPlaywrightDomMetadata(
       (entry.optionsTruncated !== true || entry.options.length === 100));
   return (
     typeof entry.ref === "string" &&
+    typeof entry.identity === "string" &&
+    entry.identity.length > 0 &&
+    entry.identity.length <= 256 &&
     entry.count === 1 &&
     typeof entry.visible === "boolean" &&
     typeof entry.tag === "string" &&
@@ -1191,10 +1421,21 @@ function isPlaywrightDomMetadata(
 }
 
 export function playwrightSelectActionCode(
-  target: Pick<BrowserTargetFingerprint, "options"> & { ref: string },
+  target: Pick<BrowserTargetFingerprint, "options"> & {
+    ref: string;
+    identity?: string;
+    role?: string;
+    name?: string;
+    domAttributes?: string;
+  },
   option: string,
+  documentKey?: string,
 ): string {
-  return `async page => { const locator = page.locator('aria-ref=' + ${JSON.stringify(target.ref)}); const requested = ${JSON.stringify(option)}; const expectedOptions = ${JSON.stringify(target.options ?? null)}; await locator.evaluate((element, { requested, expectedOptions }) => { if (!(element instanceof HTMLSelectElement) || element.disabled) throw new Error('Browser target is not a selectable native control'); if (expectedOptions === null || element.options.length > 100) throw new Error('Browser options were not completely observed'); const options = [...element.options].map(option => ({ value: option.value.slice(0, 512), label: (option.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 512), selected: option.selected, disabled: option.disabled })); if (JSON.stringify(options) !== JSON.stringify(expectedOptions)) throw new Error('Browser options changed; inspect again'); const byValue = options.filter(candidate => candidate.value === requested && !candidate.disabled); const byLabel = options.filter(candidate => candidate.label === requested && !candidate.disabled); const matches = byValue.length > 0 ? byValue : byLabel; if (matches.length !== 1) throw new Error(matches.length === 0 ? 'Browser option missing' : 'Browser option ambiguous'); const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set; if (setter === undefined) throw new Error('Browser select value setter unavailable'); setter.call(element, matches[0].value); element.dispatchEvent(new Event('input', { bubbles: true })); element.dispatchEvent(new Event('change', { bubbles: true })); }, { requested, expectedOptions }); }`;
+  const locatorCode =
+    documentKey === undefined
+      ? `const locator = page.locator('aria-ref=' + ${JSON.stringify(target.ref)});`
+      : `${playwrightRequireHandleCode(documentKey, { identity: target.identity!, ref: target.ref, role: target.role!, name: target.name!, domAttributes: target.domAttributes! })} const locator = handle;`;
+  return `async page => { ${locatorCode} const requested = ${JSON.stringify(option)}; const expectedOptions = ${JSON.stringify(target.options ?? null)}; await locator.evaluate((element, { requested, expectedOptions }) => { if (!(element instanceof HTMLSelectElement) || element.disabled) throw new Error('Browser target is not a selectable native control'); if (expectedOptions === null || element.options.length > 100) throw new Error('Browser options were not completely observed'); const options = [...element.options].map(option => ({ value: option.value.slice(0, 512), label: (option.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 512), selected: option.selected, disabled: option.disabled })); if (JSON.stringify(options) !== JSON.stringify(expectedOptions)) throw new Error('Browser options changed; inspect again'); const byValue = options.filter(candidate => candidate.value === requested && !candidate.disabled); const byLabel = options.filter(candidate => candidate.label === requested && !candidate.disabled); const matches = byValue.length > 0 ? byValue : byLabel; if (matches.length !== 1) throw new Error(matches.length === 0 ? 'Browser option missing' : 'Browser option ambiguous'); const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set; if (setter === undefined) throw new Error('Browser select value setter unavailable'); setter.call(element, matches[0].value); element.dispatchEvent(new Event('input', { bubbles: true })); element.dispatchEvent(new Event('change', { bubbles: true })); }, { requested, expectedOptions }); }`;
 }
 
 function isMissingPlaywrightDomMetadata(value: unknown): boolean {
@@ -1210,7 +1451,7 @@ function requireObservedTarget(
   observationId: string,
   targetId: string,
   action: BrowserTargetFingerprint["actions"][number],
-): BrowserTargetFingerprint & { ref: string; disabled: boolean } {
+): PlaywrightObservedTarget {
   const observation = tab.observation;
   if (
     observation === undefined ||
