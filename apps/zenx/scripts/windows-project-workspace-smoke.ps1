@@ -118,8 +118,7 @@ try {
     approvalPolicy = "never"
   }
 
-  & npm run build
-  if ($LASTEXITCODE -ne 0) { throw "ZenX build failed." }
+  # Portable packaging builds its own isolated snapshot and prepares all resources.
   $packageOutput = & node ./scripts/package-zenx-portable.mjs --app
   if ($LASTEXITCODE -ne 0) { throw "ZenX portable packaging failed." }
   $packageLines = @($packageOutput)

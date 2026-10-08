@@ -65,6 +65,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Cache verified provider archives
+        uses: actions/cache@v4
+        with:
+          # Only immutable downloads; assembly still verifies every digest.
+          # Never restore staging output or another runner's transaction locks.
+          path: apps/zenx/.packaged/cache/artifacts/sha256/[0-9a-f]*
+          key: zenx-provider-archives-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/zenx/resources/providers/provider-lock.json') }}
       - run: npm ci
       - run: npm --workspace apps/zenx run smoke:capabilities
 
@@ -105,6 +112,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Cache verified provider archives
+        uses: actions/cache@v4
+        with:
+          path: apps/zenx/.packaged/cache/artifacts/sha256/[0-9a-f]*
+          key: zenx-provider-archives-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/zenx/resources/providers/provider-lock.json') }}
       - run: npm ci
       - name: Exercise Windows publish handle lifecycle and rollback
         run: |
@@ -166,6 +178,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Cache verified provider archives
+        uses: actions/cache@v4
+        with:
+          path: apps/zenx/.packaged/cache/artifacts/sha256/[0-9a-f]*
+          key: zenx-provider-archives-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/zenx/resources/providers/provider-lock.json') }}
       - run: npm ci
       - run: npm --workspace apps/zenx run test:project-identity
       - run: npm --workspace apps/zenx run smoke:windows-projects
@@ -233,10 +250,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/mobile/package-lock.json
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
+          # Expo generates android/ below, so key the cache from its inputs.
+          cache-dependency-path: |
+            apps/mobile/package-lock.json
+            apps/mobile/app.json
       - run: npm ci
       - run: npm test
       - run: npm run typecheck
@@ -244,7 +270,7 @@ jobs:
         working-directory: .
       - run: npm run test:host
       - run: npm run prebuild -- --no-install
-      - run: ./gradlew assembleDebug
+      - run: ./gradlew assembleDebug --build-cache
         working-directory: apps/mobile/android
       - name: Try preinstalled headless Android emulator screenshot (fixture only)
         run: timeout 240 ./scripts/capture-installed-emulator.sh

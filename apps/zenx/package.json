@@ -15,7 +15,7 @@
     "brand:generate": "node ./scripts/generate-brand-assets.mjs",
     "brand:check": "node ./scripts/generate-brand-assets.mjs --check",
     "pretypecheck": "npm run prepare:plugin-sdk",
-    "typecheck": "tsc -p tsconfig.node.json --noEmit --pretty false && tsc -p tsconfig.web.json --noEmit --pretty false",
+    "typecheck": "npm run typecheck:prepared",
     "pretest": "npm run prepare:first-party-plugins",
     "test": "tsx --test test/**/*.test.ts test/**/*.test.mjs",
     "test:prepared": "tsx --test test/**/*.test.ts test/**/*.test.mjs",
@@ -33,9 +33,10 @@
     "smoke:windows-user-browser": "tsx src/main/user-browser-smoke.ts",
     "smoke:providers": "npm run build && electron ./out/main/provider-smoke.js",
     "smoke:workspace-browser": "npm run build && electron ./out/main/workspace-browser-smoke.js",
-    "check": "npm run brand:check && npm run typecheck && npm run prepare:first-party-plugins && npm run test:prepared && npm run build:prepared",
+    "check": "npm run brand:check && npm run prepare:first-party-plugins && npm run typecheck:prepared && npm run test:prepared && npm run build:prepared",
     "test:imzenx": "tsx --test integration/imzenx-sync.test.ts",
-    "prepare:rtk": "node ./scripts/prepare-rtk.mjs"
+    "prepare:rtk": "node ./scripts/prepare-rtk.mjs",
+    "typecheck:prepared": "tsc -p tsconfig.node.json --noEmit --pretty false && tsc -p tsconfig.web.json --noEmit --pretty false"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

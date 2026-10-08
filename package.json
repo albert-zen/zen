@@ -20,14 +20,14 @@
   },
   "scripts": {
     "build": "npm run build --workspace @zenx/plugin-sdk && tsc -p tsconfig.json",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm test",
+    "check": "npm run format:check && npm run lint && npm test",
     "format": "prettier --write . && uv run --project apps/imzen --extra dev ruff format apps/imzen",
     "format:check": "prettier --check . && uv run --project apps/imzen --extra dev ruff format --check apps/imzen",
     "lint": "uv run --project apps/imzen --extra dev ruff check apps/imzen",
     "start": "node dist/apps/cli/src/cli.js",
     "test": "npm run test:node && npm run test:imzen",
     "test:imzen": "uv run --project apps/imzen --extra dev pytest -q apps/imzen/tests && npm run test:imzenx --workspace @zen/zenx",
-    "test:node": "npm test --workspace @zenx/plugin-sdk && npm run build && npm test --workspace @zenx/imzenx-plugin && node --test dist/test/*.test.js",
+    "test:node": "npm run build && npm run test:prepared --workspace @zenx/plugin-sdk && npm test --workspace @zenx/imzenx-plugin && node --test dist/test/*.test.js",
     "typecheck": "npm run typecheck --workspace @zenx/plugin-sdk && tsc -p tsconfig.json --noEmit"
   },
   "engines": {
