@@ -108,9 +108,108 @@
 .rooms-chat-status button:hover {
   background: var(--color-surface-hover);
 }
+.room-toolbar-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+}
+.room-toolbar-summary h2,
+.room-toolbar-summary .room-assistant-state {
+  margin: 0;
+  min-width: 0;
+}
+.room-setup-note > summary {
+  cursor: pointer;
+  padding: 5px 0;
+  color: var(--color-text-secondary);
+}
+.room-setup-settings-content {
+  max-height: min(320px, 45vh);
+  overflow: auto;
+  padding: 8px 0;
+  font-size: var(--font-size-caption);
+}
+.room-setup-settings-content > p {
+  margin: 0 0 12px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+.room-setup-settings-content > ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.room-setup-settings-content li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 0;
+}
+.room-setup-settings-content li > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.room-setup-settings-content li > button {
+  min-height: 28px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.room-setup-settings-content li > button:hover {
+  background: var(--color-surface-hover);
+}
+@media (pointer: coarse) {
+  .room-setup-settings-content li > button {
+    min-height: 44px;
+  }
+}
+.room-setup-note > summary:focus-visible,
+.room-setup-settings-content button:focus-visible,
+.room-source-link:focus-visible,
+.room-history-edge button:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
 .rooms-chat-feed {
   padding: 28px max(24px, calc((100% - var(--room-conversation-width)) / 2));
   scrollbar-gutter: stable;
+  overflow-anchor: none;
+}
+.room-history-edge {
+  min-height: 28px;
+  margin-bottom: 16px;
+  color: var(--color-text-muted);
+  text-align: center;
+  font-size: var(--font-size-caption);
+}
+.room-history-edge button,
+.room-load-earlier {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 5px 8px;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+.room-history-edge button:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-secondary);
+}
+.room-history-error {
+  overflow-wrap: anywhere;
+  color: var(--color-text-secondary);
+}
+.room-history-error button {
+  text-decoration: underline;
 }
 .rooms-chat-feed:has(> .rooms-chat-empty:only-child) {
   display: grid;
@@ -140,6 +239,14 @@
   gap: 8px;
   margin-bottom: 8px;
   flex-wrap: wrap;
+  padding-inline-end: 104px;
+  min-height: 28px;
+}
+@media (pointer: coarse), (hover: none) {
+  .rooms-chat-feed .room-message header {
+    padding-inline-end: 44px;
+    min-height: 44px;
+  }
 }
 .rooms-chat-feed .room-message header strong {
   font-size: var(--font-size-label);
@@ -149,24 +256,70 @@
   font-size: 11px;
   color: var(--color-text-muted);
 }
-.rooms-chat-feed .room-role {
-  background: transparent;
-  color: var(--color-text-muted);
+.room-sender-name {
+  display: inline-flex;
+  min-width: 0;
+  max-width: min(75%, 360px);
   padding: 0;
-  font-weight: 400;
-  letter-spacing: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.room-sender-name strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.room-sender-name:hover {
+  text-decoration: underline;
+}
+.room-sender-profile {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  min-width: 180px;
+  max-width: min(340px, calc(100vw - 20px));
+  font-size: var(--font-size-caption);
+}
+.room-sender-profile > p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+.room-sender-profile .room-source-link {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  border: 0;
+  border-radius: var(--radius-control);
+  padding: 6px 8px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  text-align: start;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.room-sender-profile .room-source-link:hover {
+  background: var(--color-surface-hover);
+}
+.room-sender-name:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+@media (pointer: coarse) {
+  .room-sender-name,
+  .room-sender-profile .room-source-link {
+    min-height: 44px;
+  }
 }
 .rooms-chat-feed .room-message .markdown-body {
   font-size: var(--font-size-body);
   line-height: 1.7;
-}
-.rooms-chat-feed .room-message-details {
-  margin-top: 6px;
-}
-.rooms-chat-feed .room-message-details summary {
-  cursor: pointer;
-  width: fit-content;
-  padding: 3px 0;
 }
 .room-assistant-controls {
   margin: 10px 24px 0;
@@ -245,6 +398,9 @@
   margin-right: 0;
 }
 .rooms-chat-feed .room-message[data-kind="human"] > .markdown-body {
+  width: fit-content;
+  max-width: 100%;
+  margin-left: auto;
   padding: 10px 14px;
   border: 1px solid var(--color-border-subtle);
   border-radius: 16px 16px 4px 16px;
@@ -252,19 +408,17 @@
 }
 .rooms-chat-feed .room-message[data-kind="human"] header {
   justify-content: flex-end;
+  padding-inline-start: 104px;
+  padding-inline-end: 0;
 }
-.rooms-chat-feed .room-role-human {
-  display: none;
+@media (pointer: coarse), (hover: none) {
+  .rooms-chat-feed .room-message[data-kind="human"] header {
+    padding-inline-start: 44px;
+    padding-inline-end: 0;
+  }
 }
-.rooms-chat-feed .room-message[data-kind="human"] .room-message-details,
 .rooms-chat-feed .room-message[data-kind="human"] .room-delivery {
   text-align: right;
-}
-.rooms-chat-feed
-  .room-message[data-kind="human"]
-  .room-message-details
-  summary {
-  margin-left: auto;
 }
 .rooms-chat-dialog .rooms-chat-danger {
   align-self: flex-start;
@@ -318,9 +472,20 @@
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+.room-message-quote {
+  border-inline-start: 2px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+  margin-bottom: 8px;
+}
 .room-message-quote p {
   margin: 4px 0 0;
   white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  line-height: 1.5;
 }
 .room-reply-draft {
   display: flex;
@@ -331,33 +496,6 @@
   min-width: 0;
   flex: 1;
 }
-.room-message-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-  font-size: 12px;
-}
-.room-message-actions button,
-.room-reply-draft button {
-  border: 0;
-  background: var(--surface-hover);
-  color: inherit;
-  border-radius: 6px;
-  padding: 4px 8px;
-  cursor: pointer;
-}
-.room-reaction-options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 6px 0;
-}
-.room-reaction-options button[aria-pressed="true"] {
-  background: var(--surface-active);
-}
-
 /* Conversation tools stay compact; the selected conversation already owns the app title. */
 .rooms-chat-header {
   min-height: 44px;
@@ -376,6 +514,62 @@
 }
 @media (pointer: coarse) {
   .rooms-chat-header > button {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+/* Room actions share the existing App title row, including its native no-drag controls. */
+.room-title-actions-host {
+  min-width: 0;
+}
+.room-title-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  -webkit-app-region: no-drag;
+}
+.room-title-actions > button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  padding: 7px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+.room-title-actions > button:hover {
+  background: var(--color-surface-hover);
+}
+.room-title-actions > button:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+.rooms-chat-header > button {
+  position: relative;
+}
+.room-header-status-dot {
+  position: absolute;
+  inset-block-start: 5px;
+  inset-inline-end: 5px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+}
+.room-settings-replies {
+  border-block: 1px solid var(--color-border-subtle);
+  padding: 10px 0;
+}
+@media (pointer: coarse) {
+  .room-title-actions > button {
     width: 44px;
     height: 44px;
   }

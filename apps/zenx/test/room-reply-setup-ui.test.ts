@@ -365,7 +365,21 @@ test("Room setup CTAs select explicit members and returning restores the origina
       document.querySelector(".rooms-chat-header h2")?.textContent,
       "#Work",
     );
-    const buttons = [...document.querySelectorAll(".room-setup-note button")];
+    assert.equal(document.querySelector(".room-setup-note"), null);
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Conversation settings"]',
+        )!
+        .click(),
+    );
+    const note = document.querySelector<HTMLDetailsElement>(
+      '[role="dialog"] .room-setup-note',
+    )!;
+    assert.equal(note.open, false);
+    await act(async () => note.querySelector("summary")!.click());
+    assert.equal(note.open, true);
+    const buttons = [...note.querySelectorAll("button")];
     assert.equal(buttons.length, 2);
     await act(async () => (buttons[1] as HTMLButtonElement).click());
     const query = new URL(routes[0]!, "https://zenx.local").searchParams;

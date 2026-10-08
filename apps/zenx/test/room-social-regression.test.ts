@@ -84,7 +84,9 @@ test("Room social review regressions: receipts, refreshed reactions, and failed 
         readers: [{ threadId: "worker", name: "Worker", state: "read" }],
       }),
     });
-    const label = document.querySelector(".room-delivery")?.textContent;
+    const label = document
+      .querySelector(".room-delivery")
+      ?.getAttribute("title");
     assert.match(label!, /@Worker: Read/);
     await s.close();
   }
@@ -121,7 +123,8 @@ test("Room social review regressions: receipts, refreshed reactions, and failed 
     await s.tick();
     assert(
       [...document.querySelectorAll(".room-message [aria-label]")].some(
-        (element) => element.getAttribute("aria-label") === "Worker reacted 👀",
+        (element) =>
+          element.getAttribute("aria-label")?.includes("👀 · 1 · Worker"),
       ),
     );
     await s.close();
@@ -139,7 +142,7 @@ test("Room social review regressions: receipts, refreshed reactions, and failed 
     });
     await act(async () =>
       [...document.querySelectorAll("button")]
-        .find((b) => b.textContent === "Reply")!
+        .find((b) => b.getAttribute("aria-label") === "Reply")!
         .click(),
     );
     await act(async () => {

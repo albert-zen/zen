@@ -98,7 +98,10 @@ async function edit(dom: any, value: string) {
 async function clickText(label: string, index = 0) {
   await act(async () =>
     [...document.querySelectorAll<HTMLButtonElement>("button")]
-      .filter((b) => b.textContent === label)
+      .filter(
+        (b) =>
+          b.textContent === label || b.getAttribute("aria-label") === label,
+      )
       [index]!.click(),
   );
 }
@@ -207,7 +210,7 @@ async function multiplePrepareRecovery(newer = false) {
   try {
     assert.equal(
       document.querySelector(".room-message header strong")!.textContent,
-      "Agent",
+      "Unknown member",
     );
     assert.equal(
       document.querySelector(".room-message header .room-role"),

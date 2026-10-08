@@ -448,8 +448,12 @@ ThreadView
 - Room 复用 Thread 的输入容器、自适应文本区、发送按钮视觉与候选列表。Room 仍经插件 SDK 保存消息和消费投递回执；共享外观不提供 Thread 专属的中断、停止、权限或模型控制。
 - 普通 Room 输入 `@` 弹出可搜索的成员候选；上下方向键选择、Enter/Tab 确认、Escape 关闭，选择不会同时发送消息，中文输入法确认与长按 Enter 不触发重复提交。成员选择保留 literal `@name` 及前后文本，与 Host 的 mention 匹配规则一致。Always On Assistant 不要求 `@`，新消息仍在现有下一周期 steering 路径接入。
 - Thread 的文件、线程、工作流和 Room 的成员候选共享 viewport-anchored portal 呈现，避开 Composer 底部滚动容器的裁剪；候选保持编辑器焦点，窗口变化后重新定位，不复制数据或执行语义。
-- Room 的次级导航沿用平面行与中性选中态，正文与输入框沿同一阅读列对齐。用户消息使用右侧轻量气泡，Agent 消息保持自然排版和可辨认的作者；消息原文不做删改。时刻简写可通过 title 查看完整日期，来源 Thread/Turn 与消息 ID 在 Message details 中保留。
+- Room 的次级导航沿用平面行与中性选中态，正文与输入框沿同一阅读列对齐。用户消息使用右侧轻量气泡，Agent 消息保持自然排版和可辨认的作者；消息原文不做删改。时刻简写可通过 title 查看完整日期，来源 Thread/Turn 与消息 ID 只在消息 More 菜单的技术详情中保留，不常驻显示。
 - Room 的设置与未确定投递状态保持可见且可操作。自动化卡片的完整指令默认折叠，展开后可读；这些都是呈现调整，不改变 Trigger 配置、运行、恢复或授权。
+- Room 的标题与重命名、工作区、设置操作共享应用外壳中的同一标题行，正文上方不再另起操作栏；保留原生窗口控件和拖动区域边界。自动回复未启用时，只在现有设置入口显示轻量状态提示，具体成员数量和配置入口收进会话设置，不额外占用常驻状态栏或标题空间。“未启用”不擅自区分未配置、暂停或 Host 全局关闭。展开和查看设置不启用 Trigger，也不重放消息。投递失败和结果待确认仍独立可见、可操作。
+- Room 向上滚动到历史边缘时自动分批读取，保留当前可见消息的位置；首次打开不自动扫全量历史，读取失败停止并提供明确重试。迟到响应不改变新的房间，实时消息和分页使用消息 ID 对齐。界面只展示 Host 当前保留的历史（现有上限 256 条），到达边界不冒充永久完整档案。
+- Room 消息头只显示一个发送者名称和时间，不叠加 Agent、成员、Thread、PAW 或来源未知标签。优先保留消息记录的有效作者名；通用 Agent 名仅可由记录的来源 Thread 匹配真实成员或明确的会话名称，没有来源时使用中性的“未知成员”，不从正文 @提及反推作者。点击名字按需展示来源会话和当前关联 PAW 的导航，关联关系不改写历史身份；原始 message/thread/turn/operation IDs 只在 More 菜单的技术详情中出现。
+- Room 的本人消息姓名和时间与消息右沿对齐，动作组位于其左侧；其他成员的姓名和时间保持左对齐、动作组位于右侧。动作预留空间不能把本人消息头推离右沿。Room 的 Reply、React、More 使用消息上方的轻量动作组，桌面 hover 或 keyboard focus 时显示，浮层打开期间保持可见。触摸或无 hover 时保留可见的 More 入口并能执行同样动作；不让每条消息常驻一排大按钮。已有 reactions 在正文下显示为 emoji 与数量的可切换 pill，没有 reaction 时不留空行。选择 Reply 后 Composer 保持输入焦点和清楚的作者/摘录引用，选择 reaction 不发送消息或启动 Turn。
 - Linux 与 Windows 的工作区入口避让原生最小化、最大化和关闭按钮，不能将打开面板的点击交给原生关闭区域。
 
 - Room 的自动回复设置按明确成员导航到现有 Room mention Trigger 编辑器；路由参数只表达临时 UI 意图，成员和目标从最新 Host Room / Thread 投影验证，显式 Save 才写入定义，不修改权限、不重放旧消息。Cancel / Back 返回原 Room，不把离开表单当作取消已提交的 Host 请求。Member conversation 选项以标题和短工作区 / 可区分短 ID 呈现，完整身份仍可搜索、查看并由无障碍名称读取。
@@ -495,3 +499,17 @@ PAW 导航使用与共享图标相同描边风格的对话气泡，表达一对�
 Normal PAW chat keeps only compact, named rename/workspace/settings controls. Do not put model-cycle, quota or background implementation descriptions under its input. Paused delivery and failures remain explicit; Pause/Resume lives in conversation settings. Rename edits the display name only and preserves the Room identity and bound working Thread; Cancel/Escape leaves the name unchanged. PAW/Rooms appear after plugin entries and at the same section hierarchy as Projects, using neutral selected surfaces and spacing instead of extra truncated separators.
 
 Native scrollbars retain their geometry and scrolling behavior. Their track is transparent against each surface; the thumb uses the theme's muted text color while scrolling, keyboard/focus interaction or edge/drag activity is occurring, and becomes transparent at rest. Forced-colors uses native colors. Do not hide overflow to simulate autohide, and do not count Linux/mock evidence as native Windows/macOS validation.
+
+### 2026-10-08: Room IM presentation references
+
+The message hierarchy and actions use these specific public patterns: Slack's
+[compact message display](https://slack.com/help/articles/213893898-Change-how-messages-are-displayed)
+keeps sender identity without requiring avatars; Discord exposes
+[Reply on hover and through More](https://support.discord.com/hc/en-us/articles/360057382374-Replies-FAQ)
+and supports [keyboard access to message actions](https://support.discord.com/hc/en-us/articles/1500000056121-Keyboard-Navigation-FAQ).
+[Teams reactions](https://support.microsoft.com/en-us/teams/chat/like-or-react-to-messages-in-microsoft-teams)
+appear beneath messages, and Discord's
+[reaction toggle](https://support.discord.com/hc/en-us/articles/12102061808663-Reactions-and-Super-Reactions-FAQ)
+removes one's selected reaction on a second click. These inform presentation,
+not ZenX execution or identity authority. Merging the Room status and action row
+is the user's explicit ZenX decision, not a claim about those products.
