@@ -116,7 +116,9 @@ export function installCodeWebGlobals(context: Context): void {
     if (actual < count) throw new TypeError('Not enough arguments');
   };
   const normalize = init => {
-    if (init === undefined || init === null) return '';
+    if (init === undefined) return '';
+    // Preserve null for the native constructor: Node 22 and 24 differ here.
+    if (init === null) return null;
     if (typeof init !== 'object' && typeof init !== 'function') return string(init);
     const iterator = init[Symbol.iterator];
     if (iterator != null) {
