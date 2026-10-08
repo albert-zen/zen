@@ -61,7 +61,7 @@ test("updating an old bundled Computer profile uses the current resource and exp
     const currentTarball = path.join(
       resources,
       "plugins",
-      "zenx-computer-plugin-macos-1.0.1.tgz",
+      "zenx-computer-plugin-macos-1.0.2.tgz",
     );
     const oldTarball = path.join(
       resources,
@@ -115,7 +115,7 @@ test("updating an old bundled Computer profile uses the current resource and exp
     const updated = service
       .pluginSnapshot()
       .plugins.find((plugin) => plugin.id === "computer");
-    assert.equal(updated?.version, "1.0.1");
+    assert.equal(updated?.version, "1.0.2");
     assert.equal(
       path.basename(updated?.profileSource?.packageSpec ?? ""),
       path.basename(currentTarball),
@@ -459,7 +459,7 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       path.join(
         resources,
         "plugins",
-        "zenx-browser-plugin-playwright-1.0.3.tgz",
+        "zenx-browser-plugin-playwright-1.0.4.tgz",
       ),
       { pluginId: "browser", packageName: "@zenx/browser-plugin" },
       playwrightCandidate,
@@ -491,7 +491,7 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       browserBackend("electron"),
     );
     await service.replaceBundledProviderVariant(
-      path.join(resources, "plugins", "zenx-browser-plugin-electron-1.0.3.tgz"),
+      path.join(resources, "plugins", "zenx-browser-plugin-electron-1.0.4.tgz"),
       { pluginId: "browser", packageName: "@zenx/browser-plugin" },
       electronCandidate,
     );
@@ -641,7 +641,7 @@ test("an uninstalled Browser reinstalls the current Host-selected App Resource v
     assert.equal(browser?.lifecycle, "enabled");
     assert.equal(
       path.basename(browser?.profileSource?.packageSpec ?? ""),
-      "zenx-browser-plugin-electron-1.0.3.tgz",
+      "zenx-browser-plugin-electron-1.0.4.tgz",
     );
     assert.equal(
       (
@@ -703,7 +703,7 @@ test("provider variant admission and Catalog failures retain the old backend and
   const electronTarball = path.join(
     resources,
     "plugins",
-    "zenx-browser-plugin-electron-1.0.3.tgz",
+    "zenx-browser-plugin-electron-1.0.4.tgz",
   );
   try {
     await service.initialize();
@@ -711,7 +711,7 @@ test("provider variant admission and Catalog failures retain the old backend and
       path.join(
         resources,
         "plugins",
-        "zenx-browser-plugin-user-session-1.0.3.tgz",
+        "zenx-browser-plugin-user-session-1.0.4.tgz",
       ),
       { pluginId: "browser", packageName: "@zenx/browser-plugin" },
     );
@@ -760,13 +760,13 @@ test("restart keeps a committed Browser backend isolated from a different curren
         name: "user-session-to-electron",
         initialMode: "user-session",
         selectedMode: "isolated",
-        initialTarball: "zenx-browser-plugin-user-session-1.0.3.tgz",
+        initialTarball: "zenx-browser-plugin-user-session-1.0.4.tgz",
       },
       {
         name: "electron-to-user-session",
         initialMode: "isolated",
         selectedMode: "user-session",
-        initialTarball: "zenx-browser-plugin-electron-1.0.3.tgz",
+        initialTarball: "zenx-browser-plugin-electron-1.0.4.tgz",
       },
     ] as const) {
       for (const outcome of [
@@ -1025,8 +1025,8 @@ test("profile-managed Computer remains absent on Linux and unavailable Windows p
                 resources,
                 "plugins",
                 platform === "win32"
-                  ? "zenx-computer-plugin-win32-1.1.1.tgz"
-                  : "zenx-computer-plugin-macos-1.0.1.tgz",
+                  ? "zenx-computer-plugin-win32-1.1.2.tgz"
+                  : "zenx-computer-plugin-macos-1.0.2.tgz",
               ),
               { pluginId: "computer", packageName: "@zenx/computer-plugin" },
             ),

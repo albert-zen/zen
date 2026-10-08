@@ -7,6 +7,9 @@ import {
   assertBrowserObservation,
   browserActionScript,
   browserInspectScript,
+  browserDomCapture,
+  evaluateBrowserDocument,
+  type BrowserDomInspection,
   browserScrollScript,
   BrowserScreenshotArtifactStore,
   redactBrowserUrl,
@@ -20,6 +23,11 @@ import {
   type BrowserTargetFingerprint,
   type ZenXBrowserBackend,
 } from "./capabilities/browser-provider.js";
+
+import {
+  OBSERVATION_CAPTURE,
+  MAX_OBSERVATION_CAPTURE_ITEMS,
+} from "./capabilities/observation-capture.js";
 
 export interface WorkspaceBrowserTab {
   id: string;
@@ -89,6 +97,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
   readonly #owners = new Map<number, Owner>();
   readonly #tabs = new Map<string, Tab>();
   readonly #sessionThreads = new Map<string, string>();
+  readonly #sessionIncarnations = new Map<string, string>();
   readonly #artifacts: BrowserScreenshotArtifactStore;
   readonly #dependencies: WorkspaceBrowserDependencies;
 
@@ -121,6 +130,8 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     if (existing !== undefined && existing !== threadId)
       throw new Error("Browser session is already bound to another Thread");
     this.#sessionThreads.set(sessionId, threadId);
+    if (existing === undefined)
+      this.#sessionIncarnations.set(sessionId, randomUUID());
   }
 
   #owner(sender: WebContents): Owner {
@@ -480,12 +491,13 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     return await this.#rendered(tab, async () => {
       this.#requireAgentTab(sessionId, tabId);
       const documentVersion = tab.documentVersion;
+      const sessionIncarnation = this.#sessionIncarnations.get(sessionId);
       const navigationGeneration = tab.navigationGeneration;
       const renderRevision = tab.renderRevision;
-      const inspected = await this.#evaluate<{
-        visibleText: string;
-        targets: BrowserTargetFingerprint[];
-      }>(tab, browserInspectScript);
+      const inspected = await this.#evaluate<BrowserDomInspection>(
+        tab,
+        browserInspectScript,
+      );
       this.#assertAgentOperationCurrent(
         sessionId,
         tab,
@@ -537,35 +549,70 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         throw error;
       }
       const targets = new Map<string, BrowserTargetFingerprint>();
-      const projected = inspected.targets.slice(0, 80).map((target) => {
-        const targetId = randomUUID();
-        targets.set(targetId, target);
-        return {
-          targetId,
-          role: target.role,
-          name: target.name,
-          actions: [...target.actions],
-          ...(target.value === undefined ? {} : { value: target.value }),
-          ...(target.checked === undefined ? {} : { checked: target.checked }),
-          ...(target.selected === undefined
-            ? {}
-            : { selected: target.selected }),
-          ...(target.options === undefined
-            ? {}
-            : { options: target.options.map((option) => ({ ...option })) }),
-          ...(target.optionsTruncated === undefined
-            ? {}
-            : { optionsTruncated: target.optionsTruncated }),
-        };
-      });
-      tab.observation = { id: observationId, documentVersion, targets };
+      const projected = inspected.targets
+        .slice(0, MAX_OBSERVATION_CAPTURE_ITEMS)
+        .map((target) => {
+          const targetId = randomUUID();
+          targets.set(targetId, target);
+          return {
+            targetId,
+            role: target.role,
+            name: target.name,
+            actions: [...target.actions],
+            ...(target.value === undefined ? {} : { value: target.value }),
+            ...(target.checked === undefined
+              ? {}
+              : { checked: target.checked }),
+            ...(target.selected === undefined
+              ? {}
+              : { selected: target.selected }),
+            ...(target.options === undefined
+              ? {}
+              : { options: target.options.map((option) => ({ ...option })) }),
+            ...(target.optionsTruncated === undefined
+              ? {}
+              : { optionsTruncated: target.optionsTruncated }),
+          };
+        });
+      tab.observation = {
+        id: observationId,
+        documentVersion,
+        targets,
+        ...(inspected.documentIdentity === undefined
+          ? {}
+          : { documentIdentity: inspected.documentIdentity }),
+      };
       return {
         ...this.#agentSummary(sessionId, tab),
         observationId,
         documentVersion,
         visibleText: inspected.visibleText.slice(0, 8_000),
         screenshot,
-        targets: projected,
+        targets: projected.slice(0, 80),
+        [OBSERVATION_CAPTURE]: {
+          ...browserDomCapture(
+            inspected,
+            projected,
+            `${sessionId}/${sessionIncarnation}/${tab.id}`,
+          ),
+          assertCurrent: () => {
+            this.#assertAgentOperationCurrent(
+              sessionId,
+              tab,
+              navigationGeneration,
+              documentVersion,
+              "observation continuation",
+              renderRevision,
+            );
+            if (
+              tab.observation?.id !== observationId ||
+              this.#sessionIncarnations.get(sessionId) !== sessionIncarnation
+            )
+              throw new Error(
+                "Browser observation capture is stale; inspect again",
+              );
+          },
+        },
       };
     });
   }
@@ -636,8 +683,17 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         tab.documentVersion,
         observationId,
       );
+      if (tab.observation.documentIdentity === undefined)
+        throw new Error(
+          "Browser document identity is unavailable; inspect again",
+        );
+      const expression = browserScrollScript(
+        direction,
+        pixels,
+        tab.observation.documentIdentity,
+      );
       tab.observation = undefined;
-      await this.#evaluate(tab, browserScrollScript(direction, pixels));
+      await this.#evaluate(tab, expression);
       this.#assertAgentOperationCurrent(
         sessionId,
         tab,
@@ -661,11 +717,13 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
   closeSession(sessionId: string): number {
     this.#requireSessionThread(sessionId);
     this.#sessionThreads.delete(sessionId);
+    this.#sessionIncarnations.delete(sessionId);
     return 0;
   }
 
   async close(): Promise<void> {
     this.#sessionThreads.clear();
+    this.#sessionIncarnations.clear();
   }
 
   async shutdown(): Promise<void> {
@@ -817,19 +875,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
   async #evaluate<T>(tab: Tab, expression: string): Promise<T> {
     const debuggerApi = tab.view.webContents.debugger;
     if (!debuggerApi.isAttached()) debuggerApi.attach("1.3");
-    const response = (await debuggerApi.sendCommand("Runtime.evaluate", {
-      expression,
-      awaitPromise: true,
-      returnByValue: true,
-    })) as {
-      result?: { value?: unknown; description?: string };
-      exceptionDetails?: { text?: string };
-    };
-    if (response.exceptionDetails !== undefined)
-      throw new Error(
-        `Browser CDP evaluation failed: ${response.exceptionDetails.text ?? response.result?.description ?? "unknown error"}`,
-      );
-    return response.result?.value as T;
+    return await evaluateBrowserDocument<T>(debuggerApi, expression);
   }
 }
 

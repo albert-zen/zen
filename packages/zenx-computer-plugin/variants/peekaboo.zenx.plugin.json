@@ -1,6 +1,6 @@
 {
   "id": "computer",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Peekaboo 3.x background-first macOS automation with bounded snapshots, explicit permissions, and foreground input only through labeled takeover tools.",
   "provider": {
     "id": "peekaboo-cli",
@@ -43,7 +43,7 @@
   "tools": [
     {
       "name": "computer_inspect",
-      "description": "Inspect at most 32 semantic accessibility controls in one exact app window target without activating it or reading sibling windows. target.windowTitle is required.",
+      "description": "Inspect a bounded first page of at most 32 controls in one exact app window, or follow nextCursor without recapture. Coverage separately reports available pages and native omissions; this is not a complete accessibility tree. baseObservationId requests a diff only of a retained first-page baseline; omit it or set full:true to resync. target.windowTitle is required.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -76,6 +76,18 @@
                 "required": ["bundleId"]
               }
             ]
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Continue the exact immutable captured observation using its returned nextCursor. Does not recapture or renew action references. Omit to inspect afresh."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
           }
         },
         "required": ["target"],
@@ -92,7 +104,7 @@
         "app_targeted",
         "no_global_input"
       ],
-      "maxOutputBytes": 12288
+      "maxOutputBytes": 131072
     },
     {
       "name": "computer_press",
@@ -365,5 +377,5 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "Use Computer to inspect an exact native window before acting, prefer background-safe semantic controls, and use explicitly labeled foreground takeover only when necessary."
+  "mainDocument": "If available, start with computer_list_windows; its query filters windows only. Otherwise use the supplied exact window target. Pass an exact returned target to computer_inspect. Inspect coverage and follow nextCursor with the same target to read the immutable captured controls beyond the first page; native traversal omissions remain explicit and are not recoverable by paging. References express exact-fingerprint presentation continuity, not proven native object identity. Actions always require the latest observationId plus targetId and native revalidation. Pass baseObservationId only when retaining that first-page baseline and applied controlChanges; omit it or set full:true after context compaction/lost context. Apply added/updated/removedFromView and optional order; update every retained control.selector.observationId to observation.actionObservationId before acting. Cursor pages do not replace the first-page diff baseline or renew action authority. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Prefer background-safe semantic controls. This Peekaboo variant does not expose computer_list_windows; use an explicitly supplied target."
 }

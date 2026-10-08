@@ -343,6 +343,7 @@
   重验且在导航、关闭、新观察或动作后失效；它是产品侧瞬时状态，不进入 Zen Core 或 durable journal。
   Browser 在候选截断前排除无动作节点；Computer 各后端共用有界选择，优先保留可用语义动作，再以剩余名额保留文字上下文，返回仍按原观察顺序。
   Browser observations additionally project bounded current non-password control state and native select options; mutations consume the prior observation, and an explicitly requested follow-up observation is a new fail-closed inspect result.
+  Observation presentation retains an owner-scoped, bounded, short-lived capture for explicit cursor reads and optional base-referenced diffs. Stable browser node references identify surviving DOM objects; Computer references express only unique exact-fingerprint presentation continuity, never native object identity or renewed action authority. Every action remains bound to its fresh observation and native revalidation. Cursor pages retain the same immutable capture, disclose native capture omissions separately from available pages, and expire explicitly on mutation, scope change, eviction or provider retirement. Omitting a diff base (including after context compaction) requests a self-contained full bounded view; this adds no durable journal or automatic recovery authority.
 
 - **ZenXUserBrowserAttachmentEpoch** — ZenX user-browser provider 用实际 CDP sessionId、target、逻辑 session owner 与
   attach attempt/incarnation 关联一次瞬时 attachment ownership，并在移除任何映射前把无法证明闭合的生命周期证据

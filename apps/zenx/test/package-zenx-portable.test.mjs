@@ -415,6 +415,22 @@ test("extracts and compiles both fixed macOS Computer helpers into App Resources
   );
   assert.ok(roleActivation >= 0);
   assert.ok(windowResolution > roleActivation);
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /matchingWindows\.contains\(where: \{ CFEqual\(\$0, window\) \}\)/u,
+  );
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /matchingWindows\.count != 1[\s\S]*?target window title is ambiguous/u,
+  );
+  for (const field of [
+    "targetContext",
+    "launchTime",
+    "windowFrame",
+    "windowId",
+  ]) {
+    assert.match(sources.MAC_ACCESSIBILITY_SOURCE, new RegExp(field));
+  }
   for (const field of [
     "visitedCount",
     "visitLimitReached",

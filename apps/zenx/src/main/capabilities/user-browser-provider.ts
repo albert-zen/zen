@@ -15,10 +15,12 @@ import {
   assertBrowserObservation,
   type BrowserScrollDirection,
   browserInspectScript,
+  browserDomCapture,
   redactBrowserUrl,
   resolveBrowserObservedTarget,
   BrowserScreenshotArtifactStore,
   type BrowserInspection,
+  type BrowserDomInspection,
   type BrowserLiveObservationEvent,
   type BrowserLiveObservationListener,
   type BrowserScreenshotArtifact,
@@ -27,6 +29,10 @@ import {
   type BrowserTargetFingerprint,
   type ZenXBrowserBackend,
 } from "./browser-provider.js";
+import {
+  MAX_OBSERVATION_CAPTURE_ITEMS,
+  OBSERVATION_CAPTURE,
+} from "./observation-capture.js";
 
 const USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS = 2_000;
 const USER_BROWSER_SCREENSHOT_TIMEOUT_MS = 10_000;
@@ -166,6 +172,11 @@ export interface UserBrowserCdpClient {
     owner: UserBrowserAttachmentOwner,
     signal?: AbortSignal,
   ): Promise<string>;
+  assertDocumentCurrent?(
+    targetId: string,
+    owner: UserBrowserAttachmentOwner,
+    expectedDocumentIdentity: string,
+  ): void;
   detachTarget(
     targetId: string,
     owner: UserBrowserAttachmentOwner,
@@ -679,6 +690,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
   ): Promise<BrowserInspection> {
     throwIfAborted(signal);
     const { session, tab } = this.#sessionTab(sessionId, tabId);
+    tab.observation = undefined;
     const operation = this.#startOperation(session, tab, async () => {
       let evaluation: { value: unknown; documentIdentity: string };
       try {
@@ -699,13 +711,37 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       if (
         raw === undefined ||
         typeof raw.visibleText !== "string" ||
-        !Array.isArray(raw.targets)
+        !Array.isArray(raw.targets) ||
+        (raw.documentIdentity !== undefined &&
+          !isCaptureIdentity(raw.documentIdentity, 16_384)) ||
+        [raw.itemTotal, raw.textTotal].some(
+          (total) =>
+            total !== undefined &&
+            (typeof total !== "number" ||
+              !Number.isSafeInteger(total) ||
+              total < 0),
+        )
       ) {
         throw new Error(
           "User browser CDP inspection returned an unsupported shape",
         );
       }
-      const fingerprints = raw.targets.map(requireFingerprint).slice(0, 80);
+      const fingerprints = raw.targets
+        .slice(0, MAX_OBSERVATION_CAPTURE_ITEMS)
+        .map(requireFingerprint);
+      const inspected: BrowserDomInspection = {
+        visibleText: raw.visibleText,
+        targets: fingerprints,
+        ...(raw.documentIdentity === undefined
+          ? {}
+          : { documentIdentity: raw.documentIdentity as string }),
+        ...(raw.itemTotal === undefined
+          ? {}
+          : { itemTotal: raw.itemTotal as number }),
+        ...(raw.textTotal === undefined
+          ? {}
+          : { textTotal: raw.textTotal as number }),
+      };
       const targets = new Map<string, BrowserTargetFingerprint>();
       const observationId = randomUUID();
       const screenshotCapture =
@@ -828,7 +864,34 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         documentVersion: tab.documentVersion,
         visibleText: raw.visibleText.slice(0, 8_000),
         screenshot,
-        targets: projected,
+        targets: projected.slice(0, 80),
+        [OBSERVATION_CAPTURE]: {
+          ...browserDomCapture(
+            inspected,
+            projected,
+            JSON.stringify([
+              "user-browser",
+              session.id,
+              session.incarnation,
+              tabId,
+              evaluation.documentIdentity,
+            ]),
+          ),
+          assertCurrent: () => {
+            this.#assertTabCurrent(session, tabId, tab);
+            if (
+              tab.observation?.id !== observationId ||
+              tab.documentIdentity !== evaluation.documentIdentity
+            ) {
+              throw new Error("User browser capture expired; inspect again");
+            }
+            this.#client.assertDocumentCurrent?.(
+              tabId,
+              this.#attachmentOwner(session),
+              evaluation.documentIdentity,
+            );
+          },
+        },
       };
     });
     const result = await raceAbort(operation, signal);
@@ -2190,6 +2253,48 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     return (await this.#executionDocument(targetId, owner, signal)).identity;
   }
 
+  assertDocumentCurrent(
+    targetId: string,
+    owner: UserBrowserAttachmentOwner,
+    expectedDocumentIdentity: string,
+  ): void {
+    const epoch = this.#attachmentClosures.get(targetId);
+    const state = this.#targetDocuments.get(targetId);
+    const sessionId = this.#targetSessions.get(targetId);
+    if (
+      this.#closing ||
+      epoch === undefined ||
+      state === undefined ||
+      sessionId === undefined ||
+      state.frameId.length === 0 ||
+      state.isolatedExecutionContextId === undefined ||
+      state.pendingFrameInvalidations.size > 0 ||
+      [...state.pendingIsolatedContexts].some(
+        ([contextId, frameId]) =>
+          frameId === state.frameId &&
+          contextId !== state.isolatedExecutionContextId,
+      )
+    ) {
+      throw new UserBrowserDocumentChangedBeforeDispatchError();
+    }
+    const fence = {
+      targetId,
+      sessionId,
+      attachmentEpoch: epoch,
+      ...owner,
+      providerRevision: this.#providerRevision,
+      documentRevision: state.revision,
+      frameId: state.frameId,
+      loaderId: state.loaderId,
+      url: state.url,
+      executionContextId: state.isolatedExecutionContextId,
+    };
+    this.#assertDocumentFence(fence, true);
+    if (this.#documentFenceIdentity(fence) !== expectedDocumentIdentity) {
+      throw new UserBrowserDocumentChangedBeforeDispatchError();
+    }
+  }
+
   async observeScreencast(
     targetId: string,
     owner: UserBrowserAttachmentOwner,
@@ -2723,24 +2828,34 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       settledContextState.invalidExecutionContextIds.clear();
     }
     this.#assertDocumentFence(fence, true);
-    const identity = JSON.stringify({
-      targetId,
-      sessionId,
+    return {
+      identity: this.#documentFenceIdentity({
+        ...fence,
+        executionContextId: world.executionContextId,
+      }),
+      ...fence,
+      executionContextId: world.executionContextId,
+    };
+  }
+
+  #documentFenceIdentity(
+    fence: ZenXUserBrowserDocumentExecutionFence & {
+      executionContextId: number;
+    },
+  ): string {
+    return JSON.stringify({
+      targetId: fence.targetId,
+      sessionId: fence.sessionId,
       attachAttempt: fence.attachmentEpoch.attachAttempt,
       logicalSessionId: fence.logicalSessionId,
       logicalSessionIncarnation: fence.logicalSessionIncarnation,
       providerRevision: fence.providerRevision,
       revision: fence.documentRevision,
-      frameId: frame.id,
-      loaderId: frame.loaderId,
-      url: frame.url,
-      executionContextId: world.executionContextId,
+      frameId: fence.frameId,
+      loaderId: fence.loaderId,
+      url: fence.url,
+      executionContextId: fence.executionContextId,
     });
-    return {
-      identity,
-      ...fence,
-      executionContextId: world.executionContextId,
-    };
   }
 
   async #documentBarrier(
@@ -3968,6 +4083,10 @@ function requireFingerprint(value: unknown): BrowserTargetFingerprint {
       (action) =>
         action === "click" || action === "type" || action === "select",
     ) ||
+    (target.documentIdentity !== undefined &&
+      !isCaptureIdentity(target.documentIdentity, 16_384)) ||
+    (target.nodeIdentity !== undefined &&
+      !isCaptureIdentity(target.nodeIdentity, 256)) ||
     (target.value !== undefined && typeof target.value !== "string") ||
     (target.checked !== undefined && typeof target.checked !== "boolean") ||
     (target.selected !== undefined && typeof target.selected !== "boolean") ||
@@ -3990,6 +4109,12 @@ function requireFingerprint(value: unknown): BrowserTargetFingerprint {
     throw new Error("User browser CDP inspection target is invalid");
   }
   return {
+    ...(target.documentIdentity === undefined
+      ? {}
+      : { documentIdentity: target.documentIdentity as string }),
+    ...(target.nodeIdentity === undefined
+      ? {}
+      : { nodeIdentity: target.nodeIdentity as string }),
     selector: target.selector as string,
     tag: target.tag as string,
     role: target.role as string,
@@ -4020,6 +4145,12 @@ function requireFingerprint(value: unknown): BrowserTargetFingerprint {
           }),
         }),
   };
+}
+
+function isCaptureIdentity(value: unknown, maxLength: number): value is string {
+  return (
+    typeof value === "string" && value.length > 0 && value.length <= maxLength
+  );
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
