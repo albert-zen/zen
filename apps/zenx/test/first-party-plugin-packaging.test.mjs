@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 
 import {
   firstPartyPluginStagingPrefix,
-  packZenXFirstPartyPlugins,
+  FIRST_PARTY_PLUGINS,
 } from "../scripts/pack-first-party-plugins.mjs";
 import { firstPartyProviderTarball } from "../src/main/first-party-profile-loader.ts";
 import { browserCapabilityManifest } from "../src/main/capabilities/browser-provider.ts";
@@ -22,6 +22,12 @@ import {
 
 const run = promisify(execFile);
 const repositoryRoot = path.resolve(import.meta.dirname, "..", "..", "..");
+const preparedPluginsDirectory = path.resolve(
+  import.meta.dirname,
+  "..",
+  "resources",
+  "plugins",
+);
 
 const expected = [
   ["@zenx/fleet-plugin", "zenx-fleet-plugin-1.0.0.tgz"],
@@ -165,14 +171,23 @@ test("first-party plugin staging shares the destination volume", () => {
   );
 });
 
-test("all first-party plugins validate and pack as self-contained ordinary npm tarballs", async () => {
+test("all prepared first-party plugins are self-contained ordinary npm tarballs", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-first-party-packaging-"),
   );
   try {
-    const packed = await packZenXFirstPartyPlugins({
-      outputDirectory: directory,
+    // npm test/check has just run the real packer for every variant. Inspect
+    // those same artifacts instead of rebuilding and packing all packages twice.
+    // The clean-source test below still covers standalone packer preparation.
+    await cp(preparedPluginsDirectory, path.join(directory, "plugins"), {
+      recursive: true,
+    }).catch((cause) => {
+      throw new Error(
+        "First-party test artifacts are missing; run npm run prepare:first-party-plugins --workspace @zen/zenx",
+        { cause },
+      );
     });
+    const packed = FIRST_PARTY_PLUGINS;
     assert.deepEqual(
       packed.map(({ packageName, tarball }) => [
         packageName,
