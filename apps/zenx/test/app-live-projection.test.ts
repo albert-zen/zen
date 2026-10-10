@@ -22,6 +22,7 @@ import type {
   Thread,
 } from "../src/protocol-client/index.js";
 import { App } from "../src/renderer/src/App.js";
+import { RoomsPage } from "../src/renderer/src/bundled-automation-ui.js";
 import { pluginUiRegistry } from "../src/renderer/src/PluginProductPage.js";
 import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
@@ -766,8 +767,187 @@ test("plugin query intent stays on its owned page and preserves the sidebar sele
   }
 });
 
+test("Room title and real actions share App's header only on the exact Room route", async () => {
+  const roomRoute = "/plugins/zenx-rooms/rooms";
+  const otherRoute = "/plugins/zenx-rooms/rooms-preview";
+  const rooms = ["a /?中", "b"].map((id, index) => ({
+    id,
+    name: `Team ${index + 1}`,
+    members: [],
+    messages: [],
+    createdAt: 0,
+  }));
+  const calls: Array<{ pluginId: string; commandId: string }> = [];
+  let navigate: ((route: string) => void) | undefined;
+  const dispose = pluginUiRegistry.registerTrusted("room-header-test-ui", {
+    overview: ({ sdk }) => {
+      navigate = sdk.navigation.navigate;
+      return createElement(RoomsPage, { sdk });
+    },
+  });
+  const pluginSnapshot = {
+    plugins: [
+      {
+        id: "zenx-rooms",
+        displayName: "Rooms",
+        enabled: true,
+        available: true,
+        lifecycle: "enabled",
+        contributionCount: 1,
+        version: "1",
+        source: "bundled",
+      },
+    ],
+    pages: [
+      {
+        key: "zenx-rooms:rooms",
+        pluginId: "zenx-rooms",
+        id: "rooms",
+        title: "Rooms",
+        route: roomRoute,
+        surfaceId: "overview",
+      },
+    ],
+    subroutes: [
+      {
+        key: "zenx-rooms:preview",
+        pluginId: "zenx-rooms",
+        id: "preview",
+        title: "Preview",
+        pageId: "rooms",
+        route: otherRoute,
+        surfaceId: "overview",
+      },
+    ],
+    sidebar: [],
+    bundles: [
+      {
+        key: "zenx-rooms:main",
+        pluginId: "zenx-rooms",
+        id: "main",
+        apiVersion: 1,
+        kind: "trusted",
+        entry: "room-header-test-ui",
+      },
+    ],
+    surfaces: [
+      {
+        key: "zenx-rooms:overview",
+        pluginId: "zenx-rooms",
+        id: "overview",
+        bundleId: "main",
+        exportName: "overview",
+      },
+    ],
+    settings: [],
+    panels: [],
+    commands: [],
+    menus: [],
+  } as ZenXPluginSnapshot;
+  const harness = await mountApp({
+    pluginSnapshot,
+    request: async () => {
+      throw Error("No Thread request expected");
+    },
+    executeCommand: async (pluginId, commandId) => {
+      calls.push({ pluginId, commandId });
+      if (pluginId === "zenx-rooms" && commandId === "list") return { rooms };
+      throw Error(`Unexpected ${pluginId}/${commandId}`);
+    },
+  });
+  let lastHost: HTMLElement | null = null;
+  try {
+    const row = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Open room Team 1"]',
+      ),
+    );
+    await act(async () => row.click());
+    const host = await waitFor(() =>
+      document.querySelector<HTMLElement>(".room-title-actions-host"),
+    );
+    await waitFor(() => host.querySelectorAll("button").length === 3);
+    const header = host.closest(".workspace-header")!;
+    assert.equal(header.querySelector("h1")!.textContent, "Team 1");
+    assert.equal(document.querySelectorAll(".workspace-header").length, 1);
+    assert.equal(document.querySelector(".rooms-chat-header"), null);
+    assert.equal(document.querySelector(".rooms-chat-status"), null);
+    assert.equal(document.querySelector(".rooms-chat-list"), null);
+    assert.equal(
+      host.querySelector<HTMLElement>("#thread-browser-toggle")!.dataset.roomId,
+      rooms[0]!.id,
+    );
+    assert.deepEqual(
+      [...host.querySelectorAll("button")].map((button) =>
+        button.getAttribute("aria-label"),
+      ),
+      [
+        "Rename conversation",
+        "Open conversation workspace",
+        "Conversation settings",
+      ],
+    );
+
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="Open room Team 2"]')!
+        .click(),
+    );
+    assert.equal(
+      document.querySelector(".workspace-header h1")!.textContent,
+      "Team 2",
+    );
+    assert.equal(
+      document.querySelector<HTMLElement>(
+        ".room-title-actions-host #thread-browser-toggle",
+      )!.dataset.roomId,
+      "b",
+    );
+    assert.equal(document.querySelectorAll(".room-title-actions").length, 1);
+
+    for (const route of [
+      `${otherRoute}?roomId=b`,
+      roomRoute,
+      `${roomRoute}?create=room`,
+    ]) {
+      await act(async () => navigate!(route));
+      assert.equal(
+        document.querySelector(".room-title-actions-host"),
+        null,
+        route,
+      );
+      assert.equal(document.querySelector(".room-title-actions"), null, route);
+      assert.equal(host.childElementCount, 0, "retired host is empty");
+    }
+    await act(async () => navigate!(`${roomRoute}?roomId=b`));
+    lastHost = await waitFor(() =>
+      document.querySelector<HTMLElement>(".room-title-actions-host"),
+    );
+    await waitFor(() => lastHost!.querySelectorAll("button").length === 3);
+    assert.equal(
+      document.querySelector(".workspace-header h1")!.textContent,
+      "Team 2",
+    );
+    assert.ok(
+      calls.length > 0 &&
+        calls.every(
+          (call) => call.pluginId === "zenx-rooms" && call.commandId === "list",
+        ),
+    );
+  } finally {
+    await harness.unmount();
+    assert.equal(lastHost?.childElementCount ?? 0, 0);
+    dispose();
+  }
+});
+
 interface MountOptions {
   pluginSnapshot?: ZenXPluginSnapshot;
+  executeCommand?(
+    pluginId: string,
+    commandId: string,
+    input?: unknown,
+  ): Promise<unknown>;
   request(method: string, params?: unknown): Promise<unknown>;
   attachments?(threadId: string): Promise<ZenXThreadAttachmentProjection>;
   usage?(threadId: string): Promise<ModelUsageProjection>;
@@ -835,7 +1015,7 @@ async function mountApp(options: MountOptions) {
         options.onNotification?.(listener) ?? (() => undefined),
     },
     threads: {
-      list: async ({ archived }: { archived: boolean }) =>
+      list: async ({ archived = false }: { archived?: boolean } = {}) =>
         options.threads === undefined
           ? archived
             ? []
@@ -910,6 +1090,15 @@ async function mountApp(options: MountOptions) {
       onChange: () => () => undefined,
     },
     plugins: {
+      executeCommand: async (
+        pluginId: string,
+        commandId: string,
+        input?: unknown,
+      ) => {
+        if (options.executeCommand)
+          return options.executeCommand(pluginId, commandId, input);
+        throw Error(`Unexpected plugin command: ${pluginId}/${commandId}`);
+      },
       get: async () =>
         options.pluginSnapshot ?? {
           plugins: [],

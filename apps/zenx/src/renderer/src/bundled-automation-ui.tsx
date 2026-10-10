@@ -22,8 +22,13 @@ import {
   handleComposerSuggestionKey,
 } from "./ComposerSuggestions.js";
 import { useRoomComposerSelector } from "./use-room-composer-selector.js";
+import { readRoomHistory, type RoomHistoryPage } from "./room-history.js";
 import { PluginRequirementsPreview } from "./PluginRequirementsPreview.js";
 import { PAW_PLUGIN_REQUIREMENTS } from "../../assistant-preset-requirements.js";
+import { RoomMessageSource, roomSenderName } from "./RoomMessageSource.js";
+import { RoomReplySetupNotice } from "./RoomReplySetupNotice.js";
+import { RoomMessageActions } from "./RoomMessageActions.js";
+import { RoomHeaderActions } from "./room-header.js";
 
 import type {
   TriggerKind,
@@ -1596,6 +1601,11 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     >
   >({});
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const olderRequest = useRef<{ roomId: string } | null>(null);
+  const refreshAfterOlder = useRef(false);
+  const [historyErrors, setHistoryErrors] = useState<Record<string, string>>(
+    {},
+  );
   const [roomErrors, setRoomErrors] = useState<Record<string, string>>({});
   const [pendingByRoom, setPendingByRoom] = useState<
     Record<string, RoomPendingSend>
@@ -1714,9 +1724,40 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     assistantSetupSession,
   ]);
   const feed = useRef<HTMLDivElement>(null);
-  const lastMessage = useRef<string | null>(null);
   const lastRoom = useRef<string | null>(null);
   const stickToBottom = useRef(true);
+  const lastScrollTop = useRef(0);
+  const feedAnchor = useRef<{
+    roomId: string;
+    messageId: string;
+    offset: number;
+  } | null>(null);
+  const preserveFeedAnchor = (roomId: string) => {
+    const element = feed.current;
+    if (!element || element.dataset.roomId !== roomId) return;
+    const top = element.getBoundingClientRect().top;
+    const message = Array.from(
+      element.querySelectorAll<HTMLElement>("[data-room-message-id]"),
+    ).find((entry) => entry.getBoundingClientRect().bottom > top);
+    if (message)
+      feedAnchor.current = {
+        roomId,
+        messageId: message.dataset.roomMessageId!,
+        offset: message.getBoundingClientRect().top - top,
+      };
+  };
+  useLayoutEffect(() => {
+    olderRequest.current = null;
+    refreshAfterOlder.current = false;
+    feedAnchor.current = null;
+    setLoadingOlder(false);
+    return () => {
+      olderRequest.current = null;
+      refreshAfterOlder.current = false;
+      feedAnchor.current = null;
+      refreshSequence.current += 1;
+    };
+  }, [selected, sdk.context?.route]);
   const setRoomPending = (roomId: string, value: RoomPendingSend | null) => {
     const next = { ...pendingRef.current };
     if (value === null) delete next[roomId];
@@ -1763,7 +1804,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     delete intentRevisions.current[entry.id];
   };
   const refresh = async () => {
+    if (olderRequest.current?.roomId === selectedRef.current) {
+      refreshAfterOlder.current = true;
+      return;
+    }
     const sequence = ++refreshSequence.current;
+    const epoch = viewEpoch.current;
     const next: RoomListResult = { rooms: [] };
     let cursor: number | null = 0;
     while (cursor !== null && next.rooms.length < 128) {
@@ -1781,43 +1827,33 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       selectedRef.current = target?.id ?? null;
     if (target?.messageCount !== undefined) {
       const cached = historyCache.current[target.id];
-      const desired = Math.min(
-        target.messageCount,
-        Math.max(
-          4,
-          (cached?.messages.length ?? 0) +
-            Math.max(
-              0,
-              target.messageCount - (cached?.count ?? target.messageCount),
-            ),
-        ),
+      const page = await readRoomHistory(
+        async (cursor) =>
+          (await sdk.commands.execute("messages", {
+            roomId: target.id,
+            cursor,
+          })) as RoomHistoryPage,
+        {
+          oldestMessageId: cached?.messages[0]?.id,
+          isCurrent: () =>
+            sequence === refreshSequence.current &&
+            epoch === viewEpoch.current &&
+            selectedRef.current === target.id,
+          invalidCursorMessage: i18n.t("panels:roomHistoryCursorDidNotAdvance"),
+          changedHistoryMessage: i18n.t("panels:roomHistoryChangedRetry"),
+        },
       );
-      let cursor: number | null = 0;
-      let messages: ZenXRoom["messages"] = [];
-      do {
-        const page = (await sdk.commands.execute("messages", {
-          roomId: target.id,
-          cursor,
-        })) as { messages: ZenXRoom["messages"]; nextCursor: number | null };
-        if (
-          sequence !== refreshSequence.current ||
-          (selectedRef.current !== null && selectedRef.current !== target.id)
-        )
-          return;
-        messages = [...page.messages, ...messages];
-        if (page.nextCursor !== null && page.nextCursor <= cursor)
-          throw new Error(i18n.t("panels:roomHistoryCursorDidNotAdvance"));
-        cursor = page.nextCursor;
-      } while (cursor !== null && messages.length < desired);
+      if (!page) return;
       historyCache.current[target.id] = {
-        messages,
+        ...page,
         count: target.messageCount,
-        nextCursor: cursor,
       };
-      target.messages = messages;
-      target.nextCursor = cursor;
+      target.messages = page.messages;
+      target.nextCursor = page.nextCursor;
     }
-    if (sequence !== refreshSequence.current) return;
+    if (sequence !== refreshSequence.current || epoch !== viewEpoch.current)
+      return;
+    if (target && !stickToBottom.current) preserveFeedAnchor(target.id);
     setData({ ...next });
     setSelected((current) =>
       primaryNavigation ||
@@ -1987,17 +2023,28 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           ? "saved · reviewed"
           : "saved"
         : "delivery unconfirmed";
-  const tail = room?.messages.at(-1)?.id ?? null;
-  useEffect(() => {
-    if (
-      selected !== lastRoom.current ||
-      (tail !== lastMessage.current && stickToBottom.current)
-    ) {
-      if (feed.current) feed.current.scrollTop = feed.current.scrollHeight;
+  useLayoutEffect(() => {
+    const element = feed.current;
+    const anchor = feedAnchor.current;
+    feedAnchor.current = null;
+    if (element && selected !== lastRoom.current) {
+      stickToBottom.current = true;
+      element.scrollTop = element.scrollHeight;
+    } else if (element && anchor?.roomId === selected) {
+      const message = Array.from(
+        element.querySelectorAll<HTMLElement>("[data-room-message-id]"),
+      ).find((entry) => entry.dataset.roomMessageId === anchor.messageId);
+      if (message)
+        element.scrollTop +=
+          message.getBoundingClientRect().top -
+          element.getBoundingClientRect().top -
+          anchor.offset;
+    } else if (element && stickToBottom.current) {
+      element.scrollTop = element.scrollHeight;
     }
+    lastScrollTop.current = element?.scrollTop ?? 0;
     lastRoom.current = selected;
-    lastMessage.current = tail;
-  }, [selected, tail]);
+  });
   const run = async (command: string, input: unknown) => {
     if (actionBusy.current) return false;
     const epoch = viewEpoch.current;
@@ -2050,61 +2097,81 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       setBusy(false);
     }
   };
-  const loadEarlier = async (roomId: string, cursor: number) => {
-    if (loadingOlder) return;
+  const loadEarlier = async (roomId: string) => {
+    const cached = historyCache.current[roomId];
+    if (
+      olderRequest.current ||
+      selectedRef.current !== roomId ||
+      !cached ||
+      cached.nextCursor === null
+    )
+      return;
+    const request = { roomId };
+    const epoch = viewEpoch.current;
+    olderRequest.current = request;
+    const current = () =>
+      olderRequest.current === request &&
+      selectedRef.current === roomId &&
+      viewEpoch.current === epoch;
+    stickToBottom.current = false;
+    preserveFeedAnchor(roomId);
     setLoadingOlder(true);
+    setHistoryErrors((errors) => ({ ...errors, [roomId]: "" }));
     ++refreshSequence.current;
     try {
-      let offset: number | null = cursor;
-      let cache = historyCache.current[roomId];
-      for (let n = 0; n < 4 && offset !== null; n++) {
-        const page = (await sdk.commands.execute("messages", {
-          roomId,
-          cursor: offset,
-        })) as { messages: ZenXRoom["messages"]; nextCursor: number | null };
-        const known = new Set(
-          cache?.messages.map((message) => message.id) ?? [],
-        );
-        cache = {
-          messages: [
-            ...page.messages.filter((message) => !known.has(message.id)),
-            ...(cache?.messages ?? []),
-          ].slice(-256),
-          count: cache?.count ?? 0,
-          nextCursor: page.nextCursor,
-        };
-        offset = page.nextCursor;
-      }
-      if (cache) {
-        historyCache.current[roomId] = cache;
-        const height = feed.current?.scrollHeight ?? 0;
-        setData((current) => ({
-          ...current,
-          rooms: current.rooms.map((entry) =>
-            entry.id === roomId
-              ? {
-                  ...entry,
-                  messages: cache!.messages,
-                  nextCursor: cache!.nextCursor,
-                }
-              : entry,
-          ),
-        }));
-        requestAnimationFrame(() => {
-          if (feed.current)
-            feed.current.scrollTop += feed.current.scrollHeight - height;
-        });
-      }
+      const page = await readRoomHistory(
+        async (cursor) =>
+          (await sdk.commands.execute("messages", {
+            roomId,
+            cursor,
+          })) as RoomHistoryPage,
+        {
+          oldestMessageId: cached.messages[0]?.id,
+          earlierMessages: 16,
+          isCurrent: current,
+          invalidCursorMessage: i18n.t("panels:roomHistoryCursorDidNotAdvance"),
+          changedHistoryMessage: i18n.t("panels:roomHistoryChangedRetry"),
+        },
+      );
+      if (!page || !current()) return;
+      historyCache.current[roomId] = { ...page, count: cached.count };
+      preserveFeedAnchor(roomId);
+      setData((data) => ({
+        ...data,
+        rooms: data.rooms.map((entry) =>
+          entry.id === roomId ? { ...entry, ...page } : entry,
+        ),
+      }));
     } catch (reason) {
-      setRoomErrors((current) => ({
-        ...current,
+      if (!current()) return;
+      preserveFeedAnchor(roomId);
+      setHistoryErrors((errors) => ({
+        ...errors,
         [roomId]: i18n.t("panels:olderMessagesUnavailable", {
           error: describeError(reason),
         }),
       }));
     } finally {
-      setLoadingOlder(false);
+      if (current()) {
+        olderRequest.current = null;
+        setLoadingOlder(false);
+        if (refreshAfterOlder.current) {
+          refreshAfterOlder.current = false;
+          void refresh().catch((reason: unknown) =>
+            setError(describeError(reason)),
+          );
+        }
+      }
     }
+  };
+  const loadEarlierOnIntent = () => {
+    if (
+      room &&
+      feed.current &&
+      feed.current.scrollTop <= 120 &&
+      !historyErrors[room.id]
+    )
+      void loadEarlier(room.id);
   };
   const reacting = useRef(new Set<string>());
   const reactToMessage = async (
@@ -2350,6 +2417,58 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       }));
     }
   };
+  const roomActions = room ? (
+    <>
+      <button
+        type="button"
+        aria-label={i18n.t("panels:renameConversation")}
+        title={i18n.t("panels:renameConversation")}
+        onClick={(event) => {
+          dialogInvoker.current = event.currentTarget;
+          setName(room.name);
+          setPanel("rename");
+        }}
+      >
+        <Icon name="compose" size={16} />
+      </button>
+      {primaryNavigation ? (
+        <button
+          id="thread-browser-toggle"
+          data-room-id={room.id}
+          type="button"
+          aria-label={i18n.t("panels:openConversationWorkspace")}
+          title={i18n.t("panels:openConversationWorkspace")}
+          onClick={() =>
+            sdk.navigation.navigate(
+              `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: room.id, panel: "open" })}`,
+            )
+          }
+        >
+          <Icon name="panel-right" size={16} />
+        </button>
+      ) : null}
+      <button
+        type="button"
+        aria-label={i18n.t("panels:conversationSettings")}
+        title={
+          room.responders?.some((entry) => !entry.configured)
+            ? `${i18n.t("panels:conversationSettings")} · ${i18n.t("panels:roomRepliesUnavailableCount", { count: room.responders.filter((entry) => !entry.configured).length })}`
+            : i18n.t("panels:conversationSettings")
+        }
+        onClick={(event) => {
+          dialogInvoker.current = event.currentTarget;
+          setName(room.name);
+          setPanel("manage");
+        }}
+      >
+        <Icon name="settings" size={16} />
+        {!room.assistant &&
+        room.responders?.some((entry) => !entry.configured) ? (
+          <span className="room-header-status-dot" aria-hidden="true" />
+        ) : null}
+      </button>
+    </>
+  ) : null;
   return (
     <div
       className={`rooms-chat${primaryNavigation ? " rooms-chat-primary" : ""}`}
@@ -2424,64 +2543,31 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           </div>
         ) : (
           <>
-            <header className="rooms-chat-header">
-              <div>
-                {!primaryNavigation ? (
-                  <h2>{room.assistant ? room.name : `#${room.name}`}</h2>
-                ) : null}
-                {room.assistant && !room.assistantRepliesEnabled ? (
-                  <p className="room-assistant-state" role="status">
-                    {i18n.t("panels:repliesPaused")}
-                  </p>
-                ) : null}
-              </div>
-              <button
-                type="button"
-                aria-label={i18n.t("panels:renameConversation")}
-                title={i18n.t("panels:renameConversation")}
-                onClick={(event) => {
-                  dialogInvoker.current = event.currentTarget;
-                  setName(room.name);
-                  setPanel("rename");
-                }}
-              >
-                <Icon name="compose" size={16} />
-              </button>
-              {primaryNavigation ? (
-                <button
-                  id="thread-browser-toggle"
-                  data-room-id={room.id}
-                  type="button"
-                  aria-label={i18n.t("panels:openConversationWorkspace")}
-                  title={i18n.t("panels:openConversationWorkspace")}
-                  onClick={() =>
-                    sdk.navigation.navigate(
-                      `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: room.id, panel: "open" })}`,
-                    )
-                  }
-                >
-                  <Icon name="panel-right" size={16} />
-                </button>
-              ) : null}
-              <button
-                type="button"
-                aria-label={i18n.t("panels:conversationSettings")}
-                title={i18n.t("panels:conversationSettings")}
-                onClick={(event) => {
-                  dialogInvoker.current = event.currentTarget;
-                  setName(room.name);
-                  setPanel("manage");
-                }}
-              >
-                <Icon name="settings" size={16} />
-              </button>
-            </header>
+            <RoomHeaderActions
+              roomId={room.id}
+              primary={primaryNavigation}
+              fallback={
+                <header className="rooms-chat-header">
+                  <div className="room-toolbar-summary">
+                    {!primaryNavigation ? (
+                      <h2>{room.assistant ? room.name : `#${room.name}`}</h2>
+                    ) : null}
+                    {room.assistant && !room.assistantRepliesEnabled ? (
+                      <p className="room-assistant-state" role="status">
+                        {i18n.t("panels:repliesPaused")}
+                      </p>
+                    ) : null}
+                  </div>
+                  {roomActions}
+                </header>
+              }
+            >
+              {roomActions}
+            </RoomHeaderActions>
             {error ||
             roomErrors[room.id] ||
             feedback[room.id] ||
             pending ||
-            (!room.assistant &&
-              room.responders?.some((entry) => !entry.configured)) ||
             (room.operations ?? []).some(
               (entry) => entry.id !== pendingByRoom[room.id]?.id,
             ) ? (
@@ -2493,45 +2579,6 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 {error || roomErrors[room.id] ? (
                   <p role="alert" className="form-error">
                     {roomErrors[room.id] || error}
-                  </p>
-                ) : null}
-                {!pending &&
-                (room.operations ?? []).length === 0 &&
-                !room.assistant &&
-                room.responders?.some((entry) => !entry.configured) ? (
-                  <p className="room-setup-note">
-                    {i18n.t("panels:automaticRepliesAreNotSetUpFor")}{" "}
-                    {room.responders
-                      .filter((entry) => !entry.configured)
-                      .map((entry) => `@${entry.name}`)
-                      .join(", ")}
-                    .{" "}
-                    {room.members
-                      .filter((member) =>
-                        room.responders?.some(
-                          (entry) =>
-                            entry.name === member.name && !entry.configured,
-                        ),
-                      )
-                      .map((member) => (
-                        <button
-                          key={member.threadId}
-                          type="button"
-                          onClick={() =>
-                            sdk.navigation.navigate(
-                              roomReplySetupRoute(
-                                room.id,
-                                member.name,
-                                member.threadId,
-                              ),
-                            )
-                          }
-                        >
-                          {i18n.t("panels:setupMemberReplies", {
-                            member: member.name,
-                          })}
-                        </button>
-                      ))}
                   </p>
                 ) : null}
                 {feedback[room.id] ? (
@@ -2657,26 +2704,63 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             <div
               className="rooms-chat-feed"
               ref={feed}
+              data-room-id={room.id}
               role="log"
+              tabIndex={0}
               aria-label={`${room.name} messages`}
               onScroll={(event) => {
                 const target = event.currentTarget;
+                const upward = target.scrollTop < lastScrollTop.current;
+                lastScrollTop.current = target.scrollTop;
                 stickToBottom.current =
+                  !upward &&
                   target.scrollHeight - target.scrollTop - target.clientHeight <
-                  80;
+                    80;
+                if (upward) loadEarlierOnIntent();
+              }}
+              onWheel={(event) => {
+                if (event.deltaY < 0 && event.currentTarget.scrollTop === 0)
+                  loadEarlierOnIntent();
+              }}
+              onKeyDown={(event) => {
+                if (
+                  event.target === event.currentTarget &&
+                  ["ArrowUp", "PageUp", "Home"].includes(event.key)
+                )
+                  loadEarlierOnIntent();
               }}
             >
-              {room.nextCursor !== null && room.nextCursor !== undefined ? (
-                <button
-                  type="button"
-                  className="room-load-earlier"
-                  disabled={loadingOlder}
-                  onClick={() => void loadEarlier(room.id, room.nextCursor!)}
-                >
-                  {loadingOlder
-                    ? i18n.t("panels:loading")
-                    : i18n.t("panels:loadEarlierMessages")}
-                </button>
+              {room.nextCursor !== undefined && room.messages.length > 0 ? (
+                <div className="room-history-edge">
+                  {historyErrors[room.id] ? (
+                    <span className="room-history-error" role="alert">
+                      {historyErrors[room.id]}
+                    </span>
+                  ) : null}
+                  {room.nextCursor !== null ? (
+                    <button
+                      type="button"
+                      className="room-load-earlier"
+                      disabled={loadingOlder}
+                      aria-label={
+                        historyErrors[room.id]
+                          ? i18n.t("panels:retryEarlierMessages")
+                          : i18n.t("panels:loadEarlierMessages")
+                      }
+                      onClick={() => void loadEarlier(room.id)}
+                    >
+                      {loadingOlder
+                        ? i18n.t("panels:loading")
+                        : historyErrors[room.id]
+                          ? i18n.t("panels:retryEarlierMessages")
+                          : i18n.t("panels:scrollForEarlierMessages")}
+                    </button>
+                  ) : (
+                    <span role="status">
+                      {i18n.t("panels:earliestRetainedMessages")}
+                    </span>
+                  )}
+                </div>
               ) : null}
               {room.messages.length === 0 ? (
                 <div className="rooms-chat-empty">
@@ -2692,181 +2776,120 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   </p>
                 </div>
               ) : null}
-              {room.messages.map((message) => (
-                <article
-                  className="room-message"
-                  data-kind={message.kind}
-                  key={message.id}
-                >
-                  <header>
-                    {message.author === roomRoleLabel(message.kind) ? null : (
-                      <span
-                        className={`room-role room-role-${message.kind}`}
-                        aria-label={i18n.t("panels:messageRole", {
-                          role: roomRoleLabel(message.kind),
+              {room.messages.map((message) => {
+                const senderName = roomSenderName(
+                  message,
+                  room.members,
+                  threads,
+                );
+                const quotedMessage = message.replyTo
+                  ? room.messages.find(
+                      (entry) => entry.id === message.replyTo!.messageId,
+                    )
+                  : undefined;
+                const quoteAuthor = quotedMessage
+                  ? roomSenderName(quotedMessage, room.members, threads)
+                  : message.replyTo?.author === "Agent"
+                    ? i18n.t("panels:roomUnknownSender")
+                    : message.replyTo?.author;
+                return (
+                  <article
+                    className="room-message"
+                    data-kind={message.kind}
+                    data-room-message-id={message.id}
+                    key={message.id}
+                  >
+                    <header>
+                      <RoomMessageSource
+                        message={message}
+                        members={room.members}
+                        rooms={data.rooms}
+                        threads={threads}
+                        navigate={(route) => sdk.navigation.navigate(route)}
+                      />
+                      <time
+                        dateTime={new Date(message.createdAt).toISOString()}
+                        title={new Date(message.createdAt).toLocaleString(
+                          i18n.resolvedLanguage,
+                        )}
+                      >
+                        {new Date(message.createdAt).toLocaleTimeString(
+                          i18n.resolvedLanguage,
+                          {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          },
+                        )}
+                      </time>
+                    </header>
+                    {message.replyTo ? (
+                      <div
+                        className="room-message-quote"
+                        aria-label={i18n.t("panels:replyToAuthor", {
+                          name: quoteAuthor,
                         })}
                       >
-                        {roomRoleLabel(message.kind)}
-                      </span>
-                    )}
-                    <strong>{message.author}</strong>
-                    <time
-                      dateTime={new Date(message.createdAt).toISOString()}
-                      title={new Date(message.createdAt).toLocaleString(
-                        i18n.resolvedLanguage,
-                      )}
-                    >
-                      {new Date(message.createdAt).toLocaleTimeString(
-                        i18n.resolvedLanguage,
-                        {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        },
-                      )}
-                    </time>
-                  </header>
-                  {message.replyTo ? (
-                    <div
-                      className="room-message-quote"
-                      aria-label={i18n.t("panels:replyToAuthor", {
-                        name: message.replyTo.author,
-                      })}
-                    >
-                      <strong>{message.replyTo.author}</strong>
-                      <p>{message.replyTo.text}</p>
-                    </div>
-                  ) : null}
-                  <Markdown text={message.text} />
-                  <div className="room-message-actions">
-                    <button
-                      type="button"
-                      disabled={Boolean(pending) || sendingRooms[room.id]}
-                      onClick={() => {
+                        <strong>{quoteAuthor}</strong>
+                        <p>{message.replyTo.text}</p>
+                      </div>
+                    ) : null}
+                    <Markdown text={message.text} />
+                    <RoomMessageActions
+                      message={message}
+                      disabled={
+                        Boolean(pending) || Boolean(sendingRooms[room.id])
+                      }
+                      operationId={deliveries[message.id]?.operationId}
+                      onReply={() => {
                         revisions.current[room.id] =
                           (revisions.current[room.id] ?? 0) + 1;
                         setReplies((current) => ({
                           ...current,
                           [room.id]: {
                             messageId: message.id,
-                            author: message.author,
+                            author: senderName,
                             text: message.text,
                           },
                         }));
                         composer.current?.focus();
                       }}
-                    >
-                      {i18n.t("panels:reply")}
-                    </button>
-                    <details>
-                      <summary>{i18n.t("panels:react")}</summary>
-                      <div
-                        className="room-reaction-options"
-                        aria-label={i18n.t("panels:chooseReaction")}
+                      onReact={(emoji) =>
+                        reactToMessage(room.id, message.id, emoji)
+                      }
+                    />
+                    {message.kind === "human" &&
+                    (deliveries[message.id]?.receipt === "delivered" ||
+                      deliveries[message.id]?.state === "saved" ||
+                      deliveries[message.id]?.state === "unknown") ? (
+                      <small
+                        className="room-delivery"
+                        title={
+                          deliveries[message.id]?.readers
+                            ?.map((reader) =>
+                              i18n.t("panels:roomReplyStatus", {
+                                name: reader.name,
+                                status:
+                                  reader.state === "read"
+                                    ? i18n.t("panels:read")
+                                    : reader.state === "unavailable"
+                                      ? i18n.t("panels:readStatusUnavailable")
+                                      : i18n.t("panels:readNotConfirmed"),
+                              }),
+                            )
+                            .join(" · ") || i18n.t("panels:readNotConfirmed")
+                        }
                       >
-                        {["👍", "❤️", "🎉", "👀", "✅", "🤔"].map((emoji) => (
-                          <button
-                            key={emoji}
-                            type="button"
-                            aria-label={i18n.t("panels:reactEmoji", { emoji })}
-                            aria-pressed={
-                              message.reactions?.some(
-                                (reaction) =>
-                                  reaction.actorId === "user" &&
-                                  reaction.emoji === emoji,
-                              ) ?? false
-                            }
-                            onClick={() =>
-                              void reactToMessage(
-                                room.id,
-                                message.id,
-                                message.reactions?.some(
-                                  (reaction) =>
-                                    reaction.actorId === "user" &&
-                                    reaction.emoji === emoji,
-                                )
-                                  ? null
-                                  : emoji,
-                              )
-                            }
-                          >
-                            {emoji}
-                          </button>
-                        ))}
-                      </div>
-                    </details>
-                    {message.reactions?.map((reaction) => (
-                      <span
-                        key={reaction.actorId}
-                        title={`${reaction.label}: ${reaction.emoji}`}
-                        aria-label={i18n.t("panels:reactedEmoji", {
-                          name: reaction.label,
-                          emoji: reaction.emoji,
-                        })}
-                      >
-                        {reaction.emoji}
-                      </span>
-                    ))}
-                  </div>
-                  {message.kind === "human" &&
-                  (deliveries[message.id]?.receipt === "delivered" ||
-                    deliveries[message.id]?.state === "saved") ? (
-                    <small
-                      className="room-delivery"
-                      title={i18n.t(
-                        "panels:deliveredSavedInThisRoomReadAdmitted",
-                      )}
-                    >
-                      {i18n.t("panels:deliveredToRoom")}{" "}
-                      {deliveries[message.id]?.readers
-                        ?.map((reader) =>
-                          i18n.t("panels:roomReplyStatus", {
-                            name: reader.name,
-                            status:
-                              reader.state === "read"
-                                ? i18n.t("panels:read")
-                                : reader.state === "unavailable"
-                                  ? i18n.t("panels:readStatusUnavailable")
-                                  : i18n.t("panels:readNotConfirmed"),
-                          }),
+                        {i18n.t("panels:roomDelivered")}
+                        {deliveries[message.id]?.readers?.some(
+                          (reader) => reader.state === "read",
                         )
-                        .join(" · ")}
-                      {deliveries[message.id]?.readers?.length
-                        ? ""
-                        : i18n.t("panels:readNotConfirmed")}
-                    </small>
-                  ) : message.kind === "human" &&
-                    deliveries[message.id]?.state === "unknown" ? (
-                    <small className="room-delivery">
-                      {i18n.t("panels:deliveredToRoomAgentReadResponseStatus")}
-                    </small>
-                  ) : null}
-                  {message.kind === "human" || message.originThreadId ? (
-                    <details className="room-message-details">
-                      <summary>{i18n.t("panels:messageDetails")}</summary>
-                      <span>
-                        {i18n.t("panels:messageId")} {message.id}
-                      </span>
-                      {message.originThreadId ? (
-                        <span>
-                          {i18n.t("panels:sourceConversation")}{" "}
-                          {message.originThreadId}
-                        </span>
-                      ) : null}
-                      {message.originTurnId ? (
-                        <span>
-                          {i18n.t("panels:turn")} {message.originTurnId}
-                        </span>
-                      ) : null}
-                      {deliveries[message.id]?.operationId ? (
-                        <span>
-                          {i18n.t("panels:operationId")}{" "}
-                          {deliveries[message.id]!.operationId}
-                        </span>
-                      ) : null}
-                    </details>
-                  ) : null}
-                </article>
-              ))}
+                          ? ` · ${i18n.t("panels:roomReadCount", { count: deliveries[message.id]!.readers!.filter((reader) => reader.state === "read").length })}`
+                          : ""}
+                      </small>
+                    ) : null}
+                  </article>
+                );
+              })}
             </div>
             <div className="rooms-chat-compose">
               <ComposerShell
@@ -3057,6 +3080,27 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   : i18n.t("panels:close")}
               </button>
             </header>
+            {panel === "manage" &&
+            room &&
+            !room.assistant &&
+            room.responders?.some((entry) => !entry.configured) ? (
+              <div className="room-settings-replies">
+                <RoomReplySetupNotice
+                  members={room.members}
+                  responders={room.responders}
+                  configure={(member) =>
+                    sdk.navigation.navigate(
+                      roomReplySetupRoute(
+                        room.id,
+                        member.name,
+                        member.threadId,
+                      ),
+                    )
+                  }
+                />
+              </div>
+            ) : null}
+
             {panel === "create" && assistantMode ? (
               <>
                 <p className="room-assistant-disclosure">
@@ -3463,12 +3507,6 @@ function Field({
       />
     </label>
   );
-}
-
-function roomRoleLabel(kind: ZenXRoom["messages"][number]["kind"]): string {
-  if (kind === "human") return i18n.t("panels:you");
-  if (kind === "agent") return i18n.t("panels:agent");
-  return i18n.t("panels:system");
 }
 
 function describeError(error: unknown): string {
