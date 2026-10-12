@@ -1,5 +1,9 @@
 # ARCHITECTURE
 
+- **ZenX activity observation** — Renderer derives one disposable per-Turn task-receipt index and contiguous trace summaries from existing Items; request acknowledgement, call disposition and underlying task lifetime remain separate, without new runtime authority.
+- **ZenX approval review** — Composer-attached requests and user-opened full details share exact request-scoped transient response/focus ownership and existing Host decisions; presentation never creates or broadens permission.
+- **ZenX pending-message shelf** — A renderer-only view of canonical queued IDs/order/text/image counts, with local disclosure and request feedback; existing exact-target cancellation/resume callbacks remain the authority, without edit/reorder or optimistic removal.
+
 - **ZenX 界面语言** — Renderer 的本地语言偏好（system/en/zh-CN）只拥有展示选择；集中式 i18next 词条按功能分组，通过 React 订阅即时更新，系统模式按 Electron 返回的有序语言列表解析，原生菜单同步展示语言，不改写 canonical 内容、Host 配置或插件语义。
 
 ## 核心概念

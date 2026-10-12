@@ -1,0 +1,524 @@
+.approval-request-card {
+  container: approval-card / inline-size;
+  width: 100%;
+  max-width: var(--conversation-width);
+  min-width: 0;
+  min-height: 0;
+  max-height: min(460px, calc(100dvh - 220px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 auto 10px;
+  padding: 12px 14px;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--surface-2);
+  color: var(--text);
+  box-shadow: 0 2px 8px var(--color-elevation-low);
+}
+.approval-request-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+.approval-request-icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.approval-request-heading h3 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--font-size-body);
+  line-height: 1.45;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.approval-request-card button,
+.approval-request-dialog button {
+  min-height: 44px;
+  border: 1px solid var(--border-control);
+  border-radius: 8px;
+  font-size: var(--font-size-label);
+  line-height: 1.35;
+  cursor: pointer;
+}
+.approval-request-card button:focus-visible,
+.approval-request-dialog button:focus-visible,
+.approval-request-card pre:focus-visible,
+.approval-request-dialog pre:focus-visible,
+.approval-request-arguments summary:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+.approval-request-card .approval-request-details {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--font-size-caption);
+}
+.approval-request-card .approval-request-details:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.approval-request-preview {
+  min-height: 52px;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-inset);
+}
+.approval-request-preview-label {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 6px;
+  padding: 6px 9px 0;
+  color: var(--text-3);
+  font-size: var(--font-size-caption);
+  line-height: 1.4;
+}
+.approval-request-preview-label > span:last-child {
+  margin-left: auto;
+}
+.approval-request-preview pre,
+.approval-request-dialog pre {
+  min-width: 0;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-caption);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+}
+.approval-request-preview pre {
+  min-height: 0;
+  max-height: 136px;
+  flex: 1 1 auto;
+}
+.approval-request-cwd {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  flex: 0 0 auto;
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
+}
+.approval-request-cwd > span {
+  flex: 0 0 auto;
+  color: var(--text-3);
+}
+.approval-request-cwd code {
+  min-width: 0;
+  max-height: 4.5em;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+}
+.approval-request-scope {
+  flex: 0 0 auto;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: var(--font-size-caption);
+  line-height: 1.45;
+}
+.approval-request-scope-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+.approval-request-scope-label > span {
+  color: var(--text-3);
+}
+.approval-request-scope-label strong {
+  font-weight: 500;
+}
+.approval-request-scope p {
+  margin: 5px 0 0;
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+.approval-request-scope.is-compact {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.approval-request-scope.is-compact > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+.approval-request-scope.is-compact p {
+  margin: 0;
+  color: var(--text-2);
+}
+.approval-request-decisions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.approval-request-progress {
+  min-width: 0;
+  margin-right: auto;
+  color: var(--text-3);
+  font-size: var(--font-size-caption);
+}
+.approval-request-progress:empty {
+  display: none;
+}
+.approval-request-decisions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 15px;
+  font-weight: 500;
+}
+.approval-request-decisions .approval-request-deny {
+  background: var(--surface);
+  color: var(--text-2);
+}
+.approval-request-decisions .approval-request-deny:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.approval-request-decisions .approval-request-allow {
+  border-color: var(--text);
+  background: var(--text);
+  color: var(--surface);
+}
+.approval-request-decisions .approval-request-allow:hover:not(:disabled) {
+  opacity: 0.88;
+}
+.approval-request-decisions button:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+.approval-request-card .approval-request-error,
+.approval-request-dialog .approval-request-error {
+  flex: 0 0 auto;
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--font-size-caption);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.ui-dialog.ui-dialog-surface {
+  border-color: var(--border-strong);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-high);
+}
+.ui-dialog.ui-dialog-surface.approval-request-dialog {
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.approval-request-dialog-heading {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 18px 18px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.approval-request-dialog-heading > div {
+  min-width: 0;
+  flex: 1;
+}
+.approval-request-dialog-heading p {
+  margin: 0 0 6px;
+  color: var(--text-3);
+  font-size: var(--font-size-caption);
+}
+.approval-request-dialog-heading h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.approval-request-dialog .approval-request-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 44px;
+  width: 44px;
+  border-color: transparent;
+  color: var(--text-3);
+  background: transparent;
+}
+.approval-request-dialog .approval-request-close:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+.approval-request-dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 16px 18px;
+  display: grid;
+  gap: 16px;
+}
+.approval-request-metadata {
+  min-width: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 7px 12px;
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
+}
+.approval-request-metadata > div {
+  display: contents;
+}
+.approval-request-metadata dt {
+  color: var(--text-3);
+}
+.approval-request-metadata dd {
+  margin: 0;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.approval-request-full-code h3 {
+  margin: 0 0 8px;
+  font-size: var(--font-size-caption);
+  color: var(--text-3);
+  font-weight: 500;
+}
+.approval-request-dialog pre {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-inset);
+}
+.approval-request-arguments summary {
+  min-height: 44px;
+  padding: 12px 0;
+  color: var(--text-2);
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+}
+.approval-request-dialog-footer {
+  display: grid;
+  gap: 14px;
+  flex: 0 0 auto;
+  padding: 14px 18px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+/* The selector shares the modal's quiet surface and hierarchy, while retaining
+   Popover's viewport placement and the native three permission modes. */
+.ui-popover.composer-selection-menu.permission-menu {
+  width: min(328px, calc(100vw - 24px));
+  max-height: var(--radix-popover-content-available-height);
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-overlay);
+  box-shadow: var(--shadow-medium);
+  overflow: auto;
+}
+.permission-menu .permission-menu-heading {
+  padding: 6px 10px 9px;
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--font-size-caption);
+  font-weight: 500;
+}
+.ui-popover.permission-menu button {
+  min-height: 58px;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 8px;
+}
+.ui-popover.permission-menu button > span {
+  min-width: 0;
+}
+.ui-popover.permission-menu button strong {
+  color: var(--text-2);
+  font-weight: 500;
+}
+.ui-popover.permission-menu button small {
+  margin-top: 3px;
+  color: var(--text-3);
+  line-height: 1.4;
+}
+.ui-popover.permission-menu [aria-checked="true"] {
+  color: var(--text);
+  background: var(--surface-active);
+}
+.ui-popover.permission-menu [aria-checked="true"] strong {
+  color: var(--text);
+}
+.ui-popover.permission-menu button:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: -2px;
+}
+.ui-popover.permission-menu .composer-menu-note {
+  margin: 5px 4px 2px;
+  padding: 9px 6px 4px;
+  border-top: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: var(--font-size-caption);
+  line-height: 1.45;
+}
+@media (max-width: 600px), (max-height: 700px) {
+  .approval-request-card {
+    gap: 7px;
+    padding: 9px 11px;
+  }
+  .approval-request-preview pre {
+    max-height: 72px;
+  }
+  .bottom-zone.has-queue .approval-request-card {
+    gap: 4px;
+    margin-bottom: 0;
+    padding-block: 8px;
+  }
+  .bottom-zone.has-queue .approval-request-preview-label {
+    padding-top: 4px;
+    line-height: 1.3;
+  }
+  .bottom-zone.has-queue .approval-request-preview pre {
+    max-height: 34px;
+    padding-block: 5px;
+  }
+  .approval-request-heading {
+    gap: 7px;
+  }
+  .approval-request-heading h3 {
+    font-size: var(--font-size-body);
+  }
+  .approval-request-icon {
+    width: 24px;
+    height: 24px;
+  }
+  .approval-request-dialog-heading {
+    padding: 12px 12px 10px;
+  }
+  .approval-request-dialog-heading h2 {
+    font-size: 15px;
+  }
+  .approval-request-dialog-body {
+    padding: 12px;
+    gap: 12px;
+  }
+  .approval-request-dialog-footer {
+    gap: 10px;
+    padding: 12px;
+  }
+}
+@media (max-width: 420px) {
+  .approval-request-card .approval-request-details {
+    width: 44px;
+    padding: 0;
+  }
+  .approval-request-details > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .approval-request-decisions button {
+    flex: 1;
+  }
+  .approval-request-progress:not(:empty) {
+    flex-basis: 100%;
+  }
+}
+/* Side chats can be narrow inside a wide desktop window. */
+@container approval-card (max-width: 420px) {
+  .approval-request-heading {
+    gap: 7px;
+  }
+  .approval-request-heading h3 {
+    font-size: var(--font-size-body);
+  }
+  .approval-request-icon {
+    width: 24px;
+    height: 24px;
+  }
+  .approval-request-card .approval-request-details {
+    width: 44px;
+    padding: 0;
+  }
+  .approval-request-details > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .approval-request-preview pre {
+    max-height: 72px;
+  }
+  .bottom-zone.has-queue .approval-request-preview pre {
+    max-height: 34px;
+    padding-block: 5px;
+  }
+  .approval-request-decisions button {
+    flex: 1;
+  }
+  .approval-request-progress:not(:empty) {
+    flex-basis: 100%;
+  }
+}
+@media (forced-colors: active) {
+  .approval-request-card,
+  .ui-dialog.ui-dialog-surface,
+  .ui-popover.composer-selection-menu.permission-menu {
+    border-color: CanvasText;
+    background: Canvas;
+    color: CanvasText;
+    box-shadow: none;
+  }
+  .approval-request-decisions .approval-request-allow,
+  .approval-request-decisions .approval-request-deny {
+    border-color: ButtonText;
+    background: ButtonFace;
+    color: ButtonText;
+  }
+  .ui-popover.permission-menu [aria-checked="true"] {
+    outline: 1px solid Highlight;
+    outline-offset: -1px;
+  }
+}

@@ -1,4 +1,56 @@
 export const en = {
+  approvalQuestionOnce: "Allow this action?",
+  approvalQuestionCapability: "Allow tool access?",
+  approvalAllowAccess: "Allow access",
+  approvalInlineRunCodeScope:
+    "Remember permission for the stable, shell-equivalent run_code capability, not per command or code segment.",
+
+  approvalInlineOnceScope:
+    "Use full file access for this call and its nested operations only.",
+  approvalInlineCapabilityScope:
+    "Remember permission for the stable {{tool}} capability, not per command or code segment.",
+  queuePendingCount: "Pending send · {{count}}",
+  queueCancelAll: "Cancel all",
+  queueCancelling: "Cancelling…",
+  queueResuming: "Continuing…",
+  queueViewAll: "View all {{count}}",
+  queueShowLess: "Show less",
+  queueShowMessages: "Show queued messages",
+  queueHideMessages: "Hide queued messages",
+  queueReadFullMessage: "Read full queued message {{number}}",
+  queueCollapseMessage: "Collapse queued message {{number}}",
+  queueWaiting: "Waiting to send",
+
+  approvalScopeLabel: "Permission scope",
+  approvalOnceScope: "This call and its nested operations only",
+  approvalCapabilityScope: "Remember this tool capability",
+  approvalRequestDetails: "Full request",
+  approvalCommandLabel: "Command",
+  approvalCodeLabel: "Code",
+  approvalToolLabel: "Tool",
+  approvalArgumentsLabel: "Arguments",
+  approvalRequestIdLabel: "Request ID",
+  approvalResponding: "Sending decision…",
+  approvalFullRequestTitle: "Approval request details",
+
+  requested: "Requested",
+  admitting: "Preparing",
+  stopping: "Stopping…",
+  stopped: "Stopped",
+  awaitingToolResult: "Awaiting tool result",
+  toolCalls: "{{count}} tool calls",
+  toolFailures: "{{count}} tool failed",
+  toolCancelled: "{{count}} cancelled or declined",
+  lastKnownPending: "{{count}} task results still pending",
+  stopUnconfirmed: "Background action may still be running",
+  stopUnconfirmedNote:
+    "Stopping this conversation does not confirm that the background action stopped. Review its latest receipt before continuing.",
+  stoppedNote:
+    "Your partial results are kept. You can send a new message when you are ready.",
+  interruptedNote:
+    "This conversation is no longer being followed. Its final state has not been confirmed.",
+  reviewActivity: "Review activity",
+  continueWriting: "Write a message",
   pin: "Pin",
 
   accessibility: "Accessibility",
@@ -530,6 +582,56 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  approvalQuestionOnce: "允许这次操作？",
+  approvalQuestionCapability: "允许工具访问？",
+  approvalAllowAccess: "允许访问",
+  approvalInlineRunCodeScope:
+    "记住与 Shell 权限等同的 run_code 能力授权，并非逐条命令或代码片段批准。",
+
+  approvalInlineOnceScope: "使用完整文件访问权限，仅本次调用及其嵌套操作。",
+  approvalInlineCapabilityScope:
+    "记住 {{tool}} 能力授权，并非逐条命令或代码片段批准。",
+  queuePendingCount: "待发送 · {{count}}",
+  queueCancelAll: "全部取消",
+  queueCancelling: "取消中…",
+  queueResuming: "继续中…",
+  queueViewAll: "查看全部 {{count}} 条",
+  queueShowLess: "收起",
+  queueShowMessages: "查看待发送消息",
+  queueHideMessages: "收起待发送消息",
+  queueReadFullMessage: "阅读第 {{number}} 条待发送消息全文",
+  queueCollapseMessage: "收起第 {{number}} 条待发送消息",
+  queueWaiting: "等待发送",
+
+  approvalScopeLabel: "权限范围",
+  approvalOnceScope: "仅本次调用及其嵌套操作",
+  approvalCapabilityScope: "记住此工具能力",
+  approvalRequestDetails: "完整请求",
+  approvalCommandLabel: "命令",
+  approvalCodeLabel: "代码",
+  approvalToolLabel: "工具",
+  approvalArgumentsLabel: "参数",
+  approvalRequestIdLabel: "请求 ID",
+  approvalResponding: "正在提交决定…",
+  approvalFullRequestTitle: "审批请求详情",
+
+  requested: "已请求",
+  admitting: "准备中",
+  stopping: "正在停止…",
+  stopped: "已停止",
+  awaitingToolResult: "等待工具结果",
+  toolCalls: "{{count}} 次工具调用",
+  toolFailures: "{{count}} 次工具失败",
+  toolCancelled: "{{count}} 次已取消或拒绝",
+  lastKnownPending: "{{count}} 个任务结果仍待确认",
+  stopUnconfirmed: "后台操作可能仍在运行",
+  stopUnconfirmedNote:
+    "停止对话并不表示后台操作已停止。继续前请先查看最新回执。",
+  stoppedNote: "部分结果已保留。准备好后可以发送新消息。",
+  interruptedNote: "此对话已断开跟随，最终状态尚未确认。",
+  reviewActivity: "查看运行过程",
+  continueWriting: "继续输入",
+
   pin: "固定",
 
   accessibility: "辅助功能",
@@ -781,7 +883,7 @@ export const zhCN = {
   setAsDefault: "设为默认",
   settings: "设置",
   sharedConversation: "共享会话",
-  shell: "Shell",
+  shell: "命令",
   skills: "技能",
   skillsToSend: "要发送的技能",
   slashCommands: "斜杠命令",

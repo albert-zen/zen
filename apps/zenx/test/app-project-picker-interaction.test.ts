@@ -1905,14 +1905,12 @@ for (const committed of [true, false] as const) {
       assert.equal(readCalls, 1);
       if (committed) {
         await waitFor(() =>
-          document.querySelector(".queued-messages") === null
-            ? true
-            : undefined,
+          document.querySelector(".queue-shelf") === null ? true : undefined,
         );
       } else {
         assert.match(
-          document.querySelector(".queued-messages")?.textContent ?? "",
-          /1 queued/u,
+          document.querySelector(".queue-shelf")?.textContent ?? "",
+          /Pending send · 1/u,
         );
         await waitFor(() =>
           (
@@ -2116,20 +2114,31 @@ test("native queue admission failure belongs to its queued Item and latest attem
     await send(begun(firstAttempt));
     await send(rejected(firstAttempt));
     assert.match(
-      document.querySelector(".queued-failure")?.textContent ?? "",
+      document.querySelector(".queue-row-error")?.textContent ?? "",
       /image-capable model/u,
     );
-    assert.equal(document.querySelectorAll(".queued-failure").length, 1);
+    assert.equal(document.querySelectorAll(".queue-row-error").length, 1);
+    assert.equal(
+      document
+        .querySelector(".queue-row-error")
+        ?.closest(".queue-row")
+        ?.getAttribute("data-queue-id"),
+      "queued-second",
+    );
+    assert.equal(
+      document.querySelector('[data-queue-id="queued-first"] .queue-row-error'),
+      null,
+    );
     await send(begun(secondAttempt));
-    assert.equal(document.querySelector(".queued-failure"), null);
+    assert.equal(document.querySelector(".queue-row-error"), null);
     await send(rejected(firstAttempt)); // stale first attempt cannot override the new one
-    assert.equal(document.querySelector(".queued-failure"), null);
+    assert.equal(document.querySelector(".queue-row-error"), null);
     await send(rejected(secondAttempt), "another-thread");
-    assert.equal(document.querySelector(".queued-failure"), null);
+    assert.equal(document.querySelector(".queue-row-error"), null);
     await send(rejected(secondAttempt));
-    assert.equal(document.querySelectorAll(".queued-failure").length, 1);
+    assert.equal(document.querySelectorAll(".queue-row-error").length, 1);
     await send(rejected(secondAttempt)); // duplicate notification does not duplicate a card
-    assert.equal(document.querySelectorAll(".queued-failure").length, 1);
+    assert.equal(document.querySelectorAll(".queue-row-error").length, 1);
     await send({
       type: "item_completed",
       item: {
@@ -2142,10 +2151,10 @@ test("native queue admission failure belongs to its queued Item and latest attem
         createdAt: new Date(21_000).toISOString(),
       },
     });
-    assert.equal(document.querySelector(".queued-failure"), null);
+    assert.equal(document.querySelector(".queue-row-error"), null);
     assert.match(
-      document.querySelector(".queued-messages")?.textContent ?? "",
-      /1 queued/u,
+      document.querySelector(".queue-shelf")?.textContent ?? "",
+      /Pending send · 1/u,
     );
   } finally {
     await unmountApp(harness);
@@ -2305,8 +2314,8 @@ for (const path of [
       assert.equal(composer.value, "original");
       if (path !== "rpc")
         assert.match(
-          document.querySelector(".queued-messages")?.textContent ?? "",
-          /1 queued/u,
+          document.querySelector(".queue-shelf")?.textContent ?? "",
+          /Pending send · 1/u,
         );
       assert.equal(document.querySelector(".composer-error"), null);
     } finally {
