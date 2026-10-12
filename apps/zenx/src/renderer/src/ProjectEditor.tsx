@@ -1,4 +1,7 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
+import { Dialog } from "./ui/controls.js";
+import { useRef, useState } from "react";
 import { Icon } from "./icons.js";
 import { DirectoryPicker } from "./DirectoryPicker.js";
 
@@ -19,6 +22,7 @@ export function ProjectEditor({
   onRemove(): Promise<void>;
   onClose(): void;
 }) {
+  useTranslation("shell");
   const [name, setName] = useState(initialName);
   const [folder, setFolder] = useState(workspace);
   const [picking, setPicking] = useState(false);
@@ -26,14 +30,6 @@ export function ProjectEditor({
   const [error, setError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const folderRef = useRef<HTMLButtonElement>(null);
-  const initialFocus = useRef<HTMLElement | null>(null);
-  useEffect(() => {
-    initialFocus.current = document.activeElement as HTMLElement | null;
-    dialogRef.current?.querySelector("input")?.focus();
-    return () => {
-      if (initialFocus.current?.isConnected) initialFocus.current.focus();
-    };
-  }, []);
   const run = async (action: () => Promise<void>) => {
     if (busy) return;
     setBusy(true);
@@ -46,51 +42,29 @@ export function ProjectEditor({
       setBusy(false);
     }
   };
-  const keyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (event.key === "Escape") {
-      event.stopPropagation();
-      event.preventDefault();
-      if (!busy) onClose();
-      return;
-    }
-    if (event.key !== "Tab") return;
-    const elements = Array.from(
-      dialogRef.current?.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), input:not(:disabled), [tabindex="0"]',
-      ) ?? [],
-    );
-    if (!elements.length) {
-      event.preventDefault();
-      return;
-    }
-    const first = elements[0],
-      last = elements.at(-1);
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last?.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first?.focus();
-    }
-  };
+
   const changesDefaultFolder = isDefault && folder !== workspace;
   return (
     <>
-      <div className="project-editor-backdrop" hidden={picking}>
+      <Dialog
+        open={!picking}
+        onOpenChange={(open) => {
+          if (!open && !busy) onClose();
+        }}
+        title={i18n.t("shell:editProject")}
+        className="project-editor-shell"
+      >
         <section
           className="project-editor"
           ref={dialogRef}
-          role="dialog"
-          aria-modal="true"
           aria-labelledby="project-editor-title"
-          onKeyDown={keyDown}
         >
           <header>
-            <h2 id="project-editor-title">Edit project</h2>
+            <h2 id="project-editor-title">{i18n.t("shell:editProject")}</h2>
             <button
               type="button"
               className="icon-button"
-              aria-label="Close project editor"
+              aria-label={i18n.t("shell:closeProjectEditor")}
               disabled={busy}
               onClick={onClose}
             >
@@ -105,7 +79,7 @@ export function ProjectEditor({
             }}
           >
             <label>
-              Project name
+              {i18n.t("shell:projectName")}
               <input
                 value={name}
                 maxLength={200}
@@ -114,7 +88,7 @@ export function ProjectEditor({
               />
             </label>
             <div className="project-editor-folder">
-              <span>Project folder</span>
+              <span>{i18n.t("shell:projectFolder")}</span>
               <div>
                 <Icon name="folder" />
                 <span title={folder}>{folder}</span>
@@ -125,21 +99,24 @@ export function ProjectEditor({
                   disabled={busy}
                   onClick={() => setPicking(true)}
                 >
-                  Change folder
+                  {i18n.t("shell:changeFolder")}
                 </button>
               </div>
             </div>
             {folder !== workspace ? (
               <p className="muted">
-                Existing conversations keep their original folder. New
-                conversations use this folder.
+                {i18n.t("shell:existingConversationsKeepFolder")}
               </p>
             ) : null}
             {changesDefaultFolder ? (
               <p className="muted">
                 {hostBusy
-                  ? "Wait for running tasks to finish before changing the default project folder."
-                  : "Changing the default folder restarts the local host."}
+                  ? i18n.t(
+                      "shell:waitForRunningTasksToFinishBeforeChangingTheDefaultProjectFolder",
+                    )
+                  : i18n.t(
+                      "shell:changingTheDefaultFolderRestartsTheLocalHost",
+                    )}
               </p>
             ) : null}
             {error ? (
@@ -154,7 +131,7 @@ export function ProjectEditor({
                 disabled={busy || (isDefault && hostBusy)}
                 onClick={() => void run(onRemove)}
               >
-                Remove from ZenX
+                {i18n.t("shell:removeFromZenx")}
               </button>
               <span />
               <button
@@ -163,7 +140,7 @@ export function ProjectEditor({
                 disabled={busy}
                 onClick={onClose}
               >
-                Cancel
+                {i18n.t("shell:cancel")}
               </button>
               <button
                 type="submit"
@@ -172,12 +149,12 @@ export function ProjectEditor({
                   busy || !name.trim() || (changesDefaultFolder && hostBusy)
                 }
               >
-                {busy ? "Saving…" : "Save"}
+                {busy ? i18n.t("shell:saving") : i18n.t("shell:save")}
               </button>
             </footer>
           </form>
         </section>
-      </div>
+      </Dialog>
       {picking ? (
         <DirectoryPicker
           onCancel={() => {

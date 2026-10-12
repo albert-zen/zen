@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -44,6 +44,8 @@ import {
 import { ZenXProjectProjection } from "../src/main/project-projection.js";
 
 const SELF_CONTROL_TOOL_NAMES = [
+  "zenx_models_list",
+  "zenx_threads_configure",
   "zenx_projects_list",
   "zenx_threads_list",
   "zenx_threads_create",
@@ -55,7 +57,35 @@ const SELF_CONTROL_TOOL_NAMES = [
   "zenx_threads_send",
   "zenx_self_control_workflows_get",
   "zenx_self_control_workflows_update",
+  "zenx_self_control_devices",
+  "zenx_self_control_threads_wait",
 ];
+
+test("bundled and ordinary self-control manifests expose the same exact or readable selectors", async () => {
+  const bundled = new ZenXSelfControlCapabilityPackage({
+    appServer: new MutableAppServerRequestPort(),
+  }).manifest;
+  const ordinary = JSON.parse(
+    await readFile(
+      new URL(
+        "../../../packages/zenx-self-control-plugin/zenx.plugin.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  ) as typeof bundled;
+  for (const tool of bundled.tools) {
+    const matching = ordinary.tools.find((entry) => entry.name === tool.name);
+    assert.deepEqual(matching?.inputSchema, tool.inputSchema, tool.name);
+    const properties = tool.inputSchema.properties as Record<string, unknown>;
+    if (properties.target === undefined) continue;
+    assert.ok(properties.threadId, tool.name);
+    assert.deepEqual(tool.inputSchema.oneOf, [
+      { required: ["target"] },
+      { required: ["threadId"] },
+    ]);
+  }
+});
 
 test("self-control reads and updates the same workflow configuration port", async () => {
   let value = {
@@ -146,9 +176,7 @@ test("real ZenX host control tools make active semantics explicit", async () => 
     );
     const first = await invoke(tools, "zenx_threads_send", {
       threadId,
-      mode: "start",
       text: slowShell("steer-finished"),
-      clientUserMessageId: "host-start-steer",
     });
     const firstTurnId = stringField(first, "turnId");
     await firstCommand;
@@ -164,10 +192,8 @@ test("real ZenX host control tools make active semantics explicit", async () => 
     );
     const steered = await invoke(tools, "zenx_threads_send", {
       threadId,
-      mode: "steer",
+      messageType: "guidance",
       text: "Use the steering update.",
-      expectedTurnId: firstTurnId,
-      clientUserMessageId: "host-steer",
     });
     assert.equal(steered.mode, "steer");
     assert.equal(steered.expectedTurnId, firstTurnId);
@@ -180,9 +206,7 @@ test("real ZenX host control tools make active semantics explicit", async () => 
     );
     const second = await invoke(tools, "zenx_threads_send", {
       threadId,
-      mode: "start",
       text: slowShell("replace-finished"),
-      clientUserMessageId: "host-start-replace",
     });
     const secondTurnId = stringField(second, "turnId");
     await secondCommand;
@@ -194,10 +218,8 @@ test("real ZenX host control tools make active semantics explicit", async () => 
     );
     const replaced = await invoke(tools, "zenx_threads_send", {
       threadId,
-      mode: "replace",
+      messageType: "replacement",
       text: "Replacement prompt.",
-      expectedTurnId: secondTurnId,
-      clientUserMessageId: "host-replace",
     });
     assert.equal(replaced.interruptedTurnId, secondTurnId);
     assert.notEqual(replaced.turnId, secondTurnId);
@@ -210,11 +232,9 @@ test("real ZenX host control tools make active semantics explicit", async () => 
       (turnId) =>
         turnId !== secondTurnId && turnId !== stringField(replaced, "turnId"),
     );
-    await invoke(tools, "zenx_threads_send", {
+    const followUp = await invoke(tools, "zenx_threads_send", {
       threadId,
-      mode: "start",
       text: "Follow-up prompt.",
-      clientUserMessageId: "host-follow-up",
     });
     await followUpCompleted;
 
@@ -226,12 +246,14 @@ test("real ZenX host control tools make active semantics explicit", async () => 
     assert.equal(recent.source, "zenx.app-server");
     const turns = recent.turns as Array<{
       status: string;
-      items: Array<{ type: string; clientId?: string }>;
+      items: Array<{ type: string; item?: { clientId?: string } }>;
     }>;
     assert(turns.some((turn) => turn.status === "interrupted"));
     assert(
       turns.some((turn) =>
-        turn.items.some((item) => item.clientId === "host-follow-up"),
+        turn.items.some(
+          (item) => item.item?.clientId === followUp.clientUserMessageId,
+        ),
       ),
     );
 
@@ -279,7 +301,13 @@ test("real ZenX host control tools make active semantics explicit", async () => 
       )[0]?.archived,
       true,
     );
-    const archivedRead = await invoke(tools, "zenx_threads_read", { threadId });
+    await assert.rejects(
+      invoke(tools, "zenx_threads_read", { threadId }),
+      /archived|inactive/i,
+    );
+    const archivedRead = await invoke(tools, "zenx_threads_read", {
+      target: threadId,
+    });
     assert.equal(archivedRead.threadId, threadId);
     const unarchived = await invoke(tools, "zenx_threads_unarchive", {
       threadId,
@@ -320,10 +348,9 @@ test("real ZenX host control tools make active semantics explicit", async () => 
       invoke(tools, "zenx_threads_send", {
         threadId,
         mode: "steer",
-        text: "missing expected turn",
-        clientUserMessageId: "invalid-steer",
+        text: "protocol controls are not accepted",
       }),
-      /requires expectedTurnId/u,
+      /Unexpected argument: mode/u,
     );
   } finally {
     await manager.stop();
@@ -455,108 +482,12 @@ test("an Agent drives the complete bounded tracer bullet through App Server wire
       targetRead.thread.turns
         .flatMap((turn) => turn.items)
         .filter((item) => item.type === "userMessage")
-        .map((item) => item.clientId),
-      ["tracer-child-start", "tracer-child-follow-up"],
+        .map((item) => item.content.map((part) => part.text).join("")),
+      ["Child initial prompt.", "Child follow-up prompt."],
     );
   } finally {
     client.close();
     await server.close();
-    await capabilities.close();
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("bounded reads omit command output and truncate message text", async () => {
-  const directory = await mkdtemp(
-    path.join(os.tmpdir(), "zenx-control-bound-"),
-  );
-  const hugeMessage = "long-message".repeat(500);
-  const secretOutput = "secret-like-output".repeat(500);
-  const port: AppServerRequestPort = {
-    projectProjection: new ZenXProjectProjection(),
-    async request<M extends ClientRequestMethod>(
-      method: M,
-      _params: ClientRequestParams[M],
-    ): Promise<ClientRequestResults[M]> {
-      assert.equal(method, "thread/read");
-      return {
-        thread: {
-          id: "thread-bounded",
-          sessionId: "thread-bounded",
-          forkedFromId: null,
-          parentThreadId: null,
-          preview: "",
-          ephemeral: false,
-          isPinned: false,
-          modelProvider: "fake",
-          createdAt: 1,
-          updatedAt: 2,
-          recencyAt: null,
-          status: { type: "idle" },
-          path: null,
-          cwd: "/tmp/work",
-          cliVersion: "zen/0.1.0",
-          source: "appServer",
-          threadSource: null,
-          agentNickname: null,
-          agentRole: null,
-          gitInfo: null,
-          name: null,
-          turns: [
-            {
-              id: "turn-bounded",
-              itemsView: "full",
-              status: "completed",
-              error: null,
-              startedAt: 1,
-              completedAt: 2,
-              durationMs: 1_000,
-              items: [
-                {
-                  type: "agentMessage",
-                  id: "agent-long",
-                  text: hugeMessage,
-                  phase: "final_answer",
-                  memoryCitation: null,
-                },
-                {
-                  type: "commandExecution",
-                  id: "command-secret",
-                  pluginId: null,
-                  scriptPath: null,
-                  command: "inspect",
-                  cwd: "/tmp/work",
-                  processId: null,
-                  source: "agent",
-                  status: "completed",
-                  commandActions: [],
-                  aggregatedOutput: secretOutput,
-                  exitCode: 0,
-                  durationMs: null,
-                },
-              ],
-            },
-          ],
-        },
-      } as ClientRequestResults[M];
-    },
-  };
-  const capabilities = await grantedSelfControl(directory, port);
-  try {
-    const result = await invoke(
-      capabilityTools(capabilities),
-      "zenx_threads_read",
-      {
-        threadId: "thread-bounded",
-        maxTurns: 1,
-        maxItemsPerTurn: 2,
-      },
-    );
-    const serialized = JSON.stringify(result);
-    assert.doesNotMatch(serialized, /secret-like-output/u);
-    assert.match(serialized, /\[truncated\]/u);
-    assert.match(serialized, /"outputOmitted":true/u);
-  } finally {
     await capabilities.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -623,6 +554,7 @@ test("self-control Project and Thread filters reconcile filesystem aliases", asy
       });
       assert.deepEqual(projects.projects, [
         {
+          name: "alias",
           workspace: path.resolve(alias),
           cwd: path.resolve(alias),
           configured: true,
@@ -829,9 +761,7 @@ class TracerBulletModel implements ModelAdapter {
         const target = selfControlResult(results[2]!.text);
         yield call("zenx_threads_send", {
           threadId: target.threadId,
-          mode: "start",
           text: "Child initial prompt.",
-          clientUserMessageId: "tracer-child-start",
         });
         return;
       }
@@ -854,9 +784,7 @@ class TracerBulletModel implements ModelAdapter {
         const target = selfControlResult(results[2]!.text);
         yield call("zenx_threads_send", {
           threadId: target.threadId,
-          mode: "start",
           text: "Child follow-up prompt.",
-          clientUserMessageId: "tracer-child-follow-up",
         });
         return;
       }

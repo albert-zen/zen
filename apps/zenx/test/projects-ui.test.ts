@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import test from "node:test";
+import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 
 const baseProps = {
   liveThread: null,
@@ -78,4 +79,48 @@ test("configured Project exposes the recent and scoped New thread actions", asyn
   assert.match(html, /aria-label="More actions for zen"/u);
   assert.doesNotMatch(html, />Default</u);
   assert.doesNotMatch(html, /aria-label="Remove zen from ZenX"/u);
+});
+
+test("a grouped thread exposes its real working directory without changing its Project start path", async () => {
+  Object.assign(globalThis, { React });
+  const { Sidebar } = await import("../src/renderer/src/Sidebar.js");
+  const thread: NativeThreadSummary = {
+    threadId: "linked-id",
+    name: "Feature",
+    preview: "",
+    archived: false,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    status: "idle",
+    currentMetadata: {
+      cwd: "/fixture/linked",
+      model: "fixture-model",
+      provider: "fixture",
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    },
+  };
+  const html = renderToStaticMarkup(
+    React.createElement(Sidebar, {
+      ...baseProps,
+      threads: [thread],
+      projects: {
+        projects: [
+          {
+            key: "/fixture/zen",
+            workspace: "/fixture/zen",
+            name: "Zen",
+            configured: true,
+            isDefault: true,
+            threadIds: [thread.threadId],
+          },
+        ],
+        unavailableThreadIds: [],
+        lastUsedWorkspace: "/fixture/zen",
+      },
+    }),
+  );
+  assert.match(html, /Directory · linked/u);
+  assert.match(html, /Working directory: \/fixture\/linked/u);
+  assert.match(html, /aria-label="New thread in Zen"/u);
 });

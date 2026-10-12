@@ -1,3 +1,4 @@
+import { i18n } from "./i18n.js";
 import {
   compileModelMessages,
   type ModelMessage,
@@ -11,7 +12,9 @@ import type {
 export interface ContextCompactionProjection {
   item: ContextCompactionItem;
   canonicalIndex: number;
-  effectiveMessages: readonly ModelMessage[];
+  effectiveMessages: readonly ModelMessage[] | null;
+  /** Display history can arrive before the authoritative canonical read. */
+  snapshotError?: string;
 }
 
 /** Derives the exact model-message projection immediately after each reset. */
@@ -19,28 +22,42 @@ export function projectContextCompactions(
   items: readonly CanonicalItem[] | undefined,
 ): ContextCompactionProjection[] {
   if (items === undefined) return [];
-  return items.flatMap((item, canonicalIndex) => {
+  return items.flatMap<ContextCompactionProjection>((item, canonicalIndex) => {
     if (item.type !== "context_compaction") return [];
-    return [
-      {
-        item,
-        canonicalIndex,
-        effectiveMessages: compileModelMessages(
-          items.slice(0, canonicalIndex + 1),
-          compactionSelection(items, item, canonicalIndex),
-        ),
-      },
-    ];
+    try {
+      return [
+        {
+          item,
+          canonicalIndex,
+          effectiveMessages: compileModelMessages(
+            items.slice(0, canonicalIndex + 1),
+            compactionSelection(items, item, canonicalIndex),
+          ),
+        },
+      ];
+    } catch (error) {
+      // Core compilation requires a complete canonical prefix. A live event or
+      // paged display history may not contain that prefix; keep the committed
+      // summary visible without inventing a retained-context snapshot.
+      return [
+        {
+          item,
+          canonicalIndex,
+          effectiveMessages: null,
+          snapshotError: error instanceof Error ? error.message : String(error),
+        },
+      ];
+    }
   });
 }
 
 export function compactionInitiatorLabel(item: ContextCompactionItem): string {
   const initiator =
     item.initiator ?? (item.provenance === "agentic" ? "agent" : undefined);
-  if (initiator === "human") return "Human initiated";
-  if (initiator === "agent") return "Agent initiated";
-  if (initiator === "automatic") return "Automatic";
-  return "Initiator unavailable";
+  if (initiator === "human") return i18n.t("shell:humanInitiated");
+  if (initiator === "agent") return i18n.t("shell:agentInitiated");
+  if (initiator === "automatic") return i18n.t("shell:automatic");
+  return i18n.t("shell:initiatorUnavailable");
 }
 
 function compactionSelection(

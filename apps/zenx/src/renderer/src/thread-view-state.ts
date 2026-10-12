@@ -12,6 +12,19 @@ import type {
   ToolCallItem,
   ToolResultItem,
 } from "../../../../../src/item.js";
+import { pendingQueuedMessages } from "../../../../../src/input-queue.js";
+
+function projectedQueue(
+  items: readonly CanonicalItem[],
+): NonNullable<Thread["queuedMessages"]> {
+  return pendingQueuedMessages(items).map((item) => ({
+    id: item.id,
+    clientId: item.clientId,
+    text: userInputText(item.input),
+    imageCount: item.input.filter((part) => part.type === "image").length,
+    revision: item.revision,
+  }));
+}
 
 export function projectNativeRecovery(
   recovery: NativeThreadRecoverySnapshot,
@@ -71,6 +84,8 @@ export function applyNativeThreadEvent(
   nowSeconds = Math.floor(Date.now() / 1_000),
 ): Thread {
   if (event.type === "model_catalog_updated") return thread;
+  if (event.type === "queue_failed" || event.type === "queue_admission_started")
+    return thread;
   if (event.type === "thread_started") {
     return event.threadId === thread.id
       ? projectNativeThread(event.thread)
@@ -105,6 +120,17 @@ export function applyNativeThreadEvent(
       canonicalItems: [...(thread.canonicalItems ?? []), event.item],
       updatedAt: seconds(event.item.createdAt),
     };
+    if (
+      event.item.type === "user_message_queued" ||
+      event.item.type === "user_message_queue_cancelled" ||
+      event.item.type === "user_message_queue_edited" ||
+      event.item.type === "user_message"
+    ) {
+      thread = {
+        ...thread,
+        queuedMessages: projectedQueue(thread.canonicalItems ?? []),
+      };
+    }
   }
   if (event.type === "turn_started") {
     return applyThreadViewNotification(
@@ -195,13 +221,7 @@ export function applyNativeThreadEvent(
   if (event.type === "item_completed") {
     if (event.item.type === "context_compaction") return thread;
     if (event.item.type === "tool_result") {
-      return updateCommandResult(
-        thread,
-        event.item.callId,
-        event.item.output,
-        event.item.exitCode,
-        event.item.executionStatus,
-      );
+      return updateCommandResult(thread, event.item);
     }
     const item =
       event.item.type === "tool_call"
@@ -261,6 +281,9 @@ export function applyThreadViewNotification(
 ): Thread {
   if (method === "thread/queue/updated") {
     const event = params as ServerNotificationParams["thread/queue/updated"];
+    // The native canonical stream owns queue consumption. Legacy snapshots
+    // may arrive later than its item_completed event (or a new append).
+    if (thread.canonicalItems !== undefined) return thread;
     return event.threadId === thread.id
       ? { ...thread, queuedMessages: event.queuedMessages }
       : thread;
@@ -460,25 +483,26 @@ function eventCoveredByCanonical(
   return false;
 }
 
-function updateCommandResult(
-  thread: Thread,
-  callId: string,
-  output: string,
-  exitCode: number,
-  executionStatus: "completed" | "failed" | "declined" | undefined,
-): Thread {
+function updateCommandResult(thread: Thread, result: ToolResultItem): Thread {
   return {
     ...thread,
     turns: thread.turns.map((turn) => ({
       ...turn,
       items: turn.items.map((item) =>
-        item.type === "commandExecution" && item.callId === callId
+        item.type === "commandExecution" && item.callId === result.callId
           ? {
               ...item,
-              status:
-                executionStatus ?? (exitCode === 0 ? "completed" : "failed"),
-              aggregatedOutput: output,
-              exitCode,
+              status: nativeCommandExecutionStatus(result),
+              aggregatedOutput: result.output,
+              exitCode: result.exitCode,
+              ...(result.contentType === undefined
+                ? {}
+                : {
+                    contentType: result.contentType,
+                    structuredContent: structuredClone(
+                      result.structuredContent,
+                    ),
+                  }),
             }
           : item,
       ),
@@ -500,18 +524,11 @@ function projectNativeThread(
     .reverse()
     .find((item) => item.type === "thread_forked");
   const createdAt = seconds(fork?.createdAt ?? metadata.createdAt);
-  const deliveredClientIds = new Set(
-    snapshot.items.flatMap((item) =>
-      item.type === "user_message" && item.clientId !== undefined
-        ? [item.clientId]
-        : [],
-    ),
-  );
   return {
     id: snapshot.id,
     sessionId: snapshot.id,
     forkedFromId: fork?.sourceThreadId ?? null,
-    parentThreadId: null,
+    parentThreadId: metadata.parentThreadId ?? null,
     preview: firstMessage === undefined ? "" : userMessagePreview(firstMessage),
     ephemeral: false,
     isPinned: false,
@@ -532,20 +549,7 @@ function projectNativeThread(
     gitInfo: null,
     name: snapshot.name ?? null,
     canonicalItems: structuredClone(snapshot.items),
-    queuedMessages: snapshot.items.flatMap((item) =>
-      item.type === "user_message_queued" &&
-      !deliveredClientIds.has(item.clientId)
-        ? [
-            {
-              id: item.id,
-              clientId: item.clientId,
-              text: userInputText(item.input),
-              imageCount: item.input.filter((part) => part.type === "image")
-                .length,
-            },
-          ]
-        : [],
-    ),
+    queuedMessages: projectedQueue(snapshot.items),
     turns: snapshot.turns.map((turn) => {
       const started = turn.items.find((item) => item.type === "turn_started");
       const terminal = [...turn.items]

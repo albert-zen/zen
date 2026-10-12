@@ -12,7 +12,7 @@
     {
       "id": "zenx-triggers.read",
       "title": "Read Triggers",
-      "description": "List Trigger definitions and bounded wakeup history.",
+      "description": "List Trigger definitions, bounded wakeup history, Thread discovery, and referenced source results.",
       "scope": "workspace"
     },
     {
@@ -23,6 +23,147 @@
     }
   ],
   "tools": [
+    {
+      "name": "zenx_triggers_threads",
+      "description": "Discover readable Thread targets for notification setup.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-triggers.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.triggers.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_triggers_workspaces",
+      "description": "List configured Project workspaces eligible for a new automation Thread.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-triggers.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.triggers.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_triggers_preview_target",
+      "description": "Preview trusted Host Thread defaults and configured workspace before explicit confirmation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workspace": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "required": ["workspace"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-triggers.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.triggers.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_triggers_create_target",
+      "description": "Create an idle dedicated automation Thread only after confirming current Host defaults and workspace.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workspace": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "preview": {
+            "type": "object",
+            "properties": {
+              "workspace": {
+                "type": "string",
+                "maxLength": 4096
+              },
+              "resolvedWorkspace": {
+                "type": "string",
+                "maxLength": 4096
+              },
+              "model": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "providerProfileId": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "modelId": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "reasoningEffort": {
+                "type": ["string", "null"]
+              },
+              "sandbox": {
+                "type": "string",
+                "enum": ["read-only", "workspace-write", "danger-full-access"]
+              },
+              "approvalPolicy": {
+                "type": "string",
+                "enum": ["never", "on-request"]
+              },
+              "processEpoch": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "workspace",
+              "resolvedWorkspace",
+              "model",
+              "providerProfileId",
+              "modelId",
+              "reasoningEffort",
+              "sandbox",
+              "approvalPolicy",
+              "processEpoch",
+              "revision"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": ["workspace", "preview"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-triggers.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.triggers.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_triggers_result",
+      "description": "Read the exact source Turn preview of a retained notification; full original content is available through Thread reading.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "historyId": {
+            "type": "string"
+          }
+        },
+        "required": ["historyId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-triggers.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.triggers.manage"],
+      "maxOutputBytes": 65536
+    },
     {
       "name": "zenx_triggers_list",
       "description": "List Trigger definitions and bounded wakeup history.",
@@ -45,7 +186,8 @@
         "properties": {
           "threadId": {
             "type": "string",
-            "maxLength": 512
+            "maxLength": 512,
+            "description": "Notification target: full ID, unique short ID, or exact title. On creation defaults to the calling Thread."
           },
           "kind": {
             "type": "string",
@@ -67,7 +209,26 @@
           },
           "watchedThreadId": {
             "type": "string",
-            "maxLength": 512
+            "maxLength": 512,
+            "description": "Source Thread: full ID, unique short ID, or exact title."
+          },
+          "sourceDevice": {
+            "type": "string",
+            "maxLength": 512,
+            "description": "Optional Fleet source device for a Thread watch. Omit or use local for this Host; notification target stays local."
+          },
+          "sourceWorkspace": {
+            "type": "string",
+            "maxLength": 512,
+            "description": "Optional remote source workspace ID or exact label; resolved and retained with the exact source Thread."
+          },
+          "once": {
+            "type": "boolean",
+            "description": "Attempt one notification, then stop listening. New thread watches default to true; false listens to every future Turn."
+          },
+          "includeLatest": {
+            "type": "boolean",
+            "description": "On creation, notify the latest Turn if it has already ended; otherwise wait for the active or next Turn."
           },
           "roomId": {
             "type": "string",
@@ -187,7 +348,7 @@
             "additionalProperties": false
           }
         },
-        "required": ["threadId", "kind", "label", "prompt"],
+        "required": ["kind", "label", "prompt"],
         "additionalProperties": false
       },
       "permissions": ["zenx-triggers.write"],
@@ -207,7 +368,8 @@
           },
           "threadId": {
             "type": "string",
-            "maxLength": 512
+            "maxLength": 512,
+            "description": "Notification target: full ID, unique short ID, or exact title. On creation defaults to the calling Thread."
           },
           "kind": {
             "type": "string",
@@ -229,7 +391,26 @@
           },
           "watchedThreadId": {
             "type": "string",
-            "maxLength": 512
+            "maxLength": 512,
+            "description": "Source Thread: full ID, unique short ID, or exact title."
+          },
+          "sourceDevice": {
+            "type": "string",
+            "maxLength": 512,
+            "description": "Optional Fleet source device for a Thread watch. Omit or use local for this Host; notification target stays local."
+          },
+          "sourceWorkspace": {
+            "type": "string",
+            "maxLength": 512,
+            "description": "Optional remote source workspace ID or exact label; resolved and retained with the exact source Thread."
+          },
+          "once": {
+            "type": "boolean",
+            "description": "Attempt one notification, then stop listening. New thread watches default to true; false listens to every future Turn."
+          },
+          "includeLatest": {
+            "type": "boolean",
+            "description": "On creation, notify the latest Turn if it has already ended; otherwise wait for the active or next Turn."
           },
           "roomId": {
             "type": "string",
@@ -376,6 +557,29 @@
       "maxOutputBytes": 65536
     },
     {
+      "name": "zenx_triggers_resume",
+      "description": "Resume a stopped Trigger after validating its full definition revision; elapsed timers must first be edited.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "triggerId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["triggerId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-triggers.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.triggers.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
       "name": "zenx_triggers_delete",
       "description": "Delete a Trigger definition while preserving audit history.",
       "inputSchema": {
@@ -425,7 +629,7 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "Use Triggers to schedule and inspect auditable ZenX wakeups.",
+  "mainDocument": "Use Triggers to notify a local Thread when another Turn ends. Full IDs, unique short IDs and exact titles select Threads. For a native Fleet source, set sourceDevice and optionally sourceWorkspace; setup retains the exact remote device/workspace/Thread locator and listens to canonical completions. Omit sourceDevice or use local for this Host. New thread watches default to one notification attempt; omit threadId to notify the calling local Thread. includeLatest checks an already ended latest Turn only on creation. Use list for delivery state and visible source connection errors, result for the exact local or remote source Turn preview, and cancel to stop listening. queued means accepted input, not completed work. Failed/interrupted source Turns are explicitly labeled. Read-only recovery follows already observed active Turns without replaying unrelated old completions; failed or unknown sends are not retried.",
   "ui": {
     "bundles": [
       {
@@ -452,7 +656,7 @@
     "pages": [
       {
         "id": "triggers",
-        "title": "Triggers",
+        "title": "Automations",
         "route": "/plugins/zenx-triggers/triggers",
         "surfaceId": "triggers-page"
       }
@@ -460,13 +664,38 @@
     "sidebar": [
       {
         "id": "triggers",
-        "label": "Triggers",
+        "label": "Automations",
         "icon": "clock",
         "pageId": "triggers",
         "order": 10
       }
     ],
     "commands": [
+      {
+        "id": "threads",
+        "title": "Discover readable Thread targets for notification setup.",
+        "tool": "zenx_triggers_threads"
+      },
+      {
+        "id": "workspaces",
+        "title": "List configured Project workspaces eligible for a new automation Thread.",
+        "tool": "zenx_triggers_workspaces"
+      },
+      {
+        "id": "preview-target",
+        "title": "Preview trusted Host Thread defaults and configured workspace before explicit confirmation.",
+        "tool": "zenx_triggers_preview_target"
+      },
+      {
+        "id": "create-target",
+        "title": "Create an idle dedicated automation Thread only after confirming current Host defaults and workspace.",
+        "tool": "zenx_triggers_create_target"
+      },
+      {
+        "id": "result",
+        "title": "Read the exact source Turn preview of a retained notification; full original content is available through Thread reading.",
+        "tool": "zenx_triggers_result"
+      },
       {
         "id": "list",
         "title": "List Trigger definitions and bounded wakeup history.",
@@ -486,6 +715,11 @@
         "id": "cancel",
         "title": "Deactivate a Trigger without deleting its definition or history.",
         "tool": "zenx_triggers_cancel"
+      },
+      {
+        "id": "resume",
+        "title": "Resume a stopped Trigger after validating its full definition revision; elapsed timers must first be edited.",
+        "tool": "zenx_triggers_resume"
       },
       {
         "id": "delete",

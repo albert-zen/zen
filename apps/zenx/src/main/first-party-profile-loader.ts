@@ -6,22 +6,32 @@ export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
   imzenx: {
     pluginId: "imzenx",
     packageName: "@zenx/imzenx-plugin",
-    tarball: "zenx-imzenx-plugin-1.0.0.tgz",
+    tarball: "zenx-imzenx-plugin-1.0.2.tgz",
   },
   browser: {
     pluginId: "browser",
     packageName: "@zenx/browser-plugin",
-    tarball: "zenx-browser-plugin-electron-1.0.3.tgz",
+    tarball: "zenx-browser-plugin-electron-1.0.4.tgz",
   },
   computer: {
     pluginId: "computer",
     packageName: "@zenx/computer-plugin",
-    tarball: "zenx-computer-plugin-macos-1.0.1.tgz",
+    tarball: "zenx-computer-plugin-macos-1.0.2.tgz",
+  },
+  subagents: {
+    pluginId: "zenx-subagents",
+    packageName: "@zenx/subagents-plugin",
+    tarball: "zenx-subagents-plugin-1.0.0.tgz",
+  },
+  fleet: {
+    pluginId: "zenx-fleet",
+    packageName: "@zenx/fleet-plugin",
+    tarball: "zenx-fleet-plugin-1.0.0.tgz",
   },
   selfControl: {
     pluginId: "zenx-self-control",
     packageName: "@zenx/self-control-plugin",
-    tarball: "zenx-self-control-plugin-1.0.0.tgz",
+    tarball: "zenx-self-control-plugin-1.0.1.tgz",
   },
   triggers: {
     pluginId: "zenx-triggers",
@@ -31,6 +41,21 @@ export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
 });
 
 export const FIRST_PARTY_MARKETPLACE_ENTRIES = Object.freeze([
+  {
+    pluginId: "zenx-fleet",
+    packageName: FIRST_PARTY_PLUGIN_PACKAGES.fleet.packageName,
+    name: "Fleet",
+    description:
+      "Discover your machines and run explicit target-scoped Zen work.",
+    icon: "terminal",
+  },
+  {
+    pluginId: "zenx-subagents",
+    packageName: FIRST_PARTY_PLUGIN_PACKAGES.subagents.packageName,
+    name: "Subagents",
+    description: "Create and inspect native child Threads.",
+    icon: "users",
+  },
   {
     pluginId: "imzenx",
     packageName: FIRST_PARTY_PLUGIN_PACKAGES.imzenx.packageName,
@@ -88,19 +113,19 @@ export function firstPartyProviderTarball(
 ): string {
   if (pluginId === "browser") {
     if (providerId === "electron-dedicated-browser")
-      return "zenx-browser-plugin-electron-1.0.3.tgz";
+      return "zenx-browser-plugin-electron-1.0.4.tgz";
     if (providerId === "playwright-cli")
-      return "zenx-browser-plugin-playwright-1.0.3.tgz";
+      return "zenx-browser-plugin-playwright-1.0.4.tgz";
     if (providerId === "user-browser-cdp")
-      return "zenx-browser-plugin-user-session-1.0.3.tgz";
+      return "zenx-browser-plugin-user-session-1.0.4.tgz";
   }
   if (pluginId === "computer") {
     if (providerId === "macos-desktop")
-      return "zenx-computer-plugin-macos-1.0.1.tgz";
+      return "zenx-computer-plugin-macos-1.0.2.tgz";
     if (providerId === "microsoft-winapp-cli")
-      return "zenx-computer-plugin-win32-1.1.1.tgz";
+      return "zenx-computer-plugin-win32-1.1.2.tgz";
     if (providerId === "peekaboo-cli")
-      return "zenx-computer-plugin-peekaboo-1.0.0.tgz";
+      return "zenx-computer-plugin-peekaboo-1.0.1.tgz";
   }
   throw new Error(`No provider variant for ${pluginId}/${providerId}`);
 }

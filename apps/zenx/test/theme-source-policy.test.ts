@@ -19,6 +19,11 @@ const dynamicProductTokens = new Set([
   "--bottom-zone-height",
   "--auxiliary-width", // AuxiliaryPanel owns user-resized width.
   "--browser-panel-width", // BrowserThreadPanel owns user-resized width.
+  "--radix-popover-content-available-height", // Radix owns viewport collision measurements.
+  "--radix-popover-content-transform-origin",
+  "--radix-select-content-available-height",
+  "--radix-select-content-transform-origin",
+  "--radix-select-trigger-width",
 ]);
 
 test("renderer product styles keep raw colors in the single theme source", async () => {

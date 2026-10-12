@@ -51,20 +51,31 @@ export interface TriggerProgramInput {
 
 export interface ZenXTrigger {
   id: string;
+  /** Monotonic definition mutation fence; legacy definitions start at zero. */
+  definitionRevision?: number;
   threadId: string;
   kind: TriggerKind;
   label: string;
   prompt: string;
   createdAt: number;
   active: boolean;
+  /** Transient source-observation error; never part of a stored definition. */
+  sourceError?: string;
   timer?: { nextRunAt: number; intervalMinutes: number | null };
-  watch?: { threadId: string; event: "turn_completed" };
+  watch?: {
+    threadId: string;
+    event: "turn_completed";
+    once?: boolean;
+    sourceDevice?: string;
+    sourceWorkspace?: string;
+  };
   room?: { roomId: string; mention: string };
   signal?: { name: string };
   program?: TriggerProgramConfig;
 }
 
 export interface TriggerHistoryEntry {
+  delivery?: "pending" | "queued" | "failed" | "unknown";
   id: string;
   triggerId: string;
   threadId: string;
@@ -78,6 +89,8 @@ export interface TriggerHistoryEntry {
   turnId: string | null;
   error: string | null;
   sourceThreadId: string | null;
+  sourceDevice?: string;
+  sourceWorkspace?: string;
   sourceTurnId: string | null;
   sourceRoomId: string | null;
   sourceRoomMessageId: string | null;
@@ -92,7 +105,19 @@ export interface RoomMember {
   name: string;
   threadId: string;
 }
+export interface RoomQuote {
+  messageId: string;
+  author: string;
+  text: string;
+}
+export interface RoomReaction {
+  actorId: string;
+  label: string;
+  emoji: string;
+}
 export interface RoomMessage {
+  replyTo?: RoomQuote;
+  reactions?: RoomReaction[];
   id: string;
   roomId: string;
   author: string;
@@ -102,12 +127,89 @@ export interface RoomMessage {
   originThreadId: string | null;
   originTurnId: string | null;
 }
+export interface RoomSendOperation {
+  replyTo?: RoomQuote;
+  id: string;
+  text: string;
+  messageId: string | null;
+  createdAt: number;
+  acknowledged: boolean;
+  /** Persisted terminal fact: never permit a later post/prepare of this key. */
+  cancelled?: true;
+  mentions: Array<{ name: string; threadId: string; triggerIds: string[] }>;
+}
+export interface RoomDeliveryView {
+  operationId: string;
+  roomId: string;
+  text: string;
+  messageId: string | null;
+  state: "prepared" | "saved" | "cancelled";
+  createdAt: number;
+  mentions: Array<{
+    name: string;
+    threadId: string;
+    configuredNow: boolean;
+    deliveries: Array<{
+      triggerId: string;
+      status:
+        | "unconfigured"
+        | "pending"
+        | "queued"
+        | "running"
+        | "completed"
+        | "failed"
+        | "unknown";
+      historyId: string | null;
+    }>;
+  }>;
+}
 export interface ZenXRoom {
+  assistant?: { threadId: string; triggerId: string };
+  /** Editable planning documents; never Thread/Trigger execution authority. */
+  assistantWorkspace?: AssistantWorkspace;
   id: string;
   name: string;
+  operationEpoch?: string;
   members: RoomMember[];
   messages: RoomMessage[];
+  operations?: RoomSendOperation[];
   createdAt: number;
+}
+
+export type AssistantReference =
+  | {
+      kind: "thread";
+      device: string;
+      workspace: string;
+      threadId: string;
+      label: string;
+    }
+  | { kind: "trigger"; triggerId: string; label: string };
+export interface AssistantMatter {
+  id: string;
+  title: string;
+  plan: string;
+  statusNote: string;
+  notes: string;
+  references: AssistantReference[];
+}
+export interface AssistantMemory {
+  id: string;
+  title: string;
+  text: string;
+}
+export type AssistantMemoryNote = AssistantMemory;
+export interface AssistantWorkspace {
+  revision: number;
+  updatedAt: number;
+  matters: AssistantMatter[];
+  memory: AssistantMemory[];
+}
+export interface UpdateAssistantWorkspaceInput {
+  roomId: string;
+  expectedRevision: number;
+  matters: AssistantMatter[];
+  memory: AssistantMemory[];
 }
 
 export interface TriggerSnapshot {
@@ -131,6 +233,10 @@ export type CreateTriggerInput =
       label: string;
       prompt: string;
       watchedThreadId: string;
+      sourceDevice?: string;
+      sourceWorkspace?: string;
+      once?: boolean;
+      includeLatest?: boolean;
     } & TriggerProgramInput)
   | ({
       threadId: string;

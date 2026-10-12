@@ -110,10 +110,11 @@ public/opaque visibility 与 round-trip 必需的可选 Provider item identity�
 可以流式展示，compatible 的公开 reasoning content 才使用 text delta。失败或中断不会伪造
 completed reasoning Item。
 
-`thread/compact` 是 ZAS native method，不是 Codex 0.146.0 方法。它只接受精确的
-`{ threadId: string }`，等待 Zen 使用 admission 时冻结的当前 Provider selection
+`thread/compact` 是 ZAS native method，不是 Codex 0.146.0 方法。它接受必填
+`threadId` 及可选 `includeOriginalReference` / `retention`，等待 Zen 使用 admission 时冻结的当前 Provider selection
 为最新完整 Turn 边界生成、验证并 append canonical context compaction，然后返回
-精确的 `{ compactionItemId: string }`。调用者不能指定边界或 retained Item；active /
+精确的 `{ compactionItemId: string }`。调用者不能指定任意边界或绕开 Core 规划器直接写
+`retainedItemIds`；结构化保留选择由 Host 校验。active /
 incomplete Turn、没有新 eligible boundary、generation / abort / validation / journal
 失败都明确返回且不隐藏重试。Z11 不发送 compaction progress notification。
 
@@ -122,7 +123,7 @@ incomplete Turn、没有新 eligible boundary、generation / abort / validation 
 Unknown window、缺失或无效 usage、未成功 Turn 与已覆盖边界不触发；自动失败通过
 既有 Turn execution `error`（`willRetry: false`）与失败 completion 明确投影，不增加
 wire method、后台 retry 或 compaction progress notification。手动 `thread/compact`
-语义不变。
+仍使用最新完整 Turn 边界，不能更改历史或队列。
 
 `model/list` 的 `supportedReasoningEfforts`、`defaultReasoningEffort` 与
 `inputModalities` 直接来自结构化 catalog，不再硬编码。固定 0.146.0 CAS schema 要求
@@ -237,3 +238,11 @@ New Thread discovery is broadcast as `thread/started` to all initialized
 connections after the canonical Thread metadata commits. It does not subscribe
 those connections to transcript output or activate their UI. The creator gets
 one notification through the same event projection, alongside its request result.
+
+`thread/compact` 的 ZAS 扩展参数 `includeOriginalReference`（默认 true）与
+`retention`（Core policy 字段，包括 `itemIds`、`itemRanges`、`recentTurnCount`）不是 CAS 0.146.0
+的 schema；使用此本地共享、已初始化且持有 bearer 的 endpoint 的客户端均可发送，
+并无独立的「仅 ZAS 客户端」wire 身份门禁。`thread/original/read` 仅在这个本地共享
+endpoint 上，从存储的开启引用的压缩边界分页回读公开 Thread 投影，最多 50 项，
+不返回 reasoning、排队输入或边界后内容；它不属于 remote-host workspace-scoped
+接口，也不因此赋予远端工作区读取权。原始 ItemList 本身不变。

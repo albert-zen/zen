@@ -6,6 +6,10 @@ import {
   type AttachmentRef,
 } from "./attachment-ref.js";
 
+/** Observation receipt for a copied tool call, never an executed child operation. */
+export const SIDE_CHAT_TOOL_SNAPSHOT_CONTENT_TYPE =
+  "zen.side-chat-tool-snapshot.v1";
+
 /** Original UTF-8 text budget for the fixed repository instruction snapshot. */
 export const MAX_WORKSPACE_INSTRUCTION_BYTES = 128 * 1024;
 
@@ -17,6 +21,7 @@ export interface WorkspaceInstructionFile {
 export type ItemType =
   | "thread_metadata"
   | "thread_forked"
+  | "thread_instruction"
   | "thread_configuration_changed"
   | "context_compaction"
   | "turn_started"
@@ -24,6 +29,8 @@ export type ItemType =
   | "turn_aborted"
   | "turn_replacement_requested"
   | "user_message_queued"
+  | "user_message_queue_cancelled"
+  | "user_message_queue_edited"
   | "user_message"
   | "agent_message"
   | "model_usage"
@@ -36,6 +43,7 @@ export type ItemType =
 const CANONICAL_ITEM_TYPES = {
   thread_metadata: true,
   thread_forked: true,
+  thread_instruction: true,
   thread_configuration_changed: true,
   context_compaction: true,
   turn_started: true,
@@ -43,6 +51,8 @@ const CANONICAL_ITEM_TYPES = {
   turn_aborted: true,
   turn_replacement_requested: true,
   user_message_queued: true,
+  user_message_queue_cancelled: true,
+  user_message_queue_edited: true,
   user_message: true,
   agent_message: true,
   model_usage: true,
@@ -64,6 +74,8 @@ export interface ItemBase {
 interface ThreadMetadataItemBase extends ItemBase {
   type: "thread_metadata";
   cwd: string;
+  /** Immutable creation relation; ordinary copies do not inherit it. */
+  parentThreadId?: string;
   /** Only new Threads opt in; existing journals are never retroactively loaded. */
   workspaceInstructionPolicy?: "repo-root-on-first-message";
   sandbox: SandboxMode;
@@ -89,8 +101,17 @@ export interface ThreadForkedItem extends ItemBase {
   type: "thread_forked";
   sourceThreadId: string;
   sourceBoundaryItemId: string;
-  sourceTurnId: string;
+  /** Absent only on full-context snapshots without a source Turn. */
+  sourceTurnId?: string;
   workspace: "same-directory";
+  /** A full canonical snapshot, with inherited execution made inert. */
+  context?: "full";
+}
+
+/** Host-authored model instruction that does not create or schedule a Turn. */
+export interface ThreadInstructionItem extends ItemBase {
+  type: "thread_instruction";
+  text: string;
 }
 
 export interface CanonicalProviderSelection {
@@ -176,6 +197,13 @@ export type TurnReplacementRequestedItem =
 export interface TextUserInputPart {
   type: "text";
   text: string;
+  /** Host-loaded skill snapshot; text and source remain canonical on replay. */
+  skillSource?: {
+    kind: "catalog" | "instruction";
+    id?: string;
+    path?: string;
+    sha256?: string;
+  };
 }
 
 export interface ImageUserInputPart {
@@ -306,6 +334,8 @@ interface ContextCompactionItemBase extends ItemBase {
   coveredThroughItemId: string;
   summary: string;
   retainedItemIds: string[];
+  /** Legacy Items have no flag and retain their original projection unchanged. */
+  includeOriginalReference?: boolean;
   algorithmVersion: string;
 }
 
@@ -342,6 +372,25 @@ export interface QueuedUserMessageItem extends ItemBase {
   type: "user_message_queued";
   clientId: string;
   input: UserInput;
+  /** Explicit native manual choice; absent preserves legacy FIFO turns. */
+  deliveryMode?: "batch-next";
+}
+
+/** A replacement input revision; the initial queued Item owns identity/order. */
+export interface QueuedUserMessageEditedItem extends ItemBase {
+  type: "user_message_queue_edited";
+  queuedItemId: string;
+  clientId: string;
+  editId: string;
+  revision: number;
+  input: UserInput;
+}
+
+/** A completed cancellation fact; the original queued input stays in history. */
+export interface QueuedUserMessageCancelledItem extends ItemBase {
+  type: "user_message_queue_cancelled";
+  queuedItemId: string;
+  clientId: string;
 }
 
 export interface CodeStateItem extends ItemBase {
@@ -355,8 +404,11 @@ export interface CodeStateItem extends ItemBase {
 export type CanonicalItem =
   | CodeStateItem
   | QueuedUserMessageItem
+  | QueuedUserMessageCancelledItem
+  | QueuedUserMessageEditedItem
   | ThreadMetadataItem
   | ThreadForkedItem
+  | ThreadInstructionItem
   | ThreadConfigurationChangedItem
   | ContextCompactionItem
   | TurnStartedItem
@@ -480,6 +532,14 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
     case "thread_metadata":
       requireNoTurnId(item);
       requireNonEmptyString(item.cwd, "thread_metadata.cwd");
+      if (item.parentThreadId !== undefined) {
+        requireNonEmptyString(
+          item.parentThreadId,
+          "thread_metadata.parentThreadId",
+        );
+        if (item.parentThreadId === item.threadId)
+          throw new Error("Thread cannot be its own parent");
+      }
       if (item.workspaceInstructionPolicy !== undefined) {
         requireEnum(
           item.workspaceInstructionPolicy,
@@ -520,12 +580,24 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         item.sourceBoundaryItemId,
         "thread_forked.sourceBoundaryItemId",
       );
-      requireNonEmptyString(item.sourceTurnId, "thread_forked.sourceTurnId");
+      if (item.context !== undefined)
+        requireEnum(item.context, ["full"], "thread_forked.context");
+      if (item.context === "full")
+        requireOptionalNonEmptyString(
+          item.sourceTurnId,
+          "thread_forked.sourceTurnId",
+        );
+      else
+        requireNonEmptyString(item.sourceTurnId, "thread_forked.sourceTurnId");
       requireEnum(
         item.workspace,
         ["same-directory"],
         "thread_forked.workspace",
       );
+      break;
+    case "thread_instruction":
+      requireNoTurnId(item);
+      requireNonEmptyString(item.text, "thread_instruction.text");
       break;
     case "thread_configuration_changed":
       requireNoTurnId(item);
@@ -610,6 +682,14 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         item.retainedItemIds,
         "context_compaction.retainedItemIds",
       );
+      if (
+        item.includeOriginalReference !== undefined &&
+        typeof item.includeOriginalReference !== "boolean"
+      ) {
+        throw new Error(
+          "context_compaction.includeOriginalReference must be a boolean",
+        );
+      }
       if (item.provenance === "agentic") {
         requireTurnId(item, type);
         requireNonEmptyString(item.callId, "context_compaction.callId");
@@ -690,6 +770,21 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
     case "user_message_queued":
       requireNonEmptyString(item.clientId, `${type}.clientId`);
       validateUserInput(item.input, `${type}.input`);
+      break;
+    case "user_message_queue_edited":
+      requireNoTurnId(item);
+      requireNonEmptyString(item.queuedItemId, `${type}.queuedItemId`);
+      requireNonEmptyString(item.clientId, `${type}.clientId`);
+      requireNonEmptyString(item.editId, `${type}.editId`);
+      requireSafeInteger(item.revision, `${type}.revision`);
+      if ((item.revision as number) < 1)
+        throw new Error(`${type}.revision must be positive`);
+      validateUserInput(item.input, `${type}.input`);
+      break;
+    case "user_message_queue_cancelled":
+      requireNoTurnId(item);
+      requireNonEmptyString(item.queuedItemId, `${type}.queuedItemId`);
+      requireNonEmptyString(item.clientId, `${type}.clientId`);
       break;
     case "user_message":
       requireTurnId(item, type);
@@ -894,6 +989,24 @@ export function validateUserInput(value: unknown, name: string): void {
     const part = requireRecord(rawPart, `${name}[${String(index)}]`);
     if (part.type === "text") {
       requireNonEmptyString(part.text, `${name}[${String(index)}].text`);
+      if (part.skillSource !== undefined) {
+        const source = requireRecord(part.skillSource, "skillSource");
+        requireEnum(
+          source.kind,
+          ["catalog", "instruction"],
+          "skillSource.kind",
+        );
+        if (source.kind === "instruction") {
+          requireNonEmptyString(source.id, "skillSource.id");
+          requireNonEmptyString(source.path, "skillSource.path");
+          const hash = requireNonEmptyString(
+            source.sha256,
+            "skillSource.sha256",
+          );
+          if (!/^[a-f0-9]{64}$/u.test(hash))
+            throw new Error("Invalid Skill source hash");
+        }
+      }
     } else if (part.type === "image" || part.type === "audio") {
       validateAttachmentRef(
         part.attachment,

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rm,
   symlink,
@@ -21,7 +23,11 @@ import {
   type ZenXHostProfile,
   ZenXHostProfileStore,
 } from "../src/main/host-profile.js";
-import { ZenXSettingsService } from "../src/main/settings-service.js";
+import { ProviderLogoResources } from "../src/main/provider-logo-resource.js";
+import {
+  ConfigurationPreCommitError,
+  ZenXSettingsService,
+} from "../src/main/settings-service.js";
 import type { OpenAiSubscriptionAuthProfile } from "../../cli/src/subscription-auth.js";
 
 const encryption: LocalEncryption = {
@@ -78,7 +84,9 @@ test("persists one user-scoped workflow configuration for Settings and self-cont
         baseRevision: before.revision,
         commands: [],
       }),
-      /Configuration conflict/u,
+      (error: unknown) =>
+        error instanceof ConfigurationPreCommitError &&
+        /Configuration conflict/u.test(error.message),
     );
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -1312,6 +1320,351 @@ test("adds, edits, and deletes Provider profiles with atomic replacements and is
   }
 });
 
+test("custom Provider Logo survives restart, rejects invalid uploads, and falls back when its resource is missing", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-provider-logo-"),
+  );
+  try {
+    const first = settingsFor(directory, inactiveSubscription());
+    await first.initialize({ ZENX_PROVIDER: "fake" });
+    const provider = compatibleProfile("custom-logo").providerProfiles[0]!;
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    const before = (await first.publicSettings()).profile;
+    await assert.rejects(
+      first.addProviderProfile(
+        provider,
+        "key",
+        before.revision,
+        new Uint8Array([1, 2, 3]),
+      ),
+      /valid PNG, JPEG, or WebP/u,
+    );
+    const oversizedDimensions = Buffer.from(png);
+    oversizedDimensions.writeUInt32BE(1025, 16);
+    await assert.rejects(
+      first.addProviderProfile(
+        provider,
+        "key",
+        before.revision,
+        oversizedDimensions,
+      ),
+      /valid PNG, JPEG, or WebP/u,
+    );
+    await assert.rejects(
+      first.addProviderProfile(
+        provider,
+        "key",
+        before.revision,
+        png.subarray(0, 24),
+      ),
+      /valid PNG, JPEG, or WebP/u,
+    );
+    const invalidFilter = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nMtIzcnJBwAGLAIV5wb2PAAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    await assert.rejects(
+      first.addProviderProfile(provider, "key", before.revision, invalidFilter),
+      /valid PNG, JPEG, or WebP/u,
+    );
+    assert.equal(
+      (await first.publicSettings()).profile.providerProfiles.some(
+        (entry) => entry.providerProfileId === provider.providerProfileId,
+      ),
+      false,
+    );
+    await first.addProviderProfile(provider, "key", before.revision, png);
+    const saved = await first.publicSettings();
+    const resource = saved.profile.providerProfiles.find(
+      (entry) => entry.providerProfileId === provider.providerProfileId,
+    )?.logoResource;
+    assert.match(resource ?? "", /^[a-f0-9]{64}\.png$/u);
+    assert.match(
+      saved.providerLogoDataUrls?.[provider.providerProfileId] ?? "",
+      /^data:image\/png;base64,/u,
+    );
+    const reloaded = settingsFor(directory, inactiveSubscription());
+    await reloaded.initialize({});
+    assert.equal(
+      (await reloaded.publicSettings()).profile.providerProfiles.find(
+        (entry) => entry.providerProfileId === provider.providerProfileId,
+      )?.logoResource,
+      resource,
+    );
+    assert.match(
+      (await reloaded.publicSettings()).providerLogoDataUrls?.[
+        provider.providerProfileId
+      ] ?? "",
+      /^data:image\/png;base64,/u,
+    );
+    await unlink(path.join(directory, "provider-logos", resource!));
+    assert.equal(
+      (await reloaded.publicSettings()).providerLogoDataUrls?.[
+        provider.providerProfileId
+      ],
+      undefined,
+    );
+    await reloaded.editProviderProfile(provider.providerProfileId, provider, {
+      logoUpload: null,
+    });
+    assert.equal(
+      (await reloaded.publicSettings()).profile.providerProfiles.find(
+        (entry) => entry.providerProfileId === provider.providerProfileId,
+      )?.logoResource,
+      undefined,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Provider Logo IPC projection stays bounded and shared resources count for each profile", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-provider-logo-budget-"),
+  );
+  try {
+    const service = settingsFor(directory, inactiveSubscription());
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    const large = Array.from({ length: 8 }, (_, index) =>
+      pngWithAncillaryChunk(png, Buffer.alloc(470 * 1024, index + 1)),
+    );
+    for (let index = 0; index < large.length; index++)
+      await service.addProviderProfile(
+        compatibleProfile(`quota-${index}`).providerProfiles[0]!,
+        "key",
+        undefined,
+        large[index],
+      );
+    await assert.rejects(
+      service.addProviderProfile(
+        compatibleProfile("quota-8").providerProfiles[0]!,
+        "key",
+        undefined,
+        large[0],
+      ),
+      /exceed 4 MiB total/u,
+    );
+    await assert.rejects(
+      service.addProviderProfile(
+        compatibleProfile("quota-unique").providerProfiles[0]!,
+        "key",
+        undefined,
+        pngWithAncillaryChunk(png, Buffer.alloc(470 * 1024, 9)),
+      ),
+      /exceed 4 MiB total/u,
+    );
+    assert.equal(
+      (await readdir(path.join(directory, "provider-logos"))).length,
+      8,
+    );
+    const saved = (await service.publicSettings()).profile;
+    assert.equal(saved.providerProfiles.length, 9);
+    const duplicate = saved.providerProfiles.find(
+      (provider) => provider.providerProfileId === "quota-0",
+    )?.logoResource;
+    assert.ok(duplicate);
+    const legacy = {
+      ...saved,
+      providerProfiles: saved.providerProfiles.map((provider) =>
+        provider.providerProfileId === "fake"
+          ? { ...provider, logoResource: duplicate }
+          : provider,
+      ),
+    };
+    await writeFile(
+      path.join(directory, "host-profile.json"),
+      JSON.stringify(legacy),
+    );
+    const reloaded = settingsFor(directory, inactiveSubscription());
+    await reloaded.initialize({});
+    const projected = (await reloaded.publicSettings()).providerLogoDataUrls;
+    assert.equal(Object.keys(projected ?? {}).length, 8);
+    assert.equal(projected?.["quota-7"], undefined);
+    assert.ok(
+      Object.values(projected ?? {}).reduce(
+        (length, url) => length + url.length,
+        0,
+      ) <
+        5.5 * 1024 * 1024,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Provider Logo validates PNG bit depth and row shape while accepting Adam7", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-adam7-logo-"));
+  try {
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAFoEvQfAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    const logos = new ProviderLogoResources(directory);
+    const imported = await logos.import(png);
+    assert.match(
+      (await logos.dataUrl(imported.resource)) ?? "",
+      /^data:image\/png;base64,/u,
+    );
+    for (const invalid of [
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAwYAAABoxfWYAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+    ])
+      await assert.rejects(
+        logos.import(Buffer.from(invalid, "base64")),
+        /valid PNG, JPEG, or WebP/u,
+      );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Provider Logo requires a valid indexed palette before consecutive image data", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-indexed-logo-"));
+  try {
+    // A real 1×1 indexed PNG; macOS sips decodes it successfully.
+    const valid = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAABlBMVEX/AAAA/wDSh+9xAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    const signatureAndHeader = valid.subarray(0, 33);
+    const palette = valid.subarray(33, 51);
+    const imageData = valid.subarray(51, 73);
+    const end = valid.subarray(73);
+    const missingPalette = Buffer.concat([signatureAndHeader, imageData, end]);
+    const invalid = [
+      missingPalette,
+      Buffer.concat([signatureAndHeader, imageData, palette, end]),
+      Buffer.concat([
+        signatureAndHeader,
+        pngChunk("PLTE", Buffer.alloc(4)),
+        imageData,
+        end,
+      ]),
+      Buffer.concat([
+        signatureAndHeader,
+        pngChunk("PLTE", Buffer.alloc(9)),
+        imageData,
+        end,
+      ]),
+      Buffer.concat([signatureAndHeader, palette, palette, imageData, end]),
+      Buffer.concat([
+        signatureAndHeader,
+        palette,
+        pngChunk("ABCD", Buffer.alloc(0)),
+        imageData,
+        end,
+      ]),
+      Buffer.concat([
+        signatureAndHeader,
+        palette,
+        pngChunk("IDAT", imageData.subarray(8, 13)),
+        pngChunk("raNd", Buffer.alloc(0)),
+        pngChunk("IDAT", imageData.subarray(13, 18)),
+        end,
+      ]),
+    ];
+    const logos = new ProviderLogoResources(directory);
+    for (const png of invalid)
+      await assert.rejects(logos.import(png), /valid PNG, JPEG, or WebP/u);
+    const resource = `${createHash("sha256").update(missingPalette).digest("hex")}.png`;
+    await mkdir(path.join(directory, "provider-logos"));
+    await writeFile(
+      path.join(directory, "provider-logos", resource),
+      missingPalette,
+    );
+    assert.equal(await logos.dataUrl(resource), undefined);
+    const imported = await logos.import(valid);
+    assert.match(
+      (await logos.dataUrl(imported.resource)) ?? "",
+      /^data:image\/png;base64,/u,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+function pngWithAncillaryChunk(png: Buffer, payload: Buffer): Buffer {
+  return Buffer.concat([
+    png.subarray(0, png.length - 12),
+    pngChunk("raNd", payload),
+    png.subarray(png.length - 12),
+  ]);
+}
+
+function pngChunk(name: string, payload: Buffer): Buffer {
+  const type = Buffer.from(name);
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(payload.length);
+  let crc = 0xffffffff;
+  for (const byte of Buffer.concat([type, payload])) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++)
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+  }
+  const checksum = Buffer.alloc(4);
+  checksum.writeUInt32BE((crc ^ 0xffffffff) >>> 0);
+  return Buffer.concat([length, type, payload, checksum]);
+}
+
+test("general Settings save cannot replace Host-owned Logo references and cleans removed Provider assets", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-provider-logo-save-"),
+  );
+  try {
+    const service = settingsFor(directory, inactiveSubscription());
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    const provider = compatibleProfile("save-logo").providerProfiles[0]!;
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    await service.addProviderProfile(provider, "key", undefined, png);
+    const saved = (await service.publicSettings()).profile;
+    const resource = saved.providerProfiles.find(
+      (candidate) => candidate.providerProfileId === provider.providerProfileId,
+    )?.logoResource;
+    assert.ok(resource);
+    await assert.rejects(
+      service.save({
+        ...saved,
+        providerProfiles: saved.providerProfiles.map((candidate) =>
+          candidate.providerProfileId === provider.providerProfileId
+            ? { ...candidate, logoResource: `${"a".repeat(64)}.png` }
+            : candidate,
+        ),
+      }),
+      /Logo resource is Host-owned/u,
+    );
+    assert.equal(
+      (await service.publicSettings()).profile.providerProfiles.find(
+        (candidate) =>
+          candidate.providerProfileId === provider.providerProfileId,
+      )?.logoResource,
+      resource,
+    );
+    await service.save({
+      ...saved,
+      providerProfiles: saved.providerProfiles.filter(
+        (candidate) =>
+          candidate.providerProfileId !== provider.providerProfileId,
+      ),
+    });
+    await assert.rejects(
+      readFile(path.join(directory, "provider-logos", resource)),
+      /ENOENT/u,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("provider add, edit, and settings save reject incomplete context metadata without persisting", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-required-context-"),
@@ -1340,12 +1693,22 @@ test("provider add, edit, and settings save reject incomplete context metadata w
 
     await assert.rejects(
       service.addProviderProfile(incomplete, "required-key"),
-      /Provider profile required.*model required-model.*positive context window/u,
+      (error: unknown) =>
+        error instanceof ConfigurationPreCommitError &&
+        error.reason === "validation" &&
+        /Provider profile required.*model required-model.*positive context window/u.test(
+          error.message,
+        ),
     );
     await service.addProviderProfile(configured, "required-key");
     await assert.rejects(
       service.editProviderProfile("required", incomplete),
-      /Provider profile required.*model required-model.*positive context window/u,
+      (error: unknown) =>
+        error instanceof ConfigurationPreCommitError &&
+        error.reason === "validation" &&
+        /Provider profile required.*model required-model.*positive context window/u.test(
+          error.message,
+        ),
     );
     const before = await service.publicSettings();
     await assert.rejects(
@@ -1362,6 +1725,200 @@ test("provider add, edit, and settings save reject incomplete context metadata w
         (provider) => provider.providerProfileId === "required",
       )?.models[0]?.contextWindow,
       32_768,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Provider add and edit prepare failures are known rejected saves before profile write", async () => {
+  for (const operation of ["add", "edit"] as const) {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-provider-prepare-"),
+    );
+    try {
+      const service = settingsFor(directory, inactiveSubscription());
+      await service.initialize({ ZENX_PROVIDER: "fake" });
+      const provider = compatibleProfile("prepare").providerProfiles[0]!;
+      if (operation === "edit")
+        await service.addProviderProfile(provider, "first-key");
+      const before = (await service.publicSettings()).profile;
+      service.setConfigurationControl({
+        prepare: async () => {
+          throw new Error("prepare rejected");
+        },
+        publish: async () => {
+          throw new Error("unexpected publish");
+        },
+        discard: async () => {},
+        current: async () => {
+          throw new Error("unexpected current");
+        },
+      });
+      const save =
+        operation === "add"
+          ? service.addProviderProfile(provider, "first-key", before.revision)
+          : service.editProviderProfile(
+              provider.providerProfileId,
+              { ...provider, displayName: "Changed" },
+              { baseRevision: before.revision },
+            );
+      await assert.rejects(
+        save,
+        (error: unknown) =>
+          error instanceof ConfigurationPreCommitError &&
+          error.reason === "save-rejected" &&
+          /prepare rejected/u.test(error.message),
+      );
+      assert.deepEqual((await service.publicSettings()).profile, before);
+      assert.equal(
+        (
+          await new ZenXHostProfileStore(
+            path.join(directory, "host-profile.json"),
+          ).readOptional()
+        )?.revision,
+        before.revision,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("a vault read failure before Provider profile write is a known rejected save", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-provider-vault-"),
+  );
+  class FailingReadVault extends ZenXCredentialVault {
+    failRead = false;
+    override async readApiKey(id: string): Promise<string | undefined> {
+      if (this.failRead) throw new Error("vault read failed");
+      return await super.readApiKey(id);
+    }
+  }
+  try {
+    const vault = new FailingReadVault(
+      path.join(directory, "credentials.vault"),
+      encryption,
+    );
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault,
+      subscription: inactiveSubscription(),
+    });
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    const provider = compatibleProfile("vault").providerProfiles[0]!;
+    await service.addProviderProfile(provider, "first-key");
+    const before = (await service.publicSettings()).profile;
+    vault.failRead = true;
+    await assert.rejects(
+      service.editProviderProfile(
+        provider.providerProfileId,
+        { ...provider, displayName: "Changed" },
+        { apiKey: "replacement-key", baseRevision: before.revision },
+      ),
+      (error: unknown) =>
+        error instanceof ConfigurationPreCommitError &&
+        error.reason === "save-rejected" &&
+        error.message === "vault read failed",
+    );
+    vault.failRead = false;
+    assert.deepEqual((await service.publicSettings()).profile, before);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Provider saves refused during maintenance are not classified as form validation", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-provider-maintenance-"),
+  );
+  try {
+    const service = settingsFor(directory, inactiveSubscription());
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    const existing = compatibleProfile("existing").providerProfiles[0]!;
+    await service.addProviderProfile(existing, "key");
+    const before = (await service.publicSettings()).profile;
+    assert.equal(service.tryBeginMaintenance(), true);
+    try {
+      for (const save of [
+        service.addProviderProfile(
+          compatibleProfile("another").providerProfiles[0]!,
+          "key",
+          before.revision,
+        ),
+        service.editProviderProfile(
+          existing.providerProfileId,
+          { ...existing, displayName: "Changed" },
+          { baseRevision: before.revision },
+        ),
+      ]) {
+        await assert.rejects(
+          save,
+          (error: unknown) =>
+            error instanceof ConfigurationPreCommitError &&
+            error.reason === "save-rejected" &&
+            error.message === "host_restarting",
+        );
+      }
+    } finally {
+      service.endMaintenance();
+    }
+    assert.deepEqual((await service.publicSettings()).profile, before);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Provider profile write that may have committed remains unconfirmed", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-provider-write-"),
+  );
+  class LostWriteAcknowledgementStore extends ZenXHostProfileStore {
+    rejectAfterWrite = false;
+    override async write(profile: ZenXHostProfile): Promise<void> {
+      await super.write(profile);
+      if (this.rejectAfterWrite) throw new Error("write acknowledgement lost");
+    }
+  }
+  try {
+    const profileStore = new LostWriteAcknowledgementStore(
+      path.join(directory, "host-profile.json"),
+    );
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault: new ZenXCredentialVault(
+        path.join(directory, "credentials.vault"),
+        encryption,
+      ),
+      profileStore,
+      subscription: inactiveSubscription(),
+    });
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    const provider = compatibleProfile("write-phase").providerProfiles[0]!;
+    await service.addProviderProfile(provider, "key");
+    const before = (await service.publicSettings()).profile;
+    profileStore.rejectAfterWrite = true;
+    await assert.rejects(
+      service.editProviderProfile(
+        provider.providerProfileId,
+        { ...provider, displayName: "Persisted before error" },
+        { baseRevision: before.revision },
+      ),
+      (error: unknown) =>
+        !(error instanceof ConfigurationPreCommitError) &&
+        error instanceof Error &&
+        error.message === "write acknowledgement lost",
+    );
+    const persisted = await profileStore.readOptional();
+    assert.equal(persisted?.revision, (before.revision ?? 0) + 1);
+    assert.equal(
+      persisted?.providerProfiles.find(
+        (entry) => entry.providerProfileId === provider.providerProfileId,
+      )?.displayName,
+      "Persisted before error",
     );
   } finally {
     await rm(directory, { recursive: true, force: true });

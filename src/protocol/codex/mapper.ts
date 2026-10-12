@@ -45,6 +45,8 @@ export interface CodexThread {
   queuedMessages?: Array<{
     id: string;
     clientId: string;
+    /** Optional read-only metadata; it does not create a CAS edit command. */
+    revision?: number;
     text: string;
     imageCount: number;
   }>;
@@ -157,6 +159,7 @@ export function projectThread(
     queuedMessages: pendingQueuedMessages(snapshot.items).map((item) => ({
       id: item.id,
       clientId: item.clientId,
+      revision: item.revision,
       text: textFromUserInput(item.input),
       imageCount: item.input.filter((part) => part.type === "image").length,
     })),
@@ -324,11 +327,14 @@ export function projectCompletedItem(
     case "model_usage":
     case "thread_configuration_changed":
     case "thread_forked":
+    case "thread_instruction":
     case "thread_metadata":
     case "tool_result":
     case "turn_aborted":
     case "turn_completed":
     case "user_message_queued":
+    case "user_message_queue_cancelled":
+    case "user_message_queue_edited":
     case "turn_replacement_requested":
     case "turn_started":
       return null;

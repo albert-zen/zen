@@ -1,4 +1,9 @@
 import { projectContextInspection } from "../../../../src/context-inspection.js";
+import { randomUUID } from "node:crypto";
+import { FleetToolGateway } from "../../../../src/protocol/native/remote-tools.js";
+import { FleetShellGateway } from "./fleet-shell.js";
+import type { ToolEnvironment } from "../../../../src/tool.js";
+import { FleetHostService } from "./fleet-host.js";
 import {
   createHostedAppServer,
   type HostedZenAppServer,
@@ -25,9 +30,22 @@ import {
 } from "../../../../src/model-usage.js";
 import { ToolOutputSpool } from "../../../../src/tool-output-spool.js";
 
+let fleetHost: FleetHostService | undefined;
+const roomListeners = new Set<
+  (event: { roomId: string; threadId: string }) => void
+>();
+const roomRequests = new Map<
+  string,
+  {
+    resolve: (value: unknown) => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }
+>();
 let server: CodexWebSocketServer | undefined;
 let appServer: HostedZenAppServer | undefined;
 let tools: ZenXHostToolBundle | undefined;
+let targetToolEnvironment: ToolEnvironment | undefined;
 let replaceCapabilities:
   ((capabilities: ZenXCapabilityGenerationSnapshot) => void) | undefined;
 let currentCapabilityGeneration: (() => string) | undefined;
@@ -61,6 +79,77 @@ process.once("SIGINT", () => void shutdown());
 process.once("SIGTERM", () => void shutdown());
 
 async function handleCommand(command: HostCommand): Promise<void> {
+  if (command.type === "fleet/room-event") {
+    for (const listener of roomListeners) listener(command);
+    return;
+  }
+  if (command.type === "fleet/room-result") {
+    const request = roomRequests.get(command.requestId);
+    if (request) {
+      roomRequests.delete(command.requestId);
+      clearTimeout(request.timer);
+      if (command.error) request.reject(new Error(command.error));
+      else request.resolve(command.result);
+    }
+    return;
+  }
+  if (command.type === "fleet/control") {
+    try {
+      if (!appServer) throw new Error("Host unavailable");
+      fleetHost ??= new FleetHostService(
+        appServer,
+        {
+          request: (operation, params) =>
+            new Promise((resolve, reject) => {
+              if (roomRequests.size >= 32) {
+                reject(new Error("Too many Room requests"));
+                return;
+              }
+              const requestId = randomUUID();
+              const timer = setTimeout(() => {
+                roomRequests.delete(requestId);
+                reject(new Error("Room result unknown"));
+              }, 15000);
+              roomRequests.set(requestId, { resolve, reject, timer });
+              send({
+                type: "fleet/room-request",
+                requestId,
+                operation,
+                params,
+              });
+            }),
+          subscribe: (listener) => {
+            roomListeners.add(listener);
+            return () => roomListeners.delete(listener);
+          },
+        },
+        targetToolEnvironment
+          ? new FleetShellGateway(targetToolEnvironment)
+          : undefined,
+        targetToolEnvironment
+          ? ({ hostId, processEpoch }) =>
+              new FleetToolGateway({
+                tools: targetToolEnvironment!,
+                hostId,
+                processEpoch,
+              })
+          : undefined,
+      );
+      send({
+        type: "fleet/result",
+        requestId: command.requestId,
+        result: await fleetHost.control(command.action, command.input),
+      });
+    } catch (error) {
+      send({
+        type: "fleet/result",
+        requestId: command.requestId,
+        error: error instanceof Error ? error.message : "Fleet control failed",
+      });
+    }
+    return;
+  }
+
   if (command.type === "capability/result") {
     tools?.handleResult(command);
     return;
@@ -153,7 +242,10 @@ async function handleCommand(command: HostCommand): Promise<void> {
         : {
             type: "configuration/current",
             requestId: command.requestId,
-            current: appServer.currentConfiguration(),
+            current: {
+              ...appServer.currentConfiguration(),
+              threadStartDefaults: appServer.threadStartDefaults(),
+            },
           },
     );
     return;
@@ -312,20 +404,22 @@ async function handleCommand(command: HostCommand): Promise<void> {
       const usageSelection = snapshot.turns.find(
         (turn) => turn.id === latestUsage?.turnId,
       )?.selection;
+      const inspection =
+        process.env.ZENX_CONTEXT_INSPECTOR === "1"
+          ? projectContextInspection(snapshot.items, selection)
+          : undefined;
       send({
         type: "thread-usage/result",
         requestId: command.requestId,
         usage: {
-          ...(process.env.ZENX_CONTEXT_INSPECTOR === "1"
-            ? {
-                inspection: projectContextInspection(snapshot.items, selection),
-              }
-            : {}),
+          ...(inspection ? { inspection } : {}),
           ...projectModelUsage(snapshot.items, {
             contextWindow,
-            estimatedInputTokens: estimateModelMessageInputTokens(
-              compileModelMessages(snapshot.items, selection),
-            ),
+            estimatedInputTokens:
+              inspection?.estimatedMessageTokens ??
+              estimateModelMessageInputTokens(
+                compileModelMessages(snapshot.items, selection),
+              ),
             providerContextUsageCompatible:
               usageSelection !== undefined &&
               usageSelection.providerProfileId ===
@@ -386,6 +480,7 @@ async function handleCommand(command: HostCommand): Promise<void> {
     toolOutputSpool,
   });
   tools = toolComposition.capabilityBundle;
+  targetToolEnvironment = toolComposition.toolEnvironment;
   replaceCapabilities = toolComposition.replaceCapabilities;
   currentCapabilityGeneration = toolComposition.currentGenerationToken;
   closeToolComposition = toolComposition.close;
@@ -423,6 +518,13 @@ function codeRuntimeWorkerEntry(): URL {
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
+  await fleetHost?.close();
+  fleetHost = undefined;
+  for (const request of roomRequests.values()) {
+    clearTimeout(request.timer);
+    request.reject(new Error("Host stopped"));
+  }
+  roomRequests.clear();
   await server?.close();
   server = undefined;
   await closeToolComposition?.();
@@ -435,6 +537,7 @@ async function shutdown(): Promise<void> {
   appServer = undefined;
   toolOutputSpool = undefined;
   tools = undefined;
+  targetToolEnvironment = undefined;
   replaceCapabilities = undefined;
   currentCapabilityGeneration = undefined;
   maintenance = undefined;

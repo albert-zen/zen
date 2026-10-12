@@ -18,11 +18,14 @@ export interface CurrentMetadata {
 
 export interface ThreadSummary {
   threadId: string;
+  parentThreadId?: string;
   currentMetadata: CurrentMetadata;
   name?: string;
   archived: boolean;
   createdAt: string;
   updatedAt: string;
+  /** Latest locally started Turn, or this Thread's creation (including forks). */
+  turnSortAt?: string;
   preview: string;
   status: "idle" | "active";
   forkedFromThreadId?: string;
@@ -31,6 +34,7 @@ export interface ThreadSummary {
 
 export interface UnavailableThreadSummary {
   threadId: string;
+  parentThreadId?: string;
   name?: string;
   archived: boolean;
   createdAt: null;
@@ -131,6 +135,10 @@ export function isNativeThreadSummary(
     !isRecord(value) ||
     typeof value.threadId !== "string" ||
     value.threadId.length === 0 ||
+    (value.parentThreadId !== undefined &&
+      (typeof value.parentThreadId !== "string" ||
+        value.parentThreadId.length === 0 ||
+        value.parentThreadId === value.threadId)) ||
     typeof value.archived !== "boolean" ||
     (value.name !== undefined && typeof value.name !== "string") ||
     typeof value.preview !== "string"
@@ -149,6 +157,7 @@ export function isNativeThreadSummary(
     (value.status === "idle" || value.status === "active") &&
     typeof value.createdAt === "string" &&
     typeof value.updatedAt === "string" &&
+    (value.turnSortAt === undefined || typeof value.turnSortAt === "string") &&
     (value.forkedFromThreadId === undefined ||
       typeof value.forkedFromThreadId === "string") &&
     (value.forkedFromTurnId === undefined ||

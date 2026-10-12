@@ -1,6 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
-import { rename, rm, stat, open, opendir, realpath } from "node:fs/promises";
+import {
+  rename,
+  rm,
+  stat,
+  lstat,
+  open,
+  opendir,
+  realpath,
+} from "node:fs/promises";
 import path from "node:path";
+import type { Dirent } from "node:fs";
 
 export interface WorkspaceFileListing {
   path: string;
@@ -11,6 +20,246 @@ export interface WorkspaceTextFile {
   path: string;
   text: string;
   revision: string;
+}
+export interface WorkspaceFileReference {
+  cwd: string;
+  path: string;
+  name: string;
+}
+export interface WorkspaceFileSearch {
+  cwd: string;
+  entries: { name: string; path: string }[];
+  truncated: boolean;
+  scanned: number;
+  warnings?: string[];
+}
+
+const referenceSearchExcludedDirectories = new Set([
+  ".git",
+  "node_modules",
+  ".hg",
+  ".svn",
+  ".venv",
+  "__pycache__",
+  ".spotlight-v100",
+  ".trashes",
+]);
+
+const referenceSearchExcludedFiles = new Set([
+  ".ds_store",
+  "thumbs.db",
+  "desktop.ini",
+]);
+
+function referenceRank(relative: string, needle: string, explicit: boolean) {
+  const basename = path.posix.basename(relative).toLowerCase();
+  const hidden = relative.split("/").some((part) => part.startsWith("."));
+  const match = !needle
+    ? 0
+    : basename === needle ||
+        (basename.lastIndexOf(".") > 0 &&
+          basename.slice(0, basename.lastIndexOf(".")) === needle)
+      ? 0
+      : basename.startsWith(needle)
+        ? 1
+        : basename.includes(needle)
+          ? 2
+          : 3;
+  // Broad queries favor ordinary files; explicit dotted/path queries favor
+  // match quality, so useful hidden configuration remains discoverable.
+  return explicit ? [match, Number(hidden)] : [Number(hidden), match];
+}
+
+// Ephemeral discovery only: no index, file content, or session state is retained.
+export async function searchWorkspaceFiles(
+  root: string,
+  query: unknown,
+): Promise<WorkspaceFileSearch> {
+  if (
+    typeof query !== "string" ||
+    query.length > 512 ||
+    /[\u0000-\u001f\u007f]/.test(query)
+  )
+    throw new Error("Invalid workspace file search query");
+  const cwd = await realpath(root);
+  // Root access is required even if a prioritized subtree fills the result limit.
+  const rootDirectory = await opendir(cwd);
+  await rootDirectory.close();
+  const normalizedQuery = query
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/^\.\//, "");
+  const needle = normalizedQuery.toLocaleLowerCase();
+  const explicit =
+    normalizedQuery.includes("/") || normalizedQuery.startsWith(".");
+  const compare = (a: { path: string }, b: { path: string }) => {
+    const left = referenceRank(a.path, needle, explicit);
+    const right = referenceRank(b.path, needle, explicit);
+    return (
+      left[0]! - right[0]! ||
+      left[1]! - right[1]! ||
+      (!needle ? a.path.split("/").length - b.path.split("/").length : 0) ||
+      a.path.toLowerCase().localeCompare(b.path.toLowerCase(), "en") ||
+      a.path.localeCompare(b.path, "en")
+    );
+  };
+  const result: WorkspaceFileSearch = {
+    cwd,
+    entries: [],
+    truncated: false,
+    scanned: 0,
+  };
+  type PendingDirectory = {
+    relative: string;
+    depth: number;
+    priority: boolean;
+    iterator?: AsyncIterator<Dirent>;
+  };
+  const priority: PendingDirectory[] = [];
+  const ordinary: PendingDirectory[] = [
+    { relative: "", depth: 0, priority: false },
+  ];
+  const hidden: PendingDirectory[] = [];
+  const enqueue = (directory: PendingDirectory) => {
+    if (directory.priority) priority.push(directory);
+    else if (directory.relative.split("/").some((part) => part.startsWith(".")))
+      hidden.push(directory);
+    else ordinary.push(directory);
+  };
+  const warn = (relative: string, error: unknown) => {
+    result.truncated = true;
+    const code = (error as NodeJS.ErrnoException)?.code;
+    const message = error instanceof Error ? error.message : String(error);
+    (result.warnings ??= []).push(`${relative}: ${code ?? message}`);
+  };
+  const parent = normalizedQuery.slice(0, normalizedQuery.lastIndexOf("/") + 1);
+  if (parent) {
+    const parts = parent.split("/").filter(Boolean);
+    if (path.isAbsolute(parent) || parts.includes(".."))
+      throw new Error("Search path is outside this workspace");
+    if (
+      !parts.some((part) =>
+        referenceSearchExcludedDirectories.has(part.toLowerCase()),
+      )
+    ) {
+      try {
+        let directory = cwd;
+        for (const part of parts) {
+          directory = path.join(directory, part);
+          if ((await lstat(directory)).isSymbolicLink())
+            throw new Error(
+              "Symbolic link directories are excluded from search",
+            );
+        }
+        const target = await resolveWorkspacePath(cwd, parent);
+        priority.push({
+          relative: target.relative,
+          depth: 0,
+          priority: true,
+        });
+      } catch (error) {
+        warn(parent, error);
+      }
+    }
+  }
+  const visited = new Set<string>();
+  const openIterators = new Map<AsyncIterator<Dirent>, string>();
+  const deadline = performance.now() + 500;
+  try {
+    while (priority.length || ordinary.length || hidden.length) {
+      if (result.scanned >= 10_000 || performance.now() >= deadline) {
+        result.truncated = true;
+        break;
+      }
+      const current = (priority.shift() ?? ordinary.shift() ?? hidden.shift())!;
+      if (!current.iterator && visited.has(current.relative)) continue;
+      // Resolve again before opening so a replaced directory cannot ordinarily
+      // redirect traversal outside cwd. As with the viewer, this is not openat.
+      try {
+        if (!current.iterator) {
+          visited.add(current.relative);
+          const target = await resolveWorkspacePath(cwd, current.relative);
+          current.iterator = (await opendir(target.resolved))[
+            Symbol.asyncIterator
+          ]();
+          openIterators.set(current.iterator, current.relative);
+        }
+        // Every entry, including OS debris, costs scan budget. Yield after one
+        // bounded slice so a huge ordinary directory cannot starve its siblings;
+        // hidden subtrees wait behind ordinary work unless explicitly requested.
+        let exhausted = false;
+        for (let slice = 0; slice < 1024; slice++) {
+          if (result.scanned >= 10_000 || performance.now() >= deadline) {
+            result.truncated = true;
+            break;
+          }
+          const read = await current.iterator.next();
+          if (read.done) {
+            exhausted = true;
+            openIterators.delete(current.iterator);
+            break;
+          }
+          const entry = read.value;
+          result.scanned++;
+          const lowerName = entry.name.toLowerCase();
+          const relative = current.relative
+            ? `${current.relative}/${entry.name}`
+            : entry.name;
+          if (entry.isDirectory()) {
+            if (referenceSearchExcludedDirectories.has(lowerName)) continue;
+            if (current.depth >= 32) result.truncated = true;
+            else
+              enqueue({
+                relative,
+                depth: current.depth + 1,
+                priority: current.priority,
+              });
+          } else if (
+            entry.isFile() &&
+            !referenceSearchExcludedFiles.has(lowerName) &&
+            !lowerName.startsWith("._") &&
+            relative.toLocaleLowerCase().includes(needle)
+          ) {
+            result.entries.push({ name: entry.name, path: relative });
+            result.entries.sort(compare);
+            if (result.entries.length > 80) {
+              result.truncated = true;
+              result.entries.pop();
+            }
+          }
+        }
+        if (!exhausted) enqueue(current);
+      } catch (error) {
+        if (!current.relative) throw error;
+        warn(current.relative, error);
+      }
+    }
+  } finally {
+    // A paused async directory iterator holds an fd; also release it when a
+    // deadline/error ends the walk rather than waiting for GC.
+    const remaining = [...openIterators];
+    const closed = await Promise.allSettled(
+      remaining.map(([iterator]) => iterator.return?.()),
+    );
+    for (let index = 0; index < closed.length; index++)
+      if (closed[index]!.status === "rejected")
+        warn(
+          remaining[index]![1],
+          (closed[index] as PromiseRejectedResult).reason,
+        );
+  }
+  return result;
+}
+
+export async function validateWorkspaceFileReference(
+  root: string,
+  relative: unknown,
+): Promise<WorkspaceFileReference> {
+  const cwd = await realpath(root);
+  const target = await resolveWorkspacePath(cwd, relative);
+  if (!(await stat(target.resolved)).isFile())
+    throw new Error("Only a regular file can be referenced");
+  return { cwd, path: target.relative, name: path.basename(target.resolved) };
 }
 export type WorkspaceFileSaveResult = {
   status: "saved" | "conflict";

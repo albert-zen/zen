@@ -1,13 +1,354 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  writeFile,
+  rm,
+  symlink,
+  realpath,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import {
   listWorkspaceFiles,
   readWorkspaceFile,
   saveWorkspaceFile,
+  searchWorkspaceFiles,
+  validateWorkspaceFileReference,
 } from "../src/main/workspace-files.js";
+
+test("reference search matches nested special paths and validates binary without reading content", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-reference-"));
+  try {
+    await mkdir(path.join(root, "文档 [draft]"));
+    await writeFile(
+      path.join(root, "文档 [draft]", "A # %.bin"),
+      Buffer.from([0, 255]),
+    );
+    for (const directory of ["node_modules", ".git"]) {
+      await mkdir(path.join(root, directory));
+      await writeFile(path.join(root, directory, "A # %.bin"), "ignored");
+    }
+    const result = await searchWorkspaceFiles(root, "a # %");
+    assert.equal(result.truncated, false);
+    assert.deepEqual(result.entries, [
+      { name: "A # %.bin", path: "文档 [draft]/A # %.bin" },
+    ]);
+    const reference = await validateWorkspaceFileReference(
+      root,
+      result.entries[0]!.path,
+    );
+    assert.equal(reference.cwd, result.cwd);
+    assert.equal(reference.path, "文档 [draft]/A # %.bin");
+    await rm(path.join(root, reference.path));
+    await assert.rejects(
+      validateWorkspaceFileReference(root, reference.path),
+      /ENOENT/,
+    );
+    await assert.rejects(
+      validateWorkspaceFileReference(root, "."),
+      /regular file/,
+    );
+    await assert.rejects(
+      validateWorkspaceFileReference(root, "../outside"),
+      /workspace/,
+    );
+    await assert.rejects(searchWorkspaceFiles(root, null), /query/);
+    await assert.rejects(searchWorkspaceFiles(root, "x".repeat(513)), /query/);
+    await assert.rejects(searchWorkspaceFiles(root, "x\0"), /query/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("reference search reports truncation and does not follow directory junctions", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-search-bound-"));
+  try {
+    const workspace = path.join(root, "workspace");
+    const outside = path.join(root, "outside");
+    await mkdir(workspace);
+    await mkdir(outside);
+    await writeFile(path.join(outside, "secret.txt"), "outside");
+    await symlink(
+      outside,
+      path.join(workspace, "link"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    assert.deepEqual(
+      (await searchWorkspaceFiles(workspace, "secret")).entries,
+      [],
+    );
+    const linkedSearch = await searchWorkspaceFiles(workspace, "link/secret");
+    assert.deepEqual(linkedSearch.entries, []);
+    assert.equal(linkedSearch.truncated, true);
+    assert.match(linkedSearch.warnings!.join(" "), /Symbolic link/);
+    await assert.rejects(
+      validateWorkspaceFileReference(workspace, "link/secret.txt"),
+      /outside this workspace/,
+    );
+    for (let i = 0; i < 85; i++)
+      await writeFile(path.join(workspace, `${i}.txt`), "");
+    const result = await searchWorkspaceFiles(workspace, ".txt");
+    assert.equal(result.entries.length, 80);
+    assert.equal(result.truncated, true);
+    await assert.rejects(
+      searchWorkspaceFiles(path.join(root, "missing"), ""),
+      /ENOENT/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("reference search bounds depth and surfaces unreadable directory errors", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-search-depth-"));
+  try {
+    const deep = path.join(root, ...Array.from({ length: 34 }, () => "d"));
+    await mkdir(deep, { recursive: true });
+    await writeFile(path.join(deep, "hidden.txt"), "");
+    const result = await searchWorkspaceFiles(root, "hidden");
+    assert.equal(result.truncated, true);
+    assert.deepEqual(result.entries, []);
+    const file = path.join(root, "not-a-directory");
+    await writeFile(file, "");
+    await assert.rejects(searchWorkspaceFiles(file, ""), /ENOTDIR/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("reference search preserves valid results when child directories disappear or deny access", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-search-partial-"));
+  const originalOpen = fs.opendir;
+  try {
+    await mkdir(path.join(root, "denied"));
+    await mkdir(path.join(root, "deleted"));
+    await writeFile(path.join(root, "valid.txt"), "");
+    t.mock.method(fs, "opendir", async (directory: string) => {
+      if (path.basename(directory) === "denied")
+        throw Object.assign(new Error("access denied"), { code: "EACCES" });
+      if (path.basename(directory) === "deleted")
+        await rm(directory, { recursive: true });
+      return originalOpen(directory);
+    });
+    syncBuiltinESMExports();
+    const result = await searchWorkspaceFiles(root, "");
+    assert.deepEqual(result.entries, [
+      { name: "valid.txt", path: "valid.txt" },
+    ]);
+    assert.equal(result.truncated, true);
+    assert.equal(result.warnings?.length, 2);
+    assert.match(result.warnings!.join(" "), /denied.*EACCES|EACCES.*denied/);
+    assert.match(result.warnings!.join(" "), /deleted.*ENOENT|ENOENT.*deleted/);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("explicit parent path is searched before root enumeration and remains bounded", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-search-priority-"));
+  const originalOpen = fs.opendir;
+  const opened: string[] = [];
+  try {
+    await mkdir(path.join(root, "src"));
+    await writeFile(path.join(root, "src", "foo.ts"), "");
+    t.mock.method(fs, "opendir", async (directory: string) => {
+      opened.push(directory);
+      return originalOpen(directory);
+    });
+    syncBuiltinESMExports();
+    const result = await searchWorkspaceFiles(root, "src/foo");
+    // Root is first opened and closed only to check accessibility.
+    assert.equal(path.basename(opened[1]!), "src");
+    assert.deepEqual(result.entries, [{ name: "foo.ts", path: "src/foo.ts" }]);
+    assert.equal(
+      new Set(result.entries.map((entry) => entry.path)).size,
+      result.entries.length,
+    );
+    await assert.rejects(searchWorkspaceFiles(root, "../foo"), /workspace/);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("reference search excludes OS debris and ranks useful files ahead of hidden configuration", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-mention-rank-"));
+  try {
+    await mkdir(path.join(root, ".github", "workflows"), { recursive: true });
+    await mkdir(path.join(root, "src", "deep"), { recursive: true });
+    for (const file of [
+      ".DS_Store",
+      "Thumbs.db",
+      "desktop.ini",
+      "._README.md",
+      ".gitignore",
+      ".gitmodules",
+      "README.md",
+      "readme-extra.md",
+      "src/deep/README.md",
+      "src/deep/.DS_Store",
+      ".github/workflows/build.yml",
+    ]) {
+      await writeFile(path.join(root, file), "fixture");
+    }
+    const empty = await searchWorkspaceFiles(root, "");
+    assert.equal(empty.truncated, false);
+    assert.deepEqual(
+      empty.entries.map((entry) => entry.path),
+      [
+        "readme-extra.md",
+        "README.md",
+        "src/deep/README.md",
+        ".gitignore",
+        ".gitmodules",
+        ".github/workflows/build.yml",
+      ],
+    );
+    assert.deepEqual(
+      (await searchWorkspaceFiles(root, "readme")).entries.map((e) => e.path),
+      ["README.md", "src/deep/README.md", "readme-extra.md"],
+    );
+    assert.deepEqual(
+      (await searchWorkspaceFiles(root, ".git")).entries.map((e) => e.path),
+      [".gitignore", ".gitmodules", ".github/workflows/build.yml"],
+    );
+    assert.deepEqual(
+      (await searchWorkspaceFiles(root, ".github/workflows/bu")).entries.map(
+        (e) => e.path,
+      ),
+      [".github/workflows/build.yml"],
+    );
+    assert.deepEqual(
+      (await searchWorkspaceFiles(root, "ds_store")).entries,
+      [],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("reference search ranks beyond result cap and reports partial results honestly", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-mention-cap-"));
+  try {
+    await mkdir(path.join(root, ".github"));
+    for (let i = 0; i < 90; i++)
+      await writeFile(
+        path.join(root, ".github", `sample-${String(i).padStart(3, "0")}.txt`),
+        "",
+      );
+    await writeFile(path.join(root, "sample.ts"), "");
+    const result = await searchWorkspaceFiles(root, "sample");
+    assert.equal(result.entries.length, 80);
+    assert.equal(result.entries[0]?.path, "sample.ts");
+    assert.equal(result.truncated, true);
+    const explicit = await searchWorkspaceFiles(root, ".github/sample-089");
+    assert.deepEqual(
+      explicit.entries.map((e) => e.path),
+      [".github/sample-089.txt"],
+    );
+    assert.equal(explicit.truncated, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("reference search reports scan cap with excluded OS debris", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-mention-scan-"));
+  const resolvedRoot = await realpath(root);
+  const originalOpen = fs.opendir;
+  let opens = 0;
+  try {
+    t.mock.method(fs, "opendir", async (directory: string) => {
+      if (directory !== resolvedRoot || opens++ === 0)
+        return originalOpen(directory);
+      return {
+        async *[Symbol.asyncIterator]() {
+          try {
+            for (let i = 0; i < 10_001; i++)
+              yield {
+                name: `._junk-${i}`,
+                isDirectory: () => false,
+                isFile: () => true,
+              };
+          } finally {
+            throw Object.assign(new Error("close failed"), { code: "EIO" });
+          }
+        },
+      } as Awaited<ReturnType<typeof fs.opendir>>;
+    });
+    syncBuiltinESMExports();
+    const result = await searchWorkspaceFiles(root, "");
+    assert.deepEqual(result.entries, []);
+    assert.equal(result.truncated, true);
+    assert.ok(result.scanned <= 10_000);
+    assert.match(result.warnings!.join(" "), /EIO/);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("reference search gives ordinary siblings scan time before hidden debris and a large ordinary directory", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-mention-fair-"));
+  const cwd = await realpath(root);
+  const originalOpen = fs.opendir;
+  let rootOpens = 0;
+  try {
+    for (const directory of [".github", "bulk", "src"])
+      await mkdir(path.join(root, directory));
+    await writeFile(path.join(root, "src", "sample.ts"), "");
+    t.mock.method(fs, "opendir", async (directory: string) => {
+      if (directory === cwd && ++rootOpens > 1)
+        return {
+          close: async () => {},
+          async *[Symbol.asyncIterator]() {
+            for (const name of [".github", "bulk", "src"])
+              yield { name, isDirectory: () => true, isFile: () => false };
+          },
+        } as Awaited<ReturnType<typeof fs.opendir>>;
+      if (
+        [".github", "bulk"].some((name) => directory === path.join(cwd, name))
+      )
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield {
+              name: "sample.yml",
+              isDirectory: () => false,
+              isFile: () => true,
+            };
+            for (let i = 0; i < 10_001; i++)
+              yield {
+                name: `._sample-${i}`,
+                isDirectory: () => false,
+                isFile: () => true,
+              };
+          },
+        } as Awaited<ReturnType<typeof fs.opendir>>;
+      return originalOpen(directory);
+    });
+    syncBuiltinESMExports();
+    const broad = await searchWorkspaceFiles(root, "sample");
+    assert.ok(broad.entries.some((entry) => entry.path === "src/sample.ts"));
+    assert.equal(broad.truncated, true);
+    assert.ok(broad.scanned <= 10_000);
+    const precise = await searchWorkspaceFiles(root, ".github/sample.yml");
+    assert.ok(
+      precise.entries.some((entry) => entry.path === ".github/sample.yml"),
+    );
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("workspace viewer lists directories first and reads exact UTF-8 source", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zenx-files-"));

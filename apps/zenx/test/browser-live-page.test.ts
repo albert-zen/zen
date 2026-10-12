@@ -1,3 +1,4 @@
+import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { JSDOM } from "jsdom";
@@ -47,6 +48,22 @@ test("Browser observer keeps status, privacy, and mode in one compact toolbar", 
 
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => root.render(React.createElement(BrowserPage)));
+
+  const expand = dom.window.document.querySelector<HTMLButtonElement>(
+    '[aria-label="Expand browser view"]',
+  );
+  assert.equal(
+    expand?.querySelector("svg")?.getAttribute("data-icon"),
+    "maximize",
+  );
+  await act(async () => expand?.click());
+  const restore = dom.window.document.querySelector<HTMLButtonElement>(
+    '[aria-label="Restore browser panel"]',
+  );
+  assert.equal(
+    restore?.querySelector("svg")?.getAttribute("data-icon"),
+    "minimize",
+  );
 
   const toolbar = dom.window.document.querySelector(
     ".browser-live-toolbar[aria-label='Browser observation']",

@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import test from "node:test";
 import {
   deferred,
+  fakeJpegCaptureData,
   nextTurn,
   waitUntil,
   listen,
@@ -27,6 +28,23 @@ import type {
   BrowserTargetFingerprint,
   ZenXBrowserBackend,
 } from "../src/main/capabilities/browser-provider.js";
+import type { UserBrowserLiveImageDecoder } from "../src/main/capabilities/user-browser-live-frame.js";
+import {
+  MAX_OBSERVATION_CAPTURE_ITEMS,
+  MAX_OBSERVATION_CAPTURE_TEXT,
+  OBSERVATION_CAPTURE,
+} from "../src/main/capabilities/observation-capture.js";
+
+const decodeTestLiveImage: UserBrowserLiveImageDecoder = async (encoded) => ({
+  isEmpty: () => false,
+  getSize: () => ({ width: 800, height: 600 }),
+  resize: () => {
+    throw new Error("test capture does not need resizing");
+  },
+  toJPEG: () => encoded,
+});
+
+const liveConnectionOptions = { liveFrameImageDecoder: decodeTestLiveImage };
 
 test("user browser scroll consumes observations and guards document identity before dispatch", async () => {
   const client = new FakeUserBrowserClient();
@@ -119,9 +137,241 @@ test("attached document acquisition enables Runtime before reading the frame tre
   }
 });
 
-test("live observation acks every screencast frame and publishes only the bounded latest frame", async () => {
+test("target info changes reach the live browser metadata projection", async () => {
   const cdp = await createFakeCdpServer();
-  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const connection = await connectUserBrowserCdp(
+    cdp.endpoint,
+    undefined,
+    liveConnectionOptions,
+  );
+  const events: Array<{ type: string; title?: string; url?: string }> = [];
+  try {
+    await connection.backend.listTabs("work");
+    const unsubscribe = connection.backend.observeTab!(
+      "work",
+      "target-1",
+      (event) => events.push(event),
+    );
+    cdp.emitTargetInfoChanged(
+      "target-1",
+      "Updated account",
+      "https://example.test/updated",
+    );
+    await waitUntil(() =>
+      events.some(
+        (event) =>
+          event.type === "metadata" &&
+          event.title === "Updated account" &&
+          event.url === "https://example.test/updated",
+      ),
+    );
+    unsubscribe();
+  } finally {
+    await connection.backend.close();
+    await cdp.close();
+  }
+});
+
+test("silent background screencasts produce continuous fresh frames and stop capture on unsubscribe", async () => {
+  const cdp = await createFakeCdpServer();
+  const connection = await connectUserBrowserCdp(
+    cdp.endpoint,
+    undefined,
+    liveConnectionOptions,
+  );
+  const events: Array<{
+    type: string;
+    status?: string;
+    frame?: { data: string };
+  }> = [];
+  try {
+    await connection.backend.listTabs("work");
+    const unsubscribe = connection.backend.observeTab!(
+      "work",
+      "target-1",
+      (event) => events.push(event),
+    );
+    await waitUntil(() => cdp.count("Page.startScreencast") === 1);
+    assert.equal(
+      events.some((event) => event.status === "live"),
+      false,
+      "start acknowledgement alone is not a live image",
+    );
+    await waitUntil(
+      () => events.filter((event) => event.type === "frame").length >= 2,
+    );
+    const frames = events.filter((event) => event.type === "frame");
+    assert.notEqual(frames[0]?.frame?.data, frames[1]?.frame?.data);
+    assert.equal(
+      events.some((event) => event.status === "live"),
+      true,
+    );
+    const captures = cdp.requests("Page.captureScreenshot");
+    assert.ok(
+      captures.every(
+        (capture) =>
+          capture.fromSurface === true &&
+          capture.captureBeyondViewport === false &&
+          capture.clip === undefined,
+      ),
+    );
+    assert.equal(cdp.count("Page.getLayoutMetrics"), 0);
+    unsubscribe();
+    await waitUntil(() => cdp.count("Page.stopScreencast") === 1);
+    const count = cdp.count("Page.captureScreenshot");
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    assert.equal(cdp.count("Page.captureScreenshot"), count);
+  } finally {
+    await connection.backend.close();
+    await cdp.close();
+  }
+});
+
+test("a late live capture cannot publish after observer cancellation", async () => {
+  const cdp = await createFakeCdpServer();
+  const connection = await connectUserBrowserCdp(
+    cdp.endpoint,
+    undefined,
+    liveConnectionOptions,
+  );
+  const events: Array<{ type: string; status?: string }> = [];
+  try {
+    await connection.backend.listTabs("work");
+    cdp.holdNextLiveCaptureReply();
+    const unsubscribe = connection.backend.observeTab!(
+      "work",
+      "target-1",
+      (event) => events.push(event),
+    );
+    await waitUntil(() => cdp.count("Page.captureScreenshot") === 1);
+    unsubscribe();
+    await waitUntil(() => cdp.count("Page.stopScreencast") === 1);
+    cdp.releaseLiveCaptureReply();
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    assert.equal(
+      events.some((event) => event.type === "frame" || event.status === "live"),
+      false,
+    );
+    assert.equal(cdp.count("Page.captureScreenshot"), 1);
+  } finally {
+    await connection.backend.close();
+    await cdp.close();
+  }
+});
+
+test("a locally decoded frame cannot cross a document change", async () => {
+  const cdp = await createFakeCdpServer();
+  const decodeStarted = deferred<void>();
+  const releaseDecode = deferred<void>();
+  let holdFirstDecode = true;
+  const connection = await connectUserBrowserCdp(cdp.endpoint, undefined, {
+    liveFrameImageDecoder: async (encoded) => {
+      if (holdFirstDecode) {
+        holdFirstDecode = false;
+        decodeStarted.resolve();
+        await releaseDecode.promise;
+      }
+      return await decodeTestLiveImage(encoded);
+    },
+  });
+  const events: Array<{ type: string; frame?: { data: string } }> = [];
+  try {
+    await connection.backend.listTabs("work");
+    const unsubscribe = connection.backend.observeTab!(
+      "work",
+      "target-1",
+      (event) => events.push(event),
+    );
+    await decodeStarted.promise;
+    cdp.emitMainDocumentChange();
+    await waitUntil(() => cdp.count("Page.startScreencast") === 2);
+    releaseDecode.resolve();
+    await waitUntil(() => events.some((event) => event.type === "frame"));
+    assert.equal(
+      events.some(
+        (event) => event.frame?.data === fakeJpegCaptureData("capture-1"),
+      ),
+      false,
+    );
+    unsubscribe();
+  } finally {
+    releaseDecode.resolve();
+    await connection.backend.close();
+    await cdp.close();
+  }
+});
+
+test("queued screencast pixels from an old document or subscription never publish in its replacement", async () => {
+  const cdp = await createFakeCdpServer();
+  const connection = await connectUserBrowserCdp(
+    cdp.endpoint,
+    undefined,
+    liveConnectionOptions,
+  );
+  const events: Array<{ type: string; frame?: { data: string } }> = [];
+  try {
+    await connection.backend.listTabs("work");
+    cdp.holdNextLiveCaptureReply();
+    let unsubscribe = connection.backend.observeTab!(
+      "work",
+      "target-1",
+      (event) => events.push(event),
+    );
+    await waitUntil(() => cdp.count("Page.startScreencast") === 1);
+    await waitUntil(() => cdp.count("Page.captureScreenshot") === 1);
+    cdp.emitMainDocumentChange();
+    await waitUntil(() => cdp.count("Page.startScreencast") === 2);
+    cdp.emitScreencastFrame("late-old-document", 1);
+    await waitUntil(() => cdp.count("Page.screencastFrameAck") === 1);
+    await waitUntil(() => events.some((event) => event.type === "frame"));
+    assert.equal(
+      events.some(
+        (event) =>
+          event.frame?.data ===
+          Buffer.from("late-old-document").toString("base64"),
+      ),
+      false,
+    );
+    cdp.releaseLiveCaptureReply();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(
+      events.some(
+        (event) => event.frame?.data === fakeJpegCaptureData("capture-1"),
+      ),
+      false,
+    );
+    unsubscribe();
+    await waitUntil(() => cdp.count("Page.stopScreencast") === 2);
+    events.length = 0;
+    unsubscribe = connection.backend.observeTab!("work", "target-1", (event) =>
+      events.push(event),
+    );
+    await waitUntil(() => cdp.count("Page.startScreencast") === 3);
+    cdp.emitScreencastFrame("late-old-subscription", 2);
+    await waitUntil(() => cdp.count("Page.screencastFrameAck") === 2);
+    await waitUntil(() => events.some((event) => event.type === "frame"));
+    assert.equal(
+      events.some(
+        (event) =>
+          event.frame?.data ===
+          Buffer.from("late-old-subscription").toString("base64"),
+      ),
+      false,
+    );
+    unsubscribe();
+  } finally {
+    await connection.backend.close();
+    await cdp.close();
+  }
+});
+
+test("live observation acks screencast notifications without accelerating fixed captures", async () => {
+  const cdp = await createFakeCdpServer();
+  const connection = await connectUserBrowserCdp(
+    cdp.endpoint,
+    undefined,
+    liveConnectionOptions,
+  );
   const backend = connection.backend;
   try {
     assert.equal(typeof backend.observeTab, "function");
@@ -133,11 +383,27 @@ test("live observation acks every screencast frame and publishes only the bounde
       events.push(event),
     );
     await waitUntil(() => cdp.count("Page.startScreencast") === 1);
+    await waitUntil(() => cdp.count("Page.captureScreenshot") === 1);
+    const capturesBeforeNotifications = cdp.count("Page.captureScreenshot");
 
     for (let frame = 1; frame <= 64; frame += 1)
       cdp.emitScreencastFrame(`latest-${frame}`, frame);
     await waitUntil(() => cdp.count("Page.screencastFrameAck") === 64);
-    await new Promise((resolve) => setTimeout(resolve, 140));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(
+      cdp.count("Page.captureScreenshot"),
+      capturesBeforeNotifications,
+      "native frame notifications must not preempt the fixed capture interval",
+    );
+    await waitUntil(
+      () =>
+        events.filter(
+          (event) =>
+            typeof event === "object" &&
+            event !== null &&
+            (event as { type?: unknown }).type === "frame",
+        ).length >= 2,
+    );
 
     const frames = events.filter(
       (event): event is { type: "frame"; frame: { data: string } } =>
@@ -145,11 +411,7 @@ test("live observation acks every screencast frame and publishes only the bounde
         event !== null &&
         (event as { type?: unknown }).type === "frame",
     );
-    assert.ok(frames.length > 0 && frames.length <= 2, JSON.stringify(frames));
-    assert.equal(
-      frames.at(-1)?.frame.data,
-      Buffer.from("latest-64").toString("base64"),
-    );
+    assert.ok(frames.length >= 2, JSON.stringify(frames));
 
     unsubscribe();
     await waitUntil(() => cdp.count("Page.stopScreencast") === 1);
@@ -162,7 +424,11 @@ test("live observation acks every screencast frame and publishes only the bounde
 
 test("live observation fences document changes and becomes unavailable on exact detach", async () => {
   const cdp = await createFakeCdpServer();
-  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const connection = await connectUserBrowserCdp(
+    cdp.endpoint,
+    undefined,
+    liveConnectionOptions,
+  );
   const backend = connection.backend;
   try {
     const events: unknown[] = [];
@@ -188,7 +454,7 @@ test("live observation fences document changes and becomes unavailable on exact 
             (event as { type?: unknown }).type === "status",
         )
         .map((event) => event.status);
-    assert.deepEqual(statuses().slice(-2), ["connecting", "live"]);
+    assert.deepEqual(statuses().slice(-2), ["connecting", "connecting"]);
 
     cdp.detachSession();
     await waitUntil(() => statuses().at(-1) === "unavailable");
@@ -218,9 +484,59 @@ test("live observation fences document changes and becomes unavailable on exact 
   }
 });
 
-test("live observation acks and rejects oversized frames then recovers on the next Agent operation", async () => {
+test("live observation replaces the old frame when the same tab navigates to a new document", async () => {
   const cdp = await createFakeCdpServer();
-  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const connection = await connectUserBrowserCdp(
+    cdp.endpoint,
+    undefined,
+    liveConnectionOptions,
+  );
+  const backend = connection.backend;
+  try {
+    const events: Array<{
+      type: string;
+      status?: string;
+      frame?: { data: string };
+    }> = [];
+    await backend.listTabs("work");
+    const unsubscribe = backend.observeTab!("work", "target-1", (event) =>
+      events.push(event),
+    );
+    await waitUntil(() => events.some((event) => event.type === "frame"));
+    const framesBeforeNavigation = events.filter(
+      (event) => event.type === "frame",
+    ).length;
+
+    cdp.replaceMainDocument("https://example.test/next");
+
+    await waitUntil(
+      () =>
+        cdp.count("Page.startScreencast") === 2 &&
+        events.filter((event) => event.type === "frame").length >
+          framesBeforeNavigation,
+    );
+    const statuses = events
+      .filter((event) => event.type === "status")
+      .map((event) => event.status);
+    assert.equal(statuses.includes("connecting"), true);
+    assert.equal(statuses.at(-1), "live");
+    assert.equal(statuses.includes("failed"), false);
+
+    unsubscribe();
+  } finally {
+    await backend.closeSession("work");
+    await backend.close();
+    await cdp.close();
+  }
+});
+
+test("live observation rejects oversized capture results then recovers on the next Agent operation", async () => {
+  const cdp = await createFakeCdpServer();
+  const connection = await connectUserBrowserCdp(
+    cdp.endpoint,
+    undefined,
+    liveConnectionOptions,
+  );
   const backend = connection.backend;
   try {
     const events: unknown[] = [];
@@ -231,10 +547,12 @@ test("live observation acks and rejects oversized frames then recovers on the ne
     );
     await waitUntil(() => cdp.count("Page.startScreencast") === 1);
 
-    cdp.emitRawScreencastFrame(
-      Buffer.alloc(USER_BROWSER_MAX_LIVE_FRAME_BYTES + 1).toString("base64"),
-      1,
+    cdp.nextLiveCaptureData(
+      fakeJpegCaptureData("oversized", {
+        trailingBytes: USER_BROWSER_MAX_LIVE_FRAME_BYTES + 1,
+      }),
     );
+    cdp.emitScreencastFrame("notification", 1);
     await waitUntil(
       () =>
         cdp.count("Page.screencastFrameAck") === 1 &&
@@ -266,7 +584,7 @@ test("live observation acks and rejects oversized frames then recovers on the ne
       events.push(event),
     );
     await waitUntil(() => cdp.count("Page.startScreencast") === 2);
-    assert.equal(statuses().at(-1), "live");
+    assert.equal(statuses().at(-1), "connecting");
     cdp.emitScreencastFrame("recovered", 2);
     await waitUntil(() =>
       events.some(
@@ -370,6 +688,235 @@ test("user browser projects current control state and dispatches native select",
     "Express",
   );
   assert.equal(client.actionCount, 1);
+});
+
+test("user browser retains a bounded hidden capture with actionable targets beyond the direct projection", async () => {
+  const client = new FakeUserBrowserClient();
+  const text = "x".repeat(MAX_OBSERVATION_CAPTURE_TEXT + 1);
+  client.inspectionResult = {
+    documentIdentity: "dom-a",
+    visibleText: text,
+    targets: Array.from({ length: 600 }, (_, index) => ({
+      ...client.inspectionTarget,
+      documentIdentity: "dom-a",
+      nodeIdentity: `dom-a:${String(index + 1)}`,
+      selector: `#button-${String(index + 1)}`,
+      name: `Button ${String(index + 1)}`,
+    })),
+    itemTotal: 600,
+    textTotal: text.length,
+  };
+  const backend = new UserBrowserCdpBackend(client);
+  try {
+    await backend.listTabs("work");
+    const inspection = await backend.inspect("work", "target-1");
+    const capture = inspection[OBSERVATION_CAPTURE];
+    assert.ok(capture);
+    assert.equal(inspection.targets.length, 80);
+    assert.equal(inspection.visibleText.length, 8_000);
+    assert.equal(capture.entries.length, MAX_OBSERVATION_CAPTURE_ITEMS);
+    assert.equal(capture.text?.length, MAX_OBSERVATION_CAPTURE_TEXT);
+    assert.equal(capture.coverage.sourceComplete, false);
+    assert.equal(capture.coverage.itemTotal, 600);
+    assert.equal(capture.coverage.textTotal, text.length);
+    assert.match(capture.coverage.reasons.join(" "), /iframe|frame/iu);
+    assert.match(capture.coverage.reasons.join(" "), /shadow/iu);
+    assert.match(capture.coverage.reasons.join(" "), /target|item/iu);
+    assert.match(capture.coverage.reasons.join(" "), /text/iu);
+    assert.doesNotThrow(() => capture.assertCurrent?.());
+    assert.equal(capture.entries[511]?.identity, "dom-a:512");
+    const hidden = capture.entries[511]!.value;
+    assert.equal(hidden.name, "Button 512");
+    assert.equal(
+      inspection.targets.some((target) => target.targetId === hidden.targetId),
+      false,
+    );
+    assert.doesNotMatch(JSON.stringify(inspection), /dom-a|Button 512/u);
+    await backend.click(
+      "work",
+      "target-1",
+      inspection.observationId,
+      hidden.targetId,
+    );
+    assert.equal(client.actionCount, 1);
+    assert.match(
+      client.lastActionExpression!,
+      /const expectedDocumentIdentity = "dom-a"/u,
+    );
+    assert.match(
+      client.lastActionExpression!,
+      /const expectedNodeIdentity = "dom-a:512"/u,
+    );
+    assert.throws(() => capture.assertCurrent?.(), /expired|stale/iu);
+    const next = await backend.inspect("work", "target-1");
+    const nextCapture = next[OBSERVATION_CAPTURE]!;
+    assert.notEqual(next.documentVersion, inspection.documentVersion);
+    assert.equal(nextCapture.scopeKey, capture.scopeKey);
+    assert.equal(nextCapture.entries[511]?.identity, "dom-a:512");
+    assert.notEqual(nextCapture.entries[511]?.value.targetId, hidden.targetId);
+    assert.doesNotThrow(() => nextCapture.assertCurrent?.());
+  } finally {
+    await backend.close();
+  }
+});
+
+test("user browser capture scope follows native document and logical session incarnations", async () => {
+  const client = new FakeUserBrowserClient();
+  client.inspectionResult = {
+    documentIdentity: "dom-a",
+    visibleText: "Continue",
+    targets: [
+      {
+        ...client.inspectionTarget,
+        documentIdentity: "dom-a",
+        nodeIdentity: "dom-a:1",
+      },
+    ],
+    itemTotal: 1,
+    textTotal: 8,
+  };
+  const backend = new UserBrowserCdpBackend(client);
+  try {
+    await backend.listTabs("work");
+    const first = (await backend.inspect("work", "target-1"))[
+      OBSERVATION_CAPTURE
+    ]!;
+    const second = (await backend.inspect("work", "target-1"))[
+      OBSERVATION_CAPTURE
+    ]!;
+    assert.equal(first.scopeKey, second.scopeKey);
+    assert.throws(() => first.assertCurrent?.(), /expired|stale/iu);
+    client.documentToken = "document-b";
+    const nativeChanged = (await backend.inspect("work", "target-1"))[
+      OBSERVATION_CAPTURE
+    ]!;
+    assert.notEqual(second.scopeKey, nativeChanged.scopeKey);
+    client.inspectionResult = {
+      documentIdentity: "dom-b",
+      visibleText: "Continue",
+      targets: [],
+      itemTotal: 0,
+      textTotal: 8,
+    };
+    const domChanged = (await backend.inspect("work", "target-1"))[
+      OBSERVATION_CAPTURE
+    ]!;
+    assert.notEqual(nativeChanged.scopeKey, domChanged.scopeKey);
+    await backend.closeSession("work");
+    assert.throws(() => domChanged.assertCurrent?.(), /detaching|closed/iu);
+    await backend.listTabs("work");
+    const reopened = (await backend.inspect("work", "target-1"))[
+      OBSERVATION_CAPTURE
+    ]!;
+    assert.notEqual(domChanged.scopeKey, reopened.scopeKey);
+  } finally {
+    await backend.close();
+  }
+});
+
+test("legacy user browser inspection data reports unknown coverage and no invented node identity", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  try {
+    await backend.listTabs("work");
+    const inspected = await backend.inspect("work", "target-1");
+    const capture = inspected[OBSERVATION_CAPTURE];
+    assert.ok(capture);
+    assert.equal(capture.coverage.sourceComplete, null);
+    assert.equal(capture.coverage.itemTotal, undefined);
+    assert.equal(capture.coverage.textTotal, undefined);
+    assert.equal(capture.entries[0]?.identity, undefined);
+    client.inspectionResult = {
+      visibleText: "Continue",
+      targets: [client.inspectionTarget],
+      itemTotal: 1,
+      textTotal: 8,
+    };
+    const totalsOnly = (await backend.inspect("work", "target-1"))[
+      OBSERVATION_CAPTURE
+    ]!;
+    assert.equal(totalsOnly.coverage.sourceComplete, null);
+    assert.equal(totalsOnly.entries[0]?.identity, undefined);
+    assert.ok(
+      totalsOnly.coverage.reasons.includes(
+        "native-document-identity-unavailable",
+      ),
+    );
+  } finally {
+    await backend.close();
+  }
+});
+
+test("user browser capture rejects malformed or overlong document and node identities", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  try {
+    await backend.listTabs("work");
+    for (const identity of ["", "x".repeat(16_385), 1, null]) {
+      client.inspectionResult = {
+        visibleText: "Continue",
+        targets: [client.inspectionTarget],
+        documentIdentity: identity,
+      };
+      await assert.rejects(
+        backend.inspect("work", "target-1"),
+        /unsupported shape/u,
+      );
+      for (const field of ["documentIdentity", "nodeIdentity"]) {
+        client.inspectionResult = {
+          visibleText: "Continue",
+          targets: [{ ...client.inspectionTarget, [field]: identity }],
+        };
+        await assert.rejects(
+          backend.inspect("work", "target-1"),
+          /target is invalid/u,
+        );
+      }
+    }
+    client.inspectionResult = {
+      documentIdentity: "x".repeat(8_000),
+      visibleText: "Continue",
+      targets: [
+        {
+          ...client.inspectionTarget,
+          documentIdentity: "x".repeat(8_000),
+          nodeIdentity: "x".repeat(257),
+        },
+      ],
+    };
+    await assert.rejects(
+      backend.inspect("work", "target-1"),
+      /target is invalid/u,
+    );
+  } finally {
+    await backend.close();
+  }
+});
+
+test("attached native lifecycle expires hidden captures without a new inspection or CDP request", async () => {
+  const cdp = await createFakeCdpServer();
+  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  try {
+    await connection.backend.listTabs("work");
+    const inspected = await connection.backend.inspect("work", "target-1");
+    const capture = inspected[OBSERVATION_CAPTURE]!;
+    assert.doesNotThrow(() => capture.assertCurrent?.());
+    const count = cdp.methods().length;
+    cdp.emitMainDocumentChange();
+    await waitUntil(() => {
+      try {
+        capture.assertCurrent?.();
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    assert.throws(() => capture.assertCurrent?.(), /document changed/iu);
+    assert.equal(cdp.methods().length, count);
+  } finally {
+    await connection.backend.close();
+    await cdp.close();
+  }
 });
 
 test("attached browser rejects malformed screenshot data explicitly", async () => {
@@ -2240,6 +2787,8 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
   nextCreatedTarget = 2;
   identityChangePhase?: "during-evaluate" | "post-confirmation";
   invalidateInspection = false;
+  inspectionResult?: unknown;
+  lastActionExpression?: string;
   inspectionTarget: BrowserTargetFingerprint = {
     selector: "#continue",
     tag: "button",
@@ -2494,7 +3043,7 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
         this.holdInspections = false;
       }
       const result = {
-        value: {
+        value: this.inspectionResult ?? {
           visibleText: "Signed in as Alice",
           targets: [this.inspectionTarget],
         },
@@ -2506,6 +3055,7 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
       }
       return result;
     }
+    this.lastActionExpression = expression;
     onDispatched?.();
     this.actionCount += 1;
     if (this.actionUnknownSettlement !== undefined) {
@@ -2544,6 +3094,19 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
 
   async getDocumentIdentity() {
     return this.documentToken;
+  }
+
+  assertDocumentCurrent(
+    _targetId: string,
+    _owner: {
+      logicalSessionId: string;
+      logicalSessionIncarnation: number;
+    },
+    expectedDocumentIdentity: string,
+  ): void {
+    if (this.documentToken !== expectedDocumentIdentity) {
+      throw new UserBrowserDocumentChangedBeforeDispatchError();
+    }
   }
 
   async close() {

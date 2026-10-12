@@ -1,3 +1,4 @@
+import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import React, { act, useState } from "react";
@@ -6,6 +7,68 @@ import { JSDOM } from "jsdom";
 import { EditorView } from "@codemirror/view";
 import { AuxiliaryPanel } from "../src/renderer/src/auxiliary-panel.js";
 import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
+
+test("opening the panel transfers keyboard focus to its close control and restores it on close", async () => {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+    pretendToBeVisual: true,
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    Window: dom.window.Window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    MutationObserver: dom.window.MutationObserver,
+    Node: dom.window.Node,
+    getComputedStyle: dom.window.getComputedStyle,
+    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+    cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  (dom.window as any).zenx = {};
+  function Harness() {
+    const [open, setOpen] = useState(false);
+    const [selectedTab, setSelectedTab] = useState("");
+    return React.createElement(
+      React.Fragment,
+      null,
+      React.createElement(
+        "button",
+        {
+          id: "thread-browser-toggle",
+          onClick: () => setOpen(true),
+        },
+        "Open panel",
+      ),
+      React.createElement(AuxiliaryPanel, {
+        threadId: "thread-a",
+        title: "Task A",
+        open,
+        onOpenChange: setOpen,
+        snapshot: null,
+        selectedTab,
+        onSelectTab: setSelectedTab,
+      }),
+    );
+  }
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () => root.render(React.createElement(Harness)));
+    const toggle = document.getElementById("thread-browser-toggle")!;
+    toggle.focus();
+    await act(async () => toggle.click());
+    const close = document.querySelector<HTMLButtonElement>(
+      ".auxiliary-close-button",
+    )!;
+    assert.equal(document.activeElement, close);
+    await act(async () => close.click());
+    assert.equal(document.activeElement, toggle);
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
 
 test("side tabs suspend Browser frames, render Markdown and escaped source, and isolate plugin surfaces", async () => {
   const dom = new JSDOM(
@@ -121,7 +184,7 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
         ...document.querySelectorAll<HTMLButtonElement>(
           ".workspace-tab-types > button",
         ),
-      ].find((e) => e.textContent === name)!;
+      ].find((e) => e.querySelector("strong")?.textContent === name)!;
     await act(async () => choose("Attached browser").click());
     assert.equal(requests.at(-1)?.frames, true);
     const tab = (name: string) =>
@@ -218,9 +281,13 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
     );
 
     await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>('[aria-label="Close side panel"]')!
-        .click(),
+      document.querySelector<HTMLElement>(".auxiliary-panel")!.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
     );
     assert.equal(
       document.querySelector(".auxiliary-panel")?.getAttribute("data-open"),
@@ -372,7 +439,9 @@ for (const throughHostSdk of [false, true]) {
           ...document.querySelectorAll<HTMLButtonElement>(
             ".workspace-tab-types > button",
           ),
-        ].find((element) => element.textContent === name)!;
+        ].find(
+          (element) => element.querySelector("strong")?.textContent === name,
+        )!;
       const selectedTab = () =>
         document.querySelector<HTMLButtonElement>(
           '[role="tab"][aria-selected="true"]',

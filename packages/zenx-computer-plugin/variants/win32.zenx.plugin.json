@@ -1,6 +1,6 @@
 {
   "id": "computer",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and WGC capture stay background-safe; unsupported global input never silently substitutes for them.",
   "provider": {
     "id": "microsoft-winapp-cli",
@@ -66,7 +66,7 @@
     },
     {
       "name": "computer_inspect",
-      "description": "Inspect at most 32 semantic UI Automation controls in one exact Windows HWND without activating it or reading sibling windows. target.windowTitle is required.",
+      "description": "Inspect a bounded first page of at most 32 controls in one exact app window, or follow nextCursor without recapture. Coverage separately reports available pages and native omissions; this is not a complete accessibility tree. baseObservationId requests a diff only of a retained first-page baseline; omit it or set full:true to resync. target.windowTitle is required. Windows reads are scoped to one exact HWND through UI Automation.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -99,6 +99,18 @@
                 "required": ["bundleId"]
               }
             ]
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Continue the exact immutable captured observation using its returned nextCursor. Does not recapture or renew action references. Omit to inspect afresh."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
           }
         },
         "required": ["target"],
@@ -107,7 +119,7 @@
       "permissions": ["computer.accessibility.inspect"],
       "interactionMode": "background_safe",
       "capabilities": ["uia.inspect", "app_targeted", "no_global_input"],
-      "maxOutputBytes": 12288
+      "maxOutputBytes": 131072
     },
     {
       "name": "computer_press",
@@ -281,5 +293,5 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "Start with computer_list_windows to find open windows and running applications. If truncated, narrow with query. Pass a returned target unchanged to computer_inspect before acting, prefer background-safe semantic controls, and use explicitly labeled foreground takeover only where available."
+  "mainDocument": "If available, start with computer_list_windows; its query filters windows only. Otherwise use the supplied exact window target. Pass an exact returned target to computer_inspect. Inspect coverage and follow nextCursor with the same target to read the immutable captured controls beyond the first page; native traversal omissions remain explicit and are not recoverable by paging. References express exact-fingerprint presentation continuity, not proven native object identity. Actions always require the latest observationId plus targetId and native revalidation. Pass baseObservationId only when retaining that first-page baseline and applied controlChanges; omit it or set full:true after context compaction/lost context. Apply added/updated/removedFromView and optional order; update every retained control.selector.observationId to observation.actionObservationId before acting. Cursor pages do not replace the first-page diff baseline or renew action authority. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Prefer background-safe semantic controls."
 }

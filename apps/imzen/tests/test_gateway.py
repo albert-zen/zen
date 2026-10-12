@@ -11,12 +11,14 @@ from imagent.applications import ZenApplicationAdapter
 from imagent.applications.appserver_client import AppServerError
 from imagent.bindings import InMemoryBindingRepository
 from imagent.contracts import (
+    ApplicationInputRejected,
     AttachmentContent,
     ConversationRef,
     InboundMessage,
     LocalPath,
     ProjectionPolicy,
     TextContent,
+    TextFormat,
 )
 from imagent.gateway import (
     GatewayExtensions,
@@ -312,6 +314,7 @@ async def test_duplicate_input_reuses_thread_and_projects_markdown(tmp_path: Pat
     assert client.started_turns == [("thread-1", "Build it", {})]
     projected = next(message for message in channel.sent if markdown in sent_texts_for(message))
     assert projected.reply_to == "m1"
+    assert projected.content[0].format is TextFormat.MARKDOWN
 
 
 @pytest.mark.asyncio
@@ -660,12 +663,49 @@ async def test_outcome_unknown_is_not_reauthorized_after_restart(tmp_path: Path)
     assert second_client.started_turns == []
 
 
+@pytest.mark.asyncio
+async def test_proven_start_rejection_has_one_plain_reply_and_dedupes_after_restart(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "gateway.sqlite3"
+    message = inbound("proven-rejection", "synthetic input")
+    first_state = SQLiteGatewayState(state_path)
+    first_client = FakeAppServer()
+    first_client.fail_turn = ApplicationInputRejected("thread_busy")
+    gateway, channel, _ = compose(tmp_path, first_client, idempotency=first_state)
+    await gateway.start()
+    try:
+        await channel.emit_message(message)
+        await channel.emit_message(message)
+    finally:
+        await gateway.stop()
+        await first_state.close()
+    replies = [out for out in channel.sent if "message was not sent" in sent_texts_for(out)]
+    assert len(replies) == 1
+    assert replies[0].content[0].format is TextFormat.PLAIN
+    assert len(first_client.started_turns) == 1
+
+    reopened = SQLiteGatewayState(state_path, stale_claim_after_seconds=0)
+    second_client = FakeAppServer()
+    second, second_channel, _ = compose(tmp_path, second_client, idempotency=reopened)
+    await second.start()
+    try:
+        await second_channel.emit_message(message)
+    finally:
+        await second.stop()
+        await reopened.close()
+    assert not second_client.started_turns
+    assert not second_channel.sent
+
+
 @pytest.mark.parametrize(
     ("phase", "expected"),
     (
         (InboundFailurePhase.PRE_ACCEPTANCE, "could not process"),
         (InboundFailurePhase.OUTCOME_UNKNOWN, "outcome is unknown"),
         (InboundFailurePhase.POST_ACCEPTANCE, "projection failed"),
+        (InboundFailurePhase.TURN_ENDED, "turn has ended"),
+        (InboundFailurePhase.THREAD_BUSY, "still running"),
     ),
 )
 @pytest.mark.asyncio
@@ -681,6 +721,10 @@ async def test_failure_presenter_preserves_sdk_classification(phase, expected) -
     assert presented.conversation_ref == ConversationRef("test", "chat-1")
     assert presented.reply_to == "native-1"
     assert expected in sent_texts_for(presented)
+    assert presented.content[0].format is TextFormat.PLAIN
+    assert "**" not in sent_texts_for(presented)
+    if phase in {InboundFailurePhase.TURN_ENDED, InboundFailurePhase.THREAD_BUSY}:
+        assert "message was not sent" in sent_texts_for(presented)
 
 
 def sent_texts_for(message) -> str:

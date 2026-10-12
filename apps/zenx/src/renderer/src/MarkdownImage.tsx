@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import { useContext, useEffect, useState } from "react";
 import { classifyImageSource } from "../../image-source.js";
 import { ImageUrlPreview, ThreadImagesContext } from "./ImagePresentation.js";
@@ -9,6 +11,7 @@ export function MarkdownImage({
   source: string;
   name: string;
 }) {
+  useTranslation("panels");
   const target = classifyImageSource(source);
   const cwd = useContext(ThreadImagesContext)?.cwd;
   const [local, setLocal] = useState<{
@@ -28,7 +31,7 @@ export function MarkdownImage({
     setError(null);
     if (target.kind !== "local") return;
     if (typeof window.zenx?.imageAttachments?.readLocal !== "function") {
-      setError("Local image reader is unavailable");
+      setError("local-reader-unavailable");
       return;
     }
     let active = true;
@@ -51,16 +54,26 @@ export function MarkdownImage({
       if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
     };
   }, [source, cwd]);
+  const displayError =
+    error === "local-reader-unavailable"
+      ? i18n.t("panels:localImageReaderIsUnavailable")
+      : error === "image-load-failed"
+        ? i18n.t("panels:imageCouldNotBeLoaded")
+        : error;
   if (target.kind === "rejected")
     return (
-      <span className="image-placeholder">{name || "Unsupported image"}</span>
+      <span className="image-placeholder">
+        {name || i18n.t("panels:unsupportedImage")}
+      </span>
     );
   return (
     <>
       <button
         className="image-thumbnail markdown-image"
         type="button"
-        aria-label={`Preview ${name || "image"}`}
+        aria-label={i18n.t("panels:previewImage", {
+          name: name || i18n.t("panels:image"),
+        })}
         disabled={url === null || error !== null}
         onClick={(event) => {
           event.preventDefault();
@@ -69,24 +82,26 @@ export function MarkdownImage({
         }}
       >
         {error !== null ? (
-          <span role="alert">Image unavailable: {name || source}</span>
+          <span role="alert">
+            {i18n.t("panels:imageUnavailablePrefix")} {name || source}
+          </span>
         ) : url === null ? (
-          <span>Loading image…</span>
+          <span>{i18n.t("panels:loadingImage2")}</span>
         ) : (
           <img
             src={url}
             alt={name}
             loading="lazy"
             referrerPolicy="no-referrer"
-            onError={() => setError("Image could not be loaded")}
+            onError={() => setError("image-load-failed")}
           />
         )}
       </button>
       {trigger === null ? null : (
         <ImageUrlPreview
           url={url}
-          error={error}
-          name={name || "Image"}
+          error={displayError}
+          name={name || i18n.t("panels:image")}
           trigger={trigger}
           onClose={() => setTrigger(null)}
         />

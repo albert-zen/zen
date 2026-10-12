@@ -1,3 +1,4 @@
+import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
@@ -85,7 +86,8 @@ async function mount(
     changeName,
     async cleanup() {
       await act(async () => root.unmount());
-      assert.equal(document.activeElement, trigger);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(document.activeElement === trigger, true);
       Object.assign(globalThis, previous);
       dom.window.close();
     },

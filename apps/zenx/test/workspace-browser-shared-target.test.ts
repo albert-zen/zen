@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { WorkspaceBrowser } from "../src/main/workspace-browser.js";
+import { OBSERVATION_CAPTURE } from "../src/main/capabilities/observation-capture.js";
 
 test("Workspace Browser human view and Agent backend operate the exact same target", async () => {
   const directory = await mkdtemp(
@@ -114,6 +115,66 @@ test("an aborted current Agent navigation fails instead of reporting success", a
     const error = Object.assign(new Error("aborted"), { code: "ERR_ABORTED" });
     load.reject(error);
     await assert.rejects(navigating, /interrupted/u);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("mounting during an Agent action fences its outcome while an unchanged mount preserves observation", async () => {
+  const fixture = await sharedFixture();
+  try {
+    const humanTabs = fixture.browser.command(
+      fixture.sender as never,
+      "thread-a",
+      "new",
+      undefined,
+      "https://example.test/start",
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    const tabId = humanTabs[0]!.id;
+    const web = fixture.views[0]!.webContents;
+    fixture.browser.bindThreadSession("agent-session", "thread-a");
+    web.debuggerApi.defaultValue = {
+      visibleText: "fixture",
+      targets: [
+        {
+          selector: "button",
+          role: "button",
+          name: "Act",
+          actions: ["click"],
+          state: {},
+        },
+      ],
+    };
+    let inspection = await fixture.browser.inspect("agent-session", tabId);
+    const actionEvaluation = deferred<unknown>();
+    web.debuggerApi.nextEvaluation = actionEvaluation;
+    const acting = fixture.browser.click(
+      "agent-session",
+      tabId,
+      inspection.observationId,
+      inspection.targets[0]!.targetId,
+    );
+    const mount = () =>
+      fixture.browser.mount(fixture.sender as never, {
+        threadId: "thread-a",
+        tabId,
+        lease: "lease-a",
+        bounds: { x: 0, y: 0, width: 640, height: 480 },
+      });
+    mount();
+    actionEvaluation.resolve({ ok: true });
+    await assert.rejects(acting, /outcome is unknown/u);
+
+    inspection = await fixture.browser.inspect("agent-session", tabId);
+    mount();
+    web.debuggerApi.defaultValue = { ok: true };
+    await fixture.browser.click(
+      "agent-session",
+      tabId,
+      inspection.observationId,
+      inspection.targets[0]!.targetId,
+    );
   } finally {
     await fixture.close();
   }
@@ -257,6 +318,122 @@ test("detaching an Agent session makes its in-flight inspection unknown without 
   }
 });
 
+test("detaching an Agent session cannot deliver an in-flight live frame", async () => {
+  const fixture = await sharedFixture();
+  try {
+    const humanTabs = fixture.browser.command(
+      fixture.sender as never,
+      "thread-a",
+      "new",
+      undefined,
+      "https://example.test/start",
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    const tabId = humanTabs[0]!.id;
+    const web = fixture.views[0]!.webContents;
+    fixture.browser.bindThreadSession("agent-session", "thread-a");
+    const pendingCapture = deferred<FakeImage>();
+    web.nextCapture = pendingCapture;
+    let frames = 0;
+    const stop = fixture.browser.observeTab("agent-session", tabId, (event) => {
+      if (event.type === "frame") frames += 1;
+    });
+    try {
+      fixture.browser.closeSession("agent-session");
+      pendingCapture.resolve(new FakeImage());
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(frames, 0);
+    } finally {
+      stop();
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("Workspace hidden capture retains fresh action IDs beyond the public cap and expires on mutation", async () => {
+  const fixture = await sharedFixture();
+  try {
+    fixture.browser.bindThreadSession("agent-session", "thread-a");
+    const tab = await fixture.browser.open(
+      "agent-session",
+      "https://example.test/start",
+    );
+    const web = fixture.views[0]!.webContents;
+    const raw = {
+      documentIdentity: "native-incarnation",
+      visibleText: "x".repeat(20_000),
+      itemTotal: 150,
+      textTotal: 20_000,
+      targets: Array.from({ length: 150 }, (_, index) => ({
+        documentIdentity: "native-incarnation",
+        nodeIdentity: `node-${index}`,
+        selector: `#b${index}`,
+        tag: "button",
+        role: "button",
+        name: `Button ${index}`,
+        type: "",
+        id: `b${index}`,
+        fieldName: "",
+        autocomplete: "",
+        href: "",
+        actions: ["click"],
+      })),
+    };
+    web.debuggerApi.defaultValue = raw;
+    const first = await fixture.browser.inspect("agent-session", tab.tabId);
+    assert.equal(first.targets.length, 80);
+    assert.equal(first.visibleText.length, 8_000);
+    const capture = first[OBSERVATION_CAPTURE]!;
+    assert.equal(capture.entries.length, 150);
+    assert.equal(capture.text!.length, 20_000);
+    assert.equal(capture.coverage.sourceComplete, true);
+    assert.equal(capture.entries[100]!.identity, "node-100");
+    assert.equal(JSON.stringify(first).includes("node-100"), false);
+    capture.assertCurrent!();
+    web.debuggerApi.defaultValue = { ok: true };
+    await fixture.browser.click(
+      "agent-session",
+      tab.tabId,
+      first.observationId,
+      capture.entries[100]!.value.targetId,
+    );
+    assert.throws(() => capture.assertCurrent!(), /stale/);
+    web.debuggerApi.defaultValue = raw;
+    const second = await fixture.browser.inspect("agent-session", tab.tabId);
+    assert.equal(second[OBSERVATION_CAPTURE]!.scopeKey, capture.scopeKey);
+    assert.notEqual(
+      second[OBSERVATION_CAPTURE]!.entries[100]!.value.targetId,
+      capture.entries[100]!.value.targetId,
+    );
+    const third = await fixture.browser.inspect("agent-session", tab.tabId);
+    assert.throws(() => second[OBSERVATION_CAPTURE]!.assertCurrent!(), /stale/);
+    await fixture.browser.navigate(
+      "agent-session",
+      tab.tabId,
+      "https://example.test/next",
+    );
+    assert.throws(
+      () => third[OBSERVATION_CAPTURE]!.assertCurrent!(),
+      /changed|stale/,
+    );
+    const current = await fixture.browser.inspect("agent-session", tab.tabId);
+    fixture.browser.closeSession("agent-session");
+    fixture.browser.bindThreadSession("agent-session", "thread-a");
+    assert.throws(
+      () => current[OBSERVATION_CAPTURE]!.assertCurrent!(),
+      /stale/,
+    );
+    const rebound = await fixture.browser.inspect("agent-session", tab.tabId);
+    assert.notEqual(
+      rebound[OBSERVATION_CAPTURE]!.scopeKey,
+      current[OBSERVATION_CAPTURE]!.scopeKey,
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
 async function sharedFixture() {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-shared-browser-race-"),
@@ -307,8 +484,20 @@ class FakeDebugger {
   attach() {
     this.attached = true;
   }
-  async sendCommand(method: string) {
+  async sendCommand(method: string, params?: Record<string, unknown>) {
+    if (method === "Page.getFrameTree")
+      return { frameTree: { frame: { id: "main-frame" } } };
+    if (method === "Page.createIsolatedWorld") {
+      assert.equal(params?.worldName, "zenx-browser-observation-v1");
+      assert.equal(params?.grantUniveralAccess, false);
+      return { executionContextId: 42 };
+    }
     assert.equal(method, "Runtime.evaluate");
+    assert.equal(
+      params?.contextId,
+      42,
+      "all page code must run in the isolated world",
+    );
     this.evaluations += 1;
     const next = this.nextEvaluation;
     this.nextEvaluation = undefined;
@@ -358,6 +547,7 @@ class FakeWebContents extends EventEmitter {
   #destroyed = false;
   readonly loadCalls: string[] = [];
   nextLoad?: ReturnType<typeof deferred<void>>;
+  nextCapture?: ReturnType<typeof deferred<FakeImage>>;
   constructor(readonly id = 1) {
     super();
   }
@@ -384,6 +574,9 @@ class FakeWebContents extends EventEmitter {
     return this.#destroyed;
   }
   capturePage() {
+    const next = this.nextCapture;
+    this.nextCapture = undefined;
+    if (next !== undefined) return next.promise;
     return Promise.resolve(new FakeImage());
   }
   setWindowOpenHandler() {
@@ -406,11 +599,15 @@ class FakeWebContents extends EventEmitter {
 
 class FakeView {
   readonly webContents = new FakeWebContents();
+  #bounds = { x: 0, y: 0, width: 0, height: 0 };
   setVisible() {
     return undefined;
   }
-  setBounds() {
-    return undefined;
+  setBounds(bounds: { x: number; y: number; width: number; height: number }) {
+    this.#bounds = bounds;
+  }
+  getBounds() {
+    return this.#bounds;
   }
 }
 

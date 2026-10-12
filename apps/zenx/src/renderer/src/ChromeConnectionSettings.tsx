@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { Select } from "./ui/controls.js";
 import { useEffect, useState } from "react";
 
 import type { ChromeBridgeSettingsSnapshot } from "../../main/chrome-extension-bridge.js";
@@ -10,6 +12,7 @@ export function ChromeConnectionSettings({
   draft: ZenXHostProfile;
   setDraft(value: ZenXHostProfile): void;
 }) {
+  const { t } = useTranslation("settings");
   const [snapshot, setSnapshot] = useState<ChromeBridgeSettingsSnapshot | null>(
     null,
   );
@@ -49,46 +52,64 @@ export function ChromeConnectionSettings({
   };
 
   const selectedMode = draft.browserMode ?? "isolated";
-  const connected = snapshot?.connection.connectedTab;
+  const connected = snapshot?.connection.state === "connected";
+  const tabCount = snapshot?.connection.tabCount ?? 0;
   return (
-    <div className="page-card settings-card chrome-connection-settings">
+    <div
+      id="browser-settings"
+      className="page-card settings-card chrome-connection-settings"
+      tabIndex={-1}
+    >
       <div className="settings-card-head">
         <div>
-          <h3>Browser</h3>
-          <p>Choose where Browser tools work.</p>
+          <h3>{t("chromeConnectionSettings.browser")}</h3>
+          <p>{t("chromeConnectionSettings.chooseWhereBrowserToolsWork")}</p>
         </div>
         <span
-          className={connected === undefined ? "status-muted" : "status-good"}
+          role="status"
+          className={connected ? "status-good" : "status-muted"}
         >
-          {connected === undefined
-            ? "No Chrome tab connected"
-            : "Chrome tab connected"}
+          {connected
+            ? t("chromeConnectionSettings.chromeConnected")
+            : t("chromeConnectionSettings.chromeNotConnected")}
         </span>
       </div>
       <label className="field">
-        <span>Browser mode</span>
-        <select
+        <span>{t("chromeConnectionSettings.browserMode")}</span>
+        <Select
           value={selectedMode}
-          onChange={(event) =>
+          onValueChange={(value) =>
             setDraft({
               ...draft,
-              browserMode: event.target.value as "isolated" | "user-session",
+              browserMode: value as "isolated" | "user-session",
             })
           }
         >
-          <option value="isolated">ZenX browser</option>
-          <option value="user-session">Connected Chrome tab</option>
-        </select>
+          <option value="isolated">
+            {t("chromeConnectionSettings.zenxBrowser")}
+          </option>
+          <option value="user-session">
+            {t("chromeConnectionSettings.connectedChrome")}
+          </option>
+        </Select>
         <small className="settings-note">
-          Changing this mode takes effect after restarting ZenX.
+          {t(
+            "chromeConnectionSettings.changingThisModeTakesEffectAfterRestartingZenx",
+          )}
         </small>
       </label>
       {selectedMode === "user-session" ? (
         <>
           <div className="settings-row">
             <div>
-              <strong>1. Register the local connector</strong>
-              <span>Let Chrome connect to this installed ZenX app.</span>
+              <strong>
+                {t("chromeConnectionSettings.1RegisterTheLocalConnector")}
+              </strong>
+              <span>
+                {t(
+                  "chromeConnectionSettings.letChromeConnectToThisInstalledZenxApp",
+                )}
+              </span>
             </div>
             <div className="settings-actions">
               {snapshot?.nativeHostRegistered ? (
@@ -100,7 +121,9 @@ export function ChromeConnectionSettings({
                     void run("remove", window.zenx.chromeBridge.remove)
                   }
                 >
-                  {busy === "remove" ? "Removing…" : "Remove connector"}
+                  {busy === "remove"
+                    ? t("chromeConnectionSettings.removing")
+                    : t("chromeConnectionSettings.removeConnector")}
                 </button>
               ) : (
                 <button
@@ -111,17 +134,22 @@ export function ChromeConnectionSettings({
                     void run("prepare", window.zenx.chromeBridge.prepare)
                   }
                 >
-                  {busy === "prepare" ? "Registering…" : "Register connector"}
+                  {busy === "prepare"
+                    ? t("chromeConnectionSettings.registering")
+                    : t("chromeConnectionSettings.registerConnector")}
                 </button>
               )}
             </div>
           </div>
           <div className="settings-row">
             <div>
-              <strong>2. Load the ZenX extension</strong>
+              <strong>
+                {t("chromeConnectionSettings.2LoadTheZenxExtension")}
+              </strong>
               <span>
-                Open chrome://extensions, enable Developer mode, choose Load
-                unpacked, then select the folder opened here.
+                {t(
+                  "chromeConnectionSettings.openChromeExtensionsEnableDeveloperModeChooseLoadUnpacked",
+                )}
               </span>
             </div>
             <button
@@ -135,34 +163,34 @@ export function ChromeConnectionSettings({
                 })
               }
             >
-              {busy === "open" ? "Opening…" : "Show extension folder"}
+              {busy === "open"
+                ? t("chromeConnectionSettings.opening")
+                : t("chromeConnectionSettings.showExtensionFolder")}
             </button>
           </div>
           <div className="settings-row">
             <div>
-              <strong>3. Connect one current tab</strong>
+              <strong>
+                {t("chromeConnectionSettings.3ConnectYourBrowser")}
+              </strong>
               <span>
-                Open the signed-in page in Chrome and click the ZenX extension.
-                Click it again to revoke access. Closing ZenX or disabling the
-                extension also disconnects the debugger.
+                {t(
+                  "chromeConnectionSettings.clickTheZenxExtensionOnceInChromeExistingAnd",
+                )}
               </span>
             </div>
-            <span
-              className={
-                connected === undefined ? "status-muted" : "status-good"
-              }
-            >
-              {connected === undefined
-                ? "Waiting for a tab"
-                : `${connected.title || "Untitled tab"} · ${safeHost(connected.url)}`}
+            <span className={connected ? "status-good" : "status-muted"}>
+              {connected
+                ? t("chromeConnectionSettings.tabsAvailable", {
+                    count: tabCount,
+                  })
+                : t("chromeConnectionSettings.waitingForChrome")}
             </span>
           </div>
           <p className="settings-note">
-            The original page stays in Chrome and keeps its existing login
-            state. ZenX receives debugger access only to the selected tab; it
-            does not copy cookies or enumerate the rest of the profile. The
-            Attached browser panel is an observation surface, not an embedded
-            copy of the Chrome tab.
+            {t(
+              "chromeConnectionSettings.keepUsingYourUsualChromeWindowsAndSignedIn",
+            )}
           </p>
         </>
       ) : null}
@@ -173,14 +201,6 @@ export function ChromeConnectionSettings({
       )}
     </div>
   );
-}
-
-function safeHost(value: string): string {
-  try {
-    return new URL(value).host || value;
-  } catch {
-    return value;
-  }
 }
 
 function describeError(error: unknown): string {

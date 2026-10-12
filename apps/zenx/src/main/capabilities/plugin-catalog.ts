@@ -49,6 +49,7 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
   readonly #listeners = new Set<(snapshot: ZenXPluginSnapshot) => void>();
   readonly #providerDiagnostics: ZenXCapabilityProviderDiagnostic[] = [];
   readonly #discoveryErrors: string[] = [];
+  #bundledStartupFailureCount = 0;
   readonly #options: ZenXPluginCatalogOptions;
   #allowForegroundRequired: boolean;
   #disabled = new Set<string>();
@@ -242,7 +243,16 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
       const manifest = validateManifest(capabilityPackage.manifest);
       const previous = this.#catalogPackages.get(manifest.id);
       const previousDescriptor = this.#packageDescriptors[manifest.id];
-      if (previous === undefined || previousDescriptor === undefined) {
+      const repairingUnavailableBundle =
+        previous === undefined &&
+        options.allowSameVersionBundledVariant === true &&
+        source === "bundled" &&
+        profile?.source.mode === "bundled" &&
+        previousDescriptor?.profileSource?.mode === "bundled";
+      if (
+        previousDescriptor === undefined ||
+        (previous === undefined && !repairingUnavailableBundle)
+      ) {
         throw new Error(`Plugin ${manifest.id} is not installed`);
       }
       if (previousDescriptor.source !== source) {
@@ -294,14 +304,14 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
       });
 
       try {
-        if (shouldEnable && profile === undefined) {
+        if (shouldEnable && profile === undefined && previous !== undefined) {
           await this.#stopPluginRuntimeWithRollback(manifest.id, previous);
         }
         enterCatalogCommit(options);
         await this.#configurationStore.save(nextConfiguration);
       } catch (error) {
         await runtimeStage?.rollback();
-        if (shouldEnable && profile === undefined) {
+        if (shouldEnable && profile === undefined && previous !== undefined) {
           await this.#restorePluginRuntime(previous);
         }
         throw error;
@@ -336,11 +346,17 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
           ...this.#packageDescriptors,
           [manifest.id]: previousDescriptor,
         };
-        this.#catalogPackages.set(manifest.id, previous);
+        if (previous !== undefined)
+          this.#catalogPackages.set(manifest.id, previous);
+        else this.#catalogPackages.delete(manifest.id);
         await this.#configurationStore.save(
           this.#configuration({ packages: this.#packageDescriptors }),
         );
-        if (shouldEnable && !this.#registered.has(manifest.id)) {
+        if (
+          shouldEnable &&
+          previous !== undefined &&
+          !this.#registered.has(manifest.id)
+        ) {
           await this.#restorePluginRuntime(previous);
           this.#activateRegistration(previous);
         }
@@ -691,6 +707,12 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
     this.#emit();
   }
 
+  recordBundledStartupError(message: string): void {
+    this.#discoveryErrors.push(message);
+    this.#bundledStartupFailureCount++;
+    this.#emit();
+  }
+
   recordProviderDiagnostic(diagnostic: ZenXCapabilityProviderDiagnostic): void {
     const index = this.#providerDiagnostics.findIndex(
       (candidate) =>
@@ -754,6 +776,11 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
         : enabled
           ? "enabled"
           : "installed";
+      const unavailableReason = entry.available
+        ? undefined
+        : this.#discoveryErrors
+            .findLast((message) => message.startsWith(`${manifest.id}: `))
+            ?.slice(manifest.id.length + 2);
       return {
         id: manifest.id,
         displayName: manifest.name,
@@ -771,15 +798,18 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
         lifecycle,
         enabled,
         available: entry.available,
+        ...(unavailableReason === undefined ? {} : { unavailableReason }),
         contributionCount:
           (manifest.contributions?.sidebar?.length ?? 0) +
           (manifest.contributions?.pages?.length ?? 0) +
           (manifest.contributions?.subroutes?.length ?? 0) +
           (manifest.contributions?.settings?.length ?? 0) +
           (manifest.contributions?.panels?.length ?? 0) +
+          (manifest.contributions?.threadHeaders?.length ?? 0) +
           (manifest.contributions?.commands?.length ?? 0) +
           (manifest.contributions?.menus?.length ?? 0) +
           (manifest.contributions?.resultRenderers?.length ?? 0),
+        permissions: structuredClone(manifest.permissions),
       };
     });
     const enabled = [...this.#registered.values()].filter(
@@ -851,6 +881,9 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
       subroutes: project((manifest) => manifest.contributions?.subroutes),
       settings: project((manifest) => manifest.contributions?.settings),
       panels: project((manifest) => manifest.contributions?.panels),
+      threadHeaders: project(
+        (manifest) => manifest.contributions?.threadHeaders,
+      ),
       commands: project((manifest) => manifest.contributions?.commands),
       menus: project((manifest) => manifest.contributions?.menus),
       resultRenderers: project(
@@ -863,6 +896,7 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
     return {
       providerDiagnostics: structuredClone(this.#providerDiagnostics),
       discoveryErrors: [...this.#discoveryErrors],
+      bundledStartupFailureCount: this.#bundledStartupFailureCount,
     };
   }
 
@@ -969,6 +1003,7 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
 
   hostSnapshot(): ZenXCapabilityHostSnapshot {
     const definitions: ModelTool[] = [];
+    const remoteToolNames: string[] = [];
     for (const registered of this.#registered.values()) {
       const manifest = registered.package.manifest;
       if (this.#disabled.has(manifest.id)) continue;
@@ -980,10 +1015,26 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
             description: tool.description,
             inputSchema: structuredClone(tool.inputSchema),
           });
+          if (tool.remoteExecution === "text-json")
+            remoteToolNames.push(tool.name);
         }
       }
     }
-    return { definitions, plugins: this.availablePlugins() };
+    return {
+      definitions,
+      remoteToolNames,
+      plugins: this.availablePlugins(),
+      pluginCatalogAvailable: this.#catalogAvailable,
+      pluginReadiness: this.pluginSnapshot().plugins.map(
+        ({ id, displayName, lifecycle, enabled, available }) => ({
+          id,
+          displayName,
+          lifecycle,
+          enabled,
+          available,
+        }),
+      ),
+    };
   }
 
   setForegroundRequiredAllowed(allowed: boolean): void {
@@ -1305,10 +1356,10 @@ function validateManifest(
     sidebarIds.add(contribution.id);
   }
   const validateSurfaceContributions = (
-    kind: "settings" | "panel",
+    kind: "settings" | "panel" | "thread header",
     values: readonly {
       id: string;
-      title: string;
+      title?: string;
       surfaceId: string;
       order?: number;
     }[],
@@ -1318,7 +1369,7 @@ function validateManifest(
       if (
         !isContributionId(value.id) ||
         ids.has(value.id) ||
-        value.title.trim().length === 0 ||
+        (kind !== "thread header" && (value.title?.trim().length ?? 0) === 0) ||
         !surfaceIds.has(value.surfaceId) ||
         (value.order !== undefined && !Number.isSafeInteger(value.order))
       ) {
@@ -1334,6 +1385,10 @@ function validateManifest(
     manifest.contributions?.settings ?? [],
   );
   validateSurfaceContributions("panel", manifest.contributions?.panels ?? []);
+  validateSurfaceContributions(
+    "thread header",
+    manifest.contributions?.threadHeaders ?? [],
+  );
   const commandIds = new Set<string>();
   for (const command of manifest.contributions?.commands ?? []) {
     if (
@@ -1408,6 +1463,14 @@ function validateManifest(
     if (tool.capabilities.length === 0) {
       throw new Error(`Capability tool ${tool.name} declares no capabilities`);
     }
+    if (
+      tool.remoteExecution !== undefined &&
+      (tool.remoteExecution !== "text-json" ||
+        tool.interactionMode !== "background_safe")
+    )
+      throw new Error(
+        `Capability tool ${tool.name} remoteExecution requires a background_safe text-json tool`,
+      );
     if (
       tool.maxOutputBytes !== undefined &&
       (!Number.isSafeInteger(tool.maxOutputBytes) ||

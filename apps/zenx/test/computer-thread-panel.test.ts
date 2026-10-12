@@ -1,3 +1,5 @@
+import { chooseValue } from "./choice-interaction.js";
+import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import React, { act } from "react";
@@ -78,8 +80,9 @@ test("Computer panel follows the Agent until the user pins and pauses frames whi
       selectedId: "window-b",
     }),
   );
-  const select = dom.window.document.querySelector("select")!;
-  assert.equal(select.value, "__follow__");
+  const select =
+    dom.window.document.querySelector<HTMLButtonElement>(".ui-select")!;
+  assert.equal(select.dataset.value, "__follow__");
   assert.match(select.textContent ?? "", /Follow Agent/u);
   assert.doesNotMatch(
     dom.window.document.body.textContent ?? "",
@@ -87,10 +90,7 @@ test("Computer panel follows the Agent until the user pins and pauses frames whi
   );
   assert.match(select.title, /latest-private-call-id/u);
 
-  select.value = "window-a";
-  await act(async () =>
-    select.dispatchEvent(new dom.window.Event("change", { bubbles: true })),
-  );
+  await chooseValue(select, "window-a");
   assert.deepEqual(requests.at(-1), {
     threadId: "thread-a",
     targetId: "window-a",

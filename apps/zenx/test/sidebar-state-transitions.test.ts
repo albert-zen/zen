@@ -5,6 +5,7 @@ import * as React from "react";
 import { createRoot } from "react-dom/client";
 
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
+import type { PublicHostSettings } from "../src/main/host-profile.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 const { Sidebar } = await import("../src/renderer/src/Sidebar.js");
@@ -34,7 +35,7 @@ test("collapsed Projects remain recoverable without an Archived scope", async ()
   const root = createRoot(container);
 
   try {
-    await act(async () => root.render(createElement(ActiveSidebar)));
+    await act(async () => root.render(createElement(ActiveSidebar, {})));
     const projectsToggle = requiredButton(".projects-section-toggle");
     await act(async () => projectsToggle.click());
     assert.equal(document.querySelector(".thread-row"), null);
@@ -54,7 +55,7 @@ test("collapsed Projects remain recoverable without an Archived scope", async ()
       "false",
     );
     await act(async () => root.render(null));
-    await act(async () => root.render(createElement(ActiveSidebar)));
+    await act(async () => root.render(createElement(ActiveSidebar, {})));
     assert.equal(
       requiredButton(".project-toggle").getAttribute("aria-expanded"),
       "false",
@@ -68,8 +69,85 @@ test("collapsed Projects remain recoverable without an Archived scope", async ()
   }
 });
 
-function ActiveSidebar() {
-  const threads = [summary("active-thread", "Active Thread", false)];
+test("active Sidebar uses a profile logo and falls back when its managed image disappears", async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
+  const previousGlobals = {
+    document: globalThis.document,
+    HTMLElement: globalThis.HTMLElement,
+    Node: globalThis.Node,
+    window: globalThis.window,
+  };
+  Object.assign(globalThis, {
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    window: dom.window,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const logo = "data:image/png;base64,ZmFrZQ==";
+  const settings = (includeImage: boolean) =>
+    ({
+      profile: {
+        providerProfiles: [
+          {
+            providerProfileId: "custom",
+            type: "fake",
+            displayName: "Custom",
+            models: [],
+            logoResource: "managed-logo",
+          },
+        ],
+      },
+      providerLogoDataUrls: includeImage ? { custom: logo } : {},
+    }) as unknown as PublicHostSettings;
+  let onChanged: ((value: PublicHostSettings) => void) | undefined;
+  Object.assign(dom.window, {
+    zenx: {
+      platform: "darwin",
+      settings: {
+        get: async () => settings(true),
+        onChanged: (listener: (value: PublicHostSettings) => void) => {
+          onChanged = listener;
+          return () => {
+            onChanged = undefined;
+          };
+        },
+      },
+    },
+  });
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () => {
+      root.render(
+        createElement(ActiveSidebar, { providerProfileId: "custom" }),
+      );
+      await Promise.resolve();
+    });
+    assert.equal(
+      document.querySelector<HTMLImageElement>(
+        ".thread-model .provider-logo img",
+      )?.src,
+      logo,
+    );
+    await act(async () => onChanged?.(settings(false)));
+    assert.ok(document.querySelector(".thread-model .provider-logo.generic"));
+    assert.equal(
+      document.querySelector(".thread-model .provider-logo img"),
+      null,
+    );
+  } finally {
+    await act(async () => root.unmount());
+    Object.assign(globalThis, previousGlobals, {
+      IS_REACT_ACT_ENVIRONMENT: undefined,
+    });
+    dom.window.close();
+  }
+});
+
+function ActiveSidebar({ providerProfileId }: { providerProfileId?: string }) {
+  const threads = [
+    summary("active-thread", "Active Thread", false, providerProfileId),
+  ];
   return createElement(Sidebar, {
     liveThread: null,
     mode: "projects",
@@ -121,12 +199,14 @@ function summary(
   threadId: string,
   name: string,
   archived: boolean,
+  providerProfileId?: string,
 ): NativeThreadSummary {
   return {
     threadId,
     currentMetadata: {
       model: "fake",
       provider: "fake",
+      ...(providerProfileId === undefined ? {} : { providerProfileId }),
       cwd: "/work/zen",
       sandbox: "danger-full-access",
       approvalPolicy: "never",

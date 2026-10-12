@@ -1,36 +1,71 @@
+import { createImZenXPawHandler } from "./imzenx-paw.js";
+import { createFleetRoomsHandler } from "./fleet-rooms.js";
+import { deliverAssistantInput } from "./assistant-preset.js";
+import { FleetSettingsService } from "./fleet-settings.js";
+import { ZenXFleetCapabilityPackage } from "./capabilities/fleet-package.js";
+import { FleetToolTransportAdapter } from "./fleet-tool-router.js";
+import { FleetProductService } from "./fleet-product.js";
+import { realpath } from "node:fs/promises";
+import { ZenXSubagentsCapabilityPackage } from "./capabilities/subagents-package.js";
+import { attachMainWindowDiagnostics } from "./main-window-diagnostics.js";
+import { SkillsService, type SkillMode } from "../../../cli/src/skills.js";
 import { createImZenXProfileLoader } from "./imzenx-profile-loader.js";
 import { readZenXConnectionDescriptor } from "../protocol-client/connection-descriptor.js";
 import {
   app,
   BrowserWindow,
+  desktopCapturer,
   dialog,
   ipcMain,
   Menu,
   safeStorage,
   session,
   shell,
+  systemPreferences,
 } from "electron";
+import { randomUUID } from "node:crypto";
+import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { windowBackdropOptions } from "./window-appearance.js";
 import { FileAttachmentStore } from "../../../../src/attachment.js";
 
 import { isAllowedZenXExternalUrl } from "../external-link-policy.js";
-import {
-  isClientRequestMethod,
-  type ServerNotificationParams,
-} from "../protocol-client/index.js";
+import { type ServerNotificationParams } from "../protocol-client/index.js";
+import { registerProtocolRequestIpc } from "./protocol-request-ipc.js";
 import { ipcChannels } from "../preload/ipc.js";
 import { AppServerManager } from "./app-server-manager.js";
 import type { ApprovalDecision } from "./app-server-manager.js";
 import { ZenXCredentialVault } from "./credential-vault.js";
+import { secureLocalEncryption } from "./secure-local-encryption.js";
 import type {
+  PublicHostSettings,
   ZenXProviderDeleteReplacements,
   ZenXProviderEditOptions,
   ZenXProviderProfile,
   ZenXSettingsUpdate,
   ZenXSidebarOrder,
 } from "./host-profile.js";
-import { ZenXSettingsService } from "./settings-service.js";
+import {
+  ConfigurationPreCommitError,
+  ZenXSettingsService,
+} from "./settings-service.js";
+import {
+  isRendererSettingsDiagnostic,
+  SettingsDiagnosticLog,
+  runDiagnosedProviderMutation,
+  type ProviderKnownRejectionCode,
+} from "./settings-diagnostic-log.js";
+import { OperationalDiagnosticLog } from "./operational-diagnostic-log.js";
+import {
+  computerReadinessSnapshot,
+  probeComputerAccess,
+  type ZenXComputerAccessVerification,
+  type ZenXComputerReadinessSnapshot,
+} from "./computer-readiness.js";
+import {
+  ElectronMacComputerBackend,
+  retryDesktopSourceEnumeration,
+} from "./capabilities/computer-provider.js";
 import {
   withZenXProviderTransports,
   zenXProviderDiscoveryTransport,
@@ -56,6 +91,8 @@ import {
   MutableAppServerRequestPort,
   ZenXSelfControlCapabilityPackage,
 } from "./capabilities/self-control-package.js";
+import { nativeText, setNativeLanguage } from "./native-locale.js";
+import { resolveLanguage } from "../locale.js";
 import { installApplicationMenu } from "./application-menu.js";
 import { ZenXDirectoryBrowser } from "./directory-browser.js";
 import {
@@ -93,12 +130,16 @@ import {
 import { ZenXPluginDevControlServer } from "./plugin-dev-control.js";
 import { createDelegatingFirstPartyProfileLoader } from "./first-party-profile-loader.js";
 import { installZenXBundledPluginsAtStartup } from "./bundled-plugin-startup.js";
+import { ImZenXSetupService } from "./imzenx-setup-service.js";
+import { isTrustedImZenXSetupSender } from "./imzenx-setup-ipc.js";
+import { pathToFileURL } from "node:url";
 import { BrowserLiveObservationIpcBridge } from "./browser-live-observation-ipc.js";
 import { ComputerLiveObservationIpcBridge } from "./computer-live-observation-ipc.js";
 import { createElectronWorkspaceBrowser } from "./workspace-browser-electron.js";
 import { useWorkspaceBrowserProvider } from "./workspace-browser-provider-policy.js";
 import {
   ChromeExtensionBridge,
+  type ChromeBridgeSettingsSnapshot,
   ZENX_CHROME_EXTENSION_ID,
   ZENX_CHROME_EXTENSION_ORIGIN,
 } from "./chrome-extension-bridge.js";
@@ -110,6 +151,7 @@ import {
   type ChromeNativeHostStage,
 } from "./chrome-native-host.js";
 import {
+  configureChromeNativeHostActivationPolicy,
   chromeNativeHostRegistered,
   registerChromeNativeHost,
   unregisterChromeNativeHost,
@@ -120,6 +162,11 @@ const nativeHostCaller = chromeNativeHostOrigin(
   ZENX_CHROME_EXTENSION_ORIGIN,
 );
 const nativeHostMode = nativeHostCaller !== undefined;
+configureChromeNativeHostActivationPolicy({
+  platform: process.platform,
+  nativeHostMode,
+  setActivationPolicy: (policy) => app.setActivationPolicy(policy),
+});
 if (nativeHostCaller !== undefined) {
   void (async () => {
     let stage: ChromeNativeHostStage = "resolve-user-data";
@@ -157,9 +204,12 @@ if (nativeHostCaller !== undefined) {
   })();
 }
 
+let mainWindowDiagnostics: OperationalDiagnosticLog | undefined;
 let appServerManager: AppServerManager | undefined;
+let fleetSettingsService: FleetSettingsService | undefined;
 let settingsService: ZenXSettingsService | undefined;
 let capabilityService: ZenXCapabilityService | undefined;
+let imZenXSetupService: ImZenXSetupService | undefined;
 let chromeExtensionBridge: ChromeExtensionBridge | undefined;
 let pluginDevControl: ZenXPluginDevControlServer | undefined;
 const workspaceBrowser = createElectronWorkspaceBrowser();
@@ -203,6 +253,7 @@ const externalZasAcceptancePath = externalZasAcceptanceConfigPath(
 );
 
 let rendererReady = false;
+const ownedAppWindowIds = new Set<number>();
 let bootstrapFailure: string | undefined;
 
 function loadAppRenderer(window: BrowserWindow): void {
@@ -214,11 +265,12 @@ function loadAppRenderer(window: BrowserWindow): void {
 function loadStartupPage(window: BrowserWindow): void {
   const query: Record<string, string> =
     bootstrapFailure === undefined ? {} : { error: bootstrapFailure };
+  query.language = resolveLanguage("system", app.getPreferredSystemLanguages());
   const rendererUrl = process.env["ELECTRON_RENDERER_URL"];
   if (rendererUrl) {
     const url = new URL("/startup.html", rendererUrl);
-    if (bootstrapFailure !== undefined)
-      url.searchParams.set("error", bootstrapFailure);
+    for (const [key, value] of Object.entries(query))
+      url.searchParams.set(key, value);
     void window.loadURL(url.href);
   } else {
     void window.loadFile(join(__dirname, "../renderer/startup.html"), {
@@ -250,7 +302,17 @@ function createWindow(): BrowserWindow {
       sandbox: true,
     },
   });
+  ownedAppWindowIds.add(window.id);
+  window.once("closed", () => ownedAppWindowIds.delete(window.id));
 
+  mainWindowDiagnostics ??= new OperationalDiagnosticLog(
+    app.getPath("userData"),
+  );
+  attachMainWindowDiagnostics(
+    window,
+    mainWindowDiagnostics,
+    () => hostLifecycle.quitting,
+  );
   window.on("closed", () => dirtyFileWindows.delete(window.id));
   window.webContents.on("will-prevent-unload", (event) => {
     if (hostLifecycle.quitting) {
@@ -259,12 +321,11 @@ function createWindow(): BrowserWindow {
     }
     const response = dialog.showMessageBoxSync(window, {
       type: "warning",
-      buttons: ["Keep editing", "Leave window"],
+      buttons: [nativeText("keepEditing"), nativeText("leaveWindow")],
       defaultId: 0,
       cancelId: 0,
-      message: "Leave with unsaved file edits?",
-      detail:
-        "Unsaved drafts will be lost. A save already in progress may still finish.",
+      message: nativeText("leaveUnsaved"),
+      detail: nativeText("unsavedDetail"),
     });
     if (response === 1) event.preventDefault();
   });
@@ -286,6 +347,10 @@ async function bootstrapZenX(): Promise<void> {
   if (!ownsSingleInstance) return;
   bootstrapFence.throwIfCancelled();
   const userDataDirectory = app.getPath("userData");
+  imZenXSetupService = new ImZenXSetupService({
+    directory: join(userDataDirectory, "plugin-data", "imzenx", "setup"),
+    encryption: safeStorage,
+  });
   const entryPath = join(__dirname, "app-server-host.js");
   const tokenFile = join(userDataDirectory, "runtime", "app-server.token");
   const connectionDescriptorFile = join(
@@ -296,6 +361,20 @@ async function bootstrapZenX(): Promise<void> {
   const zenDataDirectory = resolve(
     process.env["ZENX_DATA_DIR"] ?? join(app.getPath("home"), ".zen"),
   );
+  const skills = new SkillsService(zenDataDirectory);
+  ipcMain.handle(ipcChannels.skillsList, () => skills.list());
+  ipcMain.handle(ipcChannels.skillsImport, (_event, directory: unknown) => {
+    if (typeof directory !== "string")
+      throw new Error("Skill directory is required");
+    return skills.importDirectory(directory);
+  });
+  ipcMain.handle(
+    ipcChannels.skillsMode,
+    (_event, id: unknown, mode: unknown) => {
+      if (typeof id !== "string") throw new Error("Skill id is required");
+      return skills.setMode(id, mode as SkillMode | null);
+    },
+  );
   const imageAttachments = new FileAttachmentStore(
     join(zenDataDirectory, "attachments"),
   );
@@ -303,8 +382,21 @@ async function bootstrapZenX(): Promise<void> {
     home: app.getPath("home"),
     documents: app.getPath("documents"),
   });
+  setNativeLanguage(
+    resolveLanguage("system", app.getPreferredSystemLanguages()),
+  );
   installApplicationMenu();
-  let automationService: ZenXAutomationControlPort | undefined;
+  ipcMain.handle(ipcChannels.localeSystemLanguages, () =>
+    app.getPreferredSystemLanguages(),
+  );
+  ipcMain.handle(ipcChannels.localeSetLanguage, (_event, language: unknown) => {
+    if (language !== "en" && language !== "zh-CN")
+      throw new Error("Unsupported interface language");
+    if (setNativeLanguage(language)) installApplicationMenu();
+  });
+  let automationService:
+    | Awaited<ReturnType<typeof createBundledAutomationPluginService>>
+    | undefined;
   let triggersPackage: ZenXTriggersCapabilityPackage | undefined;
   const resourcesDirectory = app.isPackaged
     ? process.resourcesPath
@@ -324,6 +416,22 @@ async function bootstrapZenX(): Promise<void> {
       safeStorage,
     ),
   });
+  const settingsDiagnostics = new SettingsDiagnosticLog(userDataDirectory);
+  const operationalDiagnostics = (mainWindowDiagnostics ??=
+    new OperationalDiagnosticLog(userDataDirectory));
+  const observeAppServer = (manager: AppServerManager) => {
+    manager.setRemoteRoomsHandler(
+      createFleetRoomsHandler(manager, () => automationService),
+    );
+    manager.onStatus((status) => {
+      if (status.type === "ready")
+        void fleetSettingsService?.restore().catch(() => undefined);
+    });
+
+    manager.onStatus((status) => {
+      void operationalDiagnostics.observeAppServer(status);
+    });
+  };
   try {
     await settingsService.initialize(process.env);
     bootstrapFence.throwIfCancelled();
@@ -344,8 +452,93 @@ async function bootstrapZenX(): Promise<void> {
       browserEnvironment.ZENX_USER_BROWSER_CDP_ENDPOINT =
         chromeExtensionBridge.endpoint;
     }
+    fleetSettingsService = new FleetSettingsService({
+      directory: userDataDirectory,
+      encryption: secureLocalEncryption(safeStorage),
+      manager: () => {
+        if (!appServerManager) throw new Error("Host unavailable");
+        return appServerManager;
+      },
+      workspaces: async () => {
+        const profile = (await settingsService!.publicSettings()).profile;
+        const paths = [
+          ...new Set([
+            ...profile.workspaces,
+            ...(profile.workspace ? [profile.workspace] : []),
+          ]),
+        ];
+        return await Promise.all(
+          paths.map(async (cwd) => ({
+            cwd: await realpath(cwd),
+            label:
+              profile.projectNames?.[cwd] ??
+              cwd.split(/[\\/]/).filter(Boolean).at(-1) ??
+              cwd,
+          })),
+        );
+      },
+    });
+    ipcMain.removeHandler(ipcChannels.fleetControl);
+    const fleetProduct = new FleetProductService(fleetSettingsService);
+    ipcMain.handle(
+      ipcChannels.fleetControl,
+      async (_event, action: unknown, input: unknown, revision?: number) => {
+        const fleet = fleetSettingsService!;
+        if (action === "status") return await fleet.status();
+        if (action === "readiness") return await fleet.readiness();
+        if (action === "catalog" && typeof input === "string")
+          return await fleetProduct.catalog(input);
+        if (action === "listThreads")
+          return await fleetProduct.list(
+            input as Parameters<typeof fleetProduct.list>[0],
+          );
+        if (action === "createThread")
+          return await fleetProduct.create(
+            input as Parameters<typeof fleetProduct.create>[0],
+          );
+        if (action === "readThread")
+          return await fleetProduct.read(
+            input as Parameters<typeof fleetProduct.read>[0],
+          );
+        if (action === "threadStatus")
+          return await fleetProduct.status(
+            input as Parameters<typeof fleetProduct.status>[0],
+          );
+        if (action === "sendThread")
+          return await fleetProduct.send(
+            input as Parameters<typeof fleetProduct.send>[0],
+          );
+        if (action === "save") return await fleet.save(input, revision);
+        if (action === "pair") return await fleet.pair(input);
+        if (action === "remove" && typeof input === "string")
+          return await fleet.remove(input);
+        if (action === "test" && typeof input === "string")
+          return await fleet.test(input);
+        if (action === "invoke")
+          return await fleet.invoke(
+            input as Parameters<typeof fleet.invoke>[0],
+          );
+        if (action === "hostPair") return await fleet.hostPair();
+        if (action === "hostInvitation")
+          return await fleet.hostInvitation(input);
+        if (action === "revoke" && typeof input === "string")
+          return await fleet.revoke(input);
+        throw new Error("Unsupported Fleet operation");
+      },
+    );
     const selfControlPackage = new ZenXSelfControlCapabilityPackage({
+      fleet: fleetSettingsService.router,
       appServer: selfControlPort,
+      // Agent messages supplement ongoing work by default.
+      sendPreference: async () => {
+        const profile = (await settingsService!.publicSettings()).profile;
+        // Preserve an explicit user-selected send preference.
+        if (!profile.composerSendModeExplicit) return "soft";
+        return profile.composerSendMode === "soft" ||
+          profile.composerSendMode === "hard"
+          ? profile.composerSendMode
+          : "queue";
+      },
       workflows: {
         workflowConfiguration: async () =>
           await settingsService!.workflowConfiguration(),
@@ -360,11 +553,34 @@ async function bootstrapZenX(): Promise<void> {
         },
       },
     });
+    const fleetPackage = new ZenXFleetCapabilityPackage({
+      threads: selfControlPackage,
+      fleet: fleetSettingsService,
+    });
+    const subagentsPackage = new ZenXSubagentsCapabilityPackage({
+      appServer: selfControlPort,
+      threads: selfControlPackage,
+      listSummaries: async () => {
+        if (appServerManager === undefined)
+          throw new Error("App Server is not attached");
+        const [active, archived] = await Promise.all([
+          appServerManager.listThreadSummaries(),
+          appServerManager.listThreadSummaries({ archived: true }),
+        ]);
+        return [...active, ...archived];
+      },
+    });
     const useSharedWorkspaceBrowser = useWorkspaceBrowserProvider(
       process.env,
       savedBrowserMode,
     );
+    const fleetToolTransport = new FleetToolTransportAdapter(
+      fleetSettingsService,
+      () => {},
+    );
     capabilityService = new ZenXCapabilityService({
+      toolTargetTransport: (invocation) =>
+        fleetToolTransport.invoke(invocation),
       userDataDirectory,
       ...(useSharedWorkspaceBrowser
         ? {
@@ -391,6 +607,22 @@ async function bootstrapZenX(): Promise<void> {
       trustedProfileLoaders: {
         imzenx: createImZenXProfileLoader({
           dataDirectory: join(userDataDirectory, "plugin-data", "imzenx"),
+          setRuntimeProject: (directory) =>
+            imZenXSetupService!.setRuntimeProject(directory),
+          inspectManagedChannels: (filename) =>
+            imZenXSetupService!.inspectManagedChannels(filename),
+          readManagedChannels: (filename) =>
+            imZenXSetupService!.readManagedChannels(filename),
+          registerManagedEdit: (edit) =>
+            imZenXSetupService!.registerManagedEdit(edit),
+          pawRequest: (cwd, operation, params) => {
+            if (!appServerManager)
+              throw new Error("ZAS manager is not attached");
+            return createImZenXPawHandler(
+              appServerManager,
+              () => automationService,
+            )(cwd, operation, params);
+          },
           isServerReady: () => appServerManager?.status.type === "ready",
           onServerStatus: (listener) => {
             if (appServerManager === undefined)
@@ -407,6 +639,12 @@ async function bootstrapZenX(): Promise<void> {
         computer: createDelegatingFirstPartyProfileLoader(() =>
           capabilityService!.computerProfilePackage(),
         ),
+        "zenx-fleet": createDelegatingFirstPartyProfileLoader(
+          () => fleetPackage,
+        ),
+        "zenx-subagents": createDelegatingFirstPartyProfileLoader(
+          () => subagentsPackage,
+        ),
         "zenx-self-control": createDelegatingFirstPartyProfileLoader(
           () => selfControlPackage,
         ),
@@ -421,6 +659,15 @@ async function bootstrapZenX(): Promise<void> {
         : undefined,
       projectProjection,
       appServerPort: selfControlPort,
+    });
+    capabilityService.onChange(() => {
+      try {
+        void operationalDiagnostics
+          .observePlugins(capabilityService!.diagnostics())
+          .catch(() => undefined);
+      } catch {
+        // Diagnostic observation cannot interrupt plugin state changes.
+      }
     });
     await syncProjectProjection(settingsService);
     bootstrapFence.throwIfCancelled();
@@ -453,6 +700,7 @@ async function bootstrapZenX(): Promise<void> {
       execPath: process.execPath,
       capabilityHost: capabilityService,
     });
+    observeAppServer(appServerManager);
     await selfControlPort.attach(appServerManager);
     bootstrapFence.throwIfCancelled();
     titleCoordinator = new ZenXThreadTitleCoordinator({
@@ -483,15 +731,132 @@ async function bootstrapZenX(): Promise<void> {
     );
     bootstrapFence.throwIfCancelled();
     installTitleIpc(titleCoordinator);
+    const automationManager = appServerManager;
     automationService = await createBundledAutomationPluginService({
+      targetDefaults: async () => {
+        const current = await automationManager.currentConfiguration();
+        const defaults = current.threadStartDefaults;
+        if (defaults === undefined)
+          throw new Error("Host thread defaults are unavailable");
+        const models = await automationManager.request("model/list", {});
+        const model = models.data.find((entry) => entry.isDefault);
+        if (model === undefined)
+          throw new Error("Host default model is unavailable");
+        const after = await automationManager.currentConfiguration();
+        if (
+          after.processEpoch !== current.processEpoch ||
+          after.revision !== current.revision ||
+          JSON.stringify(after.threadStartDefaults) !== JSON.stringify(defaults)
+        )
+          throw new Error("Host defaults changed; refresh and confirm again");
+        return {
+          model: model.id,
+          providerProfileId: defaults.providerProfileId,
+          modelId: defaults.modelId,
+          reasoningEffort: defaults.reasoningEffort,
+          sandbox: defaults.sandbox,
+          approvalPolicy:
+            defaults.approvalPolicy === "never"
+              ? ("never" as const)
+              : ("on-request" as const),
+          processEpoch: current.processEpoch,
+          revision: current.revision,
+        };
+      },
+      startThread: async (preview) => {
+        const current = await automationManager.currentConfiguration();
+        if (
+          current.processEpoch !== preview.processEpoch ||
+          current.revision !== preview.revision
+        )
+          throw new Error("Host defaults changed; refresh and confirm again");
+        const started = await automationManager.request("thread/start", {
+          cwd: preview.resolvedWorkspace,
+          model: preview.model,
+          sandbox: preview.sandbox,
+          approvalPolicy: preview.approvalPolicy,
+          ...(preview.reasoningEffort === null
+            ? {}
+            : { effort: preview.reasoningEffort }),
+        });
+        const after = await automationManager.currentConfiguration();
+        if (
+          after.processEpoch !== preview.processEpoch ||
+          after.revision !== preview.revision
+        )
+          throw new Error(
+            `Thread ${started.thread.id} was created as confirmed, but Host defaults changed; inspect it before retrying`,
+          );
+        return started;
+      },
+      threadTargets: {
+        projectProjection,
+        request: (method, params) => automationManager.request(method, params),
+      },
       userDataDirectory,
-      appServer: appServerManager,
+      appServer: {
+        request: (method, params) => automationManager.request(method, params),
+        onNotification: (listener) =>
+          automationManager.onNotification(listener),
+        readThread: (threadId) =>
+          automationManager.request("thread/read", {
+            threadId,
+            includeTurns: true,
+          }),
+        resolveRemoteThread: (device, workspace, target) =>
+          fleetSettingsService!.resolveRemoteThread(device, workspace, target),
+        readRemoteThread: (device, workspace, threadId, turnId) =>
+          fleetSettingsService!.readRemoteThread(
+            device,
+            workspace,
+            threadId,
+            turnId,
+          ),
+        subscribeRemoteThread: (device, workspace, threadId, options, signal) =>
+          fleetSettingsService!.subscribeRemoteThread(
+            device,
+            workspace,
+            threadId,
+            options,
+            signal,
+          ),
+        sendAssistant: (params, signal) =>
+          deliverAssistantInput(automationManager, params, signal),
+        enqueue: async (params) => {
+          await automationManager.request("turn/queue", params);
+        },
+      },
       titles: titleCoordinator,
     });
     bootstrapFence.throwIfCancelled();
+    const roomVersions = new Map<string, string>();
+    automationService.onChange((snapshot) => {
+      for (const room of snapshot.rooms) {
+        if (!room.assistant) continue;
+        const version = `${room.messages.length}:${room.messages.at(-1)?.id ?? ""}`;
+        if (roomVersions.get(room.id) !== version) {
+          roomVersions.set(room.id, version);
+          appServerManager?.notifyRemoteRoom(room.id, room.assistant.threadId);
+        }
+      }
+    });
     triggersPackage = new ZenXTriggersCapabilityPackage(automationService);
-    await capabilityService.initialize();
+    try {
+      await capabilityService.initialize();
+    } catch (error) {
+      void operationalDiagnostics.recordPluginStartupFailure();
+      throw error;
+    }
+    try {
+      await operationalDiagnostics.observePlugins(
+        capabilityService.diagnostics(),
+      );
+    } catch {
+      // Diagnostic observation cannot interrupt startup.
+    }
     bootstrapFence.throwIfCancelled();
+    const startupFailureCountBeforeSync =
+      capabilityService.diagnostics().bundledStartupFailureCount;
     try {
       await capabilityService.syncProfileManagedProviderVariants();
     } catch (error) {
@@ -499,9 +864,14 @@ async function bootstrapZenX(): Promise<void> {
       // Provider profile synchronization is optional plugin state. Keep the
       // core App Server available with the previously committed provider and
       // expose the failure through the normal capability diagnostics.
-      capabilityService.recordDiscoveryError(
-        `Provider profile synchronization is unavailable: ${describeError(error)}`,
-      );
+      if (
+        capabilityService.diagnostics().bundledStartupFailureCount ===
+        startupFailureCountBeforeSync
+      )
+        capabilityService.recordBundledPluginStartupError(
+          "Provider profile synchronization",
+          error,
+        );
     }
     bootstrapFence.throwIfCancelled();
     await installZenXBundledPluginsAtStartup(
@@ -510,6 +880,7 @@ async function bootstrapZenX(): Promise<void> {
     );
     bootstrapFence.throwIfCancelled();
     installCapabilityIpc(capabilityService, appServerManager, marketplace);
+    installImZenXSetupIpc(imZenXSetupService);
     installChromeBridgeIpc({
       settings: settingsService,
       bridge: chromeExtensionBridge,
@@ -534,8 +905,14 @@ async function bootstrapZenX(): Promise<void> {
     }
   } catch (error) {
     bootstrapFence.rethrowIfCancelled(error);
-    console.error("Could not start Zen App Server", error);
+    console.error(
+      appServerManager === undefined
+        ? "Could not start ZenX"
+        : "Could not start Zen App Server",
+      error,
+    );
     if (appServerManager === undefined) {
+      void operationalDiagnostics.recordBootstrapFailure();
       installFailedProtocolIpc(
         error instanceof Error ? error.message : String(error),
       );
@@ -604,6 +981,9 @@ async function bootstrapZenX(): Promise<void> {
   installSettingsIpc(
     settingsService,
     directoryBrowser,
+    settingsDiagnostics,
+    operationalDiagnostics,
+    join(userDataDirectory, "diagnostics"),
     async () => {
       if (appServerManager?.status.type === "ready") return;
       const hostConfig = await withZenXProviderTransports(
@@ -620,6 +1000,7 @@ async function bootstrapZenX(): Promise<void> {
           execPath: process.execPath,
           capabilityHost: capabilityService,
         });
+        observeAppServer(appServerManager);
         await selfControlPort.attach(appServerManager);
         await appServerManager.start();
       } else await appServerManager.restart(hostConfig);
@@ -696,12 +1077,11 @@ app.on("before-quit", (event) => {
     dirtyFileWindows.size > 0 &&
     dialog.showMessageBoxSync({
       type: "warning",
-      buttons: ["Keep editing", "Quit"],
+      buttons: [nativeText("keepEditing"), nativeText("quit")],
       defaultId: 0,
       cancelId: 0,
-      message: "Quit with unsaved file edits?",
-      detail:
-        "Unsaved drafts will be lost. A save already in progress may still finish.",
+      message: nativeText("quitUnsaved"),
+      detail: nativeText("unsavedDetail"),
     }) !== 1
   ) {
     event.preventDefault();
@@ -728,6 +1108,11 @@ app.on("second-instance", () => {
 
 async function stopZenXHost(): Promise<void> {
   const errors: Error[] = [];
+  try {
+    await imZenXSetupService?.close();
+  } catch {
+    errors.push(new Error("Could not stop IM runtime preparation"));
+  }
   try {
     await pluginDevControl?.close();
     pluginDevControl = undefined;
@@ -816,6 +1201,8 @@ import {
   listWorkspaceFiles,
   readWorkspaceFile,
   saveWorkspaceFile,
+  searchWorkspaceFiles,
+  validateWorkspaceFileReference,
 } from "./workspace-files.js";
 
 function installProtocolIpc(
@@ -827,6 +1214,11 @@ function installProtocolIpc(
   for (const [channel, read] of [
     [ipcChannels.workspaceFilesList, listWorkspaceFiles],
     [ipcChannels.workspaceFilesRead, readWorkspaceFile],
+    [ipcChannels.workspaceFilesSearch, searchWorkspaceFiles],
+    [
+      ipcChannels.workspaceFilesValidateReference,
+      validateWorkspaceFileReference,
+    ],
   ] as const) {
     ipcMain.handle(
       channel,
@@ -886,10 +1278,13 @@ function installProtocolIpc(
   ipcMain.handle(ipcChannels.imageAttachmentsPick, async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender);
     const options = {
-      title: "Choose images",
+      title: nativeText("chooseImages"),
       properties: ["openFile", "multiSelections"],
       filters: [
-        { name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp"] },
+        {
+          name: nativeText("images"),
+          extensions: ["png", "jpg", "jpeg", "gif", "webp"],
+        },
       ],
     } satisfies Electron.OpenDialogOptions;
     const result =
@@ -952,28 +1347,11 @@ function installProtocolIpc(
         readProjectThreadStartOptions(selection),
       ),
   );
-  ipcMain.handle(
-    ipcChannels.request,
-    async (_event, method: unknown, params: unknown) => {
-      if (!isClientRequestMethod(method)) {
-        throw new Error(`Unsupported ZenX protocol method: ${String(method)}`);
-      }
-      const result = await manager.request(method, params as never);
-      if (method === "thread/resume" || method === "thread/read") {
-        const snapshot =
-          result as import("../protocol-client/index.js").ClientRequestResults["thread/read"];
-        void observeThreadSnapshotTitle(titles, snapshot.thread).catch(
-          (error: unknown) => {
-            console.warn(
-              "Could not observe Thread snapshot for ZenX title",
-              error,
-            );
-          },
-        );
-      }
-      return result;
-    },
-  );
+  registerProtocolRequestIpc(manager, (thread) => {
+    void observeThreadSnapshotTitle(titles, thread).catch((error: unknown) => {
+      console.warn("Could not observe Thread snapshot for ZenX title", error);
+    });
+  });
   ipcMain.handle(
     ipcChannels.respondApproval,
     (_event, requestId: unknown, decision: unknown) => {
@@ -1120,10 +1498,8 @@ function installChromeBridgeIpc(options: {
       "zenx-native-host.cmd",
     ),
   };
-  const snapshot = async () => {
-    const configuredMode =
-      (await options.settings.publicSettings()).profile.browserMode ??
-      "isolated";
+  const snapshot = async (): Promise<ChromeBridgeSettingsSnapshot> => {
+    const configuredMode = await options.settings.configuredBrowserMode();
     const environmentMode = process.env.ZENX_BROWSER_MODE;
     const effectiveMode =
       environmentMode === "user-session" || environmentMode === "isolated"
@@ -1144,7 +1520,7 @@ function installChromeBridgeIpc(options: {
       nativeHostRegistered: await chromeNativeHostRegistered(registration),
       extensionDirectory,
       extensionId: ZENX_CHROME_EXTENSION_ID,
-      connection: options.bridge?.status() ?? { state: "waiting" as const },
+      connection: options.bridge?.status() ?? { state: "waiting", tabCount: 0 },
     };
   };
   ipcMain.handle(ipcChannels.chromeBridgeGet, snapshot);
@@ -1226,6 +1602,9 @@ function readProjectThreadStartOptions(
 function installSettingsIpc(
   settings: ZenXSettingsService,
   directoryBrowser: ZenXDirectoryBrowser,
+  diagnostics: SettingsDiagnosticLog,
+  operationalDiagnostics: OperationalDiagnosticLog,
+  diagnosticsDirectory: string,
   startHostIfNeeded: () => Promise<void>,
   refreshProjects: () => Promise<void>,
 ): void {
@@ -1240,6 +1619,113 @@ function installSettingsIpc(
   ipcMain.handle(
     ipcChannels.settingsGet,
     async () => await settings.publicSettings(),
+  );
+  ipcMain.handle(
+    ipcChannels.settingsDiagnosticRecord,
+    async (_event, input: unknown) => {
+      try {
+        if (!isRendererSettingsDiagnostic(input)) return;
+        await diagnostics.record(input);
+      } catch {
+        // A support log failure must never interrupt Settings.
+      }
+    },
+  );
+  ipcMain.handle(ipcChannels.settingsDiagnosticsOpenFolder, async () => {
+    await mkdir(diagnosticsDirectory, { recursive: true, mode: 0o700 });
+    const failure = await shell.openPath(diagnosticsDirectory);
+    if (failure.length > 0)
+      throw new Error("Could not open diagnostics folder");
+  });
+  let computerVerification: ZenXComputerAccessVerification | undefined;
+  let verificationStatus: string | undefined;
+  let pendingComputerProbe: Promise<ZenXComputerReadinessSnapshot> | undefined;
+  const readComputerReadiness = (): ZenXComputerReadinessSnapshot => {
+    let accessibilityTrusted: boolean | undefined;
+    let screenRecording: string | undefined;
+    if (process.platform === "darwin") {
+      try {
+        accessibilityTrusted =
+          systemPreferences.isTrustedAccessibilityClient(false);
+      } catch {
+        // Keep the status unknown if the current process cannot read TCC.
+      }
+      try {
+        screenRecording = systemPreferences.getMediaAccessStatus("screen");
+      } catch {
+        // A failed status check is not evidence of denied capture.
+      }
+    }
+    const snapshot = computerReadinessSnapshot({
+      platform: process.platform,
+      accessibilityTrusted,
+      screenRecording,
+      foregroundControlEnabled: settings.computerForegroundControlEnabled(),
+    });
+    const status = `${snapshot.accessibility}:${snapshot.screenRecording}`;
+    if (verificationStatus !== status) computerVerification = undefined;
+    const result =
+      computerVerification === undefined
+        ? snapshot
+        : { ...snapshot, verification: computerVerification };
+    void operationalDiagnostics.observeComputer(result);
+    return result;
+  };
+  ipcMain.handle(ipcChannels.computerReadinessGet, readComputerReadiness);
+  ipcMain.handle(ipcChannels.computerReadinessProbe, () => {
+    if (pendingComputerProbe !== undefined) return pendingComputerProbe;
+    pendingComputerProbe = (async () => {
+      const verification = await probeComputerAccess(readComputerReadiness(), {
+        accessibility: async () => {
+          const backend = new ElectronMacComputerBackend(
+            join(app.getPath("temp"), `zenx-readiness-${randomUUID()}`),
+          );
+          try {
+            await backend.listWindows();
+          } finally {
+            await backend.close().catch(() => undefined);
+          }
+        },
+        screenCapture: async () => {
+          const sources = await retryDesktopSourceEnumeration(() =>
+            desktopCapturer.getSources({
+              types: ["window"],
+              thumbnailSize: { width: 32, height: 32 },
+              fetchWindowIcons: false,
+            }),
+          );
+          if (!sources.some((source) => !source.thumbnail.isEmpty()))
+            throw new Error("No window preview was available for capture");
+        },
+        screenRecordingStatus: () =>
+          systemPreferences.getMediaAccessStatus("screen"),
+      });
+      const updated = readComputerReadiness();
+      computerVerification = verification;
+      verificationStatus = `${updated.accessibility}:${updated.screenRecording}`;
+      const result = { ...updated, verification };
+      void operationalDiagnostics.observeComputer(result);
+      return result;
+    })().finally(() => {
+      pendingComputerProbe = undefined;
+    });
+    return pendingComputerProbe;
+  });
+  ipcMain.handle(
+    ipcChannels.computerReadinessOpenSettings,
+    async (_event, kind: unknown) => {
+      if (
+        process.platform !== "darwin" ||
+        (kind !== "accessibility" && kind !== "screen-recording")
+      ) {
+        throw new Error("Invalid macOS privacy settings request");
+      }
+      await shell.openExternal(
+        kind === "accessibility"
+          ? "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+          : "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+      );
+    },
   );
   ipcMain.handle(
     ipcChannels.workspaceEdit,
@@ -1344,8 +1830,18 @@ function installSettingsIpc(
       const after = (await settings.publicSettings()).profile;
       if (
         !apiKey &&
-        JSON.stringify({ ...before, composerSendMode: undefined }) ===
-          JSON.stringify({ ...after, composerSendMode: undefined })
+        JSON.stringify({
+          ...before,
+          composerSendMode: undefined,
+          composerSendModeExplicit: undefined,
+          composerSendModeMigration: undefined,
+        }) ===
+          JSON.stringify({
+            ...after,
+            composerSendMode: undefined,
+            composerSendModeExplicit: undefined,
+            composerSendModeMigration: undefined,
+          })
       ) {
         return await settings.publicSettings();
       }
@@ -1368,14 +1864,38 @@ function installSettingsIpc(
       provider: ZenXProviderProfile,
       apiKey?: unknown,
       baseRevision?: number,
+      logoUpload?: unknown,
+      diagnosticAttemptId?: unknown,
     ) => {
-      if (apiKey !== undefined && typeof apiKey !== "string") {
-        throw new Error("Invalid API key");
-      }
-      requireConfigurationRevision(baseRevision);
-      await settings.addProviderProfile(provider, apiKey, baseRevision);
-      await startHostIfNeeded();
-      return await settings.publicSettings();
+      return await runDiagnosedProviderMutation<PublicHostSettings>({
+        log: diagnostics,
+        operation: "add",
+        attemptId:
+          typeof diagnosticAttemptId === "string"
+            ? diagnosticAttemptId
+            : undefined,
+        configurationStatusFromResult: (result) => result.configuration?.status,
+        knownRejectionCode: providerKnownRejectionCode,
+        preflight: () => {
+          if (apiKey !== undefined && typeof apiKey !== "string") {
+            throw new Error("Invalid API key");
+          }
+          requireConfigurationRevision(baseRevision);
+          if (logoUpload !== undefined && !(logoUpload instanceof Uint8Array))
+            throw new Error("Invalid Provider Logo upload");
+        },
+        mutate: async ({ markCommitted }) => {
+          await settings.addProviderProfile(
+            provider,
+            apiKey as string | undefined,
+            baseRevision,
+            logoUpload as Uint8Array | undefined,
+          );
+          markCommitted();
+          await startHostIfNeeded();
+          return await settings.publicSettings();
+        },
+      });
     },
   );
   ipcMain.handle(
@@ -1385,17 +1905,46 @@ function installSettingsIpc(
       providerProfileId: unknown,
       provider: ZenXProviderProfile,
       options?: ZenXProviderEditOptions,
+      diagnosticAttemptId?: unknown,
     ) => {
-      if (typeof providerProfileId !== "string") {
-        throw new Error("Invalid Provider profile id");
-      }
-      if (options?.apiKey !== undefined && typeof options.apiKey !== "string") {
-        throw new Error("Invalid API key");
-      }
-      requireConfigurationRevision(options?.baseRevision);
-      await settings.editProviderProfile(providerProfileId, provider, options);
-      await startHostIfNeeded();
-      return await settings.publicSettings();
+      return await runDiagnosedProviderMutation<PublicHostSettings>({
+        log: diagnostics,
+        operation: "edit",
+        attemptId:
+          typeof diagnosticAttemptId === "string"
+            ? diagnosticAttemptId
+            : undefined,
+        configurationStatusFromResult: (result) => result.configuration?.status,
+        knownRejectionCode: providerKnownRejectionCode,
+        preflight: () => {
+          if (typeof providerProfileId !== "string") {
+            throw new Error("Invalid Provider profile id");
+          }
+          if (
+            options?.apiKey !== undefined &&
+            typeof options.apiKey !== "string"
+          ) {
+            throw new Error("Invalid API key");
+          }
+          if (
+            options?.logoUpload !== undefined &&
+            options.logoUpload !== null &&
+            !(options.logoUpload instanceof Uint8Array)
+          )
+            throw new Error("Invalid Provider Logo upload");
+          requireConfigurationRevision(options?.baseRevision);
+        },
+        mutate: async ({ markCommitted }) => {
+          await settings.editProviderProfile(
+            providerProfileId as string,
+            provider,
+            options,
+          );
+          markCommitted();
+          await startHostIfNeeded();
+          return await settings.publicSettings();
+        },
+      });
     },
   );
   ipcMain.handle(
@@ -1493,6 +2042,9 @@ function installSettingsIpc(
 async function syncProjectProjection(
   settings: ZenXSettingsService,
 ): Promise<void> {
+  // Refresh the Host's authorization scope before projecting the new local
+  // Projects. A failed resolver/RPC must not preserve removed remote access.
+  if (appServerManager) await fleetSettingsService?.refreshWorkspaces();
   const profile = (await settings.publicSettings()).profile;
   await projectProjection.updateConfiguration(
     profile.workspaces,
@@ -1500,6 +2052,48 @@ async function syncProjectProjection(
     profile.lastUsedWorkspace,
     profile.projectNames,
   );
+}
+
+function installImZenXSetupIpc(setup: ImZenXSetupService): void {
+  const requireTrustedUi = (event: Electron.IpcMainInvokeEvent) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const rendererUrl =
+      process.env["ELECTRON_RENDERER_URL"] ??
+      pathToFileURL(join(__dirname, "../renderer/index.html")).href;
+    if (
+      !isTrustedImZenXSetupSender(
+        {
+          ownedWindow: window !== null && ownedAppWindowIds.has(window.id),
+          mainFrame: event.senderFrame === event.sender.mainFrame,
+          url: event.senderFrame?.url ?? "",
+        },
+        rendererUrl,
+      )
+    )
+      throw new Error("IM setup requires the trusted ZenX window");
+    const plugin = capabilityService
+      ?.pluginSnapshot()
+      .plugins.find((entry) => entry.id === "imzenx");
+    if (!plugin?.enabled || !plugin.available)
+      throw new Error("Enable the IMZenX plugin before configuring IM");
+  };
+  ipcMain.handle(ipcChannels.imzenxSetupInspect, async (event) => {
+    requireTrustedUi(event);
+    return setup.inspect();
+  });
+  ipcMain.handle(
+    ipcChannels.imzenxSetupSaveChannel,
+    async (event, value: unknown) => {
+      requireTrustedUi(event);
+      // The admitted runtime gates the current configuration inside its own
+      // queue. Never read then re-save a possibly stale settings snapshot here.
+      return setup.saveChannel(value);
+    },
+  );
+  ipcMain.handle(ipcChannels.imzenxSetupPrepareRuntime, async (event) => {
+    requireTrustedUi(event);
+    return setup.prepareRuntime();
+  });
 }
 
 function installCapabilityIpc(
@@ -1566,9 +2160,9 @@ function installCapabilityIpc(
   ipcMain.handle(ipcChannels.pluginsSelectTarball, async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender);
     const options = {
-      title: "Install ZenX plugin tarball",
+      title: nativeText("installPlugin"),
       properties: ["openFile"],
-      filters: [{ name: "npm package tarball", extensions: ["tgz"] }],
+      filters: [{ name: nativeText("pluginTarball"), extensions: ["tgz"] }],
     } satisfies Electron.OpenDialogOptions;
     const result =
       owner === null
@@ -1726,6 +2320,16 @@ function isApprovalDecision(value: unknown): value is ApprovalDecision {
     value === "decline" ||
     value === "cancel"
   );
+}
+
+function providerKnownRejectionCode(
+  error: unknown,
+): ProviderKnownRejectionCode | undefined {
+  if (!(error instanceof ConfigurationPreCommitError)) return undefined;
+  const reason = "reason" in error ? error.reason : undefined;
+  if (reason === "conflict") return "revision-conflict";
+  if (reason === "validation") return "validation-rejected";
+  return "save-rejected";
 }
 
 function requireConfigurationRevision(value: unknown): void {

@@ -271,8 +271,11 @@ test("light and dark semantic text, actions, boundaries, and focus meet contrast
     styles,
     /\.primary-button\s*\{[^}]*color:\s*var\(--color-text-on-accent\)/u,
   );
-  assert.doesNotMatch(styles, /outline:\s*2px solid/u);
-  assert.match(styles, /button:focus-visible,[\s\S]*?filter:\s*brightness/u);
+  assert.match(styles, /outline:\s*1px solid var\(--color-focus-ring\)/u);
+  assert.doesNotMatch(
+    styles,
+    /button:focus-visible,[^{]*\{[^}]*filter:\s*brightness/u,
+  );
   assert.match(
     styles,
     /\.composer > textarea::placeholder\s*\{[^}]*color:\s*var\(--color-text-muted\)[^}]*opacity:\s*1/u,
@@ -283,11 +286,11 @@ test("light and dark semantic text, actions, boundaries, and focus meet contrast
   );
   assert.match(
     styles,
-    /\.thread-row\.selected\s*\{[^}]*background:\s*var\(--color-surface-hover\)/u,
+    /\.thread-row\.selected\s*\{[^}]*background:\s*var\(--color-accent-soft\)/u,
   );
   assert.match(
     styles,
-    /\.thread-project,\s*\.model-line\s*\{[^}]*color:\s*var\(--color-text-muted\)/u,
+    /\.thread-project,\s*\.model-line,\s*\.thread-model\s*\{[^}]*color:\s*var\(--color-text-muted\)/u,
   );
   assert.doesNotMatch(
     styles,

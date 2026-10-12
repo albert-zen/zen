@@ -1,8 +1,11 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import {
   type CSSProperties,
   type ReactNode,
+  createContext,
+  useContext,
   useEffect,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -16,7 +19,10 @@ import { createPortal } from "react-dom";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { Thread } from "../../protocol-client/index.js";
 import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
-import type { ZenXSidebarOrder } from "../../main/host-profile.js";
+import type {
+  PublicHostSettings,
+  ZenXSidebarOrder,
+} from "../../main/host-profile.js";
 import type { AppServerHostStatus } from "../../main/app-server-manager.js";
 import { Icon } from "./icons.js";
 import type { LoadedPluginContribution } from "./plugin-contributions.js";
@@ -36,6 +42,15 @@ import {
 import { startSidebarDrag } from "./sidebar-drag.js";
 
 import { useSidebarExpansion } from "./sidebar-expansion.js";
+import {
+  ROOM_ROUTE,
+  RoomConversationNavigation,
+  type RoomConversationState,
+} from "./room-conversations.js";
+
+const THREAD_DENSITY_STORAGE_KEY = "zenx.sidebar.thread-density";
+type ThreadDensity = "compact" | "detailed";
+const SidebarSettingsContext = createContext<PublicHostSettings | null>(null);
 
 interface SidebarProps {
   collapsed?: boolean;
@@ -71,6 +86,8 @@ interface SidebarProps {
   onSelectThread(threadId: string): void;
   pendingApprovalThreadIds: ReadonlySet<string>;
   pluginContributions: readonly LoadedPluginContribution[];
+  roomConversations?: RoomConversationState;
+  selectedRoomId?: string | null;
   selectedPage: string;
   selectedThreadId: string | null;
   serverStatus: AppServerHostStatus;
@@ -107,6 +124,8 @@ export function Sidebar({
   onSelectThread,
   pendingApprovalThreadIds,
   pluginContributions,
+  roomConversations,
+  selectedRoomId,
   selectedPage,
   selectedThreadId,
   serverStatus,
@@ -118,6 +137,7 @@ export function Sidebar({
   pinnedThreads,
   threads,
 }: SidebarProps) {
+  useTranslation("shell");
   const [sidebarOrderError, setSidebarOrderError] = useState<string | null>(
     null,
   );
@@ -126,6 +146,37 @@ export function Sidebar({
   >(null);
   const [projectsOpen, toggleProjects, expansionError] =
     useSidebarExpansion("projects");
+  const [threadDensity, setThreadDensity] = useState<ThreadDensity>(() => {
+    try {
+      return window.localStorage.getItem(THREAD_DENSITY_STORAGE_KEY) ===
+        "compact"
+        ? "compact"
+        : "detailed";
+    } catch {
+      return "detailed";
+    }
+  });
+  const [settings, setSettings] = useState<PublicHostSettings | null>(null);
+  useEffect(() => {
+    const api = window.zenx?.settings;
+    if (api?.get === undefined) return;
+    let active = true;
+    let changed = false;
+    const dispose = api.onChanged?.((value) => {
+      changed = true;
+      if (active) setSettings(value);
+    });
+    void api.get().then(
+      (value) => {
+        if (active && !changed) setSettings(value);
+      },
+      () => undefined,
+    );
+    return () => {
+      active = false;
+      dispose?.();
+    };
+  }, []);
   const lastUsedProject =
     projects.lastUsedWorkspace === null
       ? undefined
@@ -162,7 +213,9 @@ export function Sidebar({
     retry: () => Promise<void>,
   ) => {
     setSidebarOrderError(
-      `Could not save Sidebar order: ${error instanceof Error ? error.message : String(error)}`,
+      i18n.t("shell:couldNotSaveSidebarOrder", {
+        error: error instanceof Error ? error.message : String(error),
+      }),
     );
     setSidebarOrderRetry(() => retry);
   };
@@ -182,8 +235,81 @@ export function Sidebar({
     setPendingPinFocus(null);
   }, [mode, pendingPinFocus, pinnedThreads]);
   useEffect(() => {
+    let shortcutObserver: MutationObserver | null = null;
+    const shortcutTargets = () => {
+      const sidebar = document.getElementById("primary-sidebar");
+      return {
+        newThread:
+          sidebar?.querySelector<HTMLButtonElement>(".new-thread-action") ??
+          null,
+        threads:
+          sidebar === null
+            ? []
+            : Array.from(
+                sidebar.querySelectorAll<HTMLButtonElement>(
+                  ".thread-row-shell > button.thread-row",
+                ),
+              ).filter((row) => !row.closest("[inert]")),
+      };
+    };
+    const clearShortcutHints = () => {
+      shortcutObserver?.disconnect();
+      shortcutObserver = null;
+      document
+        .querySelectorAll("#primary-sidebar [data-shortcut-key]")
+        .forEach((target) => target.removeAttribute("data-shortcut-key"));
+    };
+    const projectShortcutHints = () => {
+      const sidebar = document.getElementById("primary-sidebar");
+      if (sidebar === null) return;
+      sidebar
+        .querySelectorAll("[data-shortcut-key]")
+        .forEach((target) => target.removeAttribute("data-shortcut-key"));
+      const targets = shortcutTargets();
+      if (targets.newThread?.disabled === false)
+        targets.newThread.setAttribute("data-shortcut-key", "N");
+      targets.threads
+        .slice(0, 9)
+        .forEach((row, index) =>
+          row.setAttribute("data-shortcut-key", String(index + 1)),
+        );
+    };
+    const shortcutsBlocked = (event: KeyboardEvent) =>
+      event.isComposing ||
+      document.querySelector(
+        '[role="dialog"], dialog[open], [aria-modal="true"]',
+      ) !== null ||
+      (event.target instanceof window.Element &&
+        event.target.closest(
+          '[role="menu"], .project-menu, .thread-menu-rename',
+        ) !== null);
+    const showShortcutHints = () => {
+      projectShortcutHints();
+      if (shortcutObserver !== null) return;
+      shortcutObserver = new window.MutationObserver(projectShortcutHints);
+      const sidebar = document.getElementById("primary-sidebar");
+      if (sidebar !== null)
+        shortcutObserver.observe(sidebar, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["inert"],
+        });
+    };
     const switchThread = (event: KeyboardEvent) => {
       const mac = window.zenx?.platform === "darwin";
+      const modifierOnly = mac
+        ? event.key === "Meta" && event.metaKey && !event.ctrlKey
+        : event.key === "Control" && event.ctrlKey && !event.metaKey;
+      if (
+        modifierOnly &&
+        !event.defaultPrevented &&
+        !event.altKey &&
+        !event.shiftKey &&
+        !event.repeat &&
+        !shortcutsBlocked(event)
+      )
+        showShortcutHints();
       if (
         event.defaultPrevented ||
         event.isComposing ||
@@ -196,60 +322,57 @@ export function Sidebar({
         !(/^[1-9]$/u.test(event.key) || event.key.toLowerCase() === "n")
       )
         return;
-      if (
-        document.querySelector(
-          '[role="dialog"], dialog[open], [aria-modal="true"]',
-        ) !== null ||
-        (event.target instanceof window.Element &&
-          event.target.closest(
-            '[role="menu"], .project-menu, .thread-menu-rename',
-          ))
-      )
-        return;
+      if (shortcutsBlocked(event)) return;
       if (event.key.toLowerCase() === "n") {
-        const button = document.querySelector<HTMLButtonElement>(
-          "#primary-sidebar .new-thread-action",
-        );
+        const button = shortcutTargets().newThread;
         if (button === null || button.disabled) return;
         event.preventDefault();
         button.click();
         return;
       }
-      const rows = document.querySelectorAll<HTMLButtonElement>(
-        "#primary-sidebar .thread-row-shell > button.thread-row",
-      );
+      const rows = shortcutTargets().threads;
       const target = rows[Number(event.key) - 1];
       if (target === undefined) return;
       event.preventDefault();
       target.click();
     };
+    const releaseShortcutHints = (event: KeyboardEvent) => {
+      if (event.key === "Meta" || event.key === "Control") clearShortcutHints();
+    };
     document.addEventListener("keydown", switchThread);
-    return () => document.removeEventListener("keydown", switchThread);
+    document.addEventListener("keyup", releaseShortcutHints);
+    window.addEventListener("blur", clearShortcutHints);
+    return () => {
+      clearShortcutHints();
+      document.removeEventListener("keydown", switchThread);
+      document.removeEventListener("keyup", releaseShortcutHints);
+      window.removeEventListener("blur", clearShortcutHints);
+    };
   }, []);
   const watchingThreadIds = new Set<string>();
   return (
-    <>
+    <SidebarSettingsContext.Provider value={settings}>
       <aside
         id="primary-sidebar"
         className={`sidebar${open ? " open" : ""}`}
-        aria-label="Projects and threads"
+        data-thread-density={threadDensity}
+        aria-label={
+          roomConversations === undefined
+            ? i18n.t("shell:projectsAndThreads")
+            : i18n.t("shell:conversationsProjectsAndThreads")
+        }
         aria-hidden={collapsed && !open ? true : undefined}
+        inert={collapsed && !open}
       >
         <header className="sidebar-header">
-          <PluginSpaces
-            contributions={pluginContributions}
-            onOpen={onOpenContribution}
-            selectedPage={selectedPage}
-          />
-
           <div className="new-thread-control">
             <button
               className="new-thread-action"
               title={
                 typeof window !== "undefined" &&
                 window.zenx?.platform === "darwin"
-                  ? "New thread (⌘N)"
-                  : "New thread (Ctrl+N)"
+                  ? i18n.t("shell:newThreadShortcut", { shortcut: "⌘N" })
+                  : i18n.t("shell:newThreadShortcut", { shortcut: "Ctrl+N" })
               }
               aria-keyshortcuts={
                 typeof window !== "undefined" &&
@@ -268,17 +391,42 @@ export function Sidebar({
               }}
             >
               <Icon name="compose" size={14} />
-              <span>New thread</span>
+              <span>{i18n.t("shell:newThread")}</span>
               <small title={lastUsedProject?.workspace}>
                 {lastUsedProject === undefined
                   ? configuredProjects.length === 0
-                    ? "Add project first"
-                    : "Choose project"
+                    ? i18n.t("shell:addProjectFirst")
+                    : i18n.t("shell:chooseProject")
                   : (lastUsedProject.name ??
                     projectLabelForSidebar(lastUsedProject.workspace))}
               </small>
             </button>
           </div>
+        </header>
+
+        <div
+          className="sidebar-scroll"
+          aria-labelledby="sidebar-thread-list-heading"
+        >
+          <PluginSpaces
+            contributions={
+              roomConversations === undefined
+                ? pluginContributions
+                : pluginContributions.filter(
+                    (contribution) => contribution.page.route !== ROOM_ROUTE,
+                  )
+            }
+            onOpen={onOpenContribution}
+            selectedPage={selectedPage}
+          />
+          {roomConversations === undefined ? null : (
+            <RoomConversationNavigation
+              {...roomConversations}
+              selectedRoomId={selectedRoomId}
+              selectedPage={selectedPage}
+              onOpen={onOpenContribution}
+            />
+          )}
 
           <div className="sidebar-view-head">
             {mode === "projects" ? (
@@ -294,33 +442,69 @@ export function Sidebar({
                   name="chevron-down"
                   size={13}
                 />
-                <strong>Projects</strong>
+                <strong>{i18n.t("shell:projects")}</strong>
               </button>
             ) : (
               <strong id="sidebar-thread-list-heading" tabIndex={-1}>
-                Inbox
+                {i18n.t("shell:inbox")}
               </strong>
             )}
-            {mode === "projects" ? (
+            <span className="sidebar-view-actions">
+              {mode === "inbox" ? <span>{threads.length}</span> : null}
               <button
-                className="sidebar-inline-action"
+                className="sidebar-density-toggle"
                 type="button"
-                aria-label="Add project"
-                title="Add project"
-                onClick={onAddProject}
+                aria-label={i18n.t("shell:threadRowsSwitch", {
+                  density:
+                    threadDensity === "detailed"
+                      ? i18n.t("shell:detailed")
+                      : i18n.t("shell:compact"),
+                  next:
+                    threadDensity === "detailed"
+                      ? i18n.t("shell:compact")
+                      : i18n.t("shell:detailed"),
+                })}
+                aria-pressed={threadDensity === "compact"}
+                title={i18n.t("shell:threadRows", {
+                  density:
+                    threadDensity === "detailed"
+                      ? i18n.t("shell:detailed")
+                      : i18n.t("shell:compact"),
+                })}
+                onClick={() => {
+                  const next =
+                    threadDensity === "detailed" ? "compact" : "detailed";
+                  setThreadDensity(next);
+                  try {
+                    window.localStorage.setItem(
+                      THREAD_DENSITY_STORAGE_KEY,
+                      next,
+                    );
+                  } catch {
+                    // The preference remains valid for this window.
+                  }
+                }}
               >
-                <Icon name="folder-plus" size={14} />
+                <Icon name="list-detail" size={13} />
+                <span>
+                  {threadDensity === "detailed"
+                    ? i18n.t("shell:detailed")
+                    : i18n.t("shell:compact")}
+                </span>
               </button>
-            ) : (
-              <span>{threads.length}</span>
-            )}
+              {mode === "projects" ? (
+                <button
+                  className="sidebar-inline-action"
+                  type="button"
+                  aria-label={i18n.t("shell:addProject")}
+                  title={i18n.t("shell:addProject")}
+                  onClick={onAddProject}
+                >
+                  <Icon name="folder-plus" size={14} />
+                </button>
+              ) : null}
+            </span>
           </div>
-        </header>
-
-        <div
-          className="sidebar-scroll"
-          aria-labelledby="sidebar-thread-list-heading"
-        >
           {expansionError !== null ? (
             <p role="alert">{expansionError}</p>
           ) : null}
@@ -335,26 +519,28 @@ export function Sidebar({
                   if (retry !== null) void retry();
                 }}
               >
-                Try again
+                {i18n.t("shell:tryAgain")}
               </button>
             </div>
           ) : null}
           {serverStatus.type !== "ready" ? (
-            <p className="sidebar-empty">Waiting for the local App Server.</p>
+            <p className="sidebar-empty">
+              {i18n.t("shell:waitingForTheLocalAppServer")}
+            </p>
           ) : threadLoading ? (
             <p className="sidebar-empty" role="status">
-              Loading active Threads…
+              {i18n.t("shell:loadingActiveThreads")}
             </p>
           ) : threadError !== null ? (
             <div className="sidebar-empty sidebar-error" role="alert">
               <p>{threadError}</p>
               <button type="button" onClick={onRetryThreads}>
-                Try again
+                {i18n.t("shell:tryAgain")}
               </button>
             </div>
           ) : mode === "inbox" && threads.length === 0 ? (
             <p className="sidebar-empty">
-              Your conversations will appear here.
+              {i18n.t("shell:conversationsAppearHere")}
             </p>
           ) : mode === "inbox" ? (
             <InboxView
@@ -423,13 +609,15 @@ export function Sidebar({
           <button
             className="settings-nav-row"
             type="button"
-            aria-label={`Settings — ${serviceStatusPresentation(serverStatus).label}`}
+            aria-label={i18n.t("shell:settingsServiceStatus", {
+              status: serviceStatusPresentation(serverStatus).label,
+            })}
             title={serviceStatusPresentation(serverStatus).label}
             aria-current={selectedPage === "settings" ? "page" : undefined}
             onClick={onOpenSettings}
           >
             <Icon name="settings" />
-            <span>Settings</span>
+            <span>{i18n.t("shell:settings")}</span>
             <ServiceStatusDot status={serverStatus} />
           </button>
         </footer>
@@ -437,10 +625,10 @@ export function Sidebar({
       <button
         className={`sidebar-scrim${open ? " open" : ""}`}
         type="button"
-        aria-label="Close sidebar"
+        aria-label={i18n.t("shell:closeSidebar")}
         onClick={onClose}
       />
-    </>
+    </SidebarSettingsContext.Provider>
   );
 }
 
@@ -453,40 +641,29 @@ export function PluginSpaces({
   onOpen(route: string): void;
   selectedPage: string;
 }) {
-  const [expanded, toggleExpanded, expansionError] =
-    useSidebarExpansion("plugins");
-  const linksId = useId();
+  useTranslation("shell");
   if (contributions.length === 0) return null;
   return (
-    <section className="plugin-spaces" aria-label="Enabled plugin spaces">
-      <button
-        type="button"
-        className="plugin-spaces-toggle"
-        aria-expanded={expanded}
-        aria-controls={linksId}
-        onClick={toggleExpanded}
-      >
-        <Icon name={expanded ? "chevron-down" : "chevron-right"} />
-        <span>Plugin spaces</span>
-      </button>
-      {expansionError !== null ? <p role="alert">{expansionError}</p> : null}
-      <div id={linksId} hidden={!expanded}>
-        {contributions.map((contribution) => (
-          <button
-            className="plugin-space-link"
-            type="button"
-            aria-current={
-              selectedPage === contribution.page.route ? "page" : undefined
-            }
-            key={contribution.key}
-            onClick={() => onOpen(contribution.page.route)}
-          >
-            <Icon name={contribution.icon} />
-            <span>{contribution.label}</span>
-          </button>
-        ))}
-      </div>
-    </section>
+    <nav
+      className="plugin-spaces"
+      aria-label={i18n.t("shell:workspaceNavigation")}
+    >
+      {contributions.map((contribution) => (
+        <button
+          className="plugin-space-link"
+          type="button"
+          aria-current={
+            selectedPage === contribution.page.route ? "page" : undefined
+          }
+          title={contribution.label}
+          key={contribution.key}
+          onClick={() => onOpen(contribution.page.route)}
+        >
+          <Icon name={contribution.icon} size={14} />
+          <span>{contribution.label}</span>
+        </button>
+      ))}
+    </nav>
   );
 }
 
@@ -496,18 +673,27 @@ export function serviceStatusPresentation(status: AppServerHostStatus): {
 } {
   switch (status.type) {
     case "ready":
-      return { className: "ready", label: "Local service ready" };
+      return { className: "ready", label: i18n.t("shell:localServiceReady") };
     case "starting":
-      return { className: "starting", label: "Local service starting" };
+      return {
+        className: "starting",
+        label: i18n.t("shell:localServiceStarting"),
+      };
     case "reconnecting":
-      return { className: "reconnecting", label: "Local service reconnecting" };
+      return {
+        className: "reconnecting",
+        label: i18n.t("shell:localServiceReconnecting"),
+      };
     case "error":
       return {
         className: "error",
-        label: `Local service error: ${status.message}`,
+        label: i18n.t("shell:localServiceError", { error: status.message }),
       };
     case "stopped":
-      return { className: "stopped", label: "Local service stopped" };
+      return {
+        className: "stopped",
+        label: i18n.t("shell:localServiceStopped"),
+      };
   }
 }
 
@@ -605,7 +791,7 @@ function PinnedThreadsView({
       aria-labelledby="sidebar-pinned-heading"
     >
       <h2 id="sidebar-pinned-heading" tabIndex={-1}>
-        Pinned
+        {i18n.t("shell:pinned")}
       </h2>
       {threads.map((thread) => (
         <ThreadRow
@@ -731,8 +917,8 @@ function ProjectsView({
     return (
       <div className="projects-zero-state">
         <Icon name="folder" size={18} />
-        <strong>No projects yet</strong>
-        <p>Add a folder before starting a Thread.</p>
+        <strong>{i18n.t("shell:noProjectsYet")}</strong>
+        <p>{i18n.t("shell:addAFolderBeforeStartingAThread")}</p>
       </div>
     );
   }
@@ -1059,7 +1245,7 @@ function ProjectRows({
         !actionsRef.current?.contains(event.target as Node) &&
         !menuRef.current?.contains(event.target as Node)
       ) {
-        closeMenu();
+        closeMenu(false);
       }
     };
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -1150,15 +1336,19 @@ function ProjectRows({
           <Icon name="folder" size={14} />
           <span>{group.label}</span>
           {pinnedProject ? (
-            <Icon name="pin" size={12} aria-label="Pinned project" />
+            <Icon
+              name="pin"
+              size={12}
+              aria-label={i18n.t("shell:pinnedProject")}
+            />
           ) : null}
         </button>
         {group.workspace === null || !group.configured ? null : (
           <div className="project-actions" ref={actionsRef}>
             <button
               type="button"
-              aria-label={`New thread in ${group.label}`}
-              title="New thread here"
+              aria-label={i18n.t("shell:newThreadIn", { project: group.label })}
+              title={i18n.t("shell:newThreadHere")}
               disabled={newThreadDisabled}
               onClick={() => onNewThread(group.workspace!)}
             >
@@ -1169,11 +1359,13 @@ function ProjectRows({
               className="project-more-trigger"
               type="button"
               id={`project-more-trigger-${encodeURIComponent(group.key)}`}
-              aria-label={`More actions for ${group.label}`}
+              aria-label={i18n.t("shell:moreActionsFor", {
+                project: group.label,
+              })}
               aria-expanded={menuOpen}
               aria-haspopup="menu"
               aria-controls={menuOpen ? projectMenuId : undefined}
-              title="More actions"
+              title={i18n.t("shell:moreActions")}
               onClick={toggleMenu}
               onKeyDown={handleMoreKeyDown}
             >
@@ -1187,7 +1379,9 @@ function ProjectRows({
                 menuRef={menuRef}
                 role="menu"
                 aria-labelledby={`project-more-trigger-${encodeURIComponent(group.key)}`}
-                aria-label={`${group.label} project actions`}
+                aria-label={i18n.t("shell:projectActions", {
+                  project: group.label,
+                })}
                 onKeyDown={(event) => {
                   if (event.key === "Escape") {
                     event.preventDefault();
@@ -1244,7 +1438,12 @@ function ProjectRows({
                         closeMenu();
                       } catch (error) {
                         setPinError(
-                          `Could not save project pin: ${error instanceof Error ? error.message : String(error)}`,
+                          i18n.t("shell:couldNotSaveProjectPin", {
+                            error:
+                              error instanceof Error
+                                ? error.message
+                                : String(error),
+                          }),
                         );
                       } finally {
                         setPinBusy(false);
@@ -1254,10 +1453,10 @@ function ProjectRows({
                     <Icon name={pinnedProject ? "pin-off" : "pin"} size={13} />
                     <span>
                       {pinBusy
-                        ? "Saving…"
+                        ? i18n.t("shell:saving")
                         : pinnedProject
-                          ? "Unpin project"
-                          : "Pin project"}
+                          ? i18n.t("shell:unpinProject")
+                          : i18n.t("shell:pinProject")}
                     </span>
                   </button>
                 ) : null}
@@ -1272,7 +1471,7 @@ function ProjectRows({
                     }}
                   >
                     <Icon name="settings" size={13} />
-                    <span>Edit project</span>
+                    <span>{i18n.t("shell:editProject")}</span>
                   </button>
                 ) : null}
                 {!group.isDefault ? (
@@ -1285,7 +1484,7 @@ function ProjectRows({
                     }}
                   >
                     <Icon name="check" size={13} />
-                    <span>Set as default</span>
+                    <span>{i18n.t("shell:setAsDefault")}</span>
                   </button>
                 ) : null}
                 <button
@@ -1297,59 +1496,72 @@ function ProjectRows({
                   }}
                 >
                   <Icon name="x" size={13} />
-                  <span>Remove from ZenX</span>
+                  <span>{i18n.t("shell:removeFromZenx")}</span>
                 </button>
               </SidebarMenuPopover>
             ) : null}
           </div>
         )}
       </div>
-      {open && group.threads.length === 0 ? (
-        <p className="project-empty">No threads yet.</p>
-      ) : open ? (
-        group.threads.map((thread, threadIndex) => (
-          <ThreadRow
-            hasActiveTurn={threadHasActiveTurn(thread, liveThread)}
-            key={thread.threadId}
-            onChangeThreadLifecycle={onChangeThreadLifecycle}
-            onChangeThreadPinned={onChangeThreadPinned}
-            onRenameThread={onRenameThread}
-            onForkThread={onForkThread}
-            onSelectThread={onSelectThread}
-            pendingApproval={pendingApprovalThreadIds.has(thread.threadId)}
-            pinned={pinnedThreadIds.has(thread.threadId)}
-            selected={thread.threadId === selectedThreadId}
-            thread={thread}
-            watching={watchingThreadIds.has(thread.threadId)}
-            reorder={
-              threadReorder === undefined
-                ? undefined
-                : {
-                    controlId: sidebarOrderControlId("thread", thread.threadId),
-                    dragging: threadReorder.draggingId === thread.threadId,
-                    placement:
-                      threadReorder.targetId === thread.threadId
-                        ? threadReorder.placement
-                        : undefined,
-                    onDragLeave: threadReorder.onDragLeave,
-                    onDragStart: (event) =>
-                      threadReorder.onDragStart(thread.threadId, event),
-                    onDragEnd: threadReorder.onDragEnd,
-                    onDragOver: (event) =>
-                      threadReorder.onDragOver(thread.threadId, event),
-                    onDrop: (event) =>
-                      threadReorder.onDrop(thread.threadId, event),
-                    onKeyDown: (event) =>
-                      threadReorder.onKeyDown(
-                        threadIndex,
-                        thread.threadId,
-                        event,
-                      ),
-                  }
-            }
-          />
-        ))
-      ) : null}
+      <div
+        className="project-disclosure"
+        data-open={open}
+        inert={!open}
+        aria-hidden={!open}
+      >
+        <div>
+          {group.threads.length === 0 ? (
+            <p className="project-empty">{i18n.t("shell:noThreadsYet")}</p>
+          ) : (
+            group.threads.map((thread, threadIndex) => (
+              <ThreadRow
+                hasActiveTurn={threadHasActiveTurn(thread, liveThread)}
+                key={thread.threadId}
+                onChangeThreadLifecycle={onChangeThreadLifecycle}
+                onChangeThreadPinned={onChangeThreadPinned}
+                onRenameThread={onRenameThread}
+                onForkThread={onForkThread}
+                onSelectThread={onSelectThread}
+                pendingApproval={pendingApprovalThreadIds.has(thread.threadId)}
+                pinned={pinnedThreadIds.has(thread.threadId)}
+                selected={thread.threadId === selectedThreadId}
+                thread={thread}
+                projectWorkspace={group.workspace}
+                watching={watchingThreadIds.has(thread.threadId)}
+                reorder={
+                  threadReorder === undefined
+                    ? undefined
+                    : {
+                        controlId: sidebarOrderControlId(
+                          "thread",
+                          thread.threadId,
+                        ),
+                        dragging: threadReorder.draggingId === thread.threadId,
+                        placement:
+                          threadReorder.targetId === thread.threadId
+                            ? threadReorder.placement
+                            : undefined,
+                        onDragLeave: threadReorder.onDragLeave,
+                        onDragStart: (event) =>
+                          threadReorder.onDragStart(thread.threadId, event),
+                        onDragEnd: threadReorder.onDragEnd,
+                        onDragOver: (event) =>
+                          threadReorder.onDragOver(thread.threadId, event),
+                        onDrop: (event) =>
+                          threadReorder.onDrop(thread.threadId, event),
+                        onKeyDown: (event) =>
+                          threadReorder.onKeyDown(
+                            threadIndex,
+                            thread.threadId,
+                            event,
+                          ),
+                      }
+                }
+              />
+            ))
+          )}
+        </div>
+      </div>
     </section>
   );
 }
@@ -1368,6 +1580,7 @@ interface ThreadRowReorderHandlers {
 
 function ThreadRow({
   thread,
+  projectWorkspace,
   selected,
   hasActiveTurn,
   onChangeThreadLifecycle,
@@ -1382,6 +1595,7 @@ function ThreadRow({
   reorder,
 }: {
   thread: NativeThreadSummary;
+  projectWorkspace?: string | null;
   selected: boolean;
   hasActiveTurn: boolean;
   onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
@@ -1426,7 +1640,7 @@ function ThreadRow({
         !rowRef.current?.contains(event.target as Node) &&
         !menuRef.current?.contains(event.target as Node)
       ) {
-        closeMenu();
+        closeMenu(false);
       }
     };
     document.addEventListener("pointerdown", closeOutside);
@@ -1445,27 +1659,90 @@ function ThreadRow({
     menuTriggerRef.current?.focus();
   }, [menuOpen]);
   const identity = threadModelIdentity(thread);
+  const settings = useContext(SidebarSettingsContext);
+  const providerProfileId =
+    thread.status === "systemError"
+      ? undefined
+      : thread.currentMetadata.providerProfileId;
+  const providerProfile = settings?.profile.providerProfiles.find(
+    (candidate) => candidate.providerProfileId === providerProfileId,
+  );
+  const customLogo =
+    providerProfileId === undefined
+      ? undefined
+      : settings?.providerLogoDataUrls?.[providerProfileId];
+  const logoKind =
+    settings !== null &&
+    providerProfileId !== undefined &&
+    (providerProfile === undefined ||
+      (providerProfile.logoResource !== undefined && customLogo === undefined))
+      ? "generic"
+      : identity?.providerKind;
+  const modelProvider =
+    thread.status === "systemError" ? null : thread.currentMetadata.provider;
   const contents = (
     <>
-      {inbox ? (
-        <span className="thread-project">
-          <Icon name="folder" size={12} /> {threadProject(thread)}
+      {inbox ||
+      (projectWorkspace !== undefined &&
+        thread.status !== "systemError" &&
+        thread.currentMetadata.cwd &&
+        thread.currentMetadata.cwd !== projectWorkspace) ? (
+        <span
+          className="thread-project"
+          title={
+            thread.status === "systemError"
+              ? undefined
+              : (thread.currentMetadata.cwd ?? undefined)
+          }
+        >
+          <Icon name="folder" size={12} />
+          {inbox
+            ? threadProject(thread)
+            : i18n.t("shell:directoryLabel", { path: threadProject(thread) })}
         </span>
       ) : null}
       <span className="thread-title">
         <span>{threadTitle(thread)}</span>
         {pendingApproval ? (
-          <span className="needs-dot" aria-label="Needs you" />
+          <span
+            className="thread-title-status needs-dot"
+            aria-label={i18n.t("shell:needsYou")}
+          />
         ) : thread.status === "active" ? (
-          <span className="live-dot ready" aria-label="Running" />
+          <span
+            className="thread-title-status live-dot ready"
+            aria-label={i18n.t("shell:running")}
+          />
         ) : watching ? (
-          <Icon name="moon" size={12} aria-label="Watching" />
+          <Icon name="moon" size={12} aria-label={i18n.t("shell:watching")} />
         ) : null}
       </span>
-      {identity === null ? null : (
-        <span className="model-line">
-          <ProviderLogo kind={identity.providerKind} />
-          <span>{identity.label}</span>
+      {(identity === null || modelProvider === null) &&
+      !pendingApproval &&
+      thread.status !== "active" ? null : (
+        <span className="thread-model">
+          {identity === null || modelProvider === null ? null : (
+            <>
+              <ProviderLogo
+                kind={logoKind ?? "generic"}
+                customSrc={customLogo}
+              />
+              <span className="thread-model-name" title={identity.label}>
+                {identity.label}
+              </span>
+            </>
+          )}
+          {pendingApproval || thread.status === "active" ? (
+            <span className="thread-state-inline">
+              <span
+                className={pendingApproval ? "needs-dot" : "live-dot ready"}
+                aria-hidden="true"
+              />
+              {pendingApproval
+                ? i18n.t("shell:needsYourApproval")
+                : i18n.t("shell:working")}
+            </span>
+          ) : null}
         </span>
       )}
     </>
@@ -1541,6 +1818,7 @@ function ThreadRow({
         </div>
       ) : (
         <button
+          title={`${threadTitle(thread)}${identity ? ` · ${identity.label}` : ""}${thread.currentMetadata.cwd ? ` · ${i18n.t("shell:workingDirectoryPath", { path: thread.currentMetadata.cwd })}` : ""}`}
           className={`thread-row${selected ? " selected" : ""}${inbox ? " inbox" : ""}`}
           type="button"
           id={reorder?.controlId}
@@ -1559,11 +1837,13 @@ function ThreadRow({
         className="thread-menu-trigger"
         type="button"
         id={`thread-menu-trigger-${thread.threadId}`}
-        aria-label={`Manage ${threadTitle(thread)}`}
+        aria-label={i18n.t("shell:manageThread", {
+          title: threadTitle(thread),
+        })}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
         aria-controls={menuOpen ? `thread-menu-${thread.threadId}` : undefined}
-        title={`Manage ${threadTitle(thread)}`}
+        title={i18n.t("shell:manageThread", { title: threadTitle(thread) })}
         onClick={() => {
           if (menuOpen) {
             closeMenu();
@@ -1725,7 +2005,7 @@ export function ThreadItemMenu({
           }}
         >
           <label>
-            <span>Thread name</span>
+            <span>{i18n.t("shell:threadName")}</span>
             <input
               autoFocus
               value={renameDraft}
@@ -1734,10 +2014,12 @@ export function ThreadItemMenu({
           </label>
           <div>
             <button type="submit" disabled={busy || !renameDraft.trim()}>
-              {busyAction === "rename" ? "Saving…" : "Save"}
+              {busyAction === "rename"
+                ? i18n.t("shell:saving")
+                : i18n.t("shell:save")}
             </button>
             <button type="button" disabled={busy} onClick={onCancelRename}>
-              Cancel
+              {i18n.t("shell:cancel")}
             </button>
           </div>
         </form>
@@ -1751,7 +2033,9 @@ export function ThreadItemMenu({
           onClick={onUnarchive}
         >
           <Icon name="restore" />
-          {busyAction === "unarchive" ? "Unarchiving…" : "Unarchive"}
+          {busyAction === "unarchive"
+            ? i18n.t("shell:unarchiving")
+            : i18n.t("shell:unarchive")}
         </button>
       ) : (
         <>
@@ -1764,7 +2048,7 @@ export function ThreadItemMenu({
             onClick={onBeginRename}
           >
             <Icon name="compose" />
-            Rename
+            {i18n.t("shell:rename")}
           </button>
           <button
             type="button"
@@ -1772,11 +2056,15 @@ export function ThreadItemMenu({
             tabIndex={-1}
             data-thread-action="copy"
             disabled={busy}
-            title="Copies through the latest complete Turn and uses the same working directory."
+            title={i18n.t(
+              "shell:copiesThroughTheLatestCompleteTurnAndUsesTheSameWorkingDirectory",
+            )}
             onClick={onCopy}
           >
             <Icon name="copy" />
-            {busyAction === "copy" ? "Copying…" : "Copy thread"}
+            {busyAction === "copy"
+              ? i18n.t("shell:copying")
+              : i18n.t("shell:copyThread")}
           </button>
           <button
             type="button"
@@ -1788,12 +2076,12 @@ export function ThreadItemMenu({
           >
             <Icon name={pinned ? "pin-off" : "pin"} />
             {busyAction === "pin"
-              ? "Pinning…"
+              ? i18n.t("shell:pinning")
               : busyAction === "unpin"
-                ? "Unpinning…"
+                ? i18n.t("shell:unpinning")
                 : pinned
-                  ? "Unpin"
-                  : "Pin"}
+                  ? i18n.t("shell:unpin")
+                  : i18n.t("shell:pin")}
           </button>
           <button
             type="button"
@@ -1803,17 +2091,19 @@ export function ThreadItemMenu({
             disabled={busy || hasActiveTurn}
             title={
               hasActiveTurn
-                ? "Wait for the active Turn to finish before archiving."
+                ? i18n.t("shell:waitForTheActiveTurnToFinishBeforeArchiving")
                 : undefined
             }
             onClick={onArchive}
           >
             <Icon name="archive" />
-            {busyAction === "archive" ? "Archiving…" : "Archive"}
+            {busyAction === "archive"
+              ? i18n.t("shell:archiving")
+              : i18n.t("shell:archive")}
           </button>
           {hasActiveTurn ? (
             <p className="thread-menu-help">
-              Wait for the active Turn to finish before archiving.
+              {i18n.t("shell:waitForTheActiveTurnToFinishBeforeArchiving")}
             </p>
           ) : null}
         </>

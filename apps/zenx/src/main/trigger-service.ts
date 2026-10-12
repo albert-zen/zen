@@ -1,3 +1,5 @@
+import { ALWAYS_ON_ASSISTANT_PROMPT } from "./assistant-preset.js";
+import { canonicalAssistantWorkspace } from "./trigger-store.js";
 import { createHash, randomUUID } from "node:crypto";
 
 import type {
@@ -33,6 +35,7 @@ import {
   MAX_ROOM_COUNT,
   MAX_ROOM_MEMBERS,
   MAX_ROOM_MESSAGES,
+  MAX_ROOM_OPERATIONS,
   MAX_ROOM_NAME_BYTES,
   MAX_TRIGGER_COUNT,
   MAX_TRIGGER_LABEL_BYTES,
@@ -46,6 +49,8 @@ import type {
   CreateTriggerInput,
   RoomMember,
   RoomMessage,
+  RoomSendOperation,
+  RoomDeliveryView,
   TriggerHistoryEntry,
   TriggerProgramConfig,
   TriggerProgramOutcome,
@@ -54,9 +59,47 @@ import type {
   UpdateTriggerInput,
   ZenXRoom,
   ZenXTrigger,
+  AssistantWorkspace,
+  UpdateAssistantWorkspaceInput,
 } from "./trigger-types.js";
 
 export interface ZenXTriggerAppServerPort {
+  readThread?(threadId: string): Promise<ClientRequestResults["thread/read"]>;
+  resolveRemoteThread?(
+    device: string,
+    workspace: string | undefined,
+    target: string,
+  ): Promise<{ threadId: string; workspace?: string }>;
+  readRemoteThread?(
+    device: string,
+    workspace: string | undefined,
+    threadId: string,
+    turnId?: string,
+  ): Promise<{
+    threadId: string;
+    turns: Array<{ id: string; status: Turn["status"]; preview: string }>;
+  }>;
+  subscribeRemoteThread?(
+    device: string,
+    workspace: string | undefined,
+    threadId: string,
+    options: {
+      includeCurrentTerminal: boolean;
+      onTurn(value: {
+        threadId: string;
+        turnId: string;
+        status: Turn["status"];
+      }): void;
+      onError(error: Error): void;
+      onReady?(): void;
+    },
+    signal: AbortSignal,
+  ): Promise<() => void>;
+  sendAssistant?(
+    params: ClientRequestParams["turn/queue"],
+    signal?: AbortSignal,
+  ): Promise<{ turnId: string }>;
+  enqueue?(params: ClientRequestParams["turn/queue"]): Promise<void>;
   request(
     method: "turn/start",
     params: ClientRequestParams["turn/start"],
@@ -89,9 +132,14 @@ interface WakeupEvent {
   projection?: string;
   eventText?: string;
   sourceThreadId?: string;
+  sourceDevice?: string;
+  sourceWorkspace?: string;
+  sourceDefinitionRevision?: number;
+  sourceSubscriptionId?: string;
   sourceTurnId?: string;
   sourceRoomId?: string;
   sourceRoomMessageId?: string;
+  sourceRoomMessageText?: string;
   scheduledAt?: number;
 }
 
@@ -131,6 +179,7 @@ interface TriggerGeneration {
   storeUnavailable: boolean;
   wakeupAdmission: boolean;
   timers: Map<string, { handle: unknown; scheduledAt: number }>;
+  remoteWatches: Map<string, RemoteWatch>;
   completedTurnItems: Map<string, CompletedItemBuffer>;
   pendingCompletedTurns: Map<string, PendingCompletion>;
   activeWakeups: Map<string, ActiveWakeup>;
@@ -138,8 +187,21 @@ interface TriggerGeneration {
   disposeNotifications: (() => void) | undefined;
 }
 
+interface RemoteWatch {
+  id: string;
+  definition: string;
+  controller: AbortController;
+  dispose?: () => void;
+  ready: Promise<void>;
+  error?: string;
+}
+
 export class ZenXTriggerService {
   readonly #manager: ZenXTriggerAppServerPort;
+  readonly #receiptReads = new Map<
+    string,
+    Promise<ClientRequestResults["thread/read"]>
+  >();
   readonly #store: ZenXTriggerStorePort;
   readonly #titles: ZenXTriggerTitlePort | undefined;
   readonly #programs: TriggerProgramRunner;
@@ -182,6 +244,7 @@ export class ZenXTriggerService {
       const snapshot = await this.#store.read();
       for (const entry of snapshot.history) {
         if (entry.status === "starting" || entry.status === "running") {
+          if (entry.delivery !== undefined) entry.delivery = "unknown";
           entry.status = "failed";
           entry.completedAt = this.#now();
           entry.error =
@@ -208,6 +271,7 @@ export class ZenXTriggerService {
       await this.#store.write(snapshot);
       this.#assertMutationGeneration(generation);
       this.#snapshot = snapshot;
+      this.#syncRemoteWatches(generation);
       this.#notify();
       this.#rescheduleTimers(generation);
       this.#subscribeWakeups(generation);
@@ -216,6 +280,7 @@ export class ZenXTriggerService {
       if (this.#generation === generation) this.#generation = null;
       generation.disposeNotifications?.();
       generation.disposeNotifications = undefined;
+      this.#disposeRemoteWatches(generation);
       throw error;
     }
   }
@@ -225,6 +290,7 @@ export class ZenXTriggerService {
     if (generation.wakeupAdmission) return;
     generation.wakeupAdmission = true;
     this.#subscribeWakeups(generation);
+    this.#syncRemoteWatches(generation);
     this.#rescheduleTimers(generation);
   }
 
@@ -234,6 +300,7 @@ export class ZenXTriggerService {
     generation.wakeupAdmission = false;
     generation.disposeNotifications?.();
     generation.disposeNotifications = undefined;
+    this.#disposeRemoteWatches(generation);
     for (const timer of generation.timers.values())
       this.#cancelScheduled(timer.handle);
     generation.timers.clear();
@@ -270,6 +337,7 @@ export class ZenXTriggerService {
     const generation = this.#generation;
     if (generation === null) return;
     generation.retiring = true;
+    this.#disposeRemoteWatches(generation);
     for (const controller of generation.programControllers.values())
       controller.abort();
     try {
@@ -279,6 +347,7 @@ export class ZenXTriggerService {
           for (const entry of snapshot.history) {
             if (isTerminal(entry.status)) continue;
             entry.status = "failed";
+            if (entry.delivery !== undefined) entry.delivery = "unknown";
             entry.completedAt = this.#now();
             entry.error =
               "ZenX Trigger generation retired before this wakeup reached a visible terminal result; it was not retried.";
@@ -326,7 +395,12 @@ export class ZenXTriggerService {
   }
 
   snapshot(): TriggerSnapshot {
-    return structuredClone(this.#snapshot);
+    const snapshot = structuredClone(this.#snapshot);
+    for (const trigger of snapshot.triggers) {
+      const error = this.#generation?.remoteWatches.get(trigger.id)?.error;
+      if (error !== undefined) trigger.sourceError = error;
+    }
+    return snapshot;
   }
 
   onChange(listener: (snapshot: TriggerSnapshot) => void): () => void {
@@ -336,30 +410,78 @@ export class ZenXTriggerService {
 
   async create(input: CreateTriggerInput): Promise<ZenXTrigger> {
     const generation = this.#runningGeneration();
-    const trigger = await this.#mutate(generation, async (snapshot) => {
-      if (snapshot.triggers.length >= MAX_TRIGGER_COUNT)
-        throw new Error(`ZenX Trigger limit is ${String(MAX_TRIGGER_COUNT)}`);
-      const value = triggerFromInput(
-        input,
-        randomUUID(),
-        this.#now(),
-        true,
-        this.#now(),
-      );
-      snapshot.triggers.push(value);
-      return value;
-    });
+    if (isRemoteWatchInput(input) && !this.#manager.subscribeRemoteThread)
+      throw new Error("Remote Thread observation is unavailable");
+    if (
+      input.kind === "thread" &&
+      input.includeLatest &&
+      !isRemoteWatchInput(input) &&
+      this.#manager.readThread === undefined
+    )
+      throw new Error("Reading the latest Thread result is unavailable");
+    const triggerId = randomUUID();
+    const trigger = await this.#mutate(
+      generation,
+      async (snapshot) => {
+        if (snapshot.triggers.length >= MAX_TRIGGER_COUNT)
+          throw new Error(`ZenX Trigger limit is ${String(MAX_TRIGGER_COUNT)}`);
+        const value = triggerFromInput(
+          input,
+          triggerId,
+          this.#now(),
+          true,
+          this.#now(),
+        );
+        snapshot.triggers.push(value);
+        return value;
+      },
+      false,
+      input.kind === "thread" && input.includeLatest ? triggerId : undefined,
+    );
     this.#rescheduleTimers(generation);
-    return structuredClone(trigger);
+    if (isRemoteWatchInput(input)) {
+      await generation.remoteWatches.get(trigger.id)?.ready;
+    } else if (input.kind === "thread" && input.includeLatest) {
+      try {
+        // Install first, then read: a completion racing this read goes through
+        // the same occurrence key as the live event, never a second send.
+        const result = await this.#manager.readThread!(input.watchedThreadId);
+        const latest = result.thread.turns.at(-1);
+        if (latest !== undefined && latest.status !== "inProgress")
+          await this.#fireThreadCompletion(
+            generation,
+            trigger.id,
+            input.watchedThreadId,
+            latest,
+            trigger.definitionRevision ?? 0,
+          );
+      } catch (error) {
+        await this.cancel(trigger.id);
+        throw new Error(
+          `Latest result could not be checked; watch ${trigger.id} was stopped: ${describeError(error)}`,
+        );
+      }
+    }
+    return structuredClone(
+      this.snapshot().triggers.find((entry) => entry.id === trigger.id)!,
+    );
   }
 
   async update(input: UpdateTriggerInput): Promise<ZenXTrigger> {
+    if (input.kind === "thread" && input.includeLatest)
+      throw new Error(
+        "includeLatest is only supported when creating a new watch",
+      );
     const generation = this.#runningGeneration();
     const trigger = await this.#mutate(generation, async (snapshot) => {
       const index = snapshot.triggers.findIndex(
         (candidate) => candidate.id === input.id,
       );
       if (index < 0) throw new Error("Trigger was not found");
+      if (snapshot.rooms.some((room) => room.assistant?.triggerId === input.id))
+        throw new Error(
+          "Assistant routing is fixed; pause replies or create a new conversation",
+        );
       const existing = snapshot.triggers[index]!;
       const replacement = triggerFromInput(
         input,
@@ -368,6 +490,7 @@ export class ZenXTriggerService {
         existing.active,
         this.#now(),
       );
+      replacement.definitionRevision = (existing.definitionRevision ?? 0) + 1;
       snapshot.triggers[index] = replacement;
       return replacement;
     });
@@ -383,6 +506,45 @@ export class ZenXTriggerService {
       );
       if (trigger === undefined) throw new Error("Trigger was not found");
       trigger.active = false;
+      trigger.definitionRevision = (trigger.definitionRevision ?? 0) + 1;
+    });
+    this.#rescheduleTimers(generation);
+  }
+
+  async resume(
+    triggerId: string,
+    expectedDefinition?: ZenXTrigger | number,
+  ): Promise<void> {
+    const generation = this.#runningGeneration();
+    await this.#mutate(generation, async (snapshot) => {
+      const trigger = snapshot.triggers.find(
+        (item) => item.id === required(triggerId, "trigger"),
+      );
+      if (trigger === undefined) throw new Error("Trigger was not found");
+      if (
+        expectedDefinition !== undefined &&
+        (typeof expectedDefinition === "number"
+          ? (trigger.definitionRevision ?? 0) !== expectedDefinition
+          : JSON.stringify(trigger) !==
+            JSON.stringify(withoutSourceError(expectedDefinition)))
+      )
+        throw new Error(
+          "Trigger definition changed during validation; refresh before enabling",
+        );
+      if (
+        trigger.active &&
+        !(
+          trigger.watch?.sourceDevice !== undefined &&
+          generation.remoteWatches.get(trigger.id)?.error !== undefined
+        )
+      )
+        return;
+      if (trigger.timer !== undefined && trigger.timer.nextRunAt <= this.#now())
+        throw new Error(
+          "Timer is in the past; edit the next run time before resuming",
+        );
+      trigger.active = true;
+      trigger.definitionRevision = (trigger.definitionRevision ?? 0) + 1;
     });
     this.#rescheduleTimers(generation);
   }
@@ -395,6 +557,12 @@ export class ZenXTriggerService {
         (item) => item.id === normalized,
       );
       if (index < 0) throw new Error("Trigger was not found");
+      if (
+        snapshot.rooms.some((room) => room.assistant?.triggerId === normalized)
+      )
+        throw new Error(
+          "Assistant reply Trigger is owned by its Room; pause it or delete the Room",
+        );
       snapshot.triggers.splice(index, 1);
     });
     this.#rescheduleTimers(generation);
@@ -431,12 +599,74 @@ export class ZenXTriggerService {
         name: required(input.name, "room name", MAX_ROOM_NAME_BYTES),
         members: validateMembers(input.members),
         messages: [],
+        operations: [],
+        operationEpoch: randomUUID(),
         createdAt: this.#now(),
       };
       snapshot.rooms.push(value);
       return value;
     });
     return structuredClone(room);
+  }
+
+  /** Validate setup before the Host creates an optional underlying Thread. */
+  validateAssistantRoom(input: CreateRoomInput): CreateRoomInput {
+    const generation = this.#runningGeneration();
+    if (!generation.wakeupAdmission)
+      throw new Error("Enable Triggers before creating an assistant");
+    const name = required(input.name, "room name", MAX_ROOM_NAME_BYTES);
+    const members = validateMembers(input.members);
+    if (members.length !== 1)
+      throw new Error("An assistant needs exactly one Thread");
+    if (
+      this.#snapshot.rooms.length >= MAX_ROOM_COUNT ||
+      this.#snapshot.triggers.length >= MAX_TRIGGER_COUNT
+    )
+      throw new Error("Room or Trigger limit reached");
+    return { name, members };
+  }
+
+  async createAssistantRoom(input: CreateRoomInput): Promise<ZenXRoom> {
+    const generation = this.#runningGeneration();
+    const { name, members } = this.validateAssistantRoom(input);
+    return await this.#mutate(generation, async (snapshot) => {
+      if (!generation.wakeupAdmission)
+        throw new Error("Triggers are not enabled");
+      if (
+        snapshot.rooms.length >= MAX_ROOM_COUNT ||
+        snapshot.triggers.length >= MAX_TRIGGER_COUNT
+      )
+        throw new Error("Room or Trigger limit reached");
+      const member = members[0]!;
+      const id = randomUUID();
+      const trigger = triggerFromInput(
+        {
+          kind: "roomMention",
+          threadId: member.threadId,
+          roomId: id,
+          mention: member.name,
+          label: "PAW",
+          prompt: ALWAYS_ON_ASSISTANT_PROMPT,
+        },
+        randomUUID(),
+        this.#now(),
+        true,
+        this.#now(),
+      );
+      const room: ZenXRoom = {
+        id,
+        name,
+        members,
+        assistant: { threadId: member.threadId, triggerId: trigger.id },
+        messages: [],
+        operations: [],
+        operationEpoch: randomUUID(),
+        createdAt: this.#now(),
+      };
+      snapshot.rooms.push(room);
+      snapshot.triggers.push(trigger);
+      return structuredClone(room);
+    });
   }
 
   async renameRoom(roomId: string, name: string): Promise<void> {
@@ -448,6 +678,63 @@ export class ZenXTriggerService {
       if (room === undefined) throw new Error("Room was not found");
       room.name = required(name, "room name", MAX_ROOM_NAME_BYTES);
     });
+  }
+  assistantWorkspace(roomId: string): AssistantWorkspace {
+    const room = this.#snapshot.rooms.find(
+      (candidate) => candidate.id === required(roomId, "room", MAX_ID_BYTES),
+    );
+    if (!room?.assistant) throw Error("PAW assistant Room was not found");
+    return structuredClone(
+      room.assistantWorkspace ?? {
+        revision: 0,
+        updatedAt: 0,
+        matters: [],
+        memory: [],
+      },
+    );
+  }
+  async updateAssistantWorkspace(
+    input: UpdateAssistantWorkspaceInput,
+  ): Promise<AssistantWorkspace> {
+    if (
+      !input ||
+      Object.keys(input).some(
+        (key) =>
+          !["roomId", "expectedRevision", "matters", "memory"].includes(key),
+      ) ||
+      !Number.isSafeInteger(input.expectedRevision) ||
+      input.expectedRevision < 0
+    )
+      throw Error("Invalid PAW workspace update fields or revision");
+    const roomId = required(input.roomId, "room", MAX_ID_BYTES);
+    const expectedRevision = input.expectedRevision;
+    const draft = canonicalAssistantWorkspace({
+      revision: 0,
+      updatedAt: 0,
+      matters: input.matters,
+      memory: input.memory,
+    });
+    const generation = this.#runningGeneration();
+    const result = await this.#mutate(generation, async (snapshot) => {
+      const room = snapshot.rooms.find((entry) => entry.id === roomId);
+      if (!room?.assistant) throw Error("PAW assistant Room was not found");
+      const currentRevision = room.assistantWorkspace?.revision ?? 0;
+      if (currentRevision !== expectedRevision)
+        throw Object.assign(
+          Error("PAW workspace changed; refresh before saving"),
+          { code: "workspace_conflict", currentRevision },
+        );
+      if (currentRevision === Number.MAX_SAFE_INTEGER)
+        throw Error("PAW workspace revision limit reached");
+      const workspace = canonicalAssistantWorkspace({
+        ...draft,
+        revision: currentRevision + 1,
+        updatedAt: this.#now(),
+      });
+      room.assistantWorkspace = workspace;
+      return workspace;
+    });
+    return structuredClone(result);
   }
 
   async deleteRoom(roomId: string): Promise<void> {
@@ -467,6 +754,14 @@ export class ZenXTriggerService {
         throw new Error(
           "Room cannot be deleted while a nonterminal wakeup owns its reply route",
         );
+      if (room.assistant && !generation.wakeupAdmission)
+        throw new Error(
+          "Enable Triggers before deleting an assistant Room and its reply Trigger",
+        );
+      if (room.assistant)
+        snapshot.triggers = snapshot.triggers.filter(
+          (trigger) => trigger.id !== room.assistant!.triggerId,
+        );
       snapshot.rooms = snapshot.rooms.filter(
         (candidate) => candidate.id !== normalized,
       );
@@ -480,6 +775,10 @@ export class ZenXTriggerService {
         (entry) => entry.id === required(roomId, "room", MAX_ID_BYTES),
       );
       if (room === undefined) throw new Error("Room was not found");
+      if (room.assistant)
+        throw new Error(
+          "Assistant membership is fixed; create a separate conversation",
+        );
       room.members = validateMembers([...room.members, member]);
     });
   }
@@ -491,12 +790,359 @@ export class ZenXTriggerService {
         (entry) => entry.id === required(roomId, "room", MAX_ID_BYTES),
       );
       if (room === undefined) throw new Error("Room was not found");
+      if (room.assistant)
+        throw new Error(
+          "Assistant membership is fixed; pause replies or delete the Room",
+        );
       const normalized = required(threadId, "member thread", MAX_ID_BYTES);
       if (!room.members.some((member) => member.threadId === normalized))
         throw new Error("Room member was not found");
       room.members = room.members.filter(
         (member) => member.threadId !== normalized,
       );
+    });
+  }
+
+  async prepareRoomMessage(
+    roomId: string,
+    operationId: string,
+    text: string,
+    replyToMessageId?: string,
+  ): Promise<RoomSendOperation> {
+    const generation = this.#runningGeneration();
+    const id = required(operationId, "operation ID", MAX_ID_BYTES);
+    const normalizedText = required(text, "message", MAX_MESSAGE_TEXT_BYTES);
+    return await this.#mutate(generation, async (snapshot) => {
+      const room = snapshot.rooms.find((entry) => entry.id === roomId);
+      if (!room) throw new Error("Room was not found");
+      const operations = (room.operations ??= []);
+      const existing = operations.find((operation) => operation.id === id);
+      if (existing) {
+        if (existing.cancelled === true)
+          throw new Error("Room operation was cancelled; no message was sent");
+        if (
+          existing.text !== normalizedText ||
+          existing.replyTo?.messageId !== replyToMessageId
+        )
+          throw new Error("Operation is bound to a different message");
+        return structuredClone(existing);
+      }
+      const epoch = room.operationEpoch ?? "legacy";
+      const suffix = id.startsWith(`${epoch}:`)
+        ? id.slice(epoch.length + 1)
+        : "";
+      if (
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+          suffix,
+        )
+      )
+        throw new Error(
+          "Room operation key is stale or invalid; result unknown, refresh before a NEW send",
+        );
+      room.operationEpoch ??= epoch;
+      let evicted = false;
+      while (operations.length >= MAX_ROOM_OPERATIONS) {
+        const index = operations.findIndex((entry) => entry.acknowledged);
+        if (index < 0) break;
+        operations.splice(index, 1);
+        evicted = true;
+      }
+      if (evicted) room.operationEpoch = randomUUID();
+      if (operations.length >= MAX_ROOM_OPERATIONS)
+        throw new Error(
+          "Unresolved Room operation limit reached; review pending sends",
+        );
+      const replyTo =
+        replyToMessageId === undefined
+          ? undefined
+          : roomQuote(room, replyToMessageId);
+      const value: RoomSendOperation = {
+        ...(replyTo === undefined ? {} : { replyTo }),
+        id,
+        text: normalizedText,
+        messageId: null,
+        createdAt: this.#now(),
+        acknowledged: false,
+        mentions: [],
+      };
+      operations.push(value);
+      return structuredClone(value);
+    });
+  }
+
+  async postPreparedRoomMessage(
+    roomId: string,
+    operationId: string,
+    text: string,
+  ): Promise<RoomSendOperation> {
+    const operation = await this.#postRoomMessage(
+      roomId,
+      "You",
+      text,
+      "human",
+      null,
+      null,
+      operationId,
+    );
+    if (!operation) throw new Error("Room operation is unavailable");
+    return operation;
+  }
+
+  async cancelPreparedRoomOperation(
+    roomId: string,
+    operationId: string,
+  ): Promise<RoomDeliveryView> {
+    const generation = this.#runningGeneration();
+    const normalizedRoomId = required(roomId, "room", MAX_ID_BYTES);
+    const id = required(operationId, "operation ID", MAX_ID_BYTES);
+    return await this.#mutate(generation, async (snapshot) => {
+      const room = snapshot.rooms.find(
+        (entry) => entry.id === normalizedRoomId,
+      );
+      if (!room) throw new Error("Room was not found");
+      const operation = room.operations?.find((entry) => entry.id === id);
+      if (!operation)
+        throw new Error("Room operation is not retained; result unknown");
+      if (operation.cancelled !== true && operation.messageId !== null)
+        throw new Error(
+          `Cannot cancel a saved Room message: ${operation.messageId}`,
+        );
+      operation.cancelled = true;
+      operation.acknowledged = true;
+      return {
+        operationId: operation.id,
+        roomId: normalizedRoomId,
+        text: operation.text,
+        messageId: null,
+        state: "cancelled" as const,
+        createdAt: operation.createdAt,
+        mentions: [],
+      };
+    });
+  }
+
+  wakeupsEnabled(): boolean {
+    return (
+      this.#generation?.wakeupAdmission === true && this.#generation.active
+    );
+  }
+
+  roomOperation(roomId: string, operationId: string): RoomDeliveryView {
+    const snapshot = this.#snapshot;
+    const room = snapshot.rooms.find((entry) => entry.id === roomId);
+    if (!room) throw new Error("Room was not found");
+    const operation = room.operations?.find(
+      (entry) => entry.id === operationId,
+    );
+    if (!operation)
+      throw new Error("Room operation is not retained; result unknown");
+    return {
+      operationId: operation.id,
+      roomId,
+      text: operation.text,
+      messageId: operation.messageId,
+      state:
+        operation.cancelled === true
+          ? "cancelled"
+          : operation.messageId === null
+            ? "prepared"
+            : "saved",
+      createdAt: operation.createdAt,
+      mentions: operation.mentions.map((mention) => ({
+        name: mention.name,
+        threadId: mention.threadId,
+        configuredNow:
+          this.wakeupsEnabled() &&
+          snapshot.triggers.some(
+            (trigger) =>
+              trigger.active &&
+              trigger.kind === "roomMention" &&
+              trigger.threadId === mention.threadId &&
+              trigger.room?.roomId === roomId &&
+              trigger.room.mention.toLocaleLowerCase() ===
+                mention.name.toLocaleLowerCase(),
+          ),
+        deliveries:
+          mention.triggerIds.length === 0
+            ? [
+                {
+                  triggerId: "",
+                  status: "unconfigured" as const,
+                  historyId: null,
+                },
+              ]
+            : mention.triggerIds.map((triggerId) => {
+                const entry = snapshot.history.find(
+                  (history) =>
+                    history.triggerId === triggerId &&
+                    history.sourceRoomId === roomId &&
+                    history.sourceRoomMessageId === operation.messageId,
+                );
+                return {
+                  triggerId,
+                  status:
+                    entry === undefined
+                      ? ("unknown" as const)
+                      : entry.delivery === "unknown"
+                        ? ("unknown" as const)
+                        : entry.status === "failed"
+                          ? ("failed" as const)
+                          : entry.status === "completed"
+                            ? ("completed" as const)
+                            : entry.delivery === "queued"
+                              ? ("queued" as const)
+                              : entry.status === "running"
+                                ? ("running" as const)
+                                : ("pending" as const),
+                  historyId: entry?.id ?? null,
+                };
+              }),
+      })),
+    };
+  }
+
+  roomDelivery(
+    roomId: string,
+    messageId: string,
+  ):
+    | RoomDeliveryView
+    | { roomId: string; messageId: string; state: "unknown"; mentions: [] } {
+    const room = this.#snapshot.rooms.find((entry) => entry.id === roomId);
+    if (!room) throw new Error("Room was not found");
+    const operation = room.operations?.find(
+      (entry) => entry.messageId === messageId,
+    );
+    return operation
+      ? this.roomOperation(roomId, operation.id)
+      : { roomId, messageId, state: "unknown", mentions: [] };
+  }
+
+  #readReceiptThread(
+    threadId: string,
+  ): Promise<ClientRequestResults["thread/read"]> {
+    const active = this.#receiptReads.get(threadId);
+    if (active) return active;
+    const read = Promise.resolve().then(() =>
+      this.#manager.readThread!(threadId),
+    );
+    this.#receiptReads.set(threadId, read);
+    void read
+      .finally(() => {
+        if (this.#receiptReads.get(threadId) === read)
+          this.#receiptReads.delete(threadId);
+      })
+      .catch(() => {});
+    return read;
+  }
+
+  /** Room storage and canonical Thread input admission are distinct receipts. */
+  async roomMessageReceipt(roomId: string, messageId: string) {
+    const room = this.#snapshot.rooms.find((entry) => entry.id === roomId);
+    if (!room) throw new Error("Room was not found");
+    const delivery = this.roomDelivery(roomId, messageId);
+    const retained = room.messages.some((entry) => entry.id === messageId);
+    if (!retained && delivery.state !== "saved")
+      return { ...delivery, receipt: "unknown" as const, readers: [] };
+    const histories = this.#snapshot.history.filter(
+      (entry) =>
+        entry.sourceRoomId === roomId &&
+        entry.sourceRoomMessageId === messageId,
+    );
+    const recipients = new Map<string, string>();
+    for (const mention of delivery.mentions)
+      recipients.set(mention.threadId, mention.name);
+    for (const history of histories)
+      if (!recipients.has(history.threadId))
+        recipients.set(
+          history.threadId,
+          room.members.find((member) => member.threadId === history.threadId)
+            ?.name ?? history.threadId,
+        );
+    const readers = await Promise.all(
+      [...recipients].map(async ([threadId, name]) => {
+        try {
+          const clientIds = new Set(
+            histories
+              .filter((entry) => entry.threadId === threadId)
+              .map((entry) => entry.clientUserMessageId),
+          );
+          if (clientIds.size === 0 || !this.#manager.readThread)
+            return { threadId, name, state: "unconfirmed" as const };
+          const result = await this.#readReceiptThread(threadId);
+          if (result.thread.id !== threadId)
+            throw new Error("Receipt Thread identity mismatch");
+          const admitted = result.thread.turns.some((turn) =>
+            turn.items.some(
+              (item) =>
+                item.type === "userMessage" &&
+                item.clientId !== null &&
+                clientIds.has(item.clientId),
+            ),
+          );
+          return {
+            threadId,
+            name,
+            state: admitted ? ("read" as const) : ("unconfirmed" as const),
+          };
+        } catch {
+          return { threadId, name, state: "unavailable" as const };
+        }
+      }),
+    );
+    return { ...delivery, receipt: "delivered" as const, readers };
+  }
+
+  async setRoomReaction(
+    roomId: string,
+    messageId: string,
+    actorThreadId: string | null,
+    emoji: string | null,
+  ): Promise<RoomMessage> {
+    if (
+      emoji !== null &&
+      !(ROOM_REACTION_EMOJI as readonly string[]).includes(emoji)
+    )
+      throw new Error("Unsupported Room reaction");
+    const generation = this.#runningGeneration();
+    return await this.#mutate(generation, async (snapshot) => {
+      const room = snapshot.rooms.find((entry) => entry.id === roomId);
+      if (!room) throw new Error("Room was not found");
+      const member =
+        actorThreadId === null
+          ? undefined
+          : room.members.find((entry) => entry.threadId === actorThreadId);
+      if (actorThreadId !== null && !member)
+        throw new Error("Only a Room member can react as an Agent");
+      const message = room.messages.find((entry) => entry.id === messageId);
+      if (!message) throw new Error("Room message is no longer retained");
+      const actorId =
+        actorThreadId === null ? "user" : `thread:${actorThreadId}`;
+      const reactions = (message.reactions ?? []).filter(
+        (entry) => entry.actorId !== actorId,
+      );
+      if (emoji !== null) {
+        if (reactions.length >= MAX_ROOM_MEMBERS + 1)
+          throw new Error("Room reaction limit reached");
+        reactions.push({ actorId, label: member?.name ?? "You", emoji });
+      }
+      if (reactions.length === 0) delete message.reactions;
+      else message.reactions = reactions;
+      return structuredClone(message);
+    });
+  }
+
+  async acknowledgeRoomOperation(
+    roomId: string,
+    operationId: string,
+  ): Promise<void> {
+    const generation = this.#runningGeneration();
+    await this.#mutate(generation, async (snapshot) => {
+      const operation = snapshot.rooms
+        .find((room) => room.id === roomId)
+        ?.operations?.find((entry) => entry.id === operationId);
+      if (!operation || operation.messageId === null)
+        throw new Error("Cannot acknowledge an uncommitted Room operation");
+      operation.acknowledged = true;
     });
   }
 
@@ -508,8 +1154,22 @@ export class ZenXTriggerService {
     await this.#postRoomMessage(roomId, author, text, "human", null, null);
   }
 
-  async postAgentRoomMessage(roomId: string, text: string): Promise<void> {
-    await this.#postRoomMessage(roomId, "Agent", text, "agent", null, null);
+  async postAgentRoomMessage(
+    roomId: string,
+    text: string,
+    replyToMessageId?: string,
+    callingThreadId?: string,
+  ): Promise<void> {
+    await this.#postRoomMessage(
+      roomId,
+      "Agent",
+      text,
+      "agent",
+      callingThreadId ?? null,
+      null,
+      undefined,
+      replyToMessageId,
+    );
   }
 
   async #postRoomMessage(
@@ -519,7 +1179,9 @@ export class ZenXTriggerService {
     kind: RoomMessage["kind"],
     originThreadId: string | null,
     originTurnId: string | null,
-  ): Promise<void> {
+    operationId?: string,
+    replyToMessageId?: string,
+  ): Promise<RoomSendOperation | undefined> {
     const generation = this.#runningGeneration();
     const normalizedRoomId = required(roomId, "room", MAX_ID_BYTES);
     const normalizedAuthor = required(
@@ -533,25 +1195,54 @@ export class ZenXTriggerService {
         (entry) => entry.id === normalizedRoomId,
       );
       if (room === undefined) throw new Error("Room was not found");
+      const operation =
+        operationId === undefined
+          ? undefined
+          : room.operations?.find((entry) => entry.id === operationId);
+      if (operation?.cancelled === true)
+        throw new Error("Room operation was cancelled; no message was sent");
+      if (
+        operationId !== undefined &&
+        (!operation ||
+          kind !== "human" ||
+          normalizedAuthor !== "You" ||
+          operation.text !== normalizedText)
+      )
+        throw new Error(
+          "Room operation is missing or bound to a different message",
+        );
+      if (operation !== undefined && operation.messageId !== null)
+        return { wakeups: [], operation: structuredClone(operation) };
       const value = message(
         room.id,
-        normalizedAuthor,
+        kind === "agent" && originThreadId !== null
+          ? (room.members.find((member) => member.threadId === originThreadId)
+              ?.name ?? normalizedAuthor)
+          : normalizedAuthor,
         normalizedText,
         kind,
         originThreadId,
         originTurnId,
         this.#now(),
       );
+      if (operation?.replyTo)
+        value.replyTo = structuredClone(operation.replyTo);
+      else if (replyToMessageId !== undefined)
+        value.replyTo = roomQuote(room, replyToMessageId);
       room.messages.push(value);
       const wakeups: CommittedWakeup[] = [];
       const mentions = room.members.filter((member) =>
-        mentionMatches(normalizedText, member.name),
+        room.assistant
+          ? kind === "human" && member.threadId === room.assistant.threadId
+          : mentionMatches(normalizedText, member.name),
       );
       for (const member of mentions) {
-        const triggerIds = snapshot.triggers
+        const triggerIds = (generation.wakeupAdmission ? snapshot.triggers : [])
           .filter(
             (trigger) =>
               trigger.active &&
+              (room.assistant === undefined ||
+                trigger.id === room.assistant.triggerId) &&
               trigger.threadId === member.threadId &&
               trigger.kind === "roomMention" &&
               trigger.room?.roomId === normalizedRoomId &&
@@ -559,23 +1250,42 @@ export class ZenXTriggerService {
                 member.name.toLocaleLowerCase(),
           )
           .map((trigger) => trigger.id);
+        operation?.mentions.push({
+          name: member.name,
+          threadId: member.threadId,
+          triggerIds,
+        });
         for (const triggerId of triggerIds) {
           const commit = this.#commitWakeup(snapshot, triggerId, {
             reason: `Room #${room.name} mention from ${value.author}: ${value.text}`,
             occurrenceKey: `room:${room.id}:${value.id}`,
             sourceRoomId: room.id,
             sourceRoomMessageId: value.id,
+            sourceRoomMessageText: [
+              value.replyTo
+                ? `Reply to ${value.replyTo.author} (${value.replyTo.messageId}): ${value.replyTo.text}`
+                : null,
+              value.text,
+            ]
+              .filter((part) => part !== null)
+              .join("\n\n"),
             projection: projectRoomContext(room),
           });
           if (commit !== undefined && !("rejected" in commit))
             wakeups.push(commit);
         }
       }
-      return { wakeups };
+      if (operation) operation.messageId = value.id;
+      return {
+        wakeups,
+        operation:
+          operation === undefined ? undefined : structuredClone(operation),
+      };
     });
     this.#rescheduleTimers(generation);
     for (const wakeup of committed.wakeups)
       await this.#runCommittedWakeup(generation, wakeup);
+    return committed.operation;
   }
 
   async #handleTurnCompleted(
@@ -589,27 +1299,42 @@ export class ZenXTriggerService {
       event.turn.items,
       buffered?.threadId === event.threadId ? buffered.items : [],
     );
-    const running = this.#snapshot.history.find(
+    const runningEntries = this.#snapshot.history.filter(
       (entry) =>
         entry.threadId === event.threadId &&
-        entry.turnId === event.turn.id &&
+        (entry.turnId === event.turn.id ||
+          (entry.turnId === null &&
+            entry.replyRoomId !== null &&
+            (entry.delivery === "pending" || entry.delivery === "queued") &&
+            completedItems.some(
+              (item) =>
+                item.type === "userMessage" &&
+                item.clientId === entry.clientUserMessageId,
+            ))) &&
         (entry.status === "starting" || entry.status === "running") &&
         generation.activeWakeups.has(entry.clientUserMessageId),
     );
-    if (running !== undefined) {
-      try {
-        await this.#completeTurn(generation, running.id, event, completedItems);
-      } catch (error) {
-        if (error instanceof StaleGenerationError) return;
-        if (this.#isOperational(generation)) {
-          try {
-            await this.#failHistory(
-              generation,
-              running.id,
-              `Trigger completion could not be persisted: ${describeError(error)}`,
-            );
-          } catch (failureError) {
-            this.#markStoreUnavailable(generation, running.id, failureError);
+    if (runningEntries.length > 0) {
+      for (const running of runningEntries) {
+        try {
+          await this.#completeTurn(
+            generation,
+            running.id,
+            event,
+            completedItems,
+          );
+        } catch (error) {
+          if (error instanceof StaleGenerationError) return;
+          if (this.#isOperational(generation)) {
+            try {
+              await this.#failHistory(
+                generation,
+                running.id,
+                `Trigger completion could not be persisted: ${describeError(error)}`,
+              );
+            } catch (failureError) {
+              this.#markStoreUnavailable(generation, running.id, failureError);
+            }
           }
         }
       }
@@ -623,23 +1348,47 @@ export class ZenXTriggerService {
         (trigger) =>
           trigger.active &&
           trigger.kind === "thread" &&
+          trigger.watch?.sourceDevice === undefined &&
           trigger.watch?.threadId === event.threadId,
       )
-      .map((trigger) => trigger.id);
-    const eventText = completedItemText(completedItems);
-    for (const triggerId of watchers) {
-      await this.#fire(generation, triggerId, {
-        reason: `Thread ${event.threadId} emitted turn_completed for ${event.turn.id}`,
-        occurrenceKey: `thread:${event.threadId}:${event.turn.id}`,
-        sourceThreadId: event.threadId,
-        sourceTurnId: event.turn.id,
-        projection: projectCompletedTurn(event.threadId, {
+      .map((trigger) => ({
+        id: trigger.id,
+        revision: trigger.definitionRevision ?? 0,
+      }));
+    for (const trigger of watchers) {
+      await this.#fireThreadCompletion(
+        generation,
+        trigger.id,
+        event.threadId,
+        {
           ...event.turn,
           items: completedItems,
-        }),
-        ...(eventText === undefined ? {} : { eventText }),
-      });
+        },
+        trigger.revision,
+      );
     }
+  }
+
+  async #fireThreadCompletion(
+    generation: TriggerGeneration,
+    triggerId: string,
+    threadId: string,
+    turn: Turn,
+    definitionRevision?: number,
+  ): Promise<void> {
+    if (turn.status === "inProgress") return;
+    const eventText = completedItemText(turn.items);
+    await this.#fire(generation, triggerId, {
+      reason: `Thread ${threadId}: ${turn.status} (Turn ${turn.id})`,
+      occurrenceKey: `thread:${threadId}:${turn.id}`,
+      sourceThreadId: threadId,
+      sourceTurnId: turn.id,
+      ...(definitionRevision === undefined
+        ? {}
+        : { sourceDefinitionRevision: definitionRevision }),
+      projection: projectCompletedTurn(threadId, turn),
+      ...(eventText === undefined ? {} : { eventText }),
+    });
   }
 
   #handleItemCompleted(
@@ -679,6 +1428,7 @@ export class ZenXTriggerService {
         (trigger) =>
           trigger.active &&
           trigger.kind === "thread" &&
+          trigger.watch?.sourceDevice === undefined &&
           trigger.watch?.threadId === threadId,
       )
     );
@@ -768,6 +1518,23 @@ export class ZenXTriggerService {
       (item) => item.id === triggerId && item.active,
     );
     if (trigger === undefined) return undefined;
+    if (
+      wakeup.sourceSubscriptionId !== undefined &&
+      this.#generation?.remoteWatches.get(trigger.id)?.id !==
+        wakeup.sourceSubscriptionId
+    )
+      return undefined;
+    if (
+      wakeup.sourceThreadId !== undefined &&
+      (trigger.kind !== "thread" ||
+        trigger.watch?.threadId !== wakeup.sourceThreadId ||
+        trigger.watch.sourceDevice !== wakeup.sourceDevice ||
+        trigger.watch.sourceWorkspace !== wakeup.sourceWorkspace ||
+        (wakeup.sourceDefinitionRevision !== undefined &&
+          (trigger.definitionRevision ?? 0) !==
+            wakeup.sourceDefinitionRevision))
+    )
+      return undefined;
     // A timer callback may have queued behind a definition update. Check the
     // committed schedule here, after acquiring the mutation slot.
     if (
@@ -812,6 +1579,12 @@ export class ZenXTriggerService {
         ? `ZenX Trigger wakeup admission is full at ${String(MAX_WAKEUPS)} nonterminal wakeups; this wakeup was not dispatched.`
         : null,
       sourceThreadId: wakeup.sourceThreadId ?? null,
+      ...(wakeup.sourceDevice === undefined
+        ? {}
+        : { sourceDevice: wakeup.sourceDevice }),
+      ...(wakeup.sourceWorkspace === undefined
+        ? {}
+        : { sourceWorkspace: wakeup.sourceWorkspace }),
       sourceTurnId: wakeup.sourceTurnId ?? null,
       sourceRoomId: wakeup.sourceRoomId ?? null,
       sourceRoomMessageId: wakeup.sourceRoomMessageId ?? null,
@@ -820,8 +1593,20 @@ export class ZenXTriggerService {
       programInvocationId: null,
       programOutcome: null,
       programOutcomes: [],
+      ...((trigger.kind === "thread" ||
+        snapshot.rooms.some(
+          (room) => room.assistant?.threadId === trigger.threadId,
+        )) &&
+      (this.#manager.enqueue !== undefined ||
+        this.#manager.sendAssistant !== undefined) &&
+      trigger.program === undefined
+        ? { delivery: rejected ? ("failed" as const) : ("pending" as const) }
+        : {}),
     };
     snapshot.history.unshift(history);
+    // Consume the event before dispatch. A failed/uncertain send is visible in
+    // history and never silently retried after restart.
+    if (trigger.watch?.once === true) trigger.active = false;
     if (trigger.timer !== undefined) {
       if (trigger.timer.intervalMinutes === null) trigger.active = false;
       else {
@@ -961,6 +1746,89 @@ export class ZenXTriggerService {
         return;
       }
       if (!this.#isOperational(generation)) return;
+      const assistantRooms = this.#snapshot.rooms.filter(
+        (room) => room.assistant?.threadId === trigger.threadId,
+      );
+      const assistantRoom = assistantRooms.find(
+        (room) => room.assistant?.triggerId === trigger.id,
+      );
+      if (assistantRooms.length > 0) {
+        if (!this.#manager.sendAssistant)
+          throw new Error("PAW delivery is unavailable on this Host");
+        if (this.#history(active.historyId).delivery === undefined) {
+          await this.#mutate(generation, async (snapshot) => {
+            snapshot.history.find(
+              (entry) => entry.id === active.historyId,
+            )!.delivery = "pending";
+          });
+        }
+        const result = await this.#manager.sendAssistant(
+          {
+            threadId: trigger.threadId,
+            clientUserMessageId: active.clientUserMessageId,
+            input: [
+              {
+                type: "text",
+                text: assistantWakeupInput(
+                  trigger,
+                  this.#history(active.historyId),
+                  wakeup.projection,
+                  assistantRooms,
+                  assistantRoom,
+                  wakeup.sourceRoomMessageText,
+                ),
+              },
+            ],
+          },
+          controller.signal,
+        );
+        await this.#mutate(generation, async (snapshot) => {
+          const entry = snapshot.history.find(
+            (item) => item.id === active.historyId,
+          );
+          if (entry && !isTerminal(entry.status)) {
+            entry.turnId = result.turnId;
+            entry.status = "running";
+            delete entry.delivery;
+          }
+        });
+        await this.#consumePendingCompletion(generation, active, result.turnId);
+        return;
+      }
+      if (trigger.kind === "thread" && this.#manager.enqueue !== undefined) {
+        if (this.#history(active.historyId).delivery === undefined) {
+          await this.#mutate(generation, async (snapshot) => {
+            snapshot.history.find(
+              (entry) => entry.id === active.historyId,
+            )!.delivery = "pending";
+          });
+        }
+        await this.#manager.enqueue({
+          threadId: trigger.threadId,
+          clientUserMessageId: active.clientUserMessageId,
+          input: [
+            {
+              type: "text",
+              text: wakeupInput(
+                trigger,
+                this.#history(active.historyId),
+                wakeup.projection,
+                wakeup.sourceRoomMessageText,
+              ),
+            },
+          ],
+        });
+        await this.#mutate(generation, async (snapshot) => {
+          const entry = snapshot.history.find(
+            (candidate) => candidate.id === active.historyId,
+          )!;
+          entry.delivery = "queued";
+          entry.status = "completed";
+          entry.completedAt = this.#now();
+        });
+        this.#releaseActiveWakeup(generation, active.historyId);
+        return;
+      }
       const result = await this.#manager.request("turn/start", {
         threadId: trigger.threadId,
         clientUserMessageId: active.clientUserMessageId,
@@ -971,6 +1839,7 @@ export class ZenXTriggerService {
               trigger,
               this.#history(active.historyId),
               wakeup.projection,
+              wakeup.sourceRoomMessageText,
             ),
           },
         ],
@@ -1083,6 +1952,12 @@ export class ZenXTriggerService {
       entry.turnId = event.turn.id;
       entry.status = event.turn.status === "completed" ? "completed" : "failed";
       entry.completedAt = this.#now();
+      if (
+        snapshot.rooms.some(
+          (room) => room.assistant?.threadId === entry.threadId,
+        )
+      )
+        delete entry.delivery;
       entry.error =
         bounded(event.turn.error?.message ?? "", MAX_ERROR_BYTES) || null;
       if (
@@ -1098,6 +1973,7 @@ export class ZenXTriggerService {
           .find((item) => item.type === "agentMessage");
         if (
           room !== undefined &&
+          room.assistant === undefined &&
           answer?.type === "agentMessage" &&
           answer.text.length > 0
         ) {
@@ -1191,6 +2067,7 @@ export class ZenXTriggerService {
       );
       if (entry === undefined || isTerminal(entry.status)) return;
       entry.status = "failed";
+      if (entry.delivery === "pending") entry.delivery = "unknown";
       entry.completedAt = this.#now();
       entry.error = bounded(error, MAX_ERROR_BYTES);
       released = true;
@@ -1210,6 +2087,128 @@ export class ZenXTriggerService {
       );
     } catch (error) {
       console.warn(`Could not stage trigger title: ${describeError(error)}`);
+    }
+  }
+
+  #disposeRemoteWatches(generation: TriggerGeneration): void {
+    const watches = [...generation.remoteWatches.values()];
+    generation.remoteWatches.clear();
+    for (const watch of watches) disposeRemoteWatch(watch);
+  }
+
+  #syncRemoteWatches(
+    generation: TriggerGeneration,
+    includeCurrentTerminalTriggerId?: string,
+  ): void {
+    if (!this.#isWakeupOperational(generation)) return;
+    const definitions = new Map(
+      this.#snapshot.triggers
+        .filter(
+          (trigger) =>
+            trigger.active &&
+            trigger.kind === "thread" &&
+            trigger.watch?.sourceDevice !== undefined,
+        )
+        .map((trigger) => [trigger.id, trigger] as const),
+    );
+    for (const [id, registration] of generation.remoteWatches) {
+      const trigger = definitions.get(id);
+      if (trigger && remoteWatchDefinition(trigger) === registration.definition)
+        continue;
+      // Remove the callback fence before aborting a possibly synchronous port.
+      generation.remoteWatches.delete(id);
+      disposeRemoteWatch(registration);
+    }
+    for (const trigger of definitions.values()) {
+      if (generation.remoteWatches.has(trigger.id)) continue;
+      const watch = trigger.watch!;
+      const registration: RemoteWatch = {
+        id: randomUUID(),
+        definition: remoteWatchDefinition(trigger),
+        controller: new AbortController(),
+        ready: Promise.resolve(),
+      };
+      generation.remoteWatches.set(trigger.id, registration);
+      const current = () =>
+        this.#isWakeupOperational(generation) &&
+        generation.remoteWatches.get(trigger.id) === registration &&
+        !registration.controller.signal.aborted;
+      const sourceError = (error: unknown) => {
+        if (!current()) return;
+        registration.error = bounded(
+          `Source device ${watch.sourceDevice}, Thread ${watch.threadId}: ${describeError(error)}`,
+          MAX_ERROR_BYTES,
+        );
+        this.#notify();
+      };
+      // Publish the registration identity before invoking the port: canonical
+      // recovery may deliver a completion synchronously before it returns.
+      registration.ready = (async () => {
+        try {
+          if (!this.#manager.subscribeRemoteThread)
+            throw new Error("Remote Thread observation is unavailable");
+          const dispose = await this.#manager.subscribeRemoteThread(
+            watch.sourceDevice!,
+            watch.sourceWorkspace,
+            watch.threadId,
+            {
+              includeCurrentTerminal:
+                trigger.id === includeCurrentTerminalTriggerId,
+              onReady: () => {
+                if (!current() || registration.error === undefined) return;
+                delete registration.error;
+                this.#notify();
+              },
+              onError: sourceError,
+              onTurn: (turn) => {
+                if (current() && turn.threadId !== watch.threadId) {
+                  sourceError(
+                    new Error(
+                      "Remote source Thread identity changed; completion was ignored",
+                    ),
+                  );
+                  return;
+                }
+                if (
+                  !current() ||
+                  turn.threadId !== watch.threadId ||
+                  !["completed", "failed", "interrupted"].includes(turn.status)
+                )
+                  return;
+                delete registration.error;
+                this.#notify();
+                void this.#fire(generation, trigger.id, {
+                  reason: `Device ${watch.sourceDevice}, Thread ${turn.threadId}: ${turn.status} (Turn ${turn.turnId})`,
+                  occurrenceKey: `remote-thread:${JSON.stringify([watch.sourceDevice, watch.sourceWorkspace ?? null, turn.threadId, turn.turnId])}`,
+                  sourceDevice: watch.sourceDevice,
+                  ...(watch.sourceWorkspace === undefined
+                    ? {}
+                    : { sourceWorkspace: watch.sourceWorkspace }),
+                  sourceThreadId: turn.threadId,
+                  sourceTurnId: turn.turnId,
+                  sourceDefinitionRevision: trigger.definitionRevision ?? 0,
+                  sourceSubscriptionId: registration.id,
+                  projection: [
+                    `Source device: ${watch.sourceDevice}`,
+                    ...(watch.sourceWorkspace === undefined
+                      ? []
+                      : [`Source workspace: ${watch.sourceWorkspace}`]),
+                    `Source Thread: ${turn.threadId}`,
+                    `Source Turn: ${turn.turnId}`,
+                    `Status: ${turn.status}`,
+                    "Read the exact source Turn with zenx_threads_read using the source device, workspace, Thread and Turn IDs before reporting its result.",
+                  ].join("\n"),
+                }).catch(sourceError);
+              },
+            },
+            registration.controller.signal,
+          );
+          if (current()) registration.dispose = dispose;
+          else disposeRemoteWatch({ ...registration, dispose });
+        } catch (error) {
+          sourceError(error);
+        }
+      })();
     }
   }
 
@@ -1273,6 +2272,7 @@ export class ZenXTriggerService {
     generation: TriggerGeneration,
     operation: (snapshot: TriggerSnapshot) => Promise<T>,
     allowRetiring = false,
+    includeCurrentTerminalTriggerId?: string,
   ): Promise<T> {
     this.#assertMutationGeneration(generation, allowRetiring);
     const previous = this.#mutation;
@@ -1290,6 +2290,7 @@ export class ZenXTriggerService {
       await this.#store.write(snapshot);
       this.#assertMutationGeneration(generation, allowRetiring);
       this.#snapshot = snapshot;
+      this.#syncRemoteWatches(generation, includeCurrentTerminalTriggerId);
       this.#notify();
       return result;
     } finally {
@@ -1383,6 +2384,7 @@ export class ZenXTriggerService {
     error: unknown,
   ): void {
     generation.storeUnavailable = true;
+    this.#disposeRemoteWatches(generation);
     this.#releaseActiveWakeup(generation, historyId);
     console.warn(
       `ZenX Trigger persistence is unavailable; no new wakeups will dispatch: ${bounded(
@@ -1407,12 +2409,49 @@ function newGeneration(wakeupAdmission = true): TriggerGeneration {
     storeUnavailable: false,
     wakeupAdmission,
     timers: new Map(),
+    remoteWatches: new Map(),
     completedTurnItems: new Map(),
     pendingCompletedTurns: new Map(),
     activeWakeups: new Map(),
     programControllers: new Map(),
     disposeNotifications: undefined,
   };
+}
+
+function isRemoteWatchInput(input: CreateTriggerInput): boolean {
+  return (
+    input.kind === "thread" &&
+    input.sourceDevice !== undefined &&
+    input.sourceDevice.trim() !== "local"
+  );
+}
+
+function remoteWatchDefinition(trigger: ZenXTrigger): string {
+  return JSON.stringify([
+    trigger.id,
+    trigger.definitionRevision ?? 0,
+    trigger.threadId,
+    trigger.watch,
+    trigger.prompt,
+    trigger.program,
+  ]);
+}
+
+function withoutSourceError(trigger: ZenXTrigger): ZenXTrigger {
+  const copy = { ...trigger };
+  delete copy.sourceError;
+  return copy;
+}
+
+function disposeRemoteWatch(watch: RemoteWatch): void {
+  watch.controller.abort();
+  try {
+    watch.dispose?.();
+  } catch (error) {
+    console.warn(
+      `Could not close remote Trigger observation: ${bounded(describeError(error), MAX_ERROR_BYTES)}`,
+    );
+  }
 }
 
 function triggerFromInput(
@@ -1448,6 +2487,17 @@ function triggerFromInput(
     };
   }
   if (input.kind === "thread") {
+    if (input.once !== undefined && typeof input.once !== "boolean")
+      throw new Error("once must be a boolean");
+    const sourceDevice =
+      input.sourceDevice === undefined
+        ? undefined
+        : required(input.sourceDevice, "source device", MAX_ID_BYTES);
+    if (
+      input.sourceWorkspace !== undefined &&
+      (sourceDevice === undefined || sourceDevice === "local")
+    )
+      throw new Error("sourceWorkspace requires a remote sourceDevice");
     return {
       ...common,
       kind: "thread",
@@ -1458,6 +2508,19 @@ function triggerFromInput(
           MAX_ID_BYTES,
         ),
         event: "turn_completed",
+        ...(input.once === undefined ? {} : { once: input.once }),
+        ...(sourceDevice === undefined || sourceDevice === "local"
+          ? {}
+          : { sourceDevice }),
+        ...(input.sourceWorkspace === undefined
+          ? {}
+          : {
+              sourceWorkspace: required(
+                input.sourceWorkspace,
+                "source workspace",
+                MAX_ID_BYTES,
+              ),
+            }),
       },
     };
   }
@@ -1590,6 +2653,8 @@ function programInput(active: ActiveWakeup, wakeup: WakeupEvent): unknown {
     occurrenceKey: wakeup.occurrenceKey,
     reason: bounded(wakeup.reason, 4_000),
     source: {
+      device: wakeup.sourceDevice ?? "local",
+      workspace: wakeup.sourceWorkspace ?? null,
       threadId: wakeup.sourceThreadId ?? null,
       turnId: wakeup.sourceTurnId ?? null,
       roomId: wakeup.sourceRoomId ?? null,
@@ -1748,6 +2813,8 @@ function retainSnapshot(snapshot: TriggerSnapshot): void {
       throw new Error(
         `Room cannot have more than ${String(MAX_ROOM_MEMBERS)} members`,
       );
+    if ((room.operations?.length ?? 0) > MAX_ROOM_OPERATIONS)
+      throw new Error("Unresolved Room operation limit reached");
     room.messages = room.messages.slice(-MAX_ROOM_MESSAGES);
   }
 }
@@ -1780,8 +2847,15 @@ function wakeupInput(
   trigger: ZenXTrigger,
   history: TriggerHistoryEntry,
   projection?: string,
+  completeRoomMessage?: string,
 ): string {
   const source = [
+    history.sourceDevice === undefined
+      ? null
+      : `Source device: ${history.sourceDevice}`,
+    history.sourceWorkspace === undefined
+      ? null
+      : `Source workspace: ${history.sourceWorkspace}`,
     history.sourceThreadId === null
       ? null
       : `Source Thread: ${history.sourceThreadId}`,
@@ -1804,6 +2878,9 @@ function wakeupInput(
     "",
     "Injected prompt:",
     trigger.prompt,
+    ...(completeRoomMessage === undefined
+      ? []
+      : ["", "Current user message (complete):", completeRoomMessage]),
     ...(projection === undefined
       ? []
       : [
@@ -1811,6 +2888,41 @@ function wakeupInput(
           "Bounded source context (read-only projection):",
           bounded(projection, 6_000),
         ]),
+  ].join("\n");
+}
+
+function assistantWakeupInput(
+  trigger: ZenXTrigger,
+  history: TriggerHistoryEntry,
+  projection: string | undefined,
+  rooms: ZenXRoom[],
+  sourceRoom: ZenXRoom | undefined,
+  sourceMessageText: string | undefined,
+): string {
+  const input = wakeupInput(trigger, history, projection, sourceMessageText);
+  const preset =
+    trigger.prompt === ALWAYS_ON_ASSISTANT_PROMPT
+      ? []
+      : ["PAW context:", ALWAYS_ON_ASSISTANT_PROMPT];
+  if (sourceRoom) {
+    return [
+      input,
+      "",
+      ...preset,
+      `Reply Room ID: ${sourceRoom.id}`,
+      ...(sourceMessageText !== undefined
+        ? []
+        : [
+            "The source Room message is no longer retained; recover its context before acting.",
+          ]),
+    ].join("\n");
+  }
+  return [
+    input,
+    "",
+    ...preset,
+    `Associated assistant Room IDs: ${rooms.map((room) => room.id).join(", ")}`,
+    "This is an event continuation. Honor the registered trigger prompt and its explicit destination. Associated Rooms provide context; do not select a Room implicitly or treat this event as a new user message.",
   ].join("\n");
 }
 
@@ -1836,6 +2948,9 @@ export function projectCompletedTurn(threadId: string, turn: Turn): string {
       `Source Thread: ${threadId}`,
       `Source Turn: ${turn.id}`,
       `Status: ${turn.status}`,
+      turn.error === null
+        ? null
+        : `Error: ${bounded(turn.error.message, 1_000)}`,
       userInputs.length === 0
         ? null
         : `User input:\n${userInputs.join("\n\n")}`,
@@ -1843,7 +2958,7 @@ export function projectCompletedTurn(threadId: string, turn: Turn): string {
         ? null
         : `Command/result summary:\n${commands.join("\n\n")}`,
       conclusion?.type === "agentMessage"
-        ? `Agent conclusion:\n${bounded(conclusion.text, 1_800)}`
+        ? `${turn.status === "completed" ? "Agent conclusion" : "Agent output (turn did not complete successfully)"}:\n${bounded(conclusion.text, 1_800)}`
         : "Agent conclusion:\nNo final Agent message was emitted.",
     ]
       .filter((section): section is string => section !== null)
@@ -1858,7 +2973,7 @@ export function projectRoomContext(room: ZenXRoom): string {
       entry.originThreadId === null
         ? ""
         : ` [source Thread ${entry.originThreadId}, Turn ${entry.originTurnId ?? "unknown"}]`;
-    return `${entry.author} (${entry.kind})${origin}: ${bounded(entry.text, 700)}`;
+    return `${entry.author} (${entry.kind})${origin}${entry.replyTo ? ` [reply to ${entry.replyTo.author}: ${entry.replyTo.text}]` : ""}: ${bounded(entry.text, 700)}`;
   });
   return bounded(
     [`Room #${room.name} (${room.id})`, "Recent Room context:", ...recent].join(
@@ -1913,4 +3028,22 @@ function prefixByBytes(value: string, limit: number): string {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export const ROOM_REACTION_EMOJI = [
+  "👍",
+  "❤️",
+  "🎉",
+  "👀",
+  "✅",
+  "🤔",
+] as const satisfies readonly string[];
+function roomQuote(room: ZenXRoom, messageId: string) {
+  const source = room.messages.find((entry) => entry.id === messageId);
+  if (!source) throw new Error("Reply target is not retained in this Room");
+  return {
+    messageId: source.id,
+    author: source.author,
+    text: bounded(source.text, 1000),
+  };
 }

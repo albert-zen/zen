@@ -374,9 +374,7 @@ void app.whenReady().then(async () => {
       const completion = waitForTurnCompleted(manager!, threadId);
       await invokeCapability("zenx_threads_send", {
         threadId,
-        mode: "start",
         text: "Reply exactly ZENX_SELF_CONTROL_OK.",
-        clientUserMessageId: "zenx-real-smoke-self-control-send",
       });
       await completion;
       const status = await invokeCapability("zenx_threads_status", {
@@ -388,7 +386,7 @@ void app.whenReady().then(async () => {
         maxTurns: 2,
         maxItemsPerTurn: 20,
       });
-      assert.match(JSON.stringify(read), /zenx-real-smoke-self-control-send/u);
+      assert.match(JSON.stringify(read), /ZENX_SELF_CONTROL_OK/u);
       return "projects/list and threads/list/create/send/status/read completed through the profile-managed ZenX self-control package";
     });
 

@@ -1,5 +1,7 @@
 # ZenX
 
+The desktop interface supports English, 简体中文, and following the system language. Switch immediately in **Settings → General → Language**. See [localization](docs/localization.md) for translation and contribution guidelines.
+
 ZenX is Zen's in-development Electron product. Its main process hosts the same
 App Server used by the CLI and keeps desktop-only configuration and
 orchestration outside Zen Core.
@@ -213,11 +215,49 @@ integrity-checked provider assembly used by `smoke:packaged`:
 npm --workspace apps/zenx run package:portable
 ```
 
-The result is an **unsigned, unpacked portable directory**, not an installer or
-a single-file executable. It is written below
-`apps/zenx/.packaged/artifact/ZenX-<platform>-<arch>/`; keep that directory
-together and start `ZenX.exe` on Windows, `ZenX.app` on macOS, or `ZenX` on
-Linux.
+The result is an **unpacked portable directory**, not an installer or a
+single-file executable. On macOS it is signed during packaging with
+`ZENX_CODESIGN_IDENTITY` when configured, a machine-local identity from
+`~/Library/Application Support/ZenX/signing.json`, or an ad-hoc identity when
+neither is available. The local file has this shape; `identity` is the
+certificate's 40-character SHA-1 fingerprint:
+
+```json
+{ "identity": "0123456789ABCDEF0123456789ABCDEF01234567", "mode": "local" }
+```
+
+Local signing is intended for repeated builds on one development Mac. The same
+identity signs the app, nested Electron code, `zenx-accessibility`, and
+`zenx-foreground-input`, giving macOS a stable code-signing identity for
+Accessibility authorization. The two native helpers also receive fixed signing
+identifiers, and local signing disables network timestamping. The certificate
+and private key stay in the machine's Keychain and are not stored in the
+repository. A missing file keeps the existing ad-hoc behavior. A present but
+malformed file, missing local identity, or signing failure stops packaging
+instead of falling back to ad-hoc.
+
+An explicit `ZENX_CODESIGN_IDENTITY` overrides the machine file and retains the
+existing Developer ID behavior; the explicit value `-` selects ad-hoc signing.
+To explicitly select a local SHA-1 identity without the file, set both
+`ZENX_CODESIGN_IDENTITY` and
+`ZENX_CODESIGN_MODE=local`; local mode requires the fingerprint and fails if it
+is missing or malformed.
+
+Local and ad-hoc signing keep hardened runtime disabled and sign with empty
+entitlements because the app and its nested Electron frameworks do not share an
+Apple Team ID. Neither path adds the disable-library-validation entitlement. A
+configured Developer ID keeps the signer's standard hardened-runtime behavior
+and per-helper Electron entitlements. Ad-hoc signing does not promise stable
+Accessibility authorization across rebuilt updates. The artifact is written
+below `apps/zenx/.packaged/artifact/ZenX-<platform>-<arch>/`; keep that
+directory together and start `ZenX.exe` on Windows, `ZenX.app` on macOS, or
+`ZenX` on Linux.
+
+macOS signing excludes the assembled `Contents/Resources/providers/` payload
+from re-signing. Those provider executables retain their verified upstream bytes
+and signatures, while the outer app resource seal still covers them. This keeps
+the pinned provider manifest valid after signing; provider selection continues
+to fail closed on any byte mismatch.
 
 Each packaging command builds a private output snapshot, validates and packs
 the first-party Rooms package with the public plugin developer kit, assembles resources,
@@ -439,24 +479,46 @@ of current plugin lifecycle.
 The `zenx-self-control` package is a bundled, cross-platform,
 `background_safe` plugin. Its enabled lifecycle uses the same profile, Runtime
 Supervisor and hosted App Server projection as every other package. Its
-provider-valid tools are `zenx_projects_list`, `zenx_threads_list`,
-`zenx_threads_create`, `zenx_threads_read`, `zenx_threads_status`,
-`zenx_threads_rename`, `zenx_threads_archive`, `zenx_threads_unarchive`, and
-`zenx_threads_send`. Archived Threads remain readable and are returned from
-`zenx_threads_list` only when `archived: true` is requested.
+tools discover Projects/models, list/search, create/configure, read/status, rename,
+archive/unarchive and send messages. Thread operations accept `target` as a full
+ID, unique prefix or exact title, optionally scoped by `workspace`. Exact IDs win;
+ambiguous titles/prefixes return candidates with canonical and unique short IDs,
+and perform no mutation. Archived targets remain readable and resolvable; list
+shows archived Threads only with `archived: true`.
 
-Projects are bounded groupings derived from the configured workspace and
-canonical Thread cwd metadata, not runtime objects. Reads expose bounded recent
-Turn/item projections and omit command output. Create and send operations use a
-narrow in-memory request port attached to the current `AppServerManager`, and
-that port issues only typed `thread/list`, `thread/start`, `thread/read`,
-`thread/name/set`, `thread/archive`, `thread/unarchive`, `turn/start`,
-`turn/steer`, and `turn/replace` requests. `steer` and `replace`
-require the expected active Turn ID; all sends require a stable client message
-ID. Tool calls, results, interruption, and replacement remain auditable in the
-canonical ItemLists and capability audit projection. Mutual `turn_completed`
-relays are intentionally allowed; there is no blanket cycle ban or second
-transcript/queue.
+`zenx_threads_send` needs only `target` and `text`. Optional `messageType` is
+`follow_up` (queue next work), `guidance` (supplement running work), or
+`replacement` (interrupt and change the task). Omission follows the saved ZenX
+composer preference. Idle Threads start normally. The Host derives stable message
+identity from the Runtime's canonical tool-call identity, reads the authoritative
+active Turn and retains the server's exact-Turn fence. A concurrent Turn change
+fails; it never silently retries against a new Turn. Duplicate committed messages
+are recognized from canonical history; only pending calls share an in-memory
+promise. There is no command ledger or new wait system.
+
+`zenx_threads_read` returns public Item projections derived from the native-only,
+non-subscribing `zen/thread/read` snapshot. `granularity` selects recent `turns`,
+`items`, `agent_messages`, or one `item` by `itemId`. The first three return latest
+pages in chronological order and `nextCursor` for older pages; optional `turnId`
+filters item/message pages. Cursor bindings include the Thread, granularity,
+filters and immutable Item boundary, so later appends do not move the read window.
+Previews identify truncation and include a `read` request. Single-item reads return
+8,000-character chunks of `public_item_json`: concatenate `content` using `nextCursor`
+and parse once complete. Every preview and chunk recursively projects structured
+opaque values to identity fields and their public summary; private bodies and
+provider payloads are omitted. Public reasoning and original tool output strings
+are preserved. Canonical journals and trusted native reads/recovery remain complete;
+existing output-spool receipts still describe their original storage limits.
+Turn pages cap their total preview count at 100 and report the effective per-Turn
+limit. There are no generated summaries. List cursors bind filters and ordering;
+a changed listing rejects stale cursors explicitly.
+
+`zenx_projects_list` exposes configured names and workspace paths. Creation accepts
+an exact configured `project` name/path or `cwd`, plus the existing model/effort
+settings. `zenx_models_list` exposes the live catalog, including supported efforts;
+`zenx_threads_configure` selects those existing settings through App Server validation.
+Projects remain derived Host views, never runtime objects. Completion notifications
+use the Triggers plugin.
 
 The bundled browser provider uses hidden Electron windows in a dedicated,
 ephemeral Chromium partition. Its list/open/navigate/inspect/click/type/close tools
@@ -475,22 +537,30 @@ cleanup, and advances the partition generation; reopening the same `sessionId`
 therefore starts without the prior cookies or session storage. Generation state
 exists only for active/pending sessions, so logical session bookkeeping is bounded.
 User-browser attachment is a separate explicit opt-in mode. In Settings →
-General → Browser, choose **Connected Chrome tab**, apply, and restart
-ZenX. Register the local connector, load the bundled unpacked extension from the
-folder shown by ZenX, open the signed-in page in ordinary Chrome, then click the
-extension action. The action grants ZenX debugger access to that one tab. Click
-it again, disable the extension, or quit ZenX to revoke the connection. The
-original page remains in Chrome; ZenX does not embed or clone it into its own
-Chromium profile.
+General → Browser, choose **Connected Chrome**, apply, and restart ZenX.
+Register the local connector and load the bundled unpacked extension from the
+folder shown by ZenX. Click the extension once to connect the Chrome browser.
+Existing and newly opened HTTP(S) tabs are discoverable through Browser tools;
+Agent operations attach to the requested tab as needed, without a separate
+extension click for each tab. The Agent can also open new web tabs. Human tab
+switching leaves the connection and other tabs available.
 
-The extension declares `debugger`, `nativeMessaging`, and `activeTab`, has no
-host wildcard, and talks only to a Native Messaging manifest pinned to its
-fixed extension ID. The native host connects to an authenticated ephemeral
-loopback bridge owned by the running ZenX process. Only the explicitly attached
-tab is projected to the existing user-browser provider. Cookies, storage,
-headers, other tabs, and the rest of the Chrome profile are neither requested
-nor exported. Agent close detaches ZenX's logical session without closing the
-user tab; extension or app disconnect detaches `chrome.debugger`.
+Click the extension again, cancel Chrome's debugging connection, disable the
+extension, or quit ZenX to disconnect the browser. The original windows, tabs,
+and signed-in state stay in Chrome. The sidebar follows the selected tab with a
+live, read-only view; interact directly in the original Chrome window.
+
+The extension declares `debugger`, `nativeMessaging`, and `tabs`, and talks only
+to a Native Messaging manifest pinned to its fixed extension ID. Its native
+host connects to an authenticated ephemeral loopback bridge owned by the
+running ZenX process. The connected profile's web-tab metadata is projected to
+the existing user-browser provider; debugger attachment is lazy per target.
+Chrome internal pages and other extensions' pages are not exposed as web tabs.
+Cookies, storage, headers, and profile files are not copied or exported. Agent
+close detaches its logical session without closing user tabs; browser disconnect
+revokes all debugger attachments and old observations. Reconnecting starts a new
+connection lifetime, so late work from the previous connection cannot publish
+into it. An older single-tab extension must be reloaded from the updated folder.
 
 For development and compatibility testing, an independently started Chrome,
 Edge, or Chromium 100+ instance may still expose an explicit loopback CDP
@@ -565,10 +635,14 @@ User-browser CDP supports one live panel per provider at a time; opening another
 live view explicitly marks the previous observer unavailable. Playwright and
 Electron show the latest timestamped Agent inspection screenshot, labeled as
 non-live. Thread/provider changes discard old subscription events and images.
-The Attached browser panel remains an observation surface; selecting a Chrome
-tab does not turn it into an embedded WebContentsView or by itself establish
-continuous live mirroring. Use the original Chrome tab as the authoritative
-human view.
+The Attached browser panel remains a read-only observation surface. Connected
+Chrome displays fresh compositor captures while the panel is visible. Native
+screencast events request a refresh but their unbound pixel payloads are not
+displayed; when Chrome emits no events, capture continues at a bounded 500 ms
+cadence. Captures are single-flight and scoped to the current page and observer.
+The panel reports Live only after an actual frame arrives, and stops capturing
+when hidden or disconnected. Human input still goes through the original Chrome
+tab, which shares the same page with the Agent.
 The Browser 1.0.1 bundled package removes the global sidebar contribution; its
 legacy route explains the thread-panel entry point.
 
@@ -589,9 +663,16 @@ terminates the helper. A background-safe action never falls back to foreground
 input: missing accessibility semantics is reported as
 unsupported/foreground-required.
 
-The macOS provider requires Accessibility permission; window capture also
-requires Screen Recording, and first-use helper compilation requires Apple
-Command Line Tools. On Windows, ZenX selects an optional thin adapter over
+The macOS provider requires Accessibility permission and window capture also
+requires Screen Recording. Packaged apps execute fixed AX and foreground-input
+helpers compiled into App Resources before the complete app is signed; they do
+not compile Swift on the user's machine. Packaging fixes and verifies the helper
+deployment target at the app's macOS 12.0 minimum instead of inheriting the
+build host's current SDK default. Development mode retains an explicit
+temporary compilation fallback and therefore requires Apple Command Line Tools.
+If a helper reports Accessibility denial while the ZenX toggle is already on,
+remove the old ZenX entry, add the current `ZenX.app` again, and relaunch it; an
+older code identity may no longer match the current app. On Windows, ZenX selects an optional thin adapter over
 Microsoft's Public Preview `winapp` CLI 0.3.1 or newer. Install it explicitly with
 `winget install Microsoft.winappcli --source winget`; ZenX probes `winapp
 --version` plus a read-only JSON schema probe at startup and does not expose the
@@ -814,12 +895,19 @@ open/inspect/navigate/click/type/close, including forged/stale/changed/hidden
 rejection and ordinary password-field input dispatch. It also seeds a cookie and session storage, closes
 the session, reopens the same ID, and verifies both are absent. It asserts those
 background-safe browser operations
-leave the real pointer position and foreground application unchanged. The macOS
-AX helper and foreground helper compile in that packaged run, but arbitrary
+leave the real pointer position and foreground application unchanged. The
+packaged macOS AX helper and foreground helper are compiled into fixed App
+Resources before signing, but arbitrary
 third-party AX window/action smoke remains permission- and target-dependent; its
 opaque latest-observation and forged/stale paths are unit-covered. The
 compiled helper enforces semantic fingerprint/geometry revalidation and rejects
 ambiguous matches, but that path is not claimed as a live third-party-app smoke.
+macOS inspection bounds traversal separately from its returned controls so deep
+web controls are not displaced by shallow AX layout containers. Display labels
+may fall back from AX title to description, help, or identifier, but never to an
+AX value. Scoped capture maps the already selected AX window to one on-screen,
+layer-zero CGWindow from the same PID, using bounds only as a unique fallback;
+missing or ambiguous matches fail closed.
 On Windows, `smoke:windows-computer` launches a deterministic WinForms fixture
 with a real UIA-editable control and drives the real
 `WinAppCliComputerBackend` through the profile-managed Computer package and
@@ -871,3 +959,32 @@ Pinned threads come first, collapsed project threads do not consume a number, an
 Markdown images render inline and open a full-window preview when clicked. PNG/JPEG/GIF/WebP data URLs, HTTP(S) image URLs, absolute local paths, file URLs, and paths relative to the current thread workspace are supported. Local files are read only for display, validated as images, and never imported into the journal. Missing or unsupported images show a placeholder. Escape, the close button or the backdrop closes the preview.
 
 Tool image content already returned by `view_image` appears in its expanded tool detail with the same preview. Tool commands, arguments and output text remain unchanged; a plain path alone remains text.
+
+## Skills
+
+Import standard Skill directories and choose manual, automatic or disabled mode in Settings → Skills. See [Skills](docs/skills.md) for configuration precedence, explicit slash references, resource copies and replay budgets.
+
+### Composer commands and references
+
+Type `/` at the caret to search enabled custom commands and imported Skills by
+name or description. Select with the mouse, Up/Down and Enter/Tab; Escape closes
+the picker. Custom commands expand into an editable draft; Skills use their
+existing native IDs. Exact `/compact` keeps its existing one-Enter behavior.
+
+Type `@` after whitespace to find workspace files or other Agent threads.
+References appear as removable name chips; hover for the workspace and exact
+path or thread ID. Sending expands them to explicit locator text for the agent
+to read with its existing tools. Selecting a reference does not send a message,
+automatically include another thread's history, or change runtime settings.
+
+File search is bounded to 80 results, 10,000 entries, depth 32 and a 500ms scan
+budget (checked between I/O), omits symlinks/dependency folders, and reports partial
+results and inaccessible subdirectories. A query such as `src/view` prioritizes
+that parent folder. Files become available after a real thread is created, so
+the Host can derive its root from the authoritative cwd. Thread search filters
+all Native summaries; additional matching results are available via Show more.
+Missing or inaccessible selections fail visibly and preserve the draft.
+
+For the standalone selector visual fixture, run from the repository root:
+`node node_modules/vite/bin/vite.js apps/zenx/test/fixtures/selector --host 127.0.0.1 --port 5189`.
+It uses the actual composer with fixture Host responses; it does not start ZAS.

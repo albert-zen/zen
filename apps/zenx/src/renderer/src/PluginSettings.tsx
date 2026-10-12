@@ -1,4 +1,7 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { i18n } from "./i18n.js";
+import { useTranslation } from "react-i18next";
+import { Select, ActionMenu } from "./ui/controls.js";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   ZenXPluginMutationResult,
@@ -13,6 +16,7 @@ import {
   type MarketplaceInventoryViewEntry,
 } from "../../marketplace.js";
 import { Icon } from "./icons.js";
+import { PluginAccessReview } from "./PluginAccessReview.js";
 
 type Confirmation = { pluginId: string; action: "uninstall" | "delete-data" };
 type InventoryFilter = "all" | "installed" | "built-in";
@@ -21,9 +25,12 @@ type PluginOperationResult =
 
 export function PluginSettings({
   onFeedback,
+  onOpenGeneral,
 }: {
   onFeedback?(message: string | null): void;
+  onOpenGeneral?(pluginId: "computer" | "browser"): void;
 }) {
+  const { t } = useTranslation("settings");
   const [plugins, setPlugins] = useState<ZenXPluginSnapshot | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
@@ -65,7 +72,10 @@ export function PluginSettings({
         result.capabilityRefresh.status === "failed"
       ) {
         setError(
-          `${success} Agent capability refresh failed: ${result.capabilityRefresh.message}`,
+          t("pluginSettings.capabilityRefreshFailed", {
+            success,
+            error: result.capabilityRefresh.message,
+          }),
         );
       } else {
         onFeedback?.(success);
@@ -80,7 +90,7 @@ export function PluginSettings({
   if (plugins === null) {
     return (
       <div className="page-card settings-card marketplace-state">
-        <strong>Loading plugins…</strong>
+        <strong>{t("pluginSettings.loadingPlugins")}</strong>
         {error === null ? null : <span>{error}</span>}
       </div>
     );
@@ -90,6 +100,7 @@ export function PluginSettings({
     <>
       <MarketplaceSettings
         plugins={plugins}
+        onOpenGeneral={onOpenGeneral}
         busy={busy}
         confirmation={confirmation}
         setConfirmation={setConfirmation}
@@ -107,12 +118,14 @@ export function PluginSettings({
 
 function MarketplaceSettings({
   plugins,
+  onOpenGeneral,
   busy,
   confirmation,
   setConfirmation,
   run,
 }: {
   plugins: ZenXPluginSnapshot;
+  onOpenGeneral?(pluginId: "computer" | "browser"): void;
   busy: string | null;
   confirmation: Confirmation | null;
   setConfirmation(value: Confirmation | null): void;
@@ -122,6 +135,7 @@ function MarketplaceSettings({
     success: string,
   ): Promise<void>;
 }) {
+  const { t } = useTranslation("settings");
   const [catalog, setCatalog] = useState<MarketplaceCatalogLoadSnapshot | null>(
     null,
   );
@@ -186,7 +200,7 @@ function MarketplaceSettings({
           mode: sourceMode,
           packageSpec: packageSpec.trim(),
         }),
-      "Plugin installed and enabled.",
+      i18n.t("settings:pluginSettings.pluginInstalledAndEnabled"),
     );
   };
   const selectTarball = async () => {
@@ -196,44 +210,40 @@ function MarketplaceSettings({
         const result = await window.zenx.plugins.selectTarball();
         return result.canceled ? null : result;
       },
-      "Plugin tarball installed and enabled.",
+      i18n.t("settings:pluginSettings.pluginTarballInstalledAndEnabled"),
     );
   };
 
   return (
-    <section className="marketplace-section" aria-label="Marketplace">
-      <header className="marketplace-intro">
-        <div>
-          <span className="marketplace-eyebrow">Plugin inventory</span>
-          <p>Find a plugin and control its lifecycle in one place.</p>
-        </div>
-        <span className="marketplace-count">
-          {String(inventory.length).padStart(2, "0")} on this device
-        </span>
-      </header>
-
+    <section
+      className="marketplace-section"
+      aria-label={t("pluginSettings.marketplace")}
+    >
       <div className="marketplace-rail">
         <label className="marketplace-search">
           <Icon name="search" />
-          <span className="sr-only">Search plugins</span>
+          <span className="sr-only">{t("pluginSettings.searchPlugins")}</span>
           <input
-            aria-label="Search plugins"
-            placeholder="Search name, purpose, or package"
+            aria-label={t("pluginSettings.searchPlugins2")}
+            placeholder={t("pluginSettings.searchNamePurposeOrPackage")}
             value={query}
             onInput={(event) => setQuery(event.currentTarget.value)}
           />
           {query.length === 0 ? null : (
             <button type="button" onClick={() => setQuery("")}>
-              Clear
+              {t("pluginSettings.clear")}
             </button>
           )}
         </label>
-        <div className="marketplace-filters" aria-label="Plugin filters">
+        <div
+          className="marketplace-filters"
+          aria-label={t("pluginSettings.pluginFilters")}
+        >
           {(
             [
-              ["all", "All"],
-              ["installed", "Installed"],
-              ["built-in", "Built in"],
+              ["all", t("pluginSettings.all")],
+              ["installed", t("pluginSettings.installed")],
+              ["built-in", t("pluginSettings.builtIn")],
             ] as const
           ).map(([value, label]) => (
             <button
@@ -253,7 +263,7 @@ function MarketplaceSettings({
           aria-controls="plugin-source-panel"
           onClick={() => setSourceOpen((open) => !open)}
         >
-          Install from source…
+          {t("pluginSettings.installFromSource")}
         </button>
       </div>
 
@@ -263,32 +273,33 @@ function MarketplaceSettings({
           className="page-card plugin-source-install"
         >
           <div className="plugin-source-copy">
-            <strong>Install from source</strong>
+            <strong>{t("pluginSettings.installFromSource2")}</strong>
             <span>
-              Advanced: package code is trusted to run on this computer after
-              validation.
+              {t("pluginSettings.advancedPackageCodeIsTrustedToRunOnThis")}
             </span>
           </div>
           <label>
-            Source
-            <select
-              aria-label="Plugin source"
+            {t("pluginSettings.source")}
+            <Select
+              aria-label={t("pluginSettings.pluginSource")}
               value={sourceMode}
               disabled={busy !== null}
-              onChange={(event) =>
-                setSourceMode(
-                  event.target.value as ZenXPluginPackageSource["mode"],
-                )
+              onValueChange={(value) =>
+                setSourceMode(value as ZenXPluginPackageSource["mode"])
               }
             >
-              <option value="npm">npm registry</option>
-              <option value="git">Git (commit pinned)</option>
-              <option value="local-copy">Local directory copy</option>
-              <option value="dev-link">Development link</option>
-            </select>
+              <option value="npm">{t("pluginSettings.npmRegistry")}</option>
+              <option value="git">{t("pluginSettings.gitCommitPinned")}</option>
+              <option value="local-copy">
+                {t("pluginSettings.localDirectoryCopy")}
+              </option>
+              <option value="dev-link">
+                {t("pluginSettings.developmentLink")}
+              </option>
+            </Select>
           </label>
           <label>
-            Package or path
+            {t("pluginSettings.packageOrPath")}
             <input
               value={packageSpec}
               disabled={busy !== null}
@@ -303,7 +314,9 @@ function MarketplaceSettings({
               disabled={busy !== null}
               onClick={() => void selectTarball()}
             >
-              {busy === "install-tarball" ? "Installing…" : "Choose tarball…"}
+              {busy === "install-tarball"
+                ? t("pluginSettings.installing")
+                : t("pluginSettings.chooseTarball")}
             </button>
             <button
               className="primary-button"
@@ -311,7 +324,9 @@ function MarketplaceSettings({
               disabled={busy !== null || packageSpec.trim().length === 0}
               onClick={() => void installSource()}
             >
-              {busy === "install-source" ? "Installing…" : "Install source"}
+              {busy === "install-source"
+                ? t("pluginSettings.installing")
+                : t("pluginSettings.installSource")}
             </button>
           </div>
         </div>
@@ -321,39 +336,44 @@ function MarketplaceSettings({
         <div className="marketplace-catalog-warning" role="alert">
           <Icon name="warning" />
           <div>
-            <strong>External catalog unavailable</strong>
-            <span>{catalog.error} Local plugins remain manageable.</span>
+            <strong>{t("pluginSettings.externalCatalogUnavailable")}</strong>
+            <span>
+              {catalog.error} {t("pluginSettings.localPluginsRemainManageable")}
+            </span>
           </div>
           <button
             type="button"
             className="secondary-button"
             onClick={() => setLoadAttempt((value) => value + 1)}
           >
-            Retry
+            {t("pluginSettings.retry")}
           </button>
         </div>
       )}
 
       {catalog === null && inventory.length === 0 ? (
         <div className="page-card settings-card marketplace-state">
-          <strong>Loading plugin inventory…</strong>
-          <span>Reading built-in and external package metadata.</span>
+          <strong>{t("pluginSettings.loadingPlugins2")}</strong>
         </div>
       ) : entries.length === 0 ? (
         <div className="page-card settings-card marketplace-state">
-          <strong>No plugins found</strong>
+          <strong>{t("pluginSettings.noPluginsFound")}</strong>
           <span>
             {query.trim().length === 0
-              ? "No plugins match this filter."
-              : "Try a different search."}
+              ? t("pluginSettings.noPluginsMatchThisFilter")
+              : t("pluginSettings.tryADifferentSearch")}
           </span>
         </div>
       ) : (
-        <div className="marketplace-list" aria-label="Plugin inventory">
+        <div
+          className="marketplace-list"
+          aria-label={t("pluginSettings.plugins")}
+        >
           {entries.map((entry) => (
             <MarketplaceInventoryCard
               key={entry.key}
               entry={entry}
+              onOpenGeneral={onOpenGeneral}
               busy={busy}
               confirmation={confirmation}
               setConfirmation={setConfirmation}
@@ -368,12 +388,14 @@ function MarketplaceSettings({
 
 function MarketplaceInventoryCard({
   entry,
+  onOpenGeneral,
   busy,
   confirmation,
   setConfirmation,
   run,
 }: {
   entry: MarketplaceInventoryViewEntry;
+  onOpenGeneral?(pluginId: "computer" | "browser"): void;
   busy: string | null;
   confirmation: Confirmation | null;
   setConfirmation(value: Confirmation | null): void;
@@ -383,6 +405,7 @@ function MarketplaceInventoryCard({
     success: string,
   ): Promise<void>;
 }) {
+  const { t } = useTranslation("settings");
   const [selectedVersion, setSelectedVersion] = useState(
     entry.recommendedVersion ?? "",
   );
@@ -393,13 +416,39 @@ function MarketplaceInventoryCard({
       ? confirmation.action
       : null;
   const active = plugin?.lifecycle === "enabled";
+  const available =
+    entry.available &&
+    (plugin?.lifecycle === "uninstalled" || plugin?.available !== false);
+  const displayLifecycle = available ? entry.lifecycle : "unavailable";
+  const firstPartyAccess =
+    entry.source === "built-in" &&
+    (pluginId === "computer" || pluginId === "browser")
+      ? pluginId
+      : null;
+  const [reviewingAccess, setReviewingAccess] = useState(
+    firstPartyAccess !== null && active,
+  );
+  const activationButtonRef = useRef<HTMLButtonElement>(null);
+  const accessPanelRef = useRef<HTMLDivElement>(null);
+  const focusAccessAfterOpen = useRef(false);
+  const accessPanelId = `plugin-access-${pluginId}`;
+  const openAccessReview = () => {
+    focusAccessAfterOpen.current = true;
+    setReviewingAccess(true);
+  };
+  useEffect(() => {
+    if (!reviewingAccess || !focusAccessAfterOpen.current) return;
+    focusAccessAfterOpen.current = false;
+    accessPanelRef.current?.focus();
+    accessPanelRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [reviewingAccess]);
   const source =
     entry.source === "built-in"
-      ? "Built in"
+      ? i18n.t("settings:pluginSettings.builtIn")
       : entry.source === "catalog"
-        ? "Marketplace"
+        ? t("pluginSettings.marketplace")
         : plugin?.profileSource === undefined
-          ? "Installed source"
+          ? i18n.t("settings:pluginSettings.installedSource")
           : profileSourceLabel(plugin.profileSource.mode);
 
   const installCatalogVersion = async () => {
@@ -424,16 +473,45 @@ function MarketplaceInventoryCard({
           ? window.zenx.plugins.installSource(selectedSource)
           : window.zenx.plugins.update(pluginId, selectedSource),
       pluginId === undefined
-        ? `${entry.name} v${selectedVersion} installed and enabled.`
-        : `${entry.name} updated to v${selectedVersion}.`,
+        ? t("pluginSettings.namedVersionInstalled", {
+            name: entry.name,
+            version: selectedVersion,
+          })
+        : t("pluginSettings.namedVersionUpdated", {
+            name: entry.name,
+            version: selectedVersion,
+          }),
     );
+  };
+
+  const activateFirstParty = async () => {
+    if (firstPartyAccess === null || pluginId === undefined) return;
+    if (entry.lifecycle === "available") {
+      await run(
+        `install-built-in:${pluginId}`,
+        () => window.zenx.plugins.installBuiltIn(pluginId),
+        t("pluginSettings.namedInstalled", { name: entry.name }),
+      );
+    } else if (entry.lifecycle === "uninstalled") {
+      await run(
+        `reinstall:${pluginId}`,
+        () => window.zenx.plugins.reinstall(pluginId),
+        `${entry.name} reinstalled.`,
+      );
+    } else {
+      await run(
+        `enable:${pluginId}`,
+        () => window.zenx.plugins.setEnabled(pluginId, true),
+        `${entry.name} enabled.`,
+      );
+    }
   };
 
   return (
     <article
       className="page-card marketplace-card"
       data-lifecycle={entry.lifecycle}
-      data-available={entry.available}
+      data-available={available}
       data-source={entry.source}
     >
       <span className="plugin-icon marketplace-icon" aria-hidden="true">
@@ -443,44 +521,56 @@ function MarketplaceInventoryCard({
         <div className="plugin-title-line">
           <h3>{entry.name}</h3>
           <span className="plugin-source-badge">{source}</span>
-          <span className={`plugin-status status-${entry.lifecycle}`}>
-            {lifecycleLabel(entry.lifecycle)}
+          <span className={`plugin-status status-${displayLifecycle}`}>
+            {lifecycleLabel(displayLifecycle)}
           </span>
-          {!entry.available && entry.lifecycle !== "unavailable" ? (
-            <span className="plugin-status status-unavailable">
-              Unavailable
-            </span>
-          ) : null}
           {entry.updateAvailable ? (
             <span className="plugin-status status-update">
-              Update available
+              {t("pluginSettings.updateAvailable")}
             </span>
           ) : null}
         </div>
         <p>{entry.description}</p>
-        <small>
-          {entry.packageSpec ?? pluginId}
-          {plugin === undefined ? "" : ` · v${plugin.version}`}
-          {plugin === undefined
-            ? ""
-            : ` · ${String(plugin.contributionCount)} product contributions`}
-        </small>
+        <details>
+          <summary>{t("pluginSettings.pluginDetails")}</summary>
+          <small>
+            {entry.packageSpec ?? pluginId}
+            {plugin === undefined ? "" : ` · v${plugin.version}`}
+          </small>
+        </details>
         {entry.unavailableReason === undefined ? null : (
           <div className="plugin-unavailable" role="note">
             <Icon name="warning" />
             <span>{entry.unavailableReason}</span>
           </div>
         )}
+        {available || plugin?.unavailableReason === undefined ? null : (
+          <div className="plugin-unavailable" role="note">
+            <Icon name="warning" />
+            <div>
+              <span>{t("pluginSettings.couldNotLoadThisPlugin")}</span>
+              <details>
+                <summary>{t("pluginSettings.errorDetails")}</summary>
+                <span>{plugin.unavailableReason}</span>
+              </details>
+            </div>
+          </div>
+        )}
       </div>
-      <div className="plugin-actions" aria-label={`${entry.name} actions`}>
+      <div
+        className="plugin-actions"
+        aria-label={t("pluginSettings.namedActions", { name: entry.name })}
+      >
         {entry.source === "catalog" && entry.versions.length > 0 ? (
           <label className="marketplace-version">
-            <span className="sr-only">{entry.name} version</span>
-            <select
-              aria-label={`${entry.name} version`}
+            <span className="sr-only">
+              {entry.name} {t("pluginSettings.version")}
+            </span>
+            <Select
+              aria-label={`${entry.name} ${t("pluginSettings.version")}`}
               value={selectedVersion}
               disabled={busy !== null}
-              onChange={(event) => setSelectedVersion(event.target.value)}
+              onValueChange={(value) => setSelectedVersion(value)}
             >
               {entry.versions.map((version) => (
                 <option key={version.version} value={version.version}>
@@ -490,73 +580,125 @@ function MarketplaceInventoryCard({
                     : ""}
                 </option>
               ))}
-            </select>
+            </Select>
           </label>
         ) : null}
 
         {entry.lifecycle === "unavailable" ? null : entry.lifecycle ===
           "available" ? (
           <button
+            ref={firstPartyAccess === null ? undefined : activationButtonRef}
             className="primary-button"
             type="button"
             disabled={busy !== null}
+            aria-expanded={
+              firstPartyAccess === null ? undefined : reviewingAccess
+            }
+            aria-controls={
+              firstPartyAccess === null ? undefined : accessPanelId
+            }
             onClick={() =>
-              void (entry.source === "built-in" && pluginId !== undefined
-                ? run(
-                    `install-built-in:${pluginId}`,
-                    () => window.zenx.plugins.installBuiltIn(pluginId),
-                    `${entry.name} installed and enabled.`,
-                  )
-                : installCatalogVersion())
+              void (firstPartyAccess !== null
+                ? openAccessReview()
+                : entry.source === "built-in" && pluginId !== undefined
+                  ? run(
+                      `install-built-in:${pluginId}`,
+                      () => window.zenx.plugins.installBuiltIn(pluginId),
+                      t("pluginSettings.namedInstalled", { name: entry.name }),
+                    )
+                  : installCatalogVersion())
             }
           >
             {busy === `marketplace:${entry.packageSpec}` ||
             busy === `install-built-in:${pluginId}`
-              ? "Installing…"
+              ? t("pluginSettings.installing")
               : selectedVersion.length === 0
-                ? "Install"
-                : `Install v${selectedVersion}`}
+                ? t("pluginSettings.install")
+                : t("pluginSettings.installVersion", {
+                    version: selectedVersion,
+                  })}
           </button>
         ) : entry.lifecycle === "uninstalled" && pluginId !== undefined ? (
           <button
+            ref={firstPartyAccess === null ? undefined : activationButtonRef}
             className="primary-button"
             type="button"
-            disabled={busy !== null || !entry.available}
+            disabled={busy !== null || !available}
+            aria-expanded={
+              firstPartyAccess === null ? undefined : reviewingAccess
+            }
+            aria-controls={
+              firstPartyAccess === null ? undefined : accessPanelId
+            }
             onClick={() =>
-              void run(
-                `reinstall:${pluginId}`,
-                () => window.zenx.plugins.reinstall(pluginId),
-                `${entry.name} reinstalled.`,
-              )
+              void (firstPartyAccess !== null
+                ? openAccessReview()
+                : run(
+                    `reinstall:${pluginId}`,
+                    () => window.zenx.plugins.reinstall(pluginId),
+                    `${entry.name} reinstalled.`,
+                  ))
             }
           >
-            {busy === `reinstall:${pluginId}` ? "Reinstalling…" : "Reinstall"}
+            {busy === `reinstall:${pluginId}`
+              ? t("pluginSettings.reinstalling")
+              : t("pluginSettings.reinstall")}
           </button>
         ) : pluginId === undefined ? null : (
           <>
             <button
+              ref={
+                firstPartyAccess === null || active
+                  ? undefined
+                  : activationButtonRef
+              }
               className="secondary-button"
               type="button"
-              disabled={busy !== null || (!entry.available && !active)}
+              disabled={busy !== null || (!available && !active)}
+              aria-expanded={
+                firstPartyAccess === null || active
+                  ? undefined
+                  : reviewingAccess
+              }
+              aria-controls={
+                firstPartyAccess === null || active ? undefined : accessPanelId
+              }
               title={
-                !entry.available && !active
-                  ? entry.unavailableReason
-                  : undefined
+                !available && !active ? entry.unavailableReason : undefined
               }
               onClick={() =>
-                void run(
-                  `enable:${pluginId}`,
-                  () => window.zenx.plugins.setEnabled(pluginId, !active),
-                  `${entry.name} ${active ? "disabled" : "enabled"}.`,
-                )
+                void (!active && firstPartyAccess !== null
+                  ? openAccessReview()
+                  : run(
+                      `enable:${pluginId}`,
+                      () => window.zenx.plugins.setEnabled(pluginId, !active),
+                      t("pluginSettings.namedToggled", {
+                        name: entry.name,
+                        state: active
+                          ? t("pluginSettings.disabledLower")
+                          : t("pluginSettings.enabledLower"),
+                      }),
+                    ))
               }
             >
               {busy === `enable:${pluginId}`
-                ? "Applying…"
+                ? t("pluginSettings.applying")
                 : active
-                  ? "Disable"
-                  : "Enable"}
+                  ? t("pluginSettings.disable")
+                  : t("pluginSettings.enable")}
             </button>
+            {firstPartyAccess === null || !active ? null : (
+              <button
+                ref={activationButtonRef}
+                className="secondary-button"
+                type="button"
+                aria-expanded={reviewingAccess}
+                aria-controls={accessPanelId}
+                onClick={openAccessReview}
+              >
+                {t("pluginSettings.reviewAccess")}
+              </button>
+            )}
             {entry.source === "catalog" &&
             plugin?.version !== selectedVersion ? (
               <button
@@ -566,8 +708,10 @@ function MarketplaceInventoryCard({
                 onClick={() => void installCatalogVersion()}
               >
                 {busy === `marketplace:${entry.packageSpec}`
-                  ? "Updating…"
-                  : `Update to v${selectedVersion}`}
+                  ? t("pluginSettings.updating")
+                  : t("pluginSettings.updateVersion", {
+                      version: selectedVersion,
+                    })}
               </button>
             ) : entry.source === "source" && plugin?.source === "local" ? (
               <button
@@ -578,63 +722,126 @@ function MarketplaceInventoryCard({
                   void run(
                     `update:${pluginId}`,
                     () => window.zenx.plugins.update(pluginId),
-                    `${entry.name} updated successfully.`,
+                    t("pluginSettings.namedUpdated", { name: entry.name }),
                   )
                 }
               >
-                {busy === `update:${pluginId}` ? "Opening…" : "Update…"}
+                {busy === `update:${pluginId}`
+                  ? t("pluginSettings.opening")
+                  : t("pluginSettings.update")}
               </button>
             ) : null}
-            <button
-              className="danger-button"
-              type="button"
-              disabled={busy !== null}
-              onClick={() => setConfirmation({ pluginId, action: "uninstall" })}
-            >
-              Uninstall
-            </button>
           </>
         )}
 
         {pluginId !== undefined && plugin !== undefined ? (
-          <button
-            className="danger-button quiet-danger"
-            type="button"
-            disabled={busy !== null || active}
-            title={
-              active
-                ? "Disable or uninstall this plugin before deleting its data"
-                : undefined
-            }
-            onClick={() => setConfirmation({ pluginId, action: "delete-data" })}
-          >
-            Delete data
-          </button>
+          <ActionMenu
+            label={t("pluginSettings.managePlugin", { name: entry.name })}
+            items={[
+              ...(entry.lifecycle !== "uninstalled"
+                ? [
+                    {
+                      label: t("pluginSettings.uninstall"),
+                      disabled: busy !== null,
+                      description: t(
+                        "pluginSettings.removeThePluginKeepItsSavedData",
+                      ),
+                      onSelect: () =>
+                        setConfirmation({
+                          pluginId,
+                          action: "uninstall" as const,
+                        }),
+                    },
+                  ]
+                : []),
+              {
+                label: t("pluginSettings.deleteData"),
+                disabled: busy !== null || active,
+                danger: true,
+                description: active
+                  ? t("pluginSettings.disableThePluginBeforeDeletingItsData")
+                  : t("pluginSettings.permanentlyDeleteThisPluginSSavedData"),
+                onSelect: () =>
+                  setConfirmation({ pluginId, action: "delete-data" }),
+              },
+            ]}
+          />
         ) : null}
       </div>
+      {firstPartyAccess !== null && !reviewingAccess ? (
+        <div id={accessPanelId} hidden />
+      ) : null}
+      {firstPartyAccess !== null && reviewingAccess ? (
+        <div
+          id={accessPanelId}
+          ref={accessPanelRef}
+          className="plugin-access-wrap"
+          role="group"
+          aria-label={t("pluginSettings.namedAccessDetails", {
+            name: entry.name,
+          })}
+          tabIndex={-1}
+        >
+          <PluginAccessReview
+            pluginId={firstPartyAccess}
+            permissions={plugin?.permissions ?? entry.permissions ?? []}
+            onOpenGeneral={onOpenGeneral}
+          />
+          <div className="plugin-access-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => {
+                setReviewingAccess(false);
+                activationButtonRef.current?.focus();
+              }}
+            >
+              {t("pluginSettings.closeDetails")}
+            </button>
+            {active ? null : (
+              <button
+                type="button"
+                className="primary-button"
+                disabled={
+                  busy !== null ||
+                  !available ||
+                  (plugin?.permissions ?? entry.permissions ?? []).length === 0
+                }
+                onClick={() => void activateFirstParty()}
+              >
+                {busy === null
+                  ? t("pluginSettings.continueEnabling", { name: entry.name })
+                  : t("pluginSettings.applying")}
+              </button>
+            )}
+          </div>
+        </div>
+      ) : null}
       {confirming ? (
         <div
           className="plugin-confirm"
           role="group"
-          aria-label={`Confirm ${confirming}`}
+          aria-label={t("pluginSettings.confirmAction", { action: confirming })}
         >
           <p>
             {confirming === "uninstall"
-              ? "Uninstall removes this plugin's pages, commands, runtime, and Agent tools. Its data stays on this device."
-              : "Delete this plugin's saved data only. Other plugins and historical Threads are not changed."}
+              ? t("pluginSettings.uninstallThisPluginAndItsToolsItsDataStays")
+              : t(
+                  "pluginSettings.permanentlyDeleteThisPluginSSavedDataYourConversations",
+                )}
           </p>
           <div>
             <button
               type="button"
               className="secondary-button"
+              autoFocus
               onClick={() => setConfirmation(null)}
             >
-              Cancel
+              {t("pluginSettings.cancel")}
             </button>
             <button
               type="button"
               className="danger-button"
-              autoFocus
               onClick={() =>
                 void run(
                   `${confirming}:${pluginId}`,
@@ -643,14 +850,16 @@ function MarketplaceInventoryCard({
                       ? window.zenx.plugins.uninstall(pluginId!)
                       : window.zenx.plugins.deleteData(pluginId!),
                   confirming === "uninstall"
-                    ? `${entry.name} uninstalled. Its data was kept.`
-                    : `${entry.name} data deleted.`,
+                    ? t("pluginSettings.namedUninstalled", { name: entry.name })
+                    : t("pluginSettings.namedDataDeleted", {
+                        name: entry.name,
+                      }),
                 )
               }
             >
               {confirming === "uninstall"
-                ? "Confirm uninstall"
-                : "Confirm delete data"}
+                ? t("pluginSettings.confirmUninstall")
+                : t("pluginSettings.confirmDeleteData")}
             </button>
           </div>
         </div>
@@ -662,24 +871,24 @@ function MarketplaceInventoryCard({
 function profileSourceLabel(mode: ZenXPluginPackageSource["mode"]): string {
   switch (mode) {
     case "bundled":
-      return "Built in";
+      return i18n.t("settings:pluginSettings.builtIn");
     case "npm":
-      return "npm registry";
+      return i18n.t("settings:pluginSettings.npmRegistry");
     case "git":
-      return "Commit-pinned Git";
+      return i18n.t("settings:pluginSettings.commitPinnedGit");
     case "tarball":
-      return "Tarball";
+      return i18n.t("settings:pluginSettings.tarball");
     case "local-copy":
-      return "Local directory snapshot";
+      return i18n.t("settings:pluginSettings.localDirectorySnapshot");
     case "dev-link":
-      return "Development link";
+      return i18n.t("settings:pluginSettings.developmentLink");
   }
 }
 
 function sourcePlaceholder(mode: ZenXPluginPackageSource["mode"]): string {
   switch (mode) {
     case "bundled":
-      return "App Resource package";
+      return i18n.t("settings:pluginSettings.appResourcePackage");
     case "npm":
       return "@scope/plugin@1.2.3";
     case "git":
@@ -720,15 +929,15 @@ function lifecycleLabel(
 ): string {
   switch (lifecycle) {
     case "enabled":
-      return "Enabled";
+      return i18n.t("settings:pluginSettings.enabled");
     case "installed":
-      return "Disabled";
+      return i18n.t("settings:pluginSettings.disabled");
     case "uninstalled":
-      return "Uninstalled";
+      return i18n.t("settings:pluginSettings.uninstalled");
     case "available":
-      return "Available";
+      return i18n.t("settings:pluginSettings.available");
     case "unavailable":
-      return "Unavailable";
+      return i18n.t("settings:pluginSettings.unavailable");
   }
 }
 

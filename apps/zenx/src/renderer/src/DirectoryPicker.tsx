@@ -1,3 +1,6 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
+import { Dialog } from "./ui/controls.js";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import type {
@@ -24,6 +27,7 @@ export function DirectoryPicker({
   onCancel(): void;
   onSelect(directory: string): void;
 }) {
+  useTranslation("shell");
   const [snapshot, setSnapshot] = useState<DirectoryBrowserSnapshot | null>(
     null,
   );
@@ -54,12 +58,6 @@ export function DirectoryPicker({
       if (requestEpoch.current === epoch) setLoading(false);
     }
   };
-
-  useEffect(() => {
-    const previousFocus = document.activeElement as HTMLElement | null;
-    dialogRef.current?.focus();
-    return () => previousFocus?.focus();
-  }, []);
 
   useEffect(() => {
     let active = true;
@@ -111,60 +109,42 @@ export function DirectoryPicker({
     }
   };
 
-  const onDialogKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      onCancel();
-      return;
-    }
-    if (event.key !== "Tab") return;
-    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
-      'button:not(:disabled), [href], input:not(:disabled), [tabindex]:not([tabindex="-1"])',
-    );
-    if (focusable === undefined || focusable.length === 0) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    const active = document.activeElement;
-    if (!Array.from(focusable).includes(active as HTMLElement)) {
-      event.preventDefault();
-      (event.shiftKey ? last : first)?.focus();
-    } else if (event.shiftKey && active === first) {
-      event.preventDefault();
-      last?.focus();
-    } else if (!event.shiftKey && active === last) {
-      event.preventDefault();
-      first?.focus();
-    }
-  };
-
   return (
-    <div className="directory-picker-backdrop" role="presentation">
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onCancel();
+      }}
+      title={i18n.t("shell:chooseProjectFolder")}
+      className="directory-picker-shell"
+    >
       <section
         className="directory-picker-dialog"
         ref={dialogRef}
-        role="dialog"
         tabIndex={-1}
-        aria-modal="true"
         aria-labelledby="directory-picker-title"
-        onKeyDown={onDialogKeyDown}
       >
         <header>
           <div>
-            <span className="eyebrow">Workspace library</span>
-            <h2 id="directory-picker-title">Add a project folder</h2>
-            <p>ZenX reads this location without changing its contents.</p>
+            <span className="eyebrow">{i18n.t("shell:workspaceLibrary")}</span>
+            <h2 id="directory-picker-title">
+              {i18n.t("shell:addAProjectFolder")}
+            </h2>
+            <p>
+              {i18n.t("shell:zenxReadsThisLocationWithoutChangingItsContents")}
+            </p>
           </div>
           <button
             className="icon-button"
             type="button"
             onClick={onCancel}
-            aria-label="Close folder picker"
+            aria-label={i18n.t("shell:closeFolderPicker")}
           >
             <Icon name="x" />
           </button>
         </header>
         <div className="directory-picker-body">
-          <nav aria-label="Starting locations">
+          <nav aria-label={i18n.t("shell:startingLocations")}>
             {snapshot?.locations.map((location) => (
               <button
                 type="button"
@@ -179,13 +159,13 @@ export function DirectoryPicker({
           <div className="directory-picker-browser">
             <div
               className="directory-picker-breadcrumbs"
-              aria-label="Current folder path"
+              aria-label={i18n.t("shell:currentFolderPath")}
             >
               <button
                 type="button"
                 disabled={listing?.parent == null || loading}
                 onClick={() => listing?.parent && void open(listing.parent)}
-                aria-label="Open parent folder"
+                aria-label={i18n.t("shell:openParentFolder")}
               >
                 <Icon name="chevron-left" size={14} />
               </button>
@@ -204,23 +184,23 @@ export function DirectoryPicker({
               className="directory-picker-list"
               ref={listRef}
               onKeyDown={onListKeyDown}
-              aria-label="Subfolders"
+              aria-label={i18n.t("shell:subfolders")}
               aria-busy={loading}
             >
               {loading ? (
-                <p aria-live="polite">Reading folders…</p>
+                <p aria-live="polite">{i18n.t("shell:readingFolders")}</p>
               ) : error !== null ? (
                 <div className="directory-picker-error" role="alert">
                   <Icon name="warning" />
                   <p>{error}</p>
                   {failedPath === null ? null : (
                     <button type="button" onClick={() => void open(failedPath)}>
-                      Try again
+                      {i18n.t("shell:tryAgain")}
                     </button>
                   )}
                 </div>
               ) : listing?.directories.length === 0 ? (
-                <p>This folder has no subfolders.</p>
+                <p>{i18n.t("shell:thisFolderHasNoSubfolders")}</p>
               ) : (
                 listing?.directories.map((entry, index) => (
                   <button
@@ -244,13 +224,13 @@ export function DirectoryPicker({
         </div>
         <footer>
           <div>
-            <span>Current selection</span>
+            <span>{i18n.t("shell:currentSelection")}</span>
             <strong title={listing?.path}>
-              {listing?.path ?? "No folder selected"}
+              {listing?.path ?? i18n.t("shell:noFolderSelected")}
             </strong>
           </div>
           <button className="secondary-button" type="button" onClick={onCancel}>
-            Cancel
+            {i18n.t("shell:cancel")}
           </button>
           <button
             className="primary-button"
@@ -258,10 +238,10 @@ export function DirectoryPicker({
             disabled={listing === null || loading || error !== null}
             onClick={() => listing && onSelect(listing.path)}
           >
-            Add folder
+            {i18n.t("shell:addFolder")}
           </button>
         </footer>
       </section>
-    </div>
+    </Dialog>
   );
 }

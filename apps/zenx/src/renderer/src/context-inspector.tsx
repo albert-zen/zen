@@ -1,16 +1,14 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
 import type { ContextPreview } from "../../../../../src/context-inspection.js";
 
 function Preview({ value }: { value: ContextPreview }) {
+  const { t } = useTranslation("contextInspection");
   return (
     <>
       <pre>{value.text}</pre>
-      {value.truncated ? (
-        <p>
-          Preview truncated at 2,000 characters. Full source remains in the
-          journal.
-        </p>
-      ) : null}
+      {value.truncated ? <p>{t("previewTruncated")}</p> : null}
     </>
   );
 }
@@ -24,97 +22,100 @@ export function ContextInspector({
   stale?: boolean;
   onRefresh?(): void;
 }) {
+  const { t } = useTranslation("contextInspection");
   const data = usage.inspection;
   if (!data) return null;
   if (stale)
     return (
-      <section className="context-inspector" aria-label="Context inspector">
-        <p role="status">
-          Context snapshot is out of date. Previous content is hidden until a
-          fresh read succeeds.
-        </p>
+      <section className="context-inspector" aria-label={t("title")}>
+        <p role="status">{t("stale")}</p>
         <button
           type="button"
-          aria-label="Refresh context snapshot"
+          aria-label={t("refreshLabel")}
           onClick={onRefresh}
         >
-          Refresh context
+          {t("refresh")}
         </button>
       </section>
     );
   return (
-    <section className="context-inspector" aria-label="Context inspector">
+    <section className="context-inspector" aria-label={t("title")}>
       <header>
-        <span className="context-inspector-eyebrow">
-          READ ONLY · EXPERIMENT
-        </span>
-        <h2>What is in context?</h2>
-        <p>
-          Local message projection from the saved conversation. This is not a
-          capture of an in-flight request or provider-private context.
-        </p>
+        <span className="context-inspector-eyebrow">{t("eyebrow")}</span>
+        <h2>{t("heading")}</h2>
+        <p>{t("scope")}</p>
       </header>
       <section>
-        <h3>Occupancy</h3>
+        <h3>{t("occupancy")}</h3>
         <dl>
-          <dt>Projected messages · estimate</dt>
-          <dd>{data.estimatedMessageTokens.toLocaleString()} tokens</dd>
-          <dt>Model window</dt>
-          <dd>{usage.context.contextWindow?.toLocaleString() ?? "Unknown"}</dd>
+          <dt>{t("estimate")}</dt>
+          <dd>
+            {t("tokens", {
+              count: data.estimatedMessageTokens.toLocaleString(
+                i18n.resolvedLanguage,
+              ),
+            })}
+          </dd>
+          <dt>{t("window")}</dt>
+          <dd>
+            {usage.context.contextWindow?.toLocaleString(
+              i18n.resolvedLanguage,
+            ) ?? t("unknown")}
+          </dd>
           <dt>
             {usage.context.inputTokenSource === "provider"
-              ? "Last reported provider input"
-              : "Indicator estimate"}
+              ? t("providerInput")
+              : t("indicatorEstimate")}
           </dt>
-          <dd>{usage.context.inputTokens?.toLocaleString() ?? "Unknown"}</dd>
+          <dd>
+            {usage.context.inputTokens?.toLocaleString(i18n.resolvedLanguage) ??
+              t("unknown")}
+          </dd>
         </dl>
-        <p>
-          Message estimate excludes tool schemas and provider-added
-          instructions. Provider input describes the last compatible response,
-          before subsequent local changes. Neither number is cumulative billing
-          usage.
-        </p>
+        <p>{t("estimateScope")}</p>
       </section>
       <section>
-        <h3>Summary & retained originals</h3>
+        <h3>{t("summaryHeading")}</h3>
         {data.compaction ? (
           <>
-            <p>
-              Earlier context is represented by this summary and explicitly
-              retained items. Newer messages continue below.
-            </p>
+            <p>{t("summaryScope")}</p>
             <details>
-              <summary>Saved summary</summary>
+              <summary>{t("savedSummary")}</summary>
               <Preview value={data.compaction.summary} />
               <p>
-                Source: <code>{data.compaction.source}</code>
+                {t("source")}
+                <code>{data.compaction.source}</code>
               </p>
               <p>
-                Covered through: <code>{data.compaction.boundary}</code>
+                {t("coveredThrough")}
+                <code>{data.compaction.boundary}</code>
               </p>
             </details>
             <details>
               <summary>
-                {data.compaction.retainedItemIds.length +
-                  data.compaction.retainedOmitted}{" "}
-                retained source items
+                {t("retainedCount", {
+                  count:
+                    data.compaction.retainedItemIds.length +
+                    data.compaction.retainedOmitted,
+                })}
               </summary>
-              <pre>{data.compaction.retainedItemIds.join("\n") || "None"}</pre>
+              <pre>
+                {data.compaction.retainedItemIds.join("\n") || t("none")}
+              </pre>
               {data.compaction.retainedOmitted ? (
-                <p>{data.compaction.retainedOmitted} more IDs omitted.</p>
+                <p>
+                  {t("omittedIds", { count: data.compaction.retainedOmitted })}
+                </p>
               ) : null}
             </details>
           </>
         ) : (
-          <p>
-            No saved compaction. Eligible conversation messages are projected
-            directly.
-          </p>
+          <p>{t("noCompaction")}</p>
         )}
       </section>
       <section>
-        <h3>Repository rules</h3>
-        <p>Saved rule snapshots, not a fresh read of files on disk.</p>
+        <h3>{t("rules")}</h3>
+        <p>{t("rulesScope")}</p>
         {data.rules.length ? (
           data.rules.map((rule, index) => (
             <details key={index}>
@@ -123,34 +124,23 @@ export function ContextInspector({
             </details>
           ))
         ) : (
-          <p>No repository rule snapshot recorded.</p>
+          <p>{t("noRules")}</p>
         )}
         {data.rulesOmitted ? (
-          <p>{data.rulesOmitted} additional rule files omitted.</p>
+          <p>{t("omittedRules", { count: data.rulesOmitted })}</p>
         ) : null}
       </section>
       <section>
-        <h3>Capabilities & attachments</h3>
+        <h3>{t("capabilities")}</h3>
+        <p>{t("capabilitiesScope")}</p>
         <p>
-          Loaded Skills and the complete current tool directory: unknown in this
-          slice. Installed or enabled does not prove loaded into context.
+          {t("toolNamesLabel")} {data.toolNames.join(", ") || t("none")}.
         </p>
-        <p>
-          Tool calls present in this projection (up to 80 names):{" "}
-          {data.toolNames.join(", ") || "None"}.
-        </p>
-        <p>
-          Attachment markers appear in message previews; binary content is
-          omitted. Opaque reasoning is never displayed.
-        </p>
+        <p>{t("mediaScope")}</p>
       </section>
       <section>
-        <h3>Projected messages · {data.messageCount}</h3>
-        <p>
-          Ordered as compiled for the current model selection; previews include
-          rules, summary, permissions and eligible conversation content. Latest{" "}
-          {data.messages.length} shown.
-        </p>
+        <h3>{t("messages", { count: data.messageCount })}</h3>
+        <p>{t("messageScope", { count: data.messages.length })}</p>
         {data.messages.map((message, index) => (
           <details key={index}>
             <summary>
@@ -162,9 +152,8 @@ export function ContextInspector({
         ))}
       </section>
       <footer>
-        Snapshot through{" "}
-        <code>{data.throughItemId ?? "empty conversation"}</code>. Refreshes
-        with usage updates; streaming deltas and queued input are excluded.
+        {t("snapshotPrefix")} <code>{data.throughItemId ?? t("empty")}</code>
+        {t("snapshotScope")}
       </footer>
     </section>
   );

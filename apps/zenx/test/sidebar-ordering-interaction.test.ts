@@ -46,6 +46,30 @@ const threads = [
   summary("other", "idle", 10, "/work/b"),
 ];
 
+test("detailed active row keeps its Working indicator beside the model", async () => {
+  await withDom(async (root) => {
+    await act(async () => root.render(createElement(StaticSidebar)));
+    const row = requiredElement<HTMLElement>(
+      '[data-thread-id="active"] .thread-row',
+    );
+    assert.equal(
+      document.querySelector(".sidebar")?.getAttribute("data-thread-density"),
+      "detailed",
+    );
+    assert.equal(row.querySelectorAll(":scope > .thread-model").length, 1);
+    assert.equal(row.querySelector(":scope > .thread-state-label"), null);
+    assert.equal(
+      row
+        .querySelector(".thread-model > .thread-state-inline")
+        ?.textContent?.trim(),
+      "Working",
+    );
+    assert.ok(
+      row.querySelector(".thread-model > .thread-state-inline .live-dot"),
+    );
+  });
+});
+
 test("keyboard reorder restores focus while preserving selection, Pin, and active Turn state", async () => {
   await withDom(async (root) => {
     await act(async () => root.render(createElement(OrderingSidebar)));
@@ -411,17 +435,14 @@ test("Drag preview distinguishes item types and preserves the grab point", async
         assert.equal(captured.image.querySelector("svg")?.dataset.kind, kind);
       } else {
         assert.equal(captured.image.querySelector("svg[data-kind]"), null);
-        for (const selector of [
-          ".thread-title",
-          ".model-line",
-          ".provider-logo",
-        ]) {
+        for (const selector of [".thread-title"]) {
           assert.equal(
             captured.image.querySelector(selector)?.outerHTML,
             source.querySelector(selector)?.outerHTML,
           );
           assert.ok(captured.image.querySelector(selector));
         }
+        assert.equal(captured.image.title, source.title);
         assert.equal(
           captured.image.querySelector("[id], .thread-menu-trigger"),
           null,

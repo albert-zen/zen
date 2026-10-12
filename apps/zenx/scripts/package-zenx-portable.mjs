@@ -2,9 +2,12 @@ import { prepareRtkResource } from "./prepare-rtk.mjs";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+  chmod,
   cp,
   mkdir,
   mkdtemp,
+  lstat,
+  stat,
   open,
   readFile,
   rename,
@@ -14,7 +17,9 @@ import {
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import os from "node:os";
 import { packZenXFirstPartyPlugins } from "./pack-first-party-plugins.mjs";
+import ts from "typescript";
 
 const run = promisify(execFile);
 const zenx = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -23,6 +28,8 @@ const packagedRoot = path.join(zenx, ".packaged");
 const runsRoot = path.join(packagedRoot, "runs");
 const artifactRoot = path.join(packagedRoot, "artifact");
 const artifactCache = path.join(packagedRoot, "cache", "artifacts");
+export const MACOS_MINIMUM_VERSION = "12.0";
+export const MACOS_CODESIGN_MODE_ENV = "ZENX_CODESIGN_MODE";
 
 if (isDirectExecution()) await packageZenX(process.argv.slice(2));
 
@@ -67,6 +74,9 @@ async function packageZenX(arguments_) {
         path.join(appDir, "package.json"),
         `${JSON.stringify(packageManifest(target, zenxPackage), null, 2)}\n`,
       );
+      const macOsSigningConfiguration = await resolveMacOsSigningConfiguration({
+        platform: process.platform,
+      });
       const { packager } = await import("@electron/packager");
       const packaged = await packager({
         dir: appDir,
@@ -76,6 +86,11 @@ async function packageZenX(arguments_) {
         arch: process.arch,
         name: productName,
         electronVersion: "43.2.0",
+        ...macOsPackagerOptions(
+          process.platform,
+          target,
+          macOsSigningConfiguration,
+        ),
         ...(applicationIconForPlatform(process.platform, target) === undefined
           ? {}
           : { icon: applicationIconForPlatform(process.platform, target) }),
@@ -121,6 +136,14 @@ async function packageZenX(arguments_) {
                 "chrome-native-host",
               ),
             });
+            if (process.platform === "darwin") {
+              await compileMacNativeHelpers({
+                destinationDirectory: path.join(
+                  path.dirname(buildPath),
+                  "native-helpers",
+                ),
+              });
+            }
           },
         ],
         asar: false,
@@ -133,10 +156,29 @@ async function packageZenX(arguments_) {
       if (target === "smoke") {
         await runExecutable(executablePath(packaged[0], target));
       }
-      const publishedArtifact = await publishPackagedArtifact(
-        packaged[0],
-        path.join(artifactRoot, targetDirectory),
-      );
+      const finalArtifact = path.join(artifactRoot, targetDirectory);
+      let publishedArtifact;
+      try {
+        publishedArtifact = await publishPackagedArtifact(
+          packaged[0],
+          finalArtifact,
+        );
+      } catch (error) {
+        if (
+          process.platform === "win32" &&
+          process.env.ZENX_PACKAGE_DIAG === "1"
+        ) {
+          try {
+            await diagnoseWindowsPublishFailure(packaged[0], finalArtifact);
+          } catch (diagnosticError) {
+            console.error(
+              "Windows packaged publish diagnostic failed",
+              diagnosticError?.code ?? "unknown",
+            );
+          }
+        }
+        throw error;
+      }
       const executable = executablePath(publishedArtifact, target);
       console.log(
         JSON.stringify(
@@ -165,6 +207,310 @@ export function applicationIconForPlatform(platform, target = "app") {
   if (platform === "win32")
     return path.join(zenx, "resources", "icons", "zenx.ico");
   return undefined;
+}
+
+export function macOsPackagerOptions(
+  platform,
+  target = "app",
+  signingConfiguration = { identity: "-", mode: "ad-hoc" },
+) {
+  if (platform !== "darwin") return {};
+  const { identity, mode } = signingConfiguration;
+  if (!["ad-hoc", "local", "developer-id"].includes(mode)) {
+    throw new Error(`Unsupported ZenX macOS signing mode: ${String(mode)}`);
+  }
+  if (mode === "ad-hoc" && identity !== "-") {
+    throw new Error('Ad-hoc ZenX macOS signing requires identity "-"');
+  }
+  if (mode === "local") normalizeLocalSigningIdentity(identity);
+  if (mode === "developer-id" && !identity?.trim()) {
+    throw new Error("Developer ID signing requires a configured identity");
+  }
+  return {
+    appBundleId:
+      target === "app"
+        ? "com.electron.zenx"
+        : "com.electron.zenx-provider-smoke",
+    ...(target === "app"
+      ? {
+          extendInfo: {
+            NSScreenCaptureUsageDescription:
+              "ZenX captures the target window for Computer screenshot tools.",
+          },
+        }
+      : {}),
+    osxSign: {
+      identity,
+      ...(mode === "ad-hoc" || mode === "local"
+        ? { identityValidation: false }
+        : {}),
+      continueOnError: false,
+      ignore: macPackagedProviderSignIgnore,
+      optionsForFile:
+        mode === "developer-id"
+          ? macNativeHelperSignOptions
+          : mode === "local"
+            ? macLocalSignOptionsForFile
+            : macAdHocSignOptionsForFile,
+      preAutoEntitlements: false,
+      strictVerify: true,
+    },
+  };
+}
+
+export async function resolveMacOsSigningConfiguration({
+  platform = process.platform,
+  environment = process.env,
+  homeDirectory = os.homedir(),
+  readFile: readSigningFile = readFile,
+} = {}) {
+  if (platform !== "darwin") return { identity: "-", mode: "ad-hoc" };
+
+  const explicitIdentity = environment.ZENX_CODESIGN_IDENTITY?.trim();
+  const explicitMode = environment[MACOS_CODESIGN_MODE_ENV]?.trim();
+  if (
+    explicitMode !== undefined &&
+    explicitMode !== "" &&
+    explicitMode !== "local"
+  ) {
+    throw new Error(
+      `${MACOS_CODESIGN_MODE_ENV} must be "local" when it is configured`,
+    );
+  }
+  if (explicitMode === "local") {
+    if (!explicitIdentity) {
+      throw new Error(
+        `ZENX_CODESIGN_IDENTITY is required when ${MACOS_CODESIGN_MODE_ENV}=local`,
+      );
+    }
+    return {
+      identity: normalizeLocalSigningIdentity(explicitIdentity),
+      mode: "local",
+    };
+  }
+  if (explicitIdentity === "-") {
+    return { identity: "-", mode: "ad-hoc" };
+  }
+  if (explicitIdentity) {
+    return { identity: explicitIdentity, mode: "developer-id" };
+  }
+
+  const configurationPath = path.join(
+    homeDirectory,
+    "Library",
+    "Application Support",
+    "ZenX",
+    "signing.json",
+  );
+  let source;
+  try {
+    source = await readSigningFile(configurationPath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return { identity: "-", mode: "ad-hoc" };
+    throw new Error(
+      `Could not read ZenX macOS signing configuration at ${configurationPath}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+
+  let configuration;
+  try {
+    configuration = JSON.parse(source);
+  } catch (error) {
+    throw new Error(
+      `Invalid ZenX macOS signing configuration at ${configurationPath}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+  if (
+    configuration === null ||
+    typeof configuration !== "object" ||
+    Array.isArray(configuration) ||
+    configuration.mode !== "local"
+  ) {
+    throw new Error(
+      `Invalid ZenX macOS signing configuration at ${configurationPath}: mode must be "local"`,
+    );
+  }
+  return {
+    identity: normalizeLocalSigningIdentity(configuration.identity),
+    mode: "local",
+  };
+}
+
+function normalizeLocalSigningIdentity(identity) {
+  if (
+    typeof identity !== "string" ||
+    !/^[a-f\d]{40}$/iu.test(identity.trim())
+  ) {
+    throw new Error(
+      "A local ZenX signing identity must be a 40-character SHA-1 certificate fingerprint",
+    );
+  }
+  return identity.trim().toUpperCase();
+}
+
+export function macPackagedProviderSignIgnore(filePath) {
+  return filePath
+    .split(path.sep)
+    .join("/")
+    .includes("/Contents/Resources/providers/");
+}
+
+export function macAdHocSignOptionsForFile(filePath) {
+  return {
+    entitlements: [],
+    hardenedRuntime: false,
+  };
+}
+
+export function macLocalSignOptionsForFile(filePath) {
+  const pathComponents = filePath.split(/[\\/]/u);
+  const executableName = pathComponents.at(-1);
+  const helperIdentifiers = {
+    "zenx-accessibility": "com.electron.zenx.native-helper.zenx-accessibility",
+    "zenx-foreground-input":
+      "com.electron.zenx.native-helper.zenx-foreground-input",
+  };
+  return {
+    entitlements: [],
+    hardenedRuntime: false,
+    timestamp: "none",
+    ...(!pathComponents.includes("native-helpers") ||
+    helperIdentifiers[executableName] === undefined
+      ? {}
+      : {
+          additionalArguments: [
+            "--identifier",
+            helperIdentifiers[executableName],
+          ],
+        }),
+  };
+}
+
+export function macNativeHelperSignOptions(filePath) {
+  return filePath.split(path.sep).includes("native-helpers")
+    ? { entitlements: [] }
+    : null;
+}
+
+export function extractMacNativeHelperSources(source) {
+  const sourceFile = ts.createSourceFile(
+    "computer-provider.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const names = new Set([
+    "MAC_ACCESSIBILITY_SOURCE",
+    "MAC_FOREGROUND_INPUT_SOURCE",
+  ]);
+  const sources = {};
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (
+        ts.isIdentifier(declaration.name) &&
+        names.has(declaration.name.text) &&
+        declaration.initializer !== undefined &&
+        ts.isNoSubstitutionTemplateLiteral(declaration.initializer)
+      ) {
+        sources[declaration.name.text] = declaration.initializer.text;
+      }
+    }
+  }
+  for (const name of names) {
+    if (typeof sources[name] !== "string" || sources[name].length === 0) {
+      throw new Error(
+        `Could not extract ${name} from Computer provider source`,
+      );
+    }
+  }
+  return sources;
+}
+
+export async function compileMacNativeHelpers(options) {
+  const providerSource =
+    options.providerSource ??
+    (await readFile(
+      path.join(zenx, "src", "main", "capabilities", "computer-provider.ts"),
+      "utf8",
+    ));
+  const sources = extractMacNativeHelperSources(providerSource);
+  const compile =
+    options.compile ??
+    ((sourcePath, executablePath) =>
+      compileSwiftHelper(
+        sourcePath,
+        executablePath,
+        options.arch ?? process.arch,
+      ));
+  await mkdir(options.destinationDirectory, { recursive: true, mode: 0o755 });
+  await chmod(options.destinationDirectory, 0o755);
+  const sourceDirectory = await mkdtemp(
+    path.join(
+      path.dirname(options.destinationDirectory),
+      ".native-helper-source-",
+    ),
+  );
+  try {
+    for (const [name, source] of [
+      ["zenx-accessibility", sources.MAC_ACCESSIBILITY_SOURCE],
+      ["zenx-foreground-input", sources.MAC_FOREGROUND_INPUT_SOURCE],
+    ]) {
+      const sourcePath = path.join(sourceDirectory, `${name}.swift`);
+      const executablePath = path.join(options.destinationDirectory, name);
+      await writeFile(sourcePath, source, { encoding: "utf8", mode: 0o600 });
+      await compile(sourcePath, executablePath);
+      await chmod(executablePath, 0o755);
+    }
+  } finally {
+    await rm(sourceDirectory, { recursive: true, force: true });
+  }
+  return options.destinationDirectory;
+}
+
+export function macSwiftTargetTriple(arch) {
+  if (arch === "arm64") return `arm64-apple-macos${MACOS_MINIMUM_VERSION}`;
+  if (arch === "x64") return `x86_64-apple-macos${MACOS_MINIMUM_VERSION}`;
+  throw new Error(`Unsupported macOS helper architecture: ${arch}`);
+}
+
+export function assertMacNativeHelperDeploymentTarget(
+  buildMetadata,
+  expectedMinimum = MACOS_MINIMUM_VERSION,
+) {
+  if (!/^\s*platform MACOS\s*$/mu.test(buildMetadata)) {
+    throw new Error("macOS Computer helper has no MACOS build platform");
+  }
+  const minimum = /^\s*minos\s+([0-9.]+)\s*$/mu.exec(buildMetadata)?.[1];
+  if (minimum !== expectedMinimum) {
+    throw new Error(
+      `macOS Computer helper minimum system ${minimum ?? "missing"}; expected ${expectedMinimum}`,
+    );
+  }
+}
+
+async function compileSwiftHelper(sourcePath, executablePath, arch) {
+  await run(
+    "/usr/bin/swiftc",
+    [
+      "-O",
+      "-target",
+      macSwiftTargetTriple(arch),
+      sourcePath,
+      "-o",
+      executablePath,
+    ],
+    { timeout: 60_000 },
+  );
+  const { stdout } = await run(
+    "/usr/bin/vtool",
+    ["-show-build", executablePath],
+    { timeout: 10_000 },
+  );
+  assertMacNativeHelperDeploymentTarget(stdout);
 }
 
 /** Build only into the current packaging run before anything snapshots it. */
@@ -225,29 +571,189 @@ export async function withPackagingTargetLock(
   }
 }
 
-export async function publishPackagedArtifact(stagedArtifact, finalArtifact) {
+// QA-only, opt-in: inspect the owned staging artifact after a failed publish.
+// Do not retry or change the artifact during observation; never print command lines or env.
+async function diagnoseWindowsPublishFailure(stagedArtifact, finalArtifact) {
+  const status = async (file) => {
+    try {
+      const entry = await stat(file);
+      return { exists: true, directory: entry.isDirectory() };
+    } catch (error) {
+      return { exists: false, code: error?.code };
+    }
+  };
+  const script = `
+$prefix = $env:ZENX_DIAG_STAGE
+Get-CimInstance Win32_Process | Where-Object {
+  $_.ExecutablePath -and $_.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)
+} | ForEach-Object {
+  [PSCustomObject]@{ pid = $_.ProcessId; parent = $_.ParentProcessId; name = $_.Name }
+} | ConvertTo-Json -Compress
+`;
+  for (const delay of [0, 750, 2000]) {
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    let processes;
+    try {
+      processes = (
+        await run(
+          "powershell.exe",
+          ["-NoProfile", "-NonInteractive", "-Command", script],
+          {
+            timeout: 10000,
+            env: {
+              ...process.env,
+              ZENX_DIAG_STAGE: `${stagedArtifact}${path.sep}`,
+            },
+          },
+        )
+      ).stdout.trim();
+    } catch (error) {
+      processes = `query failed: ${error?.code ?? error?.message}`;
+    }
+    console.error(
+      "Windows packaged publish diagnostic",
+      JSON.stringify({
+        delayMs: delay,
+        node: process.version,
+        staged: await status(stagedArtifact),
+        final: await status(finalArtifact),
+        stagedExe: await status(
+          path.join(stagedArtifact, "ZenXProviderSmoke.exe"),
+        ),
+        ownedProcesses: processes || "[]",
+      }),
+    );
+  }
+}
+
+// A no-follow identity snapshot keeps retries bound to the original source and
+// target. Paths alone are insufficient across a backoff; this is not an OS-level
+// no-clobber operation against a writer racing *between* validation and rename.
+async function publishDirectoryIdentity(file) {
+  let entry;
+  try {
+    entry = await lstat(file, { bigint: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+  if (!entry.isDirectory())
+    throw new Error(`Packaged artifact is not a directory: ${file}`);
+  if (entry.ino === 0n && entry.birthtimeNs === 0n) {
+    throw new Error(`Packaged artifact has no usable identity: ${file}`);
+  }
+  return `${entry.dev}:${entry.ino}:${entry.birthtimeNs}`;
+}
+
+function assertPublishIdentity(actual, expected, label) {
+  if (actual !== expected)
+    throw new Error(`Packaged artifact ${label} changed during publication`);
+}
+
+// A lingering Windows handle can block directory rename even after the
+// smoke parent exits. Only retry a failed staging rename; each attempt first
+// restores any prior published artifact before waiting.
+export async function publishPackagedArtifact(
+  stagedArtifact,
+  finalArtifact,
+  {
+    renameArtifact = rename,
+    wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    platform = process.platform,
+  } = {},
+) {
   await mkdir(path.dirname(finalArtifact), { recursive: true, mode: 0o700 });
+  const stagedIdentity = await publishDirectoryIdentity(stagedArtifact);
+  if (stagedIdentity === null)
+    throw new Error("Packaged artifact staging source is missing");
+  const oldIdentity = await publishDirectoryIdentity(finalArtifact);
   const retiredArtifact = path.join(
     path.dirname(finalArtifact),
     `.${path.basename(finalArtifact)}.${randomUUID()}.retired`,
   );
-  let retired = false;
-  try {
-    await rename(finalArtifact, retiredArtifact);
-    retired = true;
-  } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
+  const delays = platform === "win32" ? [100, 250, 500, 1000] : [];
+  for (let attempt = 0; ; attempt++) {
+    // Revalidate *after* each wait, before touching either artifact. The lock
+    // serializes cooperating packagers; an unrelated writer need not honor it.
+    assertPublishIdentity(
+      await publishDirectoryIdentity(stagedArtifact),
+      stagedIdentity,
+      "source",
+    );
+    assertPublishIdentity(
+      await publishDirectoryIdentity(finalArtifact),
+      oldIdentity,
+      "target",
+    );
+    let retired = false;
+    if (oldIdentity !== null) {
+      await renameArtifact(finalArtifact, retiredArtifact);
+      retired = true;
+      assertPublishIdentity(
+        await publishDirectoryIdentity(retiredArtifact),
+        oldIdentity,
+        "backup",
+      );
+    }
+    try {
+      await renameArtifact(stagedArtifact, finalArtifact);
+    } catch (error) {
+      if (retired) {
+        try {
+          assertPublishIdentity(
+            await publishDirectoryIdentity(retiredArtifact),
+            oldIdentity,
+            "backup",
+          );
+          assertPublishIdentity(
+            await publishDirectoryIdentity(finalArtifact),
+            null,
+            "target before rollback",
+          );
+          await renameArtifact(retiredArtifact, finalArtifact);
+          assertPublishIdentity(
+            await publishDirectoryIdentity(finalArtifact),
+            oldIdentity,
+            "restored target",
+          );
+        } catch (rollbackError) {
+          // Keep the owned backup if restoration cannot be proven safe. The
+          // caller removes only the private run staging directory in finally.
+          throw new AggregateError(
+            [error, rollbackError],
+            "Packaged artifact publication and rollback failed",
+          );
+        }
+      }
+      if (error?.code !== "EPERM" || attempt >= delays.length) throw error;
+      assertPublishIdentity(
+        await publishDirectoryIdentity(stagedArtifact),
+        stagedIdentity,
+        "source",
+      );
+      assertPublishIdentity(
+        await publishDirectoryIdentity(finalArtifact),
+        oldIdentity,
+        "target",
+      );
+      await wait(delays[attempt]);
+      continue;
+    }
+    assertPublishIdentity(
+      await publishDirectoryIdentity(finalArtifact),
+      stagedIdentity,
+      "published target",
+    );
+    if (retired) {
+      assertPublishIdentity(
+        await publishDirectoryIdentity(retiredArtifact),
+        oldIdentity,
+        "backup before removal",
+      );
+      await rm(retiredArtifact, { recursive: true, force: true });
+    }
+    return finalArtifact;
   }
-  try {
-    await rename(stagedArtifact, finalArtifact);
-  } catch (error) {
-    if (retired) await rename(retiredArtifact, finalArtifact);
-    throw error;
-  }
-  if (retired) {
-    await rm(retiredArtifact, { recursive: true, force: true });
-  }
-  return finalArtifact;
 }
 
 export async function stagePackage(options) {

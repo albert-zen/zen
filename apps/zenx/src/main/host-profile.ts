@@ -16,6 +16,7 @@ import {
   type ContextCompactionConfig,
 } from "../../../../src/context-compaction.js";
 import type { ZenXHostConfig } from "./host-messages.js";
+import { validProviderLogoResource } from "./provider-logo-resource.js";
 import { resolveProjectPath } from "./project-projection.js";
 import type { ToolPresentation } from "../../../../src/tool-presentation.js";
 import {
@@ -37,6 +38,7 @@ export type ZenXProviderConnection =
 export type ZenXProviderProfile = ZenXProviderConnection & {
   providerProfileId: string;
   models: ZenXModelCatalogEntry[];
+  logoResource?: string;
 };
 
 export type ZenXModelCatalogEntry = Omit<ModelCatalogEntry, "isDefault"> & {
@@ -75,7 +77,15 @@ export interface ZenXHostProfile {
   toolPresentation?: ToolPresentation;
   /** Process-level opt-in; old profiles keep RTK disabled. */
   experimentalRtkEnabled?: boolean;
-  composerSendMode?: "queue" | "soft" | "hard";
+  composerSendMode?: "batch" | "queue" | "soft" | "hard";
+  /** Records explicit manual choice; older soft/hard could only be explicit. */
+  composerSendModeExplicit?: boolean;
+  /** One-time, reversible manual-only migration of an ambiguous old Queue. */
+  composerSendModeMigration?: {
+    version: 1;
+    previousMode: "queue";
+    acknowledged: boolean;
+  };
   /** Omitted means tool rounds are unlimited. */
   maxToolRounds?: number;
   /** Omitted means Core uses its default compaction prompt. */
@@ -100,6 +110,8 @@ export type ZenXSettingsUpdate = Pick<
   | "toolPresentation"
   | "experimentalRtkEnabled"
   | "composerSendMode"
+  | "composerSendModeExplicit"
+  | "composerSendModeMigration"
   | "maxToolRounds"
   | "contextCompaction"
 > & {
@@ -115,6 +127,7 @@ export interface ZenXProviderEditOptions {
   defaultModel?: ZenXModelReference;
   titleModel?: ZenXModelReference;
   apiKey?: string;
+  logoUpload?: Uint8Array | null;
 }
 
 export type ZenXProviderDeleteReplacements = Omit<
@@ -133,6 +146,7 @@ export interface PublicHostSettings {
   configuration?: ConfigurationSaveResult;
   rtk?: { available: boolean; reason?: string };
   profile: ZenXHostProfile;
+  providerLogoDataUrls?: Record<string, string>;
   /** Credential presence for the profile referenced by defaultModel. */
   hasApiKey: boolean;
   apiKeyProviderProfileIds: string[];
@@ -244,7 +258,8 @@ export class ZenXHostProfileStore {
       migrated ||
       foregroundPreferenceWasMissing ||
       toolPresentationWasMissing ||
-      JSON.stringify(profile) !== JSON.stringify(decoded)
+      JSON.stringify(profile) !== JSON.stringify(decoded) ||
+      JSON.stringify(profile) !== JSON.stringify(value)
     ) {
       await this.write(profile);
     }
@@ -324,8 +339,49 @@ export function validateHostProfile(
   ) {
     throw new Error("Invalid browser session mode");
   }
-  const composerSendMode = value.composerSendMode ?? "queue";
+  const migration = value.composerSendModeMigration;
   if (
+    migration !== undefined &&
+    (!isRecord(migration) ||
+      migration.version !== 1 ||
+      migration.previousMode !== "queue" ||
+      typeof migration.acknowledged !== "boolean")
+  )
+    throw new Error("Invalid composer send mode migration");
+  // Old Queue was normalized into saved profiles even without a manual
+  // choice. There is no reliable way to distinguish that case from an old
+  // explicit Queue; preserve the source and offer a visible undo instead.
+  const ambiguousLegacyQueue =
+    value.composerSendMode === "queue" &&
+    value.composerSendModeExplicit !== true &&
+    migration === undefined;
+  const composerSendMode = ambiguousLegacyQueue
+    ? "soft"
+    : (value.composerSendMode ?? "soft");
+  const composerSendModeMigration = ambiguousLegacyQueue
+    ? {
+        version: 1 as const,
+        previousMode: "queue" as const,
+        acknowledged: false,
+      }
+    : migration === undefined
+      ? undefined
+      : {
+          version: 1 as const,
+          previousMode: "queue" as const,
+          acknowledged: migration.acknowledged as boolean,
+        };
+  if (
+    value.composerSendModeExplicit !== undefined &&
+    typeof value.composerSendModeExplicit !== "boolean"
+  )
+    throw new Error("Invalid composer send preference provenance");
+  const composerSendModeExplicit = ambiguousLegacyQueue
+    ? false
+    : (value.composerSendModeExplicit ??
+      (value.composerSendMode === "soft" || value.composerSendMode === "hard"));
+  if (
+    composerSendMode !== "batch" &&
     composerSendMode !== "queue" &&
     composerSendMode !== "soft" &&
     composerSendMode !== "hard"
@@ -390,6 +446,10 @@ export function validateHostProfile(
     toolPresentation,
     experimentalRtkEnabled: value.experimentalRtkEnabled === true,
     composerSendMode,
+    composerSendModeExplicit,
+    ...(composerSendModeMigration === undefined
+      ? {}
+      : { composerSendModeMigration }),
     ...(maxToolRounds === undefined ? {} : { maxToolRounds }),
     ...(contextCompaction === undefined ? {} : { contextCompaction }),
     ...(workflowCommands.length === 0 ? {} : { workflowCommands }),
@@ -666,7 +726,16 @@ function validateProviderProfile(value: unknown): ZenXProviderProfile {
     ...validateProviderConnection(value),
     providerProfileId: providerProfileIdentifier(value.providerProfileId),
     models: validateStructuredModelCatalog(value.models),
+    ...(value.logoResource === undefined
+      ? {}
+      : { logoResource: providerLogoResource(value.logoResource) }),
   };
+}
+
+function providerLogoResource(value: unknown): string {
+  if (!validProviderLogoResource(value))
+    throw new Error("ZenX Provider Logo resource is invalid");
+  return value;
 }
 
 function validateLegacyProviderProfileV2(
@@ -844,10 +913,15 @@ export function applyBuiltInModelCatalogPresets(
       (preset) => {
         const existing = existingById.get(preset.id);
         if (existing !== undefined) existingById.delete(preset.id);
+        // Manual capability edits remain authoritative. For built-in presets,
+        // refresh metadata while carrying the user's visibility choice across
+        // restarts so a hidden model is not resurrected into normal selection.
         if (existing?.source === "manual") return existing;
         const normalized = normalizeModelCatalogEntry(preset);
         const { isDefault: _isDefault, ...model } = normalized;
-        return model;
+        return existing === undefined
+          ? model
+          : { ...model, hidden: existing.hidden };
       },
     );
     return {

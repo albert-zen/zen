@@ -1,3 +1,4 @@
+import "./dom-primitives.js";
 /// <reference path="../src/renderer/src/env.d.ts" />
 
 import assert from "node:assert/strict";
@@ -399,7 +400,7 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
         ?.getAttribute("aria-label") ?? null;
     assert.equal(
       contextUsageText(),
-      "Open context details. Context 9% · 9 / 100\nThread cache unknown",
+      "Open context details. Context 9% · 9 / 100 tokens\nThread cache unknown",
     );
     await act(async () => {
       usageRequests[1]?.response.resolve(projectedUsage(4));
@@ -407,7 +408,7 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
     });
     assert.equal(
       contextUsageText(),
-      "Open context details. Context 9% · 9 / 100\nThread cache unknown",
+      "Open context details. Context 9% · 9 / 100 tokens\nThread cache unknown",
     );
 
     await act(async () => {
@@ -433,7 +434,7 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
     });
     assert.equal(
       contextUsageText(),
-      "Open context details. Context 2% · 2 / 100\nThread cache unknown",
+      "Open context details. Context 2% · 2 / 100 tokens\nThread cache unknown",
     );
     await act(async () => {
       usageRequests[3]?.response.resolve(projectedUsage(12));
@@ -441,7 +442,7 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
     });
     assert.equal(
       contextUsageText(),
-      "Open context details. Context 2% · 2 / 100\nThread cache unknown",
+      "Open context details. Context 2% · 2 / 100 tokens\nThread cache unknown",
     );
   } finally {
     await act(async () => root.unmount());

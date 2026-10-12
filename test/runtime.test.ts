@@ -5,9 +5,20 @@ import path from "node:path";
 import test from "node:test";
 
 import { pendingQueuedMessages } from "../src/input-queue.js";
-import { shellPrintCommand } from "./fixtures.js";
+import { applyNativeThreadEvent } from "../apps/zenx/src/renderer/src/thread-view-state.js";
+import {
+  AttachmentStoreError,
+  InMemoryAttachmentStore,
+  type AttachmentStore,
+} from "../src/attachment.js";
+import type { Thread as ZenXThread } from "../apps/zenx/src/protocol-client/index.js";
+import { png1x1, shellPrintCommand } from "./fixtures.js";
 
-import { type AppServerEvent, ZenAppServer } from "../src/app-server.js";
+import {
+  AppServerError,
+  type AppServerEvent,
+  ZenAppServer,
+} from "../src/app-server.js";
 import type {
   CanonicalItem,
   ThreadMetadataItem,
@@ -62,6 +73,7 @@ function createServer(
     threadMetadata?: ThreadMetadataStore;
     threadSummaryProjection?: ThreadSummaryProjection;
     tools?: ToolRuntime;
+    attachments?: AttachmentStore;
     idFactory?: () => string;
     runtimeIdFactory?: () => string;
     runtime?: AgentRuntime;
@@ -75,6 +87,9 @@ function createServer(
     ]);
   return new ZenAppServer({
     journal: options.journal ?? new InMemoryThreadJournal(),
+    ...(options.attachments === undefined
+      ? {}
+      : { attachments: options.attachments }),
     runtime:
       options.runtime ??
       new AgentRuntime({
@@ -597,6 +612,220 @@ test("rejects archiving a Thread while its Turn is active", async () => {
     (await server.setThreadArchived(thread.id, true)).archived,
     true,
   );
+});
+
+for (const operation of ["start", "queue", "steer", "replace"] as const) {
+  test(`unarchived admission rejects ${operation} after an archive wins the mutation lock`, async () => {
+    const archiveEntered = testDeferred<void>();
+    const releaseArchive = testDeferred<void>();
+    const backingMetadata = new InMemoryThreadMetadataStore();
+    const threadMetadata: ThreadMetadataStore = {
+      read: async (threadId) => await backingMetadata.read(threadId),
+      setName: async (threadId, name) =>
+        await backingMetadata.setName(threadId, name),
+      setArchived: async (threadId, archived) => {
+        archiveEntered.resolve();
+        await releaseArchive.promise;
+        return await backingMetadata.setArchived(threadId, archived);
+      },
+    };
+    const journal = new InMemoryThreadJournal();
+    let samples = 0;
+    const model: ModelAdapter = {
+      provider: "archive-admission-test",
+      async *stream(): AsyncIterable<ModelEvent> {
+        samples += 1;
+        yield { type: "text_delta", delta: "must not execute" };
+      },
+    };
+    const server = createServer({ journal, model, threadMetadata });
+    const thread = await server.startThread();
+    const before = await journal.read(thread.id);
+    const events: AppServerEvent[] = [];
+    server.subscribe((event) => events.push(event));
+
+    const archive = server.setThreadArchived(thread.id, true);
+    await archiveEntered.promise;
+    const admitted =
+      operation === "start"
+        ? server.startTurn(thread.id, "must not persist", {
+            clientId: "blocked-start",
+            model: "fake",
+            requireUnarchived: true,
+          })
+        : operation === "queue"
+          ? server.queueMessage(
+              thread.id,
+              "must not persist",
+              "blocked-queue",
+              {
+                requireUnarchived: true,
+              },
+            )
+          : operation === "steer"
+            ? server.steerTurn(thread.id, "not-running", "must not persist", {
+                clientId: "blocked-steer",
+                requireUnarchived: true,
+              })
+            : server.replaceTurn(thread.id, "not-running", "must not persist", {
+                clientId: "blocked-replace",
+                requireUnarchived: true,
+              });
+    const rejection = assert.rejects(
+      admitted,
+      (error: unknown) =>
+        error instanceof AppServerError &&
+        error.code === "operation_forbidden" &&
+        error.message.includes(thread.id) &&
+        /archived.*unarchive/iu.test(error.message),
+    );
+    releaseArchive.resolve();
+    await archive;
+    await rejection;
+
+    assert.equal((await server.readThread(thread.id)).archived, true);
+    assert.deepEqual(await journal.read(thread.id), before);
+    assert.equal(samples, 0);
+    assert.deepEqual(
+      events.map((event) => event.type),
+      ["thread_archived_updated"],
+    );
+  });
+}
+
+for (const archived of [false, true]) {
+  test(`${archived ? "default archived" : "unarchived"} admission allows start, queue, steer and replacement without changing permissions`, async () => {
+    const entered = testDeferred<void>();
+    let samples = 0;
+    const model: ModelAdapter = {
+      provider: "unarchived-admission-test",
+      async *stream(request): AsyncIterable<ModelEvent> {
+        samples += 1;
+        if (samples === 1) {
+          entered.resolve();
+          await new Promise<void>((_resolve, reject) => {
+            request.signal.addEventListener(
+              "abort",
+              () => reject(request.signal.reason),
+              { once: true },
+            );
+          });
+          return;
+        }
+        yield { type: "text_delta", delta: "done" };
+      },
+    };
+    const server = createServer({ model });
+    const thread = await server.startThread();
+    if (archived) await server.setThreadArchived(thread.id, true);
+    await server.setThreadPermissions(thread.id, "read-only");
+    const admission = archived ? {} : { requireUnarchived: true };
+    const active = await server.startTurn(thread.id, "first", {
+      ...admission,
+    });
+    await entered.promise;
+    const steered = await server.steerTurn(thread.id, active.id, "correction", {
+      clientId: "allowed-steer",
+      ...admission,
+    });
+    assert.equal(steered.id, active.id);
+    await server.queueMessage(thread.id, "next", "allowed-queue", {
+      ...admission,
+    });
+    const queued = (await server.readThread(thread.id)).items.find(
+      (item) => item.type === "user_message_queued",
+    );
+    assert(queued?.type === "user_message_queued");
+    await server.cancelQueuedMessages(thread.id, [
+      { queuedItemId: queued.id, clientId: queued.clientId },
+    ]);
+    const replaced = await server.replaceTurn(
+      thread.id,
+      active.id,
+      "new work",
+      {
+        clientId: "allowed-replacement",
+        ...admission,
+      },
+    );
+    await replaced.turn.done;
+    const snapshot = await server.readThread(thread.id);
+    assert.equal(snapshot.archived, archived);
+    assert.equal(snapshot.sandbox, "read-only");
+    assert.equal(snapshot.approvalPolicy, "always");
+    assert.equal(snapshot.turns.length, 2);
+    assert.equal(snapshot.turns[0]?.status, "interrupted");
+    assert.equal(snapshot.turns[1]?.status, "completed");
+    assert.equal(samples, 2);
+  });
+}
+
+test("unarchived admission checks queued delivery again when archive wins after enqueue", async () => {
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "queued-archive-admission-test",
+    async *stream(): AsyncIterable<ModelEvent> {
+      samples += 1;
+      yield { type: "text_delta", delta: "must not execute" };
+    },
+  };
+  const journal = new InMemoryThreadJournal();
+  const server = createServer({ model, journal });
+  const thread = await server.startThread();
+  const before = await journal.read(thread.id);
+  let archive: Promise<unknown> | undefined;
+  const failures: Extract<AppServerEvent, { type: "queue_failed" }>[] = [];
+  server.subscribe((event) => {
+    if (event.type === "queue_failed") failures.push(event);
+    if (
+      event.type === "item_completed" &&
+      event.item.type === "user_message_queued"
+    ) {
+      // Reserve archive's lock while enqueue still owns it. Launch must wait.
+      archive = server.setThreadArchived(thread.id, true);
+    }
+  });
+  await assert.rejects(
+    server.queueMessage(thread.id, "accepted before archive", "queue-race", {
+      requireUnarchived: true,
+    }),
+    (error: unknown) =>
+      error instanceof AppServerError &&
+      error.code === "operation_forbidden" &&
+      /archived.*unarchive/iu.test(error.message),
+  );
+  assert(archive !== undefined);
+  await archive;
+  const items = await journal.read(thread.id);
+  assert.deepEqual(items.slice(0, -1), before);
+  assert.equal(items.at(-1)?.type, "user_message_queued");
+  assert.equal((await server.readThread(thread.id)).archived, true);
+  assert.equal(samples, 0);
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0]?.code, "operation_forbidden");
+  assert.equal(failures[0]?.clientId, "queue-race");
+});
+
+test("archived start and queue preserve default behavior when the admission fence is omitted", async () => {
+  const server = createServer();
+  const thread = await server.startThread();
+  await server.setThreadArchived(thread.id, true);
+  const first = await server.startTurn(thread.id, "existing caller");
+  await first.done;
+  const completed = testDeferred<void>();
+  server.subscribe((event) => {
+    if (event.type === "turn_completed") completed.resolve();
+  });
+  await server.queueMessage(
+    thread.id,
+    "existing queued caller",
+    "default-queue",
+  );
+  await completed.promise;
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(snapshot.archived, true);
+  assert.equal(snapshot.turns.length, 2);
+  assert(snapshot.turns.every((turn) => turn.status === "completed"));
 });
 
 test("persists user-facing names outside the canonical ItemList", async () => {
@@ -2544,6 +2773,26 @@ test("soft steer stays in one Turn and forces a new sample after streamed output
   });
   await firstSampleEntered.promise;
 
+  await server.queueMessage(thread.id, "queued request", "queued-client-id");
+  await assert.rejects(
+    server.steerTurn(thread.id, active.id, "late steer", {
+      clientId: "queued-client-id",
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "idempotency_conflict",
+  );
+  const queued = (await server.readThread(thread.id)).items.find(
+    (item) =>
+      item.type === "user_message_queued" &&
+      item.clientId === "queued-client-id",
+  );
+  assert(queued?.type === "user_message_queued");
+  await server.cancelQueuedMessages(thread.id, [
+    { queuedItemId: queued.id, clientId: queued.clientId },
+  ]);
+
   const steered = await server.steerTurn(
     thread.id,
     active.id,
@@ -3080,6 +3329,216 @@ test("failed sample trace survives journal reload without executing a queued too
   }
 });
 
+test("opted-in queued messages share one next Turn without losing canonical identity", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const finished = testDeferred<void>();
+  const sampled: string[][] = [];
+  const model: ModelAdapter = {
+    provider: "queue-batch-test",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      sampled.push(
+        request.messages.flatMap((message) =>
+          message.role !== "user"
+            ? []
+            : [
+                "text" in message
+                  ? message.text
+                  : message.content
+                      .filter((part) => part.type === "text")
+                      .map((part) => part.text)
+                      .join("\n"),
+              ],
+        ),
+      );
+      if (sampled.length === 1) {
+        entered.resolve();
+        await release.promise;
+      }
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const server = createServer({
+    model,
+    modelCatalog: new StaticModelCatalog([
+      {
+        id: "fake",
+        isDefault: true,
+        contextWindow: 32_768,
+        inputModalities: ["text", "image"],
+      },
+    ]),
+  });
+  let completions = 0;
+  server.subscribe((event) => {
+    if (event.type === "turn_completed" && ++completions === 2)
+      finished.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  for (const [index, text] of ["same", "same"].entries()) {
+    await server.queueMessage(thread.id, text, `batch-${index}`, {
+      deliveryMode: "batch-next",
+    });
+  }
+  await assert.rejects(server.queueMessage(thread.id, "same", "batch-0"), {
+    code: "idempotency_conflict",
+  });
+  const attachment = await server.importImageBytes(png1x1());
+  await server.queueMessage(
+    thread.id,
+    [
+      { type: "text", text: "third" },
+      { type: "image", attachment },
+    ],
+    "batch-2",
+    { deliveryMode: "batch-next" },
+  );
+  release.resolve();
+  await first.done;
+  await finished.promise;
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(snapshot.turns.length, 2);
+  assert.deepEqual(
+    snapshot.items
+      .filter((item) => item.type === "user_message")
+      .map((item) => item.clientId),
+    [undefined, "batch-0", "batch-1", "batch-2"],
+  );
+  assert.deepEqual(sampled[1]?.slice(-3), ["same", "same", "third"]);
+  assert.deepEqual(
+    snapshot.items.filter((item) => item.type === "user_message").at(-1)
+      ?.content,
+    [
+      { type: "text", text: "third" },
+      { type: "image", attachment },
+    ],
+  );
+  assert.equal(pendingQueuedMessages(snapshot.items).length, 0);
+});
+
+test("live same-thread projection clears each identical queue entry only on canonical acceptance", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const finished = testDeferred<void>();
+  let calls = 0;
+  const server = createServer({
+    model: {
+      provider: "blocked-live-queue",
+      async *stream(): AsyncIterable<ModelEvent> {
+        if (++calls === 1) {
+          entered.resolve();
+          await release.promise;
+        }
+        yield { type: "text_delta", delta: "done" };
+      },
+    },
+  });
+  let completions = 0;
+  server.subscribe((event) => {
+    if (event.type === "turn_completed" && ++completions === 3)
+      finished.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  const initial = await server.readThread(thread.id);
+  let visible: ZenXThread = {
+    ...projectThread(initial, { includeTurns: true }),
+    canonicalItems: initial.items,
+  };
+  const evidence: string[][] = [];
+  server.subscribe((event) => {
+    visible = applyNativeThreadEvent(visible, event);
+    if (
+      event.type === "item_completed" &&
+      (event.item.type === "user_message_queued" ||
+        event.item.type === "user_message")
+    ) {
+      evidence.push(visible.queuedMessages?.map((item) => item.clientId) ?? []);
+    }
+  });
+  await server.queueMessage(thread.id, "same", "same-1");
+  await server.queueMessage(thread.id, "same", "same-2");
+  assert.equal(calls, 1); // The fake Provider remains active; no !shell shortcut.
+  assert.deepEqual(
+    visible.queuedMessages?.map((item) => item.clientId),
+    ["same-1", "same-2"],
+  );
+  release.resolve();
+  await first.done;
+  await finished.promise;
+  assert.deepEqual(evidence, [
+    ["same-1"],
+    ["same-1", "same-2"],
+    ["same-2"],
+    [],
+  ]);
+  assert.deepEqual(visible.queuedMessages, []);
+});
+
+test("batch admission stops at legacy items and appends after the boundary wait", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const batchStarted = testDeferred<void>();
+  const releaseBatch = testDeferred<void>();
+  const finished = testDeferred<void>();
+  let calls = 0;
+  const server = createServer({
+    model: {
+      provider: "batch-boundary",
+      async *stream(): AsyncIterable<ModelEvent> {
+        calls++;
+        if (calls === 1) {
+          entered.resolve();
+          await release.promise;
+        }
+        if (calls === 2) {
+          batchStarted.resolve();
+          await releaseBatch.promise;
+        }
+        yield { type: "text_delta", delta: "done" };
+      },
+    },
+  });
+  let completions = 0;
+  server.subscribe((event) => {
+    if (event.type === "turn_completed" && ++completions === 4)
+      finished.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  await server.queueMessage(thread.id, "batch-a", "a", {
+    deliveryMode: "batch-next",
+  });
+  await server.queueMessage(thread.id, "batch-b", "b", {
+    deliveryMode: "batch-next",
+  });
+  await server.queueMessage(thread.id, "legacy", "legacy");
+  await server.queueMessage(thread.id, "batch-c", "c", {
+    deliveryMode: "batch-next",
+  });
+  release.resolve();
+  await first.done;
+  await batchStarted.promise;
+  await server.queueMessage(thread.id, "late", "late", {
+    deliveryMode: "batch-next",
+  });
+  releaseBatch.resolve();
+  await finished.promise;
+  const snapshot = await server.readThread(thread.id);
+  assert.deepEqual(
+    snapshot.turns.map((turn) =>
+      turn.items
+        .filter((item) => item.type === "user_message")
+        .map((item) => item.clientId),
+    ),
+    [[undefined], ["a", "b"], ["legacy"], ["c", "late"]],
+  );
+});
+
 test("queued input waits for the active turn and drains in FIFO order", async () => {
   const release = testDeferred<void>();
   const entered = testDeferred<void>();
@@ -3181,4 +3640,1064 @@ test("queued input survives restart and pauses after interruption until explicit
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("batch intent survives interrupted restart and explicitly resumes once", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-batch-reload-"));
+  try {
+    const entered = testDeferred<void>();
+    const server = createServer({
+      journal: new JsonlThreadJournal(directory),
+      model: {
+        provider: "batch-restart",
+        async *stream(request): AsyncIterable<ModelEvent> {
+          entered.resolve();
+          await new Promise<void>((_resolve, reject) =>
+            request.signal.addEventListener(
+              "abort",
+              () => reject(request.signal.reason),
+              { once: true },
+            ),
+          );
+        },
+      },
+    });
+    const thread = await server.startThread();
+    const first = await server.startTurn(thread.id, "first");
+    await entered.promise;
+    for (const id of ["one", "two", "three"])
+      await server.queueMessage(thread.id, id, id, {
+        deliveryMode: "batch-next",
+      });
+    await server.interruptTurn(thread.id, first.id);
+    await first.done;
+    const restored = createServer({
+      journal: new JsonlThreadJournal(directory),
+      model: {
+        provider: "batch-restart",
+        async *stream() {
+          yield { type: "text_delta" as const, delta: "done" };
+        },
+      },
+    });
+    const pending = pendingQueuedMessages(
+      (await restored.readThread(thread.id)).items,
+    );
+    assert.deepEqual(
+      pending.map((item) => item.deliveryMode),
+      ["batch-next", "batch-next", "batch-next"],
+    );
+    const finished = testDeferred<void>();
+    restored.subscribe((event) => {
+      if (event.type === "turn_completed") finished.resolve();
+    });
+    await restored.resumeQueue(thread.id);
+    await finished.promise;
+    const snapshot = await restored.readThread(thread.id);
+    assert.deepEqual(
+      snapshot.turns
+        .at(-1)
+        ?.items.filter((item) => item.type === "user_message")
+        .map((item) => item.clientId),
+      ["one", "two", "three"],
+    );
+    assert.deepEqual(pendingQueuedMessages(snapshot.items), []);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("automatic and explicit batch admission reject the actual undeliverable Item without retrying", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const failure = testDeferred<void>();
+  const completed = testDeferred<void>();
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "queue-admission-qa",
+    async *stream(): AsyncIterable<ModelEvent> {
+      if (++samples === 1) {
+        entered.resolve();
+        await release.promise;
+      }
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const store = new InMemoryAttachmentStore();
+  const server = createServer({
+    model,
+    attachments: store,
+    modelCatalog: new StaticModelCatalog([
+      {
+        id: "images",
+        isDefault: true,
+        contextWindow: 32_768,
+        inputModalities: ["text", "image"],
+      },
+      { id: "text", contextWindow: 32_768, inputModalities: ["text"] },
+    ]),
+  });
+  const events: AppServerEvent[] = [];
+  const otherWindow: AppServerEvent[] = [];
+  server.subscribe((event) => {
+    if (
+      event.type === "queue_failed" ||
+      event.type === "queue_admission_started"
+    ) {
+      events.push(event);
+      if (event.type === "queue_failed") failure.resolve();
+    }
+    if (
+      event.type === "turn_completed" &&
+      event.status === "completed" &&
+      ++completions === 2
+    )
+      completed.resolve();
+  });
+  server.subscribe((event) => {
+    if (event.type === "queue_failed") otherWindow.push(event);
+  });
+  let completions = 0;
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  const image = await server.importImageBytes(png1x1());
+  await server.queueMessage(thread.id, "text-first", "batch-text", {
+    deliveryMode: "batch-next",
+  });
+  await server.queueMessage(
+    thread.id,
+    [{ type: "image", attachment: image }],
+    "batch-image",
+    { deliveryMode: "batch-next" },
+  );
+  const queued = pendingQueuedMessages(
+    (await server.readThread(thread.id)).items,
+  );
+  assert.equal(queued.length, 2);
+  await server.updateThreadSettings(thread.id, { model: "text" });
+  release.resolve();
+  await first.done;
+  await failure.promise;
+  const failures = () =>
+    events.filter((entry) => entry.type === "queue_failed");
+  assert.equal(failures().length, 1);
+  assert.deepEqual(failures()[0], {
+    type: "queue_failed",
+    revision: 0,
+    threadId: thread.id,
+    queuedItemId: queued[1]!.id,
+    clientId: "batch-image",
+    attemptId: failures()[0]!.attemptId,
+    code: "image_input_unsupported",
+    message:
+      "The selected model cannot accept images. Choose an image-capable model, then Continue queue.",
+  });
+  assert.equal(otherWindow.length, 1);
+  assert.equal(samples, 1);
+  assert.deepEqual(
+    pendingQueuedMessages((await server.readThread(thread.id)).items).map(
+      (item) => item.clientId,
+    ),
+    ["batch-text", "batch-image"],
+  );
+  await assert.rejects(server.resumeQueue(thread.id), {
+    code: "image_input_unsupported",
+  });
+  assert.equal(failures().length, 2); // one explicit rejected attempt, no background duplicate
+  assert.notEqual(failures()[0]!.attemptId, failures()[1]!.attemptId);
+  await server.updateThreadSettings(thread.id, { model: "images" });
+  await server.resumeQueue(thread.id);
+  await completed.promise;
+  const restored = await server.readThread(thread.id);
+  assert.deepEqual(
+    restored.turns
+      .at(-1)
+      ?.items.filter((item) => item.type === "user_message")
+      .map((item) => item.clientId),
+    ["batch-text", "batch-image"],
+  );
+  assert.equal(pendingQueuedMessages(restored.items).length, 0);
+  assert.equal(samples, 2);
+  assert.equal(failures().length, 2);
+});
+
+test("lost queued attachment produces a safe native failure and keeps the canonical Item", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const failed = testDeferred<void>();
+  const finished = testDeferred<void>();
+  let calls = 0;
+  let missing = false;
+  const attachments = new InMemoryAttachmentStore();
+  const read = attachments.read.bind(attachments);
+  attachments.read = async (reference) => {
+    if (missing)
+      throw new AttachmentStoreError(
+        "attachment_missing",
+        "secret-token-from-provider-request",
+      );
+    return await read(reference);
+  };
+  const server = createServer({
+    attachments,
+    model: {
+      provider: "lost-attachment",
+      async *stream(): AsyncIterable<ModelEvent> {
+        if (++calls === 1) {
+          entered.resolve();
+          await release.promise;
+        }
+        yield { type: "text_delta", delta: "done" };
+      },
+    },
+    modelCatalog: new StaticModelCatalog([
+      {
+        id: "fake",
+        isDefault: true,
+        contextWindow: 32_768,
+        inputModalities: ["text", "image"],
+      },
+    ]),
+  });
+  const failures: Extract<AppServerEvent, { type: "queue_failed" }>[] = [];
+  let completions = 0;
+  server.subscribe((event) => {
+    if (event.type === "queue_failed") {
+      failures.push(event);
+      failed.resolve();
+    }
+    if (
+      event.type === "turn_completed" &&
+      event.status === "completed" &&
+      ++completions === 2
+    )
+      finished.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  const image = await server.importImageBytes(png1x1());
+  await server.queueMessage(
+    thread.id,
+    [{ type: "image", attachment: image }],
+    "lost-image",
+  );
+  missing = true;
+  release.resolve();
+  await first.done;
+  await failed.promise;
+  assert.equal(failures[0]?.code, "attachment_missing");
+  assert.equal(JSON.stringify(failures).includes("secret-token"), false);
+  assert.equal(calls, 1);
+  assert.deepEqual(
+    pendingQueuedMessages((await server.readThread(thread.id)).items).map(
+      (item) => item.clientId,
+    ),
+    ["lost-image"],
+  );
+  missing = false;
+  await server.resumeQueue(thread.id);
+  await finished.promise;
+  assert.deepEqual(
+    pendingQueuedMessages((await server.readThread(thread.id)).items),
+    [],
+  );
+  assert.equal(calls, 2);
+});
+
+test("concurrent explicit batch resumes share late second-item launch rejection and return after ready", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const enteredSecond = testDeferred<void>();
+  const releaseSecond = testDeferred<void>();
+  const autoFailed = testDeferred<void>();
+  const finished = testDeferred<void>();
+  let calls = 0;
+  let reads = 0;
+  let failAt = Number.POSITIVE_INFINITY;
+  const attachments = new InMemoryAttachmentStore();
+  const read = attachments.read.bind(attachments);
+  attachments.read = async (attachment) => {
+    if (++reads === failAt)
+      throw new AttachmentStoreError(
+        "attachment_missing",
+        "secret launch payload",
+      );
+    return await read(attachment);
+  };
+  const model: ModelAdapter = {
+    provider: "resume-admission-boundary",
+    async *stream(): AsyncIterable<ModelEvent> {
+      if (++calls === 1) {
+        entered.resolve();
+        await release.promise;
+      } else if (calls === 2) {
+        enteredSecond.resolve();
+        await releaseSecond.promise;
+      }
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const server = createServer({
+    model,
+    attachments,
+    modelCatalog: new StaticModelCatalog([
+      {
+        id: "images",
+        isDefault: true,
+        contextWindow: 32_768,
+        inputModalities: ["text", "image"],
+      },
+      { id: "text-only", contextWindow: 32_768, inputModalities: ["text"] },
+    ]),
+  });
+  const failures: Extract<AppServerEvent, { type: "queue_failed" }>[] = [];
+  const attempts: Extract<
+    AppServerEvent,
+    { type: "queue_admission_started" }
+  >[] = [];
+  let completions = 0;
+  server.subscribe((event) => {
+    if (event.type === "queue_failed") {
+      failures.push(event);
+      autoFailed.resolve();
+    }
+    if (event.type === "queue_admission_started") attempts.push(event);
+    if (
+      event.type === "turn_completed" &&
+      event.status === "completed" &&
+      ++completions === 2
+    )
+      finished.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  const image = await server.importImageBytes(png1x1());
+  await server.queueMessage(thread.id, "first batched", "batch-text", {
+    deliveryMode: "batch-next",
+  });
+  await server.queueMessage(
+    thread.id,
+    [{ type: "image", attachment: image }],
+    "batch-image",
+    { deliveryMode: "batch-next" },
+  );
+  const pending = pendingQueuedMessages(
+    (await server.readThread(thread.id)).items,
+  );
+  await server.updateThreadSettings(thread.id, { model: "text-only" });
+  release.resolve();
+  await first.done;
+  await autoFailed.promise;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(failures[0]?.clientId, "batch-image");
+  assert.equal(calls, 1);
+  await server.updateThreadSettings(thread.id, { model: "images" });
+  reads = 0;
+  failAt = 2; // first preflight read succeeds; second read inside #launchTurn fails.
+  const rejected = await Promise.allSettled([
+    server.resumeQueue(thread.id),
+    server.resumeQueue(thread.id),
+  ]);
+  assert.deepEqual(
+    rejected.map((entry) => entry.status),
+    ["rejected", "rejected"],
+  );
+  assert.deepEqual(
+    rejected.map((entry) =>
+      entry.status === "rejected" && entry.reason instanceof AppServerError
+        ? entry.reason.code
+        : null,
+    ),
+    ["attachment_missing", "attachment_missing"],
+  );
+  assert.equal(reads, 2);
+  assert.equal(calls, 1);
+  assert.equal(failures.length, 2); // one automatic + one explicit attempt, not per caller
+  assert.equal(failures[1]?.queuedItemId, pending[1]?.id);
+  assert.equal(failures[1]?.clientId, "batch-image");
+  assert.equal(
+    JSON.stringify(failures).includes("secret launch payload"),
+    false,
+  );
+  assert.equal(
+    attempts.filter((entry) => entry.attemptId === failures[1]?.attemptId)
+      .length,
+    2,
+  );
+  assert.deepEqual(
+    pendingQueuedMessages((await server.readThread(thread.id)).items).map(
+      (entry) => entry.clientId,
+    ),
+    ["batch-text", "batch-image"],
+  );
+
+  failAt = Number.POSITIVE_INFINITY;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let admitted = false;
+  try {
+    admitted = await Promise.race([
+      Promise.all([
+        server.resumeQueue(thread.id),
+        server.resumeQueue(thread.id),
+      ]).then(() => true),
+      new Promise<false>((resolve) => {
+        timeout = setTimeout(() => resolve(false), 1_500);
+      }),
+    ]);
+    assert.equal(
+      admitted,
+      true,
+      "first batch admission must not wait for the blocked Provider or all queue turns",
+    );
+    await enteredSecond.promise;
+    const during = await server.readThread(thread.id);
+    assert.equal(during.turns.at(-1)?.status, "inProgress");
+    assert.deepEqual(
+      during.turns
+        .at(-1)
+        ?.items.filter((item) => item.type === "user_message")
+        .map((item) => item.clientId),
+      ["batch-text", "batch-image"],
+    );
+  } finally {
+    clearTimeout(timeout);
+    releaseSecond.resolve();
+  }
+  await finished.promise;
+  assert.equal(calls, 2);
+  assert.equal(failures.length, 2);
+  assert.deepEqual(
+    pendingQueuedMessages((await server.readThread(thread.id)).items),
+    [],
+  );
+});
+
+test("a successfully admitted queued Turn that later fails is not another admission failure", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const enteredSecond = testDeferred<void>();
+  const releaseSecond = testDeferred<void>();
+  const autoFailed = testDeferred<void>();
+  const turnFailed = testDeferred<void>();
+  let calls = 0;
+  const model: ModelAdapter = {
+    provider: "post-admission-failure",
+    async *stream(): AsyncIterable<ModelEvent> {
+      if (++calls === 1) {
+        entered.resolve();
+        await release.promise;
+        yield { type: "text_delta", delta: "first completed" };
+      } else {
+        enteredSecond.resolve();
+        await releaseSecond.promise;
+        throw new Error(
+          "Model failed after canonical user message was accepted",
+        );
+      }
+    },
+  };
+  const server = createServer({
+    model,
+    modelCatalog: new StaticModelCatalog([
+      {
+        id: "images",
+        isDefault: true,
+        contextWindow: 32_768,
+        inputModalities: ["text", "image"],
+      },
+      { id: "text-only", contextWindow: 32_768, inputModalities: ["text"] },
+    ]),
+  });
+  let admissionFailures = 0;
+  server.subscribe((event) => {
+    if (event.type === "queue_failed") {
+      admissionFailures++;
+      autoFailed.resolve();
+    }
+    if (event.type === "turn_completed" && event.status === "failed")
+      turnFailed.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  const image = await server.importImageBytes(png1x1());
+  await server.queueMessage(
+    thread.id,
+    [{ type: "image", attachment: image }],
+    "admitted-then-failed",
+  );
+  await server.updateThreadSettings(thread.id, { model: "text-only" });
+  release.resolve();
+  await first.done;
+  await autoFailed.promise;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await server.updateThreadSettings(thread.id, { model: "images" });
+  try {
+    await server.resumeQueue(thread.id); // first message committed, Provider may still run
+    await enteredSecond.promise;
+    const running = await server.readThread(thread.id);
+    assert.equal(running.turns.at(-1)?.status, "inProgress");
+    assert.deepEqual(pendingQueuedMessages(running.items), []);
+    assert.equal(calls, 2);
+  } finally {
+    releaseSecond.resolve();
+  }
+  await turnFailed.promise;
+  assert.equal(admissionFailures, 1); // earlier auto-preflight only
+  const after = await server.readThread(thread.id);
+  assert.equal(after.turns.at(-1)?.status, "failed");
+  assert.deepEqual(
+    after.items.filter(
+      (item) =>
+        item.type === "user_message" &&
+        item.clientId === "admitted-then-failed",
+    ).length,
+    1,
+  );
+  assert.deepEqual(pendingQueuedMessages(after.items), []);
+});
+
+test("cancels one queued batch member canonically without reordering or restarting it", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const finished = testDeferred<void>();
+  let calls = 0;
+  const journal = new InMemoryThreadJournal();
+  const model: ModelAdapter = {
+    provider: "queue-cancel-batch",
+    async *stream(): AsyncIterable<ModelEvent> {
+      if (++calls === 1) {
+        entered.resolve();
+        await release.promise;
+      }
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const server = createServer({ journal, model });
+  let completions = 0;
+  server.subscribe((event) => {
+    if (
+      event.type === "turn_completed" &&
+      event.status === "completed" &&
+      ++completions === 2
+    )
+      finished.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "running");
+  await entered.promise;
+  for (const [index, text] of ["alpha", "beta", "gamma"].entries())
+    await server.queueMessage(thread.id, text, `batch-${index}`, {
+      deliveryMode: "batch-next",
+    });
+  const queued = pendingQueuedMessages(
+    (await server.readThread(thread.id)).items,
+  );
+  const target = { queuedItemId: queued[1]!.id, clientId: queued[1]!.clientId };
+  assert.deepEqual(
+    (await server.cancelQueuedMessages(thread.id, [target]))[0],
+    { ...target, status: "cancelled" },
+  );
+  assert.deepEqual(
+    (await server.cancelQueuedMessages(thread.id, [target]))[0]?.status,
+    "already_cancelled",
+  );
+  assert.deepEqual(
+    (
+      await server.cancelQueuedMessages(thread.id, [
+        { ...target, clientId: "wrong" },
+      ])
+    )[0]?.status,
+    "not_found",
+  );
+  assert.deepEqual(
+    pendingQueuedMessages((await server.readThread(thread.id)).items).map(
+      (item) => item.clientId,
+    ),
+    ["batch-0", "batch-2"],
+  );
+  assert.equal(calls, 1);
+  await assert.rejects(
+    server.queueMessage(thread.id, "beta", "batch-1", {
+      deliveryMode: "batch-next",
+    }),
+    { code: "queue_id_cancelled" },
+  );
+  await assert.rejects(
+    server.startTurn(thread.id, "beta", { clientId: "batch-1" }),
+    { code: "queue_id_cancelled" },
+  );
+  release.resolve();
+  await first.done;
+  await finished.promise;
+  const snapshot = await server.readThread(thread.id);
+  assert.deepEqual(
+    snapshot.turns
+      .at(-1)
+      ?.items.filter((item) => item.type === "user_message")
+      .map((item) => item.clientId),
+    ["batch-0", "batch-2"],
+  );
+  assert.equal(
+    snapshot.items.filter(
+      (item) =>
+        item.type === "user_message_queue_cancelled" &&
+        item.queuedItemId === target.queuedItemId,
+    ).length,
+    1,
+  );
+  assert.equal(
+    snapshot.items.filter((item) => item.type === "user_message_queued").length,
+    3,
+  );
+  assert.equal(
+    snapshot.items.some(
+      (item) => item.type === "user_message" && item.clientId === "batch-1",
+    ),
+    false,
+  );
+  assert.deepEqual(
+    pendingQueuedMessages(
+      (await createServer({ journal, model }).readThread(thread.id)).items,
+    ),
+    [],
+  );
+  const copied = await server.forkThread({
+    sourceThreadId: thread.id,
+    through: { type: "latest-complete" },
+    workspace: { type: "same-directory" },
+  });
+  const copiedQueued = copied.items.find(
+    (item) =>
+      item.type === "user_message_queued" && item.clientId === "batch-1",
+  );
+  const copiedCancel = copied.items.find(
+    (item) =>
+      item.type === "user_message_queue_cancelled" &&
+      item.clientId === "batch-1",
+  );
+  assert.ok(copiedQueued);
+  assert.equal(copiedCancel?.type, "user_message_queue_cancelled");
+  if (copiedCancel?.type !== "user_message_queue_cancelled")
+    throw new Error("Canceled Item missing in copied history");
+  assert.equal(copiedCancel.queuedItemId, copiedQueued.id);
+  assert.deepEqual(pendingQueuedMessages(copied.items), []);
+  assert.equal(calls, 2);
+});
+
+test("cancellation during a blocked preflight recaptures only still-pending FIFO", async () => {
+  const enteredTurn = testDeferred<void>();
+  const releaseTurn = testDeferred<void>();
+  const enteredRead = testDeferred<void>();
+  const releaseRead = testDeferred<void>();
+  const finished = testDeferred<void>();
+  let calls = 0;
+  let blockRead = false;
+  const attachments = new InMemoryAttachmentStore();
+  const originalRead = attachments.read.bind(attachments);
+  attachments.read = async (reference) => {
+    if (blockRead) {
+      blockRead = false;
+      enteredRead.resolve();
+      await releaseRead.promise;
+    }
+    return await originalRead(reference);
+  };
+  const model: ModelAdapter = {
+    provider: "cancel-preflight",
+    async *stream(): AsyncIterable<ModelEvent> {
+      if (++calls === 1) {
+        enteredTurn.resolve();
+        await releaseTurn.promise;
+      }
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const server = createServer({
+    attachments,
+    model,
+    modelCatalog: new StaticModelCatalog([
+      {
+        id: "fake",
+        isDefault: true,
+        contextWindow: 32768,
+        inputModalities: ["text", "image"],
+      },
+    ]),
+  });
+  let completions = 0;
+  let failures = 0;
+  server.subscribe((event) => {
+    if (event.type === "queue_failed") failures++;
+    if (
+      event.type === "turn_completed" &&
+      event.status === "completed" &&
+      ++completions === 2
+    )
+      finished.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await enteredTurn.promise;
+  const attachment = await server.importImageBytes(png1x1());
+  await server.queueMessage(thread.id, "first batch", "kept", {
+    deliveryMode: "batch-next",
+  });
+  await server.queueMessage(
+    thread.id,
+    [{ type: "image", attachment }],
+    "cancel-in-preflight",
+    { deliveryMode: "batch-next" },
+  );
+  const canceled = pendingQueuedMessages(
+    (await server.readThread(thread.id)).items,
+  )[1]!;
+  blockRead = true;
+  releaseTurn.resolve();
+  await first.done;
+  await enteredRead.promise;
+  const result = await server.cancelQueuedMessages(thread.id, [
+    { queuedItemId: canceled.id, clientId: canceled.clientId },
+  ]);
+  assert.equal(result[0]?.status, "cancelled");
+  assert.equal(calls, 1);
+  releaseRead.resolve();
+  await finished.promise;
+  const after = await server.readThread(thread.id);
+  assert.deepEqual(
+    after.turns
+      .at(-1)
+      ?.items.filter((item) => item.type === "user_message")
+      .map((item) => item.clientId),
+    ["kept"],
+  );
+  assert.equal(
+    after.items.some(
+      (item) =>
+        item.type === "user_message" && item.clientId === "cancel-in-preflight",
+    ),
+    false,
+  );
+  assert.equal(failures, 0); // cancellation is not a failed Provider admission
+  assert.deepEqual(pendingQueuedMessages(after.items), []);
+  assert.equal(calls, 2);
+});
+
+test("launch reservation wins atomically over late cancel before canonical delivery", async () => {
+  const enteredRuntime = testDeferred<void>();
+  const releaseRuntime = testDeferred<void>();
+  const finished = testDeferred<void>();
+  let calls = 0;
+  const model: ModelAdapter = {
+    provider: "cancel-after-launch",
+    async *stream(): AsyncIterable<ModelEvent> {
+      calls++;
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const runtime = new (class extends AgentRuntime {
+    override async runTurn(options: RunTurnOptions): Promise<void> {
+      enteredRuntime.resolve();
+      await releaseRuntime.promise;
+      await super.runTurn(options);
+    }
+  })({
+    toolEnvironment: new ToolEnvironment({
+      runtimes: [new ShellToolRuntime()],
+    }),
+  });
+  const server = createServer({ model, runtime });
+  server.subscribe((event) => {
+    if (event.type === "turn_completed") finished.resolve();
+  });
+  const thread = await server.startThread();
+  const queuedRequest = server.queueMessage(
+    thread.id,
+    "send only once",
+    "reserved-client",
+  );
+  await enteredRuntime.promise;
+  const queued = pendingQueuedMessages(
+    (await server.readThread(thread.id)).items,
+  )[0]!;
+  assert.ok(queued); // user_message not yet committed, but launch owns the fence
+  assert.deepEqual(
+    (
+      await server.cancelQueuedMessages(thread.id, [
+        { queuedItemId: queued.id, clientId: queued.clientId },
+      ])
+    )[0]?.status,
+    "already_started",
+  );
+  releaseRuntime.resolve();
+  await queuedRequest;
+  await finished.promise;
+  const after = await server.readThread(thread.id);
+  assert.equal(
+    after.items.filter(
+      (item) =>
+        item.type === "user_message" && item.clientId === "reserved-client",
+    ).length,
+    1,
+  );
+  assert.equal(
+    after.items.some((item) => item.type === "user_message_queue_cancelled"),
+    false,
+  );
+  assert.deepEqual(pendingQueuedMessages(after.items), []);
+  assert.equal(calls, 1);
+});
+
+test("bulk cancel binds its original IDs and leaves later queued input untouched", async () => {
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const finished = testDeferred<void>();
+  let calls = 0;
+  const server = createServer({
+    model: {
+      provider: "bulk-cancel-snapshot",
+      async *stream(): AsyncIterable<ModelEvent> {
+        if (++calls === 1) {
+          entered.resolve();
+          await release.promise;
+        }
+        yield { type: "text_delta", delta: "done" };
+      },
+    },
+  });
+  let completed = 0;
+  server.subscribe((event) => {
+    if (
+      event.type === "turn_completed" &&
+      event.status === "completed" &&
+      ++completed === 2
+    )
+      finished.resolve();
+  });
+  const thread = await server.startThread();
+  const first = await server.startTurn(thread.id, "first");
+  await entered.promise;
+  await server.queueMessage(thread.id, "old one", "old-1", {
+    deliveryMode: "batch-next",
+  });
+  await server.queueMessage(thread.id, "old two", "old-2", {
+    deliveryMode: "batch-next",
+  });
+  const fixedTargets = pendingQueuedMessages(
+    (await server.readThread(thread.id)).items,
+  ).map((item) => ({ queuedItemId: item.id, clientId: item.clientId }));
+  await server.queueMessage(thread.id, "later", "new-later", {
+    deliveryMode: "batch-next",
+  });
+  assert.deepEqual(
+    (await server.cancelQueuedMessages(thread.id, fixedTargets)).map(
+      (item) => item.status,
+    ),
+    ["cancelled", "cancelled"],
+  );
+  assert.deepEqual(
+    pendingQueuedMessages((await server.readThread(thread.id)).items).map(
+      (item) => item.clientId,
+    ),
+    ["new-later"],
+  );
+  release.resolve();
+  await first.done;
+  await finished.promise;
+  const after = await server.readThread(thread.id);
+  assert.deepEqual(
+    after.turns
+      .at(-1)
+      ?.items.filter((item) => item.type === "user_message")
+      .map((item) => item.clientId),
+    ["new-later"],
+  );
+  assert.equal(
+    after.items.filter((item) => item.type === "user_message_queue_cancelled")
+      .length,
+    2,
+  );
+  assert.equal(calls, 2);
+});
+
+test("JSONL restart derives canceled versus pending input without synthetic recovery", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-queue-cancel-jsonl-"),
+  );
+  try {
+    const entered = testDeferred<void>();
+    const blocked: ModelAdapter = {
+      provider: "jsonl-cancel",
+      async *stream(request) {
+        entered.resolve();
+        await new Promise<void>((_resolve, reject) =>
+          request.signal.addEventListener(
+            "abort",
+            () => reject(request.signal.reason),
+            { once: true },
+          ),
+        );
+        yield { type: "text_delta" as const, delta: "unreachable" };
+      },
+    };
+    const server = createServer({
+      journal: new JsonlThreadJournal(directory),
+      model: blocked,
+    });
+    const thread = await server.startThread();
+    const active = await server.startTurn(thread.id, "first");
+    await entered.promise;
+    await server.queueMessage(thread.id, "canceled", "client-canceled");
+    await server.queueMessage(thread.id, "kept", "client-kept");
+    const queued = pendingQueuedMessages(
+      (await server.readThread(thread.id)).items,
+    );
+    assert.equal(
+      (
+        await server.cancelQueuedMessages(thread.id, [
+          { queuedItemId: queued[0]!.id, clientId: queued[0]!.clientId },
+        ])
+      )[0]?.status,
+      "cancelled",
+    );
+    await server.interruptTurn(thread.id, active.id);
+    await active.done;
+    const restored = createServer({
+      journal: new JsonlThreadJournal(directory),
+      model: {
+        provider: "jsonl-cancel",
+        async *stream() {
+          yield { type: "text_delta" as const, delta: "done" };
+        },
+      },
+    });
+    const before = await restored.readThread(thread.id);
+    assert.deepEqual(
+      pendingQueuedMessages(before.items).map((item) => item.clientId),
+      ["client-kept"],
+    );
+    assert.equal(
+      before.items.filter(
+        (item) => item.type === "user_message_queue_cancelled",
+      ).length,
+      1,
+    );
+    assert.equal(
+      (
+        await restored.cancelQueuedMessages(thread.id, [
+          { queuedItemId: queued[0]!.id, clientId: queued[0]!.clientId },
+        ])
+      )[0]?.status,
+      "already_cancelled",
+    );
+    const finished = testDeferred<void>();
+    restored.subscribe((event) => {
+      if (event.type === "turn_completed" && event.status === "completed")
+        finished.resolve();
+    });
+    await restored.resumeQueue(thread.id);
+    await finished.promise;
+    const after = await restored.readThread(thread.id);
+    assert.deepEqual(
+      after.items
+        .filter((item) => item.type === "user_message")
+        .map((item) => item.clientId),
+      [undefined, "client-kept"],
+    );
+    assert.deepEqual(pendingQueuedMessages(after.items), []);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("mixed bulk cancellation reports a delivered item without undoing it and cancels only the rest", async () => {
+  const enteredFirst = testDeferred<void>();
+  const releaseFirst = testDeferred<void>();
+  const enteredSecond = testDeferred<void>();
+  const releaseSecond = testDeferred<void>();
+  const acceptedFirstQueued = testDeferred<void>();
+  const finished = testDeferred<void>();
+  let calls = 0;
+  const server = createServer({
+    model: {
+      provider: "cancel-mixed",
+      async *stream(): AsyncIterable<ModelEvent> {
+        if (++calls === 1) {
+          enteredFirst.resolve();
+          await releaseFirst.promise;
+        }
+        if (calls === 2) {
+          enteredSecond.resolve();
+          await releaseSecond.promise;
+        }
+        yield { type: "text_delta", delta: "done" };
+      },
+    },
+  });
+  let completions = 0;
+  server.subscribe((event) => {
+    if (
+      event.type === "item_completed" &&
+      event.item.type === "user_message" &&
+      event.item.clientId === "first-queued"
+    )
+      acceptedFirstQueued.resolve();
+    if (
+      event.type === "turn_completed" &&
+      event.status === "completed" &&
+      ++completions === 2
+    )
+      finished.resolve();
+  });
+  const thread = await server.startThread();
+  const initial = await server.startTurn(thread.id, "initial");
+  await enteredFirst.promise;
+  await server.queueMessage(thread.id, "first queued", "first-queued");
+  await server.queueMessage(thread.id, "second queued", "second-queued");
+  const targets = pendingQueuedMessages(
+    (await server.readThread(thread.id)).items,
+  ).map((item) => ({ queuedItemId: item.id, clientId: item.clientId }));
+  releaseFirst.resolve();
+  await initial.done;
+  await acceptedFirstQueued.promise;
+  await enteredSecond.promise;
+  try {
+    assert.deepEqual(
+      (await server.cancelQueuedMessages(thread.id, targets)).map(
+        (item) => item.status,
+      ),
+      ["already_started", "cancelled"],
+    );
+    assert.deepEqual(
+      pendingQueuedMessages((await server.readThread(thread.id)).items),
+      [],
+    );
+  } finally {
+    releaseSecond.resolve();
+  }
+  await finished.promise;
+  const after = await server.readThread(thread.id);
+  assert.equal(
+    after.items.filter((item) => item.type === "user_message_queue_cancelled")
+      .length,
+    1,
+  );
+  assert.equal(
+    after.items.filter(
+      (item) =>
+        item.type === "user_message" && item.clientId === "first-queued",
+    ).length,
+    1,
+  );
+  assert.equal(
+    after.items.some(
+      (item) =>
+        item.type === "user_message" && item.clientId === "second-queued",
+    ),
+    false,
+  );
+  assert.equal(calls, 2);
 });

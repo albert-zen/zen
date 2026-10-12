@@ -1,3 +1,4 @@
+import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import * as React from "react";
 import { act } from "react";
@@ -36,7 +37,7 @@ test("directory picker navigates folders and keyboard focus, selects, and restor
 
     await pressKey(
       harness.dom,
-      harness.container.querySelector(".directory-picker-list")!,
+      document.querySelector(".directory-picker-list")!,
       "ArrowDown",
     );
     assert.equal(harness.dom.window.document.activeElement, button("Broken"));
@@ -52,7 +53,7 @@ test("directory picker navigates folders and keyboard focus, selects, and restor
 
     await pressKey(
       harness.dom,
-      harness.container.querySelector(".directory-picker-list")!,
+      document.querySelector(".directory-picker-list")!,
       "Backspace",
     );
     await waitFor(() => findButton("Broken"));
@@ -101,18 +102,18 @@ test("directory picker exposes failure, retries, and cancels with Escape", async
   try {
     await waitFor(() => findButton("Broken"));
     await click(button("Broken"));
-    await waitFor(() => harness.container.querySelector('[role="alert"]'));
-    assert.match(harness.container.textContent ?? "", /permission denied/u);
+    await waitFor(() => document.querySelector('[role="alert"]'));
+    assert.match(document.body.textContent ?? "", /permission denied/u);
     assert.equal(button("Add folder").hasAttribute("disabled"), true);
 
     await click(button("Try again"));
     await waitFor(() => currentSelection().endsWith("/docs/Broken"));
-    assert.equal(harness.container.querySelector('[role="alert"]'), null);
+    assert.equal(document.querySelector('[role="alert"]'), null);
     assert.equal(button("Add folder").hasAttribute("disabled"), false);
 
     await pressKey(
       harness.dom,
-      harness.container.querySelector('[role="dialog"]')!,
+      document.querySelector('[role="dialog"]')!,
       "Escape",
     );
     assert.equal(harness.cancelCount(), 1);
@@ -132,7 +133,7 @@ test("directory picker ignores Backspace before a root listing is available", as
     await waitFor(() => harness.listCalls.length === 1);
     await pressKey(
       harness.dom,
-      harness.container.querySelector(".directory-picker-list")!,
+      document.querySelector(".directory-picker-list")!,
       "Backspace",
     );
     assert.deepEqual(harness.listCalls, ["/"]);
@@ -141,7 +142,7 @@ test("directory picker ignores Backspace before a root listing is available", as
     await waitFor(() => currentSelection() === "/");
     await pressKey(
       harness.dom,
-      harness.container.querySelector(".directory-picker-list")!,
+      document.querySelector(".directory-picker-list")!,
       "Backspace",
     );
     assert.deepEqual(harness.listCalls, ["/"]);
@@ -220,7 +221,14 @@ async function mountPicker(
 }
 
 async function unmountPicker(harness: PickerHarness): Promise<void> {
+  const previous = harness.dom.window.document.querySelector(
+    '[data-before="picker"]',
+  );
+  assert.ok(previous);
   await act(async () => harness.root.unmount());
+  // Radix FocusScope restores focus in a deferred unmount callback. React act
+  // does not guarantee that timer has run; drain it before replacing the DOM.
+  await waitFor(() => harness.dom.window.document.activeElement === previous);
 }
 
 function listing(

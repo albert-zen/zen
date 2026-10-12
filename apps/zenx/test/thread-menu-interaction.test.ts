@@ -13,7 +13,7 @@ const noop = () => undefined;
 
 test("Thread menu manages keyboard focus through close and row removal", async () => {
   const dom = new JSDOM(
-    "<!doctype html><html><body><main id=outside></main><div id=root></div></body></html>",
+    "<!doctype html><html><body><button id=outside>Outside action</button><div id=root></div></body></html>",
     { url: "http://localhost" },
   );
   const previousGlobals = {
@@ -159,12 +159,16 @@ test("Thread menu manages keyboard focus through close and row removal", async (
     assert.equal(narrowMenu.dataset.placement, "right");
     assert.equal(narrowMenu.style.left, "8px");
     await act(async () => {
+      document.getElementById("outside")?.focus();
       document
         .getElementById("outside")
         ?.dispatchEvent(new dom.window.Event("pointerdown", { bubbles: true }));
       await Promise.resolve();
     });
-    assert.equal(document.activeElement, trigger);
+    assert.equal(
+      document.activeElement === document.getElementById("outside"),
+      true,
+    );
     assert.equal(document.querySelector('[role="menu"]'), null);
 
     await act(async () => trigger.click());

@@ -1,4 +1,5 @@
 import type { CanonicalItem } from "../../../../src/item.js";
+import { disclosureCallResults } from "./disclosure-history.js";
 import type { ModelTool } from "../../../../src/model.js";
 import type {
   ToolExecutionResult,
@@ -6,15 +7,25 @@ import type {
   ToolRuntime,
 } from "../../../../src/tool.js";
 import { ToolEnvironment } from "../../../../src/tool.js";
-import type { ZenXAvailablePlugin } from "./capabilities/types.js";
+import type {
+  ZenXAvailablePlugin,
+  ZenXPluginSnapshot,
+  ZenXPluginReadinessSummary,
+} from "./capabilities/types.js";
+import { pluginReadiness } from "../plugin-readiness.js";
 
 export const ZENX_PLUGIN_TOOL = "zenx_plugin";
+/** Builtin-owned disclosure metadata, never model instructions or a tool index. */
+export const PLUGIN_DISCLOSURE_CONTENT_TYPE = "zen/plugin-disclosure";
 
 export type AvailablePlugin = ZenXAvailablePlugin;
 
 /** Current Host-owned catalog view; lifecycle state stays outside the Thread. */
 export interface PluginDiscoveryCatalog {
   availablePlugins(): readonly AvailablePlugin[];
+  pluginSnapshot?(): ZenXPluginSnapshot;
+  pluginSummaries?(): readonly ZenXPluginReadinessSummary[];
+  pluginCatalogAvailable?(): boolean;
 }
 
 /** Persistent meta-tool whose ordinary result is the durable disclosure fact. */
@@ -23,9 +34,23 @@ export class PluginDiscoveryToolRuntime implements ToolRuntime {
   readonly specification: ModelTool = {
     name: this.name,
     description:
-      "Discover available ZenX plugins or read one plugin's main document and tool index.",
+      "Discover available ZenX plugins, inspect selected plugin readiness, or read one plugin's main document and tool index. Readiness never enables a plugin or approves tool permissions.",
     inputSchema: {
       oneOf: [
+        {
+          type: "object",
+          properties: {
+            operation: { const: "readiness" },
+            pluginIds: {
+              type: "array",
+              items: { type: "string", minLength: 1, maxLength: 128 },
+              minItems: 1,
+              maxItems: 32,
+            },
+          },
+          required: ["operation", "pluginIds"],
+          additionalProperties: false,
+        },
         {
           type: "object",
           properties: { operation: { const: "discover" } },
@@ -57,6 +82,25 @@ export class PluginDiscoveryToolRuntime implements ToolRuntime {
       throw new Error(`Unsupported tool: ${invocation.name}`);
     }
     invocation.signal.throwIfAborted();
+    if (invocation.arguments.operation === "readiness") {
+      const pluginIds = readReadinessPluginIds(invocation.arguments);
+      const summaries =
+        this.#catalog.pluginSummaries?.() ??
+        this.#catalog.pluginSnapshot?.().plugins;
+      if (!summaries || this.#catalog.pluginCatalogAvailable?.() === false)
+        throw new Error("Plugin readiness catalog is unavailable");
+      return {
+        output: JSON.stringify({
+          operation: "readiness",
+          plugins: pluginReadiness(summaries, pluginIds),
+          nextStep:
+            "Open Settings, then Plugins, for missing or disabled plugins. Read the enabled plugin's main document for its own configuration and readiness tools.",
+          permissionChecks:
+            "Tool permissions are checked on use. Ready does not mean approved, configured, or end-to-end verified.",
+        }),
+        exitCode: 0,
+      };
+    }
     const plugins = currentAvailablePlugins(this.#catalog, this.#environment)
       .map(cloneAvailablePlugin)
       .sort((left, right) => left.id.localeCompare(right.id));
@@ -76,6 +120,10 @@ export class PluginDiscoveryToolRuntime implements ToolRuntime {
       throw new Error(`ZenX plugin is not available: ${pluginId}`);
     }
     invocation.signal.throwIfAborted();
+    if (
+      !isPluginDisclosure({ version: 1, operation: "read", pluginId }, pluginId)
+    )
+      throw new Error("Invalid plugin disclosure identity");
     return {
       output: JSON.stringify({
         operation,
@@ -89,6 +137,8 @@ export class PluginDiscoveryToolRuntime implements ToolRuntime {
         },
       }),
       exitCode: 0,
+      contentType: PLUGIN_DISCLOSURE_CONTENT_TYPE,
+      structuredContent: { version: 1, operation: "read", pluginId },
     };
   }
 }
@@ -158,28 +208,33 @@ function currentAvailablePlugins(
 export function disclosedPluginIds(
   items: readonly CanonicalItem[],
 ): ReadonlySet<string> {
-  const pending = new Map<string, string>();
   const disclosed = new Set<string>();
-  for (const item of items) {
-    if (item.type === "tool_call") {
-      pending.delete(item.callId);
-      if (item.name !== ZENX_PLUGIN_TOOL) continue;
-      const pluginId = validReadArguments(item.arguments);
-      if (pluginId !== undefined) pending.set(item.callId, pluginId);
-      continue;
-    }
-    if (item.type !== "tool_result") continue;
-    const pluginId = pending.get(item.callId);
-    pending.delete(item.callId);
+  for (const { call, result: item } of disclosureCallResults(items)) {
+    if (call.name !== ZENX_PLUGIN_TOOL) continue;
+    const pluginId = validReadArguments(call.arguments);
     if (
       pluginId !== undefined &&
       item.exitCode === 0 &&
-      isSuccessfulReadResult(item.output, pluginId)
+      (item.contentType === PLUGIN_DISCLOSURE_CONTENT_TYPE
+        ? isPluginDisclosure(item.structuredContent, pluginId)
+        : isSuccessfulReadResult(item.output, pluginId))
     ) {
       disclosed.add(pluginId);
     }
   }
   return disclosed;
+}
+
+function isPluginDisclosure(value: unknown, pluginId: string): boolean {
+  return (
+    isRecord(value) &&
+    Object.keys(value).length === 3 &&
+    value.version === 1 &&
+    value.operation === "read" &&
+    value.pluginId === pluginId &&
+    pluginId.length <= 128 &&
+    /^[a-z0-9][a-z0-9._-]*$/u.test(pluginId)
+  );
 }
 
 function validReadArguments(
@@ -235,6 +290,22 @@ function readOperation(
   }
   if (validReadArguments(arguments_) !== undefined) return "read";
   throw new Error("zenx_plugin arguments must select discover or read");
+}
+
+function readReadinessPluginIds(arguments_: Record<string, unknown>): string[] {
+  const ids = arguments_.pluginIds;
+  if (
+    Object.keys(arguments_).length !== 2 ||
+    !Array.isArray(ids) ||
+    ids.length < 1 ||
+    ids.length > 32 ||
+    ids.some(
+      (id) =>
+        typeof id !== "string" || !/^[a-z0-9][a-z0-9._-]{0,127}$/u.test(id),
+    )
+  )
+    throw new Error("zenx_plugin.readiness requires 1–32 valid plugin IDs");
+  return ids as string[];
 }
 
 function readPluginId(arguments_: Record<string, unknown>): string {

@@ -1,3 +1,4 @@
+import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import React, { act, useState } from "react";
@@ -91,7 +92,7 @@ test("shared browser pages are peer workspace tabs and the type picker unmounts 
       ...document.querySelectorAll<HTMLButtonElement>(
         ".workspace-tab-types button",
       ),
-    ].find((e) => e.textContent === "Browser")!;
+    ].find((e) => e.querySelector("strong")?.textContent === "Browser")!;
     await act(async () => browser.click());
     assert.deepEqual(
       tabs().map((tab) => tab.textContent),

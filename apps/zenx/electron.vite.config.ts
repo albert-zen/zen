@@ -114,6 +114,8 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(__dirname, "src/main/index.ts"),
+          "fleet-bridge": resolve(__dirname, "src/main/fleet-bridge.ts"),
+          "fleet-relay-cli": resolve(__dirname, "src/main/fleet-relay-cli.ts"),
           "chrome-native-host-cli": resolve(
             __dirname,
             "src/main/chrome-native-host-cli.ts",

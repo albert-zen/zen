@@ -1,3 +1,4 @@
+import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
@@ -37,15 +38,13 @@ test("permission selector exposes three modes, waits for confirmed state and sho
     );
   try {
     await render();
-    const select = container.querySelector<HTMLButtonElement>(
+    const select = document.querySelector<HTMLButtonElement>(
       '[aria-label="File permissions"]',
     )!;
     assert.equal(select.textContent, "Full access");
     await React.act(async () => select.click());
     const options = [
-      ...container.querySelectorAll<HTMLButtonElement>(
-        '[role="menuitemradio"]',
-      ),
+      ...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
     ];
     assert.deepEqual(
       options.map((option) => option.querySelector("strong")?.textContent),
@@ -63,14 +62,14 @@ test("permission selector exposes three modes, waits for confirmed state and sho
     assert.deepEqual(changes, ["read-only"]);
     assert.equal(select.textContent, "Full access");
     assert.equal(document.activeElement, select);
-    assert.equal(container.querySelector('[role="menu"]'), null);
+    assert.equal(document.querySelector('[role="menu"]'), null);
     await render(true);
     assert.equal(select.disabled, true);
-    assert.ok(container.querySelector('[role="status"]'));
+    assert.ok(document.querySelector('[role="status"]'));
     await render(false, "Wait for the running tools to finish");
     assert.equal(select.textContent, "Full access");
     assert.match(
-      container.querySelector('[role="alert"]')!.textContent!,
+      document.querySelector('[role="alert"]')!.textContent!,
       /running tools/,
     );
     assert.equal(
@@ -86,7 +85,7 @@ test("permission selector exposes three modes, waits for confirmed state and sho
         }),
       ),
     );
-    assert.equal(container.querySelector('[role="menu"]'), null);
+    assert.equal(document.querySelector('[role="menu"]'), null);
     assert.equal(document.activeElement, select);
     await React.act(async () => select.click());
     await React.act(async () =>
@@ -94,14 +93,14 @@ test("permission selector exposes three modes, waits for confirmed state and sho
         new dom.window.Event("pointerdown", { bubbles: true }),
       ),
     );
-    assert.equal(container.querySelector('[role="menu"]'), null);
+    assert.equal(document.querySelector('[role="menu"]'), null);
     assert.deepEqual(changes, ["read-only"]);
     await render(false, null, true);
     assert.equal(select.textContent, "Approval required");
     await React.act(async () => select.click());
-    assert.equal(container.querySelector('[aria-checked="true"]'), null);
+    assert.equal(document.querySelector('[aria-checked="true"]'), null);
     await render(true);
-    assert.equal(container.querySelector('[role="menu"]'), null);
+    assert.equal(document.querySelector('[role="menu"]'), null);
   } finally {
     await React.act(async () => root.unmount());
     Object.assign(globalThis, previous);

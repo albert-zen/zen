@@ -1,6 +1,6 @@
 # ZenX UI/UX decisions
 
-更新日期：2026-09-01
+更新日期：2026-10-05
 
 ### Experiment / TBD：上下文检查器
 
@@ -79,11 +79,20 @@ Thread
 
 ### 2.4 Provider 与模型身份
 
-- Thread row 只显示 **Provider logo + model name**。
+- Thread row 以完整标题为第一层，第二层仅显示运行或待审批状态；Provider/model 降为标题 tooltip，当前生成配置仍在 Composer 中可见。
 - 预设 Provider 使用随 ZenX 分发的本地正式品牌 asset；未知 Provider 使用克制的 generic fallback。
 - Thread row 不显示 Provider 文本、内部 `modelProvider`、API/订阅标签或 Fake 品牌。
 - Provider 类型、账户、订阅状态、API key 和 endpoint 配置只在 Settings / onboarding 中出现，不进入 Thread 或 canonical Items。
 - Default model 影响新 Thread；已有 Thread 的当前模型以 ZAS Thread settings 为权威。Title model 与 Thread ModelCatalog 分离。
+
+### 2.5 Fleet 就绪与人工配对
+
+- Fleet 是任意 Agent 可发现的普通插件能力；PAW 只消费相同工具，预设不拥有设备、权限或特殊连接流程。默认安装保留用户显式 Disable / Uninstall 与既有工具权限。
+- Setup 的只读就绪检查只报告已知设备和当前准备条件，不扫描网络、不创建信任；不同网络之间必须已经有可达的可信 HTTPS 路径或已配置 relay。
+- 人工邀请只为已启用 Host 的既有 endpoint 创建五分钟单用配对码。接收端先核对 Host ID / endpoint，默认 Read Only、shell 关闭；明确确认后才配对并另行检查可达性。已配对与检查成功是分别呈现的事实。
+- Fleet Settings 以机器列表为主入口：一个 Connect machine 打开有焦点约束的连接对话框，先选邀请 / 既有 SSH / 手动 HTTPS 配对，再显示对应字段。配置 ID 和机器用途属于按需详情；空 ID 由当前机器名称派生唯一的 profile-local 标识，不改变远端 Host identity。已有设备的编辑 / 移除位于行内操作菜单，本机监听、证书、relay 与客户端授权在 Hosting & access disclosure 中。展开或切换连接方式不创建连接或扩张授权。
+- 新连接的普通字段仅在当前 Fleet 页面的 renderer 内保留，切换方式或取消后重开可继续填写；编辑既有机器的 Cancel 丢弃未保存修改。邀请、配对码、信任确认不进入这些保留字段。手动配对提交即清除代码，失败仍保留普通字段和就近错误，需要新的代码才能重试；重复提交只产生一次请求。
+- 邀请和配对码只存在于人工界面的易失交互与用户明确选择的复制动作中；不进入模型发现、保存的草稿或公共配置。取消、过期、离开页面或提交尝试清除输入；隐藏已发出的邀请不伪装成撤销远端授权。
 
 ## 3. Product shell 与导航
 
@@ -105,11 +114,11 @@ Thread
 - 默认桌面 Agent 页面是 **Thread Sidebar + Chat** 两栏。
 - Inbox 是品牌区的 icon-only 模式切换，不是 Projects / Inbox segmented control。Inbox 中每个 Thread 必须明确显示 Project 归属。
 - Sidebar 的 Thread 列表只展示 active Threads。Archived Threads 的查看与 Unarchive 统一位于 Settings，不在 Sidebar 提供 Active / Archived switch。
-- 已确认的 Sidebar anchors 是品牌区与 Inbox、Projects/active Threads，以及左下 Settings。可选 Plugin spaces 位于完整的 Projects group 之前，不能插入 Projects header 与 Project/Thread list 之间。
+- 已确认的 Sidebar anchors 是品牌区与 Inbox、Projects/active Threads，以及左下 Settings。插件功能入口与内建功能平级，位于完整的 Projects group 之前，不能插入 Projects header 与 Project/Thread list 之间。
 - **Settings** 是左下常规导航 row，不是浮动齿轮 tile。
-- 插件只能使用受控 Plugin spaces contribution slot；它们不能重排、隐藏或覆写 Inbox、New thread、Projects/Threads 或 Settings。
+- 插件只能使用受控导航 contribution slot；它们不能重排、隐藏或覆写 Inbox、New thread、Projects/Threads 或 Settings。
 
-New thread 可保留独立 row；它相对 Plugin spaces / Projects 的精确视觉顺序仍可继续迭代，但全局入口与 Project 内入口的选择和创建语义已经确定。
+New thread 可保留独立 row；它相对 插件入口 / Projects 的精确视觉顺序仍可继续迭代，但全局入口与 Project 内入口的选择和创建语义已经确定。
 
 ### 3.3 Project 与 Thread 创建
 
@@ -122,7 +131,7 @@ New thread 可保留独立 row；它相对 Plugin spaces / Projects 的精确视
 ### 3.4 原生应用菜单与按需面板
 
 - Packaged Windows/Linux 不安装 Electron 默认 application menu；macOS 只保留系统合规的 application、edit 和 window roles。原生菜单不得引入第二套产品导航。
-- 桌面窗口使用与产品壳连续的 integrated title bar，并把产品行、会话行与原生窗口控件分成明确的命中区域：macOS 顶行左侧为 traffic lights 留出空间并紧接 Sidebar 展开 / 收起入口，右侧直接承载 Thread 标题、cwd 与 Thread actions；ZenX mark / wordmark 与 Inbox 共同位于其下方的 Sidebar 产品行，因此左侧原生控件不会把右侧会话行整体下压。Windows 在顶行左侧显示 ZenX 品牌与 Inbox，并把 Sidebar 展开 / 收起保持为独立的顶行按钮，中间承载会话行，右侧为 minimize / maximize-restore / close 保留原生命中区；紧凑宽度可以把会话行移到原生控件下方的第二行，但不得重叠。展开时左侧顶行与整列 Sidebar 使用同一 Sidebar surface，右侧会话标题栏与 Workspace 使用同一 main surface；唯一的 1px 语义竖分割线从窗口顶部贯穿到底，右侧标题栏底线必须精确从该竖线开始，不使用圆角或 card 式壳层过渡。系统窗口控制仍由 Electron/OS 持有，产品按钮与 Thread 标题控件均是 no-drag，剩余表面才是 drag region。Sidebar 收起后 Chat 使用完整内容宽度，标题栏保留可恢复 Sidebar 的明确入口；该偏好只属于本机产品壳，不进入 Thread 或 canonical Items。
+- 桌面窗口使用与产品壳连续的 integrated title bar，并把产品行、会话行与原生窗口控件分成明确的命中区域：macOS 顶行左侧为 traffic lights 留出空间并紧接 Sidebar 展开 / 收起入口，右侧直接承载 Thread 标题、cwd 与 Thread actions；ZenX mark / wordmark 与 Inbox 共同位于其下方的 Sidebar 产品行，因此左侧原生控件不会把右侧会话行整体下压。Windows / Linux 在顶行左侧显示 ZenX 品牌与 Inbox，并保留独立的 Sidebar 展开 / 收起按钮；右侧顶行只留给原生 minimize / maximize-restore / close 和拖动区域。所有宽度下，会话标题、主操作区与右栏 Tab 都从第二行开始，左侧 Sidebar 保持原有起点，不随主区再下移。展开时左侧顶行与整列 Sidebar 使用同一 Sidebar surface，右侧会话标题栏与 Workspace 使用同一 main surface；唯一的 1px 语义竖分割线从窗口顶部贯穿到底，右侧标题栏底线必须精确从该竖线开始，不使用圆角或 card 式壳层过渡。系统窗口控制仍由 Electron/OS 持有，产品按钮与 Thread 标题控件均是 no-drag，剩余表面才是 drag region。Sidebar 收起后 Chat 使用完整内容宽度，标题栏保留可恢复 Sidebar 的明确入口；该偏好只属于本机产品壳，不进入 Thread 或 canonical Items。
 - 不提供常驻右侧 Activity rail。Tool details 留在聊天流内；Workspace/Artifact 使用按需面板。
 - Thread header 只保留一个按需工作区 icon entry；上下文与 cache telemetry 位于 Composer。不显示 Search 或 Archive 控件，也不使用常驻 “Workspace” 文本按钮、空 overflow 或装饰性状态控件。归档能力继续位于 Thread 管理菜单与 Settings。
 - 右侧工作区只有一个并排容器和一个顶部入口，不再叠加旧 Workspace 模态抽屉。顶层只显示实际内容 Tab（文件名、浏览器页面、Computer 或插件注册的视图），加号选择新内容类型；不再先按 Browser / Files 分类再选择二级内容。插件贡献进入加号选择器，打开后按自身 surface 展示；Trigger 与 Room 不硬编码为核心 tabs。关闭和展开始终避开原生标题栏控件。Markdown 使用连续可编辑的实时预览：光标进入或触及格式节点时局部露出源码，离开后恢复渲染，自动保存，不提供常规 Edit / Preview / Save 按钮；失败与磁盘冲突在文件内处理，不覆盖未保存输入。
@@ -144,7 +153,7 @@ New thread 可保留独立 row；它相对 Plugin spaces / Projects 的精确视
 - Project 按标题上下半区判断 before/after，插入线画在整个 Project group 的前/后边界；展开的线程数量不影响标题命中。Thread 按自身行的上下半区判断，插入线画在对应行边界。两层复用主题 accent 的亮线，线程排序期间列表位置保持稳定，松手后才保存顺序；离开目标、取消或结束拖动立即清除提示。
 - Project 在相同置顶状态的项目间排序；跨置顶分区不显示可投放提示、不产生 mutation。Thread 只接受同一 owning Project 内的 drop，不改变 cwd、selection、Pin、active Turn、menu、disclosure 或 archive semantics。
 - 拖动项目时暂时隐藏其子列表，保持组件实例与保存的展开偏好，结束或取消后恢复；标题的 aria-expanded 同步临时视觉状态。拖动线程不折叠 Project。
-- 拖动来源变淡，项目预览保留文件夹图标；线程预览复用原行的标题及厂商图标/模型名称两行样式，不添加线程图标，保留来源行尺寸及鼠标抓取坐标，避免拖起时跳到光标右侧；长标题省略。指针靠近 Sidebar 滚动区上/下边缘时按接近程度连续滚动，移回中央或移出区域停止。drop、dragend、Escape、失焦与卸载统一释放临时状态和滚动动画。
+- 拖动来源变淡，项目预览保留文件夹图标；线程预览复用原行的标题与当前状态样式，不添加线程图标，保留来源行尺寸及鼠标抓取坐标，避免拖起时跳到光标右侧；长标题省略。指针靠近 Sidebar 滚动区上/下边缘时按接近程度连续滚动，移回中央或移出区域停止。drop、dragend、Escape、失焦与卸载统一释放临时状态和滚动动画。
 - 当前不新增菜单上移/下移（用户明确低优先级）；保留既有键盘排序。
 - 聚焦 Project 标题或 Thread row 后可用 Alt+Arrow Up / Alt+Arrow Down 等价移动；完成或保存失败后，焦点返回同一对象。键盘与 pointer 路径使用同一 Settings mutation 与 reconciliation 规则。
 
@@ -204,15 +213,20 @@ ItemList replay，Renderer 不保存另一份 transcript authority。
 
 Composer 保持一个位置、几何和命中区域稳定的 primary action，只改变语义：
 
-| Run 状态 | Draft     | Primary action   |
-| -------- | --------- | ---------------- |
-| Running  | Empty     | Stop             |
-| Running  | Non-empty | Interrupt & Send |
-| Idle     | Non-empty | Send             |
-| Idle     | Empty     | Send disabled    |
+| Run 状态 | Draft     | Primary action     |
+| -------- | --------- | ------------------ |
+| Running  | Empty     | Stop               |
+| Running  | Non-empty | 当前配置的发送方式 |
+| Idle     | Non-empty | Send               |
+| Idle     | Empty     | Send disabled      |
 
 - 不拆成常驻 Stop、Steer 和 Send 三个按钮。
-- 运行中有草稿时，**Steer** 是保留当前 Turn 的显式次要动作；稳定 primary action 同时切换为 **Interrupt & Send**，用于中断当前路径并发送草稿。两者不得静默互相降级，也不得隐藏用户选择的是 soft steer 还是 hard steer。
+- 运行中有草稿时，primary action 与 Enter 使用现有全局发送偏好：Steer now 保留当前 Turn 并追加指导；Next turn 将排队消息一起交给下一轮；Each turn 让每条排队消息各自占用一轮；Interrupt & Send 中断当前路径后开始新轮。偏好未另行选择时沿用既有 soft steer 默认；UI 不改变已排队消息的分组或交付语义。
+- 第一层只显示既有 primary orb，不新增常驻展开按钮。orb 位于 Composer 最右侧，与右下圆角保持既有关系；hover 与 keyboard focus 打开同一个主题化非模态面板。primary 点击始终直接发送或中断，面板顶部只出现一次当前动作与后果说明，运行中其他动作只显示真实 modifier-Enter shortcut，不发明 modifier-click 或新的发送行为。
+- primary orb 保持 44px hit target 与既有较小可见圆。触摸点击直接执行当前 Send / Stop，不拦截为展开，也不添加常驻触摸选项按钮。面板内所有动作的 hit target 至少 44px 高。
+- 面板不冒充 tooltip 或纯 ARIA menu：它包含可聚焦的命令与已有全局偏好 Select，使用 nonmodal dialog。Arrow Up/Down 从 orb 进入面板，Tab 按普通控件顺序导航；primary disabled 时同一命中区域保留键盘可达性以编辑偏好。Escape 关闭并把面板拥有的焦点还给 orb（disabled 时为同位置的焦点区），普通 hover/focus 不抢焦点。真实 hover bridge 与短离开延迟覆盖 pointer gap；在面板内聚焦后保持可用，outside interaction 或 Escape 可关闭。Turn/context 变化丢弃旧动作，保留草稿；持续 hover 可以显示新的当前动作，但不得保留或执行旧 Turn 的动作。
+- Running 且无内容时 primary 保持红色 Stop / interrupt；纯空白文字按 Empty 处理。沿用既有 draft 判定：附件也是内容，因此只有附件时仍为发送动作，不能为了显示 Stop 丢弃附件。
+- Default while running 只在面板 footer 中编辑，复用共享 Select、主题、键盘与失败反馈；选择偏好从不发送消息，保存失败保留权威旧值，晚到回复不能覆盖更新的 Settings notification。
 - 状态切换不引发 Composer 几何跳动；按钮保持清晰图标、准确 `aria-label` / tooltip 和适合当前输入方式的 hit target。
 - Composer toolbar 只显示一个组合 **Model** 控件，按钮将当前模型与 effort 并列显示（例如 `5.6 Sol High`）；同一可达的键盘菜单分别进入 Model 与 Reasoning 选择，Reasoning 只列当前 `(providerProfileId, modelId)` 在 `model/list` 中明确支持的 effort。没有已配置 reasoning 控制的纯文本模型显示 **Text only**，并保持可运行；当前模型不在可运行目录时才显示 Unknown / unavailable，且不根据名称猜测选项。两项配置都只影响下一次 Turn，运行中的 Turn 保持启动时 selection。
 - 模型切换复用 App Server 的原子 Thread settings 更新；当前 effort 被目标支持时保留，否则使用目标模型的 default effort。运行中的 Turn 保持启动时冻结的 selection，变更从下一 Turn 生效。
@@ -246,7 +260,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 
 ### 4.6 Settings 与 onboarding
 
-- Settings 是由左下导航进入的 routed page。Settings 顶部动作的最终合同仍为 **TBD**；“不提供 Done”以及“只在 dirty 时显示或强调 Apply & restart”是当前设计实验，不是 durable semantics。
+- Settings 是由左下导航进入的 routed page。Host 设置使用独立底部 Apply 保存栏，未保存草稿跨页保留；即时外观设置在本页说明，重启仅按真实 configuration 状态提示。
 - Settings 明确管理 Archived Threads、Provider/Account 和 Plugins；General 可以承载其他 host-local preferences，但不能改变这些核心分区的所有权。
 - Context compaction prompt 是可选的 host-local preference；省略时使用 Core 默认。它只影响未来
   compaction summary 生成，不重写历史 Thread，也不进入 canonical ItemList。
@@ -261,7 +275,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
   custom OpenAI-compatible 入口编辑 display name、Provider name、base URL、API key replacement
   和 model IDs。稳定 profile ID 既不展示也不可编辑；已保存 API key 永不回显，空白表示保留。
 - Account 额度卡按当前 ZenX 登录账户的真实订阅接口窗口显示剩余/已用及本地重置时间，按返回时长命名；缺失窗口与空分组不渲染，窗口内未知值不补0。进入账户页或登录成功后查询，可显式刷新；失败清空旧值，退出或切换账户使迟到响应失效，不混入 API 余额。
-- Settings 的二态开关复用 plugin-switch，Agentic compaction、RTK、前台控制与外观开关保持同一命中区、焦点与禁用样式。原生选择器保留键盘和选择语义，使用统一主题箭头与留白，字段说明在对应控件下方。
+- Settings 的二态开关复用 plugin-switch，Agentic compaction、RTK、前台控制与外观开关保持同一命中区、焦点与禁用样式。共享 Select/Combobox 保留键盘和选择语义，使用统一主题浮层、箭头与留白，字段说明在对应控件下方。
 - Z05 UI 至多配置一个 OpenAI subscription profile；Account 的登录、登出与手动 code
   始终路由到这个 profile，而不是假定固定 ID。删除它会清理 profile-scoped OAuth credential，
   但不会恢复或改写历史 Thread。
@@ -410,13 +424,13 @@ ThreadView
 
 需要调整 durable semantics 时更新本文；只调整视觉校准时也应说明它没有改变状态归属、导航语义或 interaction contract。Git 历史负责保存旧决策，不在仓库中维护第二份当前规则。
 
-Plugin Spaces 标题是展开/收起按钮，默认展开；收起隐藏插件入口并释放侧栏空间，
-不改变当前插件页面。按钮支持键盘激活并通过 `aria-expanded` 表达状态。
+插件导航不再增加 Plugin Spaces 折叠层；所有可用入口共用与主导航一致的行、焦点和当前页面标记，较长列表在其导航区滚动。
 
 ## Thread 辅助右栏
 
 - Thread 顶栏只有一个工作区入口；文件、共享浏览器页面、Computer 与已注册插件 panel 都是平级内容 Tab。加号提供类型选择，不增加 Browser / Files 分类层或旧 Workspace 抽屉；即使 Browser 插件未启用，文件与人工内置浏览器仍可用。
 - 默认 Browser 工具与用户共用内置真实页面，页面直接作为顶层 Tab。显式配置外部 provider 时，Attached browser 可跟随或固定当前 Thread 的 Agent 目标；CDP 展示观察画面，isolated Playwright 展示最近一次 inspect 截图。观察面隐藏时停止订阅，不通过展示触发 inspect 或改变模型 observationId。Computer 按明确窗口目标持续观察，隐藏或 provider 停用、替换后停止；不支持该能力时明确显示状态。
+- Browser 与 Computer 的 Agent 指针是短时的语义动作位置提示，系统鼠标和键盘焦点不用于制作动效。Browser 的共享页面、独立 Electron 和连接 Chrome 展示已执行 click/type/select 的目标；macOS bundled Computer 在有准确窗口几何的实时预览中展示 press/set_value 目标。无几何、过期、窗口尺寸变化或切换目标时不画猜测位置；Playwright、Windows 与 Peekaboo 尚不提供轨迹。减少动态效果时保留静态目标提示，取消移动效果；轨迹不拦截输入，也不是操作完成的权威凭据。全局桌面输入仍走现有显式前台接管设置，不能承诺任意原生应用完全后台运行。
 - 宽窗口可以调整右栏宽度或展开；窄窗口打开右栏时使用工作区全宽，关闭返回聊天。Tab 支持左右方向键、Home/End；Escape 还原展开或关闭右栏。
 - 文件选择器从当前 Thread 的 cwd 浏览现有 UTF-8 文本，上限 1 MiB；目录最多显示 2,000 项并提示截断，不显示符号链接，拒绝解析时位于 cwd 外的路径。路径检查界定普通浏览范围，不构成防御本机进程并发替换文件树的 OS 沙箱。每个文件直接占一个顶层 Tab，Markdown 使用连续编辑与光标附近语法展开，其他文本直接编辑；自动保存，无常规 Edit / Preview / Save 按钮，Ctrl/Cmd+S 可立即提交待保存内容。保留 BOM 与未修改区域的混合换行。保存前校验读取版本，冲突保留草稿并可查看磁盘版本；不提供无提示强制覆盖。保存使用临时文件替换，并串行化 Host 内同一路径的保存，外部编辑采用乐观检查而非跨进程文件锁。草稿跨面板和 Thread 切换保留在窗口内；关闭文件先完成保存，失败保留文件和输入；丢弃冲突草稿重新读磁盘需要明确操作，窗口关闭仍有未保存内容时提示。文件不自动监视，也不缓存为会话历史。
 - 插件 `contributions.panels` 按 order 排列在加号选择器中，打开后与文件、浏览器并列。内容继续使用 Generic UI Host：可信模块或隔离 iframe，不在聊天底部重复挂载；context 包含当前 threadId。插件卸载或停用后移除其 tab。
@@ -424,3 +438,80 @@ Plugin Spaces 标题是展开/收起按钮，默认展开；收起隐藏插件�
 - Browser 的共享标签使用真实 Chromium WebContentsView 支持输入地址、点击、输入、滚动、前进/后退和刷新；同一 Thread 的 Browser 工具与用户挂载并操作精确相同的 target，登录状态保存在独立的 ZenX 持久 profile。外部 CDP provider 仍通过 “Attached browser” 显示其原页面，不把同 URL 的新页面冒充接管。Ctrl/Cmd+L 聚焦地址栏。
 - 共享网页没有 Node 或 ZenX preload，外部导航限 HTTP(S)；设备、位置、通知等权限默认拒绝。关闭标签释放页面；关闭窗口、隐藏面板或切换 Thread 时只移除 native view，Host 继续持有页面供同一 Thread 的 Agent 使用。当前最多20个共享标签，不提供书签、扩展或完整历史管理。
 - 当前范围不含新建/删除/重命名文件、终端及异步 Inbox 回答回流。
+
+## 7. Shared controls and readable context
+
+- `ui/controls.tsx` 以 Radix 的 Select/Popover/Dialog 为基础。短枚举用 `Select(value, onValueChange, option children)`；长目录用带搜索的 `Combobox`；动作使用 `ActionMenu`，页面切换保留 Tabs。值选择与动作语义分开。浮层使用 portal、视口避让和可取消的入退场；Esc/确认返回触发点，外部点击不抢回焦点。
+- 正文 14px、字段和导航 13px、辅助文字 12px；32px 常规控件、28px 紧凑控件，粗指针至少 44px。沿用现有 graphite/cobalt/ember、accent 与高对比 tokens，标题/正文用本机 Segoe UI Variable Display/Text，代码用 Cascadia Code/Consolas，不下载字体。
+- 插件与内建功能入口平级，长插件导航在自身区域滚动。会话标题与可操作状态优先，模型元信息按需查看。右栏的平级内容 tabs 不改变实例/草稿/执行生命周期；新建页解释每种内容的用途。
+- 设置保存栏与滚动内容分区；任意设置页存在未保存 Host 草稿时都保留保存入口。离开设置再返回保留草稿；异步保存不覆盖保存开始后继续编辑的值。Appearance 仍即时生效，Host 设置显式 Apply；错误保留草稿并允许重试。Uninstall 位于更多动作，保留数据；永久数据删除在同一菜单的独立危险分区，禁用前不可用，并有独立确认。
+- 共用 motion tokens 为反馈 100ms、进入 150ms、退出 100ms、布局 200ms；动画不控制业务提交。含 Electron 原生 Browser view 的右栏不单独平移 DOM 占位，以免与真实页面 bounds 脱节。菜单/对话框交由 primitive 的 presence 管理卸载，details 使用可反向的内在高度过渡；reduced motion 取消位移和动画，保留状态反馈。
+- 压缩完成行只从 canonical compaction 派生。默认展示发起者、摘要字符数与“完整输入占用未知”；字符不是 tokens。展开优先呈现可选取和复制的 Markdown 摘要，独立说明保留原始 Items 数量、时点与后续增长；真实 Core 消息投影在诊断 disclosure 中。历史消息条数、摘要字符数、摘要调用 tokenUsage 均不冒充完整模型输入；未记录的完整输入占用不展示为 0 或伪造节省比例。
+- `test/fixtures/controls-visual.html` 提供共享控件、禁用、长目录、对话框与长中文压缩摘要的开发展示面；不是产品导航入口。
+
+## Room 与 Thread 的共享输入体验
+
+- Room 复用 Thread 的输入容器、自适应文本区、发送按钮视觉与候选列表。Room 仍经插件 SDK 保存消息和消费投递回执；共享外观不提供 Thread 专属的中断、停止、权限或模型控制。
+- 普通 Room 输入 `@` 弹出可搜索的成员候选；上下方向键选择、Enter/Tab 确认、Escape 关闭，选择不会同时发送消息，中文输入法确认与长按 Enter 不触发重复提交。成员选择保留 literal `@name` 及前后文本，与 Host 的 mention 匹配规则一致。Always On Assistant 不要求 `@`，新消息仍在现有下一周期 steering 路径接入。
+- Thread 的文件、线程、工作流和 Room 的成员候选共享 viewport-anchored portal 呈现，避开 Composer 底部滚动容器的裁剪；候选保持编辑器焦点，窗口变化后重新定位，不复制数据或执行语义。
+- Room 的次级导航沿用平面行与中性选中态，正文与输入框沿同一阅读列对齐。用户消息使用右侧轻量气泡，Agent 消息保持自然排版和可辨认的作者；消息原文不做删改。时刻简写可通过 title 查看完整日期，来源 Thread/Turn 与消息 ID 在 Message details 中保留。
+- Room 的设置与未确定投递状态保持可见且可操作。自动化卡片的完整指令默认折叠，展开后可读；这些都是呈现调整，不改变 Trigger 配置、运行、恢复或授权。
+- Linux 与 Windows 的工作区入口避让原生最小化、最大化和关闭按钮，不能将打开面板的点击交给原生关闭区域。
+
+- Room 的自动回复设置按明确成员导航到现有 Room mention Trigger 编辑器；路由参数只表达临时 UI 意图，成员和目标从最新 Host Room / Thread 投影验证，显式 Save 才写入定义，不修改权限、不重放旧消息。Cancel / Back 返回原 Room，不把离开表单当作取消已提交的 Host 请求。Member conversation 选项以标题和短工作区 / 可区分短 ID 呈现，完整身份仍可搜索、查看并由无障碍名称读取。
+- Room 发起的自动回复设置以只读摘要显示精确 Room、成员与执行 Thread，只要求填写名称和回复指令并显式保存；不在这个固定目标流程显示类型切换或新建 Thread 控件。成员名中的 `|` 属于名字本身，不能被条件串的分隔符截断。通用自动化编辑器保留原有完整选择能力。
+
+本轮视觉和交互校准参考 [DeepSeek Harness 的输入候选组件](https://github.com/deepseek-ai/deepseek-harness/tree/639ed015397290b3745d163aafe02ffee4aa3f84/packages/client/ui-input-trigger)、[T3 Code 的 ComposerCommandMenu](https://github.com/pingdotgg/t3code/blob/5cc99e1c23980d7995a13c47f969b47cb68ed1be/apps/web/src/components/chat/ComposerCommandMenu.tsx) 与 [Linear 的 UI refresh](https://linear.app/changelog/2026-03-12-ui-refresh)。这些是参考材料，不替代本文的产品语义，也不引入它们的运行模型或样式框架。
+
+### PAW and Room conversation workspaces
+
+The primary left navigation exposes named PAW assistants and Rooms directly, below plugin entries and as peer sections alongside the existing project/Thread organization. Opening one selects an IM-style conversation without a second conversation rail. Creation remains explicit, with a user-chosen assistant name; PAW (P-A-W) is the reusable preset name. Product labels and new preset defaults use PAW; existing user-chosen Room/member names, saved annotations, protocol identifiers and routes stay unchanged.
+
+PAW and Rooms use the same disclosure heading and add-button treatment as Projects. Each section remembers its own expansion across navigation and restarts; collapsing does not hide its add action. Background navigation refreshes retain published rows and empty states. Only a real Rooms admission change retires that projection; unrelated plugin catalog notifications must not clear it or move Projects.
+
+Creating PAW defaults to a new idle working Thread in a configured Project, with the current Host model and permissions previewed before the explicit Create action. It creates no Turn. Binding an existing available Thread is a separate, explicit alternative. Cancel before submission creates nothing; dismissing an already submitted form does not undo accepted Host work or replace a newer navigation. Confirmed creation remains confirmed if the subsequent list refresh fails. An uncertain Thread start or preset-save failure is visible with inspection/binding guidance, and the same setup operation cannot silently start another Thread.
+
+The existing right workspace shell is shared. Room-owned tabs expose Overview, Matters, Memory, Automations and Threads. Matters and memory are assistant-maintained notebook annotations, with exact references to execution Threads and Triggers. They do not act as a second scheduler or an execution ledger. A plan such as “waiting for review” is visibly distinct from a live Thread status. Remote references show their full device/workspace identity and do not silently open a local Thread with the same ID.
+
+Files, Browser, Computer and Thread plugin tabs require a real Room member Thread. A PAW can use its single bound Thread; shared Rooms ask the user to select a member, with the resource context visible above the tabs. Room navigation and tab selection stay separate from canonical execution identity. Existing file drafts remain owned by the shared workspace draft store.
+
+Overview shows the current recurring timer definitions, including cadence and paused state, rather than inventing a heartbeat default. The Automations tab shows the assistant's existing Triggers and their instructions, and opens the existing Trigger controls for configuration. Reading any of these views does not start a Turn or install a timer. Missing plugins and unavailable sources must be visible rather than treated as a successful empty state.
+
+## 2026-10-02：持续适用的 UI 修改与验收原则
+
+本节记录已确认的产品方向，之后所有 UI 改动均须对照；它与本文前面的权威规则共同生效，不另建平行规范。
+
+- 从完整用户流程审视界面。先枚举页面、设置分区、插件页面、弹窗和关键状态，再实际逐页打开；不得把类型检查、单页截图或通过的组件测试表述为全产品体验验收。
+- 复用已有成熟组件与交互。Room、Thread、side chat 共享正常 Composer、浮层式 @ 提示和右侧工作区；不为插件复制一套低完成度输入框、选择器或导航。
+- 设计参考应能说明具体借鉴了什么：信息层级、密度、颜色、侧栏、输入框、Tab 或消息布局。没有源码、公开设计材料或实际产品观察的依据时，不声称某设计来自 DeepSeek Harness、T3 Code 或其他产品。
+- 所有 Tab 的选中态使用表面深浅与文字对比，不用强调色底线。保留键盘焦点环、可访问名称与选中语义；选中与焦点是两件事。
+- Windows / Linux 的原生窗口操作独占最上方一行。除左侧 Sidebar 外，主页面标题与右侧工作区操作全部位于其下方，宽窄屏都不得与系统窗口按钮重叠。原生操作行统一使用 Sidebar 顶部的 surface token，与下方主标题/内容形成可见的深浅分区；浅色、深色和配色主题同步生效。
+- 图标按钮必须有准确的 tooltip 与可访问名称。关闭 Tab、关闭右栏、展开右栏、全屏打开子会话是不同动作；新建 Tab 的加号只打开内容类型选择器，不隐式创建线程。每个操作的作用对象与用途必须从所在侧栏或全屏布局中清楚可见；不是禁止叉号或加号，而是不能让它们脱离被遮挡的 Tab 名称，像无归属的顶栏按钮。
+- 会话滚动、消息列和 Composer 必须在各自分栏的边界内；长标题、多个子线程、错误提示与窄屏不能挤出隐式 Grid 列或让输入框漂浮到另一会话上。Checkbox 等基础控件遵循共享样式与标签布局。
+- Subagents 的常规入口为右侧工作区加号菜单中的 Subagents Tab。Tab 内显示当前会话的子线程，选择后在右栏阅读/对话；不在主标题下重复铺设 Subagents 行或快捷标签。
+- Subagents Tab 提供 New side chat：以父会话完整上下文快照创建 fork 子线程，在上下文末尾追加明确的 side-chat 身份与等待用户请求的指令。创建本身不运行模型，不继承可执行待办队列，也不改变父会话执行。主动深入交互时可以全屏打开子线程。
+- 全屏子线程在现有 top bar 中使用可返回祖先的路径式面包屑标识位置；不另占标题栏下方一行。普通根会话不显示空面包屑。
+- 验收至少检查浅色/深色、桌面/窄屏、长文本、空状态/错误状态、键盘与焦点、打开/关闭/切换后的草稿和上下文归属。修复前后截图绑定实际构建版本；未实际查看的页面必须明确列为未验。
+- 产品改动在 PR 分支交付，不直接修改主线；独立 Review 和实际操作证据共同支持结论，不能相互替代。
+
+PAW 导航使用与共享图标相同描边风格的对话气泡，表达一对一交流；普通 Rooms 保留多人图标。它不使用代表 Thread trace 的三行图标，也不通过图标暗示额外自主性。
+
+### 2026-10-04: PAW conversation clarity
+
+Normal PAW chat keeps only compact, named rename/workspace/settings controls. Do not put model-cycle, quota or background implementation descriptions under its input. Paused delivery and failures remain explicit; Pause/Resume lives in conversation settings. Rename edits the display name only and preserves the Room identity and bound working Thread; Cancel/Escape leaves the name unchanged. PAW/Rooms appear after plugin entries and at the same section hierarchy as Projects, using neutral selected surfaces and spacing instead of extra truncated separators.
+
+Native scrollbars retain their geometry and scrolling behavior. Their track is transparent against each surface; the thumb uses the theme's muted text color while scrolling, keyboard/focus interaction or edge/drag activity is occurring, and becomes transparent at rest. Forced-colors uses native colors. Do not hide overflow to simulate autohide, and do not count Linux/mock evidence as native Windows/macOS validation.
+
+### Agent activity, approval review and pending messages
+
+Agent activity is a disposable projection of native turn items. Consecutive tool/reasoning items stay in stable disclosures; assistant/user messages remain chronological boundaries and final replies stay outside process folds. Counts describe calls, not promised successful work. Task receipts determine background lifetime independently of call disposition. A stopped turn can still have an unconfirmed background action; the latest terminal receipt retires earlier nonterminal observations across groups.
+
+Only actual running/model activity has a left-to-right text highlight. Waiting, approval, stop-request intent, unconfirmed cancellation and terminal outcomes stay static. Reduced motion and forced colors retain readable static labels. Selected transcript text pauses automatic following; an explicit Back to live resumes it. Terminal folding does not interrupt selected or focused inspection.
+
+Approvals stay composer-adjacent and name their real once-only or remembered capability scope. A bounded inline preview has a user-opened full-request dialog containing complete code, cwd and arguments. Opening or dismissing review never decides a request; both surfaces share one pending lock and preserve errors. Focus restoration respects the exact request and newer user interaction.
+
+Queued messages form a compact composer-aligned pending-send shelf. Text, real image thumbnails and attachment counts remain visible; genuine truncation has a selectable full-text disclosure. Exact ID/client-ID order is canonical; cancellation or resume acknowledgement does not remove rows. Editing uses the native exact-target expected-revision command and append-only edit fact, retaining original queue position and delivery mode; there is no reorder or implicit retry. Native delivery errors stay on their exact message; a distinct resume transport error belongs beside Continue. Approval + queue + error + draft must preserve reachable decisions, one 44px queue-action lane and Composer in narrow windows.
+
+Queued thumbnails read only validated AttachmentRefs from the exact same-thread pending input. Show a compact first set with an actionable full-gallery disclosure; missing references or failed reads remain explicit and retryable without blocking Edit/Cancel. Opening a full image uses the existing viewer and stops being visible when its exact queue owner disappears or the selected thread changes.
+
+Queue editing owns an independent local text/image draft, preserving image order and the main Composer draft. Cancel/X discards unsent edits without changing native input; failure, revision conflict, admission races and navigation/loading preserve the draft and its request identity. An App-owned memory-only cache survives viewport remounts. Save never starts the queue: the canonical edit updates the row, and an authoritative receipt may close the editor while its draft/receipt stays cached until the exact edit fact is observed. Unsupported Host skill/audio or non-round-trippable input is not silently flattened. Editor, gallery and simultaneous approval/queue/error states keep complete text context and reachable 44px decisions in a 390×600 viewport.

@@ -1,36 +1,42 @@
-import type { WorkflowCommandCandidate } from "./workflow-commands.js";
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
+import type { RefObject } from "react";
+import type { useComposerSelector } from "./use-composer-selector.js";
+import { ComposerSuggestions } from "./ComposerSuggestions.js";
 
 export function WorkflowCommandMenu({
-  activeIndex,
-  candidates,
-  onChoose,
+  id,
+  selector,
+  textarea,
 }: {
-  activeIndex: number;
-  candidates: readonly WorkflowCommandCandidate[];
-  onChoose(command: WorkflowCommandCandidate): void;
+  id: string;
+  selector: ReturnType<typeof useComposerSelector>;
+  textarea: RefObject<HTMLTextAreaElement | null>;
 }) {
-  if (candidates.length === 0) return null;
+  useTranslation("shell");
+  const localizedSelector = {
+    ...selector,
+    rows: selector.rows.map((row) =>
+      row.kind === "built-in" && row.name === "compact"
+        ? { ...row, description: i18n.t("shell:compactThisThreadsContext") }
+        : row,
+    ),
+  };
   return (
-    <div
-      className="workflow-command-menu"
-      role="listbox"
-      aria-label="Slash commands"
-    >
-      {candidates.map((command, index) => (
-        <button
-          aria-selected={index === activeIndex}
-          className={index === activeIndex ? "is-active" : undefined}
-          key={`${command.kind}:${command.name}`}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => onChoose(command)}
-          role="option"
-          type="button"
-        >
-          <strong>/{command.name}</strong>
-          <span>{command.description}</span>
-          <small>{command.kind === "built-in" ? "Built in" : "Custom"}</small>
-        </button>
-      ))}
-    </div>
+    <ComposerSuggestions
+      id={id}
+      selector={localizedSelector}
+      textarea={textarea}
+      label={
+        selector.referenceMode
+          ? i18n.t("shell:references")
+          : i18n.t("shell:slashCommands")
+      }
+      hint={
+        selector.referenceMode
+          ? i18n.t("shell:addsALocatorTheAgentReadsItWhenNeeded")
+          : i18n.t("shell:chooseToEditBeforeSending")
+      }
+    />
   );
 }

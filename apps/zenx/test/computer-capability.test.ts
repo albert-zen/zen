@@ -6,6 +6,8 @@ import {
   ComputerObservationLedger,
   ComputerZenXCapabilityPackage,
   MacForegroundInputDriver,
+  resolveMacNativeHelperExecutable,
+  retryDesktopSourceEnumeration,
   runProcess,
   selectComputerInspectionControls,
   type ComputerControlSelector,
@@ -23,6 +25,47 @@ const buttonControl: ComputerControlSelector = {
   observationId: "observation-1",
   targetId: "button",
 };
+
+test("window source enumeration retries one transient Electron failure", async () => {
+  let attempts = 0;
+  const result = await retryDesktopSourceEnumeration(async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("Failed to get sources");
+    return ["window:42:0"];
+  });
+  assert.deepEqual(result, ["window:42:0"]);
+  assert.equal(attempts, 2);
+});
+
+test("window source enumeration preserves persistent failure after one retry", async () => {
+  let attempts = 0;
+  await assert.rejects(
+    retryDesktopSourceEnumeration(async () => {
+      attempts += 1;
+      throw new Error("Failed to get sources");
+    }),
+    /Window source enumeration failed after retry: Failed to get sources/u,
+  );
+  assert.equal(attempts, 2);
+});
+
+test("window source errors remain readable and bounded", async () => {
+  await assert.rejects(
+    retryDesktopSourceEnumeration(async () => {
+      throw new Error(`source\n${"x".repeat(500)}`);
+    }),
+    (error: unknown) => {
+      assert(error instanceof Error);
+      assert.match(
+        error.message,
+        /^Window source enumeration failed: source x/u,
+      );
+      assert.ok(error.message.length < 250);
+      assert.doesNotMatch(error.message, /\n/u);
+      return true;
+    },
+  );
+});
 
 test("computer vertical slice uses only targeted AX operations and does not echo set values", async () => {
   const calls: string[] = [];
@@ -284,6 +327,57 @@ test("computer process runner rejects a pre-aborted signal before spawn", async 
   assert.equal(spawnCount, 0);
 });
 
+test("packaged macOS Computer uses its fixed helper and never compiles a fallback", async () => {
+  const calls: string[] = [];
+  const executable = await resolveMacNativeHelperExecutable(
+    "zenx-accessibility",
+    async () => {
+      calls.push("compile");
+      return "/tmp/development-helper";
+    },
+    { resourcesPath: "/Applications/ZenX.app/Contents/Resources" },
+    async (candidate, mode) => {
+      calls.push(`access:${candidate}:${String(mode)}`);
+    },
+  );
+  assert.equal(
+    executable,
+    "/Applications/ZenX.app/Contents/Resources/native-helpers/zenx-accessibility",
+  );
+  assert.deepEqual(calls, [
+    "access:/Applications/ZenX.app/Contents/Resources/native-helpers/zenx-accessibility:1",
+  ]);
+});
+
+test("development macOS Computer retains an explicit compilation fallback", async () => {
+  const executable = await resolveMacNativeHelperExecutable(
+    "zenx-foreground-input",
+    async () => "/tmp/development-helper",
+    { resourcesPath: "/Electron.app/Contents/Resources", defaultApp: true },
+    async () => assert.fail("development must not inspect packaged resources"),
+  );
+  assert.equal(executable, "/tmp/development-helper");
+});
+
+test("packaged macOS Computer reports a missing fixed helper without compiling", async () => {
+  let compiled = false;
+  await assert.rejects(
+    resolveMacNativeHelperExecutable(
+      "zenx-accessibility",
+      async () => {
+        compiled = true;
+        return "/tmp/development-helper";
+      },
+      { resourcesPath: "/Applications/ZenX.app/Contents/Resources" },
+      async () => {
+        throw new Error("missing");
+      },
+    ),
+    /Packaged macOS Computer helper is missing or not executable/u,
+  );
+  assert.equal(compiled, false);
+});
+
 function computerBackend(calls: string[]): ZenXComputerBackend {
   const resolvedTarget = {
     pid: 42,
@@ -397,5 +491,89 @@ test("computer observation budget preserves source order and prioritizes enabled
   assert.deepEqual(
     selectComputerInspectionControls(controls.slice(0, 3), () => true),
     controls.slice(0, 3),
+  );
+
+  const chromeLikeControls = [
+    ...Array.from({ length: 120 }, (_, index) => ({
+      role: index === 1 ? "AXToolbar" : "AXGroup",
+      title: "",
+      enabled: false,
+      actions: [] as string[],
+    })),
+    {
+      role: "AXButton",
+      title: "Fixture B action",
+      enabled: true,
+      actions: ["AXPress"],
+    },
+    {
+      role: "AXTextField",
+      title: "Fixture B name",
+      enabled: true,
+      actions: ["AXSetValue"],
+    },
+  ];
+  const chromeSelection = selectComputerInspectionControls(
+    chromeLikeControls,
+    (control) => control.enabled && control.actions.length > 0,
+  );
+  assert.equal(chromeSelection.length, 32);
+  assert.deepEqual(
+    chromeSelection.slice(-2).map(({ role, title }) => ({ role, title })),
+    [
+      { role: "AXButton", title: "Fixture B action" },
+      { role: "AXTextField", title: "Fixture B name" },
+    ],
+  );
+
+  const installedChromeControls = [
+    ...Array.from({ length: 53 }, (_, index) => ({
+      role: "AXGroup",
+      title: index === 0 ? "Chrome shell" : "",
+      enabled: true,
+      actions: ["AXSetValue"],
+      inWebArea: false,
+    })),
+    {
+      role: "AXTextField",
+      title: "协作文本",
+      enabled: true,
+      actions: ["AXSetValue"],
+      inWebArea: true,
+    },
+    {
+      role: "AXButton",
+      title: "更新结果",
+      enabled: true,
+      actions: ["AXPress"],
+      inWebArea: true,
+    },
+    {
+      role: "AXStaticText",
+      title: "等待更新",
+      enabled: true,
+      actions: [] as string[],
+      inWebArea: true,
+    },
+  ];
+  const installedChromeSelection = selectComputerInspectionControls(
+    installedChromeControls,
+    (control) => control.enabled && control.actions.length > 0,
+    (control) =>
+      control.inWebArea &&
+      (control.actions.length > 0 ||
+        (control.title.length > 0 && control.role !== "AXGroup")),
+  );
+  assert.equal(installedChromeSelection.length, 32);
+  assert.deepEqual(
+    installedChromeSelection.slice(-3).map(({ role, title }) => ({
+      role,
+      title,
+    })),
+    [
+      { role: "AXTextField", title: "协作文本" },
+      { role: "AXButton", title: "更新结果" },
+      { role: "AXStaticText", title: "等待更新" },
+    ],
   );
 });

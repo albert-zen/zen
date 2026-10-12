@@ -1,9 +1,21 @@
-import { Children, isValidElement, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
+import {
+  Children,
+  createContext,
+  isValidElement,
+  useContext,
+  useState,
+} from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { MarkdownImage } from "./MarkdownImage.js";
 import { classifyImageSource } from "../../image-source.js";
-import { classifyZenXLink } from "../../external-link-policy.js";
+import { classifyMessageLink } from "../../external-link-policy.js";
+
+export const MessageLinkContext = createContext<
+  ((target: { kind: "file" | "browser"; value: string }) => void) | null
+>(null);
 
 export type MarkdownBlock =
   | { type: "paragraph"; text: string }
@@ -14,6 +26,9 @@ export type MarkdownBlock =
   | { type: "code"; language: string; text: string; closed: boolean };
 
 export function Markdown({ text }: { text: string }) {
+  useTranslation("panels");
+  const onOpen = useContext(MessageLinkContext);
+  const components = { ...markdownComponents, a: messageAnchor(onOpen) };
   const blocks = parseMarkdown(text);
   const streaming = blocks.at(-1);
   const streamingBlock =
@@ -26,7 +41,7 @@ export function Markdown({ text }: { text: string }) {
       <div className="markdown-body">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
-          components={markdownComponents}
+          components={components}
           urlTransform={safeUrlTransform}
         >
           {prepareMarkdown(streamingFence.prefix)}
@@ -40,7 +55,7 @@ export function Markdown({ text }: { text: string }) {
     <div className="markdown-body">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        components={markdownComponents}
+        components={components}
         urlTransform={safeUrlTransform}
       >
         {prepareMarkdown(text)}
@@ -50,22 +65,7 @@ export function Markdown({ text }: { text: string }) {
 }
 
 const markdownComponents: Components = {
-  a({ href, children, node }) {
-    if (
-      node?.children.some(
-        (child) => child.type === "element" && child.tagName === "img",
-      )
-    )
-      return <span>{children}</span>;
-    const target = classifyZenXLink(href ?? "");
-    if (target.kind === "rejected") return <>{children}</>;
-    if (target.kind === "anchor") return <a href={target.href}>{children}</a>;
-    return (
-      <a href={target.href} rel="noreferrer" target="_blank">
-        {children}
-      </a>
-    );
-  },
+  a: messageAnchor(null),
   img({ src, alt }) {
     return (
       <MarkdownImage
@@ -101,6 +101,48 @@ const markdownComponents: Components = {
     );
   },
 };
+
+function messageAnchor(
+  onOpen: React.ContextType<typeof MessageLinkContext>,
+): NonNullable<Components["a"]> {
+  return ({ href, children, node }) => {
+    if (
+      node?.children.some(
+        (child) => child.type === "element" && child.tagName === "img",
+      )
+    )
+      return <span>{children}</span>;
+    const target = classifyMessageLink(href ?? "");
+    if (target.kind === "rejected") return <>{children}</>;
+    if (target.kind === "anchor") return <a href={target.href}>{children}</a>;
+    if (target.kind === "file" || target.kind === "browser") {
+      if (!onOpen)
+        return target.kind === "file" ? (
+          <>{children}</>
+        ) : (
+          <a href={target.value} rel="noreferrer" target="_blank">
+            {children}
+          </a>
+        );
+      return (
+        <a
+          href={href}
+          onClick={(event) => {
+            event.preventDefault();
+            onOpen(target);
+          }}
+        >
+          {children}
+        </a>
+      );
+    }
+    return (
+      <a href={target.href} rel="noreferrer" target="_blank">
+        {children}
+      </a>
+    );
+  };
+}
 
 export function parseMarkdown(source: string): MarkdownBlock[] {
   const lines = source.replace(/\r\n?/gu, "\n").split("\n");
@@ -202,6 +244,7 @@ function CodeBlock({
 }: {
   block: Extract<MarkdownBlock, { type: "code" }>;
 }) {
+  useTranslation("panels");
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     await navigator.clipboard.writeText(block.text);
@@ -213,7 +256,7 @@ function CodeBlock({
       <div className="markdown-code-header">
         <span>{block.language || "text"}</span>
         <button type="button" onClick={() => void copy()}>
-          {copied ? "Copied" : "Copy"}
+          {copied ? i18n.t("panels:copied") : i18n.t("panels:copy")}
         </button>
       </div>
       <pre>
@@ -260,8 +303,14 @@ function findUnclosedFence(source: string): {
 function safeUrlTransform(url: string, key: string): string {
   if (key === "src")
     return classifyImageSource(url).kind === "rejected" ? "" : url;
-  const target = classifyZenXLink(url);
-  return target.kind === "rejected" ? "" : target.href;
+  const target = classifyMessageLink(url);
+  return target.kind === "rejected"
+    ? ""
+    : target.kind === "file"
+      ? url // Keep the encoded spelling: messageAnchor classifies/decodes it once on click.
+      : target.kind === "browser"
+        ? target.value
+        : target.href;
 }
 
 function prepareMarkdown(source: string): string {
@@ -289,7 +338,7 @@ function prepareMarkdown(source: string): string {
       return line.replace(
         /(?<!!)\[([^\]]+)\]\(([^\s)]+)(?:\s+"[^"]*")?\)/gu,
         (match, label: string, href: string) =>
-          classifyZenXLink(href).kind === "rejected" ? label : match,
+          classifyMessageLink(href).kind === "rejected" ? label : match,
       );
     })
     .join("\n");
