@@ -95,6 +95,8 @@ const TraceCompactionsContext = createContext<
 interface ThreadViewProps {
   /** External engines use their own controls and text semantics. */
   zenFeatures?: boolean;
+  /** External native status can precede a projected Turn; canonical Zen still targets an exact Turn. */
+  nativeSessionControl?: { running: boolean; interrupt(): Promise<void> };
   sendDisabled?: boolean;
   interruptDisabled?: boolean;
   composerTools?: ReactNode;
@@ -160,6 +162,7 @@ interface ThreadViewProps {
 
 export function ThreadView({
   zenFeatures = true,
+  nativeSessionControl,
   sendDisabled = false,
   interruptDisabled = false,
   composerTools = null,
@@ -375,7 +378,7 @@ export function ThreadView({
     if (
       interruptDisabled ||
       composerDisabled ||
-      runningTurn === null ||
+      (runningTurn === null && !nativeSessionControl?.running) ||
       interrupting ||
       submitting
     )
@@ -383,7 +386,8 @@ export function ThreadView({
     setInterrupting(true);
     setInterruptError(null);
     try {
-      await onInterrupt(runningTurn.id);
+      if (nativeSessionControl) await nativeSessionControl.interrupt();
+      else if (runningTurn !== null) await onInterrupt(runningTurn.id);
     } catch (error) {
       setInterruptError(describeError(error));
     } finally {
@@ -396,7 +400,7 @@ export function ThreadView({
     composerSendMode,
   );
   const primaryMode =
-    runningTurn === null
+    runningTurn === null && !nativeSessionControl?.running
       ? "send"
       : !zenFeatures || !hasDraft
         ? "stop"
@@ -970,7 +974,7 @@ export function ThreadView({
                     composerDisabled ||
                     submitting ||
                     interrupting ||
-                    (runningTurn === null
+                    (primaryMode !== "stop"
                       ? sendDisabled || !hasDraft
                       : interruptDisabled)
                   }
@@ -1962,7 +1966,10 @@ function TraceItemHeader({
   item,
   expandable,
 }: {
-  item: Extract<ThreadItem, { type: "reasoning" | "commandExecution" }>;
+  item: Extract<
+    ThreadItem,
+    { type: "reasoning" | "commandExecution" | "nativeItem" }
+  >;
   expandable: boolean;
 }) {
   return (
@@ -1971,13 +1978,17 @@ function TraceItemHeader({
         name={
           item.type === "reasoning"
             ? "reasoning"
-            : toolPresentation(item.toolName ?? item.command).icon
+            : item.type === "nativeItem"
+              ? "tools"
+              : toolPresentation(item.toolName ?? item.command).icon
         }
         size={14}
       />
       {item.type === "reasoning" ? null : (
         <strong>
-          {toolPresentation(item.toolName ?? item.command).category}
+          {item.type === "nativeItem"
+            ? item.kind
+            : toolPresentation(item.toolName ?? item.command).category}
         </strong>
       )}
       <span title={traceItemLabel(item)}>{traceItemLabel(item)}</span>
@@ -1992,7 +2003,10 @@ function TraceItemHeader({
 }
 
 function traceItemExpandable(
-  item: Extract<ThreadItem, { type: "reasoning" | "commandExecution" }>,
+  item: Extract<
+    ThreadItem,
+    { type: "reasoning" | "commandExecution" | "nativeItem" }
+  >,
   debugTrace = false,
 ): boolean {
   return (
@@ -2010,6 +2024,12 @@ function StatusMark({ item }: { item: ThreadItem }) {
       return <small className="tool-status interrupted">Interrupted</small>;
     return null;
   }
+  if (item.type === "nativeItem")
+    return item.status === "inProgress" ? (
+      <span className="mini-spinner" aria-label="Working" />
+    ) : item.status === "failed" || item.status === "declined" ? (
+      <small className={`tool-status ${item.status}`}>{item.status}</small>
+    ) : null;
   if (item.type !== "commandExecution") return null;
   const status = commandStatus(item);
   if (status === "Completed") return null;
@@ -2039,6 +2059,12 @@ function TraceDetail({
       </div>
     );
   }
+  if (item.type === "nativeItem")
+    return (
+      <pre className="trace-detail" tabIndex={0}>
+        {item.detail}
+      </pre>
+    );
   if (item.type !== "commandExecution") return null;
   return (
     <div className="trace-detail trace-tool-detail">
@@ -2430,7 +2456,11 @@ function traceItemLabel(item: ThreadItem): string {
         ? "Thinking"
         : "Thought";
   }
-  return item.type === "commandExecution" ? commandTitle(item) : "Item details";
+  return item.type === "nativeItem"
+    ? item.title
+    : item.type === "commandExecution"
+      ? commandTitle(item)
+      : "Item details";
 }
 
 function completedTurnLabel(turn: Turn): string {

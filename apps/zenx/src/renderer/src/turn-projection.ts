@@ -11,13 +11,19 @@ export type TurnDisplayNode =
   | {
       kind: "traceItem";
       id: string;
-      item: Extract<ThreadItem, { type: "reasoning" | "commandExecution" }>;
+      item: Extract<
+        ThreadItem,
+        { type: "reasoning" | "commandExecution" | "nativeItem" }
+      >;
     }
   | {
       kind: "traceGroup";
       id: string;
       items: Array<
-        Extract<ThreadItem, { type: "reasoning" | "commandExecution" }>
+        Extract<
+          ThreadItem,
+          { type: "reasoning" | "commandExecution" | "nativeItem" }
+        >
       >;
       summary: string;
     };
@@ -30,7 +36,10 @@ export interface TurnDisplayProjection {
 }
 
 export interface TraceDisplayRow {
-  item: Extract<ThreadItem, { type: "reasoning" | "commandExecution" }>;
+  item: Extract<
+    ThreadItem,
+    { type: "reasoning" | "commandExecution" | "nativeItem" }
+  >;
   nested: boolean;
   parentToolName: string | null;
 }
@@ -79,7 +88,7 @@ export function groupReasoningWithoutDetailsRows(
 export function traceDisplayRows(
   items: readonly Extract<
     ThreadItem,
-    { type: "reasoning" | "commandExecution" }
+    { type: "reasoning" | "commandExecution" | "nativeItem" }
   >[],
 ): TraceDisplayRow[] {
   const calls = new Map(
@@ -166,7 +175,10 @@ export function projectTurn(turn: Turn): TurnDisplayProjection {
   }
   const history: TurnDisplayNode[] = [];
   let traceItems: Array<
-    Extract<ThreadItem, { type: "reasoning" | "commandExecution" }>
+    Extract<
+      ThreadItem,
+      { type: "reasoning" | "commandExecution" | "nativeItem" }
+    >
   > = [];
   const flushTrace = () => {
     if (traceItems.length === 0) return;
@@ -193,7 +205,11 @@ export function projectTurn(turn: Turn): TurnDisplayProjection {
   for (let index = 0; index < historySource.length; index += 1) {
     const item = historySource[index];
     if (item === undefined) continue;
-    if (item.type === "reasoning" || item.type === "commandExecution") {
+    if (
+      item.type === "reasoning" ||
+      item.type === "commandExecution" ||
+      item.type === "nativeItem"
+    ) {
       traceItems.push(item);
       if (steersAfterIndex.has(index)) {
         flushTrace();
@@ -230,13 +246,20 @@ export function projectTurn(turn: Turn): TurnDisplayProjection {
 export function traceSummary(
   items: readonly Extract<
     ThreadItem,
-    { type: "reasoning" | "commandExecution" }
+    { type: "reasoning" | "commandExecution" | "nativeItem" }
   >[],
 ): string {
   const commands = items.filter(
     (item): item is Extract<ThreadItem, { type: "commandExecution" }> =>
       item.type === "commandExecution",
   );
+  const native = items.filter((item) => item.type === "nativeItem");
+  if (commands.length === 0 && native.length > 0)
+    return native
+      .slice(-3)
+      .reverse()
+      .map((item) => item.title)
+      .join(" · ");
   if (commands.length === 0) {
     return items.some(
       (item) => item.type === "reasoning" && item.status === "inProgress",

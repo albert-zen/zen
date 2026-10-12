@@ -14,6 +14,8 @@ Mixed-engine sidebar navigation is a product projection: the Host feeds Zen thre
 
 `readProjectConversationNavigation` isolates the two locator-source reads and reports any unavailable source in the Project snapshot, so a failing engine source cannot hide the other owner's conversations or masquerade as a successful empty catalog.
 
+External native item projections use a ZenX-only `nativeItem` display shape when the engine reports a non-command activity. Public native details remain readable; lifecycle comes from explicit item status, item notifications, or terminal native history, and unsupported items never become fabricated running commands. This shape does not expand canonical Items or the inbound CAS facade.
+
 `conversation-presentation` owns only the renderer-local Normal / Debug trace preference, using local storage and window subscriptions like other display preferences. It never writes the Host profile or canonical history; unavailable storage keeps the explicit in-window choice, while missing or invalid saved values default to Normal.
 
 ## 核心概念

@@ -80,9 +80,10 @@ const agentProviders: AgentProvidersApi = {
     ipcRenderer.invoke(ipcChannels.agentProvidersRequest, "capabilities", {
       instanceId,
     }),
-  models: (instanceId) =>
+  models: (instanceId, cwd) =>
     ipcRenderer.invoke(ipcChannels.agentProvidersRequest, "models", {
       instanceId,
+      cwd,
     }),
   sessions: () =>
     ipcRenderer.invoke(ipcChannels.agentProvidersRequest, "sessions"),

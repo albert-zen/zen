@@ -53,9 +53,12 @@ export function useAgentProviders() {
   const [observations, setObservations] = useState<
     Record<string, Omit<AgentNavigationSession, "binding" | "providerLabel">>
   >({});
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   const [pendingApprovals, setPendingApprovals] = useState<
     Record<string, string[]>
   >({});
+  const failedInstances = useRef(new Set<string>());
   const rememberSnapshot = useCallback((snapshot: AgentSessionSnapshot) => {
     const title =
       snapshot.thread.name?.trim() || snapshot.thread.preview.trim();
@@ -65,8 +68,9 @@ export function useAgentProviders() {
         ...(title ? { title } : {}),
         model: snapshot.model,
         updatedAt: snapshot.thread.updatedAt * 1000,
-        status:
-          snapshot.thread.status.type === "active"
+        status: failedInstances.current.has(snapshot.binding.providerInstanceId)
+          ? "error"
+          : snapshot.thread.status.type === "active"
             ? "active"
             : snapshot.thread.status.type === "idle"
               ? "idle"
@@ -107,6 +111,36 @@ export function useAgentProviders() {
     const api = agentProvidersApi();
     const dispose = api && subscribeAgentRefresh(api, null, refresh);
     const disposeApprovals = api?.onEvent((event) => {
+      if (
+        event.type === "error" &&
+        event.sessionId === undefined &&
+        event.providerInstanceId !== undefined
+      )
+        failedInstances.current.add(event.providerInstanceId);
+      // A generic engine event invalidates a prior observation; it is not a terminal receipt.
+      // Hidden sessions stay unknown until read, without starting saved engines or polling transcripts.
+      setObservations((latest) => {
+        const ids =
+          event.sessionId !== undefined
+            ? [event.sessionId]
+            : event.type === "error"
+              ? sessionsRef.current
+                  .filter(
+                    (binding) =>
+                      binding.providerInstanceId === event.providerInstanceId,
+                  )
+                  .map((binding) => binding.id)
+              : [];
+        const next = { ...latest };
+        for (const id of ids) {
+          if (latest[id] || event.type === "error")
+            next[id] = {
+              ...latest[id],
+              status: event.type === "error" ? "error" : undefined,
+            };
+        }
+        return next;
+      });
       if (event.type !== "approval" && event.type !== "approvalResolved")
         return;
       setPendingApprovals((latest) => ({
@@ -163,8 +197,12 @@ export function useAgentProviders() {
   };
 }
 
-export function useAgentModels(instance: AgentProviderInstance | undefined) {
+export function useAgentModels(
+  instance: AgentProviderInstance | undefined,
+  cwd?: string,
+) {
   const id = instance?.id ?? "";
+  const scope = JSON.stringify([id, cwd ?? null]);
   const [state, setState] = useState<{
     id: string;
     models: ModelSummary[];
@@ -185,17 +223,17 @@ export function useAgentModels(instance: AgentProviderInstance | undefined) {
     if (!instance || instance.kind === "zen") return;
     let current = true;
     setState((latest) => ({
-      id,
+      id: scope,
       models: [],
       error: null,
       loading: true,
-      capabilities: latest.id === id ? latest.capabilities : null,
+      capabilities: latest.id === scope ? latest.capabilities : null,
       capabilityError: null,
     }));
     const api = agentProvidersApi();
     if (!api) {
       setState({
-        id,
+        id: scope,
         models: [],
         error: "Agent Providers are unavailable",
         loading: false,
@@ -221,7 +259,7 @@ export function useAgentModels(instance: AgentProviderInstance | undefined) {
           }));
       },
     );
-    void api.models(id).then(
+    void api.models(id, cwd).then(
       (catalog) => {
         if (current)
           setState((latest) => ({
@@ -244,9 +282,9 @@ export function useAgentModels(instance: AgentProviderInstance | undefined) {
     return () => {
       current = false;
     };
-  }, [id, instance?.kind, instance?.executable, revision]);
+  }, [id, instance?.kind, instance?.executable, revision, cwd]);
   return {
-    ...(state.id === id
+    ...(state.id === scope
       ? { ...state, error: state.error ?? state.capabilityError }
       : { models: [], error: null, loading: true, capabilities: null }),
     retry: () => setRevision((value) => value + 1),
@@ -331,7 +369,12 @@ export function ExternalAgentSession({
   const composerRef = useRef(composer);
   composerRef.current = composer;
   const operationRef = useRef(false);
-  const models = useAgentModels(instance);
+  const models = useAgentModels(
+    instance,
+    snapshot?.binding.id === sessionId
+      ? snapshot.binding.cwd
+      : (workspace ?? undefined),
+  );
   const generation = selection.current.generation;
   const current = () => selection.current.generation === generation;
   const refresh = useCallback(async () => {
@@ -474,7 +517,11 @@ export function ExternalAgentSession({
       !models.models.some((entry) => entry.id === selectedModel)
     )
       return;
-    if (visibleSnapshot !== null && activeTurn(visibleSnapshot.thread) !== null)
+    if (
+      visibleSnapshot !== null &&
+      (visibleSnapshot.thread.status.type === "active" ||
+        activeTurn(visibleSnapshot.thread) !== null)
+    )
       return;
     const started = beginComposerSubmission(
       composerRef.current,
@@ -562,7 +609,9 @@ export function ExternalAgentSession({
     }
   };
   const running =
-    visibleSnapshot !== null && activeTurn(visibleSnapshot.thread) !== null;
+    visibleSnapshot !== null &&
+    (visibleSnapshot.thread.status.type === "active" ||
+      activeTurn(visibleSnapshot.thread) !== null);
   const issue =
     instance === undefined
       ? "This Agent Provider instance is unavailable"
@@ -601,6 +650,17 @@ export function ExternalAgentSession({
           <ThreadView
             composerId={`agent-composer-${sessionId ?? instance?.id ?? "draft"}`}
             zenFeatures={false}
+            nativeSessionControl={{
+              running,
+              interrupt: async () => {
+                if (sessionId === null) return;
+                try {
+                  await agentProvidersApi()!.interrupt(sessionId);
+                } finally {
+                  await refresh();
+                }
+              },
+            }}
             composer={composer}
             thread={visibleSnapshot?.thread ?? null}
             approvals={[]}

@@ -59,7 +59,7 @@ export interface AgentNativeSession {
 }
 export interface AgentProviderAdapter {
   readonly capabilities: AgentProviderCapabilities;
-  models(): Promise<ModelSummary[]>;
+  models(cwd?: string): Promise<ModelSummary[]>;
   create(input: {
     cwd: string;
     model?: string;
@@ -82,7 +82,7 @@ export interface AgentProvidersApi {
   list(): Promise<AgentProviderInstance[]>;
   capabilities(instanceId: string): Promise<AgentProviderCapabilities>;
   save(instance: AgentProviderInstance): Promise<AgentProviderInstance>;
-  models(instanceId: string): Promise<ModelSummary[]>;
+  models(instanceId: string, cwd?: string): Promise<ModelSummary[]>;
   sessions(): Promise<AgentSessionBinding[]>;
   approvals(
     sessionId: string,

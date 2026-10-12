@@ -6,6 +6,7 @@ import {
   type OwnedChildObservation,
 } from "../owned-child-process.js";
 import type {
+  NativeDisplayItem,
   ModelSummary,
   Thread,
   ThreadItem,
@@ -227,7 +228,9 @@ export class CodexAgentAdapter implements AgentProviderAdapter {
       );
     }
     if (!active)
-      throw new Error("Codex thread has no active turn to interrupt");
+      throw new Error(
+        "Codex thread has no active turn ID available to interrupt. Refresh the native conversation and try again.",
+      );
     await this.#request(connection, "turn/interrupt", {
       threadId: nativeSessionId,
       turnId: active.id,
@@ -614,6 +617,7 @@ export class CodexAgentAdapter implements AgentProviderAdapter {
       const item = projectItem(
         params.item,
         connection.loaded.get(sessionId)?.cwd ?? "",
+        method === "item/completed" ? "completed" : "inProgress",
       );
       live.items.set(item.id, item);
     } else if (
@@ -728,16 +732,26 @@ export class CodexAgentAdapter implements AgentProviderAdapter {
       method === "item/commandExecution/outputDelta" ||
       method === "item/fileChange/outputDelta"
     ) {
+      if (!item && method.includes("fileChange"))
+        item = {
+          type: "nativeItem",
+          id,
+          kind: "fileChange",
+          title: "File changes",
+          detail: "",
+          status: "inProgress",
+        };
       if (!item)
         item = commandItem(
           id,
-          method.includes("fileChange") ? "fileChange" : "commandExecution",
+          "commandExecution",
           "",
           connection.loaded.get(sessionId)?.cwd ?? "",
           "inProgress",
         );
       if (item.type === "commandExecution")
         item.aggregatedOutput = (item.aggregatedOutput ?? "") + params.delta;
+      else if (item.type === "nativeItem") item.detail += params.delta;
     }
     if (item) live.items.set(id, item);
   }
@@ -1017,7 +1031,17 @@ function projectTurn(value: JsonRecord, cwd: string): Turn {
   const status = value.status;
   return {
     id: requireText(value.id, "Codex turn id"),
-    items: array(value.items).map((item) => projectItem(item, cwd)),
+    items: array(value.items).map((item) =>
+      projectItem(
+        item,
+        cwd,
+        status === "completed"
+          ? "completed"
+          : status === "failed" || status === "interrupted"
+            ? "finished"
+            : "unknown",
+      ),
+    ),
     itemsView: "full",
     status:
       status === "completed" || status === "interrupted" || status === "failed"
@@ -1062,7 +1086,11 @@ function commandItem(
     ...(type !== "commandExecution" ? { toolName: type } : {}),
   };
 }
-function projectItem(value: unknown, cwd: string): ThreadItem {
+function projectItem(
+  value: unknown,
+  cwd: string,
+  lifecycle: NativeDisplayItem["status"] = "unknown",
+): ThreadItem {
   const item = record(value);
   const id = requireText(item.id, "Codex item id");
   if (item.type === "userMessage") {
@@ -1100,6 +1128,45 @@ function projectItem(value: unknown, cwd: string): ThreadItem {
       ),
     };
   const type = text(item.type) ?? "unknown";
+  if (type !== "commandExecution") {
+    const names: Record<string, string> = {
+      webSearch: "Web search",
+      fileChange: "File changes",
+      mcpToolCall: "MCP tool",
+      dynamicToolCall: "Native tool",
+      imageView: "Image view",
+      imageGeneration: "Image generation",
+      contextCompaction: "Context compaction",
+      enteredReviewMode: "Entered review",
+      exitedReviewMode: "Exited review",
+      collabAgentToolCall: "Agent collaboration",
+    };
+    const label = names[type];
+    const description =
+      type === "webSearch"
+        ? text(item.query)
+        : type === "mcpToolCall"
+          ? `${text(item.server) ?? "mcp"}.${text(item.tool) ?? "tool"}`
+          : type === "dynamicToolCall"
+            ? text(item.tool)
+            : type === "imageView"
+              ? text(item.path)
+              : undefined;
+    return {
+      type: "nativeItem",
+      id,
+      kind: type,
+      title: `${label ?? `Unsupported native item (${type})`}${description ? `: ${description}` : ""}`,
+      detail: JSON.stringify(item, null, 2),
+      status:
+        item.status === "inProgress" ||
+        item.status === "completed" ||
+        item.status === "failed" ||
+        item.status === "declined"
+          ? item.status
+          : lifecycle,
+    };
+  }
   const tool = commandItem(
     id,
     type,

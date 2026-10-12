@@ -26,7 +26,10 @@ export function registerAgentProviderIpc(service: AgentProviderService): void {
         case "capabilities":
           return service.capabilities(id("instanceId"));
         case "models":
-          return service.models(id("instanceId"));
+          return service.models(
+            id("instanceId"),
+            args.cwd === undefined ? undefined : id("cwd"),
+          );
         case "sessions":
           return service.sessions();
         case "approvals":

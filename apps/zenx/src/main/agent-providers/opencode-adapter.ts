@@ -52,6 +52,8 @@ export class OpenCodeAgentProviderAdapter implements AgentProviderAdapter {
   readonly #listeners = new Set<(event: AgentProviderEvent) => void>();
   readonly #directories = new Map<string, string>();
   readonly #approvals = new Map<string, Permission>();
+  // Process-local ordering for native events and overlapping permission snapshots.
+  readonly #approvalVersions = new Map<string, number>();
   /** Process-local native stream projection, never persisted or used to reconstruct a session. */
   readonly #liveParts = new Map<string, Map<string, JsonObject>>();
   readonly #lifetime = new AbortController();
@@ -113,6 +115,11 @@ export class OpenCodeAgentProviderAdapter implements AgentProviderAdapter {
     const sessionId =
       this.#approvals.get(requestId)?.sessionID ?? nativeSessionId;
     this.#approvals.delete(requestId);
+    if (sessionId)
+      this.#approvalVersions.set(
+        sessionId,
+        (this.#approvalVersions.get(sessionId) ?? 0) + 1,
+      );
     if (sessionId)
       this.#emit({ type: "approvalResolved", sessionId, requestId });
   }
@@ -420,6 +427,10 @@ export class OpenCodeAgentProviderAdapter implements AgentProviderAdapter {
     }
     if (type === "permission.asked") {
       const permission = parsePermission(properties);
+      this.#approvalVersions.set(
+        permission.sessionID,
+        (this.#approvalVersions.get(permission.sessionID) ?? 0) + 1,
+      );
       this.#approvals.set(permission.id, permission);
       this.#emitApproval(permission);
     } else if (type === "permission.replied") {
@@ -454,13 +465,18 @@ export class OpenCodeAgentProviderAdapter implements AgentProviderAdapter {
     });
   }
 
-  async models(): Promise<ModelSummary[]> {
+  async models(cwd?: string): Promise<ModelSummary[]> {
+    if (cwd !== undefined && (!path.isAbsolute(cwd) || cwd.includes("\0")))
+      throw new Error("OpenCode workspace must be absolute");
     await this.#ready();
     const providers = object(
-      await this.#request("/provider"),
+      await this.#request("/provider", { cwd }),
       "OpenCode providers",
     );
-    const config = object(await this.#request("/config"), "OpenCode config");
+    const config = object(
+      await this.#request("/config", { cwd }),
+      "OpenCode config",
+    );
     if (!Array.isArray(providers.all) || !Array.isArray(providers.connected))
       throw new Error("Invalid OpenCode provider catalog");
     const connected = new Set(
@@ -523,7 +539,7 @@ export class OpenCodeAgentProviderAdapter implements AgentProviderAdapter {
       );
     if (!path.isAbsolute(input.cwd) || input.cwd.includes("\0"))
       throw new Error("OpenCode workspace must be absolute");
-    const models = await this.models();
+    const models = await this.models(input.cwd);
     const model =
       input.model ??
       this.#options.defaultModel ??
@@ -561,7 +577,7 @@ export class OpenCodeAgentProviderAdapter implements AgentProviderAdapter {
       throw new Error("OpenCode returned a different session");
     const cwd = session.directory as string;
     this.#directories.set(nativeSessionId, cwd);
-    const approvalsBeforeRead = new Set(this.#approvals.keys());
+    const approvalVersion = this.#approvalVersions.get(nativeSessionId) ?? 0;
     const [history, status, pending] = await Promise.all([
       this.#history(nativeSessionId, cwd),
       this.#request("/session/status", { cwd }),
@@ -585,23 +601,28 @@ export class OpenCodeAgentProviderAdapter implements AgentProviderAdapter {
           else message.parts[index] = { ...live };
         }
       }
-    for (const permissionValue of pending) {
-      const permission = parsePermission(permissionValue);
-      if (
-        permission.sessionID === nativeSessionId &&
-        !this.#approvals.has(permission.id)
-      ) {
-        this.#approvals.set(permission.id, permission);
-        this.#emitApproval(permission);
+    // A native event or a newer accepted read wins over this older snapshot.
+    if (
+      (this.#approvalVersions.get(nativeSessionId) ?? 0) === approvalVersion
+    ) {
+      const permissions = pending
+        .map(parsePermission)
+        .filter((permission) => permission.sessionID === nativeSessionId);
+      const ids = new Set(permissions.map((permission) => permission.id));
+      for (const permission of permissions) {
+        if (!this.#approvals.has(permission.id)) {
+          this.#approvals.set(permission.id, permission);
+          this.#emitApproval(permission);
+        }
       }
-    }
-    for (const [id, approval] of this.#approvals) {
-      if (
-        approval.sessionID === nativeSessionId &&
-        approvalsBeforeRead.has(id) &&
-        !pending.some((value) => optionalObject(value)?.id === id)
-      )
-        this.#resolveApproval(id);
+      for (const [id, approval] of this.#approvals) {
+        if (approval.sessionID === nativeSessionId && !ids.has(id))
+          this.#resolveApproval(id);
+      }
+      this.#approvalVersions.set(
+        nativeSessionId,
+        (this.#approvalVersions.get(nativeSessionId) ?? 0) + 1,
+      );
     }
     const nativeModel = optionalObject(session.model);
     const lastModelMessage = [...messages]
@@ -681,7 +702,9 @@ export class OpenCodeAgentProviderAdapter implements AgentProviderAdapter {
     const native = await this.read(nativeSessionId);
     if (
       input.model &&
-      !(await this.models()).some((model) => model.id === input.model)
+      !(await this.models(native.thread.cwd)).some(
+        (model) => model.id === input.model,
+      )
     )
       throw new Error("Unknown OpenCode native model");
     await this.#request(

@@ -213,11 +213,13 @@ test("tool lifecycle/output and unsupported item types remain readable projectio
     assert.equal(command.exitCode, 0);
   }
   const mcp = items?.find((item) => item.id === "mcp");
-  if (mcp?.type === "commandExecution") {
-    assert.equal(mcp.toolName, "mcpToolCall");
-    assert.deepEqual(mcp.toolArguments, { path: "a.txt" });
-    assert.match(mcp.aggregatedOutput ?? "", /read/);
-  } else assert.fail("MCP item was omitted");
+  assert.equal(mcp?.type, "nativeItem");
+  if (mcp?.type === "nativeItem") {
+    assert.equal(mcp.kind, "mcpToolCall");
+    assert.deepEqual(JSON.parse(mcp.detail).arguments, { path: "a.txt" });
+    assert.match(mcp.detail, /read/);
+    assert.equal(mcp.status, "completed");
+  }
   assert.equal(
     items?.some((item) => item.id === "patch"),
     true,

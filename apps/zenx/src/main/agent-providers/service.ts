@@ -282,11 +282,13 @@ export class AgentProviderService {
       };
     return { ...(await this.#adapter(instanceId)).capabilities };
   }
-  async models(instanceId: string): Promise<ModelSummary[]> {
+  async models(instanceId: string, cwd?: string): Promise<ModelSummary[]> {
     this.#assertOpen();
+    if (cwd !== undefined && !path.isAbsolute(string(cwd, "workspace")))
+      throw new Error("Agent Provider workspace must be absolute");
     return instanceId === "zen"
       ? this.#zenModels()
-      : (await this.#adapter(instanceId)).models();
+      : (await this.#adapter(instanceId)).models(cwd);
   }
   async approvals(sessionId: string) {
     await this.#bound(sessionId);
