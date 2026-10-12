@@ -100,6 +100,7 @@
 - **Tool Output Spool** — Host 把超出默认 8 KiB 模型 preview（4 KiB head 与 4 KiB tail）的完整已捕获 text result 暂存到权限收窄的临时文件，并只把含 head/tail、大小、hash 和易失路径的 receipt canonicalize；临时副本不是 Thread authority。
 - **Tool Execution Mode** — Tool Runtime 对执行 body 只声明 `parallel_safe` 或 `exclusive`；未声明按 `exclusive`，builtin shell 的独立进程声明 `parallel_safe`，该分类不是权限或资源 scope。
 - **ToolTaskManager** — ToolEnvironment 统一拥有普通工具的 Host-local 执行、按 Thread 隔离的 task_id、增量输出与 wait；交回时间（默认 10 秒、最高 180 秒）和执行超时（默认 10 分钟）分开，快速结果原样返回，任务不参与 journal 重建。
+- **Shell lifecycle observations** — ShellToolRuntime 从成功 spawn、直接子进程 exit 与两个输出流 end 产生正交的 foreground/stdio 事实，ToolTaskManager 将同一时点的可选快照放入普通工具回执；这些事实不改变任务状态、close 结算、取消或 journal/restart 语义。
 - **ToolTaskPolicy** — 具体工具只声明取消确认能力、资源作用域和可选 timingArguments 字段映射；默认未知取消保留 owner fence 与执行容量直到真实完成或 Host 关闭，shell 在进程组停止后确认取消，composite 由同一任务管理器持有并协调嵌套调用，本身不占子工具容量。
 - **Tool Resource Claims** — Runtime 可为一次调用声明瞬时共享或独占资源，统一任务管理器原子取得全部声明；显式启用排队的调用以自身 Thread 的 task_id 等待，冲突资源按到达顺序执行，互不相关的资源仍可并行，取消或超时的待执行调用不派发，已经派发的未知取消继续保留资源直到真实结束。
 - **ZenX Hosted Resource Ownership** — Browser 执行按真实的 Thread/session 隔离和页面身份协调，会话关闭独占整个会话；Computer 保留共享桌面的独占操作边界，其他插件各自独占插件资源，IPC transport 不充当所有插件共同的资源锁；这些资源只存在于 Host 生命周期内，不改变 Thread 权威或观察投影。
@@ -535,6 +536,15 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   同一 wait 读取增量输出。程序内部 await 子工具等待真实终态结果，不收到中间 running 回执。
   协调程序不占子工具的运行容量或资源锁。yield 后原父调用、能力快照和调度作用域由任务持有，
   后续子结果仍按原 lineage 提交；所属 Turn 的中断传播到任务及子调用，不重放执行栈。
+- 本地 shell 回执的 `foreground: running|exited` 指直接子进程，`stdio: open|eof` 指 stdout/stderr
+  是否都观测到 readable EOF，二者正交；`running + eof` 可达，不代表任务完成。成功 spawn 前不提供字段；
+  `exited` 时另给 `foreground_exit_code` 与 `foreground_signal`，信号终止的 code 为 null。
+  顶层 status 与 terminal-only `exit_code` 保持原义；只有 `running + exited + open` 派生显示
+  `running (foreground_exited)`。回执快照与输出窗口一起固定，捕获异步落盘期间的新事件留给下次观察。
+  普通完成仍以 Node child `close` 为边界（直接进程退出、输出管道关闭），不枚举重定向输出或逃逸的后代；
+  取消/超时沿现有 POSIX 进程组终止边界，Windows 只终止直接 child。强制销毁流不伪装成观测到 EOF，
+  `stdio: open` 也不承诺能识别持有者或其数量。事实仅随已领取回执进入 canonical tool_result，
+  重启重放旧回执而不复活 task；Fleet 当前 wire 不转发这些可选本地事实，不推断远端支持。
 - `run_code` 内部每次 nested tool call/result 都必须从 append-only ItemList 推导，并
   关联外层调用；模型上下文可以只接收程序显式返回的汇总结果，但 durable history
   不能省略中间调用。nested tool 失败明确返回程序，由程序或后续模型调用决定是否

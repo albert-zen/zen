@@ -61,6 +61,23 @@ use an SDK request deadline to stand in for a Catalog failure. Retain real proce
 and installer paths, reject early mutation failure, and release/abort/join every
 fixture operation before deleting its temporary directory.
 
+## Shell lifecycle observations
+
+After `npm run build`, `node --test dist/test/shell-lifecycle.test.js` checks the
+optional shell facts at the real process/task boundary. POSIX fixtures cover all
+four foreground/stdio combinations, early foreground exit code, late output and
+EOF, cancellation/timeout, signal exit, an escaped pipe holder, and journal
+replay without resurrecting host-local tasks. Spawn failure and ordinary
+spawn/exit fixtures run on every platform. Tests synchronize through fixture
+files rather than treating output timing as process completion.
+
+The root Linux aggregate runs these tests. The existing macOS capability and
+Windows computer CI jobs also run the focused file; POSIX process-group tests
+explicitly skip on Windows, where the current shell runtime only kills its direct
+child. These checks do not claim Windows process-tree containment or portable
+pipe-holder enumeration. A forced local stream destroy must remain `stdio: open`
+unless both streams actually reported EOF.
+
 ## CI download and build caches
 
 Android caches npm data using both lockfiles and Gradle data using the mobile
