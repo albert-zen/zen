@@ -551,7 +551,10 @@ export class AgentRuntime {
       name: string;
       arguments: Record<string, unknown>;
     }> = [];
-    const completedReasoning: ReasoningItem[] = [];
+    const completedReasoning: Extract<
+      ReasoningItem,
+      { reasoningContent: string }
+    >[] = [];
     let failure: { error: unknown } | undefined;
     const reasoningItems = new Map<string, string>();
     const reasoningDeltas = new Map<
