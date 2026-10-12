@@ -51,6 +51,8 @@ async function fixture(execute: (input: unknown) => Promise<unknown>) {
   });
   const snapshot: ZenXPluginSnapshot = {
     plugins: [],
+    settings: [],
+    commands: [],
     sidebar: [],
     pages: [],
     subroutes: [],
