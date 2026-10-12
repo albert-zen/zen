@@ -1,4 +1,5 @@
 import type { ProtocolIpcResult } from "../../preload/queue-edit-ipc.js";
+import type { AgentProvidersApi } from "../../main/agent-providers/types.js";
 import type { SubscriptionUsage } from "../../main/subscription-usage.js";
 import type {
   ImZenXSetupView,
@@ -73,6 +74,7 @@ declare global {
         saveChannel(input: ImZenXChannelSave): Promise<ImZenXSetupView>;
         prepareRuntime(): Promise<ImZenXSetupView>;
       };
+      agentProviders: AgentProvidersApi;
       platform: NodeJS.Platform;
       locale: {
         getSystemLanguages(): Promise<string[]>;

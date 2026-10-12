@@ -15,14 +15,25 @@ import type {
   NativeThreadRecoverySnapshot,
 } from "../../../../src/protocol/native/recovery.js";
 
-export type Thread = Omit<CodexThread, "parentThreadId"> & {
+export type Thread = Omit<CodexThread, "parentThreadId" | "turns"> & {
+  turns: Turn[];
   /** Native-only creation relation; CAS continues to project null. */
   parentThreadId: string | null;
   /** Native product projection input; absent on CAS-only compatibility data. */
   canonicalItems?: readonly CanonicalItem[];
 };
-export type Turn = CodexTurn;
-export type ThreadItem = CodexThreadItem;
+export type Turn = Omit<CodexTurn, "items"> & { items: ThreadItem[] };
+/** Display-only external-engine item; never a Zen canonical Item or CAS wire shape. */
+export interface NativeDisplayItem {
+  type: "nativeItem";
+  id: string;
+  kind: string;
+  title: string;
+  detail: string;
+  status:
+    "inProgress" | "completed" | "failed" | "declined" | "finished" | "unknown";
+}
+export type ThreadItem = CodexThreadItem | NativeDisplayItem;
 export type CommandItem = CodexCommandItem;
 
 export interface ClientInfo {

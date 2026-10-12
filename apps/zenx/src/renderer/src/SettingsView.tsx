@@ -1,5 +1,6 @@
 import { i18n } from "./i18n.js";
 import { useTranslation } from "react-i18next";
+import { AgentProviderSettings } from "./AgentProviderSettings.js";
 import { SkillsSettingsPanel } from "./SkillsSettingsPanel.js";
 import { Select, Combobox } from "./ui/controls.js";
 import { SubscriptionUsageCard } from "./SubscriptionUsageCard.js";
@@ -68,6 +69,7 @@ import {
 } from "./ProviderModelAdmissionControls.js";
 
 export type SettingsTab =
+  | "agent-providers"
   | "account"
   | "models"
   | "plugins"
@@ -92,6 +94,7 @@ export function SettingsView({
   pluginSnapshot = null,
   active = true,
   browserSettingsFocusRequest = 0,
+  onAgentProvidersChanged,
 }: {
   archivedError: string | null;
   archivedLoading: boolean;
@@ -105,6 +108,7 @@ export function SettingsView({
   pluginSnapshot?: ZenXPluginSnapshot | null;
   active?: boolean;
   browserSettingsFocusRequest?: number;
+  onAgentProvidersChanged?(): void;
 }) {
   const { t } = useTranslation("settings");
   const [settings, setSettings] = useState<PublicHostSettings | null>(null);
@@ -301,6 +305,11 @@ export function SettingsView({
     icon: IconName;
   }> = [
     {
+      id: "agent-providers",
+      label: i18n.t("shell:agentProviders"),
+      icon: "chip",
+    },
+    {
       id: "account",
       label: i18n.t("settings:settingsView.account"),
       icon: "users",
@@ -418,6 +427,11 @@ export function SettingsView({
             {tabs.map((item) => (
               <button
                 data-tab={item.id}
+                className={
+                  item.id === "models" || item.id === "account"
+                    ? "zen-settings-child"
+                    : undefined
+                }
                 key={item.id}
                 type="button"
                 role="tab"
@@ -439,6 +453,16 @@ export function SettingsView({
             aria-labelledby={`settings-tab-${tab}`}
             tabIndex={0}
           >
+            <div
+              hidden={tab !== "agent-providers"}
+              inert={tab !== "agent-providers"}
+            >
+              <AgentProviderSettings
+                active={active && tab === "agent-providers"}
+                onOpenZen={onTabChange}
+                onChanged={onAgentProvidersChanged}
+              />
+            </div>
             <Activity mode={active && tab === "account" ? "visible" : "hidden"}>
               <AccountPanel
                 settings={settings}

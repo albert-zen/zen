@@ -158,6 +158,10 @@ function canonicalItems(
       },
     ];
   }
+  if (item.type === "nativeItem")
+    throw new Error(
+      "External display items cannot become canonical Zen history",
+    );
   const callId = item.callId ?? `${item.id}-call`;
   const call: ToolCallItem = {
     id: item.id,

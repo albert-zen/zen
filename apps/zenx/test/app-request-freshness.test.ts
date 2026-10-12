@@ -174,22 +174,18 @@ test("ignores older Thread summary and model catalog responses after newer refre
       await Promise.resolve();
       await Promise.resolve();
     });
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>(
-          '.composer-model-trigger[aria-label^="Model and reasoning"]',
-        )
-        ?.click(),
+    const modelTrigger = document.querySelector<HTMLButtonElement>(
+      ".composer-model-trigger",
     );
-    await act(async () =>
-      Array.from(
-        document.querySelectorAll<HTMLButtonElement>(
-          ".composer-selection-menu button",
-        ),
-      )
-        .find((button) => button.textContent?.includes("Model"))
-        ?.click(),
-    );
+    assert.ok(modelTrigger, "The draft exposes the shared engine/model picker");
+    await act(async () => modelTrigger.click());
+    const modelEntry = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        ".composer-selection-menu button",
+      ),
+    ).find((button) => button.textContent?.startsWith("Model"));
+    assert.ok(modelEntry, "The picker exposes its model catalog entry");
+    await act(async () => modelEntry.click());
     assert.match(document.body.textContent ?? "", /new-model/u);
     await act(async () => {
       modelRequests[0]?.resolve({ data: [wireModel("old-model")] });

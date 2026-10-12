@@ -73,6 +73,9 @@ Thread
 
 ### 2.4 Provider 与模型身份
 
+- Agent Provider 表示完整执行引擎；它的模型服务配置位于对应引擎之下。Zen、Codex、OpenCode 的会话共享普通 Project / Thread 导航，不设独立的 Agent Sessions 分区。外部会话按 Host 的同一 canonical Project projection 归组，不在 renderer 另行推测 cwd 身份，也不把原生历史转换成 Zen canonical Items。
+- 新会话在同一紧凑 Composer 选择界面中选择引擎及其模型。切换引擎后目录必须来自该引擎实例，不能保留另一个实例的模型作为可用选择。已有会话保持原引擎绑定；不支持的管理动作不以空操作或跨引擎替代实现。
+
 - Thread row 以完整标题为第一层，第二层仅显示运行或待审批状态；Provider/model 降为标题 tooltip，当前生成配置仍在 Composer 中可见。
 - 预设 Provider 使用随 ZenX 分发的本地正式品牌 asset；未知 Provider 使用克制的 generic fallback。
 - Thread row 不显示 Provider 文本、内部 `modelProvider`、API/订阅标签或 Fake 品牌。
@@ -202,6 +205,10 @@ ItemList replay，Renderer 不保存另一份 transcript authority。
 - Trace Group 保持轻量，不使用厚边框或每一步一个大卡片。
 - Thinking 与 Tool row 采用一致的紧凑视觉；完成色保持克制，避免大量成功状态争夺注意力。
 - 代码块属于相邻 Agent Message 内容，可以有容器，但不能被误认为 Tool Call。
+
+从当前会话进入 Settings 再返回同一会话时，保留其草稿和当前阅读状态。隐藏只暂停当前视图的读取订阅，不暂停 Host 执行；返回时按原会话身份刷新。不为全部历史会话建立常驻视图缓存。外部引擎事件使旧的 Sidebar 状态失效；未重新观察时不得声称已经完成或仍在运行。
+
+外部会话复用当前 trace 列与 disclosure。原生非命令活动保留公开详情，不把缺少状态的搜索或其他 Item 伪装成一直运行的命令。原生会话繁忙但活动 Turn 尚不可见时仍禁止 Send，并保留按真实会话身份请求 Stop 的入口；必须依赖 Turn ID 的引擎缺少该 ID 时明确提示并刷新，不伪造执行对象。
 
 ### 4.4 Composer、审批与 live following
 

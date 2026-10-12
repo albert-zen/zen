@@ -1,3 +1,7 @@
+import type {
+  AgentProvidersApi,
+  AgentProviderEvent,
+} from "../main/agent-providers/types.js";
 import type { SubscriptionUsage } from "../main/subscription-usage.js";
 import type {
   ImZenXSetupView,
@@ -73,6 +77,56 @@ import type { ComputerObservationEnvelope } from "../main/computer-live-observat
 import type { ChromeBridgeSettingsSnapshot } from "../main/chrome-extension-bridge.js";
 import type { ZenXComputerReadinessSnapshot } from "../main/computer-readiness.js";
 
+const agentProviders: AgentProvidersApi = {
+  list: () => ipcRenderer.invoke(ipcChannels.agentProvidersRequest, "list"),
+  save: (instance) =>
+    ipcRenderer.invoke(ipcChannels.agentProvidersRequest, "save", instance),
+  capabilities: (instanceId) =>
+    ipcRenderer.invoke(ipcChannels.agentProvidersRequest, "capabilities", {
+      instanceId,
+    }),
+  models: (instanceId, cwd) =>
+    ipcRenderer.invoke(ipcChannels.agentProvidersRequest, "models", {
+      instanceId,
+      cwd,
+    }),
+  sessions: () =>
+    ipcRenderer.invoke(ipcChannels.agentProvidersRequest, "sessions"),
+  approvals: (sessionId) =>
+    ipcRenderer.invoke(ipcChannels.agentProvidersRequest, "approvals", {
+      sessionId,
+    }),
+  create: (input) =>
+    ipcRenderer.invoke(ipcChannels.agentProvidersRequest, "create", input),
+  read: (sessionId) =>
+    ipcRenderer.invoke(ipcChannels.agentProvidersRequest, "read", {
+      sessionId,
+    }),
+  send: (sessionId, input) =>
+    ipcRenderer.invoke(ipcChannels.agentProvidersRequest, "send", {
+      sessionId,
+      ...input,
+    }),
+  interrupt: (sessionId) =>
+    ipcRenderer.invoke(ipcChannels.agentProvidersRequest, "interrupt", {
+      sessionId,
+    }),
+  respondApproval: (sessionId, requestId, decision) =>
+    ipcRenderer.invoke(ipcChannels.agentProvidersRequest, "respondApproval", {
+      sessionId,
+      requestId,
+      decision,
+    }),
+  onEvent: (listener) => {
+    const receive = (
+      _event: Electron.IpcRendererEvent,
+      value: AgentProviderEvent,
+    ) => listener(value);
+    ipcRenderer.on(ipcChannels.agentProvidersEvent, receive);
+    return () =>
+      ipcRenderer.removeListener(ipcChannels.agentProvidersEvent, receive);
+  },
+};
 contextBridge.exposeInMainWorld("zenx", {
   imzenx: {
     inspect: async (): Promise<ImZenXSetupView> =>
@@ -82,6 +136,7 @@ contextBridge.exposeInMainWorld("zenx", {
     prepareRuntime: async (): Promise<ImZenXSetupView> =>
       ipcRenderer.invoke(ipcChannels.imzenxSetupPrepareRuntime),
   },
+  agentProviders,
   platform: process.platform,
   locale: {
     getSystemLanguages: (): Promise<string[]> =>

@@ -1,3 +1,4 @@
+@import "./agent-providers.css";
 @import "./queued-message-editor.css";
 @import "./approval-request.css";
 @import "./activity-text.css";
@@ -485,6 +486,8 @@ button:disabled {
   transform: translateX(-12px);
 }
 .sidebar-header {
+  /* Sidebar actions can overlap the native titlebar drag rectangle. */
+  -webkit-app-region: no-drag;
   flex: 0 0 auto;
   padding: 4px 8px 0;
 }
@@ -9815,4 +9818,11 @@ button:disabled {
   .trace-row .mini-spinner {
     animation: none;
   }
+}
+
+.native-item-detail {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  overflow: auto;
 }

@@ -6,6 +6,22 @@
 
 - **ZenX 界面语言** — Renderer 的本地语言偏好（system/en/zh-CN）只拥有展示选择；集中式 i18next 词条按功能分组，通过 React 订阅即时更新，系统模式按 Electron 返回的有序语言列表解析，原生菜单同步展示语言，不改写 canonical 内容、Host 配置或插件语义。
 
+## Agent Provider ownership (experimental product integration)
+
+ZenX can select an **Agent Provider instance**, a Host-local configured engine such as Zen or Codex, before selecting that instance's model. Model-service providers remain configuration beneath Zen; they are not agent engines. **Agent Provider adapters** own native process/protocol lifecycle, approvals and transient display projections. They do not implement another agent loop or silently translate unsupported capabilities.
+
+The existing append-only ItemList invariant applies to Zen-native Threads. External engine sessions retain their native history as the only execution authority. **Agent session bindings** persist only the stable Host ID, provider instance ID, native session ID and workspace locator; they contain no transcript, Turn state, queue or receipt ledger. External display projections must not claim full native context or replayability. Existing Zen history/profile is not rewritten. Provider identity is fixed for each binding; changing provider means creating another native session, not resuming foreign history. PAW/Room/Fleet continue to target their existing explicit Zen-native Threads until those surfaces explicitly support an external provider capability.
+
+The desktop Host lifecycle owns external engine processes alongside the existing Zen connection; closing a window does not close an engine, explicit application Quit does. Background catalog inspection never logs in or starts a model Turn. External credentials stay in the native engine's own configuration. UI is a consumer of these Host adapters, never a session authority.
+
+Mixed-engine sidebar navigation is a product projection: the Host feeds Zen thread locators and namespaced external session locators through the same canonical Project identity resolver. Sharing a Project group and row geometry does not grant Zen operations over an external session or convert its history to canonical Items.
+
+`projectConversationLocators` combines Zen summaries and `agent:<bindingId>` locators only as inputs to that existing Project resolver. `AgentProviderModelScope` supplies the shared Composer model menu with its renderer-local engine selection; it is not an adapter registry or routing authority, and native model IDs remain opaque to Zen model-profile decoding. Transient native row title/status caches never replace the engine's history or claim a status before a native read. A later native event invalidates an older status, without eagerly starting saved engines or polling their transcripts. A native failure remains visible across non-authoritative change events; read-start and event generations let a fresh successful native read recover that observation without accepting pre-failure or superseded responses.
+
+`readProjectConversationNavigation` isolates the two locator-source reads and reports any unavailable source in the Project snapshot, so a failing engine source cannot hide the other owner's conversations or masquerade as a successful empty catalog.
+
+External native item projections use a ZenX-only `nativeItem` display shape when the engine reports a non-command activity. Public native details remain readable; lifecycle comes from explicit item status, item notifications, or terminal native history, and unsupported items never become fabricated running commands. This shape does not expand canonical Items or the inbound CAS facade.
+
 ## 核心概念
 
 - **Plugin configuration readiness** — Host catalog readiness is a read-only lifecycle projection shared by any Agent and preset; each plugin owns its nonsecret configuration and bounded readiness checks, while IMZenX save-only preparation retains an explicit-connect gate outside Thread history and never launches a channel consumer or grants permission.

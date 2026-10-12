@@ -1733,6 +1733,34 @@ test("Appearance offers opaque themes without a translucency control", async () 
 test("every Settings tab remains keyboard reachable after narrow-screen reflow", async () => {
   const harness = await mountSettings("appearance");
   try {
+    // Mounting every section exercises its real effects, so provide the read-only
+    // plugin bindings that the production preload always supplies.
+    Object.assign(window.zenx, {
+      skills: {
+        list: async () => ({
+          skills: [],
+          errors: [],
+          catalogBudgetBytes: 4096,
+        }),
+      },
+      marketplace: { get: async () => ({ entries: [] }) },
+      plugins: {
+        onChange: () => () => {},
+        get: async () => ({
+          plugins: [],
+          bundles: [],
+          surfaces: [],
+          sidebar: [],
+          pages: [],
+          subroutes: [],
+          settings: [],
+          panels: [],
+          commands: [],
+          menus: [],
+          resultRenderers: [],
+        }),
+      },
+    });
     await waitFor(() => exactButton("Appearance"));
     const tabs = Array.from(
       document.querySelectorAll<HTMLButtonElement>(
@@ -1742,6 +1770,7 @@ test("every Settings tab remains keyboard reachable after narrow-screen reflow",
     assert.deepEqual(
       tabs.map((tab) => tab.textContent?.trim()),
       [
+        "Agent Providers",
         "Account",
         "Models & provider",
         "Plugins",
@@ -1780,8 +1809,42 @@ test("every Settings tab remains keyboard reachable after narrow-screen reflow",
       );
       await Promise.resolve();
     });
-    assert.equal(document.activeElement?.textContent?.trim(), "Account");
+    assert.equal(
+      document.activeElement?.textContent?.trim(),
+      "Agent Providers",
+    );
     assert.equal(tabs[0]?.getAttribute("aria-selected"), "true");
+
+    // The responsive grid changes geometry, not DOM order or roving focus.
+    // Walk every section in both directions, including both wrap boundaries.
+    for (const [key, direction] of [
+      ["ArrowRight", 1],
+      ["ArrowLeft", -1],
+    ] as const) {
+      for (let step = 1; step <= tabs.length; step++) {
+        const focused = document.activeElement as HTMLButtonElement;
+        await act(async () => {
+          focused.dispatchEvent(
+            new harness.dom.window.KeyboardEvent("keydown", {
+              bubbles: true,
+              key,
+            }),
+          );
+          await Promise.resolve();
+        });
+        const expected = tabs[(direction * step + tabs.length) % tabs.length]!;
+        assert.equal(document.activeElement, expected, `${key} step ${step}`);
+        assert.equal(expected.getAttribute("aria-selected"), "true");
+        assert.equal(expected.tabIndex, 0);
+        assert.equal(tabs.filter((tab) => tab.tabIndex === 0).length, 1);
+        assert.equal(
+          document
+            .getElementById("settings-panel")
+            ?.getAttribute("aria-labelledby"),
+          expected.id,
+        );
+      }
+    }
   } finally {
     await unmount(harness);
   }

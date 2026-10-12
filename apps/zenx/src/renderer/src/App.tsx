@@ -1,5 +1,15 @@
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
+import {
+  AgentProviderModelScope,
+  type AgentProviderSelection,
+} from "./agent-provider-selection.js";
+import {
+  agentProviderLabel,
+  ExternalAgentSession,
+  useAgentProviders,
+} from "./agent-providers-ui.js";
+import type { AgentSessionSnapshot } from "../../main/agent-providers/types.js";
 import { ImZenXDraftContext, type ImZenXDraft } from "./imzenx-ui.js";
 import { RoomDraftContext } from "./room-drafts.js";
 import {
@@ -26,6 +36,7 @@ import { FleetComposerSurface } from "./FleetComposerSurface.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
 import {
   default as React,
+  Activity,
   useCallback,
   useEffect,
   useId,
@@ -164,6 +175,8 @@ const isModelCatalogLoading = (value: string | null) =>
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "zenx.sidebar-collapsed";
 
 interface NewThreadDraft {
+  providerInstanceId?: string;
+  agentModel?: string;
   permissionMode?: FilePermissionMode;
   id: string;
   workspace: string | null;
@@ -396,12 +409,22 @@ function updateThreadProjectionCache(
 export function App() {
   const [queueEditStore] = useState(createQueueEditStore);
   const { i18n: activeI18n } = useTranslation("shell");
+  const agentProviders = useAgentProviders();
+  const [selectedAgentSessionId, setSelectedAgentSessionId] = useState<
+    string | null
+  >(null);
+  const selectedAgentSessionIdRef = useRef(selectedAgentSessionId);
+  selectedAgentSessionIdRef.current = selectedAgentSessionId;
+  const selectedAgentSession = agentProviders.sessions.find(
+    (session) => session.id === selectedAgentSessionId,
+  );
   const selectionEpoch = useRef(0);
   const pendingResumeProjectionRef = useRef<{
     epoch: number;
     threadId: string;
     notifications: BufferedProtocolNotification[];
   } | null>(null);
+
   const threadProjectionCacheRef = useRef(
     new Map<string, ThreadProjectionCacheEntry>(),
   );
@@ -417,6 +440,7 @@ export function App() {
   const newThreadPendingRef = useRef(false);
   const newThreadDraftRef = useRef<NewThreadDraft | null>(null);
   const newThreadPendingDraftRef = useRef<NewThreadDraft | null>(null);
+  const externalPendingDraftsRef = useRef(new Map<string, NewThreadDraft>());
   const newThreadPromotionsRef = useRef(new Map<string, string>());
   const newThreadImageLeasesRef = useRef(new Map<string, number>());
   const projectPickerOperationEpoch = useRef(0);
@@ -516,7 +540,8 @@ export function App() {
       setWorkflowCommands(value.profile.workflowCommands ?? []);
     });
   }, []);
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
+  const [settingsTab, setSettingsTab] =
+    useState<SettingsTab>("agent-providers");
   const [browserSettingsFocusRequest, setBrowserSettingsFocusRequest] =
     useState(0);
   const fileDrafts = useWorkspaceFileDrafts();
@@ -706,6 +731,15 @@ export function App() {
       newThreadPendingDraftRef.current?.id === newThreadDraftRef.current.id
     )
       newThreadPendingDraftRef.current = newThreadDraftRef.current;
+    if (
+      draft === null &&
+      newThreadDraftRef.current !== null &&
+      externalPendingDraftsRef.current.has(newThreadDraftRef.current.id)
+    )
+      externalPendingDraftsRef.current.set(
+        newThreadDraftRef.current.id,
+        newThreadDraftRef.current,
+      );
     newThreadDraftRef.current = draft;
     setNewThreadDraft(draft);
   };
@@ -803,6 +837,13 @@ export function App() {
     }
   };
 
+  const agentSessionLocatorRevision = agentProviders.sessions
+    .map((binding) => `${binding.id}:${binding.cwd}`)
+    .join("\0");
+  useEffect(() => {
+    if (agentProviders.sessions.length > 0) void loadProjects();
+  }, [agentSessionLocatorRevision]);
+
   const selectProjectDirectory = async (workspace: string) => {
     const intent = projectPickerIntentRef.current;
     if (intent === null || projectPickerPendingRef.current) return;
@@ -866,6 +907,7 @@ export function App() {
   };
 
   const resumeThread = async (threadId: string, preserveNavigation = false) => {
+    setSelectedAgentSessionId(null);
     discardRecoverableDraft();
     const epoch = ++selectionEpoch.current;
     const cached = threadProjectionCacheRef.current.get(threadId);
@@ -1096,6 +1138,7 @@ export function App() {
           params,
         } as BufferedProtocolNotification;
         const eventThreadId = notificationThreadId(notification);
+
         const cached = updateThreadProjectionCache(
           threadProjectionCacheRef.current,
           notification,
@@ -1419,6 +1462,7 @@ export function App() {
   );
 
   const showNewThreadDraft = (workspace: string | null) => {
+    setSelectedAgentSessionId(null);
     discardRecoverableDraft();
     invalidateThreadSelection();
     threadUsageLoadEpoch.current += 1;
@@ -1456,6 +1500,7 @@ export function App() {
       serverStatus.type !== "ready" ||
       page !== "agent" ||
       selectedThreadIdRef.current !== null ||
+      selectedAgentSessionId !== null ||
       newThreadDraftRef.current !== null
     )
       return;
@@ -1470,6 +1515,7 @@ export function App() {
     lastUsedWorkspace,
     page,
     projectListLoaded,
+    selectedAgentSessionId,
     serverStatus.type,
   ]);
 
@@ -1503,6 +1549,12 @@ export function App() {
     draftId: string,
     update: (state: ComposerState) => ComposerState,
   ) => {
+    const externalPending = externalPendingDraftsRef.current.get(draftId);
+    if (externalPending !== undefined)
+      externalPendingDraftsRef.current.set(draftId, {
+        ...externalPending,
+        composer: update(externalPending.composer),
+      });
     if (newThreadPendingDraftRef.current?.id === draftId)
       newThreadPendingDraftRef.current = {
         ...newThreadPendingDraftRef.current,
@@ -1517,6 +1569,59 @@ export function App() {
     }
     const threadId = newThreadPromotionsRef.current.get(draftId);
     if (threadId !== undefined) updateComposer(threadId, update);
+  };
+
+  const openAgentSession = (sessionId: string) => {
+    discardRecoverableDraft();
+    invalidateThreadSelection();
+    threadUsageLoadEpoch.current += 1;
+    confirmNewThreadDraft(null);
+    selectedThreadIdRef.current = null;
+    setSelectedThreadId(null);
+    setThreadDetail(null);
+    setThreadLoading(false);
+    setThreadError(null);
+    setSelectedAgentSessionId(sessionId);
+    setPage("agent");
+    setSidebarOpen(false);
+  };
+
+  const promoteAgentDraft = (
+    draft: NewThreadDraft,
+    snapshot: AgentSessionSnapshot,
+  ) => {
+    const composerKey = `agent:${snapshot.binding.id}`;
+    const pending = externalPendingDraftsRef.current.get(draft.id) ?? draft;
+    updateComposer(composerKey, () => pending.composer);
+    newThreadPromotionsRef.current.set(draft.id, composerKey);
+    agentProviders.rememberSession(snapshot.binding);
+    agentProviders.rememberSnapshot(snapshot);
+    void window.zenx.settings
+      .markWorkspaceUsed(snapshot.binding.cwd)
+      .then(async () => await loadProjects())
+      .catch((error: unknown) => {
+        if (selectedAgentSessionIdRef.current === snapshot.binding.id)
+          setRequestError(describeError(error));
+      });
+    void agentProviders.refresh();
+    if (
+      newThreadDraftRef.current?.id === draft.id &&
+      newThreadDraftRef.current.providerInstanceId === draft.providerInstanceId
+    ) {
+      openAgentSession(snapshot.binding.id);
+    }
+  };
+
+  const changeAgentProvider = (id: string) => {
+    updateNewThreadDraft((draft) => ({
+      ...draft,
+      providerInstanceId: id,
+      agentModel: undefined,
+      composer: {
+        ...advanceComposerDraftRevision(draft.composer),
+        submission: null,
+      },
+    }));
   };
 
   const acquireNewThreadImageLease = (draftId: string) => {
@@ -2485,9 +2590,24 @@ export function App() {
         }
         onToggleSidebar={toggleSidebarCollapsed}
       >
-        {page === "agent" &&
-        newThreadDraft === null &&
-        selectedSummary !== null ? (
+        {page === "agent" && selectedAgentSessionId !== null ? (
+          <PageTitleBar
+            onOpenSidebar={openSidebar}
+            title={
+              agentProviders.labels[selectedAgentSessionId] ||
+              (selectedAgentSession
+                ? `Session ${selectedAgentSession.nativeSessionId.slice(0, 8)}`
+                : "Loading conversation")
+            }
+            titleDetails={
+              selectedAgentSession === undefined
+                ? undefined
+                : `${agentProviders.instances.find((instance) => instance.id === selectedAgentSession.providerInstanceId)?.name ?? selectedAgentSession.providerInstanceId} · Host: ${selectedAgentSession.hostId} · Working directory: ${selectedAgentSession.cwd} · Native session: ${selectedAgentSession.nativeSessionId}`
+            }
+          />
+        ) : page === "agent" &&
+          newThreadDraft === null &&
+          selectedSummary !== null ? (
           <ConversationTitleBar
             onOpenSidebar={openSidebar}
             threads={[...threadSummaries, ...archivedThreadSummaries]}
@@ -2524,6 +2644,21 @@ export function App() {
             }
             title={selectedRoom?.name ?? genericPluginTarget.title}
           />
+        ) : page === "agent" ? (
+          <div className="workspace-header">
+            <div className="workspace-heading-row">
+              <button
+                className="icon-button mobile-menu"
+                type="button"
+                aria-label="Open sidebar"
+                aria-controls="primary-sidebar"
+                aria-expanded={sidebarOpen}
+                onClick={openSidebar}
+              >
+                <Icon name="tree" />
+              </button>
+            </div>
+          </div>
         ) : null}
       </WindowTitleBar>
       {page === "agent" &&
@@ -2565,6 +2700,15 @@ export function App() {
         </button>
       ) : null}
       <Sidebar
+        agentSessions={agentProviders.navigationSessions}
+        selectedAgentSessionId={
+          page === "agent" ? selectedAgentSessionId : null
+        }
+        onSelectAgentSession={openAgentSession}
+        agentSessionError={projects.sourceErrors?.agent ?? agentProviders.error}
+        onRetryAgentSessions={() =>
+          void Promise.all([agentProviders.refresh(), loadProjects()])
+        }
         roomConversations={roomsAdmitted ? roomConversations : undefined}
         selectedRoomId={selectedRoomId}
         collapsed={sidebarCollapsed}
@@ -2643,7 +2787,9 @@ export function App() {
           }
         }}
         onOpenSettings={() => openPage("settings")}
-        onRetryThreads={() => void loadThreadSummaries(true)}
+        onRetryThreads={() =>
+          void Promise.all([loadThreadSummaries(true), loadProjects()])
+        }
         onRenameThread={renameThread}
         onForkThread={forkThread}
         onSelectThread={(threadId) => void resumeThread(threadId)}
@@ -2665,7 +2811,9 @@ export function App() {
         }
         sidebarOrder={sidebarOrder}
         pinnedThreads={pinnedSummaries}
-        threadError={threadListErrors.active}
+        threadError={
+          threadListErrors.active ?? projects.sourceErrors?.zen ?? null
+        }
         threadLoading={!threadListLoaded.active}
         threads={activeSummaries}
       />
@@ -2690,6 +2838,7 @@ export function App() {
                 setThreadUsage(undefined);
                 setSelectedSettings(null);
                 setThreadError(null);
+                setSelectedAgentSessionId(null);
                 confirmNewThreadDraft(draftRecoveryNotice.draft);
                 discardRecoverableDraft();
               }}
@@ -2726,6 +2875,7 @@ export function App() {
         <main className="workspace">
           <SettingsView
             active={page === "settings"}
+            onAgentProvidersChanged={() => void agentProviders.refresh()}
             archivedError={threadListErrors.archived}
             archivedLoading={!threadListLoaded.archived}
             archivedThreads={archivedSummaries}
@@ -2738,8 +2888,7 @@ export function App() {
             browserSettingsFocusRequest={browserSettingsFocusRequest}
             showHeader={false}
           />
-          {page === "settings" ? null : genericPluginTarget !== undefined &&
-            pluginSnapshot !== null ? (
+          {genericPluginTarget !== undefined && pluginSnapshot !== null ? (
             <ImZenXDraftContext.Provider value={imzenxDrafts}>
               <PluginProductPage
                 context={
@@ -2753,195 +2902,369 @@ export function App() {
               />
             </ImZenXDraftContext.Provider>
           ) : (
-            <AgentSurface
-              onRecoverQueuedEdit={(threadId) => {
-                // Reuse native resume's read-only snapshot/event barrier, never resumeQueue.
-                if (
-                  selectedThreadIdRef.current === threadId &&
-                  newThreadDraftRef.current === null
-                )
-                  void resumeThread(threadId, true);
-              }}
-              queueEditStore={queueEditStore}
-              threadHeader={
-                selectedThreadId !== null &&
-                newThreadDraft === null &&
-                pluginSnapshot !== null &&
-                (pluginSnapshot.threadHeaders?.length ?? 0) > 0 ? (
-                  <PluginThreadHeaders
-                    registry={pluginUiRegistry}
-                    snapshot={pluginSnapshot}
-                    threadId={selectedThreadId}
-                    threads={[...threadSummaries, ...archivedThreadSummaries]}
-                    navigate={openPage}
-                  />
-                ) : null
+            <Activity
+              key={
+                selectedAgentSessionId !== null
+                  ? `agent:${selectedAgentSessionId}`
+                  : newThreadDraft !== null
+                    ? `draft:${newThreadDraft.id}`
+                    : `zen:${selectedThreadId ?? "empty"}`
               }
-              onOpenMessageLink={(threadId, target) => {
-                setMessageLinkRequest((previous) => ({
-                  ...target,
-                  id: (previous?.id ?? 0) + 1,
-                  threadId,
-                }));
-                setBrowserPanels((current) => ({
-                  ...current,
-                  [threadId]: true,
-                }));
-              }}
-              composerSendMode={composerSendMode}
-              onComposerSendModeChange={changeComposerSendMode}
-              onCancelQueued={cancelQueued}
-              composerSendModeMigration={composerSendModeMigration}
-              queueFailure={queueFailure}
-              onSettleLegacySendChoice={settleLegacySendChoice}
-              onNoticeError={setRequestError}
-              approvals={approvals}
-              pluginSnapshot={pluginSnapshot}
-              onOpenBrowserSettings={() => {
-                setSettingsTab("general");
-                setBrowserSettingsFocusRequest((value) => value + 1);
-                openPage("settings");
-              }}
-              composerStates={composerStates}
-              configuredProjects={configuredProjects}
-              newThreadDraft={newThreadDraft}
-              threadAttachments={threadAttachments}
-              threadUsage={threadUsage}
-              models={models}
-              providerProfiles={providerProfiles}
-              workflowCommands={workflowCommands}
-              modelCatalogError={modelCatalogError}
-              modelUpdateError={modelUpdateError}
-              onDraftChange={(threadId, draft) =>
-                updateComposer(threadId, (state) => editComposer(state, draft))
-              }
-              onNewThreadDraftChange={(draft) =>
-                updateNewThreadDraft((current) => ({
-                  ...current,
-                  composer: editComposer(current.composer, draft),
-                }))
-              }
-              onNewThreadModelChange={changeNewThreadModel}
-              onNewThreadReasoningChange={changeNewThreadReasoning}
-              onNewThreadProjectChange={(workspace) => {
-                setModelUpdateError(null);
-                updateNewThreadDraft((current) => ({
-                  ...current,
-                  workspace,
-                  composer: {
-                    ...current.composer,
-                    submission:
-                      current.composer.submission?.status === "failed"
-                        ? null
-                        : current.composer.submission,
-                  },
-                }));
-              }}
-              onAddNewThreadProject={() => openProjectPicker("new-thread")}
-              onImportImages={async (threadId, files) => {
-                const imports = await Promise.all(
-                  files.map(async (file) => ({
-                    name: file.name,
-                    mediaType: file.type,
-                    bytes: new Uint8Array(await file.arrayBuffer()),
-                  })),
-                );
-                const images =
-                  await window.zenx.imageAttachments.import(imports);
-                updateComposer(threadId, (state) =>
-                  addComposerImages(state, images),
-                );
-              }}
-              onImportNewThreadImages={async (files) => {
-                const draftId = newThreadDraftRef.current?.id;
-                if (draftId === undefined) return;
-                acquireNewThreadImageLease(draftId);
-                try {
-                  const imports = await Promise.all(
-                    files.map(async (file) => ({
-                      name: file.name,
-                      mediaType: file.type,
-                      bytes: new Uint8Array(await file.arrayBuffer()),
-                    })),
-                  );
-                  const images =
-                    await window.zenx.imageAttachments.import(imports);
-                  updateNewThreadComposer(draftId, (state) =>
-                    addComposerImages(state, images),
-                  );
-                } finally {
-                  releaseNewThreadImageLease(draftId);
-                }
-              }}
-              onPickImages={async (threadId) => {
-                const images = await window.zenx.imageAttachments.pick();
-                updateComposer(threadId, (state) =>
-                  addComposerImages(state, images),
-                );
-              }}
-              onPickNewThreadImages={async () => {
-                const draftId = newThreadDraftRef.current?.id;
-                if (draftId === undefined) return;
-                acquireNewThreadImageLease(draftId);
-                try {
-                  const images = await window.zenx.imageAttachments.pick();
-                  updateNewThreadComposer(draftId, (state) =>
-                    addComposerImages(state, images),
-                  );
-                } finally {
-                  releaseNewThreadImageLease(draftId);
-                }
-              }}
-              onRemoveImage={(threadId, imageId) =>
-                updateComposer(threadId, (state) =>
-                  removeComposerImage(state, imageId),
-                )
-              }
-              onRemoveNewThreadImage={(imageId) =>
-                updateNewThreadDraft((current) => ({
-                  ...current,
-                  composer: removeComposerImage(current.composer, imageId),
-                }))
-              }
-              onReadAttachment={readAttachment}
-              onInterrupt={async (turnId) => {
-                if (threadDetail === null)
-                  throw new Error(i18n.t("shell:noThreadSelected"));
-                await window.zenx.protocol.request("turn/interrupt", {
-                  threadId: threadDetail.id,
-                  turnId,
-                });
-              }}
-              onModelChange={(model) => void changeModel(model)}
-              onPermissionChange={(mode) => void changePermission(mode)}
-              onNewThreadPermissionChange={(permissionMode) =>
-                updateNewThreadDraft((draft) => ({
-                  ...draft,
-                  permissionMode,
-                }))
-              }
-              permissionError={permissionError}
-              switchingPermission={switchingPermission}
-              onReasoningChange={(effort) => void changeReasoning(effort)}
-              onOpenSidebar={openSidebar}
-              onRespondToApproval={respondToApproval}
-              onCompact={compactFromContext}
-              onDismissCompaction={(threadId) =>
-                updateComposer(threadId, dismissCompactionFeedback)
-              }
-              onSubmit={submitComposer}
-              onSubmitNewThread={submitNewThreadDraft}
-              selectedSettings={selectedSettings}
-              selectedSummary={selectedSummary}
-              serverStatus={serverStatus}
-              switchingModel={switchingModel}
-              threadArchiving={
-                threadDetail !== null && archivingThreadIds.has(threadDetail.id)
-              }
-              threadDetail={threadDetail}
-              threadError={threadError}
-              threadLoading={threadLoading}
-            />
+              mode={page === "settings" ? "hidden" : "visible"}
+            >
+              {selectedAgentSessionId !== null ? (
+                <ExternalAgentSession
+                  key={`session:${selectedAgentSessionId}`}
+                  instance={agentProviders.instances.find(
+                    (instance) =>
+                      instance.id === selectedAgentSession?.providerInstanceId,
+                  )}
+                  sessionId={selectedAgentSessionId}
+                  workspace={selectedAgentSession?.cwd ?? null}
+                  composer={
+                    composerStates[`agent:${selectedAgentSessionId}`] ??
+                    emptyComposerState()
+                  }
+                  onComposerChange={(update) =>
+                    updateComposer(`agent:${selectedAgentSessionId}`, update)
+                  }
+                  onCreated={() => undefined}
+                  readSession={agentProviders.readSession}
+                />
+              ) : newThreadDraft !== null &&
+                (newThreadDraft.providerInstanceId ?? "zen") !== "zen" ? (
+                <ExternalAgentSession
+                  key={`draft:${newThreadDraft.id}:${newThreadDraft.providerInstanceId}`}
+                  instance={agentProviders.instances.find(
+                    (instance) =>
+                      instance.id === newThreadDraft.providerInstanceId,
+                  )}
+                  sessionId={null}
+                  workspace={
+                    configuredProjects.some(
+                      (project) =>
+                        project.workspace === newThreadDraft.workspace,
+                    )
+                      ? newThreadDraft.workspace
+                      : null
+                  }
+                  projectError={
+                    newThreadDraft.workspace !== null &&
+                    !configuredProjects.some(
+                      (project) =>
+                        project.workspace === newThreadDraft.workspace,
+                    )
+                      ? i18n.t(
+                          "shell:thisProjectIsNoLongerAvailableChooseAnotherProject",
+                        )
+                      : null
+                  }
+                  permissionMode={
+                    newThreadDraft.permissionMode ?? "workspace-write"
+                  }
+                  composer={newThreadDraft.composer}
+                  onComposerChange={(update) =>
+                    updateNewThreadComposer(newThreadDraft.id, update)
+                  }
+                  draftModel={newThreadDraft.agentModel}
+                  onDraftModelChange={(agentModel) =>
+                    updateNewThreadDraft((draft) => ({
+                      ...draft,
+                      agentModel,
+                      composer: advanceComposerDraftRevision(draft.composer),
+                    }))
+                  }
+                  onOperationChange={(pending, selectedModel) => {
+                    if (pending) {
+                      const current =
+                        newThreadDraftRef.current?.id === newThreadDraft.id
+                          ? newThreadDraftRef.current
+                          : newThreadDraft;
+                      const selected = {
+                        ...current,
+                        agentModel: selectedModel ?? current.agentModel,
+                      };
+                      if (newThreadDraftRef.current?.id === current.id)
+                        confirmNewThreadDraft(selected);
+                      externalPendingDraftsRef.current.set(
+                        newThreadDraft.id,
+                        selected,
+                      );
+                    } else if (
+                      externalPendingDraftsRef.current.has(newThreadDraft.id)
+                    ) {
+                      const failed = externalPendingDraftsRef.current.get(
+                        newThreadDraft.id,
+                      )!;
+                      if (
+                        newThreadDraftRef.current?.id !== failed.id &&
+                        failed.composer.submission?.status === "failed" &&
+                        !newThreadPromotionsRef.current.has(failed.id)
+                      )
+                        setDraftRecoveryNotice({
+                          draft: failed,
+                          message:
+                            failed.composer.submission.error ??
+                            i18n.t("shell:providerCreateFailed"),
+                        });
+                      externalPendingDraftsRef.current.delete(
+                        newThreadDraft.id,
+                      );
+                    }
+                  }}
+                  onCreated={(snapshot) =>
+                    promoteAgentDraft(newThreadDraft, snapshot)
+                  }
+                  onPermissionChange={(permissionMode) =>
+                    updateNewThreadDraft((draft) => ({
+                      ...draft,
+                      permissionMode,
+                    }))
+                  }
+                  providerSelection={{
+                    instances: agentProviders.instances,
+                    value: newThreadDraft.providerInstanceId!,
+                    onChange: changeAgentProvider,
+                    disabled:
+                      newThreadDraft.composer.submission?.status === "pending",
+                  }}
+                  emptyContent={
+                    <div className="thread-empty new-thread-draft-empty">
+                      <div
+                        className="new-thread-draft-heading"
+                        role="heading"
+                        aria-level={2}
+                      >
+                        {i18n.t("shell:whatShouldWeBuildIn")}{" "}
+                        <NewThreadProjectSelector
+                          disabled={
+                            newThreadDraft.composer.submission?.status ===
+                            "pending"
+                          }
+                          onAddProject={() => openProjectPicker("new-thread")}
+                          onChange={(workspace) =>
+                            updateNewThreadDraft((draft) => ({
+                              ...draft,
+                              workspace,
+                            }))
+                          }
+                          projects={configuredProjects}
+                          selectedWorkspace={newThreadDraft.workspace}
+                        />
+                        ?
+                      </div>
+                    </div>
+                  }
+                />
+              ) : (
+                <AgentSurface
+                  agentProviderSelection={
+                    newThreadDraft === null
+                      ? null
+                      : {
+                          instances: agentProviders.instances,
+                          value: newThreadDraft.providerInstanceId ?? "zen",
+                          onChange: changeAgentProvider,
+                          disabled:
+                            newThreadDraft.composer.submission?.status ===
+                            "pending",
+                        }
+                  }
+                  onRecoverQueuedEdit={(threadId) => {
+                    // Reuse native resume's read-only snapshot/event barrier, never resumeQueue.
+                    if (
+                      selectedThreadIdRef.current === threadId &&
+                      newThreadDraftRef.current === null
+                    )
+                      void resumeThread(threadId, true);
+                  }}
+                  queueEditStore={queueEditStore}
+                  threadHeader={
+                    selectedThreadId !== null &&
+                    newThreadDraft === null &&
+                    pluginSnapshot !== null &&
+                    (pluginSnapshot.threadHeaders?.length ?? 0) > 0 ? (
+                      <PluginThreadHeaders
+                        registry={pluginUiRegistry}
+                        snapshot={pluginSnapshot}
+                        threadId={selectedThreadId}
+                        threads={[
+                          ...threadSummaries,
+                          ...archivedThreadSummaries,
+                        ]}
+                        navigate={openPage}
+                      />
+                    ) : null
+                  }
+                  onOpenMessageLink={(threadId, target) => {
+                    setMessageLinkRequest((previous) => ({
+                      ...target,
+                      id: (previous?.id ?? 0) + 1,
+                      threadId,
+                    }));
+                    setBrowserPanels((current) => ({
+                      ...current,
+                      [threadId]: true,
+                    }));
+                  }}
+                  composerSendMode={composerSendMode}
+                  onComposerSendModeChange={changeComposerSendMode}
+                  onCancelQueued={cancelQueued}
+                  composerSendModeMigration={composerSendModeMigration}
+                  queueFailure={queueFailure}
+                  onSettleLegacySendChoice={settleLegacySendChoice}
+                  onNoticeError={setRequestError}
+                  approvals={approvals}
+                  pluginSnapshot={pluginSnapshot}
+                  onOpenBrowserSettings={() => {
+                    setSettingsTab("general");
+                    setBrowserSettingsFocusRequest((value) => value + 1);
+                    openPage("settings");
+                  }}
+                  composerStates={composerStates}
+                  configuredProjects={configuredProjects}
+                  newThreadDraft={newThreadDraft}
+                  threadAttachments={threadAttachments}
+                  threadUsage={threadUsage}
+                  models={models}
+                  providerProfiles={providerProfiles}
+                  workflowCommands={workflowCommands}
+                  modelCatalogError={modelCatalogError}
+                  modelUpdateError={modelUpdateError}
+                  onDraftChange={(threadId, draft) =>
+                    updateComposer(threadId, (state) =>
+                      editComposer(state, draft),
+                    )
+                  }
+                  onNewThreadDraftChange={(draft) =>
+                    updateNewThreadDraft((current) => ({
+                      ...current,
+                      composer: editComposer(current.composer, draft),
+                    }))
+                  }
+                  onNewThreadModelChange={changeNewThreadModel}
+                  onNewThreadReasoningChange={changeNewThreadReasoning}
+                  onNewThreadProjectChange={(workspace) => {
+                    setModelUpdateError(null);
+                    updateNewThreadDraft((current) => ({
+                      ...current,
+                      workspace,
+                      composer: {
+                        ...current.composer,
+                        submission:
+                          current.composer.submission?.status === "failed"
+                            ? null
+                            : current.composer.submission,
+                      },
+                    }));
+                  }}
+                  onAddNewThreadProject={() => openProjectPicker("new-thread")}
+                  onImportImages={async (threadId, files) => {
+                    const imports = await Promise.all(
+                      files.map(async (file) => ({
+                        name: file.name,
+                        mediaType: file.type,
+                        bytes: new Uint8Array(await file.arrayBuffer()),
+                      })),
+                    );
+                    const images =
+                      await window.zenx.imageAttachments.import(imports);
+                    updateComposer(threadId, (state) =>
+                      addComposerImages(state, images),
+                    );
+                  }}
+                  onImportNewThreadImages={async (files) => {
+                    const draftId = newThreadDraftRef.current?.id;
+                    if (draftId === undefined) return;
+                    acquireNewThreadImageLease(draftId);
+                    try {
+                      const imports = await Promise.all(
+                        files.map(async (file) => ({
+                          name: file.name,
+                          mediaType: file.type,
+                          bytes: new Uint8Array(await file.arrayBuffer()),
+                        })),
+                      );
+                      const images =
+                        await window.zenx.imageAttachments.import(imports);
+                      updateNewThreadComposer(draftId, (state) =>
+                        addComposerImages(state, images),
+                      );
+                    } finally {
+                      releaseNewThreadImageLease(draftId);
+                    }
+                  }}
+                  onPickImages={async (threadId) => {
+                    const images = await window.zenx.imageAttachments.pick();
+                    updateComposer(threadId, (state) =>
+                      addComposerImages(state, images),
+                    );
+                  }}
+                  onPickNewThreadImages={async () => {
+                    const draftId = newThreadDraftRef.current?.id;
+                    if (draftId === undefined) return;
+                    acquireNewThreadImageLease(draftId);
+                    try {
+                      const images = await window.zenx.imageAttachments.pick();
+                      updateNewThreadComposer(draftId, (state) =>
+                        addComposerImages(state, images),
+                      );
+                    } finally {
+                      releaseNewThreadImageLease(draftId);
+                    }
+                  }}
+                  onRemoveImage={(threadId, imageId) =>
+                    updateComposer(threadId, (state) =>
+                      removeComposerImage(state, imageId),
+                    )
+                  }
+                  onRemoveNewThreadImage={(imageId) =>
+                    updateNewThreadDraft((current) => ({
+                      ...current,
+                      composer: removeComposerImage(current.composer, imageId),
+                    }))
+                  }
+                  onReadAttachment={readAttachment}
+                  onInterrupt={async (turnId) => {
+                    if (threadDetail === null)
+                      throw new Error(i18n.t("shell:noThreadSelected"));
+                    await window.zenx.protocol.request("turn/interrupt", {
+                      threadId: threadDetail.id,
+                      turnId,
+                    });
+                  }}
+                  onModelChange={(model) => void changeModel(model)}
+                  onPermissionChange={(mode) => void changePermission(mode)}
+                  onNewThreadPermissionChange={(permissionMode) =>
+                    updateNewThreadDraft((draft) => ({
+                      ...draft,
+                      permissionMode,
+                    }))
+                  }
+                  permissionError={permissionError}
+                  switchingPermission={switchingPermission}
+                  onReasoningChange={(effort) => void changeReasoning(effort)}
+                  onRespondToApproval={respondToApproval}
+                  onCompact={compactFromContext}
+                  onDismissCompaction={(threadId) =>
+                    updateComposer(threadId, dismissCompactionFeedback)
+                  }
+                  onSubmit={submitComposer}
+                  onSubmitNewThread={submitNewThreadDraft}
+                  selectedSettings={selectedSettings}
+                  selectedSummary={selectedSummary}
+                  serverStatus={serverStatus}
+                  switchingModel={switchingModel}
+                  threadArchiving={
+                    threadDetail !== null &&
+                    archivingThreadIds.has(threadDetail.id)
+                  }
+                  threadDetail={threadDetail}
+                  threadError={threadError}
+                  threadLoading={threadLoading}
+                />
+              )}
+            </Activity>
           )}
           {selectedRoom && roomPanel && pluginSnapshot ? (
             <CompanionWorkspace
@@ -3263,9 +3586,11 @@ function PageTitleBar({
   onOpenSidebar,
   subtitle,
   title,
+  titleDetails,
 }: {
   onOpenSidebar(): void;
-  subtitle: string;
+  subtitle?: string;
+  titleDetails?: string;
   title: string;
 }) {
   return (
@@ -3280,8 +3605,13 @@ function PageTitleBar({
           <Icon name="tree" />
         </button>
         <div>
-          <h1>{title}</h1>
-          <p>{subtitle}</p>
+          <h1
+            title={titleDetails}
+            aria-label={titleDetails ? `${title} · ${titleDetails}` : undefined}
+          >
+            {title}
+          </h1>
+          {subtitle === undefined ? null : <p>{subtitle}</p>}
         </div>
       </div>
     </div>
@@ -3291,6 +3621,7 @@ function PageTitleBar({
 function AgentSurface({
   onRecoverQueuedEdit,
   queueEditStore,
+  agentProviderSelection,
   threadHeader,
   onOpenMessageLink,
   composerSendMode,
@@ -3333,7 +3664,6 @@ function AgentSurface({
   permissionError,
   switchingPermission,
   onReasoningChange,
-  onOpenSidebar,
   onRespondToApproval,
   onCompact,
   onDismissCompaction,
@@ -3350,6 +3680,7 @@ function AgentSurface({
 }: {
   onRecoverQueuedEdit(threadId: string): void;
   queueEditStore: QueueEditStore;
+  agentProviderSelection?: AgentProviderSelection | null;
   onOpenMessageLink(
     threadId: string,
     target: { kind: "file" | "browser"; value: string },
@@ -3401,7 +3732,6 @@ function AgentSurface({
   switchingPermission: boolean;
   onModelChange(model: string): void;
   onReasoningChange(effort: string): void;
-  onOpenSidebar(): void;
   onRespondToApproval(
     requestId: string,
     decision: ApprovalDecision,
@@ -3449,17 +3779,6 @@ function AgentSurface({
         pluginSnapshot={pluginSnapshot}
         onOpenBrowserSettings={onOpenBrowserSettings}
       />
-      {newThreadDraft !== null || selectedSummary === null ? (
-        <button
-          className="icon-button mobile-menu new-thread-draft-mobile"
-          type="button"
-          aria-label={i18n.t("shell:openSidebar")}
-          onClick={onOpenSidebar}
-        >
-          <Icon name="tree" />
-        </button>
-      ) : null}
-
       {serverStatus.type === "error" ? (
         <EmptyState
           error
@@ -3496,90 +3815,93 @@ function AgentSurface({
           detail={threadError}
         />
       ) : newThreadDraft !== null ? (
-        <FleetComposerSurface
-          key={newThreadDraft.id}
-          text={newThreadDraft.composer.draft.text}
-          onTextChange={onNewThreadDraftChange}
-          attachmentCount={newThreadDraft.composer.draft.images.length}
-          onNotice={onNoticeError}
-          disabled={newThreadDraft.composer.submission?.status === "pending"}
-        >
-          {(machineControl) => (
-            <ThreadView
-              approvals={[]}
-              composerContextPosition="after"
-              composer={newThreadDraft.composer}
-              composerSendMode={composerSendMode}
-              onComposerSendModeChange={onComposerSendModeChange}
-              composerContext={
-                <div className="new-thread-composer-context">
-                  {machineControl}
-                  <NewThreadProjectContext
-                    projects={configuredProjects}
-                    selectedWorkspace={newThreadDraft.workspace}
-                  />
-                </div>
-              }
-              emptyContent={
-                <div className="thread-empty new-thread-draft-empty">
-                  <div
-                    className="new-thread-draft-heading"
-                    role="heading"
-                    aria-level={2}
-                  >
-                    {i18n.t("shell:whatShouldWeBuildIn")}{" "}
-                    <NewThreadProjectSelector
-                      disabled={
-                        newThreadDraft.composer.submission?.status === "pending"
-                      }
-                      onAddProject={onAddNewThreadProject}
-                      onChange={onNewThreadProjectChange}
+        <AgentProviderModelScope selection={agentProviderSelection ?? null}>
+          <FleetComposerSurface
+            key={newThreadDraft.id}
+            text={newThreadDraft.composer.draft.text}
+            onTextChange={onNewThreadDraftChange}
+            attachmentCount={newThreadDraft.composer.draft.images.length}
+            onNotice={onNoticeError}
+            disabled={newThreadDraft.composer.submission?.status === "pending"}
+          >
+            {(machineControl) => (
+              <ThreadView
+                approvals={[]}
+                composerContextPosition="after"
+                composer={newThreadDraft.composer}
+                composerSendMode={composerSendMode}
+                onComposerSendModeChange={onComposerSendModeChange}
+                composerContext={
+                  <div className="new-thread-composer-context">
+                    {machineControl}
+                    <NewThreadProjectContext
                       projects={configuredProjects}
                       selectedWorkspace={newThreadDraft.workspace}
                     />
-                    ?
                   </div>
-                </div>
-              }
-              imageCapabilityError={imageCapabilityMessage(
-                providerProfiles,
-                draftSettings,
-                models,
-              )}
-              imageCapabilityNotice={imageCapabilityNotice(
-                providerProfiles,
-                draftSettings,
-                models,
-              )}
-              modelDisabled={
-                newThreadDraft.composer.submission?.status === "pending"
-              }
-              modelError={
-                draftProjectError ?? modelUpdateError ?? modelCatalogError
-              }
-              models={models}
-              providerProfiles={providerProfiles}
-              permissionMode={
-                newThreadDraft.permissionMode ?? "danger-full-access"
-              }
-              onPermissionChange={onNewThreadPermissionChange}
-              selectedModel={draftSettings?.model}
-              selectedReasoningEffort={draftSettings?.reasoningEffort}
-              thread={null}
-              workflowCommands={workflowCommands}
-              onDraftChange={onNewThreadDraftChange}
-              onImportImages={onImportNewThreadImages}
-              onPickImages={onPickNewThreadImages}
-              onReadAttachment={onReadAttachment}
-              onRemoveImage={onRemoveNewThreadImage}
-              onInterrupt={async () => undefined}
-              onModelChange={onNewThreadModelChange}
-              onReasoningChange={onNewThreadReasoningChange}
-              onRespondToApproval={onRespondToApproval}
-              onSubmit={onSubmitNewThread}
-            />
-          )}
-        </FleetComposerSurface>
+                }
+                emptyContent={
+                  <div className="thread-empty new-thread-draft-empty">
+                    <div
+                      className="new-thread-draft-heading"
+                      role="heading"
+                      aria-level={2}
+                    >
+                      {i18n.t("shell:whatShouldWeBuildIn")}{" "}
+                      <NewThreadProjectSelector
+                        disabled={
+                          newThreadDraft.composer.submission?.status ===
+                          "pending"
+                        }
+                        onAddProject={onAddNewThreadProject}
+                        onChange={onNewThreadProjectChange}
+                        projects={configuredProjects}
+                        selectedWorkspace={newThreadDraft.workspace}
+                      />
+                      ?
+                    </div>
+                  </div>
+                }
+                imageCapabilityError={imageCapabilityMessage(
+                  providerProfiles,
+                  draftSettings,
+                  models,
+                )}
+                imageCapabilityNotice={imageCapabilityNotice(
+                  providerProfiles,
+                  draftSettings,
+                  models,
+                )}
+                modelDisabled={
+                  newThreadDraft.composer.submission?.status === "pending"
+                }
+                modelError={
+                  draftProjectError ?? modelUpdateError ?? modelCatalogError
+                }
+                models={models}
+                providerProfiles={providerProfiles}
+                permissionMode={
+                  newThreadDraft.permissionMode ?? "danger-full-access"
+                }
+                onPermissionChange={onNewThreadPermissionChange}
+                selectedModel={draftSettings?.model ?? ""}
+                selectedReasoningEffort={draftSettings?.reasoningEffort}
+                thread={null}
+                workflowCommands={workflowCommands}
+                onDraftChange={onNewThreadDraftChange}
+                onImportImages={onImportNewThreadImages}
+                onPickImages={onPickNewThreadImages}
+                onReadAttachment={onReadAttachment}
+                onRemoveImage={onRemoveNewThreadImage}
+                onInterrupt={async () => undefined}
+                onModelChange={onNewThreadModelChange}
+                onReasoningChange={onNewThreadReasoningChange}
+                onRespondToApproval={onRespondToApproval}
+                onSubmit={onSubmitNewThread}
+              />
+            )}
+          </FleetComposerSurface>
+        </AgentProviderModelScope>
       ) : selectedSummary === null || threadDetail === null ? null : (
         <>
           <ThreadView

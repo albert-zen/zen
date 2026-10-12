@@ -1,4 +1,13 @@
 import "./dom-primitives.js";
+import { ZenXProjectProjection } from "../src/main/project-projection.js";
+import { agentSessionNavigationId } from "../src/main/conversation-navigation.js";
+import { chooseValue } from "./choice-interaction.js";
+
+import type {
+  AgentProviderEvent,
+  AgentProvidersApi,
+  AgentSessionSnapshot,
+} from "../src/main/agent-providers/types.js";
 /// <reference path="../src/renderer/src/env.d.ts" />
 
 import assert from "node:assert/strict";
@@ -12,7 +21,11 @@ import type { ModelUsageProjection } from "../../../src/model-usage.js";
 import type { AppServerHostStatus } from "../src/main/app-server-manager.js";
 import type { ZenXImageDraft } from "../src/main/image-attachments.js";
 import type { ZenXProjectProjectionSnapshot } from "../src/main/project-projection.js";
-import type { ModelSummary, Thread } from "../src/protocol-client/index.js";
+import type {
+  ModelSummary,
+  ServerNotificationParams,
+  Thread,
+} from "../src/protocol-client/index.js";
 import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
 const { act, createElement } = React;
@@ -51,6 +64,55 @@ function projectSwitcher(): HTMLButtonElement | undefined {
     undefined
   );
 }
+
+test("empty and provider drafts restore the narrow Sidebar from the controls row", async () => {
+  const harness = await mountApp(
+    { ...oneProject(), lastUsedWorkspace: null },
+    { agentProviders: externalAgentApi() },
+  );
+  try {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 598,
+    });
+    document.documentElement.dataset.platform = "linux";
+    const openMenu = async () => {
+      const menu = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          '.window-titlebar-session [aria-label="Open sidebar"]',
+        ),
+      );
+      assert.equal(menu.getAttribute("aria-controls"), "primary-sidebar");
+      assert.equal(menu.getAttribute("aria-expanded"), "false");
+      assert.equal(
+        document.querySelector('.agent-surface [aria-label="Open sidebar"]'),
+        null,
+      );
+      await act(async () => menu.click());
+      assert.equal(menu.getAttribute("aria-expanded"), "true");
+      assert.match(
+        document.getElementById("primary-sidebar")!.className,
+        /open/u,
+      );
+    };
+    await openMenu();
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")!.click(),
+    );
+    await waitFor(() => document.querySelector("#thread-composer"));
+    await openMenu();
+    await act(async () =>
+      document.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    await chooseAgentProvider("codex-work");
+    await waitFor(() => document.querySelector("#agent-composer-codex-work"));
+    await openMenu();
+  } finally {
+    await unmountApp(harness);
+  }
+});
 
 test("desktop title bar collapses and restores the Sidebar", async () => {
   const harness = await mountApp({
@@ -2653,7 +2715,7 @@ test("late canonical queue ID settles only the original unknown submission, not 
     },
   );
   try {
-    const composer = await selectedComposer();
+    let composer = await selectedComposer();
     await setTextareaValue(composer, "identical text");
     await invokeFormSubmit(
       document.querySelector<HTMLFormElement>("form.composer")!,
@@ -2720,6 +2782,8 @@ test("late canonical queue ID settles only the original unknown submission, not 
         document.querySelector<HTMLTextAreaElement>("#thread-composer")
           ?.value === "",
     );
+    composer = document.querySelector<HTMLTextAreaElement>("#thread-composer")!;
+    assert.ok(composer, "The returned Thread has its current composer");
     // The matching receipt clears the unknown-send error and original draft;
     // it does not leave an implementation-level success note in the composer.
     assert.equal(document.querySelector(".composer-error"), null);
@@ -3629,6 +3693,7 @@ test("current permissions follow notifications even when the Thread list fails",
 async function mountApp(
   projects: ZenXProjectProjectionSnapshot,
   options: {
+    agentProviders?: AgentProvidersApi;
     addWorkspace?(workspace: string): Promise<void>;
     getStatus?(): Promise<AppServerHostStatus>;
     initialPinnedThreadIds?: string[];
@@ -3687,6 +3752,7 @@ async function mountApp(
     options.composerSendMode ?? "queue";
   Object.assign(currentSettings.profile, options.initialProfile);
   const zenx = {
+    agentProviders: options.agentProviders,
     panels: { onOpen: () => () => undefined },
     platform: "darwin",
     protocol: {
@@ -3770,10 +3836,31 @@ async function mountApp(
           : await options.modelUsage(),
     },
     projects: {
-      get: async () =>
-        options.projectsGet === undefined
-          ? projects
-          : await options.projectsGet(),
+      get: async () => {
+        if (options.projectsGet !== undefined)
+          return await options.projectsGet();
+        if (options.agentProviders === undefined) return projects;
+        const sessions = await options.agentProviders.sessions();
+        if (sessions.length === 0) return projects;
+        const projection = new ZenXProjectProjection(
+          "freebsd",
+          async (value) => value,
+        );
+        await projection.updateConfiguration(
+          projects.projects.map((project) => project.workspace),
+          null,
+          projects.lastUsedWorkspace,
+        );
+        return await projection.project([
+          ...projects.projects.flatMap((project) =>
+            project.threadIds.map((id) => ({ id, cwd: project.workspace })),
+          ),
+          ...sessions.map((session) => ({
+            id: agentSessionNavigationId(session.id),
+            cwd: session.cwd,
+          })),
+        ]);
+      },
       startThread: async (
         workspace: string,
         selection?: { model?: string; effort?: string },
@@ -4182,6 +4269,41 @@ function exactButton(label: string): HTMLButtonElement | undefined {
   return [...document.querySelectorAll<HTMLButtonElement>("button")].find(
     (button) => button.textContent?.trim() === label,
   );
+}
+
+async function chooseAgentProvider(id: string): Promise<void> {
+  const trigger = await waitFor(() =>
+    document.querySelector<HTMLButtonElement>(".composer-model-trigger"),
+  );
+  await act(async () => trigger.click());
+  const entry = await waitFor(() =>
+    [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(
+      (button) => button.textContent?.startsWith("Agent Provider"),
+    ),
+  );
+  await act(async () => entry.click());
+  const option = await waitFor(() =>
+    [
+      ...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+    ].find((button) => button.dataset.agentProviderId === id),
+  );
+  await act(async () => option.click());
+}
+
+async function chooseComposerModel(id: string): Promise<void> {
+  const trigger = document.querySelector<HTMLButtonElement>(
+    ".composer-model-trigger",
+  )!;
+  await act(async () => trigger.click());
+  const entry = [
+    ...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+  ].find((button) => button.textContent?.startsWith("Model"))!;
+  await act(async () => entry.click());
+  const option = [
+    ...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+  ].find((button) => button.dataset.modelId === id)!;
+  assert.ok(option);
+  await act(async () => option.click());
 }
 
 function exactMenuButton(label: string): HTMLButtonElement | undefined {
@@ -4773,6 +4895,701 @@ test("composer default save cannot roll back a newer settings notification", asy
     assert.equal(
       document.querySelector<HTMLTextAreaElement>("textarea")?.value,
       "",
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+function externalAgentApi(
+  overrides: Partial<AgentProvidersApi> = {},
+): AgentProvidersApi {
+  let bindings: AgentSessionSnapshot["binding"][] = [];
+  return {
+    list: async () => [
+      { id: "zen", kind: "zen", name: "Zen" },
+      { id: "codex-work", kind: "codex", name: "Codex work" },
+    ],
+    save: async (instance) => instance,
+    capabilities: async () => ({
+      models: true,
+      interrupt: true,
+      resume: true,
+      changeModel: true,
+      approvals: true,
+      permissionModes: ["workspace-write", "danger-full-access"],
+    }),
+    models: async () => [
+      { ...wireModel("codex-model", true), id: "codex-model" },
+    ],
+    sessions: async () => bindings,
+    approvals: async () => [],
+    create: async () => {
+      const value = externalAgentSnapshot();
+      bindings = [...bindings, value.binding];
+      return value;
+    },
+    read: async () => externalAgentSnapshot(),
+    send: async () => undefined,
+    interrupt: async () => undefined,
+    respondApproval: async () => undefined,
+    onEvent: () => () => undefined,
+    ...overrides,
+  };
+}
+function externalAgentSnapshot(): AgentSessionSnapshot {
+  return {
+    binding: {
+      id: "external-binding",
+      hostId: "local-host",
+      providerInstanceId: "codex-work",
+      nativeSessionId: "native-codex",
+      cwd: "/work/zen",
+    },
+    model: "codex-model",
+    thread: {
+      ...liveThread(),
+      id: "native-codex",
+      sessionId: "native-codex",
+      modelProvider: "codex",
+      name: "Native Codex conversation",
+      preview: "Native Codex conversation",
+      canonicalItems: undefined,
+    },
+  };
+}
+
+test("App selects an Agent Provider, promotes its first Send, and reopens the native session", async () => {
+  let creates = 0;
+  let catalogs = 0;
+  let usedWorkspace = "";
+  const sends: unknown[] = [];
+  const native = externalAgentSnapshot();
+  const service = externalAgentApi({
+    models: async () => {
+      catalogs++;
+      return [{ ...wireModel("codex-model", true), id: "codex-model" }];
+    },
+    create: async (request) => {
+      creates++;
+      assert.equal(request.cwd, "/work/zen");
+      assert.equal(request.providerInstanceId, "codex-work");
+      return native;
+    },
+    sessions: async () => (creates ? [native.binding] : []),
+    send: async (id, request) => {
+      sends.push({ id, ...request });
+    },
+  });
+  const harness = await mountApp(oneProject(), {
+    agentProviders: service,
+    markWorkspaceUsed: async (workspace) => {
+      usedWorkspace = workspace;
+      return publicSettings([]);
+    },
+  });
+  try {
+    const zenComposer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(zenComposer, "Use the real engine");
+    assert.equal(catalogs, 0);
+    await chooseAgentProvider("codex-work");
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#agent-composer-codex-work"),
+    );
+    assert.equal(composer.value, "Use the real engine");
+    const send = await waitFor(() => {
+      const button = document.querySelector<HTMLButtonElement>(
+        '[aria-label="Send"]',
+      );
+      return button && !button.disabled ? button : undefined;
+    });
+    await act(async () => send.click());
+    await waitFor(() =>
+      document.querySelector("#agent-composer-external-binding"),
+    );
+    assert.equal(creates, 1);
+    assert.equal(usedWorkspace, "/work/zen");
+    assert.deepEqual(sends, [
+      {
+        id: "external-binding",
+        text: "Use the real engine",
+        model: "codex-model",
+      },
+    ]);
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>(
+        "#agent-composer-external-binding",
+      )!.value,
+      "",
+    );
+    assert.equal(document.querySelector('[aria-label="Add images"]'), null);
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          ".native-session-row-shell > .thread-row",
+        )!
+        .click(),
+    );
+    await waitFor(() =>
+      document.querySelector("#agent-composer-external-binding"),
+    );
+    assert.match(
+      document.querySelector(".native-session-row-shell > .thread-row")!
+        .textContent!,
+      /Native Codex conversation/,
+    );
+    assert.doesNotMatch(
+      document.querySelector(".native-session-row-shell > .thread-row")!
+        .textContent!,
+      /Codex work/,
+    );
+    assert.match(
+      document
+        .querySelector(".native-session-row-shell > .thread-row")!
+        .getAttribute("title")!,
+      /Codex work.*Working directory: \/work\/zen/,
+    );
+    assert.equal(document.querySelector(".agent-session-navigation"), null);
+    assert.equal(document.querySelectorAll(".project-group").length, 1);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("App finishes a late native create without stealing newer Settings navigation", async () => {
+  const creation = deferred<AgentSessionSnapshot>();
+  let sends = 0;
+  let created = false;
+  const service = externalAgentApi({
+    create: () => creation.promise,
+    sessions: async () => (created ? [externalAgentSnapshot().binding] : []),
+    send: async () => {
+      sends++;
+    },
+  });
+  const harness = await mountApp(oneProject(), { agentProviders: service });
+  try {
+    await waitFor(() => document.querySelector(".composer-model-trigger"));
+    await chooseAgentProvider("codex-work");
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#agent-composer-codex-work"),
+    );
+    await setTextareaValue(composer, "Continue in Codex");
+    const send = await waitFor(() => {
+      const value = document.querySelector<HTMLButtonElement>(
+        '[aria-label="Send"]',
+      );
+      return value && !value.disabled ? value : undefined;
+    });
+    await act(async () => send.click());
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
+    );
+    await act(async () => {
+      created = true;
+      creation.resolve(externalAgentSnapshot());
+    });
+    await waitFor(() => (sends === 1 ? true : undefined));
+    assert.equal(
+      document.querySelector<HTMLElement>(".settings-view")!.hidden,
+      false,
+    );
+    assert.equal(
+      document.querySelector("#agent-composer-external-binding"),
+      null,
+    );
+    assert.ok(
+      document.querySelector(".native-session-row-shell > .thread-row"),
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("Restore failed native draft replaces a newer selected external session", async () => {
+  const creation = deferred<AgentSessionSnapshot>();
+  const service = externalAgentApi({
+    create: () => creation.promise,
+    sessions: async () => [externalAgentSnapshot().binding],
+  });
+  const harness = await mountApp(oneProject(), { agentProviders: service });
+  try {
+    await waitFor(() => document.querySelector(".composer-model-trigger"));
+    await chooseAgentProvider("codex-work");
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#agent-composer-codex-work"),
+    );
+    await setTextareaValue(composer, "Recover this request");
+    const send = await waitFor(() => {
+      const value = document.querySelector<HTMLButtonElement>(
+        '[aria-label="Send"]',
+      );
+      return value && !value.disabled ? value : undefined;
+    });
+    await act(async () => send.click());
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          ".native-session-row-shell > .thread-row",
+        )!
+        .click(),
+    );
+    await waitFor(() =>
+      document.querySelector("#agent-composer-external-binding"),
+    );
+    await act(async () => creation.reject(new Error("Native create failed")));
+    const restore = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (value) => value.textContent?.trim() === "Restore draft",
+      ),
+    );
+    await act(async () => restore.click());
+    const recovered = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#agent-composer-codex-work"),
+    );
+    assert.equal(recovered.value, "Recover this request");
+    assert.equal(
+      document.querySelector("#agent-composer-external-binding"),
+      null,
+    );
+    assert.match(document.body.textContent!, /Native create failed/);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("concurrent external drafts do not retain delivered text", async () => {
+  const first = deferred<AgentSessionSnapshot>();
+  const second = deferred<AgentSessionSnapshot>();
+  let creates = 0;
+  const sent: string[] = [];
+  const native = {
+    ...externalAgentSnapshot(),
+    binding: { ...externalAgentSnapshot().binding, id: "external-first" },
+  };
+  const service = externalAgentApi({
+    create: () => (++creates === 1 ? first.promise : second.promise),
+    sessions: async () => [native.binding],
+    read: async () => native,
+    send: async (id) => {
+      sent.push(id);
+    },
+  });
+  const harness = await mountApp(oneProject(), { agentProviders: service });
+  try {
+    await waitFor(() => document.querySelector(".composer-model-trigger"));
+    await chooseAgentProvider("codex-work");
+    await setTextareaValue(
+      await waitFor(() =>
+        document.querySelector<HTMLTextAreaElement>(
+          "#agent-composer-codex-work",
+        ),
+      ),
+      "First message",
+    );
+    await act(async () =>
+      (
+        await waitFor(() => {
+          const b = document.querySelector<HTMLButtonElement>(
+            '[aria-label="Send"]',
+          );
+          return b && !b.disabled ? b : undefined;
+        })
+      ).click(),
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")!.click(),
+    );
+    await waitFor(() => document.querySelector("#thread-composer"));
+    await chooseAgentProvider("codex-work");
+    await setTextareaValue(
+      await waitFor(() =>
+        document.querySelector<HTMLTextAreaElement>(
+          "#agent-composer-codex-work",
+        ),
+      ),
+      "Second message",
+    );
+    await act(async () =>
+      (
+        await waitFor(() => {
+          const b = document.querySelector<HTMLButtonElement>(
+            '[aria-label="Send"]',
+          );
+          return b && !b.disabled ? b : undefined;
+        })
+      ).click(),
+    );
+    assert.equal(creates, 2);
+    await act(async () => first.resolve(native));
+    await waitFor(() => sent.length === 1);
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          ".native-session-row-shell > .thread-row",
+        )!
+        .click(),
+    );
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        "#agent-composer-external-first",
+      ),
+    );
+    assert.equal(composer.value, "");
+  } finally {
+    await act(async () =>
+      second.resolve({
+        ...native,
+        binding: { ...native.binding, id: "external-second" },
+      }),
+    );
+    await unmountApp(harness);
+  }
+});
+
+test("interrupted external create restores explicit model selection", async () => {
+  const creation = deferred<AgentSessionSnapshot>();
+  const service = externalAgentApi({
+    models: async () => [
+      { ...wireModel("codex-model", true), id: "codex-model" },
+      { ...wireModel("other-model", false), id: "other-model" },
+    ],
+    create: () => creation.promise,
+  });
+  const harness = await mountApp(oneProject(), { agentProviders: service });
+  try {
+    await waitFor(() => document.querySelector(".composer-model-trigger"));
+    await chooseAgentProvider("codex-work");
+    await waitFor(() =>
+      document
+        .querySelector(".composer-model-trigger")
+        ?.textContent?.includes("codex-model"),
+    );
+    await chooseComposerModel("other-model");
+    await setTextareaValue(
+      await waitFor(() =>
+        document.querySelector<HTMLTextAreaElement>(
+          "#agent-composer-codex-work",
+        ),
+      ),
+      "Keep requested model",
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click(),
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
+    );
+    await act(async () => creation.reject(new Error("Native create failed")));
+    const restore = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (b) => b.textContent?.trim() === "Restore draft",
+      ),
+    );
+    await act(async () => restore.click());
+    await waitFor(() => document.querySelector("#agent-composer-codex-work"));
+    assert.ok(
+      document
+        .querySelector(".composer-model-trigger")!
+        .textContent!.includes("other-model"),
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("fresh external-only profile can configure Codex and send from global New thread", async () => {
+  let configured:
+    | import("../src/main/agent-providers/types.js").AgentProviderInstance
+    | null = null;
+  let creates = 0;
+  let sends = 0;
+  let zenCreates = 0;
+  const native = externalAgentSnapshot();
+  const service = externalAgentApi({
+    list: async () => [
+      { id: "zen", kind: "zen", name: "Zen" },
+      ...(configured === null ? [] : [configured]),
+    ],
+    save: async (instance) => {
+      configured = instance;
+      return instance;
+    },
+    create: async (request) => {
+      creates++;
+      assert.equal(request.providerInstanceId, configured!.id);
+      return {
+        ...native,
+        binding: { ...native.binding, providerInstanceId: configured!.id },
+      };
+    },
+    sessions: async () =>
+      creates
+        ? [{ ...native.binding, providerInstanceId: configured!.id }]
+        : [],
+    send: async () => {
+      sends++;
+    },
+  });
+  const project = { ...oneProject(), lastUsedWorkspace: null };
+  const harness = await mountApp(project, {
+    agentProviders: service,
+    initialProfile: { onboardingComplete: false, providerProfiles: [] },
+    models: [],
+    startProjectThread: async () => {
+      zenCreates++;
+      throw new Error("Zen is not configured");
+    },
+  });
+  try {
+    await waitFor(() =>
+      document.querySelector<HTMLElement>(".settings-view")?.hidden === false
+        ? true
+        : undefined,
+    );
+    await act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((value) => value.textContent?.trim() === "Add instance")!
+        .click(),
+    );
+    await waitFor(() =>
+      document.querySelector('[aria-label="codex instance name"]'),
+    );
+    await act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((value) => value.textContent?.trim() === "Save")!
+        .click(),
+    );
+    await waitFor(() => configured ?? undefined);
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")!.click(),
+    );
+    await waitFor(() => document.querySelector("#thread-composer"));
+    assert.equal(
+      document.querySelector<HTMLElement>(".settings-view")!.hidden,
+      true,
+    );
+    const projectChoice = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        ".new-thread-project-menu button",
+      ),
+    );
+    await act(async () => projectChoice.click());
+    await chooseAgentProvider(configured!.id);
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        `#agent-composer-${configured!.id}`,
+      ),
+    );
+    await setTextareaValue(composer, "Run without a Zen account");
+    const send = await waitFor(() => {
+      const value = document.querySelector<HTMLButtonElement>(
+        '[aria-label="Send"]',
+      );
+      return value && !value.disabled ? value : undefined;
+    });
+    await act(async () => send.click());
+    await waitFor(() => (sends === 1 ? true : undefined));
+    assert.equal(creates, 1);
+    assert.equal(zenCreates, 0);
+    assert.ok(document.querySelector("#agent-composer-external-binding"));
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("mixed Project rows preserve separate Zen and native drafts with honest row actions", async () => {
+  const native = externalAgentSnapshot();
+  const harness = await mountThreadApp({
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(liveThread());
+      throw new Error(`Unexpected ${method}`);
+    },
+    agentProviders: externalAgentApi({
+      sessions: async () => [native.binding],
+      read: async () => native,
+    }),
+  });
+  try {
+    const zenRow = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '.thread-row-shell[data-thread-id="thread-1"] > .thread-row',
+      ),
+    );
+    const nativeRow = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        ".native-session-row-shell > .thread-row",
+      ),
+    );
+    assert.equal(document.querySelectorAll(".project-group").length, 1);
+    assert.equal(
+      document.querySelector(".agent-session-navigation") === null,
+      true,
+    );
+    assert.equal(
+      nativeRow.parentElement!.querySelector(".thread-menu-trigger") === null,
+      true,
+    );
+    await act(async () => zenRow.click());
+    await setTextareaValue(
+      await waitFor(() =>
+        document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+      ),
+      "Zen draft",
+    );
+    await act(async () => nativeRow.click());
+    const nativeComposer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        "#agent-composer-external-binding",
+      ),
+    );
+    await setTextareaValue(nativeComposer, "Native draft");
+    assert.match(
+      nativeRow.getAttribute("aria-label")!,
+      /Host: local-host.*Native session: native-codex/,
+    );
+    assert.equal(nativeRow.getAttribute("aria-current"), "page");
+    assert.equal(zenRow.getAttribute("aria-current"), null);
+    await act(async () => zenRow.click());
+    assert.equal(
+      (
+        await waitFor(() =>
+          document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+        )
+      ).value,
+      "Zen draft",
+    );
+    await act(async () => nativeRow.click());
+    assert.equal(
+      (
+        await waitFor(() =>
+          document.querySelector<HTMLTextAreaElement>(
+            "#agent-composer-external-binding",
+          ),
+        )
+      ).value,
+      "Native draft",
+    );
+    assert.equal(nativeRow.getAttribute("aria-current"), "page");
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("R1 counterexample: Retry agent conversations refreshes its missing Project locators", async () => {
+  let healthy = false;
+  let projectReads = 0;
+  let agentReads = 0;
+  const native = externalAgentSnapshot();
+  const project = oneProject();
+  const harness = await mountApp(project, {
+    projectsGet: async () => {
+      projectReads++;
+      return healthy
+        ? {
+            ...project,
+            projects: project.projects.map((p) => ({
+              ...p,
+              threadIds: [`agent:${native.binding.id}`],
+            })),
+          }
+        : { ...project, sourceErrors: { agent: "Native source unavailable" } };
+    },
+    agentProviders: externalAgentApi({
+      sessions: async () => {
+        agentReads++;
+        return [native.binding];
+      },
+      read: async () => native,
+    }),
+  });
+  try {
+    const retry = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (b) => b.textContent?.trim() === "Retry agent conversations",
+      ),
+    );
+    await waitFor(() => projectReads >= 2);
+    const before = projectReads;
+    const beforeAgent = agentReads;
+    healthy = true;
+    await act(async () => retry.click());
+    await waitFor(() => agentReads > beforeAgent);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.ok(
+      projectReads > before,
+      "Retry refreshes the shared Project projection",
+    );
+    assert.ok(
+      document.querySelector(".native-session-row-shell"),
+      "A successful retry must restore the known native Project conversation",
+    );
+    assert.equal(
+      document.body.textContent?.includes("Native source unavailable"),
+      false,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("R1 counterexample: Retry Zen conversations refreshes its missing Project locators", async () => {
+  let healthy = false;
+  let projectReads = 0;
+  let zenReads = 0;
+  const project = oneProject();
+  const harness = await mountApp(project, {
+    projectsGet: async () => {
+      projectReads++;
+      return healthy
+        ? {
+            ...project,
+            projects: project.projects.map((p) => ({
+              ...p,
+              threadIds: ["thread-1"],
+            })),
+          }
+        : { ...project, sourceErrors: { zen: "Zen source unavailable" } };
+    },
+    threads: async (archived) => {
+      if (!archived) zenReads++;
+      return archived ? [] : [summary(false)];
+    },
+  });
+  try {
+    const retry = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (b) => b.textContent?.trim() === "Try again",
+      ),
+    );
+    const before = projectReads;
+    const beforeZen = zenReads;
+    healthy = true;
+    await act(async () => retry.click());
+    await waitFor(() => zenReads > beforeZen);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.ok(
+      projectReads > before,
+      "Retry refreshes the shared Project projection",
+    );
+    assert.equal(
+      document.body.textContent?.includes("Zen source unavailable"),
+      false,
+    );
+    assert.ok(
+      document.querySelector('.thread-row-shell[data-thread-id="thread-1"]'),
+      "A successful retry must restore the known Zen Project conversation",
     );
   } finally {
     await unmountApp(harness);

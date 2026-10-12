@@ -22,13 +22,19 @@ export type TurnDisplayNode =
   | {
       kind: "traceItem";
       id: string;
-      item: Extract<ThreadItem, { type: "reasoning" | "commandExecution" }>;
+      item: Extract<
+        ThreadItem,
+        { type: "reasoning" | "commandExecution" | "nativeItem" }
+      >;
     }
   | {
       kind: "traceGroup";
       id: string;
       items: Array<
-        Extract<ThreadItem, { type: "reasoning" | "commandExecution" }>
+        Extract<
+          ThreadItem,
+          { type: "reasoning" | "commandExecution" | "nativeItem" }
+        >
       >;
       summary: string;
     };
@@ -41,7 +47,10 @@ export interface TurnDisplayProjection {
 }
 
 export interface TraceDisplayRow {
-  item: Extract<ThreadItem, { type: "reasoning" | "commandExecution" }>;
+  item: Extract<
+    ThreadItem,
+    { type: "reasoning" | "commandExecution" | "nativeItem" }
+  >;
   nested: boolean;
   parentToolName: string | null;
 }
@@ -90,7 +99,7 @@ export function groupReasoningWithoutDetailsRows(
 export function traceDisplayRows(
   items: readonly Extract<
     ThreadItem,
-    { type: "reasoning" | "commandExecution" }
+    { type: "reasoning" | "commandExecution" | "nativeItem" }
   >[],
 ): TraceDisplayRow[] {
   const calls = new Map(
@@ -180,7 +189,10 @@ export function projectTurn(
   }
   const history: TurnDisplayNode[] = [];
   let traceItems: Array<
-    Extract<ThreadItem, { type: "reasoning" | "commandExecution" }>
+    Extract<
+      ThreadItem,
+      { type: "reasoning" | "commandExecution" | "nativeItem" }
+    >
   > = [];
   const flushTrace = () => {
     if (traceItems.length === 0) return;
@@ -207,7 +219,11 @@ export function projectTurn(
   for (let index = 0; index < historySource.length; index += 1) {
     const item = historySource[index];
     if (item === undefined) continue;
-    if (item.type === "reasoning" || item.type === "commandExecution") {
+    if (
+      item.type === "reasoning" ||
+      item.type === "commandExecution" ||
+      item.type === "nativeItem"
+    ) {
       traceItems.push(item);
       if (steersAfterIndex.has(index)) {
         flushTrace();
@@ -311,6 +327,17 @@ export function summarizeTraceActivity(
   const categories = new Map<string, number>();
   const active: Array<{ item: CommandItem; phase: CommandPhase }> = [];
   for (const item of items) {
+    if (item.type === "nativeItem") {
+      result.total += 1;
+      categories.set(item.kind, (categories.get(item.kind) ?? 0) + 1);
+      if (item.status === "inProgress") {
+        result.active += 1;
+        result.running += 1;
+      }
+      if (item.status === "failed") result.failed += 1;
+      if (item.status === "declined") result.cancelled += 1;
+      continue;
+    }
     if (item.type !== "commandExecution") continue;
     result.total += 1;
     const category = toolPresentation(item.toolName ?? item.command).category;
@@ -355,11 +382,13 @@ export function summarizeTraceActivity(
   result.current = current?.item ?? null;
   result.phase =
     current?.phase ??
-    (items.some(
-      (item) => item.type === "reasoning" && item.status === "inProgress",
-    )
-      ? "thinking"
-      : "idle");
+    (result.running > 0
+      ? "running"
+      : items.some(
+            (item) => item.type === "reasoning" && item.status === "inProgress",
+          )
+        ? "thinking"
+        : "idle");
   result.categories = [...categories].map(([label, count]) => ({
     label,
     count,
@@ -386,6 +415,12 @@ export function traceSummary(
       : `${commandTitle(item)} · ${commandPhaseLabel(phase).toLowerCase()}`;
   }
   if (activity.current) return commandTitle(activity.current);
+  const native = items.filter((item) => item.type === "nativeItem");
+  if (commands.length === 0 && native.length > 0)
+    return native
+      .slice(-3)
+      .map((item) => item.title)
+      .join(" · ");
   if (activity.total === 0) return i18n.t("shell:thoughts");
   return i18n.t("shell:toolCalls", { count: activity.total });
 }
