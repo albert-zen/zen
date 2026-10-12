@@ -87,7 +87,11 @@ export async function restoreLoginShellPath(options: {
           if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
           else child.kill("SIGKILL");
         } catch {
-          child.kill("SIGKILL");
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            // A failed kill cannot turn the bounded fallback into a hung launch.
+          }
         }
       }
       child.stdout?.destroy();

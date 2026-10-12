@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
 import childProcess, { ChildProcess } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  ShellToolRuntime,
+  sanitizeToolEnvironment,
+} from "../../../src/tool.js";
 import { PassThrough } from "node:stream";
 import test, { type TestContext } from "node:test";
 import { restoreLoginShellPath } from "../src/main/login-shell-environment.js";
@@ -297,3 +305,147 @@ test("an empty inherited environment can receive a framed PATH", async (t) => {
   assert.equal(await pending, "restored");
   assert.deepEqual(environment, { PATH: minimalPath });
 });
+
+test("timeout targets the owned detached process group and still settles if killing fails", async (t) => {
+  const shell = mockShell(t);
+  Object.defineProperty(shell.child, "pid", { value: 987654 });
+  const killGroup = t.mock.method(process, "kill", () => {
+    throw new Error("already gone");
+  });
+  shell.kill.mock.mockImplementation(() => {
+    throw new Error("already gone");
+  });
+  const environment = { PATH: minimalPath, SHELL: "/bin/zsh" };
+  assert.equal(
+    await restoreLoginShellPath({
+      platform: "darwin",
+      environment,
+      fromTerminal: false,
+      timeoutMs: 10,
+    }),
+    "timed-out",
+  );
+  assert.deepEqual(killGroup.mock.calls[0]!.arguments, [-987654, "SIGKILL"]);
+  assert.equal(environment.PATH, minimalPath);
+});
+
+test(
+  "the first real shell tool receives recovered PATH through the unchanged whitelist",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const shell = mockShell(t);
+    const environment = {
+      PATH: minimalPath,
+      SHELL: "/bin/zsh",
+      API_KEY: "host-secret",
+      NODE_OPTIONS: "host-node-flags",
+      LC_TEST: "locale",
+      HOME: tmpdir(),
+    };
+    const pending = restoreLoginShellPath({
+      platform: "darwin",
+      environment,
+      fromTerminal: false,
+    });
+    const recoveredPath = `/fixture with spaces/工具:/usr/bin:/bin`;
+    shell.complete(recoveredPath);
+    assert.equal(await pending, "restored");
+    shell.spawn.mock.restore();
+    assert.deepEqual(sanitizeToolEnvironment(environment, ["LC_TEST"]), {
+      PATH: recoveredPath,
+      SHELL: "/bin/zsh",
+      HOME: tmpdir(),
+    });
+    const runtime = new ShellToolRuntime({
+      environment,
+      blockedEnvironmentVariables: ["LC_TEST"],
+    });
+    const result = await runtime.execute({
+      callId: "first-tool",
+      name: "shell",
+      arguments: {
+        command:
+          'printf "%s\\n" "$PATH" "${API_KEY-unset}" "${NODE_OPTIONS-unset}" "${LC_TEST-unset}"',
+      },
+      cwd: tmpdir(),
+      signal: new AbortController().signal,
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.output, `${recoveredPath}\nunset\nunset\nunset\n`);
+  },
+);
+
+test("Electron opens the startup page before capture and awaits it before Host configuration", () => {
+  const source = readFileSync(
+    new URL("../src/main/index.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /createWindow\(\);\s+await bootstrapFence\.run\(bootstrapZenX\)/u,
+  );
+  const bootstrap = source.slice(
+    source.indexOf("async function bootstrapZenX()"),
+  );
+  assert(
+    bootstrap.indexOf("await restoreLoginShellPath(") <
+      bootstrap.indexOf("await settingsService.initialize(process.env)"),
+  );
+  assert(
+    bootstrap.indexOf("await restoreLoginShellPath(") <
+      bootstrap.indexOf("new AppServerManager("),
+  );
+  assert.match(
+    source,
+    /cancelBootstrap: \(\) => \{\s+loginShellAbort\.abort\(\);\s+return bootstrapFence\.cancelAndJoin\(\)/u,
+  );
+});
+
+test(
+  "real macOS zsh login profile restores a user executable without importing profile secrets",
+  { skip: process.platform !== "darwin" },
+  async () => {
+    const home = await mkdtemp(join(tmpdir(), "zenx-login-shell-"));
+    try {
+      await mkdir(join(home, "bin"));
+      await writeFile(
+        join(home, ".zprofile"),
+        'print "login profile chatter"\nexport PATH="$HOME/bin:$PATH"\nexport LOGIN_SHELL_SECRET="profile-secret"\nexport NODE_OPTIONS="--require invalid-profile-module"\nexport ZENX_DATA_DIR="/profile-must-not-reconfigure-host"\n',
+      );
+      await writeFile(
+        join(home, ".zshrc"),
+        'print "interactive startup chatter"\n',
+      );
+      await writeFile(
+        join(home, "bin", "zenx-path-fixture"),
+        '#!/bin/sh\nprintf "%s\\n" "from-login-profile" "${LOGIN_SHELL_SECRET-unset}" "${NODE_OPTIONS-unset}"\n',
+        { mode: 0o700 },
+      );
+      const environment: NodeJS.ProcessEnv = {
+        PATH: minimalPath,
+        HOME: home,
+        SHELL: "/bin/zsh",
+        ZDOTDIR: home,
+      };
+      assert.equal(
+        await restoreLoginShellPath({ environment, fromTerminal: false }),
+        "restored",
+      );
+      assert(environment.PATH!.split(":").includes(join(home, "bin")));
+      assert.equal(environment.LOGIN_SHELL_SECRET, undefined);
+      assert.equal(environment.NODE_OPTIONS, undefined);
+      assert.equal(environment.ZENX_DATA_DIR, undefined);
+      const result = await new ShellToolRuntime({ environment }).execute({
+        callId: "first-mac-tool",
+        name: "shell",
+        arguments: { command: "zenx-path-fixture" },
+        cwd: home,
+        signal: new AbortController().signal,
+      });
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.output, "from-login-profile\nunset\nunset\n");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  },
+);

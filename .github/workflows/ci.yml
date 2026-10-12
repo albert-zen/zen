@@ -73,6 +73,8 @@ jobs:
           path: apps/zenx/.packaged/cache/artifacts/sha256/[0-9a-f]*
           key: zenx-provider-archives-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/zenx/resources/providers/provider-lock.json') }}
       - run: npm ci
+      - name: Exercise macOS login-shell PATH and first tool execution
+        run: npm --workspace apps/zenx exec -- tsx --test test/login-shell-environment.test.ts
       - run: npm --workspace apps/zenx run smoke:capabilities
 
   zenx-windows-computer-smoke:
