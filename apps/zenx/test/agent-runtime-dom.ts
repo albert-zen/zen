@@ -22,6 +22,7 @@ export async function withRuntimeDom(
     hide(): Promise<void>;
     click(selector: string): Promise<HTMLButtonElement>;
   }) => Promise<void>,
+  options: { keyByThread?: boolean } = {},
 ) {
   const dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
   const previous = { window: globalThis.window, document: globalThis.document };
@@ -60,7 +61,7 @@ export async function withRuntimeDom(
           root.render(
             React.createElement(ThreadReadingStateProvider, {
               children: React.createElement(ThreadView, {
-                key: thread.id,
+                key: options.keyByThread ? thread.id : undefined,
                 thread,
                 approvals: [],
                 composer: draft,

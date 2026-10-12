@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { act, withRuntimeDom } from "./agent-runtime-dom.js";
+import {
+  act,
+  withRuntimeDom as withUnkeyedRuntimeDom,
+} from "./agent-runtime-dom.js";
+
+// Existing runtime tests also exercise updates within one mounted ThreadView.
+// These navigation regressions deliberately mirror App's keyed thread remounts.
+const withRuntimeDom: typeof withUnkeyedRuntimeDom = (run) =>
+  withUnkeyedRuntimeDom(run, { keyByThread: true });
 import {
   runtimeThread,
   runtimeCommand,
