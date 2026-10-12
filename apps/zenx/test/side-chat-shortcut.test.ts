@@ -30,10 +30,15 @@ async function fixture(execute: (input: unknown) => Promise<unknown>) {
     requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
     cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
     React,
+    ResizeObserver: class {
+      observe() {}
+      disconnect() {}
+    },
     IS_REACT_ACT_ENVIRONMENT: true,
   });
   const calls: unknown[] = [];
   const routes: string[] = [];
+  const selectedTabs: string[] = [];
   Object.assign(dom.window, {
     zenx: {
       plugins: {
@@ -85,7 +90,7 @@ async function fixture(execute: (input: unknown) => Promise<unknown>) {
           snapshot: enabled ? snapshot : { ...snapshot, panels: [] },
           onOpenChange: () => {},
           selectedTab,
-          onSelectTab: () => {},
+          onSelectTab: (tab) => selectedTabs.push(tab),
           navigate: (route) => routes.push(route),
         }),
       ),
@@ -103,6 +108,7 @@ async function fixture(execute: (input: unknown) => Promise<unknown>) {
     button,
     calls,
     routes,
+    selectedTabs,
     close: async () => {
       await act(async () => root.unmount());
       dom.window.close();
@@ -201,6 +207,126 @@ test("quick creation is unavailable when the Subagents contribution is disabled"
     await f.render("parent", true, "", false);
     assert.equal(document.querySelector('[aria-label="New side chat"]'), null);
     assert.deepEqual(f.calls, []);
+  } finally {
+    await f.close();
+  }
+});
+
+function delayedBrowser(creation: ReturnType<typeof deferred>) {
+  Object.assign(window.zenx, {
+    workspaceBrowser: {
+      command: async (_thread: string, command: string) =>
+        command === "list" ? [] : creation.promise,
+      onChanged: () => () => {},
+      mount: async () => {},
+      onFocusAddress: () => () => {},
+    },
+  });
+}
+
+function browserShortcut(): HTMLButtonElement {
+  const browser = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      ".workspace-tab-types > button",
+    ),
+  ].find((button) => button.querySelector("strong")?.textContent === "Browser");
+  assert.ok(browser);
+  return browser;
+}
+
+function createdBrowser(id: string) {
+  return [
+    {
+      id,
+      threadId: "parent",
+      title: "New browser",
+      url: "about:blank",
+      loading: false,
+      canGoBack: false,
+      canGoForward: false,
+      sharedWithAgent: true,
+    },
+  ];
+}
+
+test("a newer pending Browser intent fences an older quick side-chat completion", async () => {
+  const creation = deferred();
+  const browserCreation = deferred();
+  const f = await fixture(async () => creation.promise);
+  delayedBrowser(browserCreation);
+  try {
+    await f.render();
+    await act(async () => f.button().click());
+    await act(async () => browserShortcut().click());
+    assert.equal(browserShortcut().disabled, true);
+    await act(async () => creation.resolve({ threadId: "older-side-chat" }));
+    assert.deepEqual(
+      f.routes,
+      [],
+      "creation can finish without taking navigation from the newer Browser intent",
+    );
+    assert.equal(f.calls.length, 1);
+    await act(async () =>
+      browserCreation.resolve(createdBrowser("newer-browser")),
+    );
+    assert.equal(f.selectedTabs.at(-1), "browser:newer-browser");
+  } finally {
+    await f.close();
+  }
+});
+
+test("a newer side-chat intent retains the chooser when an older Browser completes", async () => {
+  const creation = deferred();
+  const browserCreation = deferred();
+  const f = await fixture(async () => creation.promise);
+  delayedBrowser(browserCreation);
+  try {
+    await f.render();
+    await act(async () => browserShortcut().click());
+    await act(async () => f.button().click());
+    await act(async () =>
+      browserCreation.resolve(createdBrowser("older-browser")),
+    );
+    assert.deepEqual(
+      f.selectedTabs,
+      [],
+      "an earlier Browser request must not select its tab",
+    );
+    assert.equal(f.button().disabled, true, "pending side chat stays mounted");
+    await act(async () => creation.resolve({ threadId: "newer-side-chat" }));
+    assert.deepEqual(f.routes, ["/threads/newer-side-chat?view=panel"]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a failed side chat can retry with fresh navigation ownership after a newer Browser intent", async () => {
+  const first = deferred();
+  const retry = deferred();
+  const browserCreation = deferred();
+  let attempts = 0;
+  const f = await fixture(async () =>
+    ++attempts === 1 ? first.promise : retry.promise,
+  );
+  delayedBrowser(browserCreation);
+  try {
+    await f.render();
+    await act(async () => f.button().click());
+    await act(async () => browserShortcut().click());
+    await act(async () => first.reject(new Error("Creation failed")));
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /Creation failed/,
+    );
+    assert.equal(f.button().disabled, false);
+    await act(async () => f.button().click());
+    await act(async () =>
+      browserCreation.resolve(createdBrowser("superseded-browser")),
+    );
+    assert.deepEqual(f.selectedTabs, []);
+    await act(async () => retry.resolve({ threadId: "retried-side-chat" }));
+    assert.deepEqual(f.routes, ["/threads/retried-side-chat?view=panel"]);
+    assert.equal(attempts, 2);
   } finally {
     await f.close();
   }

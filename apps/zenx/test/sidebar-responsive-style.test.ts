@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { JSDOM } from "jsdom";
 
 test("narrow desktop Thread rows reserve the overflow menu column", async () => {
   const styles = await readFile(
@@ -276,4 +277,62 @@ test("Linux workspace heading and narrow toggle stay clear of native window cont
     styles.slice(lastToggle),
     /top:\s*calc\(var\(--native-titlebar-height\) \+ 4px\);\s*right:\s*8px;/u,
   );
+});
+
+test("coarse-pointer child row and actions keep 44px minimum targets after the base cascade", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/subagents.css", import.meta.url),
+    "utf8",
+  );
+  const dom = new JSDOM(
+    '<style></style><div class="subagent-tree-entry"><button class="subagent-tree-row">Child</button><button class="subagent-sidebar-pin">Pin</button></div><button class="subagent-create-button">Side chat</button>',
+  );
+  try {
+    const style = dom.window.document.querySelector("style")!;
+    style.textContent = styles;
+    const rules = [...style.sheet!.cssRules];
+    const coarse = rules.find(
+      (rule): rule is CSSMediaRule =>
+        rule.type === dom.window.CSSRule.MEDIA_RULE &&
+        (rule as CSSMediaRule).conditionText === "(pointer: coarse)",
+    );
+    assert.ok(coarse);
+    const targets = [...coarse.cssRules].find(
+      (rule): rule is CSSStyleRule =>
+        rule.type === dom.window.CSSRule.STYLE_RULE &&
+        (rule as CSSStyleRule).style.getPropertyValue("min-height") === "44px",
+    );
+    assert.ok(targets);
+    assert.ok(
+      targets.selectorText
+        .split(",")
+        .map((selector) => selector.trim())
+        .includes(".subagent-tree-entry > .subagent-tree-row"),
+      "touch rule must match the base row selector specificity",
+    );
+    // JSDOM does not evaluate pointer media features: materialize that matched
+    // media block after its real base rules, then inspect the computed cascade.
+    style.textContent =
+      rules
+        .filter((rule) => rule.type === dom.window.CSSRule.STYLE_RULE)
+        .map((rule) => rule.cssText)
+        .join("\n") +
+      "\n" +
+      [...coarse.cssRules].map((rule) => rule.cssText).join("\n");
+    for (const selector of [
+      ".subagent-tree-row",
+      ".subagent-sidebar-pin",
+      ".subagent-create-button",
+    ]) {
+      assert.equal(
+        dom.window.getComputedStyle(
+          dom.window.document.querySelector(selector)!,
+        ).minHeight,
+        "44px",
+        selector,
+      );
+    }
+  } finally {
+    dom.window.close();
+  }
 });

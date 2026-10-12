@@ -270,7 +270,7 @@
 
 @media (pointer: coarse) {
   .subagent-sidebar-pin,
-  .subagent-tree-row,
+  .subagent-tree-entry > .subagent-tree-row,
   .subagent-create-button {
     min-height: 44px;
   }

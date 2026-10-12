@@ -853,6 +853,14 @@ export function AuxiliaryPanel({
                           key={threadId}
                           parent={threadId}
                           active={open === true}
+                          beginNavigation={() => {
+                            const operationEpoch = ++selectionEpoch.current;
+                            // Keep this pending choice mounted if an older
+                            // Browser creation publishes its resource meanwhile.
+                            setChoosing(true);
+                            return () =>
+                              selectionEpoch.current === operationEpoch;
+                          }}
                           execute={(input) =>
                             window.zenx.plugins.executeCommand(
                               panel.pluginId,

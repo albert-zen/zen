@@ -139,6 +139,7 @@ export function CreateSideChat({
   active = true,
   execute,
   navigate,
+  beginNavigation,
   onCreated,
 }: {
   parent: string;
@@ -148,6 +149,8 @@ export function CreateSideChat({
     mode: "side-chat";
   }): Promise<unknown>;
   navigate(route: string): void;
+  /** Capture the shell’s current navigation intent before creation starts. */
+  beginNavigation?(): () => boolean;
   onCreated?(): void;
 }) {
   useTranslation("panels");
@@ -176,6 +179,7 @@ export function CreateSideChat({
     setBusy(true);
     setError(null);
     try {
+      const canNavigate = beginNavigation?.();
       const result = (await execute({
         parentThreadId: source,
         mode: "side-chat",
@@ -184,7 +188,8 @@ export function CreateSideChat({
       if (!id) throw new Error(i18n.t("panels:newConversationUnidentified"));
       if (mounted.current && epoch.current === requestEpoch) {
         onCreated?.();
-        navigate(`/threads/${encodeURIComponent(id)}?view=panel`);
+        if (canNavigate?.() ?? true)
+          navigate(`/threads/${encodeURIComponent(id)}?view=panel`);
       }
     } catch (cause) {
       if (mounted.current && epoch.current === requestEpoch)

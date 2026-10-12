@@ -103,7 +103,7 @@ test("Thread menu manages keyboard focus through close and row removal", async (
         }),
       );
     });
-    assert.equal(document.activeElement?.textContent?.trim(), "Copy thread");
+    assert.equal(document.activeElement?.textContent?.trim(), "Fork");
 
     await act(async () => {
       document.activeElement?.dispatchEvent(
@@ -197,7 +197,7 @@ test("Thread menu manages keyboard focus through close and row removal", async (
     await act(async () => trigger.click());
     const copy = Array.from(
       document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
-    ).find((item) => item.textContent?.includes("Copy thread"));
+    ).find((item) => item.textContent?.includes("Fork"));
     assert.ok(copy);
     await act(async () => {
       copy.click();
