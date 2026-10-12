@@ -1122,6 +1122,11 @@ ZenX 的 `/compact --no-reference` 仅将关闭原文定位符作为 `thread/com
 ### Always On Assistant preset
 
 An assistant Room binds one real Thread to an owned roomMention Trigger.
+Its personal display name is the existing Room name; an explicit PAW rename
+atomically updates that name, its bound member name and owned Trigger mention.
+Historical messages and canonical Thread titles remain unchanged. First-use
+setup is a disposable renderer wizard over existing setup/configuration APIs;
+only its optional welcome dismissal is an origin-local presentation preference.
 Trusted setup defaults to creating an idle Thread through the existing Host
 Project/thread-start boundary with confirmed settings; explicit existing-Thread
 binding remains available. The Room and its Trigger commit atomically in the

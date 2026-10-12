@@ -676,7 +676,24 @@ export class ZenXTriggerService {
         (candidate) => candidate.id === required(roomId, "room", MAX_ID_BYTES),
       );
       if (room === undefined) throw new Error("Room was not found");
-      room.name = required(name, "room name", MAX_ROOM_NAME_BYTES);
+      const nextName = required(
+        name,
+        room.assistant ? "PAW name" : "room name",
+        room.assistant ? MAX_MEMBER_NAME_BYTES : MAX_ROOM_NAME_BYTES,
+      );
+      if (room.assistant) {
+        const member = room.members.find(
+          (value) => value.threadId === room.assistant!.threadId,
+        );
+        const trigger = snapshot.triggers.find(
+          (value) => value.id === room.assistant!.triggerId,
+        );
+        if (!member || !trigger?.room)
+          throw new Error("PAW identity is unavailable");
+        member.name = nextName;
+        trigger.room.mention = nextName;
+      }
+      room.name = nextName;
     });
   }
   assistantWorkspace(roomId: string): AssistantWorkspace {

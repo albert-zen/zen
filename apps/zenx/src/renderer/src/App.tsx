@@ -3281,7 +3281,7 @@ function PageTitleBar({
         </button>
         <div>
           <h1>{title}</h1>
-          <p>{subtitle}</p>
+          {subtitle !== title ? <p>{subtitle}</p> : null}
         </div>
       </div>
     </div>

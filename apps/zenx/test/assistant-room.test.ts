@@ -376,3 +376,21 @@ test("direct working Thread completion stays out of the PAW Room", async () => {
     await f.close();
   }
 });
+
+test("renaming a PAW atomically updates its speaking identity and mention without renaming the working Thread", async () => {
+  const f = await fixture();
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    await f.service.renameRoom(room.id, "Nova");
+    const saved = await f.store.read();
+    assert.equal(saved.rooms[0]?.name, "Nova");
+    assert.equal(saved.rooms[0]?.members[0]?.name, "Nova");
+    assert.equal(saved.rooms[0]?.members[0]?.threadId, "chief-thread");
+    assert.equal(saved.triggers[0]?.room?.mention, "Nova");
+    assert.equal(f.model.requests.length, 0);
+    await assert.rejects(f.service.renameRoom(room.id, "x".repeat(129)));
+    assert.equal((await f.store.read()).rooms[0]?.name, "Nova");
+  } finally {
+    await f.close();
+  }
+});

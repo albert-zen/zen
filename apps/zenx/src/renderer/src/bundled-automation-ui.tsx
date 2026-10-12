@@ -22,6 +22,7 @@ import {
   handleComposerSuggestionKey,
 } from "./ComposerSuggestions.js";
 import { useRoomComposerSelector } from "./use-room-composer-selector.js";
+import { DirectoryPicker } from "./DirectoryPicker.js";
 import { PluginRequirementsPreview } from "./PluginRequirementsPreview.js";
 import { PAW_PLUGIN_REQUIREMENTS } from "../../assistant-preset-requirements.js";
 
@@ -1523,6 +1524,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const initialRoomId = routeQuery(sdk.context?.route).get("roomId");
   const primaryNavigation = sdk.context?.primaryNavigation === true;
   const createIntent = routeQuery(sdk.context?.route).get("create");
+  const manageIntent = routeQuery(sdk.context?.route).get("manage");
+  const managedRoute = useRef<string | null>(null);
+  const [assistantProjectPicker, setAssistantProjectPicker] = useState(false);
+  const [assistantProjectSaving, setAssistantProjectSaving] = useState(false);
+  const assistantProjectOperation = useRef({ epoch: 0, pending: false });
+  const [assistantStep, setAssistantStep] = useState<"name" | "setup">("name");
   const viewEpoch = useRef(0);
   useLayoutEffect(() => {
     viewEpoch.current += 1;
@@ -1624,7 +1631,10 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     setSelected(initialRoomId);
     setError(null);
     setPanel(null);
+    setAssistantProjectPicker(false);
+    assistantProjectOperation.current.epoch += 1;
     if (createIntent === "room" || createIntent === "companion") {
+      setAssistantStep("name");
       setAssistantMode(createIntent === "companion");
       setName(createIntent === "companion" ? "PAW" : "");
       setMemberName(createIntent === "companion" ? "Assistant" : "");
@@ -1638,7 +1648,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       setAssistantCreationFailed(false);
       setPanel("create");
     }
-  }, [initialRoomId, primaryNavigation, createIntent]);
+  }, [initialRoomId, primaryNavigation, createIntent, manageIntent]);
   // SDK wrappers change on ordinary parent polling, without a new setup intent.
   useEffect(() => {
     if (panel !== "create" || !assistantMode) return;
@@ -1946,13 +1956,17 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     return () => clearInterval(timer);
   }, [sdk]);
   useEffect(() => {
-    if (panel === "rename") dialog.current?.querySelector("input")?.focus();
+    if (
+      panel === "rename" ||
+      (panel === "create" && assistantMode && assistantStep === "name")
+    )
+      dialog.current?.querySelector("input")?.focus();
     else if (panel !== null) dialogClose.current?.focus();
-  }, [panel]);
+  }, [panel, assistantMode, assistantStep, assistantProjectPicker]);
   const closeDialog = () => {
     dialogEpoch.current += 1;
     setPanel(null);
-    if (primaryNavigation && createIntent)
+    if (primaryNavigation && (createIntent || manageIntent))
       sdk.navigation.navigate(
         selected
           ? `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: selected })}`
@@ -1961,6 +1975,31 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     requestAnimationFrame(() => dialogInvoker.current?.focus());
   };
   const room = data.rooms.find((entry) => entry.id === selected);
+  useEffect(() => {
+    const route = sdk.context?.route;
+    if (!primaryNavigation || typeof route !== "string" || !manageIntent) {
+      managedRoute.current = null;
+      return;
+    }
+    if (!room || room.id !== initialRoomId || managedRoute.current === route)
+      return;
+    if (manageIntent !== "rename" && manageIntent !== "settings") return;
+    managedRoute.current = route;
+    dialogInvoker.current =
+      document.activeElement instanceof window.HTMLElement
+        ? document.activeElement
+        : null;
+    setName(room.name);
+    setAssistantMode(Boolean(room.assistant));
+    setError(null);
+    setPanel(manageIntent === "rename" ? "rename" : "manage");
+  }, [
+    sdk.context?.route,
+    primaryNavigation,
+    manageIntent,
+    room,
+    initialRoomId,
+  ]);
   const draft = room === undefined ? "" : (drafts[room.id] ?? "");
   const changeRoomDraft = (text: string) => {
     if (!room) return;
@@ -2376,6 +2415,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               onClick={(event) => {
                 dialogInvoker.current = event.currentTarget;
                 setAssistantMode(true);
+                setAssistantStep("name");
                 setName("PAW");
                 setMemberName("Assistant");
                 setThreadId("");
@@ -2994,9 +3034,49 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           </>
         )}
       </main>
-      {panel !== null ? (
+      {assistantProjectPicker ? (
+        <DirectoryPicker
+          onCancel={() => {
+            assistantProjectOperation.current.epoch += 1;
+            setAssistantProjectPicker(false);
+          }}
+          onSelect={(workspace) => {
+            if (assistantProjectOperation.current.pending) return;
+            const epoch = dialogEpoch.current;
+            const projectEpoch = assistantProjectOperation.current.epoch;
+            assistantProjectOperation.current.pending = true;
+            setAssistantProjectSaving(true);
+            void window.zenx.settings
+              .addWorkspace(workspace)
+              .then(() => {
+                if (
+                  epoch !== dialogEpoch.current ||
+                  projectEpoch !== assistantProjectOperation.current.epoch
+                )
+                  return;
+                setAssistantWorkspace(workspace);
+                setAssistantProjectPicker(false);
+                setAssistantSetupSession((session) => session + 1);
+              })
+              .catch((reason: unknown) => {
+                if (
+                  epoch !== dialogEpoch.current ||
+                  projectEpoch !== assistantProjectOperation.current.epoch
+                )
+                  return;
+                setAssistantProjectPicker(false);
+                setAssistantSetupError(describeError(reason));
+              })
+              .finally(() => {
+                assistantProjectOperation.current.pending = false;
+                setAssistantProjectSaving(false);
+              });
+          }}
+        />
+      ) : null}
+      {panel !== null && !assistantProjectPicker ? (
         <div
-          className="rooms-chat-overlay"
+          className={`rooms-chat-overlay${panel === "create" && assistantMode ? " paw-setup-overlay" : ""}`}
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) closeDialog();
           }}
@@ -3037,13 +3117,17 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   ? i18n.t("panels:renameConversation")
                   : i18n.t("panels:conversationSettings")
             }
-            className="rooms-chat-dialog"
+            className={`rooms-chat-dialog${panel === "create" && assistantMode ? " paw-setup-dialog" : ""}`}
           >
             <header>
               <h2>
                 {panel === "create"
                   ? assistantMode
-                    ? i18n.t("panels:newPawConversation")
+                    ? i18n.t(
+                        assistantStep === "name"
+                          ? "panels:pawNameStep"
+                          : "panels:pawSetupStep",
+                      )
                     : i18n.t("panels:newRoom")
                   : panel === "rename"
                     ? i18n.t("panels:renameConversation")
@@ -3052,17 +3136,35 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       })}
               </h2>
               <button ref={dialogClose} type="button" onClick={closeDialog}>
-                {panel === "rename"
-                  ? i18n.t("panels:cancel")
-                  : i18n.t("panels:close")}
+                {panel === "create" && assistantMode
+                  ? i18n.t("panels:pawLater")
+                  : panel === "rename"
+                    ? i18n.t("panels:cancel")
+                    : i18n.t("panels:close")}
               </button>
             </header>
             {panel === "create" && assistantMode ? (
-              <>
+              <p className="paw-setup-description">
+                {i18n.t(
+                  assistantStep === "name"
+                    ? "panels:pawNameHelp"
+                    : "panels:pawSetupHelp",
+                )}
+              </p>
+            ) : null}
+            {panel === "create" &&
+            assistantMode &&
+            assistantStep === "setup" ? (
+              <details
+                className="paw-setup-capabilities"
+                open={!assistantPluginsReady}
+              >
+                <summary>{i18n.t("panels:pawCapabilities")}</summary>
                 <p className="room-assistant-disclosure">
                   {i18n.t("panels:pawWorkingConversationDisclosure")}
                 </p>
                 <PluginRequirementsPreview
+                  key={assistantSetupSession}
                   requirements={PAW_PLUGIN_REQUIREMENTS}
                   purposeLabels={{
                     "zenx-rooms": i18n.t("panels:pawChatAndMemory"),
@@ -3078,31 +3180,79 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     sdk.navigation.navigate("settings");
                   }}
                 />
-              </>
+                {!assistantPluginsReady ? (
+                  <button
+                    type="button"
+                    className="quiet-button"
+                    disabled={busy}
+                    onClick={() =>
+                      setAssistantSetupSession((session) => session + 1)
+                    }
+                  >
+                    {i18n.t("panels:pawRetrySetup")}
+                  </button>
+                ) : null}
+              </details>
             ) : null}
-            <Field
-              label={
-                room?.assistant || assistantMode
-                  ? i18n.t("panels:name")
-                  : i18n.t("panels:roomName")
-              }
-              value={name}
-              onChange={setName}
-              disabled={
-                panel === "create" &&
-                assistantMode &&
-                (busy ||
-                  (assistantCreation.current !== null &&
-                    assistantCreationFailed))
-              }
-            />
-            {panel === "create" && assistantMode && assistantNameTooLong ? (
+            {panel !== "create" ||
+            !assistantMode ||
+            assistantStep === "name" ? (
+              <Field
+                label={
+                  room?.assistant || assistantMode
+                    ? i18n.t("panels:name")
+                    : i18n.t("panels:roomName")
+                }
+                value={name}
+                onChange={setName}
+                disabled={
+                  panel === "create" &&
+                  assistantMode &&
+                  (busy ||
+                    (assistantCreation.current !== null &&
+                      assistantCreationFailed))
+                }
+              />
+            ) : (
+              <p className="paw-setup-name">
+                <strong>{name}</strong>
+              </p>
+            )}
+            {(panel === "create" ? assistantMode : Boolean(room?.assistant)) &&
+            assistantNameTooLong ? (
               <p role="alert">{i18n.t("panels:pawNameTooLong")}</p>
+            ) : null}
+            {panel === "create" && assistantMode && assistantStep === "name" ? (
+              <button
+                type="button"
+                className="primary-button"
+                disabled={!name.trim() || assistantNameTooLong}
+                onClick={() => setAssistantStep("setup")}
+              >
+                {i18n.t("panels:pawNext")}
+              </button>
+            ) : null}
+            {panel === "create" &&
+            assistantMode &&
+            assistantStep === "setup" ? (
+              <button
+                type="button"
+                className="quiet-button"
+                disabled={busy || assistantCreation.current !== null}
+                onClick={() => setAssistantStep("name")}
+              >
+                {i18n.t("panels:pawBack")}
+              </button>
             ) : null}
             {panel !== "create" ? (
               <button
                 type="button"
-                disabled={busy || !name.trim() || name === room?.name}
+                disabled={
+                  busy ||
+                  !name.trim() ||
+                  name === room?.name ||
+                  (Boolean(room?.assistant) && assistantNameTooLong)
+                }
                 onClick={() => {
                   const epoch = dialogEpoch.current;
                   void run("rename", { roomId: room?.id, name }).then((ok) => {
@@ -3115,7 +3265,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   : i18n.t("panels:rename")}
               </button>
             ) : null}
-            {panel === "create" || (panel === "manage" && !room?.assistant) ? (
+            {(panel === "create" &&
+              (!assistantMode || assistantStep === "setup")) ||
+            (panel === "manage" && !room?.assistant) ? (
               <>
                 {!assistantMode ? (
                   <Field
@@ -3175,6 +3327,18 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                             ))}
                           </Select>
                         </label>
+                        <button
+                          type="button"
+                          className="quiet-button"
+                          disabled={
+                            busy ||
+                            assistantCreation.current !== null ||
+                            assistantProjectSaving
+                          }
+                          onClick={() => setAssistantProjectPicker(true)}
+                        >
+                          {i18n.t("shell:addProject")}
+                        </button>
                         {assistantTargetPreview?.workspace ===
                         assistantWorkspace ? (
                           <p
@@ -3224,7 +3388,19 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     ) : null}
                     {assistantSetupError !== null &&
                     assistantTarget === "new" ? (
-                      <p role="alert">{assistantSetupError}</p>
+                      <div role="alert">
+                        <p>{assistantSetupError}</p>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            setAssistantSetupError(null);
+                            setAssistantSetupSession((session) => session + 1);
+                          }}
+                        >
+                          {i18n.t("panels:pawRetrySetup")}
+                        </button>
+                      </div>
                     ) : null}
                   </>
                 ) : null}
@@ -3272,7 +3448,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 ) : null}
               </>
             ) : null}
-            {panel === "create" ? (
+            {panel === "create" &&
+            (!assistantMode || assistantStep === "setup") ? (
               <button
                 type="button"
                 className="primary-button"
@@ -3360,29 +3537,31 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       : i18n.t("panels:resumePaw")}
                   </button>
                 ) : null}
-                <button
-                  type="button"
-                  disabled={
-                    busy ||
-                    Boolean(room?.assistant) ||
-                    !memberName.trim() ||
-                    !threadId
-                  }
-                  onClick={() =>
-                    void run("add-member", {
-                      roomId: room?.id,
-                      name: memberName,
-                      threadId,
-                    }).then((ok) => {
-                      if (ok) {
-                        setMemberName("");
-                        setThreadId("");
-                      }
-                    })
-                  }
-                >
-                  {i18n.t("panels:addMember")}
-                </button>
+                {!room?.assistant ? (
+                  <button
+                    type="button"
+                    disabled={
+                      busy ||
+                      Boolean(room?.assistant) ||
+                      !memberName.trim() ||
+                      !threadId
+                    }
+                    onClick={() =>
+                      void run("add-member", {
+                        roomId: room?.id,
+                        name: memberName,
+                        threadId,
+                      }).then((ok) => {
+                        if (ok) {
+                          setMemberName("");
+                          setThreadId("");
+                        }
+                      })
+                    }
+                  >
+                    {i18n.t("panels:addMember")}
+                  </button>
+                ) : null}
                 <h3>{i18n.t("panels:members")}</h3>
                 {room?.members.map((member) => (
                   <div className="rooms-chat-member" key={member.threadId}>
@@ -3391,26 +3570,28 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       <summary>{i18n.t("panels:details")}</summary>
                       <code>{member.threadId}</code>
                     </details>
-                    <button
-                      type="button"
-                      disabled={busy || Boolean(room.assistant)}
-                      onClick={() => {
-                        if (
-                          window.confirm(
-                            i18n.t("panels:removeMemberConfirm", {
-                              name: member.name,
-                              room: room.name,
-                            }),
+                    {!room.assistant ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => {
+                          if (
+                            window.confirm(
+                              i18n.t("panels:removeMemberConfirm", {
+                                name: member.name,
+                                room: room.name,
+                              }),
+                            )
                           )
-                        )
-                          void run("remove-member", {
-                            roomId: room.id,
-                            threadId: member.threadId,
-                          });
-                      }}
-                    >
-                      {i18n.t("panels:remove")}
-                    </button>
+                            void run("remove-member", {
+                              roomId: room.id,
+                              threadId: member.threadId,
+                            });
+                        }}
+                      >
+                        {i18n.t("panels:remove")}
+                      </button>
+                    ) : null}
                   </div>
                 ))}
                 <button

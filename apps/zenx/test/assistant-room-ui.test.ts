@@ -301,16 +301,24 @@ for (const entry of ["primary route", "plugin button"] as const) {
         document.querySelector('[role="dialog"][aria-label="Create PAW"]'),
       );
       assert.equal(input("Name").value, "PAW");
-      assert.match(document.body.textContent ?? "", /New PAW conversation/);
       assert.match(
         document.body.textContent ?? "",
-        /creates its own working conversation/,
+        /What should we call your PAW/,
       );
-      assert.match(document.body.textContent ?? "", /Chat and memory: Ready/);
+      assert.match(
+        document.body.textContent ?? "",
+        /personal agent appears in conversations/,
+      );
       assert.ok(
         calls.every((call) => ["list", "workspaces"].includes(call.id)),
       );
       await fill("Name", "Daily Companion");
+      await act(async () =>
+        [...document.querySelectorAll<HTMLButtonElement>("button")]
+          .find((button) => button.textContent === "Continue")!
+          .click(),
+      );
+      assert.match(document.body.textContent ?? "", /Chat and memory: Ready/);
       assert.equal(
         [...document.querySelectorAll("label")].some(
           (node) => node.textContent === "Member name",

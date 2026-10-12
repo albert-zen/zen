@@ -233,8 +233,11 @@ test("a failed explicit binding keeps visible fields aligned with its retained s
       reject(Error("Binding result could not be confirmed")),
     );
     assert.equal(
-      document.querySelector<HTMLInputElement>('[role="dialog"] input')!
-        .disabled,
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          '[role="dialog"] button',
+        ),
+      ].find((button) => button.textContent === "Back")!.disabled,
       true,
     );
     assert.equal(
@@ -283,6 +286,8 @@ async function withForm(
     delaySetupReads: () => void;
     releaseSetupReads: () => void;
   }) => Promise<void>,
+  startAtName = false,
+  failFirstSetupRead = false,
 ) {
   const dom = new JSDOM('<div id="root"></div>', {
     url: "http://localhost",
@@ -344,6 +349,10 @@ async function withForm(
             return { rooms: [] };
           }
           if (id === "workspaces") {
+            if (failFirstSetupRead) {
+              failFirstSetupRead = false;
+              throw new Error("Project settings temporarily unavailable");
+            }
             if (delaySetup) await setupReads;
             return ["/project", "/second"];
           }
@@ -365,6 +374,12 @@ async function withForm(
     await act(async () =>
       root.render(React.createElement(RoomsPage, { sdk: sdk() })),
     );
+    if (!startAtName)
+      await act(async () =>
+        [...document.querySelectorAll<HTMLButtonElement>("button")]
+          .find((button) => button.textContent === "Continue")!
+          .click(),
+      );
     await run({
       root,
       calls,
@@ -385,3 +400,69 @@ async function withForm(
     dom.window.close();
   }
 }
+
+test("first-use PAW setup names before configuring, returns without losing a name, and can be postponed", async () => {
+  await withForm(async ({ calls, routes }) => {
+    const find = (text: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent === text,
+      )!;
+    assert.equal(
+      document.querySelector('[aria-label="Working conversation"]'),
+      null,
+    );
+    const input = document.querySelector<HTMLInputElement>(
+      '[role="dialog"] input',
+    )!;
+    assert.equal(document.activeElement, input);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "Nova");
+      input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    });
+    await act(async () => find("Continue").click());
+    assert.match(
+      document.querySelector(".paw-setup-name")!.textContent!,
+      /Nova/,
+    );
+    await act(async () => find("Back").click());
+    assert.equal(
+      document.querySelector<HTMLInputElement>('[role="dialog"] input')!.value,
+      "Nova",
+    );
+    await act(async () => find("Later").click());
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(
+      calls.some((call) => call.id === "create-assistant"),
+      false,
+    );
+    assert.deepEqual(routes, ["/plugins/zenx-rooms/rooms"]);
+  }, true);
+});
+
+test("failed setup reads preserve the form and explicitly retry without creating work", async () => {
+  await withForm(
+    async ({ calls }) => {
+      assert.match(
+        document.body.textContent!,
+        /Project settings temporarily unavailable/,
+      );
+      assert.equal(createButton().disabled, true);
+      await act(async () =>
+        [...document.querySelectorAll<HTMLButtonElement>("button")]
+          .find((button) => button.textContent === "Retry setup checks")!
+          .click(),
+      );
+      assert.equal(createButton().disabled, false);
+      assert.equal(calls.filter((call) => call.id === "workspaces").length, 2);
+      assert.equal(
+        calls.some((call) => call.id === "create-assistant"),
+        false,
+      );
+    },
+    false,
+    true,
+  );
+});
