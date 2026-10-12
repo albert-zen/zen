@@ -74,6 +74,7 @@ async function harness(
       event: unknown,
       epoch?: string,
     ): Promise<void>;
+    displayed: string[];
     states: Map<string, ComposerState>;
     sent: { id: string; text: string }[];
   }) => Promise<void>,
@@ -129,6 +130,7 @@ async function harness(
   const root = createRoot(document.getElementById("root")!);
   const states = new Map<string, ComposerState>();
   const sent: { id: string; text: string }[] = [];
+  const displayed: string[] = [];
   const serverStatus = { type: "ready" as const, reconnected: false };
   let shown: string[] = [];
   function draw() {
@@ -151,6 +153,7 @@ async function harness(
             },
             cancelQueued: async () => ({ results: [] }),
             onOpenMessageLink: () => {},
+            onContentDisplayed: (thread) => displayed.push(thread.id),
             models: [model()],
             providerProfiles: [],
             serverStatus,
@@ -169,6 +172,7 @@ async function harness(
     await run({
       states,
       sent,
+      displayed,
       render: async (ids) => {
         shown = ids;
         await act(async () => draw());
@@ -213,6 +217,11 @@ test("late resume from a previously selected child cannot replace the current vi
       "draft b",
     );
     await h.resolve("a");
+    assert.ok(h.displayed.length > 0);
+    assert.ok(
+      h.displayed.every((id) => id === "b"),
+      "old generation never acknowledges a different Thread",
+    );
     assert.equal(document.querySelector("textarea")?.id, "side-composer-b");
     assert.equal(
       document.querySelector<HTMLTextAreaElement>("textarea")?.value,
@@ -275,5 +284,15 @@ test("events arriving during resume replay once; stale process and foreign Threa
       document.body.textContent ?? "",
       /duplicate overwritten|wrong Thread|wrong process/,
     );
+  });
+});
+
+test("an unmounted pending side viewport cannot acknowledge late recovery", async () => {
+  await harness(async (h) => {
+    await h.render(["child"]);
+    assert.deepEqual(h.displayed, []);
+    await h.render([]);
+    await h.resolve("child");
+    assert.deepEqual(h.displayed, []);
   });
 });

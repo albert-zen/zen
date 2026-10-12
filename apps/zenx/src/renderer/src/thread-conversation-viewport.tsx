@@ -80,6 +80,7 @@ export function ThreadConversationViewport({
   deliver,
   cancelQueued,
   onOpenMessageLink,
+  onContentDisplayed,
   models,
   providerProfiles,
   serverStatus,
@@ -101,6 +102,8 @@ export function ThreadConversationViewport({
     targets: readonly QueuedCancellationTarget[],
   ): Promise<{ results: QueuedCancellationResult[] }>;
   onOpenMessageLink(target: { kind: "file" | "browser"; value: string }): void;
+  /** Called only for the visible, loaded native content of this viewport. */
+  onContentDisplayed?(thread: Thread): void;
   models: readonly ModelSummary[];
   providerProfiles: readonly ZenXProviderProfile[];
   serverStatus: AppServerHostStatus;
@@ -262,6 +265,29 @@ export function ThreadConversationViewport({
       dispose();
     };
   }, [threadId, serverStatus, revision]);
+
+  // AuxiliaryPanel mounts this viewport only for its open, visible conversation
+  // tab. Old recovery generations are fenced above; match both loaded identities
+  // before allowing the owning App to advance its local read position.
+  useEffect(() => {
+    if (
+      serverStatus.type === "ready" &&
+      !loading &&
+      error === null &&
+      thread?.id === threadId &&
+      settings?.threadId === threadId &&
+      thread.canonicalItems !== undefined
+    )
+      onContentDisplayed?.(thread);
+  }, [
+    serverStatus.type,
+    loading,
+    error,
+    thread,
+    threadId,
+    settings,
+    onContentDisplayed,
+  ]);
 
   const reload = () => setRevision((value) => value + 1);
   const report = async (operation: () => Promise<unknown>) => {

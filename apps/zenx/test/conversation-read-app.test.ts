@@ -321,7 +321,11 @@ async function waitFor<T>(read: () => T | null | undefined | false) {
   throw new Error("Timed out waiting for renderer projection");
 }
 
-function testPlugin(id = "route-harness", realRoom = false) {
+function testPlugin(
+  id = "route-harness",
+  realRoom = false,
+  panelThread?: string,
+) {
   const route =
     id === "zenx-rooms"
       ? "/plugins/zenx-rooms/rooms"
@@ -343,7 +347,9 @@ function testPlugin(id = "route-harness", realRoom = false) {
               {
                 onClick: () =>
                   sdk.navigation.navigate(
-                    `${route}?setup=room-reply&roomId=one`,
+                    panelThread
+                      ? `/threads/${panelThread}?view=panel`
+                      : `${route}?setup=room-reply&roomId=one`,
                   ),
               },
               "Open setup intent",
@@ -1206,6 +1212,194 @@ for (const hostStatus of [
           "ready rendered cached content can finally acknowledge",
         );
       }
+    } finally {
+      await harness.unmount();
+      plugin.dispose();
+    }
+  });
+}
+
+test("R2 a visibly loaded side conversation clears its unread Thread", async () => {
+  const plugin = testPlugin("zenx-rooms", false, "thread-1");
+  const harness = await mountApp({
+    pluginSnapshot: plugin.pluginSnapshot,
+    seedMarks: '{"t:thread-1":0}',
+    threads: async (archived) =>
+      archived
+        ? []
+        : [{ ...summary(), completedAnswer: { itemId: "final", position: 4 } }],
+    request: async () => resumed(answeredThread()),
+    executeCommand: async (_plugin, command) => {
+      if (command === "list")
+        return {
+          rooms: [
+            {
+              id: "room-1",
+              name: "Work room",
+              createdAt: 0,
+              members: [{ name: "Bot", threadId: "thread-1" }],
+              assistant: { threadId: "thread-1", triggerId: "reply" },
+              messages: [],
+            },
+          ],
+        };
+      if (command === "workspace")
+        return { revision: 1, updatedAt: 0, matters: [], memory: [] };
+      throw Error(String(command));
+    },
+  });
+  try {
+    await waitFor(() => document.querySelector(".unread-dot"));
+    const roomButton = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Open PAW Work room"]',
+      ),
+    );
+    await act(async () => roomButton.click());
+    const panelButton = [...document.querySelectorAll("button")].find(
+      (button) => button.textContent === "Open setup intent",
+    );
+    assert.ok(panelButton);
+    await act(async () => panelButton.click());
+    await waitFor(() =>
+      document.querySelector(
+        ".auxiliary-conversation .thread-conversation-viewport",
+      ),
+    );
+    const sideText = document.querySelector(
+      ".auxiliary-conversation",
+    )!.textContent!;
+    assert.match(sideText, /New answer/);
+    const viewport = document.querySelector(
+      ".auxiliary-conversation .thread-conversation-viewport",
+    )!;
+    assert.equal(
+      viewport.closest("[hidden]"),
+      null,
+      "the side conversation is not in a hidden tab",
+    );
+    const observation = {
+      unread: Boolean(document.querySelector(".unread-dot")),
+      mark: JSON.parse(
+        window.localStorage.getItem("zenx.conversation-read-watermarks.v2")!,
+      )["t:thread-1"],
+    };
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          ".auxiliary-conversation-heading button",
+        )!
+        .click(),
+    );
+    await waitFor(() => document.querySelector(".agent-surface .thread-view"));
+    assert.equal(
+      Boolean(document.querySelector(".unread-dot")),
+      false,
+      "full-screen control clears the same answer",
+    );
+    assert.equal(
+      JSON.parse(
+        window.localStorage.getItem("zenx.conversation-read-watermarks.v2")!,
+      )["t:thread-1"],
+      4,
+    );
+    assert.deepEqual(
+      observation,
+      { unread: false, mark: 4 },
+      "the exact unread answer was already loaded in the visible side conversation",
+    );
+  } finally {
+    await harness.unmount();
+    plugin.dispose();
+  }
+});
+
+for (const outcome of ["failure", "hidden"] as const) {
+  test(`R2 side recovery ${outcome} preserves unread`, async () => {
+    const plugin = testPlugin("zenx-rooms", false, "thread-1");
+    let resolve!: (snapshot: ReturnType<typeof resumed>) => void;
+    let reject!: (error: Error) => void;
+    const recovery = new Promise<ReturnType<typeof resumed>>((yes, no) => {
+      resolve = yes;
+      reject = no;
+    });
+    const harness = await mountApp({
+      pluginSnapshot: plugin.pluginSnapshot,
+      seedMarks: '{"t:thread-1":0}',
+      threads: async (archived) =>
+        archived
+          ? []
+          : [
+              {
+                ...summary(),
+                completedAnswer: { itemId: "final", position: 4 },
+              },
+            ],
+      request: async () => recovery,
+      executeCommand: async (_plugin, command) => {
+        if (command === "list")
+          return {
+            rooms: [
+              {
+                id: "room-1",
+                name: "Work room",
+                createdAt: 0,
+                members: [{ name: "Bot", threadId: "thread-1" }],
+                assistant: { threadId: "thread-1", triggerId: "reply" },
+                messages: [],
+              },
+            ],
+          };
+        if (command === "workspace")
+          return { revision: 1, updatedAt: 0, matters: [], memory: [] };
+        throw Error(String(command));
+      },
+    });
+    try {
+      const roomButton = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          '[aria-label="Open PAW Work room"]',
+        ),
+      );
+      await act(async () => roomButton.click());
+      const panelButton = [...document.querySelectorAll("button")].find(
+        (button) => button.textContent === "Open setup intent",
+      )!;
+      await act(async () => panelButton.click());
+      assert.ok(
+        document.querySelector(
+          ".auxiliary-conversation .conversation-viewport-status",
+        ),
+      );
+      assert.equal(
+        JSON.parse(
+          window.localStorage.getItem("zenx.conversation-read-watermarks.v2")!,
+        )["t:thread-1"],
+        0,
+        "pending side recovery is not displayed content",
+      );
+      if (outcome === "hidden") {
+        await act(async () =>
+          document
+            .querySelector<HTMLButtonElement>(".new-thread-action")!
+            .click(),
+        );
+        await act(async () => resolve(resumed(answeredThread())));
+        assert.equal(document.querySelector(".auxiliary-conversation"), null);
+      } else {
+        await act(async () => reject(Error("Side recovery failed")));
+        assert.match(
+          document.querySelector(".auxiliary-conversation")!.textContent!,
+          /Side recovery failed/,
+        );
+      }
+      assert.ok(document.querySelector(".unread-dot"));
+      assert.equal(
+        JSON.parse(
+          window.localStorage.getItem("zenx.conversation-read-watermarks.v2")!,
+        )["t:thread-1"],
+        0,
+      );
     } finally {
       await harness.unmount();
       plugin.dispose();

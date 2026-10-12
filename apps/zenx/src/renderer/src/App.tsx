@@ -2558,6 +2558,19 @@ export function App() {
       queueEditStore={queueEditStore}
       key={id}
       threadId={id}
+      onContentDisplayed={(displayed) => {
+        if (displayed.id !== id || serverStatus.type !== "ready") return;
+        const summary = [...threadSummaries, ...archivedThreadSummaries].find(
+          (entry) => entry.threadId === id,
+        );
+        setReadWatermarks((current) =>
+          withReadMark(
+            current,
+            `t:${id}`,
+            displayedAnswerPosition(displayed, summary),
+          ),
+        );
+      }}
       composer={composerStates[id] ?? emptyComposerState()}
       readComposer={() => composerStatesRef.current[id] ?? emptyComposerState()}
       updateComposer={(change) => updateComposer(id, change)}
