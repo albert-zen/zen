@@ -60,28 +60,55 @@ export function useAgentProviders() {
   const [pendingApprovals, setPendingApprovals] = useState<
     Record<string, string[]>
   >({});
-  const failedInstances = useRef(new Set<string>());
-  const rememberSnapshot = useCallback((snapshot: AgentSessionSnapshot) => {
-    const title =
-      snapshot.thread.name?.trim() || snapshot.thread.preview.trim();
-    setObservations((latest) => ({
-      ...latest,
-      [snapshot.binding.id]: {
-        ...(title ? { title } : {}),
-        model: snapshot.model,
-        updatedAt: snapshot.thread.updatedAt * 1000,
-        status: failedInstances.current.has(snapshot.binding.providerInstanceId)
-          ? "error"
-          : snapshot.thread.status.type === "active"
-            ? "active"
-            : snapshot.thread.status.type === "idle"
-              ? "idle"
-              : snapshot.thread.status.type === "systemError"
-                ? "error"
-                : undefined,
-      },
-    }));
-  }, []);
+  const failureVersions = useRef(new Map<string, number>());
+  const observationVersions = useRef(new Map<string, number>());
+  const readRequests = useRef(new Map<string, number>());
+  const rememberSnapshot = useCallback(
+    (snapshot: AgentSessionSnapshot, failureVersion = 0) => {
+      const title =
+        snapshot.thread.name?.trim() || snapshot.thread.preview.trim();
+      setObservations((latest) => ({
+        ...latest,
+        [snapshot.binding.id]: {
+          ...(title ? { title } : {}),
+          model: snapshot.model,
+          updatedAt: snapshot.thread.updatedAt * 1000,
+          status:
+            (failureVersions.current.get(snapshot.binding.providerInstanceId) ??
+              0) > failureVersion
+              ? "error"
+              : snapshot.thread.status.type === "active"
+                ? "active"
+                : snapshot.thread.status.type === "idle"
+                  ? "idle"
+                  : snapshot.thread.status.type === "systemError"
+                    ? "error"
+                    : undefined,
+        },
+      }));
+    },
+    [],
+  );
+  // Only a read begun after the latest native event can replace its observation.
+  const readSession = useCallback(
+    async (sessionId: string) => {
+      const failures = new Map(failureVersions.current);
+      const observation = observationVersions.current.get(sessionId) ?? 0;
+      const request = (readRequests.current.get(sessionId) ?? 0) + 1;
+      readRequests.current.set(sessionId, request);
+      const snapshot = await agentProvidersApi()!.read(sessionId);
+      const instanceId = snapshot.binding.providerInstanceId;
+      if (
+        readRequests.current.get(sessionId) === request &&
+        (observationVersions.current.get(sessionId) ?? 0) === observation &&
+        (failureVersions.current.get(instanceId) ?? 0) ===
+          (failures.get(instanceId) ?? 0)
+      )
+        rememberSnapshot(snapshot, failures.get(instanceId) ?? 0);
+      return snapshot;
+    },
+    [rememberSnapshot],
+  );
   const [error, setError] = useState<string | null>(null);
   const epoch = useRef(0);
   const refresh = useCallback(async () => {
@@ -118,7 +145,15 @@ export function useAgentProviders() {
         event.sessionId === undefined &&
         event.providerInstanceId !== undefined
       )
-        failedInstances.current.add(event.providerInstanceId);
+        failureVersions.current.set(
+          event.providerInstanceId,
+          (failureVersions.current.get(event.providerInstanceId) ?? 0) + 1,
+        );
+      if (event.sessionId !== undefined)
+        observationVersions.current.set(
+          event.sessionId,
+          (observationVersions.current.get(event.sessionId) ?? 0) + 1,
+        );
       // A generic engine event invalidates a prior observation; it is not a terminal receipt.
       // Hidden sessions stay unknown until read, without starting saved engines or polling transcripts.
       setObservations((latest) => {
@@ -138,7 +173,10 @@ export function useAgentProviders() {
           if (latest[id] || event.type === "error")
             next[id] = {
               ...latest[id],
-              status: event.type === "error" ? "error" : undefined,
+              status:
+                event.type === "error" || latest[id]?.status === "error"
+                  ? "error"
+                  : undefined,
             };
         }
         return next;
@@ -190,6 +228,7 @@ export function useAgentProviders() {
       };
     }),
     rememberSnapshot,
+    readSession,
     refresh,
     rememberSession: (binding: AgentSessionBinding) =>
       setSessions((latest) => [
@@ -305,7 +344,7 @@ export function ExternalAgentSession({
   emptyContent,
   onPermissionChange,
   onOperationChange,
-  onSnapshot,
+  readSession,
   draftModel,
   onDraftModelChange,
   projectError = null,
@@ -324,7 +363,7 @@ export function ExternalAgentSession({
   draftModel?: string;
   projectError?: string | null;
   onDraftModelChange?(model: string): void;
-  onSnapshot?(snapshot: AgentSessionSnapshot): void;
+  readSession?(sessionId: string): Promise<AgentSessionSnapshot>;
 }) {
   useTranslation("shell");
   const [snapshot, setSnapshot] = useState<AgentSessionSnapshot | null>(null);
@@ -386,7 +425,9 @@ export function ExternalAgentSession({
     try {
       const version = approvalVersion.current;
       const [value, pending] = await Promise.all([
-        agentProvidersApi()!.read(sessionId),
+        readSession
+          ? readSession(sessionId)
+          : agentProvidersApi()!.read(sessionId),
         agentProvidersApi()!.approvals(sessionId),
       ]);
       if (
@@ -423,7 +464,6 @@ export function ExternalAgentSession({
         ];
       });
       setSnapshot(value);
-      onSnapshot?.(value);
       setReadError(null);
       setLoading(false);
     } catch (reason) {
@@ -437,7 +477,7 @@ export function ExternalAgentSession({
       setReadError(agentProviderError(reason));
       setLoading(false);
     }
-  }, [sessionId, generation]);
+  }, [sessionId, generation, readSession]);
   const initializedIdentity = useRef<number | null>(null);
   useEffect(() => {
     // Activity pauses effects without changing this conversation's identity.

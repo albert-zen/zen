@@ -748,6 +748,8 @@ test("background native completion must update sidebar status", async () => {
       service.emit({ type: "changed", sessionId: "binding-one" }),
     );
     await act(async () => new Promise((r) => setTimeout(r, 200)));
+    assert.equal(state.navigationSessions[0]?.status, undefined);
+    assert.equal(reads, 0, "hidden events do not poll native history");
   }, service.result);
 });
 test("active native engine with no in-progress projected turn still offers Stop", async () => {
@@ -800,9 +802,18 @@ test("model discovery is scoped to Project and ignores a late previous Project c
   }, service.result);
 });
 
-test("provider-wide failure marks hidden bound sessions without reading their history", async () => {
+test("Codex error then changed preserves failure until a fresh native read recovers", async () => {
   const value = snapshot();
-  const service = api({ sessions: async () => [value.binding] });
+  const old = deferred<AgentSessionSnapshot>();
+  let reads = 0;
+  let next = Promise.resolve(snapshot("binding-one", "working", true));
+  const service = api({
+    sessions: async () => [value.binding],
+    read: async () => {
+      reads++;
+      return next;
+    },
+  });
   let state: ReturnType<typeof useAgentProviders>;
   function Harness() {
     state = useAgentProviders();
@@ -810,20 +821,104 @@ test("provider-wide failure marks hidden bound sessions without reading their hi
   }
   await mounted(async ({ render }) => {
     await render(h(Harness));
-    await act(async () => state.rememberSnapshot(value));
-    await act(async () =>
+    await act(async () => {
+      await state.readSession(value.binding.id);
+    });
+    assert.equal(state.navigationSessions[0]?.status, "active");
+    next = old.promise;
+    const stale = state.readSession(value.binding.id);
+    await act(async () => {
       service.emit({
         type: "error",
         providerInstanceId: codex.id,
-        message: "engine stopped",
-      }),
-    );
+        message: "Codex app-server closed",
+      });
+      service.emit({ type: "changed", sessionId: value.binding.id });
+    });
     assert.equal(state.navigationSessions[0]?.status, "error");
-    await act(async () => state.rememberSnapshot(value));
+    await act(async () => {
+      old.resolve(value);
+      await stale;
+    });
     assert.equal(
       state.navigationSessions[0]?.status,
       "error",
-      "a read launched before process failure cannot clear it",
+      "pre-failure read is stale",
     );
+    assert.equal(
+      reads,
+      2,
+      "background notifications never poll native history",
+    );
+    next = Promise.resolve(value);
+    await act(async () => {
+      await state.readSession(value.binding.id);
+    });
+    assert.equal(
+      state.navigationSessions[0]?.status,
+      "idle",
+      "post-failure read can recover",
+    );
+  }, service.result);
+});
+
+test("native observation generations fence repeat failure, late reads and newer session events", async () => {
+  const value = snapshot();
+  const old = deferred<AgentSessionSnapshot>();
+  let next = old.promise;
+  const service = api({
+    sessions: async () => [value.binding],
+    read: async () => next,
+  });
+  let state: ReturnType<typeof useAgentProviders>;
+  function Harness() {
+    state = useAgentProviders();
+    return h("div");
+  }
+  const fail = () =>
+    service.emit({
+      type: "error",
+      providerInstanceId: codex.id,
+      message: "closed",
+    });
+  await mounted(async ({ render }) => {
+    await render(h(Harness));
+    await act(async () => fail());
+    const stale = state.readSession(value.binding.id);
+    await act(async () => fail());
+    next = Promise.resolve(snapshot("binding-one", "reconnected", true));
+    await act(async () => {
+      await state.readSession(value.binding.id);
+    });
+    assert.equal(state.navigationSessions[0]?.status, "active");
+    await act(async () => {
+      old.resolve(value);
+      await stale;
+    });
+    assert.equal(
+      state.navigationSessions[0]?.status,
+      "active",
+      "older response cannot undo recovery",
+    );
+    const beforeChange = deferred<AgentSessionSnapshot>();
+    next = beforeChange.promise;
+    const pending = state.readSession(value.binding.id);
+    await act(async () =>
+      service.emit({ type: "changed", sessionId: value.binding.id }),
+    );
+    await act(async () => {
+      beforeChange.resolve(value);
+      await pending;
+    });
+    assert.equal(
+      state.navigationSessions[0]?.status,
+      undefined,
+      "a newer session event invalidates an in-flight observation",
+    );
+    next = Promise.resolve(value);
+    await act(async () => {
+      await state.readSession(value.binding.id);
+    });
+    assert.equal(state.navigationSessions[0]?.status, "idle");
   }, service.result);
 });

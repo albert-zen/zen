@@ -435,3 +435,104 @@ test("stale native permission read must not revive replied approval", async () =
     await f.adapter.dispose();
   }
 });
+
+test("OpenCode Stop uses its exact known locator while transcript and permission reads fail", async () => {
+  const f = await fixture();
+  try {
+    const native = await f.adapter.create({
+      cwd: f.directory,
+      permissionMode: "danger-full-access",
+    });
+    await f.adapter.send(native.nativeSessionId, { text: "work" });
+    assert.equal(
+      (await f.adapter.read(native.nativeSessionId)).thread.status.type,
+      "active",
+    );
+    await writeFile(path.join(f.directory, "fail-history"), "yes");
+    await writeFile(path.join(f.directory, "fail-permissions"), "yes");
+    const before = (await f.requests()).length;
+    await f.adapter.interrupt(native.nativeSessionId);
+    assert.deepEqual((await f.requests()).slice(before), [
+      {
+        method: "POST",
+        path: `/session/${native.nativeSessionId}/abort`,
+        directory: f.directory,
+        body: {},
+      },
+    ]);
+  } finally {
+    await f.adapter.dispose();
+  }
+});
+
+test("restored OpenCode Stop reads only metadata and rejects foreign or unknown session identity", async () => {
+  const first = await fixture();
+  const native = await first.adapter.create({
+    cwd: first.directory,
+    permissionMode: "danger-full-access",
+  });
+  await first.adapter.send(native.nativeSessionId, { text: "work" });
+  await first.adapter.dispose();
+  await writeFile(path.join(first.directory, "fail-history"), "yes");
+  await writeFile(path.join(first.directory, "fail-permissions"), "yes");
+  const second = await fixture("normal", first.directory);
+  try {
+    await assert.rejects(second.adapter.interrupt(""), /Invalid/);
+    assert.equal(
+      second.children.length,
+      0,
+      "invalid IDs cannot launch a process",
+    );
+    await assert.rejects(second.adapter.interrupt("missing"), /HTTP 404/);
+    const file = path.join(first.directory, "native.json");
+    const state = JSON.parse(await readFile(file, "utf8"));
+    state.sessions[native.nativeSessionId].id = "foreign";
+    await writeFile(file, JSON.stringify(state));
+    await assert.rejects(
+      second.adapter.interrupt(native.nativeSessionId),
+      /different session/,
+    );
+    assert.equal(
+      (await second.requests()).filter((r) => r.path.endsWith("/abort")).length,
+      0,
+    );
+    state.sessions[native.nativeSessionId].id = native.nativeSessionId;
+    await writeFile(file, JSON.stringify(state));
+    const before = (await second.requests()).length;
+    await second.adapter.interrupt(native.nativeSessionId);
+    assert.deepEqual((await second.requests()).slice(before), [
+      {
+        method: "GET",
+        path: `/session/${native.nativeSessionId}`,
+        directory: null,
+        body: {},
+      },
+      {
+        method: "POST",
+        path: `/session/${native.nativeSessionId}/abort`,
+        directory: first.directory,
+        body: {},
+      },
+    ]);
+  } finally {
+    await second.adapter.dispose();
+  }
+});
+
+test("OpenCode abort acknowledgement is not a native completion receipt", async () => {
+  const f = await fixture("abort-ack-only");
+  try {
+    const native = await f.adapter.create({
+      cwd: f.directory,
+      permissionMode: "danger-full-access",
+    });
+    await f.adapter.send(native.nativeSessionId, { text: "work" });
+    await f.adapter.interrupt(native.nativeSessionId);
+    assert.equal(
+      (await f.adapter.read(native.nativeSessionId)).thread.status.type,
+      "active",
+    );
+  } finally {
+    await f.adapter.dispose();
+  }
+});

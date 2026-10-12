@@ -159,6 +159,10 @@ if (behavior === "bad-url") {
         },
       ]);
     if (p === "/permission") {
+      if (fs.existsSync(path.join(home, "fail-permissions"))) {
+        res.writeHead(503).end();
+        return;
+      }
       if (behavior === "stale-permission" && state.permissions.length > 0) {
         const snapshot = structuredClone(state.permissions);
         fs.writeFileSync(path.join(home, "permission-read-pending"), "ready");
@@ -256,6 +260,10 @@ if (behavior === "bad-url") {
     }
     if (!action) return json(session);
     if (action === "message") {
+      if (fs.existsSync(path.join(home, "fail-history"))) {
+        res.writeHead(503).end();
+        return;
+      }
       const before = url.searchParams.get("before");
       const messages = before
         ? state.history[id].slice(
@@ -369,6 +377,7 @@ if (behavior === "bad-url") {
       return;
     }
     if (action === "abort") {
+      if (behavior === "abort-ack-only") return json(true);
       state.status[id] = { type: "idle" };
       for (const message of state.history[id])
         if (

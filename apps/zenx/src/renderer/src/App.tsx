@@ -2929,7 +2929,7 @@ export function App() {
                     updateComposer(`agent:${selectedAgentSessionId}`, update)
                   }
                   onCreated={() => undefined}
-                  onSnapshot={agentProviders.rememberSnapshot}
+                  readSession={agentProviders.readSession}
                 />
               ) : newThreadDraft !== null &&
                 (newThreadDraft.providerInstanceId ?? "zen") !== "zen" ? (

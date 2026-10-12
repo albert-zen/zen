@@ -725,11 +725,21 @@ export class OpenCodeAgentProviderAdapter implements AgentProviderAdapter {
   async interrupt(nativeSessionId: string): Promise<void> {
     validateId(nativeSessionId);
     await this.#ready();
-    const native = await this.read(nativeSessionId);
+    // Abort is session-addressed; transcript/permission availability cannot gate Stop.
+    let cwd = this.#directories.get(nativeSessionId);
+    if (cwd === undefined) {
+      const session = parseSession(
+        await this.#request(`/session/${encodeURIComponent(nativeSessionId)}`),
+      );
+      if (session.id !== nativeSessionId)
+        throw new Error("OpenCode returned a different session");
+      cwd = session.directory as string;
+      this.#directories.set(nativeSessionId, cwd);
+    }
     if (
       (await this.#request(
         `/session/${encodeURIComponent(nativeSessionId)}/abort`,
-        { method: "POST", cwd: native.thread.cwd },
+        { method: "POST", cwd },
       )) !== true
     )
       throw new Error("OpenCode did not acknowledge interruption");
