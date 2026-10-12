@@ -132,6 +132,7 @@ export type UserInputPart =
   | { type: "attachment"; attachment: AttachmentRef };
 
 export interface ClientRequestParams {
+  "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditParams;
   "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendParams;
   "zen/turn/send-unarchived": import("../../../../src/protocol/native/wire.js").NativeTurnSendParams;
   "zen/thread/queue/cancel": {
@@ -220,6 +221,7 @@ export interface ClientRequestParams {
 }
 
 export interface ClientRequestResults {
+  "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditResult;
   "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendResult;
   "zen/turn/send-unarchived": import("../../../../src/protocol/native/wire.js").NativeTurnSendResult;
   "zen/thread/queue/cancel": {

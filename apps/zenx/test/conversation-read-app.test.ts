@@ -1076,3 +1076,139 @@ test("same-time Room identities stay unread through failed and stale saturated-h
     plugin.dispose();
   }
 });
+
+for (const hostStatus of [
+  { type: "ready", reconnected: false },
+  { type: "error", message: "Runtime process exited" },
+  { type: "stopped" },
+  { type: "starting" },
+  { type: "reconnecting", attempt: 1, delayMs: 50 },
+] satisfies AppServerHostStatus[]) {
+  const serverReady = hostStatus.type === "ready";
+  test(`R2 cached unread answer is acknowledged only when rendered: status=${hostStatus.type}`, async () => {
+    const plugin = testPlugin();
+    let current = summary();
+    let notify: NotificationListener | undefined;
+    let status: ((value: AppServerHostStatus) => void) | undefined;
+    let resumeCount = 0;
+    const harness = await mountApp({
+      pluginSnapshot: plugin.pluginSnapshot,
+      request: async () => {
+        resumeCount += 1;
+        if (resumeCount === 1) return resumed(thread());
+        return new Promise(() => {});
+      },
+      threads: async (archived) => (archived ? [] : [current]),
+      onNotification: (listener) => {
+        notify = listener;
+        return () => {};
+      },
+      onStatus: (listener) => {
+        status = listener;
+        return () => {};
+      },
+    });
+    try {
+      await act(async () =>
+        (
+          await waitFor(() =>
+            document.querySelector<HTMLButtonElement>(".thread-row"),
+          )
+        ).click(),
+      );
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(
+            '.plugin-space-link[title="Route harness"]',
+          )!
+          .click(),
+      );
+      current = {
+        ...current,
+        completedAnswer: { itemId: "r2-hidden-final", position: 4 },
+      };
+      await act(async () => {
+        notify?.(
+          "zen/thread/event",
+          nativeEvent(1, {
+            type: "turn_started",
+            threadId: "thread-1",
+            turnId: "turn-r2",
+          }),
+        );
+        notify?.(
+          "zen/thread/event",
+          nativeEvent(2, {
+            type: "item_completed",
+            item: {
+              id: "r2-hidden-final",
+              type: "agent_message",
+              threadId: "thread-1",
+              turnId: "turn-r2",
+              createdAt: new Date(3000).toISOString(),
+              text: "This answer has never been shown",
+            },
+          }),
+        );
+        notify?.(
+          "zen/thread/event",
+          nativeEvent(3, {
+            type: "turn_completed",
+            threadId: "thread-1",
+            turnId: "turn-r2",
+            status: "completed",
+          }),
+        );
+      });
+      assert.ok(
+        document.querySelector(".unread-dot"),
+        "background answer is initially unread",
+      );
+      assert.equal(
+        JSON.parse(
+          window.localStorage.getItem("zenx.conversation-read-watermarks.v2")!,
+        )["t:thread-1"],
+        0,
+      );
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>(".thread-row")!.click();
+        if (!serverReady) status?.(hostStatus);
+      });
+      const rendered = document.querySelector(".agent-surface")!.textContent!;
+      if (serverReady)
+        assert.match(rendered, /This answer has never been shown/);
+      else {
+        if (hostStatus.type === "error")
+          assert.match(rendered, /Runtime process exited/);
+        assert.doesNotMatch(rendered, /This answer has never been shown/);
+      }
+      const mark = JSON.parse(
+        window.localStorage.getItem("zenx.conversation-read-watermarks.v2")!,
+      )["t:thread-1"];
+      assert.equal(
+        mark,
+        serverReady ? 4 : 0,
+        `read watermark must reflect rendered transcript (serverReady=${serverReady})`,
+      );
+      if (!serverReady) {
+        await act(async () => status?.({ type: "ready", reconnected: false }));
+        assert.match(
+          document.querySelector(".agent-surface")!.textContent!,
+          /This answer has never been shown/,
+        );
+        assert.equal(
+          JSON.parse(
+            window.localStorage.getItem(
+              "zenx.conversation-read-watermarks.v2",
+            )!,
+          )["t:thread-1"],
+          4,
+          "ready rendered cached content can finally acknowledge",
+        );
+      }
+    } finally {
+      await harness.unmount();
+      plugin.dispose();
+    }
+  });
+}

@@ -22,6 +22,7 @@ function projectedQueue(
     clientId: item.clientId,
     text: userInputText(item.input),
     imageCount: item.input.filter((part) => part.type === "image").length,
+    revision: item.revision,
   }));
 }
 
@@ -122,6 +123,7 @@ export function applyNativeThreadEvent(
     if (
       event.item.type === "user_message_queued" ||
       event.item.type === "user_message_queue_cancelled" ||
+      event.item.type === "user_message_queue_edited" ||
       event.item.type === "user_message"
     ) {
       thread = {

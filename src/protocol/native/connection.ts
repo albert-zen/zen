@@ -16,6 +16,8 @@ import {
   NATIVE_THREAD_READ_METHOD,
   NATIVE_THREAD_CREATE_CHILD_METHOD,
   NATIVE_QUEUE_CANCEL_METHOD,
+  NATIVE_QUEUE_EDIT_METHOD,
+  type NativeQueueEditParams,
   NATIVE_TURN_SEND_UNARCHIVED_METHOD,
   type NativeTurnSendResult,
 } from "./wire.js";
@@ -116,6 +118,63 @@ export class NativeConnection {
                 ? { data: { zenCode: error.code } }
                 : {}),
             },
+          });
+      }
+      return;
+    }
+    if (message.method === NATIVE_QUEUE_EDIT_METHOD) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        if (
+          !isRecord(params) ||
+          typeof params.threadId !== "string" ||
+          params.threadId.trim().length === 0 ||
+          typeof params.queuedItemId !== "string" ||
+          typeof params.clientId !== "string" ||
+          typeof params.editId !== "string" ||
+          typeof params.expectedRevision !== "number" ||
+          !Array.isArray(params.input)
+        )
+          throw new AppServerError(
+            "invalid_request",
+            "Thread, queue identity, expected revision, edit ID and input are required",
+          );
+        if (this.#appServer === undefined)
+          throw new AppServerError(
+            "unavailable",
+            "Native queue editing is unavailable",
+          );
+        const request = params as unknown as NativeQueueEditParams;
+        this.#subscriptions.add(request.threadId);
+        const result = await this.#appServer.editQueuedMessage(
+          request.threadId,
+          request,
+          request.input,
+        );
+        if (!this.#closed) this.#send({ id: message.id, result });
+      } catch (error) {
+        if (!this.#closed)
+          this.#send({
+            id: message.id,
+            error:
+              error instanceof AppServerError
+                ? {
+                    code: -32602,
+                    message: error.message,
+                    data: { zenCode: error.code },
+                  }
+                : {
+                    code: -32603,
+                    message:
+                      "Queue edit outcome is unconfirmed. Read the Thread or retry the same edit ID before making another edit.",
+                  },
           });
       }
       return;

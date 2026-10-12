@@ -153,6 +153,11 @@ import {
 } from "./thread-view-state.js";
 import { ThreadView } from "./ThreadView.js";
 import { ThreadConversationViewport } from "./thread-conversation-viewport.js";
+import { requestQueuedEdit, importQueuedImages } from "./queue-edit-request.js";
+import {
+  createQueueEditStore,
+  type QueueEditStore,
+} from "./queue-edit-state.js";
 import {
   PluginThreadHeaders,
   ThreadBreadcrumbAncestors,
@@ -421,6 +426,7 @@ function updateThreadProjectionCache(
 }
 
 export function App() {
+  const [queueEditStore] = useState(createQueueEditStore);
   const { i18n: activeI18n } = useTranslation("shell");
   const selectionEpoch = useRef(0);
   const pendingResumeProjectionRef = useRef<{
@@ -1175,10 +1181,36 @@ export function App() {
           const projected =
             params as ServerNotificationParams["zen/thread/event"];
           const nativeEvent = projected.event;
+          if (
+            nativeEvent.type === "item_completed" &&
+            nativeEvent.item.type === "user_message_queue_edited"
+          ) {
+            const edited = nativeEvent.item;
+            queueAttemptsRef.current.delete(
+              `${projected.threadId}:${edited.queuedItemId}`,
+            );
+            if (selectedThreadIdRef.current === projected.threadId)
+              setQueueFailure((current) =>
+                current?.queuedItemId === edited.queuedItemId &&
+                (current.revision ?? 0) < edited.revision
+                  ? null
+                  : current,
+              );
+          }
           if (nativeEvent.type === "queue_admission_started") {
             const key = `${projected.threadId}:${nativeEvent.queuedItemId}`;
-            queueAttemptsRef.current.set(key, nativeEvent.attemptId);
-            if (selectedThreadIdRef.current === projected.threadId)
+            const sameRevision = cached?.thread.queuedMessages?.some(
+              (item) =>
+                item.id === nativeEvent.queuedItemId &&
+                item.clientId === nativeEvent.clientId &&
+                (item.revision ?? 0) === (nativeEvent.revision ?? 0),
+            );
+            if (sameRevision)
+              queueAttemptsRef.current.set(key, nativeEvent.attemptId);
+            if (
+              sameRevision &&
+              selectedThreadIdRef.current === projected.threadId
+            )
               setQueueFailure((current) =>
                 current?.queuedItemId === nativeEvent.queuedItemId
                   ? null
@@ -1193,7 +1225,8 @@ export function App() {
               cached?.thread.queuedMessages?.some(
                 (item) =>
                   item.id === nativeEvent.queuedItemId &&
-                  item.clientId === nativeEvent.clientId,
+                  item.clientId === nativeEvent.clientId &&
+                  (item.revision ?? 0) === (nativeEvent.revision ?? 0),
               )
             )
               setQueueFailure(nativeEvent);
@@ -1444,6 +1477,8 @@ export function App() {
     );
   const displayedThreadPosition =
     page === "agent" &&
+    serverStatus.type === "ready" &&
+    selectedSummary !== null &&
     newThreadDraft === null &&
     !threadLoading &&
     threadError === null &&
@@ -2520,6 +2555,7 @@ export function App() {
 
   const renderSideConversation = (id: string) => (
     <ThreadConversationViewport
+      queueEditStore={queueEditStore}
       key={id}
       threadId={id}
       composer={composerStates[id] ?? emptyComposerState()}
@@ -2850,6 +2886,15 @@ export function App() {
             </ImZenXDraftContext.Provider>
           ) : (
             <AgentSurface
+              onRecoverQueuedEdit={(threadId) => {
+                // Reuse native resume's read-only snapshot/event barrier, never resumeQueue.
+                if (
+                  selectedThreadIdRef.current === threadId &&
+                  newThreadDraftRef.current === null
+                )
+                  void resumeThread(threadId, true);
+              }}
+              queueEditStore={queueEditStore}
               threadHeader={
                 selectedThreadId !== null &&
                 newThreadDraft === null &&
@@ -3376,6 +3421,8 @@ function PageTitleBar({
 }
 
 function AgentSurface({
+  onRecoverQueuedEdit,
+  queueEditStore,
   threadHeader,
   onOpenMessageLink,
   composerSendMode,
@@ -3433,6 +3480,8 @@ function AgentSurface({
   threadError,
   threadLoading,
 }: {
+  onRecoverQueuedEdit(threadId: string): void;
+  queueEditStore: QueueEditStore;
   onOpenMessageLink(
     threadId: string,
     target: { kind: "file" | "browser"; value: string },
@@ -3674,6 +3723,14 @@ function AgentSurface({
             onCancelQueued={(targets) =>
               onCancelQueued(threadDetail.id, targets)
             }
+            queueEditStore={queueEditStore}
+            onEditQueued={(params) =>
+              requestQueuedEdit(params, () =>
+                onRecoverQueuedEdit(params.threadId),
+              )
+            }
+            onImportQueueImages={importQueuedImages}
+            onPickQueueImages={() => window.zenx.imageAttachments.pick()}
             composerContext={
               composerSendModeMigration?.acknowledged === false &&
               composerSendMode === "soft" ? (
@@ -3707,7 +3764,8 @@ function AgentSurface({
               threadDetail.queuedMessages?.some(
                 (item) =>
                   item.id === queueFailure.queuedItemId &&
-                  item.clientId === queueFailure.clientId,
+                  item.clientId === queueFailure.clientId &&
+                  (item.revision ?? 0) === (queueFailure.revision ?? 0),
               )
                 ? queueFailure
                 : null

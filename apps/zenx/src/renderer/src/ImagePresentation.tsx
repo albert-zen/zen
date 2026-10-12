@@ -42,6 +42,9 @@ export function AttachmentImage({
   name,
   onOpen,
   onReadAttachment,
+  lazy = false,
+  retryOnError = false,
+  compact = false,
 }: {
   attachment: AttachmentRef;
   name: string;
@@ -51,25 +54,85 @@ export function AttachmentImage({
     trigger: HTMLButtonElement,
   ): void;
   onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
+  /** Defer payload access until this thumbnail is in the visible scroll area. */
+  lazy?: boolean;
+  retryOnError?: boolean;
+  compact?: boolean;
 }) {
   useTranslation("panels");
-  const { url, error } = useAttachmentUrl(attachment, onReadAttachment);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [visible, setVisible] = useState(!lazy);
+  useEffect(() => {
+    if (!lazy || visible) return;
+    const element = buttonRef.current;
+    if (element === null) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setVisible(true);
+        observer.disconnect();
+      }
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [lazy, visible]);
+  const { url, error, retry, invalidate } = useAttachmentUrl(
+    attachment,
+    onReadAttachment,
+    !lazy || visible,
+  );
+  const retryable = retryOnError && error !== null;
   return (
     <button
+      ref={buttonRef}
       className="image-thumbnail"
       type="button"
-      aria-label={i18n.t("panels:previewImage", { name })}
-      disabled={url === null}
-      onClick={(event) => onOpen(attachment, name, event.currentTarget)}
+      aria-label={i18n.t(
+        retryable ? "panels:retryImage" : "panels:previewImage",
+        { name },
+      )}
+      aria-busy={visible && url === null && error === null}
+      disabled={url === null && !retryable}
+      title={
+        url === null
+          ? i18n.t(error ? "panels:imageUnavailable" : "panels:loadingImage")
+          : name
+      }
+      onClick={(event) =>
+        retryable ? retry() : onOpen(attachment, name, event.currentTarget)
+      }
     >
       {url === null ? (
-        <span className="image-placeholder" role={error ? "alert" : undefined}>
-          {error
-            ? i18n.t("panels:imageUnavailable")
-            : i18n.t("panels:loadingImage")}
+        <span
+          className="image-placeholder"
+          role={error ? "alert" : undefined}
+          aria-label={
+            compact
+              ? `${name}: ${i18n.t(error ? "panels:imageUnavailable" : "panels:loadingImage")}`
+              : undefined
+          }
+        >
+          {compact ? (
+            <>
+              <Icon name={error ? "warning" : "image"} size={15} />
+              {retryable ? <span>{i18n.t("panels:retry")}</span> : null}
+            </>
+          ) : error ? (
+            `${i18n.t("panels:imageUnavailable")}${retryable ? ` · ${i18n.t("panels:retry")}` : ""}`
+          ) : (
+            i18n.t("panels:loadingImage")
+          )}
         </span>
       ) : (
-        <img alt={name} src={url} />
+        <img
+          alt={name}
+          src={url}
+          loading={lazy ? "lazy" : undefined}
+          onError={invalidate}
+        />
       )}
     </button>
   );
@@ -81,22 +144,36 @@ export function ImagePreview({
   onClose,
   onReadAttachment,
   trigger,
+  restoreFocus,
+  safeError = false,
+  portalContainer,
 }: {
   attachment: AttachmentRef;
   name: string;
   onClose(): void;
   onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
   trigger: HTMLButtonElement;
+  restoreFocus?(): void;
+  safeError?: boolean;
+  portalContainer?: HTMLElement;
 }) {
   useTranslation("panels");
-  const { url, error } = useAttachmentUrl(attachment, onReadAttachment);
+  const { url, error, invalidate } = useAttachmentUrl(
+    attachment,
+    onReadAttachment,
+  );
   return (
     <ImageUrlPreview
       url={url}
-      error={error}
+      error={
+        safeError && error !== null ? i18n.t("panels:imageUnavailable") : error
+      }
       name={name}
       onClose={onClose}
       trigger={trigger}
+      restoreFocus={restoreFocus}
+      onImageError={invalidate}
+      portalContainer={portalContainer}
     />
   );
 }
@@ -107,21 +184,29 @@ export function ImageUrlPreview({
   name,
   onClose,
   trigger,
+  restoreFocus,
+  onImageError,
+  portalContainer,
 }: {
   url: string | null;
   error: string | null;
   name: string;
   onClose(): void;
   trigger: HTMLElement;
+  restoreFocus?(): void;
+  onImageError?(): void;
+  portalContainer?: HTMLElement;
 }) {
   useTranslation("panels");
   const closeRef = useRef<HTMLButtonElement>(null);
+  const callbacks = useRef({ onClose, restoreFocus });
+  callbacks.current = { onClose, restoreFocus };
   useEffect(() => {
     closeRef.current?.focus();
     const keydown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        callbacks.current.onClose();
       } else if (event.key === "Tab") {
         event.preventDefault();
         closeRef.current?.focus();
@@ -130,9 +215,12 @@ export function ImageUrlPreview({
     document.addEventListener("keydown", keydown);
     return () => {
       document.removeEventListener("keydown", keydown);
-      trigger.focus();
+      const active = document.activeElement;
+      if (active !== document.body && active !== closeRef.current) return;
+      if (callbacks.current.restoreFocus) callbacks.current.restoreFocus();
+      else if (trigger.isConnected) trigger.focus({ preventScroll: true });
     };
-  }, [onClose, trigger]);
+  }, [trigger]);
   return createPortal(
     <div
       className="image-preview-layer"
@@ -158,11 +246,11 @@ export function ImageUrlPreview({
             {error ?? i18n.t("panels:loadingImage2")}
           </p>
         ) : (
-          <img alt={name} src={url} />
+          <img alt={name} src={url} onError={onImageError} />
         )}
       </div>
     </div>,
-    document.body,
+    portalContainer ?? document.body,
   );
 }
 
@@ -215,7 +303,14 @@ if (typeof window !== "undefined") {
 function useAttachmentUrl(
   attachment: AttachmentRef,
   read: (attachment: AttachmentRef) => Promise<Uint8Array>,
-): { url: string | null; error: string | null } {
+  enabled = true,
+): {
+  url: string | null;
+  error: string | null;
+  retry(): void;
+  invalidate(): void;
+} {
+  const [attempt, setAttempt] = useState(0);
   const cacheKey = `${attachment.mediaType}:${attachment.sha256}`;
   const [state, setState] = useState<{
     url: string | null;
@@ -225,6 +320,7 @@ function useAttachmentUrl(
     error: null,
   }));
   useEffect(() => {
+    if (!enabled) return;
     const cached = attachmentUrlCache.get(cacheKey);
     if (cached !== undefined) {
       cached.consumers += 1;
@@ -267,6 +363,17 @@ function useAttachmentUrl(
       active = false;
       if (acquired !== null) releaseAttachmentUrl(cacheKey, acquired);
     };
-  }, [cacheKey, attachment, read]);
-  return state;
+  }, [cacheKey, attachment, read, enabled, attempt]);
+  return {
+    ...(enabled ? state : { url: null, error: null }),
+    retry: () => setAttempt((value) => value + 1),
+    invalidate: () => {
+      const cached = attachmentUrlCache.get(cacheKey);
+      if (cached !== undefined) {
+        attachmentUrlCache.delete(cacheKey);
+        URL.revokeObjectURL(cached.url);
+      }
+      setState({ url: null, error: i18n.t("panels:imageUnavailable") });
+    },
+  };
 }
