@@ -396,3 +396,86 @@ for (const zoneHeight of [126, 226]) {
     });
   });
 }
+
+test("canonical image revision and thread ownership override stale media projections", async () => {
+  await withRuntimeDom(async (h) => {
+    const ref = (digit: string) => ({
+      type: "attachment" as const,
+      sha256: digit.repeat(64),
+      mediaType: "image/png" as const,
+      byteLength: 68,
+      width: 120,
+      height: 90,
+    });
+    const stale = ref("a"),
+      first = ref("b"),
+      edited = ref("c"),
+      other = ref("d");
+    const user = {
+      type: "userMessage" as const,
+      id: "same-user",
+      clientId: null,
+      content: [
+        { type: "text" as const, text: "image", text_elements: [] as [] },
+      ],
+    };
+    const a = runtimeThread([user], "completed");
+    const canonical = (
+      threadId: string,
+      image: ReturnType<typeof ref> | null,
+    ) => [
+      {
+        type: "user_message" as const,
+        id: user.id,
+        threadId,
+        turnId: a.turns[0]!.id,
+        createdAt: "2026-10-12T00:00:00Z",
+        content: image
+          ? [{ type: "image" as const, attachment: image }]
+          : [{ type: "text" as const, text: "image removed" }],
+      },
+    ];
+    const reads: string[] = [];
+    const props = {
+      threadAttachments: { [user.id]: [stale] },
+      onReadAttachment: async (image: ReturnType<typeof ref>) => {
+        reads.push(image.sha256);
+        return new Uint8Array();
+      },
+    };
+    await h.render({ ...a, canonicalItems: canonical(a.id, first) }, props);
+    assert.deepEqual(reads, [first.sha256]);
+    await h.render({ ...a, canonicalItems: canonical(a.id, edited) }, props);
+    assert.deepEqual(
+      reads,
+      [first.sha256, edited.sha256],
+      "same-ID replacement uses the new canonical reference",
+    );
+    await h.render({ ...a, canonicalItems: canonical(a.id, null) }, props);
+    assert.equal(
+      document.querySelector(".message-images"),
+      null,
+      "edited message cannot resurrect stale media",
+    );
+    await h.render({ ...a, canonicalItems: [] }, props);
+    assert.equal(
+      document.querySelector(".message-images"),
+      null,
+      "deleted canonical history has no image refs",
+    );
+    await h.render(
+      {
+        ...a,
+        id: "other-thread",
+        canonicalItems: canonical("other-thread", other),
+      },
+      props,
+    );
+    assert.equal(
+      reads.at(-1),
+      other.sha256,
+      "reused Item ID does not borrow another thread's reference",
+    );
+    assert.ok(!reads.includes(stale.sha256));
+  });
+});

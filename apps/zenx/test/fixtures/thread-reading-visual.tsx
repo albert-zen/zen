@@ -20,7 +20,33 @@ const longAnswer = Array.from(
   (_, i) =>
     `### Reading checkpoint ${i + 1}\n\nThis is an idle, completed conversation. Reading and selecting these paragraphs should never reattach the viewport to the bottom. There are no streaming messages in this fixture.`,
 ).join("\n\n");
+const replayImages = new URLSearchParams(location.search).has("images");
+const imageRef = {
+  type: "attachment" as const,
+  sha256: "a".repeat(64),
+  mediaType: "image/png" as const,
+  byteLength: 68,
+  width: 120,
+  height: 90,
+};
+let finishImage: (bytes: Uint8Array) => void;
+const imagePayload = new Promise<Uint8Array>((resolve) => {
+  finishImage = resolve;
+});
+const imageUser = {
+  type: "userMessage" as const,
+  id: "visual-image",
+  clientId: null,
+  content: [
+    {
+      type: "text" as const,
+      text: "An image with a deliberately delayed payload.",
+      text_elements: [] as [],
+    },
+  ],
+};
 function Fixture() {
+  const [mediaReady, setMediaReady] = useState(false);
   const [id, setId] = useState("thread-a");
   const [hidden, setHidden] = useState(false);
   const [wide, setWide] = useState(true);
@@ -28,6 +54,7 @@ function Fixture() {
   const thread = {
     ...runtimeThread(
       [
+        ...(replayImages ? [imageUser] : []),
         runtimeCommand("one"),
         runtimeCommand("two"),
         runtimeMessage("answer", longAnswer),
@@ -35,6 +62,23 @@ function Fixture() {
       "completed",
     ),
     id,
+    ...(replayImages
+      ? {
+          canonicalItems:
+            id === "thread-a"
+              ? [
+                  {
+                    type: "user_message" as const,
+                    id: imageUser.id,
+                    threadId: id,
+                    turnId: "runtime-turn",
+                    createdAt: "2026-10-12T00:00:00Z",
+                    content: [{ type: "image" as const, attachment: imageRef }],
+                  },
+                ]
+              : [],
+        }
+      : {}),
   };
   return (
     <ThreadReadingStateProvider>
@@ -73,6 +117,24 @@ function Fixture() {
           <button onClick={() => setWide((value) => !value)}>
             Resize idle layout
           </button>
+          {replayImages ? (
+            <button
+              disabled={mediaReady}
+              onClick={() => {
+                setMediaReady(true);
+                finishImage(
+                  Uint8Array.from(
+                    atob(
+                      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=",
+                    ),
+                    (c) => c.charCodeAt(0),
+                  ),
+                );
+              }}
+            >
+              Resolve delayed image
+            </button>
+          ) : null}
           <span>Idle completed fixture · {id}</span>
         </nav>
         <div
@@ -92,6 +154,12 @@ function Fixture() {
             <ThreadView
               thread={thread}
               approvals={[]}
+              threadAttachments={
+                mediaReady && id === "thread-a"
+                  ? { [imageUser.id]: [imageRef] }
+                  : {}
+              }
+              onReadAttachment={() => imagePayload}
               composer={{
                 ...emptyComposerState(),
                 draft: { text: drafts[id] ?? "", images: [] },

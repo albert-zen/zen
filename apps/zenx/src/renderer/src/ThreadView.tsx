@@ -1,3 +1,4 @@
+import { projectThreadAttachmentItems } from "../../thread-attachment-projection.js";
 import {
   ThreadReadingContext,
   useThreadReadingState,
@@ -193,9 +194,22 @@ interface ThreadViewProps {
 
 export function ThreadView(props: ThreadViewProps) {
   const readingState = useThreadReadingState(props.thread?.id);
+  const items = props.thread?.canonicalItems;
+  const canonicalAttachments = useMemo(
+    () =>
+      items === undefined ? undefined : projectThreadAttachmentItems(items),
+    [items],
+  );
+  // Native history and its image placeholders commit together, even while a
+  // separate media refresh/payload read is pending. A newer canonical snapshot
+  // also removes old references synchronously; never merge stale Host results.
+
   return (
     <ThreadReadingContext.Provider value={readingState}>
-      <ThreadViewContent {...props} />
+      <ThreadViewContent
+        {...props}
+        threadAttachments={canonicalAttachments ?? props.threadAttachments}
+      />
     </ThreadReadingContext.Provider>
   );
 }

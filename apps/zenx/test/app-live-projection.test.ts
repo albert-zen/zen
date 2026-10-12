@@ -1387,3 +1387,194 @@ test("actual App cached navigation restores tall-Composer position", async () =>
     await harness.unmount();
   }
 });
+
+for (const interaction of ["none", "manual", "navigate"] as const) {
+  test(`actual App retains canonical image geometry through late media refresh and ${interaction} intent`, async () => {
+    const user = {
+      type: "userMessage" as const,
+      id: "image-user",
+      clientId: null,
+      content: [
+        {
+          type: "text" as const,
+          text: "Inspect this screenshot.",
+          text_elements: [] as [],
+        },
+      ],
+    };
+    const a = {
+      ...thread(),
+      turns: runtimeThread([user, runtimeCommand("done")], "completed").turns,
+    };
+    const b = { ...a, id: "thread-2" };
+    const image = {
+      type: "attachment" as const,
+      sha256: "a".repeat(64),
+      mediaType: "image/png" as const,
+      byteLength: 68,
+      width: 120,
+      height: 90,
+    };
+    const projection = { "image-user": [image] };
+    const late = deferred<ZenXThreadAttachmentProjection>();
+    let attachmentLoads = 0;
+    let imageStillCurrent = true;
+    const harness = await mountApp({
+      threads: async (archived) =>
+        archived ? [] : [summary(), summary("thread-2", "Thread two")],
+      request: async (method, params) => {
+        if (method === "zen/thread/resume") {
+          const selected =
+            (params as { threadId: string }).threadId === a.id ? a : b;
+          const snapshot = resumed(selected);
+          if (selected.id === a.id && imageStillCurrent) {
+            // Use a real multimodal canonical user message, matching the separate
+            // read-only attachment projection returned by the Host service.
+            for (const item of snapshot.thread.items) {
+              if (item.type === "user_message" && item.id === user.id) {
+                delete item.text;
+                Object.assign(item, {
+                  content: [
+                    { type: "text", text: "Inspect this screenshot." },
+                    { type: "image", attachment: image },
+                  ],
+                });
+              }
+            }
+          }
+          return snapshot;
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      },
+      attachments: async (id) =>
+        id !== a.id
+          ? {}
+          : ++attachmentLoads < 3
+            ? projection
+            : await late.promise,
+    });
+    const previous = globalThis.ResizeObserver;
+    const callbacks = new Set<() => void>();
+    globalThis.ResizeObserver = class {
+      constructor(private callback: () => void) {}
+      observe() {
+        callbacks.add(this.callback);
+      }
+      disconnect() {
+        callbacks.delete(this.callback);
+      }
+    } as unknown as typeof ResizeObserver;
+    const resize = () => {
+      for (const callback of callbacks) callback();
+    };
+    try {
+      const tops = new WeakMap<HTMLElement, number>();
+      const proto = window.HTMLElement.prototype;
+      Object.defineProperties(proto, {
+        clientHeight: {
+          configurable: true,
+          get() {
+            return this.classList.contains("messages") ? 400 : 0;
+          },
+        },
+        scrollHeight: {
+          configurable: true,
+          get() {
+            if (!this.classList.contains("messages")) return 0;
+            // Real image row geometry: 120px thumbnail at 4:3 plus 6px margin.
+            return 1000 + (this.querySelector(".message-images") ? 96 : 0);
+          },
+        },
+        scrollTop: {
+          configurable: true,
+          get() {
+            return this.classList.contains("messages")
+              ? Math.min(tops.get(this) ?? 0, this.scrollHeight - 400)
+              : 0;
+          },
+          set(value: number) {
+            if (this.classList.contains("messages"))
+              tops.set(
+                this,
+                Math.max(0, Math.min(this.scrollHeight - 400, value)),
+              );
+          },
+        },
+      });
+      const rows = [
+        ...document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+      ];
+      const choose = async (i: number) => {
+        await act(async () => rows[i]!.click());
+        await waitFor(() => document.querySelector(".messages"));
+        await act(async () => resize());
+      };
+      const scroll = () => document.querySelector<HTMLElement>(".messages")!;
+      await choose(0);
+      await waitFor(() => document.querySelector(".message-images"));
+      await choose(1);
+      const reused = scroll();
+      await choose(0);
+      assert.equal(scroll(), reused);
+      await waitFor(() => document.querySelector(".message-images"));
+      assert.equal(attachmentLoads, 2);
+      await act(async () => {
+        scroll().dispatchEvent(
+          new window.WheelEvent("wheel", { deltaY: -46, bubbles: true }),
+        );
+        scroll().scrollTop = 650;
+        scroll().dispatchEvent(new window.Event("scroll"));
+      });
+      assert.equal(scroll().scrollTop, 650);
+      assert.equal(scroll().scrollHeight - scroll().clientHeight, 696);
+      await choose(1);
+      await choose(0);
+      assert.equal(
+        scroll(),
+        reused,
+        "actual cached App navigation stays unkeyed",
+      );
+      assert.equal(attachmentLoads, 3);
+      assert.ok(
+        document.querySelector(".message-images"),
+        "canonical image geometry must remain present while Host media refresh is pending",
+      );
+      assert.equal(scroll().scrollTop, 650);
+      if (interaction === "manual") {
+        await act(async () => {
+          scroll().dispatchEvent(
+            new window.WheelEvent("wheel", { deltaY: -100, bubbles: true }),
+          );
+          scroll().scrollTop = 550;
+          scroll().dispatchEvent(new window.Event("scroll"));
+        });
+      }
+      if (interaction === "navigate") await choose(1);
+      await act(async () => {
+        late.resolve(projection);
+      });
+      if (interaction === "navigate") {
+        assert.equal(
+          document.querySelector(".message-images"),
+          null,
+          "late A media must not enter B, even with reused Item IDs",
+        );
+        assert.equal(scroll().scrollTop, 600);
+        await choose(0);
+      }
+      await waitFor(() => document.querySelector(".message-images"));
+      await act(async () => resize());
+      assert.ok(document.querySelector(".back-live"));
+      assert.equal(scroll().scrollTop, interaction === "manual" ? 550 : 650);
+      // A newer authoritative snapshot without the image invalidates it, even if
+      // an asynchronous Host projection still contains the old reference.
+      imageStillCurrent = false;
+      await choose(1);
+      await choose(0);
+      assert.equal(document.querySelector(".message-images"), null);
+    } finally {
+      globalThis.ResizeObserver = previous;
+      await harness.unmount();
+    }
+  });
+}
