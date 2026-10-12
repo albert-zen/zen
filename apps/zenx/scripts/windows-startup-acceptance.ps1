@@ -40,6 +40,11 @@ function Wait-Event($Directory, $Process, $Type) {
   }
   throw "Timed out waiting for $Type"
 }
+function Get-EventUtcTime($Event) {
+  # PowerShell 7 converts ISO JSON timestamps to DateTime. Do not stringify them:
+  # DateTime.Parse(DateTime) can lose milliseconds through the culture formatter.
+  return ([DateTime]$Event.at).ToUniversalTime()
+}
 function Write-FixtureDiagnostics($Directory, $Process) {
   foreach ($name in @("events-$($Process.Id).jsonl", "stdout.log", "stderr.log")) {
     try {
@@ -174,12 +179,19 @@ public static class StartupWindows {
       if (@($activation.windows).Count -ne 1 -or $activation.windows[0].hwnd -ne $sample.hwnd) { throw "Second launch changed physical window identity" }
       if (@(Read-Events $directory $primary.Id | Where-Object type -eq "gate-released").Count) { throw "Bootstrap released before second-launch check" }
       # Deliberately slow bootstrap for at least three seconds after gate entry.
-      $holdUntil = [DateTime]::Parse($gate.at).ToUniversalTime().AddSeconds(3)
+      $gateEnteredAt = Get-EventUtcTime $gate
+      $sample.gateEnteredAt = $gateEnteredAt.ToString("o")
+      $holdUntil = $gateEnteredAt.AddSeconds(3)
       while ([DateTime]::UtcNow -lt $holdUntil) { Start-Sleep -Milliseconds 20 }
       Assert-SoleVisibleWindow $primary.Id $hwnd
       $sample.visibleDuringDelayedBootstrap = $true
-      $sample.gateHeldMilliseconds = [math]::Round(([DateTime]::UtcNow - [DateTime]::Parse($gate.at).ToUniversalTime()).TotalMilliseconds, 1)
+      $sample.gateReleaseRequestedAt = [DateTime]::UtcNow.ToString("o")
       [IO.File]::WriteAllText((Join-Path $directory "release"), "release", $utf8)
+      $released = Wait-Event $directory $primary "gate-released"
+      $gateReleasedAt = Get-EventUtcTime $released
+      $sample.gateReleasedAt = $gateReleasedAt.ToString("o")
+      $sample.gateHeldMilliseconds = ($gateReleasedAt - $gateEnteredAt).TotalMilliseconds
+      if ($sample.gateHeldMilliseconds -lt 3000) { throw "Actual bootstrap gate was held for less than three seconds" }
       $type = if ($mode -eq "success") { "renderer-loaded" } else { "failure-loaded" }
       $result = Wait-Event $directory $primary $type
       Assert-SoleVisibleWindow $primary.Id $hwnd

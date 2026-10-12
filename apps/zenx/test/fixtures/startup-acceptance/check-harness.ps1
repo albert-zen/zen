@@ -5,7 +5,7 @@ $parseErrors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile($HarnessPath, [ref] $tokens, [ref] $parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
 # Load only the real harness helpers. Never execute its package or process launcher.
-foreach ($name in @("Assert-SoleVisibleWindow", "Stop-Fixture", "Stop-OwnedFixtures")) {
+foreach ($name in @("Assert-SoleVisibleWindow", "Stop-Fixture", "Stop-OwnedFixtures", "Get-EventUtcTime")) {
   $functions = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true))
   if ($functions.Count -ne 1) { throw "Missing unique helper $name" }
   . ([scriptblock]::Create($functions[0].Extent.Text))
@@ -24,6 +24,18 @@ function Assert-Throws([scriptblock] $Action, $Pattern) {
   $caught = $null
   try { & $Action | Out-Null } catch { $caught = $_.Exception.Message }
   if ($null -eq $caught -or $caught -notmatch $Pattern) { throw "Expected $Pattern; received $caught" }
+}
+# Modern ConvertFrom-Json may materialize dates; older versions leave strings.
+# Both must preserve the exact fractional timestamp used for holding bootstrap.
+$expected = [DateTimeOffset]::Parse("2026-10-12T14:59:19.846Z").UtcDateTime
+foreach ($event in @(
+  ('{"at":"2026-10-12T14:59:19.846Z"}' | ConvertFrom-Json),
+  @{ at = "2026-10-12T14:59:19.846Z" },
+  @{ at = $expected }
+)) {
+  $actual = Get-EventUtcTime $event
+  Assert-True ($actual.Ticks -eq $expected.Ticks) "Event timestamp lost fractional milliseconds"
+  Assert-True ($actual.AddSeconds(3).Ticks - $expected.Ticks -eq 30000000) "Gate deadline must retain a full three seconds"
 }
 Assert-SoleVisibleWindow 123 ([IntPtr]::new(42))
 [StartupWindows]::Handles = [long[]]@()
