@@ -260,6 +260,80 @@ test("Cockpit bounds pending polling and discards older and departed-view result
   }
 });
 
+test("Cockpit mobile menu clears a desktop collapse and remains usable after closing", async () => {
+  const harness = await mountApp(oneProject(), { cockpitEnabled: true });
+  try {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1440,
+    });
+    const cockpit = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.includes("Cockpit"),
+      ),
+    );
+    await act(async () => cockpit.click());
+    assert.ok(document.querySelector('[aria-label="Experimental Cockpit"]'));
+    const collapse = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Collapse sidebar"]',
+    )!;
+    await act(async () => collapse.click());
+    assert.equal(
+      harness.dom.window.localStorage.getItem("zenx.sidebar-collapsed"),
+      "true",
+    );
+    assert.ok(document.querySelector(".app-shell.sidebar-collapsed"));
+
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 592,
+    });
+    await act(async () => window.dispatchEvent(new window.Event("resize")));
+    const open = document.querySelector<HTMLButtonElement>(
+      '.window-titlebar-session [aria-label="Open sidebar"]',
+    )!;
+    assert.ok(open);
+    await act(async () => open.click());
+    assert.ok(document.querySelector(".app-shell.sidebar-open"));
+    assert.equal(
+      Boolean(document.querySelector(".app-shell.sidebar-collapsed")),
+      false,
+    );
+    assert.equal(
+      document.getElementById("primary-sidebar")?.hasAttribute("inert"),
+      false,
+    );
+    assert.equal(
+      document.getElementById("primary-sidebar")?.hasAttribute("aria-hidden"),
+      false,
+    );
+    assert.equal(
+      document
+        .querySelector('[aria-label="Collapse sidebar"]')
+        ?.getAttribute("aria-expanded"),
+      "true",
+    );
+
+    const backdrop =
+      document.querySelector<HTMLButtonElement>(".sidebar-scrim")!;
+    assert.ok(backdrop);
+    await act(async () => backdrop.click());
+    assert.equal(
+      Boolean(document.querySelector(".app-shell.sidebar-open")),
+      false,
+    );
+    await act(async () => open.click());
+    assert.ok(document.querySelector(".app-shell.sidebar-open"));
+    assert.equal(
+      Boolean(document.querySelector(".app-shell.sidebar-collapsed")),
+      false,
+    );
+    assert.ok(document.querySelector('[aria-label="Experimental Cockpit"]'));
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("desktop title bar collapses and restores the Sidebar", async () => {
   const harness = await mountApp({
     projects: [],

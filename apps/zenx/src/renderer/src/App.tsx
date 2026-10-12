@@ -2548,7 +2548,7 @@ export function App({
           />
         ) : cockpitEnabled && page === "cockpit" ? (
           <PageTitleBar
-            onOpenSidebar={() => setSidebarOpen(true)}
+            onOpenSidebar={openSidebar}
             subtitle={i18n.t("cockpit:subtitle")}
             title={i18n.t("cockpit:title")}
           />
