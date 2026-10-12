@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync, rm } from "node:fs";
+import { mkdtempSync, readFileSync, rm } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { app, BrowserWindow, type WebContentsView } from "electron";
+
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { WorkspaceBrowserPanel } from "../renderer/src/workspace-browser-panel.js";
+import { i18n } from "../renderer/src/i18n.js";
+import type { WorkspaceBrowserTab } from "./workspace-browser.js";
 
 import type { BrowserInspection } from "./capabilities/browser-provider.js";
 import { createElectronWorkspaceBrowser } from "./workspace-browser-electron.js";
@@ -390,6 +396,7 @@ void app.whenReady().then(async () => {
       1,
       "Ending the Agent session must preserve the shared human page",
     );
+    await assertStableControlLayout();
     console.log(
       JSON.stringify({
         passed: true,
@@ -419,6 +426,7 @@ void app.whenReady().then(async () => {
           "all human-owned Agent mutations reject; return requires fresh observation",
           "human confirmation occurs exactly once and is never replayed on return",
           "old no-reference close remains fenced even after a fresh inspection",
+          "production control status preserves native viewport geometry at 320/390/900px in English and Chinese",
         ],
       }),
     );
@@ -484,4 +492,96 @@ async function closeFixture(): Promise<void> {
   await new Promise<void>((resolve, reject) =>
     fixture.close((error) => (error === undefined ? resolve() : reject(error))),
   );
+}
+
+/** Real Chromium layout, with production panel markup and the actual stylesheet.
+ * This development smoke is invoked from apps/zenx by its package script. */
+async function assertStableControlLayout(): Promise<void> {
+  const css = readFileSync(path.resolve("src/renderer/src/styles.css"), "utf8");
+  const layout = new BrowserWindow({ show: false, width: 900, height: 700 });
+  try {
+    await layout.loadURL(
+      `data:text/html;charset=utf-8,${encodeURIComponent(`<style>${css}</style><main style="height:700px;width:900px" id="fixture"></main>`)}`,
+    );
+    layout.showInactive();
+    const tab: WorkspaceBrowserTab = {
+      id: "layout",
+      threadId: "layout-thread",
+      title: "Local fixture",
+      url: "http://localhost/fixture",
+      loading: false,
+      canGoBack: true,
+      canGoForward: false,
+      sharedWithAgent: true,
+      control: "agent",
+      agentActionsInFlight: 0,
+      agentActionOutcomeUnknown: false,
+      requiresFreshObservation: false,
+    };
+    for (const language of ["en", "zh-CN"]) {
+      await i18n.changeLanguage(language);
+      for (const width of [320, 390, 900]) {
+        // Exercise real narrow workspace columns without depending on the
+        // desktop window manager honoring asynchronous native window resizing.
+        let expected: unknown;
+        let buttonsVisible = true;
+        let statusesReadable = true;
+        for (const state of [
+          {},
+          { control: "human", requiresFreshObservation: true },
+          { requiresFreshObservation: true },
+          { agentActionsInFlight: 1, requiresFreshObservation: true },
+          { agentActionOutcomeUnknown: true, requiresFreshObservation: true },
+          {},
+        ] as Partial<WorkspaceBrowserTab>[]) {
+          const markup = renderToStaticMarkup(
+            React.createElement(WorkspaceBrowserPanel, {
+              threadId: tab.threadId,
+              tab: { ...tab, ...state },
+              open: true,
+            }),
+          );
+          const measured = await layout.webContents
+            .executeJavaScript(`(async()=>{
+            document.querySelector('#fixture').style.width=${width}+'px';
+            document.querySelector('#fixture').innerHTML=${JSON.stringify(markup)};
+            await new Promise(requestAnimationFrame);
+            const viewport=document.querySelector('.workspace-browser-viewport').getBoundingClientRect();
+            const control=document.querySelector('.workspace-browser-control').getBoundingClientRect();
+            const button=document.querySelector('.workspace-browser-control button').getBoundingClientRect();
+            const status=document.querySelector('[role="status"]');
+            return {viewport:[viewport.x,viewport.y,viewport.width,viewport.height],
+              buttonVisible:button.x>=control.x&&button.right<=control.right&&button.y>=control.y&&button.bottom<=control.bottom,
+              statusKeyboardScrollable:status.tabIndex===0&&status.clientHeight>0&&getComputedStyle(status).overflowY==='auto'};
+          })()`);
+          assert.equal(
+            measured.viewport[2],
+            width,
+            "Fixture must exercise the requested actual panel width",
+          );
+          expected ??= measured.viewport;
+          assert.deepEqual(
+            measured.viewport,
+            expected,
+            `Status changed native viewport at ${width}px/${language}: ${JSON.stringify(state)}`,
+          );
+          buttonsVisible &&= measured.buttonVisible;
+          statusesReadable &&= measured.statusKeyboardScrollable;
+        }
+        assert.equal(
+          buttonsVisible,
+          true,
+          "Control action must stay visible without scrolling status",
+        );
+        assert.equal(
+          statusesReadable,
+          true,
+          "Overflowing notices remain keyboard-readable",
+        );
+      }
+    }
+  } finally {
+    await i18n.changeLanguage("en");
+    layout.destroy();
+  }
 }

@@ -37,7 +37,9 @@ While any dispatched action remains unsettled, inspection cannot renew
 mutation authority for a handed-off tab. After settlement, a fresh successful
 inspection clears the transient unknown-outcome warning; it observes current
 page state, not proof of server-side success. Repeated takeover/return is
-idempotent. Closing a page invalidates its handles; hiding, switching tabs or
+idempotent. A fixed-size, keyboard-scrollable status region keeps status changes
+from resizing the native viewport; actual resizing still expires observations.
+Closing a page invalidates its handles; hiding, switching tabs or
 switching Threads does not release human ownership. Session detachment leaves
 the shared page and its barrier intact. Restart creates a new registry; this
 feature neither restores tab authority nor replays old actions.

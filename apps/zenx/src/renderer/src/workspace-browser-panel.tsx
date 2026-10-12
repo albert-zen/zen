@@ -157,7 +157,13 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
       }}
     >
       <div className="workspace-browser-control">
-        <div id={controlDescription} role="status" aria-live="polite">
+        <div
+          id={controlDescription}
+          role="status"
+          aria-live="polite"
+          tabIndex={0}
+          aria-label={i18n.t("panels:browserControlStatus")}
+        >
           <strong>
             {i18n.t(
               active.control === "human"

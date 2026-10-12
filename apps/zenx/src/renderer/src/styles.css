@@ -7320,18 +7320,25 @@ button:disabled {
   height: 100%;
 }
 .workspace-browser-control {
-  display: flex;
-  align-items: flex-start;
-  flex-wrap: wrap;
-  gap: 8px 12px;
+  /* Status updates must not resize the native WebContents viewport: doing so
+     would correctly expire the very observation/action reporting this status. */
+  box-sizing: border-box;
+  flex: 0 0 128px;
+  height: 128px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
   padding: 8px 12px;
+  overflow: hidden;
   border-bottom: 1px solid var(--color-border-subtle);
   font-size: 12px;
 }
 .workspace-browser-control > div {
-  flex: 1 1 180px;
   min-width: 0;
+  min-height: 0;
+  overflow: auto;
   overflow-wrap: anywhere;
+  scrollbar-gutter: stable;
 }
 .workspace-browser-control strong {
   color: var(--color-text-primary);
@@ -7341,9 +7348,10 @@ button:disabled {
   color: var(--color-text-secondary);
 }
 .workspace-browser-control > button {
+  align-self: start;
+  max-width: 128px;
   min-height: 44px;
   padding: 6px 10px;
-  max-width: 100%;
   border: 1px solid var(--color-border-subtle);
   border-radius: 6px;
   background: var(--color-surface-main);
