@@ -378,7 +378,10 @@ export const en = {
   dismiss: "Dismiss",
   copiedFromUnavailableSource: "Copied from unavailable source",
   copiedFrom: "Copied from {{name}}",
-  whatShouldWeBuildIn: "What should we build in",
+  // Split around the inline Project name so each language keeps its own
+  // word order: "What should we build in {Project}?" vs 我们要在 {Project} 中构建什么？
+  whatShouldWeBuildInStart: "What should we build in",
+  whatShouldWeBuildInEnd: "?",
   olderQueuePreference:
     "Your older Queue preference could not distinguish the old default from a manual choice. Running-turn sends now steer the current Turn; messages already queued keep their choice.",
   restorePerMessageQueue: "Restore per-message Queue",
@@ -900,7 +903,8 @@ export const zhCN = {
   dismiss: "关闭",
   copiedFromUnavailableSource: "复制自不可用的来源",
   copiedFrom: "复制自 {{name}}",
-  whatShouldWeBuildIn: "我们要在以下项目中构建什么",
+  whatShouldWeBuildInStart: "我们要在",
+  whatShouldWeBuildInEnd: " 中构建什么？",
   olderQueuePreference:
     "旧版“队列”偏好无法区分旧默认值与手动选择。执行期间发送的消息现在会引导当前轮次；已排队的消息保留原来的选择。",
   restorePerMessageQueue: "恢复逐条消息排队",

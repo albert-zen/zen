@@ -10,6 +10,7 @@ import type { ZenXProjectProjectionSnapshot } from "../src/main/project-projecti
 import {
   moveSidebarProject,
   moveSidebarThread,
+  movePinnedThreadIds,
   type SidebarOrderPlacement,
 } from "../src/renderer/src/thread-list.js";
 
@@ -151,6 +152,67 @@ test("keyboard reorder restores focus while preserving selection, Pin, and activ
       ].map((row) => row.dataset.threadId),
       ["pinned"],
     );
+  });
+});
+
+test("Pinned rows reorder inside the Pinned section with Alt+Arrow keys", async () => {
+  const calls: Array<[string, string, SidebarOrderPlacement]> = [];
+  await withDom(async (root) => {
+    await act(async () =>
+      root.render(
+        createElement(PinnedReorderSidebar, {
+          onCall: (call: [string, string, SidebarOrderPlacement]) =>
+            calls.push(call),
+        }),
+      ),
+    );
+    const pinnedIds = () =>
+      [
+        ...document.querySelectorAll<HTMLElement>(
+          ".pinned-thread-group .thread-row-shell",
+        ),
+      ].map((row) => row.dataset.threadId);
+    assert.deepEqual(pinnedIds(), ["pin-1", "pin-2", "pin-3"]);
+    const thirdRow = requiredElement<HTMLElement>(
+      '.pinned-thread-group [data-thread-id="pin-3"] .thread-row',
+    );
+    thirdRow.focus();
+    await act(async () => {
+      thirdRow.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "ArrowUp",
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.deepEqual(calls, [["pin-3", "pin-2", "before"]]);
+    assert.deepEqual(pinnedIds(), ["pin-1", "pin-3", "pin-2"]);
+    // Focus follows the moved row so keyboard users keep their place.
+    assert.equal(
+      document.activeElement?.parentElement?.dataset.threadId,
+      "pin-3",
+    );
+    const firstRow = requiredElement<HTMLElement>(
+      '.pinned-thread-group [data-thread-id="pin-1"] .thread-row',
+    );
+    firstRow.focus();
+    await act(async () => {
+      firstRow.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "ArrowDown",
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.deepEqual(pinnedIds(), ["pin-3", "pin-1", "pin-2"]);
   });
 });
 
@@ -614,10 +676,20 @@ function FailingSidebar() {
 
 function StaticSidebar({
   sidebarOrder = { projectKeys: [], threadIdsByProject: {} },
+  pinnedThreads = [threads[0]!],
+  threadRows = threads,
+  onReorderPinnedThread,
   onReorderProject = async () => undefined,
   onReorderThread = async () => undefined,
 }: {
   sidebarOrder?: ZenXSidebarOrder;
+  pinnedThreads?: NativeThreadSummary[];
+  threadRows?: NativeThreadSummary[];
+  onReorderPinnedThread?: (
+    sourceThreadId: string,
+    targetThreadId: string,
+    placement: SidebarOrderPlacement,
+  ) => Promise<void>;
   onReorderProject?: (
     sourceKey: string,
     targetKey: string,
@@ -646,11 +718,12 @@ function StaticSidebar({
     onChangeThreadPinned: async () => undefined,
     onReorderProject,
     onReorderThread,
+    onReorderPinnedThread,
     onRenameThread: async () => undefined,
     onRetryThreads: noop,
     onSelectThread: noop,
     pendingApprovalThreadIds: new Set<string>(),
-    pinnedThreads: [threads[0]!],
+    pinnedThreads,
     pluginContributions: [],
     projects: projection,
     sidebarOrder,
@@ -659,7 +732,41 @@ function StaticSidebar({
     serverStatus: { type: "ready", reconnected: false },
     threadError: null,
     threadLoading: false,
-    threads,
+    threads: threadRows,
+  });
+}
+
+function PinnedReorderSidebar({
+  onCall,
+}: {
+  onCall(call: [string, string, SidebarOrderPlacement]): void;
+}) {
+  const [pinnedIds, setPinnedIds] = useState(["pin-1", "pin-2", "pin-3"]);
+  const all = [
+    summary("pin-1", "idle", 30, "/work/a"),
+    summary("pin-2", "idle", 20, "/work/a"),
+    summary("pin-3", "idle", 10, "/work/a"),
+  ];
+  return createElement(StaticSidebar, {
+    pinnedThreads: pinnedIds.map((threadId) =>
+      all.find((thread) => thread.threadId === threadId)!,
+    ),
+    threadRows: all,
+    onReorderPinnedThread: async (
+      sourceThreadId,
+      targetThreadId,
+      placement,
+    ) => {
+      onCall([sourceThreadId, targetThreadId, placement]);
+      setPinnedIds((current) => [
+        ...movePinnedThreadIds(
+          current,
+          sourceThreadId,
+          targetThreadId,
+          placement,
+        ),
+      ]);
+    },
   });
 }
 

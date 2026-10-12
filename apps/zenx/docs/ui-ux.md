@@ -32,7 +32,7 @@ New thread 打开临时本地编辑页；选择或添加 Project 不创建 Threa
 - Thread 列表产品数据来自 ZAS native `ThreadSummary` / `CurrentMetadata` read model，经 Electron main/preload typed IPC 投影。
 - Thread 的名称与归档由 ZAS 产品元数据负责；当前选择、disclosure、草稿、打开的菜单和面板属于 renderer-local UI 状态。
 - Archive 是当前已定义的可逆生命周期操作。本阶段 ZenX 不直接删除 journal，也不伪造 App Server 尚未定义的 Delete；永久 Delete 的 ownership、恢复、附件与历史语义仍为 **TBD**，这里不是永久产品禁令。
-- Pin 是 profile-local ZenX 产品状态。Pinned Thread IDs 不进入 canonical Items、不跨设备同步，也不改变 runtime priority、scheduling priority 或 Inbox ordering；Pin 只允许改变本地 Sidebar prominence。Pin 不改变 Thread 的 owning Project，也不清除其 Project 内排序偏好。是否使用独立 Pinned section、放置位置与该 section 自身的排序规则仍为 **TBD**。
+- Pin 是 profile-local ZenX 产品状态。Pinned Thread IDs 不进入 canonical Items、不跨设备同步，也不改变 runtime priority、scheduling priority 或 Inbox ordering；Pin 只允许改变本地 Sidebar prominence。Pin 不改变 Thread 的 owning Project，也不清除其 Project 内排序偏好。Projects Sidebar 使用独立 Pinned section，其展示顺序就是 profile-local `pinnedThreadIds` 列表顺序：新 Pin 前置，用户可以在 Pinned section 内用拖拽或 Alt+方向键交换相邻行来调整顺序；排序只置换 `pinnedThreadIds`，不写入 Thread 的 Project 内排序偏好，也不是 canonical fact。
 - Project 与 Thread 的 Sidebar 顺序是 Settings-owned host-profile local preference，不是 canonical Item/journal fact，也不跨设备同步。Project 使用 canonical Project key 排序；Thread 顺序按 owning Project 分区保存，排序操作不能改变 cwd、Project identity 或把 Thread 移到另一 Project。
 - 持久化顺序是 preference list：仍存在的已知 ID 按记录顺序出现；未知或新出现的 Project/Thread 按当前稳定投影顺序追加；已移除的 ID 被忽略，并可在后续用户排序写入时自然修剪。Settings mutation 按用户操作调用顺序串行化，最后一次操作获胜。
 
@@ -120,7 +120,8 @@ New thread 可保留独立 row；它相对 插件入口 / Projects 的精确视�
 - Add project 使用 ZenX 只读 directory picker；Thread 创建最终必须解析为明确的 cwd，并消费同一个 canonical Project projection。
 - Project 内入口把被点击 Project 作为唯一作用域；全局入口使用仍有效的 last-used Project，否则要求用户明确选择。不得用默认 Project、Documents 或 `process.cwd()` 隐式替代。
 - 点击入口、切换 Project 或目录确认只更新非持久本地 draft；第一条有效 Send 才配置 Project、创建 Thread，并立即启动 Turn，不等待 summaries / Project projection。失败必须不遮盖当前页面，并提供恢复 draft 的直接重试路径。
-- Agent 入口直接打开同一个 welcome draft，不显示单独的未选择 Thread 页面。welcome 中央 Project 控件可以在首发前切换和搜索 Project；候选列表有视口内最大高度并只在列表内部滚动。welcome 保持紧凑并相对主内容列视觉居中，不使用通用 compose 装饰图标。
+- Agent 入口直接打开同一个 welcome draft，不显示单独的未选择 Thread 页面。welcome 中央 Project 控件可以在首发前切换和搜索 Project；候选列表有视口内最大高度并只在列表内部滚动。Composer 旁的 Project chip 与机器切换使用同一交互体验：可点击打开同一个带搜索、键盘导航与 Add project 的 Project popover，不是只读展示。
+- welcome draft 的未发送输入按 Project 独立保留在 renderer-local 状态（与 Thread Composer 草稿同一层级，不持久化、不进入 journal/profile）：切到 Thread 或其它页面再回到某个 Project 的 New thread 时恢复该 Project 的未发送文本与图片；不同 Project 各自保留互不覆盖；首发成功创建 Thread 后该 Project 的保留内容即被消费。首发前的 Project 切换因此是在两个 Project 的 draft 之间交换，而不是把文本跟随过去。welcome 保持紧凑并相对主内容列视觉居中，不使用通用 compose 装饰图标。
 
 ### 3.4 原生应用菜单与按需面板
 
@@ -376,7 +377,7 @@ ThreadView
 - [ ] 产品壳保留正式 ZenX logo/wordmark 位置；Thread Provider logo 不替代产品标识。
 - [ ] Add project 可发现、可聚焦并遵守 canonical cwd；New thread 在首次有效 Send 前不创建 Thread，且全局/Project 内入口遵守各自已确认的选择语义。
 - [ ] canonical cwd aliases 归一为一个 Project，同时保留稳定 display path。
-- [ ] Pin 只改变 profile-local Sidebar prominence，不改变 Inbox/runtime/scheduling；不假定独立 Pinned section 或排序。
+- [ ] Pin 只改变 profile-local Sidebar prominence，不改变 Inbox/runtime/scheduling；Pinned section 的拖拽与 Alt+方向键排序只置换 `pinnedThreadIds`，持久于 host profile，且不影响 Thread 在 owning Project 内的排序。
 - [ ] Project 可在 Sidebar 全局拖动排序；Thread 只可在 owning Project 内排序，跨 Project drop 不产生 mutation，也不改变 cwd/Project identity。
 - [ ] Sidebar 排序在 host profile 中本地持久化并按 preference list reconcile；新/未知项稳定追加、已移除项忽略，重复并发操作最后一次获胜。
 - [ ] Reorder handle 仅在 hover/focus 时出现；Arrow Up/Down 提供等价键盘操作并把焦点恢复到被移动对象，窄宽度下仍可操作。

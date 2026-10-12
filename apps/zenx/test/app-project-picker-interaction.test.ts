@@ -15,6 +15,7 @@ import type { ZenXProjectProjectionSnapshot } from "../src/main/project-projecti
 import type { ModelSummary, Thread } from "../src/protocol-client/index.js";
 import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
+import { i18n } from "../src/renderer/src/i18n.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 const {
@@ -3332,6 +3333,243 @@ test("current permissions follow notifications even when the Thread list fails",
     await waitFor(() => select.textContent === "Full access");
     assert.equal(select.disabled, false);
     assert.match(document.body.textContent ?? "", /list unavailable/);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+function twoProjectSnapshot(): ZenXProjectProjectionSnapshot {
+  return {
+    projects: [
+      {
+        key: "/work/documents",
+        workspace: "/work/documents",
+        configured: true,
+        isDefault: false,
+        threadIds: ["existing-thread"],
+      },
+      {
+        key: "/work/zen",
+        workspace: "/work/zen",
+        configured: true,
+        isDefault: true,
+        threadIds: [],
+      },
+    ],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: "/work/zen",
+  };
+}
+
+async function chooseDraftProject(name: string): Promise<void> {
+  await act(async () => projectSwitcher()?.click());
+  const option = await waitFor(() =>
+    Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        '.new-thread-project-popover [role="menuitemradio"]',
+      ),
+    ).find((button) => button.textContent?.includes(name)),
+  );
+  await act(async () => option.click());
+}
+
+test("the Composer-context Project chip opens the searchable switcher", async () => {
+  const projects = twoProjectSnapshot();
+  let projectReads = 0;
+  const harness = await mountApp(projects, {
+    projectsGet: async () => {
+      projectReads += 1;
+      return projects;
+    },
+  });
+  try {
+    await waitFor(() => projectReads > 0);
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    const chip = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        ".new-thread-composer-context .new-thread-project-trigger-chip",
+      ),
+    );
+    assert.match(chip.textContent ?? "", /zen/u);
+    assert.equal(chip.getAttribute("aria-haspopup"), "dialog");
+    assert.equal(chip.getAttribute("aria-expanded"), "false");
+
+    await act(async () => chip.click());
+    const portal = await waitFor(() =>
+      document.querySelector<HTMLElement>(".new-thread-project-popover-portal"),
+    );
+    assert.equal(chip.getAttribute("aria-expanded"), "true");
+    // The central heading keeps its own popover closed while the chip is open.
+    assert.equal(
+      document.querySelectorAll(".new-thread-project-popover").length,
+      0,
+    );
+    const search = portal.querySelector<HTMLInputElement>(
+      'input[type="search"]',
+    );
+    assert.ok(search);
+    assert.equal(search.getAttribute("aria-label"), "Search projects");
+    await act(async () => setInputValue(search, "documents"));
+    const options = await waitFor(() =>
+      Array.from(
+        portal.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+      ),
+    );
+    assert.equal(options.length, 1);
+    assert.match(options[0]?.textContent ?? "", /documents/u);
+    assert.ok(portal.querySelector(".new-thread-project-add"));
+
+    await act(async () => options[0]?.click());
+    assert.equal(
+      document.querySelector(".new-thread-project-popover-portal"),
+      null,
+    );
+    assert.match(
+      document.querySelector(".new-thread-draft-heading")?.textContent ?? "",
+      /What should we build in documents\?/u,
+    );
+    assert.match(chip.textContent ?? "", /documents/u);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("the Chinese welcome sentence embeds the Project name in the middle", async () => {
+  await i18n.changeLanguage("zh-CN");
+  try {
+    const harness = await mountApp(oneProject(), {});
+    try {
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(".new-thread-action")
+          ?.click(),
+      );
+      const heading = await waitFor(() =>
+        document.querySelector<HTMLElement>(".new-thread-draft-heading"),
+      );
+      assert.match(heading.textContent ?? "", /我们要在 zen 中构建什么？/u);
+    } finally {
+      await unmountApp(harness);
+    }
+  } finally {
+    await i18n.changeLanguage("en");
+  }
+});
+
+test("welcome drafts retain unsent input per Project, restore across navigation, and are consumed by the first Send", async () => {
+  const selectedStart = deferred<ReturnType<typeof started>>();
+  const startedWorkspaces: string[] = [];
+  let created = false;
+  const existing = summary(
+    false,
+    "existing-thread",
+    "Existing thread",
+    "/work/documents",
+  );
+  const projects = twoProjectSnapshot();
+  const harness = await mountApp(projects, {
+    addWorkspace: async () => undefined,
+    markWorkspaceUsed: async () => publicSettings([]),
+    projectsGet: async () => projects,
+    threads: async (archived) =>
+      archived
+        ? []
+        : created
+          ? [existing, summary(false, "thread-1", "Thread one", "/work/zen")]
+          : [existing],
+    startProjectThread: async (workspace) => {
+      startedWorkspaces.push(workspace);
+      const value = await selectedStart.promise;
+      created = true;
+      return value;
+    },
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(liveThread());
+      if (method === "turn/start") return {};
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  const draftText = () =>
+    document.querySelector<HTMLTextAreaElement>(
+      ".new-thread-draft-surface #thread-composer",
+    )?.value;
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        ".new-thread-draft-surface #thread-composer",
+      ),
+    );
+    await setTextareaValue(composer, "Plan the zen refactor");
+
+    // Switching Project keeps each Project's unsent input independent, like
+    // two separate drafts.
+    await chooseDraftProject("documents");
+    assert.equal(draftText(), "");
+    const documentsComposer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        ".new-thread-draft-surface #thread-composer",
+      ),
+    );
+    await setTextareaValue(documentsComposer, "Draft the documents flow");
+    await chooseDraftProject("zen");
+    assert.equal(draftText(), "Plan the zen refactor");
+    await chooseDraftProject("documents");
+    assert.equal(draftText(), "Draft the documents flow");
+    await chooseDraftProject("zen");
+    assert.equal(draftText(), "Plan the zen refactor");
+
+    // Opening a Thread keeps the draft; returning restores it.
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '[data-thread-id="existing-thread"] .thread-row',
+        )
+        ?.click(),
+    );
+    await waitFor(
+      () => document.querySelector(".new-thread-draft-surface") === null,
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    await waitFor(() =>
+      document.querySelector(".new-thread-draft-surface #thread-composer"),
+    );
+    assert.equal(draftText(), "Plan the zen refactor");
+
+    // The first Send creates the Thread and consumes the retained input.
+    const send = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+    );
+    await invokeButtonClick(send, 2);
+    await waitFor(() => startedWorkspaces.length === 1);
+    assert.deepEqual(startedWorkspaces, ["/work/zen"]);
+    await act(async () => {
+      selectedStart.resolve(started(liveThread(), "/work/zen"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(
+      () => document.querySelector(".new-thread-draft-surface") === null,
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    await waitFor(
+      () =>
+        document.querySelector<HTMLTextAreaElement>(
+          ".new-thread-draft-surface #thread-composer",
+        ) !== null,
+    );
+    assert.equal(draftText(), "");
+    // Project B's untouched input is still retained after Project A sent.
+    await chooseDraftProject("documents");
+    assert.equal(draftText(), "Draft the documents flow");
   } finally {
     await unmountApp(harness);
   }

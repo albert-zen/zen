@@ -2139,25 +2139,6 @@ button:disabled {
     var(--color-surface-main) 18%
   );
 }
-.new-thread-project-context {
-  width: 100%;
-  max-width: var(--conversation-width);
-  min-height: 32px;
-  margin: 0 auto 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 7px;
-  padding: 0 8px;
-  color: var(--text-3);
-  font-size: var(--font-size-caption);
-}
-.new-thread-project-context span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .new-thread-project-switcher {
   position: relative;
   display: inline-block;
@@ -2183,6 +2164,42 @@ button:disabled {
   outline-offset: 2px;
   border-radius: 3px;
 }
+/* Composer-context Project chip: same trigger feel as the machine Select. */
+.new-thread-project-trigger.new-thread-project-trigger-chip {
+  max-width: min(260px, 100%);
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--font-size-caption);
+  font-weight: 400;
+  text-align: left;
+}
+.new-thread-project-trigger-chip > svg {
+  flex: 0 0 auto;
+}
+.new-thread-project-trigger-chip > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.new-thread-project-trigger.new-thread-project-trigger-chip:hover:not(
+    :disabled
+  ),
+.new-thread-project-trigger.new-thread-project-trigger-chip[aria-expanded="true"] {
+  color: var(--text-1);
+  background: var(--surface-hover);
+}
+.new-thread-project-trigger.new-thread-project-trigger-chip:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
 .new-thread-project-popover {
   position: absolute;
   z-index: 40;
@@ -2204,6 +2221,17 @@ button:disabled {
 .new-thread-project-popover[data-placement="below"] {
   top: calc(100% + 12px);
   bottom: auto;
+}
+/* The Composer-context chip renders its popover through a portal so it is
+ * never clipped by the bottom Composer zone; it reuses the same rows. */
+.ui-popover.new-thread-project-popover-portal {
+  width: min(286px, calc(100vw - 32px));
+  max-height: var(--radix-popover-content-available-height, 360px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 5px;
+  padding: 6px;
+  overflow: hidden;
 }
 .new-thread-project-search {
   min-height: 34px;
