@@ -1,3 +1,4 @@
+import { desktopShellPty } from "./shell-pty.js";
 import { randomUUID } from "node:crypto";
 import { FleetToolTargetRouter } from "./fleet-tool-router.js";
 import { RtkShellOutputFilter } from "../../../../src/shell-output-filter.js";
@@ -316,6 +317,7 @@ export function createZenXHostToolEnvironment(options: {
     state: invocationState,
   });
   const shellRuntime = new ShellToolRuntime({
+    pty: desktopShellPty,
     blockedEnvironmentVariables: options.blockedEnvironmentVariables,
     toolOutputSpool: options.toolOutputSpool,
     experimentalOutputFilter:
@@ -324,6 +326,7 @@ export function createZenXHostToolEnvironment(options: {
         : new RtkShellOutputFilter(options.experimentalRtk),
   });
   const toolEnvironment = new ToolEnvironment({
+    shellSessions: true,
     runtimes: [shellRuntime],
     toolOutputSpool: options.toolOutputSpool,
     bundles: [capabilityBundle],

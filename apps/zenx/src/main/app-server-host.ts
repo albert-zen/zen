@@ -1,3 +1,4 @@
+import { ShellPanelService } from "./shell-panel-service.js";
 import { randomUUID } from "node:crypto";
 import { FleetToolGateway } from "../../../../src/protocol/native/remote-tools.js";
 import { FleetShellGateway } from "./fleet-shell.js";
@@ -78,6 +79,29 @@ process.once("SIGINT", () => void shutdown());
 process.once("SIGTERM", () => void shutdown());
 
 async function handleCommand(command: HostCommand): Promise<void> {
+  if (command.type === "shell-panel/request") {
+    try {
+      if (!appServer || !targetToolEnvironment)
+        throw new Error("Shell Host unavailable");
+      const result = await new ShellPanelService(
+        appServer,
+        targetToolEnvironment,
+      ).request(command.input);
+      send({
+        type: "shell-panel/result",
+        requestId: command.requestId,
+        result,
+      });
+    } catch (error) {
+      send({
+        type: "shell-panel/result",
+        requestId: command.requestId,
+        error: error instanceof Error ? error.message : "Shell request failed",
+      });
+    }
+    return;
+  }
+
   if (command.type === "fleet/room-event") {
     for (const listener of roomListeners) listener(command);
     return;

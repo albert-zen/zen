@@ -1,4 +1,50 @@
 export const en = {
+  shellTitle: "Terminal",
+  shellChooser: "Manage shared Shell sessions and open your own terminal",
+  shellLocalHost: "This thread · Local Host",
+  shellNew: "New terminal",
+  shellLoading: "Reading session directory…",
+  shellUnavailable:
+    "Interactive Shell requires the local ZenX desktop Host. No remote shell was opened.",
+  shellArchived: "Restore this thread before creating or typing in a terminal.",
+  shellSandbox:
+    "Interactive terminals require Full Access for this thread. Existing restricted Shell commands remain available.",
+  shellSessions: "Sessions",
+  shellStop: "Stop process",
+  shellStopQuestion: "Stop this Shell session?",
+  shellStopDetail:
+    "This sends termination to the owned process. Work in this session may be interrupted. Closing this view leaves it running. Process-tree coverage depends on platform; some descendant processes may survive.",
+  shellCancel: "Cancel",
+  shellOriginUser: "You · interactive",
+  shellOriginAgent: "Agent · command",
+  shellForegroundExited:
+    "Foreground exited ({{code}}). The Shell task still owns open output; completion is not confirmed.",
+  shellExitCode: "Exit code: {{code}}",
+  shellUserInput:
+    "You control input. The Agent can read this same session with shell_sessions and wait, but cannot type here. Opening a terminal starts your local shell and its configured startup files.",
+  shellAgentReadOnly:
+    "Live, read-only output from the Agent’s actual Shell task. Stop process requests cancellation without consuming the Agent’s output.",
+  shellEmpty: "No Shell sessions yet",
+  shellEmptyDetail:
+    "Agent commands appear here when they run. Open your own terminal to work in this thread’s directory.",
+  shellLifetime:
+    "Closing this view does not stop processes. Terminals have a 24-hour limit and end with the Host; no automatic restart. Scrollback is bounded, and completed sessions are retained briefly. This view lists local sessions only.",
+  shellTruncated: "Older output was discarded. Showing retained scrollback.",
+  shellOutput: "Shell output",
+  shellFollow: "Jump to latest",
+  shellInputUnconfirmed: "Input delivery is unconfirmed. It was not retried.",
+  shellInputTooLarge: "Paste is too large. Use smaller chunks.",
+  shellObservationUnknown: "Live session observation is unavailable.",
+  shellStatus_queued: "Queued",
+  shellStatus_running: "Running",
+  shellStatus_completed: "Exited",
+  shellStatus_failed: "Failed",
+  shellStatus_timed_out: "Timed out",
+  shellStatus_cancel_requested: "Stopping…",
+  shellStatus_cancellation_unconfirmed: "Stop unconfirmed",
+  shellStatus_cancelled: "Stopped",
+  shellStatus_unknown: "Unknown",
+
   imPreparedWaitingToConnect: "Preparation saved; waiting to connect",
   imLocalConsumerRunning: "Local connection process is running",
   imRuntimePreparedNotice:
@@ -728,6 +774,51 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  shellTitle: "终端",
+  shellChooser: "管理共享 Shell 会话，或创建自己的交互终端",
+  shellLocalHost: "当前线程 · 本机 Host",
+  shellNew: "新建终端",
+  shellLoading: "正在读取会话目录…",
+  shellUnavailable: "交互 Shell 需要本机 ZenX 桌面 Host，未打开远程 Shell。",
+  shellArchived: "请先恢复此线程，再创建终端或输入。",
+  shellSandbox:
+    "交互终端需要此线程的完全访问权限，已有的受限 Shell 命令仍可使用。",
+  shellSessions: "会话列表",
+  shellStop: "停止进程",
+  shellStopQuestion: "停止此 Shell 会话？",
+  shellStopDetail:
+    "将请求终止此会话拥有的进程，可能中断正在进行的工作。仅关闭视图会让进程继续运行。进程树的终止范围因平台而异，部分后代进程可能仍在运行。",
+  shellCancel: "取消",
+  shellOriginUser: "你 · 交互终端",
+  shellOriginAgent: "Agent · 命令",
+  shellForegroundExited:
+    "前台进程已退出（{{code}}），但 Shell 任务仍持有开放的输出，尚未确认完成。",
+  shellExitCode: "退出码：{{code}}",
+  shellUserInput:
+    "由你控制输入。Agent 可通过 shell_sessions 和 wait 读取同一会话，但不能在此输入。新建终端会启动本机 Shell 及其配置的启动文件。",
+  shellAgentReadOnly:
+    "Agent 真实 Shell 任务的实时只读输出。停止进程会请求取消任务，不会领取 Agent 的增量输出。",
+  shellEmpty: "还没有 Shell 会话",
+  shellEmptyDetail:
+    "Agent 执行的命令会显示在这里。你也可以新建终端，在当前线程的目录中操作。",
+  shellLifetime:
+    "关闭视图不会停止进程。终端最多运行 24 小时，随 Host 结束，不自动重启。滚动历史有容量上限，已结束的会话仅短暂保留。此处只显示本机会话。",
+  shellTruncated: "较早的输出已丢弃，当前显示保留的滚动历史。",
+  shellOutput: "Shell 输出",
+  shellFollow: "跳到最新",
+  shellInputUnconfirmed: "输入是否送达尚未确认，未自动重试。",
+  shellInputTooLarge: "粘贴内容过大，请分批输入。",
+  shellObservationUnknown: "无法确认实时会话状态。",
+  shellStatus_queued: "等待中",
+  shellStatus_running: "运行中",
+  shellStatus_completed: "已退出",
+  shellStatus_failed: "失败",
+  shellStatus_timed_out: "已超时",
+  shellStatus_cancel_requested: "正在停止…",
+  shellStatus_cancellation_unconfirmed: "停止未确认",
+  shellStatus_cancelled: "已停止",
+  shellStatus_unknown: "未知",
+
   imPreparedWaitingToConnect: "准备已保存，等待连接",
   imLocalConsumerRunning: "本机连接进程运行中",
   imRuntimePreparedNotice: "运行环境已准备。保存频道后再检查连接准备情况。",

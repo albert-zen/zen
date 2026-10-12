@@ -1,3 +1,4 @@
+import type { ShellPanelRequest, ShellPanelResult } from "../shell-panel.js";
 import { fork, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { chmod, mkdir, open, unlink } from "node:fs/promises";
@@ -167,7 +168,8 @@ export class AppServerManager {
         | "configuration/published"
         | "configuration/discarded"
         | "configuration/current"
-        | "fleet/result";
+        | "fleet/result"
+        | "shell-panel/result";
       resolve(event: HostEvent): void;
       reject(error: Error): void;
     }
@@ -703,6 +705,18 @@ export class AppServerManager {
         threadId,
       } satisfies HostCommand);
   }
+  async shellPanelRequest(input: ShellPanelRequest): Promise<ShellPanelResult> {
+    return await this.#sendConfigurationRequest(
+      "shell-panel/result",
+      (requestId) => ({ type: "shell-panel/request", requestId, input }),
+      (event) => {
+        if (event.type !== "shell-panel/result")
+          throw new Error("Invalid Shell response");
+        if (event.error) throw new Error(event.error);
+        return event.result ?? null;
+      },
+    );
+  }
   async fleetControl(action: string, input?: unknown): Promise<unknown> {
     return await this.#sendConfigurationRequest(
       "fleet/result",
@@ -815,7 +829,8 @@ export class AppServerManager {
       | "configuration/published"
       | "configuration/discarded"
       | "configuration/current"
-      | "fleet/result",
+      | "fleet/result"
+      | "shell-panel/result",
     command: (requestId: string) => HostCommand,
     read: (event: HostEvent) => T,
     onTimeout?: (requestId: string) => void,
@@ -1435,6 +1450,7 @@ export class AppServerManager {
         return;
       }
       if (
+        hostEvent?.type === "shell-panel/result" ||
         hostEvent?.type === "fleet/result" ||
         hostEvent?.type === "configuration/prepared" ||
         hostEvent?.type === "configuration/published" ||

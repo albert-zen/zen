@@ -422,7 +422,7 @@ ThreadView
 
 ## Thread 辅助右栏
 
-- Thread 顶栏只有一个工作区入口；文件、共享浏览器页面、Computer 与已注册插件 panel 都是平级内容 Tab。加号提供类型选择，不增加 Browser / Files 分类层或旧 Workspace 抽屉；即使 Browser 插件未启用，文件与人工内置浏览器仍可用。
+- Thread 顶栏只有一个工作区入口；文件、Terminal、共享浏览器页面、Computer 与已注册插件 panel 都是平级内容 Tab。加号提供类型选择，不增加 Browser / Files 分类层或旧 Workspace 抽屉；即使 Browser 插件未启用，文件与人工内置浏览器仍可用。
 - 默认 Browser 工具与用户共用内置真实页面，页面直接作为顶层 Tab。显式配置外部 provider 时，Attached browser 可跟随或固定当前 Thread 的 Agent 目标；CDP 展示观察画面，isolated Playwright 展示最近一次 inspect 截图。观察面隐藏时停止订阅，不通过展示触发 inspect 或改变模型 observationId。Computer 按明确窗口目标持续观察，隐藏或 provider 停用、替换后停止；不支持该能力时明确显示状态。
 - Browser 与 Computer 的 Agent 指针是短时的语义动作位置提示，系统鼠标和键盘焦点不用于制作动效。Browser 的共享页面、独立 Electron 和连接 Chrome 展示已执行 click/type/select 的目标；macOS bundled Computer 在有准确窗口几何的实时预览中展示 press/set_value 目标。无几何、过期、窗口尺寸变化或切换目标时不画猜测位置；Playwright、Windows 与 Peekaboo 尚不提供轨迹。减少动态效果时保留静态目标提示，取消移动效果；轨迹不拦截输入，也不是操作完成的权威凭据。全局桌面输入仍走现有显式前台接管设置，不能承诺任意原生应用完全后台运行。
 - 宽窗口可以调整右栏宽度或展开；窄窗口打开右栏时使用工作区全宽，关闭返回聊天。Tab 支持左右方向键、Home/End；Escape 还原展开或关闭右栏。
@@ -431,7 +431,11 @@ ThreadView
 - 插件通过 Host SDK `ui.panels.open({ panelId, threadId })` 请求展示自己声明的 panel。请求只改变易失 UI 选择，不切换当前 Thread，不创建 Turn；给后台 Thread 的请求在用户选择该 Thread 时展示。没有窗口或 panel 不可用时明确报错；成功表示已分发给窗口，不代表用户已看到或确认内容。
 - Browser 的共享标签使用真实 Chromium WebContentsView 支持输入地址、点击、输入、滚动、前进/后退和刷新；同一 Thread 的 Browser 工具与用户挂载并操作精确相同的 target，登录状态保存在独立的 ZenX 持久 profile。外部 CDP provider 仍通过 “Attached browser” 显示其原页面，不把同 URL 的新页面冒充接管。Ctrl/Cmd+L 聚焦地址栏。
 - 共享网页没有 Node 或 ZenX preload，外部导航限 HTTP(S)；设备、位置、通知等权限默认拒绝。关闭标签释放页面；关闭窗口、隐藏面板或切换 Thread 时只移除 native view，Host 继续持有页面供同一 Thread 的 Agent 使用。当前最多20个共享标签，不提供书签、扩展或完整历史管理。
-- 当前范围不含新建/删除/重命名文件、终端及异步 Inbox 回答回流。
+- Terminal 打开当前真实 Thread 的本机 Shell 会话管理首页，显示同一 ToolTaskManager 中 Agent 命令与人工交互终端的稳定 task ID、来源、cwd 和实际状态；不跨 Thread 聚合同目录进程，不建立第二套执行注册表。远端 Fleet 会话不映射成本机会话，不静默降级。
+- New terminal 是明确的人工执行操作，在 Thread 的 canonical cwd 创建真实 PTY；仅在既有 Full Access 且 Shell 未被拒绝时可用，归档或受限策略不被自动修改。启动本机交互 Shell 可能读取其正常 startup files。人工拥有输入，Agent 通过同一 Shell 系统的 shell_sessions / wait 观察，不向人工终端交错输入；Agent 取消等待不会终止人工终端。
+- 打开、隐藏、关闭 Terminal view 或返回会话列表都不停止进程。Stop process 是独立确认动作，显示请求取消、取消未确认或已停止的真实结果；进程树覆盖取决于平台，不猜测存活子进程。输出只作为不可信终端数据渲染，不解释为 HTML、权限或 Agent 指令。
+- 终端保留有界 scrollback，截断明确提示；隐藏时暂停观察，保留当前位置，Jump to latest 才恢复底部。Host 退出和人工终端的 24 小时上限结束其执行，不自动恢复进程。已完成会话短时保留只读；详情见 [Shell 运行时与安全边界](../../../docs/shared-shell.md)。
+- 当前范围不含新建/删除/重命名文件及异步 Inbox 回答回流。
 
 ## 7. Shared controls and readable context
 

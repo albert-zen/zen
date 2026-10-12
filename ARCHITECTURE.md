@@ -101,6 +101,7 @@
 - **Tool Execution Mode** — Tool Runtime 对执行 body 只声明 `parallel_safe` 或 `exclusive`；未声明按 `exclusive`，builtin shell 的独立进程声明 `parallel_safe`，该分类不是权限或资源 scope。
 - **ToolTaskManager** — ToolEnvironment 统一拥有普通工具的 Host-local 执行、按 Thread 隔离的 task_id、增量输出与 wait；交回时间（默认 10 秒、最高 180 秒）和执行超时（默认 10 分钟）分开，快速结果原样返回，任务不参与 journal 重建。
 - **Shell lifecycle observations** — ShellToolRuntime 从成功 spawn、直接子进程 exit 与两个输出流 end 产生正交的 foreground/stdio 事实，ToolTaskManager 将同一时点的可选快照放入普通工具回执；这些事实不改变任务状态、close 结算、取消或 journal/restart 语义。
+- **Shared Shell view** — ToolTaskManager projects its actual Shell tasks as bounded Host-local session observations (origin, stable task ID, captured output, lifecycle); ZenX only attaches views, while human PTY input stays a Host-only capability and the Agent reads the same sessions via shell_sessions / wait. No separate execution registry, transcript authority, remote fallback or process revival is introduced.
 - **ToolTaskPolicy** — 具体工具只声明取消确认能力、资源作用域和可选 timingArguments 字段映射；默认未知取消保留 owner fence 与执行容量直到真实完成或 Host 关闭，shell 在进程组停止后确认取消，composite 由同一任务管理器持有并协调嵌套调用，本身不占子工具容量。
 - **Tool Resource Claims** — Runtime 可为一次调用声明瞬时共享或独占资源，统一任务管理器原子取得全部声明；显式启用排队的调用以自身 Thread 的 task_id 等待，冲突资源按到达顺序执行，互不相关的资源仍可并行，取消或超时的待执行调用不派发，已经派发的未知取消继续保留资源直到真实结束。
 - **ZenX Hosted Resource Ownership** — Browser 执行按真实的 Thread/session 隔离和页面身份协调，会话关闭独占整个会话；Computer 保留共享桌面的独占操作边界，其他插件各自独占插件资源，IPC transport 不充当所有插件共同的资源锁；这些资源只存在于 Host 生命周期内，不改变 Thread 权威或观察投影。

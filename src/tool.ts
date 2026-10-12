@@ -1,4 +1,9 @@
 import {
+  ShellSessionsRuntime,
+  type ShellPtyProvider,
+  type ShellTerminalControl,
+} from "./shell-session.js";
+import {
   MAX_TOOL_YIELD_TIME_MS,
   ToolTaskManager,
   ToolWaitRuntime,
@@ -58,6 +63,8 @@ export type ShellLifecycleFacts = {
 );
 
 export interface ToolInvocation {
+  /** Host-minted human terminal request. Never accepted from tool arguments. */
+  userTerminal?: { cols: number; rows: number };
   callId: string;
   /** Host-minted only for direct plugin UI commands; never inherited from tool arguments. */
   trustedPluginUi?: true;
@@ -80,6 +87,8 @@ export interface ToolInvocation {
   /** Host-owned streaming sink; bytes emitted here must not be repeated in final output. */
   taskContext?: {
     onOutput(text: string): void;
+    onShellOutput?(text: string): void;
+    onShellControl?(control: ShellTerminalControl): void;
     /** Builtin shell observations only; absent before successful spawn. */
     onShellLifecycle?(facts: ShellLifecycleFacts): void;
     onModelContent?(content: UserInput): void;
@@ -112,6 +121,8 @@ export interface ToolRuntime {
   readonly specification: ModelTool;
   /** Runtime body scheduling only; not permission or resource scope. */
   readonly executionMode?: ToolExecutionMode;
+  /** Trusted local Shell runtime, eligible for non-consuming session observation. */
+  readonly shellSession?: true;
   /** Host builtin enforces invocation.sandbox before producing file effects. */
   readonly enforcesSandbox?: boolean;
   /** Explicit target-side opt-in for ordinary text/JSON remote execution. */
@@ -325,6 +336,8 @@ export class ToolEnvironment {
   constructor(
     options: {
       taskOptions?: ToolTaskOptions;
+      /** Publish read-only shared Shell observation in desktop Hosts. */
+      shellSessions?: boolean;
       toolOutputSpool?: ToolOutputSpool;
       runtimes?: readonly ToolRuntime[];
       bundles?: readonly ToolBundle[];
@@ -362,6 +375,11 @@ export class ToolEnvironment {
     for (const runtime of options.runtimes ?? []) {
       this.registerRuntime(runtime);
     }
+    if (
+      options.shellSessions &&
+      (options.runtimes ?? []).some((runtime) => runtime.shellSession)
+    )
+      this.registerRuntime(new ShellSessionsRuntime(this.taskManager));
     for (const bundle of options.bundles ?? []) {
       this.registerBundle(bundle);
     }
@@ -852,7 +870,12 @@ export class ToolEnvironment {
           throw new ToolResultNormalizationError(error);
         }
       };
-      if (runtime instanceof ToolWaitRuntime)
+      // Observation is a control operation, like wait, and must remain usable
+      // when every execution slot is occupied by the sessions being inspected.
+      if (
+        runtime instanceof ToolWaitRuntime ||
+        runtime instanceof ShellSessionsRuntime
+      )
         return await execute(prepared.invocation);
       const scope =
         (isCompositeToolRuntime(runtime)
@@ -1192,6 +1215,7 @@ export type ApprovalHandler = (
 export class ShellToolRuntime implements ToolRuntime {
   readonly enforcesSandbox = true;
   readonly remoteExecution = "text-json";
+  readonly shellSession = true;
   readonly name = "shell";
   readonly executionMode = "parallel_safe";
   readonly taskPolicy: ToolTaskPolicy = {
@@ -1229,6 +1253,7 @@ export class ShellToolRuntime implements ToolRuntime {
   readonly #maxOutputBytes: number;
   readonly #spool: ToolOutputSpool | undefined;
   readonly #outputFilter: ShellOutputFilter | undefined;
+  readonly #pty: ShellPtyProvider | undefined;
   constructor(
     options: {
       environment?: Readonly<NodeJS.ProcessEnv>;
@@ -1237,6 +1262,7 @@ export class ShellToolRuntime implements ToolRuntime {
       maxOutputBytes?: number;
       toolOutputSpool?: ToolOutputSpool;
       experimentalOutputFilter?: ShellOutputFilter;
+      pty?: ShellPtyProvider;
     } = {},
   ) {
     this.#environment = Object.freeze(
@@ -1250,9 +1276,66 @@ export class ShellToolRuntime implements ToolRuntime {
       options.maxOutputBytes ?? DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES;
     this.#spool = options.toolOutputSpool;
     this.#outputFilter = options.experimentalOutputFilter;
+    this.#pty = options.pty;
+  }
+  async #interactive(invocation: ToolInvocation): Promise<ToolExecutionResult> {
+    if (!this.#pty || !invocation.taskContext || !invocation.threadId)
+      throw new Error("Interactive Shell is unavailable on this Host");
+    if (invocation.sandbox !== "danger-full-access")
+      throw new Error(
+        "Interactive terminals require the thread's Full Access policy; restricted Shell commands remain available",
+      );
+    const terminal = await this.#pty.spawn({
+      cwd: invocation.cwd,
+      env: this.#environment,
+      ...invocation.userTerminal!,
+    });
+    const write = (text: string) => {
+      invocation.taskContext!.onShellOutput?.(text);
+      invocation.taskContext!.onOutput(text);
+    };
+    invocation.taskContext.onShellControl?.(terminal);
+    // PTY exit does not establish two pipe EOF observations. Do not synthesize
+    // the optional pipe lifecycle facts provided by ordinary command shells.
+    return await new Promise<ToolExecutionResult>((resolve) => {
+      let ended = false;
+      let forced: NodeJS.Timeout | undefined;
+      const data = terminal.onData(write);
+      const exit = terminal.onExit(({ exitCode }) => {
+        if (ended) return;
+        ended = true;
+        if (forced) clearTimeout(forced);
+        invocation.signal.removeEventListener("abort", abort);
+        data.dispose();
+        exit.dispose();
+        resolve({ output: "", exitCode });
+      });
+      const abort = () => {
+        if (ended) return;
+        try {
+          terminal.kill("SIGTERM");
+        } catch {
+          /* Wait for observed exit. */
+        }
+        forced ??= setTimeout(() => {
+          if (!ended) {
+            try {
+              terminal.kill("SIGKILL");
+            } catch {
+              /* Exit remains unconfirmed. */
+            }
+          }
+        }, this.#terminationGraceMs);
+        forced.unref();
+      };
+      invocation.signal.addEventListener("abort", abort, { once: true });
+      if (invocation.signal.aborted) abort();
+    });
   }
   async execute(invocation: ToolInvocation): Promise<ToolExecutionResult> {
     invocation.signal.throwIfAborted();
+    if (invocation.userTerminal !== undefined)
+      return this.#interactive(invocation);
     const command = invocation.arguments.command;
     if (typeof command !== "string" || command.trim().length === 0)
       throw new Error("shell.command must be a non-empty string");
@@ -1278,6 +1361,7 @@ export class ShellToolRuntime implements ToolRuntime {
           ? new ToolOutputWindow(this.#maxOutputBytes, this.#spool)
           : undefined;
     const write = (text: string) => {
+      invocation.taskContext?.onShellOutput?.(text);
       if (rawCapture !== undefined) rawCapture.write(text);
       else if (capture !== undefined) capture.write(text);
       else invocation.taskContext?.onOutput(text);
@@ -1675,13 +1759,15 @@ export function sanitizeToolEnvironment(
   source: Readonly<NodeJS.ProcessEnv>,
   blockedEnvironmentVariables: readonly string[] = [],
 ): NodeJS.ProcessEnv {
-  const blocked = new Set(blockedEnvironmentVariables);
+  const key = (name: string) =>
+    process.platform === "win32" ? name.toUpperCase() : name;
+  const blocked = new Set(blockedEnvironmentVariables.map(key));
   const environment: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(source)) {
     if (
       value !== undefined &&
-      !blocked.has(name) &&
-      (SAFE_ENVIRONMENT_VARIABLES.has(name) || name.startsWith("LC_"))
+      !blocked.has(key(name)) &&
+      (SAFE_ENVIRONMENT_VARIABLES.has(key(name)) || name.startsWith("LC_"))
     ) {
       environment[name] = value;
     }
