@@ -2,47 +2,99 @@ import { i18n } from "./i18n.js";
 import type { IconName } from "./icons.js";
 import type { ThreadItem } from "../../protocol-client/index.js";
 
-/** One display phase for both a tool row and its enclosing trace summary. */
-export function commandStatus(
-  item: Extract<ThreadItem, { type: "commandExecution" }>,
-): string {
+export type CommandPhase =
+  | "requested"
+  | "admitting"
+  | "queued"
+  | "running"
+  | "waiting"
+  | "cancel_requested"
+  | "cancellation_unconfirmed"
+  | "completed"
+  | "failed"
+  | "timed_out"
+  | "cancelled"
+  | "declined";
+export type CommandItem = Extract<ThreadItem, { type: "commandExecution" }>;
+export function commandTask(
+  item: CommandItem,
+): { id: string; phase: CommandPhase } | null {
   const data = item.structuredContent;
   if (
-    item.contentType === "application/vnd.zen.tool-task+json" &&
-    typeof data === "object" &&
-    data !== null &&
-    !Array.isArray(data) &&
-    "status" in data
-  ) {
-    if (data.status === "queued") return i18n.t("shell:queued");
-    if (data.status === "running")
-      return item.toolName === "wait"
-        ? i18n.t("shell:waiting")
-        : i18n.t("shell:running");
-    if (data.status === "cancel_requested") return i18n.t("shell:cancelling");
-    if (data.status === "cancellation_unconfirmed")
-      return i18n.t("shell:cancellationUnconfirmed");
-    if (data.status === "failed") return i18n.t("shell:failed");
-    if (data.status === "completed")
-      return item.toolName === "wait"
-        ? i18n.t("shell:waited")
-        : item.toolName === "shell"
-          ? i18n.t("shell:ranCommand")
-          : i18n.t("shell:completed");
-    if (data.status === "timed_out") return i18n.t("shell:timedOut");
-    if (data.status === "cancelled") return i18n.t("shell:cancelled");
-  }
-  if (item.status === "completed")
+    item.contentType !== "application/vnd.zen.tool-task+json" ||
+    data === null ||
+    typeof data !== "object" ||
+    Array.isArray(data) ||
+    !("task_id" in data) ||
+    typeof data.task_id !== "string" ||
+    !("status" in data)
+  )
+    return null;
+  const status = data.status;
+  if (
+    typeof status !== "string" ||
+    ![
+      "admitting",
+      "queued",
+      "running",
+      "completed",
+      "failed",
+      "timed_out",
+      "cancel_requested",
+      "cancellation_unconfirmed",
+      "cancelled",
+    ].includes(status)
+  )
+    return null;
+  return {
+    id: data.task_id,
+    phase:
+      status === "running" && item.toolName === "wait"
+        ? "waiting"
+        : (status as CommandPhase),
+  };
+}
+export function isTerminalCommandPhase(phase: CommandPhase): boolean {
+  return ["completed", "failed", "timed_out", "cancelled", "declined"].includes(
+    phase,
+  );
+}
+/** Task lifetime is independent of an enclosing call being aborted/declined. */
+export function commandPhase(item: CommandItem): CommandPhase {
+  const receipt = commandTask(item);
+  if (receipt !== null && receipt.phase !== "completed") return receipt.phase;
+  if (item.status === "failed" || item.status === "declined")
+    return item.status;
+  return (
+    receipt?.phase ?? (item.status === "inProgress" ? "requested" : "completed")
+  );
+}
+export function commandPhaseLabel(phase: CommandPhase): string {
+  const keys = {
+    requested: "requested",
+    admitting: "admitting",
+    queued: "queued",
+    running: "running",
+    waiting: "waiting",
+    cancel_requested: "cancelling",
+    cancellation_unconfirmed: "cancellationUnconfirmed",
+    completed: "completed",
+    failed: "failed",
+    timed_out: "timedOut",
+    cancelled: "cancelled",
+    declined: "declined",
+  } as const;
+  return i18n.t(`shell:${keys[phase]}`);
+}
+export function commandStatus(item: CommandItem): string {
+  const phase = commandPhase(item);
+  if (phase === "completed")
     return item.toolName === "wait"
       ? i18n.t("shell:waited")
       : item.toolName === "shell"
         ? i18n.t("shell:ranCommand")
         : i18n.t("shell:completed");
-  return {
-    inProgress: i18n.t("shell:started"),
-    failed: i18n.t("shell:failed"),
-    declined: i18n.t("shell:declined"),
-  }[item.status];
+  return commandPhaseLabel(phase);
 }
 
 // These are presentation labels for known capabilities, never execution routing.
@@ -201,7 +253,7 @@ export function commandTitle(
 ): string {
   const name = item.toolName ?? item.command.trim().split(/\s+/u)[0] ?? "tool";
   const args = item.toolArguments;
-  const completed = commandStatus(item) === i18n.t("shell:completed");
+  const completed = commandPhase(item) === "completed";
   const key = name.replace(/^zenx_/u, "");
   const completedAction =
     completed && item.toolName !== undefined
@@ -214,8 +266,10 @@ export function commandTitle(
   const text =
     name === "run_code" && typeof args?.description === "string"
       ? args.description
-      : name === "shell" && typeof args?.command === "string"
-        ? args.command
+      : name === "shell"
+        ? typeof args?.command === "string"
+          ? args.command
+          : i18n.t("shell:runCommand")
         : name === "zenx_plugin" && args?.operation === "discover"
           ? completed
             ? i18n.t("shell:discoveredPlugins")
@@ -239,7 +293,7 @@ export function commandSummary(
   if (item.toolName === "wait" || item.command.trim() === "wait") {
     if (
       status === i18n.t("shell:waiting") ||
-      status === i18n.t("shell:started")
+      status === i18n.t("shell:requested")
     )
       return i18n.t("shell:waitingForTask");
     if (
@@ -250,8 +304,11 @@ export function commandSummary(
     return i18n.t("shell:waitStatus", { status: status.toLowerCase() });
   }
   if (item.toolName === "shell") {
-    if (status === i18n.t("shell:started"))
-      return i18n.t("shell:startedTitle", { title });
+    if (status === i18n.t("shell:requested"))
+      return i18n.t("shell:titleStatus", {
+        title,
+        status: i18n.t("shell:requested").toLowerCase(),
+      });
     if (status === i18n.t("shell:running"))
       return i18n.t("shell:runningTitle", { title });
     if (

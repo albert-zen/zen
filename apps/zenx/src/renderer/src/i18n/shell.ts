@@ -1,4 +1,92 @@
 export const en = {
+  approvalQuestionOnce: "Allow this action?",
+  approvalQuestionCapability: "Allow tool access?",
+  approvalAllowAccess: "Allow access",
+  approvalInlineRunCodeScope:
+    "Remember permission for the stable, shell-equivalent run_code capability, not per command or code segment.",
+
+  approvalInlineOnceScope:
+    "Use full file access for this call and its nested operations only.",
+  approvalInlineCapabilityScope:
+    "Remember permission for the stable {{tool}} capability, not per command or code segment.",
+  queuePendingCount: "Pending send · {{count}}",
+  editQueuedMessage: "Edit queued message {{number}}",
+  queueEditorTitle: "Edit queued message",
+  queueEditUnavailable: "This queued input cannot be edited here.",
+  queueEditSyncing: "Saved. Waiting for the queue to sync.",
+  queueEditorDescription:
+    "Changes keep their place in the queue. Saving won’t start the agent.",
+  queueEditorSave: "Save changes",
+  queueEditorEmpty: "Add text or keep an image before saving.",
+  queueEditorImporting: "Adding images…",
+  queueEditorPendingHint:
+    "Saving changes. Closing won’t undo the submitted request.",
+  queueEditorShortcuts: "Ctrl/⌘+Enter to save · Esc to close",
+  queueEditorDropImages: "Drop images to add them",
+  queueEditInvalid:
+    "The edited message could not be saved. Check its text and images; your edits are kept.",
+  queueEditImagesUnsupported:
+    "The selected model cannot accept images. Choose an image-capable model or remove the images; your edits are kept.",
+  queueEditAttachmentUnavailable:
+    "An image is unavailable or invalid. Remove it and add it again before saving; your edits are kept.",
+  queueEditModelUnavailable:
+    "The current model settings are unavailable. Review the model settings before saving; your edits are kept.",
+  queueEditForbidden:
+    "This thread does not currently allow editing. Your edits are kept.",
+  queueEditBusy: "Another queue action is pending. Your edits are kept.",
+  queueEditUnsupported:
+    "This input includes content that cannot be safely edited here. It is kept unchanged.",
+  queueEditUnconfirmed:
+    "The save was not confirmed. Your edits are kept; retry checks the same request.",
+  queueEditNoLongerPending:
+    "This message has started sending or was cancelled. Your edits have not been applied.",
+  queueEditConflict:
+    "This queued message changed elsewhere. Your edits are kept; close and reopen to load the latest version.",
+  queueShowAllImages: "Show all {{count}} images",
+  queueHideExtraImages: "Show fewer images",
+  queueUnavailablePreviews_one: "{{count}} preview unavailable",
+  queueUnavailablePreviews_other: "{{count}} previews unavailable",
+  queueCancelAll: "Cancel all",
+  queueCancelling: "Cancelling…",
+  queueResuming: "Continuing…",
+  queueViewAll: "View all {{count}}",
+  queueShowLess: "Show less",
+  queueShowMessages: "Show queued messages",
+  queueHideMessages: "Hide queued messages",
+  queueReadFullMessage: "Read full queued message {{number}}",
+  queueCollapseMessage: "Collapse queued message {{number}}",
+  queueWaiting: "Waiting to send",
+
+  approvalScopeLabel: "Permission scope",
+  approvalOnceScope: "This call and its nested operations only",
+  approvalCapabilityScope: "Remember this tool capability",
+  approvalRequestDetails: "Full request",
+  approvalCommandLabel: "Command",
+  approvalCodeLabel: "Code",
+  approvalToolLabel: "Tool",
+  approvalArgumentsLabel: "Arguments",
+  approvalRequestIdLabel: "Request ID",
+  approvalResponding: "Sending decision…",
+  approvalFullRequestTitle: "Approval request details",
+
+  requested: "Requested",
+  admitting: "Preparing",
+  stopping: "Stopping…",
+  stopped: "Stopped",
+  awaitingToolResult: "Awaiting tool result",
+  toolCalls: "{{count}} tool calls",
+  toolFailures: "{{count}} tool failed",
+  toolCancelled: "{{count}} cancelled or declined",
+  lastKnownPending: "{{count}} task results still pending",
+  stopUnconfirmed: "Background action may still be running",
+  stopUnconfirmedNote:
+    "Stopping this conversation does not confirm that the background action stopped. Review its latest receipt before continuing.",
+  stoppedNote:
+    "Your partial results are kept. You can send a new message when you are ready.",
+  interruptedNote:
+    "This conversation is no longer being followed. Its final state has not been confirmed.",
+  reviewActivity: "Review activity",
+  continueWriting: "Write a message",
   pin: "Pin",
 
   accessibility: "Accessibility",
@@ -530,6 +618,86 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  approvalQuestionOnce: "允许这次操作？",
+  approvalQuestionCapability: "允许工具访问？",
+  approvalAllowAccess: "允许访问",
+  approvalInlineRunCodeScope:
+    "记住与 Shell 权限等同的 run_code 能力授权，并非逐条命令或代码片段批准。",
+
+  approvalInlineOnceScope: "使用完整文件访问权限，仅本次调用及其嵌套操作。",
+  approvalInlineCapabilityScope:
+    "记住 {{tool}} 能力授权，并非逐条命令或代码片段批准。",
+  queuePendingCount: "待发送 · {{count}}",
+  editQueuedMessage: "编辑第 {{number}} 条待发送消息",
+  queueEditorTitle: "编辑待发消息",
+  queueEditUnavailable: "暂不支持编辑这条待发送消息。",
+  queueEditSyncing: "已保存，正在等待队列同步。",
+  queueEditorDescription: "修改保留原有排队位置，保存不会启动运行。",
+  queueEditorSave: "保存修改",
+  queueEditorEmpty: "保存前请保留文字或至少一张图片。",
+  queueEditorImporting: "正在添加图片…",
+  queueEditorPendingHint: "正在保存。关闭不会撤销已提交的修改。",
+  queueEditorShortcuts: "Ctrl/⌘+Enter 保存 · Esc 关闭",
+  queueEditorDropImages: "拖放图片以添加",
+  queueEditInvalid: "未能保存，请检查文字和图片；你的编辑已保留。",
+  queueEditImagesUnsupported:
+    "当前模型不支持图片。请选择支持图片的模型或移除图片；你的编辑已保留。",
+  queueEditAttachmentUnavailable:
+    "有图片无法读取或不符合要求。请移除后重新添加；你的编辑已保留。",
+  queueEditModelUnavailable:
+    "当前模型设置不可用，请检查模型设置后再保存；你的编辑已保留。",
+  queueEditForbidden: "此会话目前无法编辑，你的修改已保留。",
+  queueEditBusy: "另一项队列操作尚未完成，你的编辑已保留。",
+  queueEditUnsupported: "此消息包含目前无法安全编辑的内容，原消息保持不变。",
+  queueEditUnconfirmed:
+    "尚未确认保存成功，你的编辑已保留；重试会核对同一次请求。",
+  queueEditNoLongerPending: "此消息已开始发送或已取消，你的修改尚未保存。",
+  queueEditConflict:
+    "这条待发消息已在其他地方修改。你的编辑仍保留；关闭后重新打开可载入最新版本。",
+  queueShowAllImages: "查看全部 {{count}} 张图片",
+  queueHideExtraImages: "收起更多图片",
+  queueUnavailablePreviews_one: "{{count}} 张图片无法预览",
+  queueUnavailablePreviews_other: "{{count}} 张图片无法预览",
+  queueCancelAll: "全部取消",
+  queueCancelling: "取消中…",
+  queueResuming: "继续中…",
+  queueViewAll: "查看全部 {{count}} 条",
+  queueShowLess: "收起",
+  queueShowMessages: "查看待发送消息",
+  queueHideMessages: "收起待发送消息",
+  queueReadFullMessage: "阅读第 {{number}} 条待发送消息全文",
+  queueCollapseMessage: "收起第 {{number}} 条待发送消息",
+  queueWaiting: "等待发送",
+
+  approvalScopeLabel: "权限范围",
+  approvalOnceScope: "仅本次调用及其嵌套操作",
+  approvalCapabilityScope: "记住此工具能力",
+  approvalRequestDetails: "完整请求",
+  approvalCommandLabel: "命令",
+  approvalCodeLabel: "代码",
+  approvalToolLabel: "工具",
+  approvalArgumentsLabel: "参数",
+  approvalRequestIdLabel: "请求 ID",
+  approvalResponding: "正在提交决定…",
+  approvalFullRequestTitle: "审批请求详情",
+
+  requested: "已请求",
+  admitting: "准备中",
+  stopping: "正在停止…",
+  stopped: "已停止",
+  awaitingToolResult: "等待工具结果",
+  toolCalls: "{{count}} 次工具调用",
+  toolFailures: "{{count}} 次工具失败",
+  toolCancelled: "{{count}} 次已取消或拒绝",
+  lastKnownPending: "{{count}} 个任务结果仍待确认",
+  stopUnconfirmed: "后台操作可能仍在运行",
+  stopUnconfirmedNote:
+    "停止对话并不表示后台操作已停止。继续前请先查看最新回执。",
+  stoppedNote: "部分结果已保留。准备好后可以发送新消息。",
+  interruptedNote: "此对话已断开跟随，最终状态尚未确认。",
+  reviewActivity: "查看运行过程",
+  continueWriting: "继续输入",
+
   pin: "固定",
 
   accessibility: "辅助功能",
@@ -781,7 +949,7 @@ export const zhCN = {
   setAsDefault: "设为默认",
   settings: "设置",
   sharedConversation: "共享会话",
-  shell: "Shell",
+  shell: "命令",
   skills: "技能",
   skillsToSend: "要发送的技能",
   slashCommands: "斜杠命令",

@@ -467,21 +467,32 @@ export function Dialog({
   title,
   children,
   className = "",
+  restoreFocus: allowRestoreFocus = true,
+  ...contentProps
 }: {
   open: boolean;
   onOpenChange(open: boolean): void;
   title: string;
   children: ReactNode;
   className?: string;
-}) {
+  restoreFocus?: boolean | (() => boolean);
+} & Omit<
+  ComponentProps<typeof DialogPrimitive.Content>,
+  "children" | "title" | "onOpenAutoFocus" | "onCloseAutoFocus"
+>) {
   useTranslation("panels");
   const restoreFocus = useRef<HTMLElement | null>(null);
+  const allowRestore = useRef(allowRestoreFocus);
+  allowRestore.current = allowRestoreFocus;
+  const content = useRef<HTMLDivElement>(null);
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="ui-dialog-overlay" />
         <DialogPrimitive.Content
-          className={`ui-dialog ${className}`}
+          {...contentProps}
+          ref={content}
+          className={`ui-dialog ui-dialog-surface ${className}`}
           aria-describedby={undefined}
           onOpenAutoFocus={(event) => {
             restoreFocus.current = document.activeElement as HTMLElement | null;
@@ -495,7 +506,19 @@ export function Dialog({
           }}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
-            restoreFocus.current?.focus();
+            const allowed = allowRestore.current;
+            const target = restoreFocus.current;
+            const active = document.activeElement;
+            // A dismissed or replaced dialog cannot take focus from a newer
+            // dialog, input, or navigation target when its exit animation ends.
+            if (
+              (typeof allowed === "function" ? allowed() : allowed) &&
+              target?.isConnected &&
+              (active === document.body ||
+                active === target ||
+                content.current?.contains(active))
+            )
+              target.focus();
           }}
         >
           <DialogPrimitive.Title className="sr-only">

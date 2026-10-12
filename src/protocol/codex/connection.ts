@@ -1024,6 +1024,7 @@ export class CodexConnection {
       if (
         event.item.type === "user_message_queued" ||
         event.item.type === "user_message_queue_cancelled" ||
+        event.item.type === "user_message_queue_edited" ||
         (event.item.type === "user_message" &&
           event.item.clientId !== undefined)
       ) {

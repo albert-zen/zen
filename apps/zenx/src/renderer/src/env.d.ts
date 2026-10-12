@@ -1,3 +1,4 @@
+import type { ProtocolIpcResult } from "../../preload/queue-edit-ipc.js";
 import type { SubscriptionUsage } from "../../main/subscription-usage.js";
 import type {
   ImZenXSetupView,
@@ -158,7 +159,7 @@ declare global {
         request<M extends ClientRequestMethod>(
           method: M,
           params: ClientRequestParams[M],
-        ): Promise<ClientRequestResults[M]>;
+        ): Promise<ProtocolIpcResult<M>>;
         respondToApproval(
           requestId: string,
           decision: ApprovalDecision,

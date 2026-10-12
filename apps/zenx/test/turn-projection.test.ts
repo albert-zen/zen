@@ -7,6 +7,7 @@ import {
   projectTurn,
   traceDisplayRows,
   traceSummary,
+  summarizeTraceActivity,
 } from "../src/renderer/src/turn-projection.js";
 
 test("adjacent reasoning without public details has one honest row, not one per item", () => {
@@ -53,22 +54,16 @@ test("group summary does not claim unfinished tools have been used", () => {
   };
   assert.equal(
     traceSummary([reasoning("r", ""), pending]),
-    "Started · Run command",
+    "Run command · requested",
   );
-  assert.equal(
-    traceSummary([pending, done]),
-    "Inspected page · Started · Run command",
-  );
+  assert.equal(traceSummary([pending, done]), "Run command");
   assert.equal(traceSummary([done]), "Inspected page");
   const yielded = {
     ...done,
     contentType: "application/vnd.zen.tool-task+json",
-    structuredContent: { status: "running" },
+    structuredContent: { task_id: "test-task", status: "running" },
   };
-  assert.equal(
-    traceSummary([pending, yielded]),
-    "Inspect page · running · Started · Run command",
-  );
+  assert.equal(traceSummary([pending, yielded]), "Inspect page");
 });
 
 test("thread send and rename summaries report successful actions without redundant completion or target-work claims", () => {
@@ -82,10 +77,10 @@ test("thread send and rename summaries report successful actions without redunda
   };
   assert.equal(traceSummary([sent]), "Sent message");
   assert.equal(traceSummary([renamed]), "Renamed thread");
-  assert.equal(traceSummary([sent, renamed]), "Renamed thread · Sent message");
+  assert.equal(traceSummary([sent, renamed]), "2 tool calls");
   assert.equal(
     traceSummary([sent, { ...renamed, status: "failed" }]),
-    "Rename thread · failed · Sent message",
+    "2 tool calls",
   );
 });
 
@@ -94,12 +89,15 @@ test("grouped task receipts preserve the same wait and terminal phases as their 
     ...command("wait-item", "wait"),
     toolName: "wait",
     contentType: "application/vnd.zen.tool-task+json",
-    structuredContent: { status: "running" },
+    structuredContent: { task_id: "test-task", status: "running" },
   };
   const cases = [
     [wait, "Waiting for task"],
     [
-      { ...wait, structuredContent: { status: "timed_out" } },
+      {
+        ...wait,
+        structuredContent: { task_id: "test-task", status: "timed_out" },
+      },
       "Wait · timed out",
     ],
     [
@@ -329,14 +327,17 @@ test("failed turns retain prior text and reasoning as history alongside the erro
   assert.equal(projection.terminalFallback, "invalid tool call id");
 });
 
-test("collapsed trace names only the latest three tools without reasoning boilerplate", () => {
+test("collapsed trace counts all calls without hiding earlier failures", () => {
   const items = ["one", "two", "three", "four"].map((value) => ({
     ...command(value, `echo ${value}`),
     toolName: "shell",
     toolArguments: { command: `echo ${value}` },
   }));
-  assert.equal(
-    traceSummary([reasoning("r", ""), ...items]),
-    "Ran · echo four · Ran · echo three · Ran · echo two",
-  );
+  assert.equal(traceSummary([reasoning("r", ""), ...items]), "4 tool calls");
+  const activity = summarizeTraceActivity([
+    { ...items[0]!, status: "failed" },
+    ...items.slice(1),
+  ]);
+  assert.equal(activity.total, 4);
+  assert.equal(activity.failed, 1);
 });

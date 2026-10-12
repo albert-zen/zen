@@ -3,7 +3,7 @@ import type {
   CreateChildThreadInput,
   ThreadSnapshot,
 } from "../../app-server.js";
-import type { UserInputPart } from "../../item.js";
+import type { UserInput, UserInputPart } from "../../item.js";
 import type { SkillReference } from "../../skill-input.js";
 
 export interface NativeTurnSendParams {
@@ -29,6 +29,18 @@ export type NativeCreateChildThreadParams = CreateChildThreadInput;
 export interface NativeCreateChildThreadResult {
   thread: ThreadSnapshot;
 }
+export const NATIVE_QUEUE_EDIT_METHOD = "zen/thread/queue/edit";
+export interface NativeQueueEditParams {
+  threadId: string;
+  queuedItemId: string;
+  clientId: string;
+  expectedRevision: number;
+  editId: string;
+  input: UserInput;
+}
+export type NativeQueueEditResult =
+  import("../../app-server.js").QueuedEditResult;
+
 export const NATIVE_QUEUE_CANCEL_METHOD = "zen/thread/queue/cancel";
 export const NATIVE_THREAD_RESUME_METHOD = "zen/thread/resume";
 export const NATIVE_THREAD_EVENT_METHOD = "zen/thread/event";
