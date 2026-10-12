@@ -38,16 +38,33 @@ export interface WorkspaceBrowserTab {
   canGoBack: boolean;
   canGoForward: boolean;
   sharedWithAgent: true;
+  control: "agent" | "human";
+  agentActionsInFlight: number;
+  agentActionOutcomeUnknown: boolean;
+  requiresFreshObservation: boolean;
   error?: string;
 }
 export type WorkspaceBrowserCommand =
-  "list" | "new" | "navigate" | "back" | "forward" | "reload" | "close";
+  | "list"
+  | "new"
+  | "navigate"
+  | "back"
+  | "forward"
+  | "reload"
+  | "close"
+  | "take-control"
+  | "return-control";
 
 interface Tab {
   id: string;
   threadId: string;
   view: WebContentsView;
   owner?: Owner;
+  control: "agent" | "human";
+  controlRevision: number;
+  handoffMode: boolean;
+  agentActionsInFlight: number;
+  agentActionOutcomeUnknown: boolean;
   documentVersion: number;
   navigationGeneration: number;
   renderRevision: number;
@@ -184,6 +201,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
           canGoBack: web.navigationHistory.canGoBack(),
           canGoForward: web.navigationHistory.canGoForward(),
           sharedWithAgent: true,
+          ...this.#controlSummary(tab),
           ...(tab.error ? { error: tab.error } : {}),
         };
       });
@@ -234,6 +252,11 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       threadId,
       view,
       owner,
+      control: "agent",
+      controlRevision: 0,
+      handoffMode: false,
+      agentActionsInFlight: 0,
+      agentActionOutcomeUnknown: false,
       documentVersion: 0,
       navigationGeneration: 0,
       renderRevision: 0,
@@ -328,6 +351,18 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       throw new Error("Browser tab is not in this Thread");
     const web = tab.view.webContents;
     switch (command) {
+      case "take-control":
+      case "return-control": {
+        const control = command === "take-control" ? "human" : "agent";
+        if (tab.control !== control) {
+          tab.control = control;
+          tab.handoffMode = true;
+          tab.controlRevision += 1;
+          tab.renderRevision += 1;
+          tab.observation = undefined;
+        }
+        break;
+      }
       case "navigate":
         void this.#load(tab, workspaceBrowserUrl(url)).catch(() => undefined);
         break;
@@ -456,19 +491,32 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       .map((tab) => this.#agentSummary(sessionId, tab));
   }
 
-  async open(sessionId: string, url: string): Promise<BrowserTabSummary> {
+  async open(
+    sessionId: string,
+    url: string,
+    signal?: AbortSignal,
+  ): Promise<BrowserTabSummary> {
     const threadId = this.#requireSessionThread(sessionId);
     const safeUrl = workspaceBrowserUrl(url);
     const tab = this.#new(threadId);
     try {
-      await this.#load(tab, safeUrl);
+      await this.#mutate(
+        sessionId,
+        tab,
+        undefined,
+        signal,
+        async (dispatch) => {
+          dispatch();
+          await this.#load(tab, safeUrl);
+        },
+      );
       this.#publish(threadId);
       return this.#agentSummary(
         sessionId,
         this.#requireAgentTab(sessionId, tab.id),
       );
     } catch (error) {
-      this.#closeTab(tab);
+      if (!tab.handoffMode) this.#closeTab(tab);
       throw error;
     }
   }
@@ -477,18 +525,33 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     sessionId: string,
     tabId: string,
     url: string,
+    signal?: AbortSignal,
+    observationId?: string,
   ): Promise<BrowserTabSummary> {
     const tab = this.#requireAgentTab(sessionId, tabId);
-    await this.#load(tab, workspaceBrowserUrl(url));
-    return this.#agentSummary(
+    const safeUrl = workspaceBrowserUrl(url);
+    await this.#mutate(
       sessionId,
-      this.#requireAgentTab(sessionId, tabId),
+      tab,
+      observationId,
+      signal,
+      async (dispatch) => {
+        dispatch();
+        await this.#load(tab, safeUrl);
+        return this.#agentSummary(
+          sessionId,
+          this.#requireAgentTab(sessionId, tabId),
+        );
+      },
     );
+    return this.#agentSummary(sessionId, tab);
   }
 
   async inspect(sessionId: string, tabId: string): Promise<BrowserInspection> {
     const tab = this.#requireAgentTab(sessionId, tabId);
+    const controlRevision = tab.controlRevision;
     return await this.#rendered(tab, async () => {
+      this.#assertControlRevision(tab, controlRevision);
       this.#requireAgentTab(sessionId, tabId);
       const documentVersion = tab.documentVersion;
       const sessionIncarnation = this.#sessionIncarnations.get(sessionId);
@@ -574,14 +637,21 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
               : { optionsTruncated: target.optionsTruncated }),
           };
         });
-      tab.observation = {
-        id: observationId,
-        documentVersion,
-        targets,
-        ...(inspected.documentIdentity === undefined
-          ? {}
-          : { documentIdentity: inspected.documentIdentity }),
-      };
+      tab.observation =
+        tab.handoffMode && tab.agentActionsInFlight > 0
+          ? undefined
+          : {
+              id: observationId,
+              documentVersion,
+              targets,
+              ...(inspected.documentIdentity === undefined
+                ? {}
+                : { documentIdentity: inspected.documentIdentity }),
+            };
+      if (tab.control === "agent" && tab.agentActionsInFlight === 0) {
+        tab.agentActionOutcomeUnknown = false;
+      }
+      this.#publish(tab.threadId);
       return {
         ...this.#agentSummary(sessionId, tab),
         observationId,
@@ -622,8 +692,18 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     tabId: string,
     observationId: string,
     targetId: string,
+    signal?: AbortSignal,
   ): Promise<BrowserTabSummary> {
-    return await this.#act(sessionId, tabId, observationId, targetId, "click");
+    return await this.#act(
+      sessionId,
+      tabId,
+      observationId,
+      targetId,
+      "click",
+      undefined,
+      false,
+      signal,
+    );
   }
 
   async type(
@@ -633,6 +713,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     targetId: string,
     text: string,
     submit: boolean,
+    signal?: AbortSignal,
   ): Promise<BrowserTabSummary> {
     return await this.#act(
       sessionId,
@@ -642,6 +723,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       "type",
       text,
       submit,
+      signal,
     );
   }
 
@@ -651,6 +733,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     observationId: string,
     targetId: string,
     option: string,
+    signal?: AbortSignal,
   ): Promise<BrowserTabSummary> {
     return await this.#act(
       sessionId,
@@ -659,6 +742,8 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       targetId,
       "select",
       option,
+      false,
+      signal,
     );
   }
 
@@ -672,46 +757,69 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
   ): Promise<BrowserTabSummary> {
     signal?.throwIfAborted();
     const tab = this.#requireAgentTab(sessionId, tabId);
-    return await this.#rendered(tab, async () => {
-      signal?.throwIfAborted();
-      this.#requireAgentTab(sessionId, tabId);
-      const navigationGeneration = tab.navigationGeneration;
-      const documentVersion = tab.documentVersion;
-      const renderRevision = tab.renderRevision;
-      assertBrowserObservation(
-        tab.observation,
-        tab.documentVersion,
-        observationId,
-      );
-      if (tab.observation.documentIdentity === undefined)
-        throw new Error(
-          "Browser document identity is unavailable; inspect again",
-        );
-      const expression = browserScrollScript(
-        direction,
-        pixels,
-        tab.observation.documentIdentity,
-      );
-      tab.observation = undefined;
-      await this.#evaluate(tab, expression);
-      this.#assertAgentOperationCurrent(
-        sessionId,
-        tab,
-        navigationGeneration,
-        documentVersion,
-        "scroll",
-        renderRevision,
-      );
-      if (signal?.aborted)
-        throw new Error(
-          "Browser scroll outcome unknown after cancellation; inspect again before interacting",
-        );
-      return this.#agentSummary(sessionId, tab);
-    });
+    await this.#mutate(
+      sessionId,
+      tab,
+      observationId,
+      signal,
+      async (dispatch) =>
+        this.#rendered(tab, async () => {
+          signal?.throwIfAborted();
+          this.#requireAgentTab(sessionId, tabId);
+          const navigationGeneration = tab.navigationGeneration;
+          const documentVersion = tab.documentVersion;
+          const renderRevision = tab.renderRevision;
+          assertBrowserObservation(
+            tab.observation,
+            tab.documentVersion,
+            observationId,
+          );
+          if (tab.observation.documentIdentity === undefined)
+            throw new Error(
+              "Browser document identity is unavailable; inspect again",
+            );
+          const expression = browserScrollScript(
+            direction,
+            pixels,
+            tab.observation.documentIdentity,
+          );
+          tab.observation = undefined;
+          await this.#evaluate(tab, expression, dispatch);
+          this.#assertAgentOperationCurrent(
+            sessionId,
+            tab,
+            navigationGeneration,
+            documentVersion,
+            "scroll",
+            renderRevision,
+          );
+          if (signal?.aborted)
+            throw new Error(
+              "Browser scroll outcome unknown after cancellation; inspect again before interacting",
+            );
+          return this.#agentSummary(sessionId, tab);
+        }),
+    );
+    return this.#agentSummary(sessionId, tab);
   }
 
-  async closeTab(sessionId: string, tabId: string): Promise<void> {
-    this.#closeTab(this.#requireAgentTab(sessionId, tabId));
+  async closeTab(
+    sessionId: string,
+    tabId: string,
+    signal?: AbortSignal,
+    observationId?: string,
+  ): Promise<void> {
+    const tab = this.#requireAgentTab(sessionId, tabId);
+    await this.#mutate(
+      sessionId,
+      tab,
+      observationId,
+      signal,
+      async (dispatch) => {
+        dispatch();
+        this.#closeTab(tab);
+      },
+    );
   }
 
   closeSession(sessionId: string): number {
@@ -740,47 +848,163 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     action: BrowserTargetAction,
     value?: string,
     submit = false,
+    signal?: AbortSignal,
   ): Promise<BrowserTabSummary> {
     const tab = this.#requireAgentTab(sessionId, tabId);
-    return await this.#rendered(tab, async () => {
-      this.#requireAgentTab(sessionId, tabId);
-      const navigationGeneration = tab.navigationGeneration;
-      const renderRevision = tab.renderRevision;
-      const target = resolveBrowserObservedTarget(
+    await this.#mutate(
+      sessionId,
+      tab,
+      observationId,
+      signal,
+      async (dispatch) =>
+        this.#rendered(tab, async () => {
+          this.#requireAgentTab(sessionId, tabId);
+          const navigationGeneration = tab.navigationGeneration;
+          const renderRevision = tab.renderRevision;
+          const target = resolveBrowserObservedTarget(
+            tab.observation,
+            tab.documentVersion,
+            observationId,
+            targetId,
+            action,
+          );
+          tab.observation = undefined;
+          const result = await this.#evaluate<{ ok: boolean; reason?: string }>(
+            tab,
+            browserActionScript(target, action, value, submit),
+            dispatch,
+          );
+          if (!result.ok)
+            throw new Error(
+              `Browser ${action} target is stale or unsafe: ${result.reason}`,
+            );
+          this.#assertAgentOperationCurrent(
+            sessionId,
+            tab,
+            navigationGeneration,
+            undefined,
+            action,
+            renderRevision,
+          );
+          await settleWebContents(tab.view.webContents);
+          this.#assertAgentOperationCurrent(
+            sessionId,
+            tab,
+            navigationGeneration,
+            undefined,
+            action,
+            renderRevision,
+          );
+          return this.#agentSummary(sessionId, tab);
+        }),
+    );
+    return this.#agentSummary(sessionId, tab);
+  }
+
+  #controlSummary(tab: Tab) {
+    return {
+      control: tab.control,
+      agentActionsInFlight: tab.agentActionsInFlight,
+      agentActionOutcomeUnknown: tab.agentActionOutcomeUnknown,
+      requiresFreshObservation:
+        tab.handoffMode &&
+        (tab.control === "human" ||
+          tab.observation === undefined ||
+          tab.agentActionsInFlight > 0),
+      ...(tab.handoffMode
+        ? { mutationsRequireObservation: true as const }
+        : {}),
+    };
+  }
+
+  #assertControlRevision(tab: Tab, revision: number): void {
+    if (tab.controlRevision !== revision)
+      throw new Error(
+        "Browser control changed; this request is stale. Inspect again; do not replay it automatically",
+      );
+  }
+
+  async #mutate<T>(
+    sessionId: string,
+    tab: Tab,
+    observationId: string | undefined,
+    signal: AbortSignal | undefined,
+    operation: (dispatch: () => void) => Promise<T>,
+  ): Promise<T> {
+    signal?.throwIfAborted();
+    if (tab.control === "human")
+      throw new Error(
+        "Browser tab is under human control; Agent mutations are paused until the user returns control",
+      );
+    if (tab.handoffMode) {
+      if (tab.agentActionsInFlight > 0)
+        throw new Error(
+          "An earlier Browser action is still in flight; wait for its outcome and inspect again",
+        );
+      if (observationId === undefined || tab.observation === undefined)
+        throw new Error(
+          "Browser handoff requires a fresh observationId from browser_inspect before every mutation, including navigate and close",
+        );
+      assertBrowserObservation(
         tab.observation,
         tab.documentVersion,
         observationId,
-        targetId,
-        action,
       );
-      tab.observation = undefined;
-      const result = await this.#evaluate<{ ok: boolean; reason?: string }>(
-        tab,
-        browserActionScript(target, action, value, submit),
-      );
-      if (!result.ok)
+    }
+    const revision = tab.controlRevision;
+    const sessionIncarnation = this.#sessionIncarnations.get(sessionId);
+    const admittedObservation = tab.observation;
+    let dispatched = false;
+    const dispatch = () => {
+      signal?.throwIfAborted();
+      this.#requireAgentTab(sessionId, tab.id);
+      this.#assertControlRevision(tab, revision);
+      if (this.#sessionIncarnations.get(sessionId) !== sessionIncarnation)
         throw new Error(
-          `Browser ${action} target is stale or unsafe: ${result.reason}`,
+          "Browser session changed before dispatch; inspect again",
         );
-      this.#assertAgentOperationCurrent(
-        sessionId,
-        tab,
-        navigationGeneration,
-        undefined,
-        action,
-        renderRevision,
-      );
-      await settleWebContents(tab.view.webContents);
-      this.#assertAgentOperationCurrent(
-        sessionId,
-        tab,
-        navigationGeneration,
-        undefined,
-        action,
-        renderRevision,
-      );
-      return this.#agentSummary(sessionId, tab);
-    });
+      if (
+        tab.observation !== undefined &&
+        tab.observation !== admittedObservation
+      )
+        throw new Error(
+          "Browser request is stale after a newer observation; inspect again",
+        );
+      tab.observation = undefined;
+      if (!dispatched) {
+        dispatched = true;
+        tab.agentActionsInFlight += 1;
+        this.#publish(tab.threadId);
+      }
+    };
+    try {
+      const result = await operation(dispatch);
+      if (
+        dispatched &&
+        (tab.controlRevision !== revision ||
+          this.#sessionIncarnations.get(sessionId) !== sessionIncarnation ||
+          signal?.aborted)
+      )
+        throw new Error(
+          "Browser action outcome is unknown after control changed or cancellation; it was already dispatched. Inspect before continuing; do not repeat it automatically",
+        );
+      return result;
+    } catch (error) {
+      if (dispatched) {
+        tab.agentActionOutcomeUnknown = true;
+        tab.observation = undefined;
+        // Dispatch is irreversible here. A failed CDP reply is not proof that
+        // the page action was cancelled or had no effect.
+        throw new Error(
+          `Browser action outcome is unknown after dispatch: ${error instanceof Error ? error.message : String(error)}. Inspect before continuing; do not repeat it automatically`,
+          { cause: error },
+        );
+      }
+      throw error;
+    } finally {
+      if (dispatched) tab.agentActionsInFlight -= 1;
+      this.#publish(tab.threadId);
+    }
   }
 
   async #rendered<T>(tab: Tab, operation: () => Promise<T>): Promise<T> {
@@ -859,6 +1083,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       title: (web.getTitle() || "New tab").slice(0, 256),
       url: redactBrowserUrl(web.getURL() || "about:blank"),
       loading: web.isLoading(),
+      ...this.#controlSummary(tab),
     };
   }
 
@@ -872,10 +1097,18 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     this.#publish(tab.threadId);
   }
 
-  async #evaluate<T>(tab: Tab, expression: string): Promise<T> {
+  async #evaluate<T>(
+    tab: Tab,
+    expression: string,
+    beforeDispatch?: () => void,
+  ): Promise<T> {
     const debuggerApi = tab.view.webContents.debugger;
     if (!debuggerApi.isAttached()) debuggerApi.attach("1.3");
-    return await evaluateBrowserDocument<T>(debuggerApi, expression);
+    return await evaluateBrowserDocument<T>(
+      debuggerApi,
+      expression,
+      beforeDispatch,
+    );
   }
 }
 

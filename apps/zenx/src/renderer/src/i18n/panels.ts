@@ -456,6 +456,20 @@ export const en = {
   image: "Image",
   toolResult: "Tool result",
   browserWorkspace: "Browser workspace",
+  browserTakeControl: "Take control",
+  browserReturnControl: "Return to Agent",
+  browserAgentControl: "Agent control enabled",
+  browserHumanControl: "You control this tab",
+  browserAgentControlDetail:
+    "Take control to block new Agent actions on this tab. You can still browse manually.",
+  browserHumanControlDetail:
+    "New Agent actions are blocked on this tab. Returning control does not replay actions or start a Turn.",
+  browserActionsInFlight:
+    "{{count}} Agent action(s) already dispatched may still finish. Taking control does not cancel them.",
+  browserActionOutcomeUnknown:
+    "An earlier Agent action’s outcome is uncertain. Inspect the page before repeating it.",
+  browserFreshObservationRequired:
+    "Agent needs a fresh inspection after pending actions finish before acting again. No actions are replayed.",
   back: "Back",
   forward: "Forward",
   reloadPage: "Reload page",
@@ -1145,6 +1159,20 @@ export const zhCN = {
   image: "图片",
   toolResult: "工具结果",
   browserWorkspace: "浏览器工作区",
+  browserTakeControl: "接管控制",
+  browserReturnControl: "交还 Agent",
+  browserAgentControl: "Agent 控制已启用",
+  browserHumanControl: "你正在控制此标签页",
+  browserAgentControlDetail:
+    "接管后会阻止 Agent 对此标签页发起新操作。你仍可手动浏览。",
+  browserHumanControlDetail:
+    "已阻止 Agent 对此标签页发起新操作。交还控制不会重放操作或启动 Turn。",
+  browserActionsInFlight:
+    "{{count}} 个已发出的 Agent 操作仍可能完成；接管控制不会取消它们。",
+  browserActionOutcomeUnknown:
+    "先前 Agent 操作的结果尚不确定。请先检查页面，再决定是否重复操作。",
+  browserFreshObservationRequired:
+    "待已发出的操作结束后，Agent 必须重新检查页面才能继续操作。不会重放任何操作。",
   back: "后退",
   forward: "前进",
   reloadPage: "重新加载页面",

@@ -7319,6 +7319,45 @@ button:disabled {
   min-height: 0;
   height: 100%;
 }
+.workspace-browser-control {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: 12px;
+}
+.workspace-browser-control > div {
+  flex: 1 1 180px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.workspace-browser-control strong {
+  color: var(--color-text-primary);
+}
+.workspace-browser-control p {
+  margin: 4px 0 0;
+  color: var(--color-text-secondary);
+}
+.workspace-browser-control > button {
+  min-height: 44px;
+  padding: 6px 10px;
+  max-width: 100%;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: var(--color-surface-main);
+  color: var(--color-text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+.workspace-browser-control > button:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+.workspace-browser-control > button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 .workspace-browser-tabs,
 .workspace-browser-address {
   display: flex;

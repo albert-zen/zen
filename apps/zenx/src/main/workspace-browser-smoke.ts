@@ -21,6 +21,16 @@ const slowRequestStarted = new Promise<void>((resolve) => {
 });
 const fixture = createServer((request, response) => {
   response.setHeader("content-type", "text/html; charset=utf-8");
+  if (request.url === "/handoff") {
+    response.end(`<!doctype html><title>Synthetic handoff fixture</title>
+      <main><h1>Local test only</h1>
+      <button id="login" onclick="sessionStorage.setItem('fixture-login','yes');document.querySelector('#login-state').textContent='Signed in to local fixture'">Synthetic sign in</button>
+      <p id="login-state">Signed out</p>
+      <label>Draft <input aria-label="Draft"></label>
+      <button id="confirm" onclick="document.querySelector('output').textContent='Confirmed '+document.querySelector('input').value;this.dataset.count=String(Number(this.dataset.count||0)+1)">Confirm local draft</button>
+      <output>Unconfirmed</output></main>`);
+    return;
+  }
   if (request.url === "/slow") {
     markSlowRequestStarted();
     setTimeout(
@@ -274,6 +284,106 @@ void app.whenReady().then(async () => {
       "Chromium must cancel the older load and retain the latest navigation",
     );
 
+    // Local synthetic login and confirmation only: no real account, secret,
+    // external form submission, profile export, or permission grant.
+    await browser.navigate(
+      "shared-session",
+      tabId,
+      `http://127.0.0.1:${String(port)}/handoff`,
+    );
+    browser.command(owner.webContents, "shared-thread", "take-control", tabId);
+    const originalWebContentsId = createdView.webContents.id;
+    await createdView.webContents.executeJavaScript(
+      "document.querySelector('#login').click();document.querySelector('input').focus()",
+    );
+    createdView.webContents.insertText("human draft");
+    const humanObservation = await browser.inspect("shared-session", tabId);
+    assert.match(humanObservation.visibleText, /Signed in to local fixture/u);
+    assert.equal(
+      requiredTarget(humanObservation, "Draft", "type").value,
+      "human draft",
+    );
+    await assert.rejects(
+      browser.click(
+        "shared-session",
+        tabId,
+        humanObservation.observationId,
+        requiredTarget(humanObservation, "Confirm local draft", "click")
+          .targetId,
+      ),
+      /human control/u,
+    );
+    assert.equal(
+      await createdView.webContents.executeJavaScript(
+        "document.querySelector('output').textContent",
+      ),
+      "Unconfirmed",
+    );
+    browser.command(
+      owner.webContents,
+      "shared-thread",
+      "return-control",
+      tabId,
+    );
+    await assert.rejects(
+      browser.navigate("shared-session", tabId, url),
+      /fresh observation/u,
+    );
+    let handedBack = await browser.inspect("shared-session", tabId);
+    await assert.rejects(
+      browser.closeTab(
+        "shared-session",
+        tabId,
+        undefined,
+        humanObservation.observationId,
+      ),
+      /stale/u,
+    );
+    await browser.type(
+      "shared-session",
+      tabId,
+      handedBack.observationId,
+      requiredTarget(handedBack, "Draft", "type").targetId,
+      "Agent reviewed draft",
+      false,
+    );
+    browser.command(owner.webContents, "shared-thread", "take-control", tabId);
+    browser.command(owner.webContents, "shared-thread", "take-control", tabId);
+    await createdView.webContents.executeJavaScript(
+      "document.querySelector('#confirm').click()",
+    );
+    browser.command(
+      owner.webContents,
+      "shared-thread",
+      "return-control",
+      tabId,
+    );
+    handedBack = await browser.inspect("shared-session", tabId);
+    assert.match(handedBack.visibleText, /Confirmed Agent reviewed draft/u);
+    assert.equal(
+      await createdView.webContents.executeJavaScript(
+        "document.querySelector('#confirm').dataset.count",
+      ),
+      "1",
+      "handing back never replays confirmation",
+    );
+    assert.equal(
+      await createdView.webContents.executeJavaScript(
+        "sessionStorage.getItem('fixture-login')",
+      ),
+      "yes",
+    );
+    assert.equal(
+      createdView.webContents.id,
+      originalWebContentsId,
+      "login and form stay on the same actual page",
+    );
+    await assert.rejects(
+      browser.closeTab("shared-session", tabId),
+      /fresh observation/u,
+      "a queued no-reference close stays fenced even after inspect",
+    );
+
     assert.equal(browser.closeSession("shared-session"), 0);
     assert.equal(
       browser.command(owner.webContents, "shared-thread", "list").length,
@@ -305,6 +415,10 @@ void app.whenReady().then(async () => {
           "human SPA navigation invalidates the earlier Agent observation",
           "Agent click navigation succeeds on the same shared WebContents",
           "Chromium cancels an older load and the provider reports it stale",
+          "synthetic login and form state survive explicit same-page human takeover/return",
+          "all human-owned Agent mutations reject; return requires fresh observation",
+          "human confirmation occurs exactly once and is never replayed on return",
+          "old no-reference close remains fenced even after a fresh inspection",
         ],
       }),
     );
