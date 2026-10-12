@@ -1926,6 +1926,286 @@ for (const committed of [true, false] as const) {
   });
 }
 
+test("queue editor draft and pending request survive actual App loading unmount and do not steal another thread", async () => {
+  type EditParams =
+    import("../../../src/protocol/native/wire.js").NativeQueueEditParams;
+  type EditResult =
+    import("../../../src/protocol/native/wire.js").NativeQueueEditResult;
+  const makeRecovery = (id: string, name: string) => {
+    const base = nativeRecoveryForThread({
+      ...liveThread(),
+      id,
+      sessionId: id,
+      name,
+    });
+    return {
+      ...base,
+      thread: {
+        ...base.thread,
+        items: [
+          ...base.thread.items,
+          {
+            id: `queued-${id}`,
+            clientId: `client-${id}`,
+            threadId: id,
+            type: "user_message_queued" as const,
+            createdAt: new Date(20_000).toISOString(),
+            input: [{ type: "text" as const, text: `Original queued ${id}` }],
+          },
+        ],
+      },
+    };
+  };
+  const a = makeRecovery("thread-1", "Thread one");
+  const b = makeRecovery("thread-2", "Thread two");
+  const bLoading = deferred<typeof b>();
+  const saving = deferred<EditResult>();
+  const calls: EditParams[] = [];
+  let bRequested = false;
+  const harness = await mountApp(
+    {
+      ...oneProject(),
+      projects: [
+        { ...oneProject().projects[0]!, threadIds: ["thread-1", "thread-2"] },
+      ],
+    },
+    {
+      threads: async (archived) =>
+        archived
+          ? []
+          : [summary(false), summary(false, "thread-2", "Thread two")],
+      request: async (method, params) => {
+        if (method === "zen/thread/resume") {
+          if ((params as { threadId: string }).threadId === "thread-2") {
+            bRequested = true;
+            return await bLoading.promise;
+          }
+          return a;
+        }
+        if (method === "zen/thread/queue/edit") {
+          calls.push(params as EditParams);
+          return await saving.promise;
+        }
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+    },
+  );
+  const editorText = () =>
+    document.querySelector<HTMLTextAreaElement>(
+      ".queued-message-editor textarea",
+    );
+  const selectThread = async (name: string) => {
+    const row = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>(".thread-row")].find(
+        (x) => x.textContent?.includes(name),
+      ),
+    );
+    await act(async () => row.click());
+  };
+  const openEditor = async () => {
+    const button = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".queue-row-edit"),
+    );
+    await act(async () => button.click());
+    return await waitFor(editorText);
+  };
+  try {
+    await selectThread("Thread one");
+    const mainA = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(mainA, "Independent main draft A");
+    const editA = await openEditor();
+    await setTextareaValue(editA, "Preserved queue draft A");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".queue-editor-save")!.click(),
+    );
+    await waitFor(() => calls.length === 1);
+    const firstId = calls[0]!.editId;
+    const oldView = document.querySelector(".thread-view")!;
+    await selectThread("Thread two");
+    await waitFor(() => bRequested);
+    assert.equal(
+      oldView.isConnected,
+      false,
+      "uncached navigation must really unmount ThreadView",
+    );
+    assert.equal(editA.isConnected, false);
+    assert.equal(document.querySelector(".thread-view"), null);
+    await act(async () => bLoading.resolve(b));
+    const mainB = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(mainB, "Independent main draft B");
+    await selectThread("Thread one");
+    const reopened = await openEditor();
+    assert.equal(reopened.value, "Preserved queue draft A");
+    const save =
+      document.querySelector<HTMLButtonElement>(".queue-editor-save")!;
+    assert.equal(save.disabled, true);
+    await act(async () => save.click());
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]!.editId, firstId);
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "Independent main draft A",
+    );
+    await selectThread("Thread two");
+    const editB = await openEditor();
+    await setTextareaValue(editB, "Independent queue draft B");
+    await act(async () => editB.focus());
+    await act(async () =>
+      saving.resolve({
+        status: "edited",
+        queuedItemId: calls[0]!.queuedItemId,
+        clientId: calls[0]!.clientId,
+        revision: 1,
+        editItemId: `edit-${firstId}`,
+      }),
+    );
+    assert.equal(editorText(), editB);
+    assert.equal(editB.value, "Independent queue draft B");
+    assert.equal(document.activeElement, editB);
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "Independent main draft B",
+    );
+    await selectThread("Thread one");
+    const savedDraft = await openEditor();
+    assert.equal(savedDraft.value, "Preserved queue draft A");
+    assert.equal(
+      document.querySelector<HTMLButtonElement>(".queue-editor-save")!.disabled,
+      true,
+      "receipt awaits exact canonical fact before another revision can be saved",
+    );
+    assert.match(
+      document.querySelector(".queue-row")!.textContent!,
+      /Original queued thread-1/u,
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "Independent main draft A",
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("persisted queue edit recovers a lost event and response into the actual App projection without replay", async () => {
+  type Params =
+    import("../../../src/protocol/native/wire.js").NativeQueueEditParams;
+  const base = nativeRecoveryForThread(liveThread());
+  const queued = {
+    id: "recover-edit-queue",
+    clientId: "recover-edit-client",
+    threadId: "thread-1",
+    type: "user_message_queued" as const,
+    createdAt: new Date(20_000).toISOString(),
+    input: [{ type: "text" as const, text: "Original before uncertain edit" }],
+  };
+  let recovery = {
+    ...base,
+    thread: { ...base.thread, items: [...base.thread.items, queued] },
+  };
+  const calls: Params[] = [];
+  let reads = 0;
+  const harness = await mountThreadApp({
+    request: async (method, params) => {
+      if (method === "zen/thread/resume") return recovery;
+      if (method === "zen/thread/queue/edit") {
+        const edit = params as Params;
+        calls.push(edit);
+        recovery = {
+          ...recovery,
+          thread: {
+            ...recovery.thread,
+            items: [
+              ...recovery.thread.items,
+              {
+                type: "user_message_queue_edited" as const,
+                id: `edit-${edit.editId}`,
+                threadId: edit.threadId,
+                queuedItemId: edit.queuedItemId,
+                clientId: edit.clientId,
+                editId: edit.editId,
+                revision: edit.expectedRevision + 1,
+                input: edit.input,
+                createdAt: new Date(21_000).toISOString(),
+              },
+            ],
+          },
+        };
+        throw new Error(
+          "Transport closed after durable append; event and response were lost",
+        );
+      }
+      if (method === "zen/thread/read") {
+        reads++;
+        return { thread: recovery.thread };
+      }
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "Main draft must survive recovery");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".queue-row-edit")!.click(),
+    );
+    const edited = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        ".queued-message-editor textarea",
+      ),
+    );
+    await setTextareaValue(edited, "Recovered canonical edited input");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".queue-editor-save")!.click(),
+    );
+    await waitFor(() =>
+      document
+        .querySelector(".queue-row")
+        ?.textContent?.includes("Recovered canonical edited input"),
+    );
+    assert.equal(
+      calls.length,
+      1,
+      "uncertain response is read back, never replayed",
+    );
+    assert.equal(reads, 1);
+    assert.equal(calls[0]!.expectedRevision, 0);
+    assert.equal(document.querySelectorAll(".queue-row").length, 1);
+    assert.equal(
+      document.querySelector(".queue-row")!.getAttribute("data-queue-id"),
+      queued.id,
+    );
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "Main draft must survive recovery",
+    );
+    await waitFor(
+      () => document.querySelector(".queued-message-editor") === null,
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".queue-row-edit")!.click(),
+    );
+    const fresh = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        ".queued-message-editor textarea",
+      ),
+    );
+    assert.equal(fresh.value, "Recovered canonical edited input");
+    assert.equal(
+      document.querySelector<HTMLButtonElement>(".queue-editor-save")!.disabled,
+      false,
+      "observed recovered revision retires old syncing cache",
+    );
+    assert.equal(calls.length, 1);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("ambiguous historic Queue warns on current Thread, restores explicitly, and does not repeat", async () => {
   const migrated = {
     composerSendMode: "soft" as const,

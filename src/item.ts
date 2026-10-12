@@ -30,6 +30,7 @@ export type ItemType =
   | "turn_replacement_requested"
   | "user_message_queued"
   | "user_message_queue_cancelled"
+  | "user_message_queue_edited"
   | "user_message"
   | "agent_message"
   | "model_usage"
@@ -51,6 +52,7 @@ const CANONICAL_ITEM_TYPES = {
   turn_replacement_requested: true,
   user_message_queued: true,
   user_message_queue_cancelled: true,
+  user_message_queue_edited: true,
   user_message: true,
   agent_message: true,
   model_usage: true,
@@ -374,6 +376,16 @@ export interface QueuedUserMessageItem extends ItemBase {
   deliveryMode?: "batch-next";
 }
 
+/** A replacement input revision; the initial queued Item owns identity/order. */
+export interface QueuedUserMessageEditedItem extends ItemBase {
+  type: "user_message_queue_edited";
+  queuedItemId: string;
+  clientId: string;
+  editId: string;
+  revision: number;
+  input: UserInput;
+}
+
 /** A completed cancellation fact; the original queued input stays in history. */
 export interface QueuedUserMessageCancelledItem extends ItemBase {
   type: "user_message_queue_cancelled";
@@ -393,6 +405,7 @@ export type CanonicalItem =
   | CodeStateItem
   | QueuedUserMessageItem
   | QueuedUserMessageCancelledItem
+  | QueuedUserMessageEditedItem
   | ThreadMetadataItem
   | ThreadForkedItem
   | ThreadInstructionItem
@@ -756,6 +769,16 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       break;
     case "user_message_queued":
       requireNonEmptyString(item.clientId, `${type}.clientId`);
+      validateUserInput(item.input, `${type}.input`);
+      break;
+    case "user_message_queue_edited":
+      requireNoTurnId(item);
+      requireNonEmptyString(item.queuedItemId, `${type}.queuedItemId`);
+      requireNonEmptyString(item.clientId, `${type}.clientId`);
+      requireNonEmptyString(item.editId, `${type}.editId`);
+      requireSafeInteger(item.revision, `${type}.revision`);
+      if ((item.revision as number) < 1)
+        throw new Error(`${type}.revision must be positive`);
       validateUserInput(item.input, `${type}.input`);
       break;
     case "user_message_queue_cancelled":

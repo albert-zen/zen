@@ -4,6 +4,8 @@ import type {
   UserInput,
 } from "../../../../src/item.js";
 import type { Thread } from "../../src/protocol-client/index.js";
+import type { NativeQueueEditParams } from "../../../../src/protocol/native/wire.js";
+import { pendingQueuedMessages } from "../../../../src/input-queue.js";
 import { applyNativeThreadEvent } from "../../src/renderer/src/thread-view-state.js";
 import {
   runtimeIntro,
@@ -11,6 +13,10 @@ import {
   runtimeTask,
   runtimeThread,
 } from "./agent-runtime-data.js";
+import {
+  queueImageAttachments,
+  missingQueueImage,
+} from "./agent-queue-images.js";
 export const queueScenes = [
   "两条消息",
   "单条消息",
@@ -20,18 +26,13 @@ export const queueScenes = [
   "等待继续",
   "审批与排队",
   "隐藏行失败",
+  "多张真实测试图片",
+  "图片读取失败",
 ];
-const attachment = {
-  type: "image",
-  attachment: {
-    type: "attachment",
-    sha256: "0".repeat(64),
-    mediaType: "image/png",
-    byteLength: 68,
-    width: 1,
-    height: 1,
-  },
-} as const;
+const imageInput = (index: number) => ({
+  type: "image" as const,
+  attachment: queueImageAttachments[index]!,
+});
 export const longQueueText =
   "请保留当前检查结果，然后逐项检查输入区上方的排队消息：\n1. 单条消息与多条消息的顺序清楚。\n2. 长消息能完整阅读，附件数量不会被正文遮住。\n3. 取消操作失败时保留原消息，也保留我正在输入的草稿。\n最后给出窄屏与键盘交互的验证结论，不要发布或部署。";
 export function queueItem(
@@ -82,12 +83,46 @@ export function queueScenario(scene: number): Thread {
       ? [[{ type: "text", text: short[0]! }]]
       : scene === 2
         ? [
-            [{ type: "text", text: longQueueText }, attachment, attachment],
-            [attachment],
+            [
+              { type: "text", text: longQueueText },
+              imageInput(0),
+              imageInput(1),
+            ],
+            [imageInput(2)],
           ]
-        : scene === 3 || scene === 7
-          ? many.map((text) => [{ type: "text", text }])
-          : short.map((text) => [{ type: "text", text }]);
+        : scene === 8
+          ? [
+              [
+                {
+                  type: "text",
+                  text: "比较这些本地生成的测试图，保留原始顺序。",
+                },
+                ...queueImageAttachments.map((attachment) => ({
+                  type: "image" as const,
+                  attachment,
+                })),
+              ],
+              [imageInput(2)],
+            ]
+          : scene === 9
+            ? [
+                [
+                  {
+                    type: "text",
+                    text: "这张测试图片当前无法读取；保留待发送消息。",
+                  },
+                  { type: "image", attachment: missingQueueImage },
+                ],
+                [imageInput(1)],
+              ]
+            : scene === 6
+              ? short.map((text, index) => [
+                  { type: "text" as const, text },
+                  imageInput(index),
+                ])
+              : scene === 3 || scene === 7
+                ? many.map((text) => [{ type: "text", text }])
+                : short.map((text) => [{ type: "text", text }]);
   inputs.forEach((input, index) => {
     thread = applyQueueItem(thread, queueItem(index, input));
   });
@@ -110,9 +145,8 @@ export function cancelQueueFact(
 export function drainQueueHead(thread: Thread): Thread {
   const head = thread.queuedMessages?.[0];
   if (!head) return thread;
-  const queued = thread.canonicalItems?.find(
-    (x): x is QueuedUserMessageItem =>
-      x.type === "user_message_queued" && x.id === head.id,
+  const queued = pendingQueuedMessages(thread.canonicalItems ?? []).find(
+    (item) => item.id === head.id && item.clientId === head.clientId,
   );
   if (!queued) return thread;
   return applyQueueItem(thread, {
@@ -123,5 +157,36 @@ export function drainQueueHead(thread: Thread): Thread {
     clientId: head.clientId,
     createdAt: new Date().toISOString(),
     content: queued.input,
+  });
+}
+
+/** Explicit simulated native commit; preserves queue anchor, order and client ID. */
+export function editQueueFact(
+  thread: Thread,
+  params: NativeQueueEditParams,
+): Thread {
+  const current = pendingQueuedMessages(thread.canonicalItems ?? []).find(
+    (item) =>
+      item.id === params.queuedItemId && item.clientId === params.clientId,
+  );
+  if (thread.id !== params.threadId || current === undefined)
+    throw Object.assign(
+      new Error("这条消息已开始处理或已取消；编辑草稿仍保留。"),
+      { code: "queue_already_started" },
+    );
+  if (current.revision !== params.expectedRevision)
+    throw Object.assign(new Error("这条消息已被修改；请先检查当前版本。"), {
+      code: "queue_revision_conflict",
+    });
+  return applyQueueItem(thread, {
+    type: "user_message_queue_edited",
+    id: `edit-${params.editId}`,
+    threadId: thread.id,
+    createdAt: new Date().toISOString(),
+    queuedItemId: params.queuedItemId,
+    clientId: params.clientId,
+    editId: params.editId,
+    revision: current.revision + 1,
+    input: params.input,
   });
 }

@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ThreadView } from "../../src/renderer/src/ThreadView.js";
 import {
@@ -20,17 +20,28 @@ import {
   applyQueueItem,
   cancelQueueFact,
   drainQueueHead,
+  editQueueFact,
   queueItem,
   queueScenario,
   queueScenes,
 } from "./agent-queue-data.js";
+import {
+  readQueueFixtureImage,
+  queueImageAttachments,
+} from "./agent-queue-images.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
 Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
-void i18n.changeLanguage("zh-CN");
+void i18n.changeLanguage(params.get("lang") ?? "zh-CN");
 document.documentElement.dataset.appearance = params.get("theme") ?? "dark";
 const mode = params.get("mode") ?? "runtime";
+const simulatedEditError = params.has("longError")
+  ? "模拟保存连接中断。\n" +
+    "服务器尚未确认本次修改；编辑草稿与附件仍保留，请检查连接后重试。\n".repeat(
+      8,
+    )
+  : "模拟保存连接中断；编辑草稿仍保留。";
 const runtimeScenes = [
   "并行运行",
   "等待结果",
@@ -128,6 +139,8 @@ type Props = React.ComponentProps<typeof ThreadView>;
 function Fixture() {
   const [scene, setScene] = useState(Number(params.get("scene") ?? 0));
   const [thread, setThread] = useState(() => scenario(scene));
+  const threadRef = useRef(thread);
+  threadRef.current = thread;
   const [approvals, setApprovals] = useState<Props["approvals"]>(
     (mode === "runtime" && scene === 2) || (mode === "queue" && scene === 6)
       ? [runtimeApproval]
@@ -154,6 +167,20 @@ function Fixture() {
   const [calls, setCalls] = useState(0);
   const response = useRef<{ confirm(): void; fail(): void } | null>(null);
   const next = useRef(10);
+  const imageAttempts = useRef(new Set<string>());
+  const readFixtureImage = useCallback<NonNullable<Props["onReadAttachment"]>>(
+    async (attachment) => {
+      if (
+        params.get("imageRead") === "fail-once" &&
+        !imageAttempts.current.has(attachment.sha256)
+      ) {
+        imageAttempts.current.add(attachment.sha256);
+        throw new Error("Simulated image read failed once.");
+      }
+      return readQueueFixtureImage(attachment);
+    },
+    [],
+  );
   const choose = (value: number) => {
     setScene(value);
     setThread(scenario(value));
@@ -177,10 +204,15 @@ function Fixture() {
     setCalls((n) => n + 1);
     const held = {
       confirm() {
-        confirm();
-        resolve();
-        setPending(false);
-        response.current = null;
+        try {
+          confirm();
+          resolve();
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        } finally {
+          setPending(false);
+          response.current = null;
+        }
       },
       fail() {
         reject(new Error(message));
@@ -189,7 +221,12 @@ function Fixture() {
       },
     };
     response.current = held;
-    const automatic = params.get("response");
+    const automatic =
+      params.get("response") === "fail-once"
+        ? calls === 0
+          ? "fail"
+          : "confirm"
+        : params.get("response");
     if (automatic === "confirm" || automatic === "fail") {
       setTimeout(() => {
         if (response.current === held) held[automatic]();
@@ -223,7 +260,11 @@ function Fixture() {
         {params.has("response") ? (
           <span>
             自动模拟回执：
-            {params.get("response") === "confirm" ? "确认" : "失败"}
+            {params.get("response") === "confirm"
+              ? "确认"
+              : params.get("response") === "fail-once"
+                ? "首次失败，重试确认"
+                : "失败"}
           </span>
         ) : null}
         <select
@@ -319,6 +360,31 @@ function Fixture() {
         queueFailure={failure}
         permissionMode={permission}
         onPermissionChange={setPermission}
+        onReadAttachment={readFixtureImage}
+        onPickQueueImages={async () => [
+          {
+            id: `fixture-image-${next.current++}`,
+            name: "本地生成测试图 6.png",
+            attachment: queueImageAttachments[5]!,
+          },
+        ]}
+        onEditQueued={(params) =>
+          new Promise((resolve, reject) =>
+            hold(
+              () => setThread(editQueueFact(threadRef.current, params)),
+              () =>
+                resolve({
+                  queuedItemId: params.queuedItemId,
+                  clientId: params.clientId,
+                  revision: params.expectedRevision + 1,
+                  editItemId: `edit-${params.editId}`,
+                  status: "edited",
+                }),
+              reject,
+              simulatedEditError,
+            ),
+          )
+        }
         onDraftChange={(text) => setComposer((c) => editComposer(c, text))}
         onSubmit={async () => {}}
         onInterrupt={() =>

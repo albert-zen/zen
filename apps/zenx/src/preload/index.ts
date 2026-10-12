@@ -19,6 +19,7 @@ import type {
   ServerNotificationParams,
 } from "../protocol-client/index.js";
 import { ipcChannels } from "./ipc.js";
+import type { ProtocolIpcResult } from "./queue-edit-ipc.js";
 import type {
   PublicHostSettings,
   ZenXProviderDeleteReplacements,
@@ -190,7 +191,8 @@ contextBridge.exposeInMainWorld("zenx", {
     request: async <M extends ClientRequestMethod>(
       method: M,
       params: ClientRequestParams[M],
-    ): Promise<ClientRequestResults[M]> =>
+    ): Promise<ProtocolIpcResult<M>> =>
+      // Edit rejection envelopes must stay plain data through contextBridge.
       await ipcRenderer.invoke(ipcChannels.request, method, params),
     respondToApproval: async (
       requestId: string,

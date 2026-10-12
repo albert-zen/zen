@@ -190,23 +190,25 @@ export function ApprovalRequestCard({
             <span>{i18n.t("shell:approvalRequestDetails")}</span>
           </button>
         </header>
-        <div className="approval-request-preview">
-          <div className="approval-request-preview-label">
-            <Icon name="terminal" size={13} />
-            <span>{toolName}</span>
-            <span>{previewLabel}</span>
+        <div className="approval-request-body" tabIndex={0}>
+          <div className="approval-request-preview">
+            <div className="approval-request-preview-label">
+              <Icon name="terminal" size={13} />
+              <span>{toolName}</span>
+              <span>{previewLabel}</span>
+            </div>
+            <pre tabIndex={0} aria-label={previewLabel}>
+              <code>{code}</code>
+            </pre>
           </div>
-          <pre tabIndex={0} aria-label={previewLabel}>
-            <code>{code}</code>
-          </pre>
+          {cwd()}
+          {scope(scopeId, true)}
+          {errorMessage ? (
+            <p className="approval-request-error" role="alert">
+              {errorMessage}
+            </p>
+          ) : null}
         </div>
-        {cwd()}
-        {scope(scopeId, true)}
-        {errorMessage ? (
-          <p className="approval-request-error" role="alert">
-            {errorMessage}
-          </p>
-        ) : null}
         {decisions("card")}
       </section>
       <Dialog

@@ -1,6 +1,8 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { QueuedCancellationTarget } from "../../../../../src/app-server.js";
+import type { AttachmentRef } from "../../../../../src/attachment.js";
+import { AttachmentImage } from "./ImagePresentation.js";
 import { Icon } from "./icons.js";
 
 export interface QueuedMessagePreview {
@@ -13,6 +15,14 @@ export interface QueuedMessagePreview {
 export interface QueuedMessagesProps {
   threadId: string;
   messages: readonly QueuedMessagePreview[];
+  attachments?: Readonly<Record<string, readonly AttachmentRef[]>>;
+  onReadAttachment?(attachment: AttachmentRef): Promise<Uint8Array>;
+  onOpenImage?(
+    message: Pick<QueuedMessagePreview, "id" | "clientId">,
+    attachment: AttachmentRef,
+    name: string,
+    trigger: HTMLButtonElement,
+  ): void;
   queueFailure?: {
     queuedItemId: string;
     code: string;
@@ -24,6 +34,13 @@ export interface QueuedMessagesProps {
   /** Transport failure for the current resume attempt, not a row failure. */
   resumeError?: string | null;
   compact?: boolean;
+  editableIds?: ReadonlySet<string>;
+  /** Saving rows may reopen their existing read-only edit session. */
+  editingIds?: ReadonlySet<string>;
+  onEdit?(
+    message: Pick<QueuedMessagePreview, "id" | "clientId">,
+    trigger: HTMLButtonElement,
+  ): void;
   onCancel?(target: QueuedCancellationTarget): void;
   onCancelAll?(trigger: HTMLButtonElement): void;
   onResume?(): void;
@@ -48,12 +65,18 @@ export function QueuedMessages(props: QueuedMessagesProps) {
 
 function QueueShelf({
   messages,
+  attachments = {},
+  onReadAttachment,
+  onOpenImage,
   queueFailure = null,
   pendingIds,
   busy = false,
   resuming = false,
   resumeError = null,
   compact = false,
+  editableIds,
+  editingIds,
+  onEdit,
   onCancel,
   onCancelAll,
   onResume,
@@ -171,7 +194,7 @@ function QueueShelf({
   return (
     <section
       ref={rootRef}
-      className={`queue-shelf${detailsOpen ? " is-open" : " is-collapsed"}`}
+      className={`queue-shelf${detailsOpen ? " is-open" : " is-collapsed"}${compact ? " is-compact" : ""}`}
       aria-label={t("messageQueue")}
       onFocusCapture={(event) => {
         const target = event.target;
@@ -180,6 +203,7 @@ function QueueShelf({
         const index =
           target.closest<HTMLElement>("[data-queue-index]")?.dataset.queueIndex;
         focusedRowIndex.current = index === undefined ? 0 : Number(index);
+        if (target.closest(".queue-image-gallery")) setOpen(true);
       }}
       onBlurCapture={(event) => {
         if (
@@ -289,12 +313,20 @@ function QueueShelf({
               message={message}
               index={index}
               hidden={!showAll && index >= 2}
+              imagesVisible={detailsOpen && (showAll || index < 2)}
+              compact={compact}
+              attachments={attachments[message.id] ?? []}
+              onReadAttachment={onReadAttachment}
+              onOpenImage={onOpenImage}
               pending={pendingIds?.has(message.id) ?? false}
               disabled={busy || resuming}
               failure={
                 queueFailure?.queuedItemId === message.id ? queueFailure : null
               }
               onCancel={onCancel}
+              onEdit={onEdit}
+              editable={editableIds?.has(message.id) ?? false}
+              editing={editingIds?.has(message.id) ?? false}
               onReadingChange={(expanded) => {
                 setReading((previous) => {
                   const next = new Set(previous);
@@ -329,19 +361,35 @@ function QueuedMessageRow({
   message,
   index,
   hidden,
+  imagesVisible,
+  compact,
+  attachments,
+  onReadAttachment,
+  onOpenImage,
   pending,
   disabled,
   failure,
   onCancel,
+  onEdit,
+  editable,
+  editing,
   onReadingChange,
 }: {
   message: QueuedMessagePreview;
   index: number;
   hidden: boolean;
+  imagesVisible: boolean;
+  compact: boolean;
+  attachments: readonly AttachmentRef[];
+  onReadAttachment: QueuedMessagesProps["onReadAttachment"];
+  onOpenImage: QueuedMessagesProps["onOpenImage"];
   pending: boolean;
   disabled: boolean;
   failure: QueuedMessagesProps["queueFailure"];
   onCancel: QueuedMessagesProps["onCancel"];
+  onEdit: QueuedMessagesProps["onEdit"];
+  editable: boolean;
+  editing: boolean;
   onReadingChange(expanded: boolean): void;
 }) {
   const { t } = useTranslation("shell");
@@ -352,6 +400,14 @@ function QueuedMessageRow({
   const [overflow, setOverflow] = useState(false);
   const hasText = message.text.trim().length > 0;
   const expandable = hasText && (expanded || overflow);
+  const availableImages =
+    onReadAttachment && onOpenImage
+      ? attachments.slice(0, message.imageCount)
+      : [];
+  const unavailableImages = Math.max(
+    0,
+    message.imageCount - availableImages.length,
+  );
 
   useLayoutEffect(() => {
     const text = textRef.current;
@@ -369,7 +425,7 @@ function QueuedMessageRow({
       observer?.disconnect();
       text.ownerDocument.defaultView?.removeEventListener("resize", measure);
     };
-  }, [expanded, hidden, message.text]);
+  }, [compact, expanded, hidden, message.text]);
 
   const toggle = () => {
     if (!expandable || containsSelection(textRef.current)) return;
@@ -386,82 +442,174 @@ function QueuedMessageRow({
     >
       <div className="queue-row-main">
         <div
-          className={`queue-preview${expanded ? " is-expanded" : ""}${expandable ? " is-expandable" : ""}`}
-          role={expandable ? "button" : undefined}
-          tabIndex={expandable ? 0 : undefined}
-          data-queue-control={expandable ? "preview" : undefined}
-          aria-expanded={expandable ? expanded : undefined}
-          aria-controls={expandable ? textId : undefined}
-          aria-describedby={
-            expandable
-              ? [textId, message.imageCount > 0 ? imagesId : null]
-                  .filter(Boolean)
-                  .join(" ")
-              : undefined
-          }
-          aria-label={
-            expandable
-              ? t(expanded ? "queueCollapseMessage" : "queueReadFullMessage", {
-                  number: index + 1,
-                })
-              : undefined
-          }
-          onClick={toggle}
-          onKeyDown={(event) => {
-            if (expandable && (event.key === "Enter" || event.key === " ")) {
-              event.preventDefault();
-              toggle();
-            }
-          }}
+          className={`queue-row-content${message.imageCount > 0 ? " has-images" : ""}`}
         >
-          {hasText ? (
-            <span ref={textRef} id={textId} className="queue-preview-text">
-              {message.text}
-            </span>
-          ) : null}
-          {message.imageCount > 0 ? (
-            <span
-              id={imagesId}
-              className={`queue-images${hasText ? "" : " is-only-content"}`}
+          {
+            <div
+              className={`queue-preview${expanded ? " is-expanded" : ""}${expandable ? " is-expandable" : ""}`}
+              role={expandable ? "button" : undefined}
+              tabIndex={expandable ? 0 : undefined}
+              data-queue-control={expandable ? "preview" : undefined}
+              aria-expanded={expandable ? expanded : undefined}
+              aria-controls={expandable ? textId : undefined}
+              aria-describedby={
+                expandable
+                  ? [textId, message.imageCount > 0 ? imagesId : null]
+                      .filter(Boolean)
+                      .join(" ")
+                  : undefined
+              }
+              aria-label={
+                expandable
+                  ? t(
+                      expanded
+                        ? "queueCollapseMessage"
+                        : "queueReadFullMessage",
+                      {
+                        number: index + 1,
+                      },
+                    )
+                  : undefined
+              }
+              onClick={toggle}
+              onKeyDown={(event) => {
+                if (
+                  expandable &&
+                  (event.key === "Enter" || event.key === " ")
+                ) {
+                  event.preventDefault();
+                  toggle();
+                }
+              }}
             >
-              <Icon name="image" size={14} />
-              {t("imageCount", { count: message.imageCount })}
-            </span>
-          ) : null}
-          {!hasText && message.imageCount === 0 ? (
-            <span className="queue-preview-text">{t("queueWaiting")}</span>
-          ) : null}
-          {expandable ? (
-            <Icon
-              name="chevron-down"
-              size={12}
-              className="queue-preview-chevron"
+              {hasText ? (
+                <span ref={textRef} id={textId} className="queue-preview-text">
+                  {message.text}
+                </span>
+              ) : null}
+              {message.imageCount > 0 ? (
+                <span
+                  id={imagesId}
+                  className={`queue-images${hasText ? "" : " is-only-content"}`}
+                  title={
+                    unavailableImages > 0
+                      ? t("queueUnavailablePreviews", {
+                          count: unavailableImages,
+                        })
+                      : undefined
+                  }
+                >
+                  {compact || availableImages.length === 0 ? (
+                    <Icon name="image" size={14} />
+                  ) : null}
+                  {compact ? (
+                    <>
+                      <span aria-hidden="true">{message.imageCount}</span>
+                      <span className="sr-only">
+                        {t("imageCount", { count: message.imageCount })}
+                      </span>
+                    </>
+                  ) : (
+                    t("imageCount", { count: message.imageCount })
+                  )}
+                  {unavailableImages > 0 && compact ? (
+                    <Icon name="warning" size={12} />
+                  ) : null}
+                </span>
+              ) : null}
+              {unavailableImages > 0 ? (
+                <span
+                  className={`queue-image-unavailable${compact ? " sr-only" : ""}`}
+                >
+                  {t("queueUnavailablePreviews", { count: unavailableImages })}
+                </span>
+              ) : null}
+              {!hasText && message.imageCount === 0 ? (
+                <span className="queue-preview-text">{t("queueWaiting")}</span>
+              ) : null}
+              {expandable ? (
+                <Icon
+                  name="chevron-down"
+                  size={12}
+                  className="queue-preview-chevron"
+                />
+              ) : null}
+            </div>
+          }
+          {message.imageCount > 0 ? (
+            <QueuedImageStrip
+              message={message}
+              attachments={attachments}
+              visible={imagesVisible}
+              compact={compact}
+              hasText={hasText}
+              onReadAttachment={onReadAttachment}
+              onOpenImage={onOpenImage}
             />
           ) : null}
         </div>
-        {onCancel === undefined ? null : (
-          <button
-            type="button"
-            className={`queue-row-cancel${pending ? " is-pending" : ""}`}
-            data-queue-control="cancel"
-            disabled={disabled || pending}
-            aria-label={
-              pending
-                ? `${t("cancelQueuedMessage", { number: index + 1 })}: ${t("queueCancelling")}`
-                : t("cancelQueuedMessage", { number: index + 1 })
-            }
-            title={t("cancelThisPendingMessageOnly")}
-            onClick={() =>
-              onCancel({ queuedItemId: message.id, clientId: message.clientId })
-            }
-          >
-            {pending ? (
-              <span role="status">{t("queueCancelling")}</span>
-            ) : (
-              <Icon name="x" size={14} />
-            )}
-          </button>
-        )}
+        <div className="queue-row-actions">
+          {onEdit === undefined ? null : (
+            <button
+              type="button"
+              className={`queue-row-edit${editing ? " is-pending" : ""}`}
+              data-queue-control="edit"
+              disabled={pending || !editable || (disabled && !editing)}
+              aria-label={
+                editing
+                  ? `${t("editQueuedMessage", { number: index + 1 })}: ${t("saving")}`
+                  : editable
+                    ? t("editQueuedMessage", { number: index + 1 })
+                    : `${t("editQueuedMessage", { number: index + 1 })}: ${t("queueEditUnavailable")}`
+              }
+              title={
+                editing
+                  ? t("saving")
+                  : editable
+                    ? t("editQueuedMessage", { number: index + 1 })
+                    : t("queueEditUnavailable")
+              }
+              onClick={(event) =>
+                onEdit(
+                  { id: message.id, clientId: message.clientId },
+                  event.currentTarget,
+                )
+              }
+            >
+              {editing ? (
+                <span role="status">{t("saving")}</span>
+              ) : (
+                <Icon name="compose" size={14} />
+              )}
+            </button>
+          )}
+          {onCancel === undefined ? null : (
+            <button
+              type="button"
+              className={`queue-row-cancel${pending ? " is-pending" : ""}`}
+              data-queue-control="cancel"
+              disabled={disabled || pending || editing}
+              aria-label={
+                pending
+                  ? `${t("cancelQueuedMessage", { number: index + 1 })}: ${t("queueCancelling")}`
+                  : t("cancelQueuedMessage", { number: index + 1 })
+              }
+              title={t("cancelThisPendingMessageOnly")}
+              onClick={() =>
+                onCancel({
+                  queuedItemId: message.id,
+                  clientId: message.clientId,
+                })
+              }
+            >
+              {pending ? (
+                <span role="status">{t("queueCancelling")}</span>
+              ) : (
+                <Icon name="x" size={14} />
+              )}
+            </button>
+          )}
+        </div>
       </div>
       {failure ? (
         <p className="queue-row-error" role="alert" tabIndex={-1}>
@@ -469,5 +617,91 @@ function QueuedMessageRow({
         </p>
       ) : null}
     </li>
+  );
+}
+
+function QueuedImageStrip({
+  message,
+  attachments,
+  visible,
+  compact,
+  hasText,
+  onReadAttachment,
+  onOpenImage,
+}: {
+  message: QueuedMessagePreview;
+  attachments: readonly AttachmentRef[];
+  visible: boolean;
+  compact: boolean;
+  hasText: boolean;
+  onReadAttachment: QueuedMessagesProps["onReadAttachment"];
+  onOpenImage: QueuedMessagesProps["onOpenImage"];
+}) {
+  const { t } = useTranslation("shell");
+  const galleryId = useId();
+  const [expanded, setExpanded] = useState(false);
+  // The native count remains authoritative even if some legacy/unavailable
+  // image sources cannot be represented by an addressable attachment.
+  const images =
+    onReadAttachment && onOpenImage
+      ? attachments.slice(0, message.imageCount)
+      : [];
+  const previewLimit = compact ? 1 : 3;
+  const shownImages = expanded ? images : images.slice(0, previewLimit);
+  if (images.length === 0) return null;
+  return (
+    <div className={`queue-image-strip${hasText ? "" : " is-only-content"}`}>
+      {images.length > 0 ? (
+        <div className="queue-image-gallery" id={galleryId}>
+          {visible && onReadAttachment && onOpenImage
+            ? shownImages.map((attachment, index) => (
+                <AttachmentImage
+                  key={`${attachment.mediaType}:${attachment.sha256}:${index}`}
+                  attachment={attachment}
+                  name={t("attachedImageName", { number: index + 1 })}
+                  onReadAttachment={onReadAttachment}
+                  onOpen={(ref, name, trigger) =>
+                    onOpenImage(
+                      { id: message.id, clientId: message.clientId },
+                      ref,
+                      name,
+                      trigger,
+                    )
+                  }
+                  lazy
+                  retryOnError
+                  compact
+                />
+              ))
+            : null}
+          {images.length > previewLimit ? (
+            <button
+              type="button"
+              className="queue-images-more"
+              data-queue-control="images"
+              aria-expanded={expanded}
+              aria-controls={galleryId}
+              aria-label={t(
+                expanded ? "queueHideExtraImages" : "queueShowAllImages",
+                { count: images.length },
+              )}
+              title={t(
+                expanded ? "queueHideExtraImages" : "queueShowAllImages",
+                {
+                  count: images.length,
+                },
+              )}
+              onClick={() => setExpanded(!expanded)}
+            >
+              {expanded ? (
+                <Icon name="chevron-down" size={14} />
+              ) : (
+                `+${images.length - previewLimit}`
+              )}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   );
 }

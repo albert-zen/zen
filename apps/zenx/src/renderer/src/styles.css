@@ -1,3 +1,4 @@
+@import "./queued-message-editor.css";
 @import "./approval-request.css";
 @import "./activity-text.css";
 @import "./queued-messages.css";
@@ -9728,6 +9729,30 @@ button:disabled {
   color: var(--danger);
   border-color: var(--danger);
   background: transparent;
+}
+.bottom-zone.has-queue:not(.has-approval) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.bottom-zone.has-queue:not(.has-approval) > .composer {
+  flex: 0 0 auto;
+}
+.bottom-zone.has-queue:not(.has-approval) > .queue-shelf {
+  flex: 0 1 auto;
+  min-height: 44px;
+}
+.bottom-zone.has-queue:not(.has-approval) > .queue-shelf.is-open {
+  min-height: 92px;
+}
+.bottom-zone.has-queue:not(.has-approval) .queue-shelf-details {
+  min-height: 44px;
+}
+.bottom-zone.has-queue:not(.has-approval) > .queued-cancel-notice {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 76px;
+  overflow: auto;
 }
 .bottom-zone.has-approval {
   max-height: calc(100% - 24px);

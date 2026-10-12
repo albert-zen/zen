@@ -15,11 +15,13 @@ Open `/apps/zenx/test/fixtures/agent-runtime-visual.html` with these query optio
 - `mode=runtime` (default), `scene=0..9`: concurrent work, native wait, approval,
   cancellation requested, cancellation unconfirmed, canonical stop with partial
   output, failure, completed answer, recovered history, and wait with parallel work.
-- `mode=queue`, `scene=0..7`: two inputs, one input, long text and images, many
-  inputs, delivery failure, idle continuation, approval coexistence, hidden-row failure.
+- `mode=queue`, `scene=0..9`: two inputs, one input, long text and images, many
+  inputs, delivery failure, idle continuation, approval coexistence, hidden-row failure,
+  six real local test images, and an unavailable-image scene.
 - `theme=light|dark`; `narrow&panelWidth=350` tests a narrow pane inside a wide window.
-- `response=confirm|fail` optionally supplies a simulated response 1.5 seconds
-  after a component action. Without it, use the visible confirmation/failure controls.
+- `response=confirm|fail|fail-once` optionally supplies a simulated response 1.5 seconds
+  after a component action. `fail-once` rejects the first request and confirms later
+  retries so the real modal can stay open through its failure flow. Without it, use the visible confirmation/failure controls.
 
 For an exact small component viewport, open
 `agent-runtime-frame.html?mode=queue&scene=6&theme=light&width=390&height=600`.
@@ -36,10 +38,17 @@ It embeds the same fixture, not a replacement mockup.
   `interrupted` turn without that fact is not presented as confirmed stopped.
 - Approval success resolves the request only; the tool still needs its own result.
   The full-request dialog uses native request parameters and the actual scope.
-- Image fixtures supply attachment metadata/counts only, without fabricated previews.
-  Queue edit and reorder are deliberately absent because no corresponding API exists.
+- Image fixtures now contain six locally generated geometric PNGs, with exact native
+  SHA-256/byte length/dimensions and real `onReadAttachment` bytes. These are clearly
+  labeled test images, never user attachments. `imageRead=fail-once` simulates a single
+  read failure per image for the actual retry action. Scene9 uses an intentionally
+  unavailable reference, and the readable second row remains separate.
+  The edit callback appends the actual native `user_message_queue_edited` revision
+  only after the simulated confirmation. It preserves queue ID/client/order and does
+  not cancel, requeue, or start work. `Add images` in this fixture supplies a labeled
+  generated PNG rather than opening a user file picker. Queue reorder remains absent.
 - The draft is real controlled Composer state. Disclosure, retry and cancellation
-  should preserve it.
+  should preserve it. Queue editor state is separate from this main draft.
 
 ## Suggested verification
 
@@ -53,11 +62,18 @@ It embeds the same fixture, not a replacement mockup.
 4. At 390×600, combine expanded queue, pending approval and a draft. Reject both an
    approval response and a queue cancellation; verify readable scope/cwd/errors,
    reachable 44-pixel decisions, queue scrolling and Composer controls.
-5. Check ordinary terminal folding versus active text selection, stopped partial
+5. Edit a queued text+image input, remove/add generated images, reject Save and
+   retry. Confirm only a native edit fact updates the row in its original position.
+   Cancel/close without saving leaves native input untouched.
+6. Check ordinary terminal folding versus active text selection, stopped partial
    output versus unconfirmed external work, and explicit Review activity focus.
 
 Automated regressions live in `agent-runtime-presentation.test.ts`,
 `agent-runtime-interaction.test.ts`, `approval-request-refinement.test.ts`,
-`activity-text.test.ts` and `queued-messages-refinement.test.ts`.
+`activity-text.test.ts`, `queued-messages-refinement.test.ts`, `queued-image.test.ts`
+and `queued-edit-interaction.test.ts`.
 Browser recordings demonstrate rendered component/event behavior, not Electron,
 provider end-to-end execution, physical-touch behavior or reduced-motion emulation.
+
+Queue-image pressure checks accept `lang=en` for English labels and `longError`
+for a deliberately long simulated editor failure. These are test inputs only.

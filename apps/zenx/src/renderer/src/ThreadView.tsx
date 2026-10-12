@@ -13,15 +13,22 @@ import { isCompactCommand } from "./compact-command.js";
 import { createPortal } from "react-dom";
 import {
   useEffect,
+  useCallback,
   useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 
 import type { AttachmentRef } from "../../../../../src/attachment.js";
+import { pendingQueuedMessages } from "../../../../../src/input-queue.js";
+import type {
+  NativeQueueEditParams,
+  NativeQueueEditResult,
+} from "../../../../../src/protocol/native/wire.js";
 import type {
   QueuedCancellationResult,
   QueuedCancellationTarget,
@@ -50,6 +57,7 @@ import {
   type ComposerDraftImage,
   type ComposerIntent,
   type ComposerState,
+  type ComposerDraft,
 } from "./composer-state.js";
 import type { ZenXThreadAttachmentProjection } from "../../main/image-attachments.js";
 import { ComposerShell, ComposerEditor } from "./Composer.js";
@@ -60,6 +68,17 @@ import { Icon } from "./icons.js";
 import { ActivityText } from "./ActivityText.js";
 import { ApprovalRequestCard } from "./ApprovalRequestCard.js";
 import { QueuedMessages } from "./QueuedMessages.js";
+import { QueuedMessageEditor } from "./QueuedMessageEditor.js";
+import { queuedInputDraft, queuedDraftInput } from "./queue-edit-draft.js";
+import {
+  createQueueEditStore,
+  type QueueEditStore,
+  type QueueEditSession,
+} from "./queue-edit-state.js";
+import {
+  projectQueuedImages,
+  sameImageAttachment,
+} from "./queued-message-images.js";
 import { PermissionSelect } from "./PermissionSelect.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
 import type { ModelMessage } from "../../../../../src/model.js";
@@ -103,10 +122,15 @@ interface ThreadViewProps {
     queuedItemId: string;
     clientId?: string;
     attemptId?: string;
+    revision?: number;
     code: string;
     message: string;
   } | null;
   onResumeQueue?(): Promise<void>;
+  queueEditStore?: QueueEditStore;
+  onEditQueued?(params: NativeQueueEditParams): Promise<NativeQueueEditResult>;
+  onImportQueueImages?(files: readonly File[]): Promise<ComposerDraftImage[]>;
+  onPickQueueImages?(): Promise<ComposerDraftImage[]>;
   onCancelQueued?(
     targets: readonly QueuedCancellationTarget[],
   ): Promise<{ results: QueuedCancellationResult[] }>;
@@ -163,9 +187,13 @@ export function ThreadView({
   composerId = "thread-composer",
   composerSendMode = "soft",
   onComposerSendModeChange,
-  queueFailure = null,
+  queueFailure: suppliedQueueFailure = null,
   onResumeQueue,
   onCancelQueued,
+  onEditQueued,
+  queueEditStore,
+  onImportQueueImages,
+  onPickQueueImages,
   approvals,
   composer,
   composerContext = null,
@@ -211,6 +239,17 @@ export function ThreadView({
   onOpenMessageLink,
 }: ThreadViewProps) {
   useTranslation("shell");
+  const queueFailure =
+    suppliedQueueFailure &&
+    thread?.queuedMessages?.some(
+      (message) =>
+        message.id === suppliedQueueFailure.queuedItemId &&
+        (suppliedQueueFailure.clientId === undefined ||
+          message.clientId === suppliedQueueFailure.clientId) &&
+        (message.revision ?? 0) === (suppliedQueueFailure.revision ?? 0),
+    )
+      ? suppliedQueueFailure
+      : null;
   const [stoppingRun, setStoppingRun] = useState<string | null>(null);
   const stopRequestRef = useRef<object | null>(null);
   const activeRunRef = useRef<string | null>(null);
@@ -221,6 +260,7 @@ export function ThreadView({
     threadId: string;
     queuedItemId: string;
     clientId: string;
+    revision: number;
     matchingFailureAttemptId: string | null;
     message: string;
   } | null>(null);
@@ -228,9 +268,78 @@ export function ThreadView({
   currentQueueFailureRef.current = queueFailure;
   const cancelLocks = useRef(new Map<string, Set<string>>());
   const resumeLocks = useRef(new Set<string>());
+  const editLocks = useRef(new Set<string>());
+  const editOwner = useRef(Symbol("queue editor viewport"));
+  const [localEditStore] = useState(createQueueEditStore);
+  const editStore = queueEditStore ?? localEditStore;
+  const editSessions = useSyncExternalStore(
+    editStore.subscribe,
+    editStore.getSnapshot,
+    editStore.getSnapshot,
+  );
+  // Async callbacks from an unmounted viewport still address the App-owned cache.
+  const editSessionsRef = useMemo(
+    () => ({
+      get current() {
+        return editStore.getSnapshot();
+      },
+    }),
+    [editStore],
+  );
+  const [openEditKey, setOpenEditKey] = useState<string | null>(null);
+  const updateEditSession = editStore.set;
+  useEffect(() => {
+    const owner = editOwner.current;
+    return () => {
+      for (const [key, session] of Object.entries(editStore.getSnapshot())) {
+        if (session.owner === owner)
+          editStore.set(key, { ...session, owner: undefined });
+      }
+    };
+  }, [editStore, thread?.id]);
+  const nativeQueue = useMemo(
+    () => pendingQueuedMessages(thread?.canonicalItems ?? []),
+    [thread?.canonicalItems],
+  );
+  const observedEdit = (session: QueueEditSession) =>
+    session.confirmed !== undefined &&
+    thread?.id === session.threadId &&
+    thread.canonicalItems?.some(
+      (item) =>
+        item.type === "user_message_queue_edited" &&
+        item.id === session.confirmed!.editItemId &&
+        item.threadId === session.threadId &&
+        item.queuedItemId === session.queuedItemId &&
+        item.clientId === session.clientId &&
+        item.revision === session.confirmed!.revision &&
+        item.editId === session.attempt?.editId &&
+        JSON.stringify(item.input) === session.attempt?.fingerprint,
+    ) === true;
+  useEffect(() => {
+    for (const [key, session] of Object.entries(editSessionsRef.current)) {
+      if (session.owner === undefined && observedEdit(session))
+        updateEditSession(key, null);
+    }
+  }, [thread?.canonicalItems, thread?.id, openEditKey, editSessions]);
+  const editableQueue = new Map(
+    nativeQueue.flatMap((item) => {
+      if (
+        !thread?.queuedMessages?.some(
+          (message) =>
+            message.id === item.id && message.clientId === item.clientId,
+        )
+      )
+        return [];
+      const draft = queuedInputDraft(item.input, item.id);
+      return draft === null ? [] : [[item.id, { item, draft }] as const];
+    }),
+  );
   const [, invalidateQueue] = useState(0);
   const cancelingQueue = thread !== null && cancelLocks.current.has(thread.id);
   const resumingQueue = thread !== null && resumeLocks.current.has(thread.id);
+  const editingQueue =
+    thread !== null &&
+    (editLocks.current.has(thread.id) || editStore.isPending(thread.id));
   const [cancelConfirmation, setCancelConfirmation] = useState<{
     threadId: string;
     targets: QueuedCancellationTarget[];
@@ -251,7 +360,46 @@ export function ThreadView({
     attachment: AttachmentRef;
     name: string;
     trigger: HTMLButtonElement;
+    queueOwner?: { threadId: string; queuedItemId: string; clientId: string };
   } | null>(null);
+  const queuedImages = useMemo(
+    () => projectQueuedImages(thread),
+    [thread?.canonicalItems, thread?.queuedMessages],
+  );
+  const queuedImageScope = useRef({
+    threadId: thread?.id,
+    images: queuedImages,
+  });
+  queuedImageScope.current = { threadId: thread?.id, images: queuedImages };
+  const readQueuedImage = useCallback(
+    async (attachment: AttachmentRef) => {
+      const scope = queuedImageScope.current;
+      if (
+        scope.threadId !== thread?.id ||
+        !Object.values(scope.images).some((images) =>
+          images.some((image) => sameImageAttachment(image, attachment)),
+        )
+      ) {
+        throw new Error(i18n.t("panels:imageUnavailable"));
+      }
+      return await onReadAttachment(attachment);
+    },
+    [thread?.id, onReadAttachment],
+  );
+  const queuePreviewCurrent =
+    preview?.queueOwner === undefined ||
+    (preview.queueOwner.threadId === thread?.id &&
+      thread.queuedMessages?.some(
+        (message) =>
+          message.id === preview.queueOwner!.queuedItemId &&
+          message.clientId === preview.queueOwner!.clientId,
+      ) === true &&
+      queuedImages[preview.queueOwner.queuedItemId]?.some((image) =>
+        sameImageAttachment(image, preview.attachment),
+      ) === true);
+  useEffect(() => {
+    if (!queuePreviewCurrent) setPreview(null);
+  }, [queuePreviewCurrent]);
   const [atLive, setAtLive] = useState(true);
   const [skills, setSkills] = useState<SkillEntry[]>([]);
   const [skillError, setSkillError] = useState<string | null>(null);
@@ -452,6 +600,80 @@ export function ThreadView({
     if (primaryMode === "stop") void interrupt();
     else submit(sendIntent);
   };
+  const saveQueuedEdit = async (key: string, draft: ComposerDraft) => {
+    const session = editSessionsRef.current[key];
+    if (
+      !session ||
+      session.owner !== editOwner.current ||
+      session.confirmed ||
+      session.pending ||
+      !onEditQueued ||
+      composerDisabled ||
+      currentThreadRef.current !== session.threadId ||
+      editLocks.current.has(session.threadId) ||
+      editStore.isPending(session.threadId) ||
+      cancelLocks.current.has(session.threadId) ||
+      resumeLocks.current.has(session.threadId)
+    ) {
+      throw new Error(i18n.t("shell:queueEditBusy"));
+    }
+    const input = queuedDraftInput(draft);
+    const fingerprint = JSON.stringify(input);
+    const attempt =
+      session.attempt?.fingerprint === fingerprint
+        ? session.attempt
+        : { editId: crypto.randomUUID(), fingerprint };
+    editLocks.current.add(session.threadId);
+    updateEditSession(key, {
+      ...session,
+      draft,
+      attempt,
+      pending: true,
+      error: null,
+    });
+    try {
+      const result = await onEditQueued({
+        threadId: session.threadId,
+        queuedItemId: session.queuedItemId,
+        clientId: session.clientId,
+        expectedRevision: session.expectedRevision,
+        editId: attempt.editId,
+        input,
+      });
+      if (
+        typeof result.editItemId !== "string" ||
+        result.editItemId.length === 0 ||
+        result.queuedItemId !== session.queuedItemId ||
+        result.clientId !== session.clientId ||
+        result.revision !== session.expectedRevision + 1 ||
+        !["edited", "already_edited"].includes(result.status)
+      )
+        throw new Error(i18n.t("shell:queueEditUnconfirmed"));
+      const current = editSessionsRef.current[key];
+      if (current?.identity === session.identity)
+        updateEditSession(key, {
+          ...current,
+          pending: false,
+          error: null,
+          confirmed: {
+            editItemId: result.editItemId,
+            revision: result.revision,
+          },
+        });
+    } catch (error) {
+      const current = editSessionsRef.current[key];
+      if (current?.identity === session.identity)
+        updateEditSession(key, {
+          ...current,
+          pending: false,
+          error: describeError(error),
+        });
+      throw error;
+    } finally {
+      editLocks.current.delete(session.threadId);
+      invalidateQueue((n) => n + 1);
+    }
+  };
   const cancelQueued = async (targets: readonly QueuedCancellationTarget[]) => {
     if (
       thread === null ||
@@ -460,7 +682,9 @@ export function ThreadView({
       currentThreadRef.current !== thread.id ||
       targets.length === 0 ||
       cancelLocks.current.has(thread.id) ||
-      resumeLocks.current.has(thread.id)
+      resumeLocks.current.has(thread.id) ||
+      editLocks.current.has(thread.id) ||
+      editStore.isPending(thread.id)
     )
       return;
     const threadId = thread.id;
@@ -499,7 +723,9 @@ export function ThreadView({
       runningTurn !== null ||
       currentThreadRef.current !== thread.id ||
       resumeLocks.current.has(thread.id) ||
-      cancelLocks.current.has(thread.id)
+      cancelLocks.current.has(thread.id) ||
+      editLocks.current.has(thread.id) ||
+      editStore.isPending(thread.id)
     )
       return;
     const threadId = thread.id;
@@ -534,6 +760,7 @@ export function ThreadView({
           threadId,
           queuedItemId: head.id,
           clientId: head.clientId,
+          revision: head.revision ?? 0,
           matchingFailureAttemptId,
           message,
         });
@@ -549,7 +776,8 @@ export function ThreadView({
     thread?.queuedMessages?.some(
       (entry) =>
         entry.id === queueResumeError.queuedItemId &&
-        entry.clientId === queueResumeError.clientId,
+        entry.clientId === queueResumeError.clientId &&
+        (entry.revision ?? 0) === queueResumeError.revision,
     ) &&
     !(
       queueResumeError.matchingFailureAttemptId !== null &&
@@ -781,9 +1009,94 @@ export function ThreadView({
           <QueuedMessages
             threadId={thread.id}
             messages={thread.queuedMessages ?? []}
+            attachments={queuedImages}
+            onReadAttachment={readQueuedImage}
+            onOpenImage={(message, attachment, name, trigger) => {
+              if (
+                currentThreadRef.current !== thread.id ||
+                !thread.queuedMessages?.some(
+                  (current) =>
+                    current.id === message.id &&
+                    current.clientId === message.clientId,
+                ) ||
+                !queuedImages[message.id]?.some((image) =>
+                  sameImageAttachment(image, attachment),
+                )
+              )
+                return;
+              setPreview({
+                attachment,
+                name,
+                trigger,
+                queueOwner: {
+                  threadId: thread.id,
+                  queuedItemId: message.id,
+                  clientId: message.clientId,
+                },
+              });
+            }}
             queueFailure={queueFailure}
             pendingIds={cancelLocks.current.get(thread.id)}
-            busy={cancelingQueue || composerDisabled}
+            busy={cancelingQueue || editingQueue || composerDisabled}
+            editableIds={new Set(editableQueue.keys())}
+            editingIds={
+              new Set(
+                Object.values(editSessions)
+                  .filter(
+                    (session) =>
+                      session.threadId === thread.id && session.pending,
+                  )
+                  .map((session) => session.queuedItemId),
+              )
+            }
+            onEdit={
+              onEditQueued
+                ? (target, trigger) => {
+                    const candidate = editableQueue.get(target.id);
+                    const key = JSON.stringify([
+                      thread.id,
+                      target.id,
+                      target.clientId,
+                    ]);
+                    const previous = editSessionsRef.current[key];
+                    const inspectingPending = previous?.pending === true;
+                    if (
+                      !candidate ||
+                      candidate.item.clientId !== target.clientId ||
+                      currentThreadRef.current !== thread.id ||
+                      (!inspectingPending &&
+                        (composerDisabled ||
+                          cancelingQueue ||
+                          resumingQueue ||
+                          editStore.isPending(thread.id))) ||
+                      (previous?.owner !== undefined &&
+                        previous.owner !== editOwner.current)
+                    )
+                      return;
+                    updateEditSession(
+                      key,
+                      previous && !observedEdit(previous)
+                        ? { ...previous, trigger, owner: editOwner.current }
+                        : {
+                            owner: editOwner.current,
+                            identity: JSON.stringify([
+                              key,
+                              candidate.item.revision,
+                            ]),
+                            threadId: thread.id,
+                            queuedItemId: target.id,
+                            clientId: target.clientId,
+                            expectedRevision: candidate.item.revision,
+                            draft: candidate.draft,
+                            trigger,
+                            pending: false,
+                            error: null,
+                          },
+                    );
+                    setOpenEditKey(key);
+                  }
+                : undefined
+            }
             resuming={resumingQueue}
             resumeError={visibleResumeError}
             compact={pendingApprovals.length > 0}
@@ -1168,13 +1481,103 @@ export function ThreadView({
           </div>
         </Dialog>
       )}
-      {preview === null ? null : (
+      {Object.entries(editSessions).map(([key, session]) => (
+        <QueuedMessageEditor
+          key={session.identity}
+          identity={session.identity}
+          open={
+            openEditKey === key &&
+            session.owner === editOwner.current &&
+            thread?.id === session.threadId
+          }
+          initialDraft={session.draft}
+          pending={session.pending}
+          error={session.error}
+          trigger={session.trigger}
+          canRestoreFocus={() =>
+            currentThreadRef.current === session.threadId &&
+            document.getSelection()?.isCollapsed !== false
+          }
+          onRestoreFocus={() => {
+            if (
+              currentThreadRef.current === session.threadId &&
+              !document.querySelector('[role="dialog"]') &&
+              document.getSelection()?.isCollapsed !== false
+            )
+              composerTextareaRef.current?.focus({ preventScroll: true });
+          }}
+          disabledReason={
+            session.confirmed
+              ? i18n.t("shell:queueEditSyncing")
+              : composerDisabled
+                ? i18n.t("shell:queueEditBusy")
+                : undefined
+          }
+          onDraftChange={(draft) => {
+            const current = editSessionsRef.current[key];
+            if (
+              current?.owner === editOwner.current &&
+              !current.pending &&
+              !current.confirmed
+            )
+              updateEditSession(key, { ...current, draft });
+          }}
+          onSave={(draft) => saveQueuedEdit(key, draft)}
+          onClose={(_reason) => {
+            const current = editSessionsRef.current[key];
+            if (current?.owner === editOwner.current) {
+              if (
+                !current.pending &&
+                (!current.confirmed || observedEdit(current))
+              )
+                updateEditSession(key, null);
+              else updateEditSession(key, { ...current, owner: undefined });
+            }
+            setOpenEditKey((value) => (value === key ? null : value));
+          }}
+          onReadAttachment={onReadAttachment}
+          onImportImages={
+            onImportQueueImages ??
+            (async () => {
+              throw new Error(i18n.t("shell:imageReaderUnavailable"));
+            })
+          }
+          onPickImages={
+            onPickQueueImages ??
+            (async () => {
+              throw new Error(i18n.t("shell:imageReaderUnavailable"));
+            })
+          }
+        />
+      ))}
+      {preview === null || !queuePreviewCurrent ? null : (
         <ImagePreview
           attachment={preview.attachment}
           name={preview.name}
           onClose={() => setPreview(null)}
-          onReadAttachment={onReadAttachment}
+          onReadAttachment={
+            preview.queueOwner ? readQueuedImage : onReadAttachment
+          }
           trigger={preview.trigger}
+          safeError={preview.queueOwner !== undefined}
+          restoreFocus={
+            preview.queueOwner
+              ? () => {
+                  if (
+                    currentThreadRef.current !== preview.queueOwner!.threadId ||
+                    !document.getSelection()?.isCollapsed
+                  )
+                    return;
+                  if (
+                    preview.trigger.isConnected &&
+                    !preview.trigger.closest("[hidden]")
+                  )
+                    preview.trigger.focus({ preventScroll: true });
+                  else
+                    composerTextareaRef.current?.focus({ preventScroll: true });
+                }
+              : undefined
+          }
         />
       )}
     </div>
