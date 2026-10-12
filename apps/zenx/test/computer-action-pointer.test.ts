@@ -7,6 +7,7 @@ import { ComputerZenXCapabilityPackage } from "../src/main/capabilities/computer
 import type { ComputerThreadEvent } from "../src/main/capabilities/computer-thread-observation.js";
 import type {
   ComputerActionPointer,
+  ComputerInspection,
   ComputerTarget,
   ZenXComputerBackend,
 } from "../src/main/capabilities/computer-provider.js";
@@ -23,6 +24,7 @@ const pointer = (): ComputerActionPointer => ({
 
 function backend() {
   const state = { starts: 0, stops: 0 };
+  let capture = 0;
   const implementation: ZenXComputerBackend = {
     observeWindow: () => {
       state.starts += 1;
@@ -31,7 +33,22 @@ function backend() {
       };
     },
     inspect: async () => {
-      throw new Error("unused");
+      const observationId = `observed-${++capture}`;
+      return {
+        platform: process.platform,
+        observationId,
+        target: { pid: 42, applicationName: "Fixture", windowTitle: "Fixture" },
+        controls: [
+          {
+            selector: { observationId, targetId: "button" },
+            role: "button",
+            title: "Button",
+            enabled: true,
+            actions: ["press"],
+          },
+        ],
+        truncated: false,
+      };
     },
     press: async () => {
       throw new Error("unused");
@@ -101,6 +118,7 @@ test("a successful Computer action explicitly restarts a failed same-window capt
     pointer: pointer(),
   });
   const capability = new ComputerZenXCapabilityPackage(implementation);
+  let control = (await inspectOwned(capability)).controls[0]!.selector;
   const events: ComputerThreadEvent[] = [];
   capability.observeThread({ threadId: "a", frames: true }, (event) =>
     events.push(event),
@@ -112,13 +130,12 @@ test("a successful Computer action explicitly restarts a failed same-window capt
       name: "computer_press",
       arguments: {
         target,
-        control: { observationId: "observed", targetId: "button" },
+        control,
       },
       cwd: "/workspace",
       signal: new AbortController().signal,
     });
   try {
-    await press("first-action");
     await new Promise((resolve) => setImmediate(resolve));
     assert.ok(
       events.some(
@@ -134,6 +151,7 @@ test("a successful Computer action explicitly restarts a failed same-window capt
     assert.equal(captures, 2);
     assert.equal(events.at(-1)?.type, "frame");
 
+    control = (await inspectOwned(capability)).controls[0]!.selector;
     await press("continuing-action");
     assert.equal(starts, 2, "healthy same-window capture stays continuous");
   } finally {
@@ -200,6 +218,7 @@ test("Computer action pointer is observable but omitted from the canonical tool 
     pointer: pointer(),
   });
   const capability = new ComputerZenXCapabilityPackage(implementation);
+  const control = (await inspectOwned(capability)).controls[0]!.selector;
   const events: Array<{
     type: string;
     targets?: Array<{ pointer?: ComputerActionPointer }>;
@@ -213,7 +232,7 @@ test("Computer action pointer is observable but omitted from the canonical tool 
     name: "computer_press",
     arguments: {
       target,
-      control: { observationId: "observed", targetId: "button" },
+      control,
     },
     cwd: "/workspace",
     signal: new AbortController().signal,
@@ -225,3 +244,16 @@ test("Computer action pointer is observable but omitted from the canonical tool 
     "press",
   );
 });
+
+async function inspectOwned(
+  capability: ComputerZenXCapabilityPackage,
+): Promise<ComputerInspection> {
+  return (await capability.invoke("computer_inspect", {
+    callId: "inspect",
+    threadId: "a",
+    name: "computer_inspect",
+    arguments: { target },
+    cwd: "/workspace",
+    signal: new AbortController().signal,
+  })) as ComputerInspection;
+}

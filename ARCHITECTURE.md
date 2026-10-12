@@ -1,5 +1,9 @@
 # ARCHITECTURE
 
+- **ZenX activity observation** — Renderer derives one disposable per-Turn task-receipt index and contiguous trace summaries from existing Items; request acknowledgement, call disposition and underlying task lifetime remain separate, without new runtime authority.
+- **ZenX approval review** — Composer-attached requests and user-opened full details share exact request-scoped transient response/focus ownership and existing Host decisions; presentation never creates or broadens permission.
+- **ZenX pending-message shelf** — A renderer-only view of canonical queued identity, order, revision and input, with local disclosure, transient edit drafts and request feedback; native exact-target edit/cancellation/resume commands remain the authority, without reorder or optimistic removal.
+
 - **ZenX 界面语言** — Renderer 的本地语言偏好（system/en/zh-CN）只拥有展示选择；集中式 i18next 词条按功能分组，通过 React 订阅即时更新，系统模式按 Electron 返回的有序语言列表解析，原生菜单同步展示语言，不改写 canonical 内容、Host 配置或插件语义。
 
 ## 核心概念
@@ -344,6 +348,7 @@
   重验且在导航、关闭、新观察或动作后失效；它是产品侧瞬时状态，不进入 Zen Core 或 durable journal。
   Browser 在候选截断前排除无动作节点；Computer 各后端共用有界选择，优先保留可用语义动作，再以剩余名额保留文字上下文，返回仍按原观察顺序。
   Browser observations additionally project bounded current non-password control state and native select options; mutations consume the prior observation, and an explicitly requested follow-up observation is a new fail-closed inspect result.
+  Observation presentation retains an owner-scoped, bounded, short-lived capture for explicit cursor reads and optional base-referenced diffs. Stable browser node references identify surviving DOM objects; Computer references express only unique exact-fingerprint presentation continuity, never native object identity or renewed action authority. Every action remains bound to its fresh observation and native revalidation. Cursor pages retain the same immutable capture, disclose native capture omissions separately from available pages, and expire explicitly on mutation, scope change, eviction or provider retirement. Omitting a diff base (including after context compaction) requests a self-contained full bounded view; this adds no durable journal or automatic recovery authority.
 
 - **ZenXUserBrowserAttachmentEpoch** — ZenX user-browser provider 用实际 CDP sessionId、target、逻辑 session owner 与
   attach attempt/incarnation 关联一次瞬时 attachment ownership，并在移除任何映射前把无法证明闭合的生命周期证据
@@ -1060,6 +1065,12 @@ Host 为兼容模型流解析失败保存独立、限量轮转的结构化诊断
 消息队列由 canonical `user_message_queued` 记录及同clientId的已交付user_message推导，Core按FIFO在正常完成后启动新Turn，失败/中断暂停且可显式继续；接入端仅投影队列。显式 batch-next 是队列Item上的投递选择，Host在下一Turn接纳固定有界FIFO批次并为每条输入分别写入带原clientId的canonical user_message；未指定选择的自动化/兼容客户端继续逐条Turn。运行中发送模式是桌面偏好，新手动Composer默认有活动Turn时 steer、无活动Turn时 start，可选下一轮合批或逐条队列；偏好不改变已入队的Item。偏好的 explicit 标记仅用于区分新手动Composer隐式 steer 与旧用户显式 steer 对自控插件的影响，不携带Thread运行时语义。Host 以临时 attemptId + queuedItemId 标识队列接纳尝试，预检或异步启动失败发出不携原始凭证/输入的 native queue_failed 通知；显式 resume 共享同一Thread首批临时 admission Promise，直到初始输入落盘或启动拒收才应答，不等待完整Turn、不自动重试，也不把该Promise存为会话权威；队列状态仅由 ItemList 决定。旧归一化Queue无法区分隐式默认与旧手选时，用户偏好层一次迁移至手动steer并记录版本、原Queue值和可见恢复/确认状态；该设置不改变已有队列Item或自动化投递。
 
 ZenX 在 app ready 后先打开无需IPC的静态启动页，同一窗口在Host/IPC准备就绪后切入应用；启动错误显示在该窗口，启动中再次激活只聚焦或恢复启动窗口。
+
+原生排队输入编辑通过 append-only `user_message_queue_edited` 保存绑定原 queuedItemId/clientId 的连续 revision、editId 与完整文本/图片输入；ItemList 投影在原位置取最新版本，editId 仅从已提交 Item 派生幂等收据，修改与取消/接纳共享同 Thread mutation fence 并核验 expectedRevision，编辑不恢复队列，包含 Host skill 快照或音频的输入明确拒绝编辑而不丢失内容。
+
+队列图片只从同 Thread pending native input 的精确 queuedItemId/clientId 引用复用既有附件 read/viewer，不存新 payload 或外部路径。
+
+ZenX queued-message edit drafts and pending edit receipts live in one App-owned, memory-only UI store shared by its viewports, so loading/navigation does not lose an in-flight edit identity; only exact canonical edit facts reconcile displayed queue content and retire confirmed drafts. Explicit discard clears an unsent local draft without mutating the queue. The Electron bridge carries only a whitelisted native rejection code in an edit-only serializable envelope so renderer feedback survives IPC/contextBridge; this transport detail adds no queue state or protocol authority. An uncertain edit response is read back once; a recovered snapshot triggers the existing read-only native resume barrier for the still-owning viewport, never queue resume or an automatic edit retry.
 
 显式取消排队输入通过 append-only `user_message_queue_cancelled` 按原 `queuedItemId/clientId` 标记未接纳的输入，同一Host进程在同一Thread mutation fence 内与首批launch瞬时占用裁定输赢，取消成功不再由该Host交付，已占用或已有 canonical 用户消息不得假撤回；占用不是第二套持久会话权威，进程重启后仅由ItemList恢复待发/已取消事实，此锁不宣称解决两个独立Host共用journal目录的跨进程所有权问题。
 

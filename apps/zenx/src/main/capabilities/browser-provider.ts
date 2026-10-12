@@ -1,5 +1,18 @@
 import { observeElectronPage } from "./browser-electron-observation.js";
 import {
+  ObservationPresentation,
+  observationReadOptions,
+  observationReadProperties,
+  MAX_OBSERVATION_PAGE_BYTES,
+  type ObservationReadOptions,
+} from "./observation-presentation.js";
+import {
+  OBSERVATION_CAPTURE,
+  MAX_OBSERVATION_CAPTURE_ITEMS,
+  MAX_OBSERVATION_CAPTURE_TEXT,
+  type ObservationCapture,
+} from "./observation-capture.js";
+import {
   BrowserThreadObservation,
   type BrowserThreadRequest,
   type BrowserThreadListener,
@@ -32,6 +45,9 @@ export interface BrowserTabSummary {
 }
 
 export interface BrowserInspection extends BrowserTabSummary {
+  [OBSERVATION_CAPTURE]?: ObservationCapture<
+    BrowserInspection["targets"][number]
+  >;
   observationId: string;
   documentVersion: number;
   visibleText: string;
@@ -169,13 +185,13 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
   schemaVersion: 2,
   id: "browser",
   name: "Browser",
-  version: "1.0.3",
+  version: "1.0.4",
   description:
     "A dedicated ephemeral ZenX browser session with bounded DOM inspection and narrow navigation and interaction tools.",
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
   runtime: { type: "bundled", entry: "zenx/browser" },
   mainDocument:
-    "Use Browser for bounded tab inspection, navigation, and page interaction. Prefer observe:true on open, navigate, click, type, select and scroll to return fresh targets with the action, avoiding a separate inspect call. If actionCompleted:true includes observationError, inspect again without repeating the completed action.",
+    "Use Browser for bounded tab inspection and interaction. Inspect coverage: a full response is a self-contained bounded view, not necessarily the whole page. Follow nextCursor with browser_inspect cursor to read the same immutable capture without renewing its observationId; native omissions remain explicit. Stable targetId values only act with the latest observationId and are revalidated. Prefer observe:true on actions. Pass baseObservationId only while retaining that first-page baseline (and applied targetChanges); omitted base or full:true resynchronizes, including after context compaction. Diffs use added/updated/removedFromView and optional complete order, with visibleText replaced only when present; removedFromView never proves DOM deletion. Cursor pages do not change the first-page diff baseline. Discard all prior continuation pages when adopting a new observation or first-page diff; use the new nextCursor to read its tails. If actionCompleted:true includes observationError, inspect again without repeating the completed action.",
   provider: {
     id: "electron-dedicated-browser",
     platforms: ["darwin", "win32", "linux"],
@@ -259,36 +275,43 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
           sessionId: stringSchema(),
           url: stringSchema(),
           observe: observationOption(),
+          baseObservationId: observationReadProperties.baseObservationId,
+          full: observationReadProperties.full,
         },
         ["sessionId", "url"],
       ),
       permissions: ["browser.navigate", "browser.tabs.read"],
       interactionMode: "background_safe",
       capabilities: ["dedicated_profile", "cdp", "dom.navigate"],
-      maxOutputBytes: 12 * 1024,
+      maxOutputBytes: MAX_OBSERVATION_PAGE_BYTES,
     },
     {
       name: "browser_navigate",
       description:
         "Navigate one explicit ZenX browser session/tab target to an http(s) URL.",
       inputSchema: browserTargetSchema(
-        { url: stringSchema(), observe: observationOption() },
+        {
+          url: stringSchema(),
+          observe: observationOption(),
+          baseObservationId: observationReadProperties.baseObservationId,
+          full: observationReadProperties.full,
+        },
         ["url"],
       ),
       permissions: ["browser.navigate", "browser.tabs.read"],
       interactionMode: "background_safe",
       capabilities: ["dedicated_profile", "cdp", "dom.navigate"],
-      maxOutputBytes: 12 * 1024,
+      maxOutputBytes: MAX_OBSERVATION_PAGE_BYTES,
     },
     {
       name: "browser_inspect",
       description:
-        "Create the latest bounded observation for one ZenX browser tab and return opaque target IDs, current non-password control state, and bounded native select options for visible controls.",
-      inputSchema: browserTargetSchema(),
+        "Inspect one tab, or use nextCursor to read more of its exact captured snapshot. Coverage distinguishes unread captured data from native omissions. Omit baseObservationId or set full:true for a self-contained first page; a retained matching base allows a smaller diff. Target IDs are stable only for surviving observed DOM nodes; actions require the fresh observationId.",
+      inputSchema: browserTargetSchema({ ...observationReadProperties }),
       permissions: ["browser.tabs.read"],
       interactionMode: "background_safe",
       capabilities: ["dedicated_profile", "cdp", "dom.inspect"],
-      maxOutputBytes: 12 * 1024,
+      maxOutputBytes: MAX_OBSERVATION_PAGE_BYTES,
     },
     {
       name: "browser_click",
@@ -299,13 +322,15 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
           observationId: stringSchema(),
           targetId: stringSchema(),
           observe: observationOption(),
+          baseObservationId: observationReadProperties.baseObservationId,
+          full: observationReadProperties.full,
         },
         ["observationId", "targetId"],
       ),
       permissions: ["browser.interact", "browser.tabs.read"],
       interactionMode: "background_safe",
       capabilities: ["dedicated_profile", "cdp", "dom.click"],
-      maxOutputBytes: 12 * 1024,
+      maxOutputBytes: MAX_OBSERVATION_PAGE_BYTES,
     },
     {
       name: "browser_type",
@@ -314,6 +339,8 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       inputSchema: browserTargetSchema(
         {
           observe: observationOption(),
+          baseObservationId: observationReadProperties.baseObservationId,
+          full: observationReadProperties.full,
           observationId: stringSchema(),
           targetId: stringSchema(),
           text: stringSchema(),
@@ -324,7 +351,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       permissions: ["browser.interact", "browser.tabs.read"],
       interactionMode: "background_safe",
       capabilities: ["dedicated_profile", "cdp", "dom.set_value"],
-      maxOutputBytes: 12 * 1024,
+      maxOutputBytes: MAX_OBSERVATION_PAGE_BYTES,
     },
     {
       name: "browser_select",
@@ -333,6 +360,8 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       inputSchema: browserTargetSchema(
         {
           observe: observationOption(),
+          baseObservationId: observationReadProperties.baseObservationId,
+          full: observationReadProperties.full,
           observationId: stringSchema(),
           targetId: stringSchema(),
           option: stringSchema(),
@@ -342,7 +371,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       permissions: ["browser.interact", "browser.tabs.read"],
       interactionMode: "background_safe",
       capabilities: ["dedicated_profile", "cdp", "dom.select_option"],
-      maxOutputBytes: 12 * 1024,
+      maxOutputBytes: MAX_OBSERVATION_PAGE_BYTES,
     },
     {
       name: "browser_scroll",
@@ -351,6 +380,8 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       inputSchema: browserTargetSchema(
         {
           observe: observationOption(),
+          baseObservationId: observationReadProperties.baseObservationId,
+          full: observationReadProperties.full,
           observationId: stringSchema(),
           direction: { type: "string", enum: ["up", "down", "left", "right"] },
           pixels: { type: "integer", minimum: 1, maximum: 2000 },
@@ -360,7 +391,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       permissions: ["browser.interact", "browser.tabs.read"],
       interactionMode: "background_safe",
       capabilities: ["dedicated_profile", "cdp", "dom.scroll"],
-      maxOutputBytes: 12 * 1024,
+      maxOutputBytes: MAX_OBSERVATION_PAGE_BYTES,
     },
     {
       name: "browser_close",
@@ -387,7 +418,7 @@ function observationOption() {
   return {
     type: "boolean",
     description:
-      "Return a fresh full observation and new target IDs after the action; prefer true to avoid a separate browser_inspect call. Defaults to false.",
+      "Return a fresh observation after the action; prefer true to avoid a separate browser_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false.",
   };
 }
 
@@ -404,6 +435,9 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
   readonly manifest: ZenXPluginManifestV2;
   readonly #backend: ZenXBrowserBackend;
   readonly #threadObservation: BrowserThreadObservation;
+  readonly #presentation: ObservationPresentation<
+    BrowserInspection["targets"][number]
+  >;
 
   constructor(
     backend: ZenXBrowserBackend,
@@ -411,6 +445,15 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
   ) {
     this.#backend = backend;
     this.#threadObservation = new BrowserThreadObservation(backend);
+    this.#presentation = new ObservationPresentation({
+      itemsField: "targets",
+      changesField: "targetChanges",
+      textField: "visibleText",
+      pageItems: manifest.provider?.id === "playwright-cli" ? 128 : 80,
+      identityKind: "dom-node",
+      getId: (target) => target.targetId,
+      withId: (target, targetId) => ({ ...target, targetId }),
+    });
     this.manifest = manifest;
   }
 
@@ -456,16 +499,91 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
     invocation: ToolInvocation,
   ): Promise<unknown> {
     const observe = optionalBoolean(invocation.arguments, "observe") ?? false;
+    const options = observationReadOptions(invocation.arguments);
+    if (options.cursor !== undefined && toolName !== "browser_inspect")
+      throw new Error("cursor is only supported by browser_inspect");
+    if (
+      toolName !== "browser_inspect" &&
+      !observe &&
+      (options.baseObservationId !== undefined || options.full === true)
+    )
+      throw new Error(
+        "baseObservationId/full requires browser_inspect or observe:true",
+      );
+    if (toolName === "browser_inspect") {
+      const sessionId = requiredTargetId(invocation.arguments, "sessionId");
+      const tabId = requiredTargetId(invocation.arguments, "tabId");
+      const key = this.#observationKey(sessionId, tabId);
+      if (options.cursor !== undefined)
+        return await this.#presentation.read(
+          key,
+          options.cursor,
+          invocation.signal,
+        );
+      return this.#presentInspection(
+        await this.#backend.inspect(sessionId, tabId, invocation.signal),
+        options,
+      );
+    }
+    const sessionId = requiredTargetId(invocation.arguments, "sessionId");
+    const tabId =
+      typeof invocation.arguments.tabId === "string"
+        ? invocation.arguments.tabId
+        : undefined;
+    const key =
+      tabId === undefined ? undefined : this.#observationKey(sessionId, tabId);
+    if (
+      key !== undefined &&
+      [
+        "browser_click",
+        "browser_type",
+        "browser_select",
+        "browser_scroll",
+      ].includes(toolName)
+    ) {
+      if (invocation.threadId !== undefined || this.#presentation.has(key)) {
+        const observationId = requiredTargetId(
+          invocation.arguments,
+          "observationId",
+        );
+        if (toolName === "browser_scroll")
+          await this.#presentation.assertObservation(
+            key,
+            observationId,
+            invocation.signal,
+          );
+        else
+          invocation = {
+            ...invocation,
+            arguments: {
+              ...invocation.arguments,
+              targetId: await this.#presentation.resolveAction(
+                key,
+                observationId,
+                requiredTargetId(invocation.arguments, "targetId"),
+                invocation.signal,
+              ),
+            },
+          };
+      }
+      this.#presentation.invalidate(key);
+    } else if (key !== undefined && toolName === "browser_navigate")
+      this.#presentation.invalidate(key);
+    else if (key !== undefined && toolName === "browser_close")
+      this.#presentation.forget(key);
+    else if (toolName === "browser_close_session")
+      this.#presentation.forgetPrefix(`${JSON.stringify(sessionId)}:`);
     const result = await this.#invoke(toolName, invocation);
     if (!observe || !BROWSER_OBSERVABLE_ACTIONS.has(toolName)) return result;
     const action = result as BrowserTabSummary;
     try {
       invocation.signal.throwIfAborted();
-      return await this.#backend.inspect(
+      const inspected = await this.#backend.inspect(
         action.sessionId,
         action.tabId,
         invocation.signal,
       );
+      return this.#presentInspection(inspected, options);
     } catch (error) {
       // The mutation already completed. Never turn a failed follow-up read into
       // an invitation to retry the action (which could submit the form twice).
@@ -478,6 +596,40 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
           "The action completed. Call browser_inspect for a fresh observation; do not repeat the action.",
       };
     }
+  }
+
+  #observationKey(sessionId: string, tabId: string): string {
+    return `${JSON.stringify(sessionId)}:${JSON.stringify(tabId)}`;
+  }
+
+  #presentInspection(
+    result: BrowserInspection,
+    options: ObservationReadOptions,
+  ): Record<string, unknown> {
+    const {
+      targets,
+      visibleText,
+      [OBSERVATION_CAPTURE]: captured,
+      ...header
+    } = result;
+    const capture: ObservationCapture<BrowserInspection["targets"][number]> =
+      captured ?? {
+        scopeKey: `${result.sessionId}/${result.tabId}/${result.documentVersion}`,
+        entries: targets.map((value) => ({ value })),
+        text: visibleText,
+        coverage: {
+          scope: "backend-provided bounded observation",
+          sourceComplete: null,
+          reasons: ["backend_capture_coverage_unknown"],
+        },
+      };
+    return this.#presentation.publish(
+      this.#observationKey(result.sessionId, result.tabId),
+      result.observationId,
+      header,
+      capture,
+      options,
+    );
   }
 
   async #invoke(
@@ -573,6 +725,7 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
   }
 
   async close(): Promise<void> {
+    this.#presentation.close();
     this.#threadObservation.close();
     await this.#backend.close();
   }
@@ -596,6 +749,7 @@ interface BrowserSessionIncarnation {
 
 export interface BrowserTargetFingerprint {
   documentIdentity?: string;
+  nodeIdentity?: string;
   selector: string;
   tag: string;
   role: string;
@@ -613,9 +767,65 @@ export interface BrowserTargetFingerprint {
   optionsTruncated?: boolean;
 }
 
+/** Internal result produced only in a provider-controlled isolated world. */
+export interface BrowserDomInspection {
+  visibleText: string;
+  targets: BrowserTargetFingerprint[];
+  documentIdentity?: string;
+  itemTotal?: number;
+  textTotal?: number;
+}
+
+export function browserDomCapture(
+  inspected: BrowserDomInspection,
+  projected: BrowserInspection["targets"],
+  scopePrefix: string,
+): ObservationCapture<BrowserInspection["targets"][number]> {
+  const knownTotals =
+    inspected.itemTotal !== undefined && inspected.textTotal !== undefined;
+  const reasons = ["iframe-and-shadow-root-content-excluded"];
+  if (!knownTotals) reasons.push("native-source-totals-unavailable");
+  if (inspected.documentIdentity === undefined)
+    reasons.push("native-document-identity-unavailable");
+  if ((inspected.itemTotal ?? 0) > MAX_OBSERVATION_CAPTURE_ITEMS)
+    reasons.push("native-target-limit");
+  if ((inspected.textTotal ?? 0) > MAX_OBSERVATION_CAPTURE_TEXT)
+    reasons.push("native-text-limit");
+  return {
+    scopeKey: JSON.stringify([scopePrefix, inspected.documentIdentity ?? null]),
+    entries: projected
+      .slice(0, MAX_OBSERVATION_CAPTURE_ITEMS)
+      .map((value, index) => ({
+        value,
+        ...(inspected.documentIdentity === undefined ||
+        inspected.targets[index]?.nodeIdentity === undefined
+          ? {}
+          : { identity: inspected.targets[index]!.nodeIdentity! }),
+      })),
+    text: inspected.visibleText.slice(0, MAX_OBSERVATION_CAPTURE_TEXT),
+    coverage: {
+      scope:
+        "top-document light-DOM viewport controls and normalized body text",
+      sourceComplete:
+        knownTotals && inspected.documentIdentity !== undefined
+          ? inspected.itemTotal! <= MAX_OBSERVATION_CAPTURE_ITEMS &&
+            inspected.textTotal! <= MAX_OBSERVATION_CAPTURE_TEXT
+          : null,
+      reasons,
+      ...(inspected.itemTotal === undefined
+        ? {}
+        : { itemTotal: inspected.itemTotal }),
+      ...(inspected.textTotal === undefined
+        ? {}
+        : { textTotal: inspected.textTotal }),
+    },
+  };
+}
+
 export interface BrowserObservation {
   id: string;
   documentVersion: number;
+  documentIdentity?: string;
   targets: Map<string, BrowserTargetFingerprint>;
 }
 
@@ -1053,10 +1263,10 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
   async inspect(sessionId: string, tabId: string): Promise<BrowserInspection> {
     const tab = this.#requireTab(sessionId, tabId);
     const documentVersion = tab.documentVersion;
-    const inspected = await evaluateInTab<{
-      visibleText: string;
-      targets: BrowserTargetFingerprint[];
-    }>(tab, browserInspectScript);
+    const inspected = await evaluateInTab<BrowserDomInspection>(
+      tab,
+      browserInspectScript,
+    );
     const observationId = randomUUID();
     const screenshot = await this.#captureScreenshot(tab, observationId);
     if (tab.documentVersion !== documentVersion) {
@@ -1069,28 +1279,35 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
       );
     }
     const targets = new Map<string, BrowserTargetFingerprint>();
-    const projectedTargets = inspected.targets.slice(0, 80).map((target) => {
-      const targetId = randomUUID();
-      targets.set(targetId, target);
-      return {
-        targetId,
-        role: target.role,
-        name: target.name,
-        actions: [...target.actions],
-        ...(target.value === undefined ? {} : { value: target.value }),
-        ...(target.checked === undefined ? {} : { checked: target.checked }),
-        ...(target.selected === undefined ? {} : { selected: target.selected }),
-        ...(target.options === undefined
-          ? {}
-          : { options: target.options.map((option) => ({ ...option })) }),
-        ...(target.optionsTruncated === undefined
-          ? {}
-          : { optionsTruncated: target.optionsTruncated }),
-      };
-    });
+    const projectedTargets = inspected.targets
+      .slice(0, MAX_OBSERVATION_CAPTURE_ITEMS)
+      .map((target) => {
+        const targetId = randomUUID();
+        targets.set(targetId, target);
+        return {
+          targetId,
+          role: target.role,
+          name: target.name,
+          actions: [...target.actions],
+          ...(target.value === undefined ? {} : { value: target.value }),
+          ...(target.checked === undefined ? {} : { checked: target.checked }),
+          ...(target.selected === undefined
+            ? {}
+            : { selected: target.selected }),
+          ...(target.options === undefined
+            ? {}
+            : { options: target.options.map((option) => ({ ...option })) }),
+          ...(target.optionsTruncated === undefined
+            ? {}
+            : { optionsTruncated: target.optionsTruncated }),
+        };
+      });
     tab.observation = {
       id: observationId,
       documentVersion: tab.documentVersion,
+      ...(inspected.documentIdentity === undefined
+        ? {}
+        : { documentIdentity: inspected.documentIdentity }),
       targets,
     };
     return {
@@ -1099,7 +1316,24 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
       documentVersion: tab.documentVersion,
       visibleText: inspected.visibleText.slice(0, 8_000),
       screenshot,
-      targets: projectedTargets,
+      targets: projectedTargets.slice(0, 80),
+      [OBSERVATION_CAPTURE]: {
+        ...browserDomCapture(
+          inspected,
+          projectedTargets,
+          `${tab.incarnation.partition}/${tab.tabId}`,
+        ),
+        assertCurrent: () => {
+          if (
+            this.#requireTab(sessionId, tabId) !== tab ||
+            tab.observation?.id !== observationId ||
+            tab.documentVersion !== documentVersion
+          )
+            throw new Error(
+              "Browser observation capture is stale; inspect again",
+            );
+        },
+      },
     };
   }
 
@@ -1196,12 +1430,20 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     signal?: AbortSignal,
   ): Promise<BrowserTabSummary> {
     signal?.throwIfAborted();
-    const expression = browserScrollScript(direction, pixels);
     const tab = this.#requireTab(sessionId, tabId);
     assertBrowserObservation(
       tab.observation,
       tab.documentVersion,
       observationId,
+    );
+    if (tab.observation.documentIdentity === undefined)
+      throw new Error(
+        "Browser document identity is unavailable; inspect again",
+      );
+    const expression = browserScrollScript(
+      direction,
+      pixels,
+      tab.observation.documentIdentity,
     );
     tab.observation = undefined;
     // Runtime.evaluate cannot reliably stop a dispatched mutation. Keep awaiting
@@ -1445,12 +1687,17 @@ export function browserScrollArguments(
 export function browserScrollScript(
   direction: BrowserScrollDirection,
   pixels: number,
+  documentIdentity?: string,
 ): string {
   browserScrollArguments(direction, pixels);
   const left =
     direction === "left" ? -pixels : direction === "right" ? pixels : 0;
   const top = direction === "up" ? -pixels : direction === "down" ? pixels : 0;
-  return `(() => { window.scrollBy({ left: ${left}, top: ${top}, behavior: "instant" }); try { document.querySelector('[data-zenx-agent-pointer]')?.__zenxCleanup?.(); } catch { /* Visual cleanup cannot change a completed scroll. */ } return { ok: true }; })()`;
+  const guard =
+    documentIdentity === undefined
+      ? ""
+      : `const registry = globalThis[Symbol.for(${JSON.stringify(browserNodeRegistryKey)})]; if (!registry || registry.document !== document || registry.incarnation + "|" + location.href !== ${JSON.stringify(documentIdentity)}) throw new Error("Browser document changed; inspect again");`;
+  return `(() => { ${guard} window.scrollBy({ left: ${left}, top: ${top}, behavior: "instant" }); try { document.querySelector('[data-zenx-agent-pointer]')?.__zenxCleanup?.(); } catch { /* Visual cleanup cannot change a completed scroll. */ } return { ok: true }; })()`;
 }
 
 // A page-local visual only: no real pointer, focus, or input events.
@@ -1524,8 +1771,29 @@ const browserElementNameScript = `(element) => {
   return (referenced || text(element.getAttribute("aria-label")) || labels || text(element.getAttribute("placeholder")) || text(element.textContent)).slice(0, 160);
 }`;
 
+// The registry is safe only in the provider's named isolated world. Never evaluate
+// these scripts in the page's main world: page-owned keys are not node identity.
+const browserNodeRegistryKey = "zenx.browser.observation.nodes.v1";
 export const browserInspectScript = `(() => {
-  const documentIdentity = String(performance.timeOrigin) + "|" + location.href;
+  const registryKey = Symbol.for(${JSON.stringify(browserNodeRegistryKey)});
+  let registry = globalThis[registryKey];
+  if (!registry || registry.document !== document) {
+    const random = crypto.getRandomValues(new Uint32Array(4));
+    registry = { document, incarnation: [...random].map(value => value.toString(16).padStart(8, "0")).join(""), next: 1, ids: new WeakMap(), current: new Map() };
+    globalThis[registryKey] = registry;
+  }
+  const documentIdentity = registry.incarnation + "|" + location.href;
+  registry.current.clear();
+  const nodeIdentity = (element) => {
+    let identity = registry.ids.get(element);
+    if (identity === undefined) {
+      if (!Number.isSafeInteger(registry.next)) throw new Error("Browser node identity space exhausted");
+      identity = registry.incarnation + ":" + registry.next++;
+      registry.ids.set(element, identity);
+    }
+    registry.current.set(identity, element);
+    return identity;
+  };
   const visible = (element) => {
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
@@ -1557,11 +1825,14 @@ export const browserInspectScript = `(() => {
     return parts.join(" > ");
   };
   const elements = [...document.querySelectorAll("a[href],button,input,textarea,select,[contenteditable=true],[role=button],[tabindex]")]
-    .filter((element) => visible(element) && (clickable(element) || typeable(element)))
-    .slice(0, 80);
+    .filter((element) => visible(element) && (clickable(element) || typeable(element)));
+  const text = (document.body?.innerText ?? "").replace(/\\s+/g, " ").trim();
   return {
-    visibleText: (document.body?.innerText ?? "").replace(/\\s+/g, " ").trim().slice(0, 8000),
-    targets: elements.map((element) => {
+    documentIdentity,
+    itemTotal: elements.length,
+    textTotal: text.length,
+    visibleText: text.slice(0, ${MAX_OBSERVATION_CAPTURE_TEXT}),
+    targets: elements.slice(0, ${MAX_OBSERVATION_CAPTURE_ITEMS}).map((element) => {
       const actions = [];
       if (clickable(element)) actions.push("click");
       if (typeable(element)) actions.push("type");
@@ -1571,6 +1842,7 @@ export const browserInspectScript = `(() => {
       const selected = element.getAttribute("aria-selected") === "true" ? true : element.getAttribute("aria-selected") === "false" ? false : element instanceof HTMLOptionElement ? element.selected : undefined;
       return {
         documentIdentity,
+        nodeIdentity: nodeIdentity(element),
         selector: selector(element),
         tag: element.tagName.toLowerCase(),
         role: element.getAttribute("role") ?? element.tagName.toLowerCase(),
@@ -1610,22 +1882,26 @@ export function browserActionScript(
     autocomplete: target.autocomplete,
     href: target.href,
   });
+  const expectedState = JSON.stringify({
+    ...(target.value === undefined ? {} : { value: target.value }),
+    ...(target.checked === undefined ? {} : { checked: target.checked }),
+    ...(target.selected === undefined ? {} : { selected: target.selected }),
+  });
   return `(() => {
     const name = ${browserElementNameScript};
     const expectedDocumentIdentity = ${expectedDocumentIdentity};
-    const documentIdentity = String(performance.timeOrigin) + "|" + location.href;
-    if (expectedDocumentIdentity !== null && documentIdentity !== expectedDocumentIdentity) return { ok: false, reason: "document-changed" };
+    const registry = globalThis[Symbol.for(${JSON.stringify(browserNodeRegistryKey)})];
+    if (!registry || registry.document !== document || expectedDocumentIdentity === null || registry.incarnation + "|" + location.href !== expectedDocumentIdentity) return { ok: false, reason: "document-changed" };
     const expected = ${expected};
-    const selector = ${JSON.stringify(target.selector)};
+    const expectedNodeIdentity = ${JSON.stringify(target.nodeIdentity ?? null)};
     const action = ${JSON.stringify(action)};
     const nextValue = ${JSON.stringify(text)};
     const showAgentPointer = ${browserAgentPointerScript};
   const shouldSubmit = ${JSON.stringify(submit)};
   const expectedOptions = ${JSON.stringify(target.options ?? null)};
   const expectedOptionsTruncated = ${JSON.stringify(target.optionsTruncated ?? false)};
-    const candidates = [...document.querySelectorAll(selector)];
-    if (candidates.length !== 1) return { ok: false, reason: candidates.length === 0 ? "missing" : "ambiguous" };
-    const element = candidates[0];
+    const element = registry.current.get(expectedNodeIdentity);
+    if (!element || !element.isConnected || element.ownerDocument !== document || registry.ids.get(element) !== expectedNodeIdentity) return { ok: false, reason: "node-changed" };
     if (!(element instanceof HTMLElement)) return { ok: false, reason: "not-an-html-element" };
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
@@ -1641,6 +1917,16 @@ export function browserActionScript(
       href: element instanceof HTMLAnchorElement ? element.getAttribute("href") ?? "" : "",
     };
     if (JSON.stringify(actual) !== JSON.stringify(expected)) return { ok: false, reason: "identity-changed" };
+    const expectedState = ${expectedState};
+    const currentValue = element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement || (element instanceof HTMLInputElement && element.type.toLowerCase() !== "password") ? element.value : element instanceof HTMLElement && element.matches('[contenteditable]:not([contenteditable="false"])') ? element.textContent ?? "" : undefined;
+    const currentChecked = element instanceof HTMLInputElement && ["checkbox", "radio"].includes(element.type.toLowerCase()) ? element.checked : element.getAttribute("aria-checked") === "true" ? true : element.getAttribute("aria-checked") === "false" ? false : undefined;
+    const currentSelected = element.getAttribute("aria-selected") === "true" ? true : element.getAttribute("aria-selected") === "false" ? false : element instanceof HTMLOptionElement ? element.selected : undefined;
+    const actualState = {
+      ...(currentValue === undefined ? {} : { value: currentValue.slice(0, 512) }),
+      ...(currentChecked === undefined ? {} : { checked: currentChecked }),
+      ...(currentSelected === undefined ? {} : { selected: currentSelected }),
+    };
+    if (JSON.stringify(actualState) !== JSON.stringify(expectedState)) return { ok: false, reason: "state-changed" };
     const point = {
       x: (Math.max(0, rect.left) + Math.min(innerWidth, rect.right)) / 2,
       y: (Math.max(0, rect.top) + Math.min(innerHeight, rect.bottom)) / 2,
@@ -2157,14 +2443,39 @@ async function evaluateInTab<T>(
   tab: BrowserTab,
   expression: string,
 ): Promise<T> {
-  const response = (await tab.window.webContents.debugger.sendCommand(
-    "Runtime.evaluate",
-    {
-      expression,
-      awaitPromise: true,
-      returnByValue: true,
-    },
-  )) as {
+  return await evaluateBrowserDocument<T>(
+    tab.window.webContents.debugger,
+    expression,
+  );
+}
+
+/** Named isolated execution prevents the page from forging the node registry. */
+export async function evaluateBrowserDocument<T>(
+  debuggerApi: Pick<BrowserWindow["webContents"]["debugger"], "sendCommand">,
+  expression: string,
+): Promise<T> {
+  const tree = (await debuggerApi.sendCommand("Page.getFrameTree")) as {
+    frameTree?: { frame?: { id?: string } };
+  };
+  const frameId = tree.frameTree?.frame?.id;
+  if (typeof frameId !== "string" || frameId.length === 0)
+    throw new Error("Browser CDP main-frame identity is unavailable");
+  const world = (await debuggerApi.sendCommand("Page.createIsolatedWorld", {
+    frameId,
+    worldName: "zenx-browser-observation-v1",
+    grantUniveralAccess: false,
+  })) as { executionContextId?: number };
+  if (
+    !Number.isSafeInteger(world.executionContextId) ||
+    world.executionContextId! <= 0
+  )
+    throw new Error("Browser CDP isolated execution context is unavailable");
+  const response = (await debuggerApi.sendCommand("Runtime.evaluate", {
+    expression,
+    contextId: world.executionContextId,
+    awaitPromise: true,
+    returnByValue: true,
+  })) as {
     result?: { value?: unknown; description?: string };
     exceptionDetails?: { text?: string };
   };

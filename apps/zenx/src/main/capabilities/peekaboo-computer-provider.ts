@@ -14,8 +14,10 @@ import {
   COMPUTER_ACTION_PRESS,
   COMPUTER_ACTION_SET_VALUE,
   selectComputerInspectionControls,
+  uniqueComputerCaptureEntries,
   type ComputerControlAction,
 } from "./computer-provider.js";
+import { OBSERVATION_CAPTURE } from "./observation-capture.js";
 import {
   type ExternalProviderProcessRunner,
   parseExternalJson,
@@ -48,6 +50,7 @@ interface PeekabooObservation {
 }
 
 export class PeekabooComputerBackend implements ZenXComputerBackend {
+  readonly #captureScope = randomUUID();
   readonly #executable: string;
   readonly #runner: ExternalProviderProcessRunner;
   readonly #artifactDirectory: string;
@@ -84,16 +87,22 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
     const data = requirePeekabooData(response, "see");
     const snapshotId = requiredString(data, "snapshot_id", "see.data");
     this.#snapshotIds.add(snapshotId);
-    const elements = requiredArray(data, "ui_elements", "see.data").map(
+    const rawElements = requiredArray(data, "ui_elements", "see.data").map(
       requirePeekabooElement,
     );
+    const elements = rawElements.slice(0, 128);
     const selected = selectComputerInspectionControls(
       elements,
       (element) => peekabooElementActions(element).length > 0,
     );
     const observationId = randomUUID();
     const targets = new Map<string, PeekabooObservedTarget>();
-    const controls = selected.map((element) => {
+    const selectedElements = new Set(selected);
+    const capturedElements = [
+      ...selected,
+      ...elements.filter((element) => !selectedElements.has(element)),
+    ];
+    const controls = capturedElements.map((element) => {
       const targetId = randomUUID();
       const actions = peekabooElementActions(element);
       targets.set(targetId, {
@@ -125,8 +134,50 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
       platform: "darwin",
       observationId,
       target: targetSummary(target, data),
-      controls,
-      truncated: elements.length > selected.length || data.truncation != null,
+      controls: controls.slice(0, selected.length),
+      truncated:
+        rawElements.length > selected.length || data.truncation != null,
+      [OBSERVATION_CAPTURE]: {
+        assertCurrent: () => {
+          if (this.#observations.get(key)?.observationId !== observationId) {
+            throw new Error(
+              "Computer observation is stale, consumed, or unknown; inspect the target again",
+            );
+          }
+        },
+        scopeKey: JSON.stringify([
+          this.#captureScope,
+          key,
+          typeof data.application_name === "string"
+            ? data.application_name
+            : null,
+          typeof data.window_title === "string" ? data.window_title : null,
+        ]),
+        entries: uniqueComputerCaptureEntries(
+          controls,
+          capturedElements.map((element) =>
+            JSON.stringify([
+              peekabooElementFingerprint(element),
+              element.is_actionable,
+              peekabooElementActions(element),
+            ]),
+          ),
+        ),
+        coverage: {
+          scope: "scoped_window_peekaboo_capture",
+          sourceComplete:
+            data.truncation != null || rawElements.length > elements.length
+              ? false
+              : null,
+          reasons: [
+            ...(data.truncation != null ? ["native_capture_truncation"] : []),
+            ...(rawElements.length > elements.length
+              ? ["native_output_limit"]
+              : []),
+            ...(data.truncation == null ? ["native_completeness_unknown"] : []),
+          ],
+        },
+      },
     };
   }
 
@@ -338,19 +389,24 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
     const data = requirePeekabooData(response, "see");
     const snapshotId = requiredString(data, "snapshot_id", "see.data");
     this.#snapshotIds.add(snapshotId);
-    const matches = requiredArray(data, "ui_elements", "see.data")
-      .map(requirePeekabooElement)
-      .filter(
-        (element) =>
-          peekabooElementFingerprint(element) === observed.fingerprint &&
-          sameActions(peekabooElementActions(element), observed.actions),
-      );
-    if (matches.length !== 1) {
-      throw new Error(
-        "Peekaboo target identity changed, disappeared, or became ambiguous; inspect again",
-      );
+    try {
+      const matches = requiredArray(data, "ui_elements", "see.data")
+        .map(requirePeekabooElement)
+        .filter(
+          (element) =>
+            peekabooElementFingerprint(element) === observed.fingerprint &&
+            sameActions(peekabooElementActions(element), observed.actions),
+        );
+      if (matches.length !== 1) {
+        throw new Error(
+          "Peekaboo target identity changed, disappeared, or became ambiguous; inspect again",
+        );
+      }
+      return { rawElementId: matches[0]!.id, snapshotId };
+    } catch (error) {
+      await this.#cleanSnapshot(snapshotId);
+      throw error;
     }
-    return { rawElementId: matches[0]!.id, snapshotId };
   }
 
   async #cleanSnapshot(snapshotId: string): Promise<void> {

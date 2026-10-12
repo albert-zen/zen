@@ -513,3 +513,17 @@ appear beneath messages, and Discord's
 removes one's selected reaction on a second click. These inform presentation,
 not ZenX execution or identity authority. Merging the Room status and action row
 is the user's explicit ZenX decision, not a claim about those products.
+
+### Agent activity, approval review and pending messages
+
+Agent activity is a disposable projection of native turn items. Consecutive tool/reasoning items stay in stable disclosures; assistant/user messages remain chronological boundaries and final replies stay outside process folds. Counts describe calls, not promised successful work. Task receipts determine background lifetime independently of call disposition. A stopped turn can still have an unconfirmed background action; the latest terminal receipt retires earlier nonterminal observations across groups.
+
+Only actual running/model activity has a left-to-right text highlight. Waiting, approval, stop-request intent, unconfirmed cancellation and terminal outcomes stay static. Reduced motion and forced colors retain readable static labels. Selected transcript text pauses automatic following; an explicit Back to live resumes it. Terminal folding does not interrupt selected or focused inspection.
+
+Approvals stay composer-adjacent and name their real once-only or remembered capability scope. A bounded inline preview has a user-opened full-request dialog containing complete code, cwd and arguments. Opening or dismissing review never decides a request; both surfaces share one pending lock and preserve errors. Focus restoration respects the exact request and newer user interaction.
+
+Queued messages form a compact composer-aligned pending-send shelf. Text, real image thumbnails and attachment counts remain visible; genuine truncation has a selectable full-text disclosure. Exact ID/client-ID order is canonical; cancellation or resume acknowledgement does not remove rows. Editing uses the native exact-target expected-revision command and append-only edit fact, retaining original queue position and delivery mode; there is no reorder or implicit retry. Native delivery errors stay on their exact message; a distinct resume transport error belongs beside Continue. Approval + queue + error + draft must preserve reachable decisions, one 44px queue-action lane and Composer in narrow windows.
+
+Queued thumbnails read only validated AttachmentRefs from the exact same-thread pending input. Show a compact first set with an actionable full-gallery disclosure; missing references or failed reads remain explicit and retryable without blocking Edit/Cancel. Opening a full image uses the existing viewer and stops being visible when its exact queue owner disappears or the selected thread changes.
+
+Queue editing owns an independent local text/image draft, preserving image order and the main Composer draft. Cancel/X discards unsent edits without changing native input; failure, revision conflict, admission races and navigation/loading preserve the draft and its request identity. An App-owned memory-only cache survives viewport remounts. Save never starts the queue: the canonical edit updates the row, and an authoritative receipt may close the editor while its draft/receipt stays cached until the exact edit fact is observed. Unsupported Host skill/audio or non-round-trippable input is not silently flattened. Editor, gallery and simultaneous approval/queue/error states keep complete text context and reachable 44px decisions in a 390×600 viewport.

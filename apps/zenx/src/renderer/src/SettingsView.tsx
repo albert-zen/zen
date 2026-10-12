@@ -57,6 +57,15 @@ import { PluginSettingsSurfaces } from "./PluginProductPage.js";
 import { ChromeConnectionSettings } from "./ChromeConnectionSettings.js";
 import { FleetSettings } from "./FleetSettings.js";
 import { LanguageSettings } from "./LanguageSettings.js";
+import {
+  MAX_MODELS_PER_PROVIDER,
+  appendProviderModelRows,
+  remainingProviderModelSlots,
+} from "./provider-model-admission.js";
+import {
+  ProviderModelAddControl,
+  ProviderModelDiscoveryOption,
+} from "./ProviderModelAdmissionControls.js";
 
 export type SettingsTab =
   | "account"
@@ -69,9 +78,6 @@ export type SettingsTab =
   | "workflows"
   | "fleet"
   | "archived";
-
-// Match the Host profile limit before allowing either model-add path.
-const MAX_MODELS_PER_PROVIDER = 1_024;
 
 export function SettingsView({
   archivedError,
@@ -1604,10 +1610,7 @@ function ProviderEditor({
   );
   const models = modelRows.map((row) => row.model);
   const modelIds = new Set(models.map((model) => model.id));
-  const remainingModelSlots = Math.max(
-    0,
-    MAX_MODELS_PER_PROVIDER - models.length,
-  );
+  const remainingModelSlots = remainingProviderModelSlots(models.length);
   const [discovering, setDiscovering] = useState(false);
   const [availableModels, setAvailableModels] = useState<
     ZenXModelCatalogEntry[] | null
@@ -2155,31 +2158,21 @@ function ProviderEditor({
                     const exists = modelIds.has(model.id);
                     const selected = selectedAvailableModelIds.has(model.id);
                     return (
-                      <label className="available-model-option" key={model.id}>
-                        <input
-                          type="checkbox"
-                          aria-label={t("settingsView.selectNamedModel", {
-                            name: model.id,
-                          })}
-                          disabled={
-                            exists ||
-                            (!selected &&
-                              selectedNewModels.length >= remainingModelSlots)
-                          }
-                          checked={exists || selected}
-                          onChange={(event) =>
-                            setSelectedAvailableModels((current) =>
-                              event.target.checked
-                                ? [...current, model.id]
-                                : current.filter((id) => id !== model.id),
-                            )
-                          }
-                        />
-                        <span>{model.id}</span>
-                        {exists ? (
-                          <small>{t("settingsView.alreadyAdded")}</small>
-                        ) : null}
-                      </label>
+                      <ProviderModelDiscoveryOption
+                        key={model.id}
+                        modelId={model.id}
+                        exists={exists}
+                        selected={selected}
+                        selectedCount={selectedNewModels.length}
+                        modelCount={models.length}
+                        onCheckedChange={(checked) =>
+                          setSelectedAvailableModels((current) =>
+                            checked
+                              ? [...current, model.id]
+                              : current.filter((id) => id !== model.id),
+                          )
+                        }
+                      />
                     );
                   })}
                 {availableModels.every(
@@ -2216,15 +2209,15 @@ function ProviderEditor({
                       0,
                       remainingModelSlots,
                     );
-                    setModelRows((current) => [
-                      ...current,
-                      ...additions
-                        .slice(0, MAX_MODELS_PER_PROVIDER - current.length)
-                        .map((model) => ({
+                    setModelRows((current) =>
+                      appendProviderModelRows(
+                        current,
+                        additions.map((model) => ({
                           key: globalThis.crypto.randomUUID(),
                           model: { ...model },
                         })),
-                    ]);
+                      ),
+                    );
                     setAvailableModels(null);
                     setSelectedAvailableModels([]);
                     setCatalogStatus(
@@ -2351,32 +2344,20 @@ function ProviderEditor({
               />
             </div>
           ))}
-          <button
-            className="quiet-button add-model-button"
-            type="button"
-            id={fieldId("addModel")}
-            disabled={remainingModelSlots === 0}
-            onClick={() =>
+          <ProviderModelAddControl
+            modelCount={models.length}
+            buttonId={fieldId("addModel")}
+            onAdd={() =>
               setModelRows((current) =>
-                current.length >= MAX_MODELS_PER_PROVIDER
-                  ? current
-                  : [
-                      ...current,
-                      {
-                        key: globalThis.crypto.randomUUID(),
-                        model: manualModelCatalogEntry(""),
-                      },
-                    ],
+                appendProviderModelRows(current, [
+                  {
+                    key: globalThis.crypto.randomUUID(),
+                    model: manualModelCatalogEntry(""),
+                  },
+                ]),
               )
             }
-          >
-            {t("settingsView.addModel")}
-          </button>
-          {remainingModelSlots === 0 ? (
-            <p className="settings-note" role="status">
-              {t("settingsView.modelLimitReached1024RemoveAModelTo")}
-            </p>
-          ) : null}
+          />
         </fieldset>
         {replacesDefault ? (
           <ModelReferenceSelect

@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { JSDOM } from "jsdom";
+import { appendProviderModelRows } from "../src/renderer/src/provider-model-admission.js";
 import * as React from "react";
 import type { Root } from "react-dom/client";
 
@@ -130,6 +131,8 @@ Object.assign(globalThis, {
 });
 const { createRoot } = await import("react-dom/client");
 const { SettingsView } = await import("../src/renderer/src/SettingsView.js");
+const { ProviderModelAddControl, ProviderModelDiscoveryOption } =
+  await import("../src/renderer/src/ProviderModelAdmissionControls.js");
 
 test("Settings send mode choice forwards explicit provenance through save", async () => {
   const submitted: ZenXSettingsUpdate[] = [];
@@ -607,43 +610,86 @@ test("Provider discovery starts text-only and manual overrides persist", async (
   }
 });
 
-test("model discovery and manual addition stop at the Host limit of 1024 rows", async () => {
-  const initial = structuredClone(multiProviderSettings);
-  initial.profile.providerProfiles[0]!.models.push(
-    ...Array.from({ length: 1021 }, (_, index) => model(`extra-${index}`)),
-  );
-  const harness = await mountSettings("models", {
-    initialSettings: initial,
-    discoverProvider: async () => ({
-      providerProfileId: "profile-alpha",
-      models: [model("new-one"), model("new-two")],
-    }),
-  });
-  try {
-    await waitFor(() => labeledButton("Edit Alpha"));
-    await click(labeledButtonRequired("Edit Alpha"));
-    await click(exactButtonRequired("Get available models"));
-    const first = await waitFor(() =>
-      document.querySelector<HTMLInputElement>(
-        'input[aria-label="Select new-one"]',
+test("model discovery and manual controls enforce the Host limit without mounting 1024 editors", async () => {
+  // Exercise the actual limit-dependent controls with the real Host count.
+  // Full-editor discovery/save interactions are covered with small catalogs;
+  // the append boundary and stale-state guard have direct array-level tests.
+  const harness = await mountSettings("models");
+  let liveRows: string[] = [];
+  let manualAddCalls = 0;
+  function AdmissionHarness() {
+    const [rows, setRows] = useState(() =>
+      Array.from({ length: 1_023 }, (_, index) => `existing-${index}`),
+    );
+    const [selected, setSelected] = useState<string[]>([]);
+    liveRows = rows;
+    return createElement(
+      React.Fragment,
+      null,
+      ...["existing-0", "new-one", "new-two"].map((modelId) =>
+        createElement(ProviderModelDiscoveryOption, {
+          key: modelId,
+          modelId,
+          exists: rows.includes(modelId),
+          selected: selected.includes(modelId),
+          selectedCount: selected.length,
+          modelCount: rows.length,
+          onCheckedChange: (checked: boolean) =>
+            setSelected((current) =>
+              checked
+                ? [...current, modelId]
+                : current.filter((id) => id !== modelId),
+            ),
+        }),
       ),
+      createElement(ProviderModelAddControl, {
+        modelCount: rows.length,
+        buttonId: "add-model",
+        onAdd: () => {
+          manualAddCalls += 1;
+          setRows((current) => appendProviderModelRows(current, ["manual"]));
+        },
+      }),
     );
-    await click(first);
-    const second = document.querySelector<HTMLInputElement>(
-      'input[aria-label="Select new-two"]',
-    );
-    assert.ok(second);
-    assert.equal(second.disabled, true);
-    await click(exactButtonRequired("Add selected models (1)"));
-    assert.equal(document.querySelectorAll(".provider-model-row").length, 1024);
+  }
+  try {
+    await act(async () => harness.root.render(createElement(AdmissionHarness)));
+    const choice = (modelId: string) => {
+      const input = document.querySelector<HTMLInputElement>(
+        `input[aria-label="Select ${modelId}"]`,
+      );
+      assert.ok(input);
+      return input;
+    };
+    assert.equal(choice("existing-0").checked, true);
+    assert.equal(choice("existing-0").disabled, true);
+    assert.equal(choice("new-one").disabled, false);
+    assert.equal(choice("new-two").disabled, false);
+    await click(choice("new-one"));
+    assert.equal(choice("new-one").checked, true);
+    assert.equal(choice("new-one").disabled, false, "selection can be undone");
+    assert.equal(choice("new-two").disabled, true);
+    await click(choice("new-two"));
+    assert.equal(choice("new-two").checked, false);
+    await click(choice("new-one"));
+    assert.equal(choice("new-two").disabled, false);
+
     const addModel = exactButtonRequired("Add model");
+    assert.equal(addModel.disabled, false);
+    assert.equal(addModel.tabIndex, 0);
+    await click(addModel);
+    assert.equal(liveRows.length, 1_024);
+    assert.equal(manualAddCalls, 1);
     assert.equal(addModel.disabled, true);
+    assert.equal(choice("new-one").disabled, true);
+    assert.equal(choice("new-two").disabled, true);
     assert.match(
-      document.body.textContent ?? "",
+      document.querySelector('[role="status"]')?.textContent ?? "",
       /Model limit reached.*1,024/u,
     );
     await click(addModel);
-    assert.equal(document.querySelectorAll(".provider-model-row").length, 1024);
+    assert.equal(manualAddCalls, 1);
+    assert.equal(liveRows.length, 1_024);
   } finally {
     await unmount(harness);
   }

@@ -1582,22 +1582,22 @@ test("dev abort after runtime admission begins rolls back before Catalog commit"
     path.join(os.tmpdir(), "zenx-profile-dev-precommit-"),
   );
   const userData = path.join(directory, "user-data");
-  const marker = path.join(directory, "runtime-started");
-  await createTarballFixture(directory, {
-    id: "precommit-target",
-    packageName: "@zenx-test/precommit-target",
-    runtimeTimeoutMs: 500,
-    runtimeModule: delayedReadyRuntime("precommit-target", marker, 80),
-  });
+  const runtime = await gatedReadyRuntime("precommit-target");
   const projectDirectory = path.join(
     directory,
     "fixture-package-precommit-target-1.0.0",
   );
   const controller = new AbortController();
   const service = profileService(userData, { pnpmCliPath: pnpmCli });
+  let mutation: ReturnType<typeof service.devPluginPackage> | undefined;
   try {
+    await createTarballFixture(directory, {
+      id: "precommit-target",
+      packageName: "@zenx-test/precommit-target",
+      runtimeModule: runtime.module,
+    });
     await service.initialize();
-    const mutation = service.devPluginPackage(
+    mutation = service.devPluginPackage(
       projectDirectory,
       {
         pluginId: "precommit-target",
@@ -1605,21 +1605,28 @@ test("dev abort after runtime admission begins rolls back before Catalog commit"
       },
       { signal: controller.signal },
     );
-    await waitForFile(marker);
+    await waitForProfilePhase(runtime.started, mutation, "runtime admission");
     controller.abort(new Error("fixture precommit deadline"));
+    runtime.release();
     await assert.rejects(mutation, /fixture precommit deadline/u);
+    await assert.rejects(readCatalog(userData), /ENOENT/u);
     assert.deepEqual(service.pluginSnapshot().plugins, []);
     assert.deepEqual(
       await readdir(path.join(userData, "plugin-profile", "generations")),
       [],
     );
   } finally {
+    controller.abort(new Error("fixture cleanup"));
+    runtime.release();
+    // Staging must settle before its files are removed, even if admission fails.
+    await mutation?.catch(() => undefined);
     await service.close();
+    await runtime.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test("dev install timeout and close after its Catalog fence wait for the committed result", async () => {
+test("dev install close after its Catalog fence waits for the committed result", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-profile-dev-install-fence-"),
   );
@@ -1639,15 +1646,14 @@ test("dev install timeout and close after its Catalog fence wait for the committ
   });
   let fences = 0;
   let devControl: ZenXPluginDevControlServer | undefined;
-  const transactionTimeoutMs = 3_000;
   try {
     await service.initialize();
     const blocked = catalog.blockNext(() => assert.equal(fences, 1));
     const descriptorFile = path.join(userData, "runtime", "plugin-dev.json");
+    const tokenFile = path.join(userData, "runtime", "plugin-dev.token");
     devControl = await ZenXPluginDevControlServer.start({
       descriptorFile,
-      tokenFile: path.join(userData, "runtime", "plugin-dev.token"),
-      transactionTimeoutMs,
+      tokenFile,
       install: async (request, signal, enterCommitPhase) =>
         await service.devPluginPackage(
           request.projectDirectory,
@@ -1665,22 +1671,24 @@ test("dev install timeout and close after its Catalog fence wait for the committ
         ),
       reload: async () => ({ status: "reloaded" }),
     });
-    const startedAt = Date.now();
-    const requested = requestPluginDevLink(
+    // Transaction timer behavior is covered in plugin-dev-control.test.ts.
+    // This integration check waits for the real installer to enter its fence.
+    const clientRequest = await rawProfileDevRequest(
       descriptorFile,
+      tokenFile,
       {
         version: 1,
         projectDirectory,
         pluginId: "install-fence",
         packageName: "@zenx-test/install-fence",
       },
-      { timeoutMs: 5_000 },
     );
-    await blocked.started;
+    await waitForProfilePhase(
+      blocked.started,
+      clientRequest.response,
+      "Catalog commit fence",
+    );
     const closing = devControl.close();
-    await delay(
-      Math.max(0, transactionTimeoutMs - (Date.now() - startedAt) + 25),
-    );
     assert.equal(
       await Promise.race([
         closing.then(() => "closed"),
@@ -1689,14 +1697,17 @@ test("dev install timeout and close after its Catalog fence wait for the committ
       "waiting",
     );
     blocked.release();
-    const result = await requested;
+    const response = await clientRequest.response;
     await closing;
-    assert.equal(result.reload.status, "reloaded");
+    assert.equal(response.status, 200);
+    assert.deepEqual(JSON.parse(response.body), {
+      version: 1,
+      pluginId: "install-fence",
+      packageName: "@zenx-test/install-fence",
+      generation: (await readCatalog(userData)).profileGeneration,
+      reload: { status: "reloaded" },
+    });
     assert.equal(fences, 1);
-    assert.equal(
-      (await readCatalog(userData)).profileGeneration,
-      result.generation,
-    );
     assert.equal(service.pluginSnapshot().plugins[0]?.id, "install-fence");
   } finally {
     catalog.release();
@@ -1723,12 +1734,14 @@ test("dev Catalog save rejection after the fence reports failure without a commi
     path.join(userData, "capability-grants.json"),
   );
   let fences = 0;
+  const saving = deferred<void>();
   const service = profileService(userData, {
     pnpmCliPath: pnpmCli,
     catalogStore: {
       load: async () => await delegate.load(),
       save: async () => {
         assert.equal(fences, 1);
+        saving.resolve();
         throw new Error("fixture fenced Catalog failure");
       },
     },
@@ -1737,9 +1750,10 @@ test("dev Catalog save rejection after the fence reports failure without a commi
   try {
     await service.initialize();
     const descriptorFile = path.join(userData, "runtime", "plugin-dev.json");
+    const tokenFile = path.join(userData, "runtime", "plugin-dev.token");
     devControl = await ZenXPluginDevControlServer.start({
       descriptorFile,
-      tokenFile: path.join(userData, "runtime", "plugin-dev.token"),
+      tokenFile,
       install: async (request, signal, enterCommitPhase) =>
         await service.devPluginPackage(
           request.projectDirectory,
@@ -1757,19 +1771,28 @@ test("dev Catalog save rejection after the fence reports failure without a commi
         ),
       reload: async () => ({ status: "reloaded" }),
     });
-    await assert.rejects(
-      requestPluginDevLink(
-        descriptorFile,
-        {
-          version: 1,
-          projectDirectory,
-          pluginId: "save-fail",
-          packageName: "@zenx-test/save-fail",
-        },
-        { timeoutMs: 1_000 },
-      ),
-      /fixture fenced Catalog failure/u,
+    // Observe the Catalog fence rather than racing real package preparation
+    // against a client deadline unrelated to the failure under test.
+    const clientRequest = await rawProfileDevRequest(
+      descriptorFile,
+      tokenFile,
+      {
+        version: 1,
+        projectDirectory,
+        pluginId: "save-fail",
+        packageName: "@zenx-test/save-fail",
+      },
     );
+    await waitForProfilePhase(
+      saving.promise,
+      clientRequest.response,
+      "Catalog commit fence",
+    );
+    const response = await clientRequest.response;
+    assert.equal(response.status, 400);
+    assert.deepEqual(JSON.parse(response.body), {
+      message: "fixture fenced Catalog failure",
+    });
     assert.equal(fences, 1);
     assert.deepEqual(service.pluginSnapshot().plugins, []);
     assert.deepEqual(
@@ -1849,7 +1872,11 @@ test("dev same-version update commits after a post-fence client disconnect", asy
     );
     const client = clientRequest.request;
     client.once("error", () => undefined);
-    await waitForDevCommitFence(blocked.started, clientRequest.response);
+    await waitForProfilePhase(
+      blocked.started,
+      clientRequest.response,
+      "Catalog commit fence",
+    );
     client.destroy();
     const closing = devControl.close();
     assert.equal(
@@ -1908,11 +1935,12 @@ test("a profile dev failure before the commit fence remains observable", async (
     client = clientRequest.request;
     client.once("error", () => undefined);
     await assert.rejects(
-      waitForDevCommitFence(
+      waitForProfilePhase(
         new Promise<void>(() => undefined),
         clientRequest.response,
+        "Catalog commit fence",
       ),
-      /settled before its commit fence \(HTTP 400\):.*fixture pre-fence rejection/u,
+      /settled before Catalog commit fence:.*"status":400.*fixture pre-fence rejection/u,
     );
   } finally {
     client?.destroy();
@@ -2551,23 +2579,24 @@ async function rawProfileDevRequest(
   return { request, response };
 }
 
-async function waitForDevCommitFence(
+async function waitForProfilePhase<T>(
   started: Promise<void>,
-  response: Promise<{ status: number; body: string }>,
+  operation: Promise<T>,
+  phase: string,
 ): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
       started,
-      response.then(({ status, body }) => {
+      operation.then((result) => {
         throw new Error(
-          `Plugin dev request settled before its commit fence (HTTP ${String(status)}): ${body}`,
+          `Plugin profile operation settled before ${phase}: ${JSON.stringify(result)}`,
         );
       }),
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(
           () =>
-            reject(new Error("Timed out waiting for plugin dev commit fence")),
+            reject(new Error(`Timed out waiting for plugin profile ${phase}`)),
           15_000,
         );
       }),
@@ -2643,18 +2672,48 @@ async function waitForFile(filePath: string): Promise<void> {
   }
 }
 
-function delayedReadyRuntime(
-  pluginId: string,
-  marker: string,
-  delayMs: number,
-): string {
-  return `import { writeFileSync } from "node:fs";
+async function gatedReadyRuntime(pluginId: string) {
+  const started = deferred<void>();
+  const released = deferred<void>();
+  const server = createServer(async (_request, response) => {
+    started.resolve();
+    await released.promise;
+    response.setHeader("connection", "close");
+    response.end();
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  assert.ok(address !== null && typeof address !== "string");
+  const url = `http://127.0.0.1:${String(address.port)}/ready`;
+  return {
+    started: started.promise,
+    release: () => released.resolve(),
+    close: async () => {
+      released.resolve();
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) =>
+          error === undefined ? resolve() : reject(error),
+        );
+      });
+    },
+    module: `import { get } from "node:http";
 import readline from "node:readline";
-writeFileSync(${JSON.stringify(marker)}, "started");
-setTimeout(() => process.stdout.write(JSON.stringify({version:1,type:"ready",pluginId:${JSON.stringify(pluginId)},packageVersion:"1.0.0"})+"\\n"), ${String(delayMs)});
+await new Promise((resolve, reject) => {
+  get(${JSON.stringify(url)}, (response) => {
+    response.resume();
+    response.once("end", resolve);
+    response.once("error", reject);
+  }).once("error", reject);
+});
+process.stdout.write(JSON.stringify({version:1,type:"ready",pluginId:${JSON.stringify(pluginId)},packageVersion:"1.0.0"})+"\\n");
 const lines = readline.createInterface({input:process.stdin});
 lines.on("line", (line) => { if (JSON.parse(line).type === "close") process.exit(0); });
-`;
+`,
+  };
 }
 
 async function createPluginTarball(directory: string): Promise<string> {

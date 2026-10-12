@@ -790,7 +790,7 @@ function processExists(pid: number): boolean {
 test(
   "a healthy linked worktree behind slow cwd candidates groups on a later read of the same instance",
   { skip: process.platform === "win32" },
-  async () => {
+  async (context) => {
     const { execFileSync } = await import("node:child_process");
     const root = await mkdtemp(path.join(os.tmpdir(), "zen-project-fair-git-"));
     const main = path.join(root, "main");
@@ -820,7 +820,7 @@ test(
       await mkdir(bin);
       await writeFile(
         path.join(bin, "git"),
-        '#!/bin/sh\necho "$2" >> "$ZEN_PROJECT_PROBE_LOG"\ncase "$2" in *slow-*) exec sleep 9;; esac\nexec /usr/bin/git "$@"\n',
+        '#!/bin/sh\necho $$ >> "${ZEN_PROJECT_PROBE_LOG}.pids"\necho "$2" >> "$ZEN_PROJECT_PROBE_LOG"\ncase "$2" in *slow-*) exec sleep 9;; esac\nexec /usr/bin/git "$@"\n',
       );
       await chmod(path.join(bin, "git"), 0o755);
       const slow = await Promise.all(
@@ -838,6 +838,29 @@ test(
       const original = structuredClone(threads);
       process.env.PATH = `${bin}${path.delimiter}${oldPath ?? ""}`;
       process.env.ZEN_PROJECT_PROBE_LOG = log;
+      // Only cache TTLs use the mocked clock. Git budgets, cancellation and
+      // elapsed-time assertions still use real timers and performance.now().
+      context.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+      const expireGitCache = async () => {
+        const recorded = await readFile(`${log}.pids`, "utf8").catch(
+          (error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") return "";
+            throw error;
+          },
+        );
+        const pids = recorded.trim().split("\n").filter(Boolean).map(Number);
+        // Let aborted children exit before the next read starts fresh probes.
+        const childSettlementDeadline = performance.now() + 2_000;
+        while (performance.now() < childSettlementDeadline) {
+          if (pids.every((pid) => !processExists(pid))) break;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        assert.ok(
+          pids.every((pid) => !processExists(pid)),
+          "cancelled Git children are still running before TTL expiry",
+        );
+        context.mock.timers.tick(10_050);
+      };
       const projection = new ZenXProjectProjection();
       await projection.updateConfiguration([main], main);
       let startedAt = performance.now();
@@ -855,7 +878,7 @@ test(
       // With a busy OS an execFile may be aborted before the wrapper starts;
       // subsequent ordinary TTL reads still rotate by attempted slots.
       while (reads < 3 && later.projects.length !== 9) {
-        await new Promise((resolve) => setTimeout(resolve, 10_050));
+        await expireGitCache();
         startedAt = performance.now();
         later = await projection.project(threads);
         assert.ok(performance.now() - startedAt < 1800);
@@ -888,7 +911,7 @@ test(
       execFileSync("/usr/bin/git", ["-C", linked, "init", "-q"], {
         stdio: "pipe",
       });
-      await new Promise((resolve) => setTimeout(resolve, 10_050));
+      await expireGitCache();
       const replaced = await projection.project(threads);
       assert.equal(replaced.projects.length, 10);
       assert.deepEqual(
@@ -912,7 +935,7 @@ test(
       // Losing Git entirely is a verified failure, not permission to preserve
       // the last successful identity as a display authority.
       await rm(path.join(linked, ".git"), { recursive: true, force: true });
-      await new Promise((resolve) => setTimeout(resolve, 10_050));
+      await expireGitCache();
       const noRepository = await projection.project(threads);
       assert.equal(noRepository.projects.length, 10);
       assert.deepEqual(

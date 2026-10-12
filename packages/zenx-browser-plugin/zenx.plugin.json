@@ -1,6 +1,6 @@
 {
   "id": "browser",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "A dedicated ephemeral ZenX browser session with bounded DOM inspection and narrow navigation and interaction tools.",
   "provider": {
     "id": "electron-dedicated-browser",
@@ -67,7 +67,15 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh full observation and new target IDs after the action; prefer true to avoid a separate browser_inspect call. Defaults to false."
+            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
           }
         },
         "required": ["sessionId", "url"],
@@ -76,7 +84,7 @@
       "permissions": ["browser.navigate", "browser.tabs.read"],
       "interactionMode": "background_safe",
       "capabilities": ["dedicated_profile", "cdp", "dom.navigate"],
-      "maxOutputBytes": 12288
+      "maxOutputBytes": 131072
     },
     {
       "name": "browser_navigate",
@@ -95,7 +103,15 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh full observation and new target IDs after the action; prefer true to avoid a separate browser_inspect call. Defaults to false."
+            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
           }
         },
         "required": ["sessionId", "tabId", "url"],
@@ -104,11 +120,11 @@
       "permissions": ["browser.navigate", "browser.tabs.read"],
       "interactionMode": "background_safe",
       "capabilities": ["dedicated_profile", "cdp", "dom.navigate"],
-      "maxOutputBytes": 12288
+      "maxOutputBytes": 131072
     },
     {
       "name": "browser_inspect",
-      "description": "Create the latest bounded observation for one ZenX browser tab and return opaque target IDs, current non-password control state, and bounded native select options for visible controls.",
+      "description": "Inspect one tab, or use nextCursor to read more of its exact captured snapshot. Coverage distinguishes unread captured data from native omissions. Omit baseObservationId or set full:true for a self-contained first page; a retained matching base allows a smaller diff. Target IDs are stable only for surviving observed DOM nodes; actions require the fresh observationId.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -117,6 +133,18 @@
           },
           "tabId": {
             "type": "string"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Continue the exact immutable captured observation using its returned nextCursor. Does not recapture or renew action references. Omit to inspect afresh."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
           }
         },
         "required": ["sessionId", "tabId"],
@@ -125,7 +153,7 @@
       "permissions": ["browser.tabs.read"],
       "interactionMode": "background_safe",
       "capabilities": ["dedicated_profile", "cdp", "dom.inspect"],
-      "maxOutputBytes": 12288
+      "maxOutputBytes": 131072
     },
     {
       "name": "browser_click",
@@ -147,7 +175,15 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh full observation and new target IDs after the action; prefer true to avoid a separate browser_inspect call. Defaults to false."
+            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
           }
         },
         "required": ["sessionId", "tabId", "observationId", "targetId"],
@@ -156,7 +192,7 @@
       "permissions": ["browser.interact", "browser.tabs.read"],
       "interactionMode": "background_safe",
       "capabilities": ["dedicated_profile", "cdp", "dom.click"],
-      "maxOutputBytes": 12288
+      "maxOutputBytes": 131072
     },
     {
       "name": "browser_type",
@@ -170,6 +206,18 @@
           "tabId": {
             "type": "string"
           },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
           "observationId": {
             "type": "string"
           },
@@ -181,10 +229,6 @@
           },
           "submit": {
             "type": "boolean"
-          },
-          "observe": {
-            "type": "boolean",
-            "description": "Return a fresh full observation and new target IDs after the action; prefer true to avoid a separate browser_inspect call. Defaults to false."
           }
         },
         "required": ["sessionId", "tabId", "observationId", "targetId", "text"],
@@ -193,7 +237,7 @@
       "permissions": ["browser.interact", "browser.tabs.read"],
       "interactionMode": "background_safe",
       "capabilities": ["dedicated_profile", "cdp", "dom.set_value"],
-      "maxOutputBytes": 12288
+      "maxOutputBytes": 131072
     },
     {
       "name": "browser_select",
@@ -207,6 +251,18 @@
           "tabId": {
             "type": "string"
           },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
           "observationId": {
             "type": "string"
           },
@@ -215,10 +271,6 @@
           },
           "option": {
             "type": "string"
-          },
-          "observe": {
-            "type": "boolean",
-            "description": "Return a fresh full observation and new target IDs after the action; prefer true to avoid a separate browser_inspect call. Defaults to false."
           }
         },
         "required": [
@@ -233,7 +285,7 @@
       "permissions": ["browser.interact", "browser.tabs.read"],
       "interactionMode": "background_safe",
       "capabilities": ["dedicated_profile", "cdp", "dom.select_option"],
-      "maxOutputBytes": 12288
+      "maxOutputBytes": 131072
     },
     {
       "name": "browser_scroll",
@@ -247,6 +299,18 @@
           "tabId": {
             "type": "string"
           },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
           "observationId": {
             "type": "string"
           },
@@ -258,10 +322,6 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 2000
-          },
-          "observe": {
-            "type": "boolean",
-            "description": "Return a fresh full observation and new target IDs after the action; prefer true to avoid a separate browser_inspect call. Defaults to false."
           }
         },
         "required": [
@@ -276,7 +336,7 @@
       "permissions": ["browser.interact", "browser.tabs.read"],
       "interactionMode": "background_safe",
       "capabilities": ["dedicated_profile", "cdp", "dom.scroll"],
-      "maxOutputBytes": 12288
+      "maxOutputBytes": 131072
     },
     {
       "name": "browser_close",
@@ -325,7 +385,7 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "Use Browser for targeted, inspect-before-act web automation in the selected ZenX browser provider. Prefer observe:true on open, navigate, click, type, select and scroll to return fresh targets with the action, avoiding a separate inspect call. If actionCompleted:true includes observationError, inspect again without repeating the completed action.",
+  "mainDocument": "Use Browser for bounded tab inspection and interaction. Inspect coverage: a full response is a self-contained bounded view, not necessarily the whole page. Follow nextCursor with browser_inspect cursor to read the same immutable capture without renewing its observationId; native omissions remain explicit. Stable targetId values only act with the latest observationId and are revalidated. Prefer observe:true on actions. Pass baseObservationId only while retaining that first-page baseline (and applied targetChanges); omitted base or full:true resynchronizes, including after context compaction. Diffs use added/updated/removedFromView and optional complete order, with visibleText replaced only when present; removedFromView never proves DOM deletion. Cursor pages do not change the first-page diff baseline. Discard all prior continuation pages when adopting a new observation or first-page diff; use the new nextCursor to read its tails. If actionCompleted:true includes observationError, inspect again without repeating the completed action.",
   "ui": {
     "bundles": [
       {
