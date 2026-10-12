@@ -52,7 +52,7 @@ export function observe() {
   app.on("browser-window-created", (_event, window) => {
     windowsCreated++;
     event("created", identity(window));
-    window.webContents.on("console-message", (_event, details) => {
+    window.webContents.on("console-message", (details) => {
       event("renderer-console", {
         message: details.message,
         level: details.level,

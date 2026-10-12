@@ -119,3 +119,73 @@ test("private staging preserves the original package and refuses reused destinat
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("fixture records Electron 43 console-message details from the first argument", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { EventEmitter } = await import("node:events");
+  const { createRequire } = await import("node:module");
+  const { default: ts } = await import("typescript");
+  const fixtureUrl = new URL(
+    "./fixtures/startup-acceptance/fixture.mjs",
+    import.meta.url,
+  );
+  const source = (await readFile(fixtureUrl, "utf8")).replaceAll(
+    "import.meta.url",
+    JSON.stringify(fixtureUrl.href),
+  );
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2023,
+      esModuleInterop: true,
+    },
+  }).outputText;
+  const app = new EventEmitter();
+  const webContents = new EventEmitter();
+  const records = [];
+  const exports = {};
+  const realRequire = createRequire(import.meta.url);
+  vm.runInNewContext(compiled, {
+    exports,
+    process,
+    URL,
+    setInterval: () => ({ unref() {} }),
+    require: (name) =>
+      name === "electron"
+        ? { app, BrowserWindow: {} }
+        : name === "node:fs"
+          ? {
+              readFileSync: () =>
+                JSON.stringify({
+                  evidenceDirectory: "/synthetic",
+                  mode: "failure",
+                }),
+              appendFileSync: (_path, line) => records.push(JSON.parse(line)),
+            }
+          : realRequire(name),
+  });
+  exports.observe();
+  app.emit(
+    "browser-window-created",
+    {},
+    { id: 1, webContents, getNativeWindowHandle: () => Buffer.alloc(8) },
+  );
+  webContents.emit(
+    "console-message",
+    { message: "synthetic CSP rejection", level: "error" },
+    3,
+    "deprecated positional message",
+    1,
+    "file:///startup.html",
+  );
+  assert.deepEqual(
+    records.find((record) => record.type === "renderer-console"),
+    {
+      type: "renderer-console",
+      pid: process.pid,
+      at: records.at(-1).at,
+      message: "synthetic CSP rejection",
+      level: "error",
+    },
+  );
+});
