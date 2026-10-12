@@ -12,6 +12,46 @@ from imagent.channels.native.access import ChannelAccessPolicy
 from .config import ConfigurationError, PermissionMode
 
 
+def load_channel_config(config_file: Path) -> dict[str, Any]:
+    return _load_config(config_file)
+
+
+def shared_media_root(
+    config: dict[str, Any] | None,
+    *,
+    process_cwd: Path,
+) -> Path | None:
+    """Derive the tightest ancestor of enabled channels' explicit inbound media dirs.
+
+    The result attests exactly the directories the deployment explicitly chose
+    for inbound media, so the App Server can read channel-downloaded images
+    without a configured IMZEN_APP_SERVER_SHARED_FILESYSTEM_ROOT. Channels on
+    SDK-default media directories are not covered; their deployments keep the
+    explicit setting. Returns None when no enabled channel declares media_dir or
+    the directories share no common ancestor.
+    """
+    if not isinstance(config, dict):
+        return None
+    roots: list[Path] = []
+    for channel_id in ("qq", "telegram", "feishu", "weixin"):
+        channel_config = config.get(channel_id)
+        if not isinstance(channel_config, dict) or channel_config.get("enabled") is not True:
+            continue
+        raw = channel_config.get("media_dir")
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        candidate = Path(raw.strip()).expanduser()
+        if not candidate.is_absolute():
+            candidate = process_cwd / candidate
+        roots.append(candidate.resolve())
+    if not roots:
+        return None
+    try:
+        return Path(os.path.commonpath([str(root) for root in roots]))
+    except ValueError:
+        return None
+
+
 def build_channels(
     config_file: Path | None,
     *,

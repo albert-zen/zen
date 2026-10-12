@@ -48,10 +48,14 @@ so this database is not a second Thread, transcript, queue, or Agent runtime.
 
 `IMZEN_APP_SERVER_SHARED_FILESYSTEM_ROOT` is an explicit deployment
 attestation that the external App Server can read that local directory. IMZen
-passes local-image paths only when this setting is present, and the SDK rejects
-every image outside the configured root. Leave it unset for remote or
-unshared-filesystem App Servers. Channel `media_dir` values used for images
-must be inside this root.
+passes local-image paths only when an attested root exists, and the SDK rejects
+every image outside it. When the setting is absent, IMZen attests the tightest
+common ancestor of the enabled channels' explicitly configured `media_dir`
+directories instead, creating them on startup when missing, so local App
+Servers receive channel images without extra configuration. Channels relying
+on SDK-default media directories keep requiring the explicit setting. Leave
+both unset for remote or unshared-filesystem App Servers; set the variable
+explicitly when channel media directories must not be attestable.
 
 If an enabled channel has neither `allowed_user_ids` nor
 `allowed_conversation_ids`, Full Access requires the explicit deployment

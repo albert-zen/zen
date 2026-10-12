@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from imzen.channels import build_channels
+from imzen.channels import build_channels, shared_media_root
 from imzen.config import ConfigurationError
 
 
@@ -234,3 +234,37 @@ def test_wildcard_user_dimension_does_not_remove_conversation_restriction(tmp_pa
         )
     )
     assert len(build_channels(config, factory=factory)) == 1
+
+
+def test_shared_media_root_derives_the_tightest_common_ancestor(tmp_path):
+    first = tmp_path / "one" / "inbound-media"
+    second = tmp_path / "two" / "inbound-media"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    config = {
+        "qq": {"enabled": True, "media_dir": str(first)},
+        "telegram": {"enabled": True, "media_dir": str(second)},
+    }
+
+    derived = shared_media_root(config, process_cwd=tmp_path)
+
+    assert derived == tmp_path.resolve()
+
+
+def test_shared_media_root_is_the_single_channel_media_directory(tmp_path):
+    media = tmp_path / "inbound-media"
+    media.mkdir()
+
+    derived = shared_media_root(
+        {"qq": {"enabled": True, "media_dir": str(media)}},
+        process_cwd=tmp_path,
+    )
+
+    assert derived == media.resolve()
+
+
+def test_shared_media_root_is_none_without_enabled_channels(tmp_path):
+    assert shared_media_root(None, process_cwd=tmp_path) is None
+    assert shared_media_root({}, process_cwd=tmp_path) is None
+    assert shared_media_root({"qq": {"enabled": False}}, process_cwd=tmp_path) is None
+    assert shared_media_root({"qq": {"enabled": True}}, process_cwd=tmp_path) is None

@@ -246,8 +246,9 @@
 - **ImZenFailurePresenter** — 把 SDK 已分类并固定路由的终态入站失败渲染成
   IM 用户可见消息；它不决定重试，也不保存恢复状态。
 - **IMZen App Server shared filesystem root** — 部署者对本地 App Server 可读目录的
-  显式证明；SDK 仍负责把每个 local-image 路径限制在该目录内，未配置时 TCP
-  App Server 不接收本地图片路径。
+  显式证明；SDK 仍负责把每个 local-image 路径限制在该目录内。未显式配置时，
+  IMZen 组合根以已启用频道显式配置的入站 media 目录的最紧公共祖先作为证明；
+  两者都不存在时，TCP App Server 不接收本地图片路径。
 - **IMZen Gateway state file** — SDK SQLite repository 持久化 inbound/outbound
   幂等 claim 等可重建 bridge state，使 `side_effect_started` 在进程重启后仍不被
   重新授权；它不是 Zen Thread、transcript、queue 或 Agent state。

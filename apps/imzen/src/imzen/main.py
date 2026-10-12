@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
+from pathlib import Path
 
 from imagent.applications import ZenApplicationAdapter
 from imagent.applications.appserver_client import AppServerClient, AppServerSupervisor
@@ -10,7 +11,7 @@ from imagent.contracts import ProjectionPolicy
 from imagent.gateway import GatewayExtensions, GatewayRepositories, ImAgentGateway
 from imagent.storage import SQLiteGatewayState
 
-from .channels import build_channels
+from .channels import build_channels, load_channel_config, shared_media_root
 from .client import ImZenAppServerClient
 from .config import Settings
 from .controller import (
@@ -65,12 +66,44 @@ def create_gateway(
     outbound_presentation=None,
 ) -> tuple[ImAgentGateway, SQLiteGatewayState]:
     """Compose the same SDK bridge for standalone IMZen and the ZenX plugin."""
-    client = client or _build_app_server_client(resolved)
+    loaded_channel_config = channel_config
+    if (
+        channels is None
+        and loaded_channel_config is None
+        and resolved.channels_config_file is not None
+    ):
+        loaded_channel_config = load_channel_config(resolved.channels_config_file)
+    resolved_channels = (
+        channels
+        if channels is not None
+        else build_channels(
+            resolved.channels_config_file,
+            channel_config=loaded_channel_config,
+            permission_mode=resolved.permission_mode,
+            allow_unrestricted_full_access=resolved.allow_unrestricted_full_access,
+        )
+    )
+    shared_filesystem_root = resolved.app_server_shared_filesystem_root
+    if shared_filesystem_root is None:
+        # Unattested deployments still receive channel-downloaded images: attest
+        # exactly the media directories the enabled channels already own. The
+        # SDK resolves the attested root strictly, so create the declared media
+        # directories the channels would create on first download anyway.
+        shared_filesystem_root = shared_media_root(
+            loaded_channel_config,
+            process_cwd=Path.cwd(),
+        )
+        if shared_filesystem_root is not None:
+            shared_filesystem_root.mkdir(parents=True, exist_ok=True)
+    client = client or _build_app_server_client(
+        resolved,
+        shared_filesystem_root=shared_filesystem_root,
+    )
     application = ZenApplicationAdapter(
         application_instance_id="zen-main",
         client=client,
         cwd=str(resolved.cwd),
-        shared_filesystem_root=resolved.app_server_shared_filesystem_root,
+        shared_filesystem_root=shared_filesystem_root,
         thread_start_options=thread_start_options(resolved.permission_mode),
     )
     controller = ImZenController(
@@ -82,16 +115,6 @@ def create_gateway(
     )
     if controller_factory is not None:
         controller = controller_factory(controller)
-    resolved_channels = (
-        channels
-        if channels is not None
-        else build_channels(
-            resolved.channels_config_file,
-            channel_config=channel_config,
-            permission_mode=resolved.permission_mode,
-            allow_unrestricted_full_access=resolved.allow_unrestricted_full_access,
-        )
-    )
     if persistent_subscriptions and not resolved_channels:
         raise ValueError("IMZenX requires at least one enabled IM channel")
     gateway_state = SQLiteGatewayState(resolved.gateway_state_file)
@@ -117,7 +140,11 @@ def create_gateway(
     return gateway, gateway_state
 
 
-def _build_app_server_client(settings: Settings) -> AppServerClient:
+def _build_app_server_client(
+    settings: Settings,
+    *,
+    shared_filesystem_root: Path | None = None,
+) -> AppServerClient:
     supervisor = AppServerSupervisor(
         app_server_url=settings.app_server_url,
         app_server_auth_token_file=settings.app_server_auth_token_file,
@@ -130,8 +157,6 @@ def _build_app_server_client(settings: Settings) -> AppServerClient:
             "version": "0.1.0",
         },
         shared_filesystem_verifier=(
-            None
-            if settings.app_server_shared_filesystem_root is None
-            else settings.app_server_shared_filesystem_root.is_dir
+            None if shared_filesystem_root is None else shared_filesystem_root.is_dir
         ),
     )

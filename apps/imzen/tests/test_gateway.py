@@ -11,6 +11,7 @@ from imagent.applications import ZenApplicationAdapter
 from imagent.applications.appserver_client import AppServerError
 from imagent.bindings import InMemoryBindingRepository
 from imagent.contracts import (
+    AgentInput,
     ApplicationInputRejected,
     AttachmentContent,
     ConversationRef,
@@ -19,6 +20,7 @@ from imagent.contracts import (
     ProjectionPolicy,
     TextContent,
     TextFormat,
+    ThreadRef,
 )
 from imagent.gateway import (
     GatewayExtensions,
@@ -29,6 +31,7 @@ from imagent.gateway import (
 from imagent.storage import SQLiteGatewayState
 from imagent.testing import FakeChannelAdapter
 
+from imzen.config import Settings
 from imzen.controller import (
     ImZenContentTransformer,
     ImZenController,
@@ -36,6 +39,7 @@ from imzen.controller import (
     ImZenRequestPresenter,
     thread_start_options,
 )
+from imzen.main import create_gateway
 
 
 class FakeAppServer:
@@ -807,3 +811,102 @@ async def test_prefix_preserves_quoted_parameters_and_multipart_content(tmp_path
     )
     assert captured[0].message_id == message.message_id
     assert captured[0].conversation_ref == message.conversation_ref
+
+
+def _media_input(image: Path) -> AgentInput:
+    return AgentInput(
+        client_message_id="image-message",
+        content=(
+            AttachmentContent(
+                attachment_id="image-1",
+                media_type="image/png",
+                source=LocalPath(str(image)),
+                filename="photo.png",
+                size_bytes=image.stat().st_size,
+            ),
+        ),
+    )
+
+
+def _qq_channel_config(media_dir: Path | None) -> dict[str, object]:
+    config: dict[str, object] = {
+        "enabled": True,
+        "app_id": "123",
+        "client_secret": "secret",
+        "allowed_user_ids": ["user-1"],
+    }
+    if media_dir is not None:
+        config["media_dir"] = str(media_dir)
+    return {"qq": config}
+
+
+@pytest.mark.asyncio
+async def test_create_gateway_derives_shared_root_from_channel_media(tmp_path: Path) -> None:
+    media = tmp_path / "inbound-media"
+    media.mkdir()
+    image = media / "photo.png"
+    image.write_bytes(b"png")
+    client = FakeAppServer()
+    await client.start_thread(cwd=str(tmp_path))
+    gateway, state = create_gateway(
+        Settings(
+            app_server_url="ws://127.0.0.1:4500",
+            cwd=tmp_path,
+            gateway_state_file=tmp_path / "gateway.sqlite3",
+        ),
+        client=client,
+        channel_config=_qq_channel_config(media),
+    )
+    try:
+        application = next(iter(gateway._applications.values()))
+        await application.send_input(
+            ThreadRef("zen-main", "thread-1"),
+            _media_input(image),
+        )
+    finally:
+        await state.close()
+
+    _thread_id, text, options = client.started_turns[0]
+    assert text is None
+    assert options["input_items"] == [{"type": "localImage", "path": str(image)}]
+
+
+@pytest.mark.asyncio
+async def test_create_gateway_prefers_explicit_shared_root_over_derivation(
+    tmp_path: Path,
+) -> None:
+    explicit = tmp_path / "explicit"
+    explicit.mkdir()
+    media = tmp_path / "inbound-media"
+    media.mkdir()
+    image = explicit / "photo.png"
+    image.write_bytes(b"png")
+    outside = media / "other.png"
+    outside.write_bytes(b"png")
+    client = FakeAppServer()
+    await client.start_thread(cwd=str(tmp_path))
+    gateway, state = create_gateway(
+        Settings(
+            app_server_url="ws://127.0.0.1:4500",
+            cwd=tmp_path,
+            gateway_state_file=tmp_path / "gateway.sqlite3",
+            app_server_shared_filesystem_root=explicit,
+        ),
+        client=client,
+        channel_config=_qq_channel_config(media),
+    )
+    try:
+        application = next(iter(gateway._applications.values()))
+        await application.send_input(
+            ThreadRef("zen-main", "thread-1"),
+            _media_input(image),
+        )
+        with pytest.raises(ValueError, match="outside the trusted shared_filesystem_root"):
+            await application.send_input(
+                ThreadRef("zen-main", "thread-1"),
+                _media_input(outside),
+            )
+    finally:
+        await state.close()
+
+    assert len(client.started_turns) == 1
