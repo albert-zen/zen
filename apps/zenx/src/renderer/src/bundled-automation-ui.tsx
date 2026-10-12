@@ -1590,6 +1590,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const [busy, setBusy] = useState(false);
   const actionBusy = useRef(false);
   const sending = useRef<Record<string, boolean>>({});
+  const introductionOperations = useRef<Record<string, string>>({});
   const [sendingRooms, setSendingRooms] = useState<Record<string, boolean>>({});
   const selectedRef = useRef<string | null>(initialRoomId);
   const historyCache = useRef<
@@ -2053,7 +2054,10 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     if (sending.current[created.id]) return;
     sending.current[created.id] = true;
     setSendingRooms((current) => ({ ...current, [created.id]: true }));
-    let operationId = `${created.operationEpoch ?? "legacy"}:00000000-0000-4000-8000-000000000001`;
+    const attemptKey = `${created.id}:${created.operationEpoch ?? "legacy"}`;
+    let operationId =
+      introductionOperations.current[attemptKey] ??
+      `${created.operationEpoch ?? "legacy"}:00000000-0000-4000-8000-000000000001`;
     const text = i18n.t("panels:pawIntroductionRequest");
     try {
       if (explicitRestart) {
@@ -2065,6 +2069,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
         if (previous?.state === "cancelled")
           operationId = `${created.operationEpoch ?? "legacy"}:${crypto.randomUUID()}`;
       }
+      // Retain the chosen receipt before any uncertain transport result. A retry
+      // must inspect this attempt, not the previously cancelled introduction.
+      introductionOperations.current[attemptKey] = operationId;
       await sdk.commands.execute("prepare-message", {
         roomId: created.id,
         operationId,
@@ -2589,6 +2596,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             </header>
             {room.assistant &&
             room.messages.length === 0 &&
+            (room.pendingCount ?? 0) === 0 &&
             (room.operations?.length ?? 0) === 0 ? (
               <div className="paw-chat-introduction">
                 <p>{i18n.t("panels:pawEmptyChat")}</p>

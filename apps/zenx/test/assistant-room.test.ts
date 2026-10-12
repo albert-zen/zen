@@ -562,3 +562,124 @@ test("explicit Start introduction works after cancelling an unsent introduction"
     await f.close();
   }
 });
+
+test("restarted introduction retains its new operation when delivery and refresh are uncertain", async () => {
+  const f = await fixture();
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "http://localhost",
+    pretendToBeVisual: true,
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+  });
+  dom.window.HTMLElement.prototype.scrollTo = () => {};
+  Object.assign(window, { zenx: { threads: { list: async () => [] } } });
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    const operationId = `${room.operationEpoch}:00000000-0000-4000-8000-000000000001`;
+    const text =
+      "[Automatic start] Please say hello and ask what I’d like to call you. I can skip naming and start working.";
+    await f.service.prepareRoomMessage(room.id, operationId, text);
+    await f.service.cancelPreparedRoomOperation(room.id, operationId);
+    const runtime = createZenXRoomsProfileLoader(() => f.service as never)({
+      createZenXTrustedPlugin,
+    });
+    let hideResult = false;
+    const prepared: string[] = [];
+    const sdk = {
+      context: {
+        route: `/plugins/zenx-rooms/rooms?roomId=${room.id}`,
+        primaryNavigation: true,
+      },
+      navigation: { navigate: () => {} },
+      commands: {
+        execute: async (id: string, input: any = {}) => {
+          if (id === "list" && hideResult)
+            throw Error("list transport unavailable");
+          if (id === "prepare-message") prepared.push(input.operationId);
+          const result = await runtime.invoke(
+            `zenx_rooms_${id.replaceAll("-", "_")}`,
+            {
+              callId: randomUUID(),
+              trustedPluginUi: true,
+              cwd: "/project",
+              signal: new AbortController().signal,
+              arguments: { input },
+            },
+          );
+          if (id === "post-message") {
+            hideResult = true;
+            throw Error("post result lost after admission");
+          }
+          return result;
+        },
+      },
+    };
+    await act(async () =>
+      root.render(React.createElement(RoomsPage, { sdk: sdk as any })),
+    );
+    const startButton = () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (b) => b.textContent === "Start introduction",
+      )!;
+    await act(async () => startButton().click());
+    for (let i = 0; i < 100 && startButton()?.disabled; i++)
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+    assert.equal(
+      f.model.requests.length,
+      1,
+      "the first renewed introduction was accepted exactly once",
+    );
+    assert.ok(
+      startButton() && !startButton().disabled,
+      "the UI offers an explicit retry after its delivery and list reads fail",
+    );
+    await act(async () => startButton().click());
+    for (let i = 0; i < 100 && startButton()?.disabled; i++)
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+    assert.equal(
+      f.model.requests.length,
+      1,
+      `an uncertain introduction must never dispatch a second model turn; prepared operations: ${prepared.join(", ")}`,
+    );
+    assert.equal(
+      new Set(prepared).size,
+      1,
+      `uncertain retry must retain its renewed operation: ${prepared.join(", ")}`,
+    );
+    await act(async () => root.render(null));
+    await act(async () =>
+      root.render(React.createElement(RoomsPage, { sdk: sdk as any })),
+    );
+    assert.equal(
+      startButton(),
+      undefined,
+      "unknown Host state after remount cannot authorize a new introduction",
+    );
+    assert.equal(f.model.requests.length, 1);
+    hideResult = false;
+    await act(async () => root.render(null));
+    await act(async () =>
+      root.render(React.createElement(RoomsPage, { sdk: sdk as any })),
+    );
+    assert.equal(
+      startButton(),
+      undefined,
+      "Host receipt and saved message recover the existing attempt after remount",
+    );
+    assert.equal(f.model.requests.length, 1);
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+    await f.close();
+  }
+});
